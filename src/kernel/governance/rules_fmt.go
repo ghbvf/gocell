@@ -2,6 +2,7 @@ package governance
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 )
@@ -148,6 +149,80 @@ func (v *Validator) validateFMT05() []ValidationResult {
 					Message:   fmt.Sprintf("role %q is not a valid contract role", cu.Role),
 				})
 			}
+		}
+	}
+	return results
+}
+
+// validateFMT06 checks that non-L0 cells must have schema.primary.
+func (v *Validator) validateFMT06() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		if c.ConsistencyLevel != "L0" && c.Schema.Primary == "" {
+			results = append(results, ValidationResult{
+				Code:      "FMT-06",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "schema.primary",
+				Message:   fmt.Sprintf("non-L0 cell %q must have schema.primary", c.ID),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT07 checks that the contract provider endpoint is populated based on kind.
+func (v *Validator) validateFMT07() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		provider := contractProvider(c)
+		if provider == "" {
+			var field string
+			switch cell.ContractKind(c.Kind) {
+			case cell.ContractHTTP:
+				field = "endpoints.server"
+			case cell.ContractEvent:
+				field = "endpoints.publisher"
+			case cell.ContractCommand:
+				field = "endpoints.handler"
+			case cell.ContractProjection:
+				field = "endpoints.provider"
+			default:
+				field = "endpoints"
+			}
+			results = append(results, ValidationResult{
+				Code:      "FMT-07",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      contractFile(c.ID),
+				Field:     field,
+				Message:   fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT08 checks that the first segment of a contract ID matches the contract's kind.
+// Contract ID format: "{kind}.{domain}.{version}"; the prefix before the first "." should equal kind.
+func (v *Validator) validateFMT08() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		parts := strings.SplitN(c.ID, ".", 2)
+		if len(parts) < 2 {
+			continue // malformed ID, other rules may catch this
+		}
+		prefix := parts[0]
+		if prefix != c.Kind {
+			results = append(results, ValidationResult{
+				Code:      "FMT-08",
+				Severity:  SeverityError,
+				IssueType: IssueMismatch,
+				File:      contractFile(c.ID),
+				Field:     "kind",
+				Message:   fmt.Sprintf("contract %q ID prefix %q does not match kind %q", c.ID, prefix, c.Kind),
+			})
 		}
 	}
 	return results

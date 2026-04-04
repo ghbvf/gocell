@@ -66,6 +66,12 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateREF07()...)
 	results = append(results, v.validateREF08()...)
 	results = append(results, v.validateREF09()...)
+	results = append(results, v.validateREF10()...)
+	results = append(results, v.validateREF11()...)
+	results = append(results, v.validateREF12()...)
+	results = append(results, v.validateREF13()...)
+	results = append(results, v.validateREF14()...)
+	results = append(results, v.validateREF15()...)
 
 	// Topological rules
 	results = append(results, v.validateTOPO01()...)
@@ -86,10 +92,15 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT03()...)
 	results = append(results, v.validateFMT04()...)
 	results = append(results, v.validateFMT05()...)
+	results = append(results, v.validateFMT06()...)
+	results = append(results, v.validateFMT07()...)
+	results = append(results, v.validateFMT08()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)
 	results = append(results, v.validateADV02()...)
+	results = append(results, v.validateADV03()...)
+	results = append(results, v.validateADV04()...)
 
 	return results
 }

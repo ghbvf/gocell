@@ -58,3 +58,46 @@ func (v *Validator) validateADV02() []ValidationResult {
 	}
 	return results
 }
+
+// validateADV03 checks that waivers reference contracts that appear in the slice's contractUsages.
+func (v *Validator) validateADV03() []ValidationResult {
+	var results []ValidationResult
+	for key, s := range v.project.Slices {
+		// Build set of contracts used by this slice.
+		usedContracts := make(map[string]bool, len(s.ContractUsages))
+		for _, cu := range s.ContractUsages {
+			usedContracts[cu.Contract] = true
+		}
+		for i, w := range s.Verify.Waivers {
+			if w.Contract != "" && !usedContracts[w.Contract] {
+				results = append(results, ValidationResult{
+					Code:      "ADV-03",
+					Severity:  SeverityWarning,
+					IssueType: IssueRefNotFound,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("verify.waivers[%d].contract", i),
+					Message:   fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
+				})
+			}
+		}
+	}
+	return results
+}
+
+// validateADV04 checks that status-board entries reference existing journeys.
+func (v *Validator) validateADV04() []ValidationResult {
+	var results []ValidationResult
+	for i, entry := range v.project.StatusBoard {
+		if _, ok := v.project.Journeys[entry.JourneyID]; !ok {
+			results = append(results, ValidationResult{
+				Code:      "ADV-04",
+				Severity:  SeverityWarning,
+				IssueType: IssueRefNotFound,
+				File:      "journeys/status-board.yaml",
+				Field:     fmt.Sprintf("entries[%d].journeyId", i),
+				Message:   fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
+			})
+		}
+	}
+	return results
+}

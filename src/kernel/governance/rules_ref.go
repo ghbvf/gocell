@@ -2,6 +2,8 @@ package governance
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -216,4 +218,190 @@ func journeyFile(journeyID string) string {
 
 func assemblyFile(assemblyID string) string {
 	return fmt.Sprintf("assemblies/%s/assembly.yaml", assemblyID)
+}
+
+// validateREF10 checks that every assembly has a non-empty build.entrypoint.
+func (v *Validator) validateREF10() []ValidationResult {
+	var results []ValidationResult
+	for _, a := range v.project.Assemblies {
+		if a.Build.Entrypoint == "" {
+			results = append(results, ValidationResult{
+				Code:      "REF-10",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      assemblyFile(a.ID),
+				Field:     "build.entrypoint",
+				Message:   fmt.Sprintf("assembly %q must have build.entrypoint", a.ID),
+			})
+		}
+	}
+	return results
+}
+
+// validateREF11 checks that assembly.build.entrypoint file exists on disk.
+// Skipped when root is empty.
+func (v *Validator) validateREF11() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	for _, a := range v.project.Assemblies {
+		if a.Build.Entrypoint == "" {
+			continue // REF-10 covers this
+		}
+		// The entrypoint path is relative to the repository root (parent of go.mod directory).
+		repoRoot := repositoryRoot(v.root)
+		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
+		if _, err := os.Stat(fullPath); err != nil {
+			results = append(results, ValidationResult{
+				Code:      "REF-11",
+				Severity:  SeverityError,
+				IssueType: IssueRefNotFound,
+				File:      assemblyFile(a.ID),
+				Field:     "build.entrypoint",
+				Message:   fmt.Sprintf("assembly %q build.entrypoint %q does not exist", a.ID, a.Build.Entrypoint),
+			})
+		}
+	}
+	return results
+}
+
+// repositoryRoot returns the repository root from the project root.
+// If root ends with "src", the repository root is the parent directory.
+func repositoryRoot(root string) string {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return root
+	}
+	if filepath.Base(absRoot) == "src" {
+		return filepath.Dir(absRoot)
+	}
+	return absRoot
+}
+
+// validateREF12 checks that contract.schemaRefs files exist on disk.
+// Skipped when root is empty.
+func (v *Validator) validateREF12() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		// Derive the contract directory from the contract ID.
+		// Contract ID format: "http.auth.login.v1" -> "contracts/http/auth/login/v1/"
+		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+
+		// Check each non-empty schemaRef field.
+		type refEntry struct {
+			field string
+			value string
+		}
+		refs := []refEntry{
+			{"schemaRefs.request", c.SchemaRefs.Request},
+			{"schemaRefs.response", c.SchemaRefs.Response},
+			{"schemaRefs.payload", c.SchemaRefs.Payload},
+		}
+		for _, ref := range refs {
+			if ref.value == "" {
+				continue
+			}
+			fullPath := filepath.Join(contractDir, ref.value)
+			if _, err := os.Stat(fullPath); err != nil {
+				results = append(results, ValidationResult{
+					Code:      "REF-12",
+					Severity:  SeverityError,
+					IssueType: IssueRefNotFound,
+					File:      contractFile(c.ID),
+					Field:     ref.field,
+					Message:   fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.field, ref.value),
+				})
+			}
+		}
+	}
+	return results
+}
+
+// contractDirFromID converts a contract ID to its directory path.
+// "http.auth.login.v1" -> "contracts/http/auth/login/v1"
+func contractDirFromID(id string) string {
+	segments := strings.Split(id, ".")
+	return filepath.Join("contracts", filepath.Join(segments...))
+}
+
+// validateREF13 checks that the contract provider actor exists as a cell or actor.
+func (v *Validator) validateREF13() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		provider := contractProvider(c)
+		if provider == "" {
+			continue // FMT-07 covers missing provider
+		}
+		if !v.actorExists(provider) {
+			results = append(results, ValidationResult{
+				Code:      "REF-13",
+				Severity:  SeverityError,
+				IssueType: IssueRefNotFound,
+				File:      contractFile(c.ID),
+				Field:     "endpoints",
+				Message:   fmt.Sprintf("contract %q provider actor %q is not a known cell or actor", c.ID, provider),
+			})
+		}
+	}
+	return results
+}
+
+// validateREF14 checks that all contract consumer actors exist as cells or actors.
+// The wildcard "*" is skipped.
+func (v *Validator) validateREF14() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		consumers := contractConsumers(c)
+		for i, actor := range consumers {
+			if actor == "*" {
+				continue
+			}
+			if !v.actorExists(actor) {
+				results = append(results, ValidationResult{
+					Code:      "REF-14",
+					Severity:  SeverityError,
+					IssueType: IssueRefNotFound,
+					File:      contractFile(c.ID),
+					Field:     fmt.Sprintf("endpoints.consumers[%d]", i),
+					Message:   fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor", c.ID, actor),
+				})
+			}
+		}
+	}
+	return results
+}
+
+// validateREF15 checks that assembly.id matches the map key (directory name).
+func (v *Validator) validateREF15() []ValidationResult {
+	var results []ValidationResult
+	for key, a := range v.project.Assemblies {
+		if a.ID != key {
+			results = append(results, ValidationResult{
+				Code:      "REF-15",
+				Severity:  SeverityError,
+				IssueType: IssueMismatch,
+				File:      assemblyFile(key),
+				Field:     "id",
+				Message:   fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, key),
+			})
+		}
+	}
+	return results
+}
+
+// actorExists checks if an actor ID is a known cell or external actor.
+func (v *Validator) actorExists(id string) bool {
+	if _, ok := v.project.Cells[id]; ok {
+		return true
+	}
+	for _, a := range v.project.Actors {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
 }

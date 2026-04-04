@@ -58,12 +58,51 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 	return results
 }
 
-// validateVERIFY02 checks that waiver.expiresAt is not in the past.
+// validateVERIFY02 checks waiver required fields and expiry.
+// Required: contract, owner, reason, expiresAt (valid date, not expired).
 func (v *Validator) validateVERIFY02() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
 		for i, w := range s.Verify.Waivers {
+			if w.Contract == "" {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-02",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("verify.waivers[%d].contract", i),
+					Message:   "waiver.contract is required",
+				})
+			}
+			if w.Owner == "" {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-02",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("verify.waivers[%d].owner", i),
+					Message:   fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+				})
+			}
+			if w.Reason == "" {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-02",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("verify.waivers[%d].reason", i),
+					Message:   fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+				})
+			}
 			if w.ExpiresAt == "" {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-02",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+					Message:   fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+				})
 				continue
 			}
 			t, err := time.Parse("2006-01-02", w.ExpiresAt)
