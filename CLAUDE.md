@@ -47,7 +47,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只在 `journeys/status-board.yaml`，禁止出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml
 - `lifecycle`（draft / active / deprecated）是治理字段，允许写在 contract.yaml 中
 - cell.yaml 不维护 slices、journeys、contracts 反向索引；如需汇总视图，由工具生成
-- 禁止使用旧字段名：cellId / sliceId / contractId / assemblyId / ownedSlices / authoritativeData / producer / consumers / callsContracts / publishes / consumes（详见 metadata-templates-v2.md Forbidden Legacy Names）
+- 禁止使用旧字段名：cellId / sliceId / contractId / assemblyId / ownedSlices / authoritativeData / producer / consumers / callsContracts / publishes / consumes（详见 metadata-model-v3.md 迁移附录）
 
 ### 一致性等级（L0-L4）
 
@@ -91,3 +91,8 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 2. 用 `WebFetch` 从 GitHub 拉取对标源码（`https://raw.githubusercontent.com/{owner}/{repo}/main/{path}`）
 3. 提取接口签名、生命周期钩子、错误处理等关键设计决策
 4. 编码时在 PR 描述或 commit message 中注明：`ref: {framework} {file}` + 采纳/偏离理由
+
+## 文档命名规则
+格式：`yyyyMMddHHmm-编号-实际功能或问题.md`（ date "+%Y%m%d%H%M" 后缀按内容选择，不限 `.md`）
+示例：`202603281443-022-compliance-api-review.md`
+

@@ -1,0 +1,372 @@
+# GoCell 框架补充实施计划
+
+## Context
+
+GoCell 目录骨架已生成（3 cell + 7 slice + 5 contract YAML 模板 + 空 Go 包），但没有任何 Go 代码。需要按 91 天 4 阶段路线图将骨架填充为可编译、可运行的 Cell-native Go 框架。
+
+关键约束：
+- `kernel/` 只依赖 stdlib + `pkg/` + `gopkg.in/yaml.v3`
+- `cells/` 依赖 `kernel/` + `runtime/`，不依赖 `adapters/`
+- `runtime/` 不依赖 `cells/` 和 `adapters/`
+- 错误用 `pkg/errcode`，日志用 `slog`，覆盖率 kernel ≥90% 其余 ≥80%
+
+---
+
+## Phase 0: 接口设计 + 基础骨架 (Days 1-7)
+
+**Gate: `app.Register(cell); app.Start(ctx)` 编译通过并运行**
+
+### Step 0.1 — 基础包 `pkg/`（Day 1）
+
+**并行开发**：errcode 和 ctxkeys 无依赖关系
+
+| 文件 | 内容 |
+|------|------|
+| `src/pkg/errcode/errcode.go` | `Code` 类型、`Error` struct（Code/Message/Details/Cause）、`New()`、`Wrap()` + 哨兵码（ERR_METADATA_INVALID, ERR_CELL_NOT_FOUND 等） |
+| `src/pkg/errcode/errcode_test.go` | table-driven: New / Wrap / Error() / Unwrap |
+| `src/pkg/ctxkeys/keys.go` | context key 常量（CellID, SliceID, CorrelationID, JourneyID, TraceID, SpanID）+ `WithX(ctx)` / `XFrom(ctx)` 辅助函数 |
+| `src/pkg/ctxkeys/keys_test.go` | round-trip 测试 |
+
+### Step 0.2 — 核心类型 `kernel/cell/`（Day 1-2）
+
+| 文件 | 内容 |
+|------|------|
+| `src/kernel/cell/types.go` | `CellType`（core/edge/support）、`Level`（L0-L4）+ ParseLevel/String、`HealthStatus`、`ContractKind`（http/event/command/projection）、`ContractRole`（serve/call/publish/subscribe/handle/invoke/provide/read）、`Lifecycle`（draft/active/deprecated） |
+| `src/kernel/cell/interfaces.go` | `Cell`、`Slice`、`Contract`、`Assembly` 四个核心接口 + `Dependencies`、`VerifySpec`、`Waiver`、`CellMetadata`、`Owner`、`SchemaConfig` 等关联类型 |
+| `src/kernel/cell/consistency.go` | `ValidRolesForKind(kind) []ContractRole`、`IsProviderRole(role) bool`、`IsConsumerRole(role) bool` |
+| `src/kernel/cell/types_test.go` | ParseLevel round-trip、枚举合法性 |
+| `src/kernel/cell/consistency_test.go` | kind-role 映射 table-driven |
+
+### Step 0.3 — 基础实现 `kernel/cell/base.go`（Day 2-3）
+
+| 文件 | 内容 |
+|------|------|
+| `src/kernel/cell/base.go` | `BaseCell` struct（实现 Cell 接口全部方法）+ `AddSlice()`、`AddProducedContract()`、`AddConsumedContract()`；`BaseSlice` struct（实现 Slice 接口）；`BaseContract` struct（实现 Contract 接口） |
+| `src/kernel/cell/base_test.go` | 生命周期: New → Init → Start → Health(healthy) → Stop → Health(unhealthy)；BaseSlice/BaseContract accessor 测试 |
+
+### Step 0.4 — Assembly 运行时 `kernel/assembly/`（Day 3-4）
+
+| 文件 | 内容 |
+|------|------|
+| `src/kernel/assembly/assembly.go` | `CoreAssembly` struct + `New(Config)`、`Register(Cell)`（校验无重复 ID）、`Start(ctx)`（按注册顺序 Init→Start）、`Stop(ctx)`（反序 Stop）、`Health()` |
+| `src/kernel/assembly/assembly_test.go` | 注册 2 mock cell → Start → Health → Stop 反序验证；重复 ID 报错；Init 失败回滚 |
+
+### Step 0.5 — 顶层入口 + Gate 测试（Day 4）
+
+| 文件 | 内容 |
+|------|------|
+| `src/gocell.go` | `func NewAssembly(id string) *assembly.CoreAssembly` |
+| `src/gocell_test.go` | Phase 0 Gate: NewAssembly → Register(BaseCell) → Start → Health → Stop |
+
+### Step 0.6 — 元数据 JSON Schema `kernel/metadata/schemas/`（Day 5-7）
+
+master-plan Phase 0 第 4 项明确要求产出 JSON Schema。这些 schema 是 validate-meta 的格式校验基础，也支撑 IDE YAML 自动补全。
+
+| Schema 文件 | 定义对象 | 关键字段 |
+|---|---|---|
+| `cell.schema.json` | cell.yaml | id, type(enum), consistencyLevel(enum), owner, schema.primary, verify.smoke, l0Dependencies |
+| `slice.schema.json` | slice.yaml | id, belongsToCell, contractUsages[]{contract,role(enum)}, verify{unit,contract,waivers} |
+| `contract.schema.json` | contract.yaml | id, kind(enum), ownerCell, consistencyLevel, lifecycle(enum), endpoints(oneOf per kind), schemaRefs; event 时 required: replayable, idempotencyKey, deliverySemantics |
+| `assembly.schema.json` | assembly.yaml | id, cells[], build{entrypoint,binary,deployTemplate} |
+| `journey.schema.json` | J-*.yaml | id, goal, owner, cells[], contracts[], passCriteria[]{text,mode(enum),checkRef} |
+| `status-board.schema.json` | status-board.yaml | array of {journeyId, state(enum), risk(enum), blocker, updatedAt} |
+| `actors.schema.json` | actors.yaml | array of {id, type(enum), maxConsistencyLevel(enum)} |
+
+每个 schema 使用 JSON Schema Draft 2020-12。YAML 文件可通过 `# yaml-language-server: $schema=...` 注释获得 IDE 支持。
+
+`kernel/metadata/schemas/embed.go` — 用 `//go:embed *.json` 将 schema 内嵌到 Go 二进制，供 validate-meta 的 FMT 规则直接使用。
+
+### Step 0.7 — 验证 + 构建（Day 7）
+
+```bash
+cd src && go build ./... && go test ./... -cover
+```
+
+### Phase 0 依赖图
+
+```
+pkg/errcode            ← stdlib
+pkg/ctxkeys            ← stdlib
+kernel/cell            ← stdlib + pkg/errcode + pkg/ctxkeys
+kernel/metadata/schemas ← 纯 JSON 文件 + embed.go（无 Go 依赖）
+kernel/assembly        ← kernel/cell + pkg/errcode
+gocell.go              ← kernel/assembly
+```
+
+**预估**: 21 个文件（14 Go + 7 JSON Schema）, ~1600 行
+
+---
+
+## Phase 1: Kernel 核心 (Days 8-28)
+
+### Week 1 (Days 8-14): Metadata + Validate + Scaffold
+
+#### Step 1.1 — 元数据 Go 类型 `kernel/metadata/types.go`（Day 8-9）
+
+所有 YAML 对应的 Go struct：`CellMeta`、`SliceMeta`、`ContractMeta`（含 kind-specific `EndpointsMeta`）、`JourneyMeta`（含 `PassCriterion`）、`AssemblyMeta`、`StatusBoardEntry`、`ActorMeta` + 共用类型 `OwnerMeta`、`ContractUsage`、`WaiverMeta`、`SchemaRefsMeta`、`BuildMeta`
+
+#### Step 1.2 — 元数据解析器 `kernel/metadata/parser.go`（Day 9-10）
+
+- `Parser` struct + `NewParser(root string)`
+- `Parse() (*ProjectMeta, error)` — 遍历文件系统加载全部 YAML
+- `ParseFS(fsys fs.FS)` — 支持 `fstest.MapFS` 测试
+- `ProjectMeta` 聚合结构（map[string]*CellMeta 等）
+- 目录遍历约定：`cells/*/cell.yaml`、`cells/*/slices/*/slice.yaml`、`contracts/*/*/*/*/contract.yaml`、`journeys/J-*.yaml`、`assemblies/*/assembly.yaml`
+- 外部依赖：`gopkg.in/yaml.v3`（kernel 唯一外部依赖）
+
+测试：用 `fstest.MapFS` + 现有 YAML 模板作为 testdata
+
+#### Step 1.3 — validate-meta `kernel/governance/`（Day 10-12）
+
+**核心文件：**
+
+| 文件 | 规则 |
+|------|------|
+| `rules_ref.go` | REF-01~10: 引用完整性（belongsToCell→cell 存在、contractUsages→contract 存在、ownerCell 是 cell 非 actor、schemaRefs 文件存在、id==dirname 等） |
+| `rules_topo.go` | TOPO-01~08: 拓扑合法性（role 匹配 kind、provider/consumer 身份、一致性等级约束、L0 不进契约、cell 至多属于一个 assembly） |
+| `rules_verify.go` | VERIFY-01~04: 闭环（provider contractUsage 必有 verify.contract 或 waiver、waiver 未过期、L0 依赖显式声明） |
+| `rules_fmt.go` | FMT-01~06: 格式校验，第一层用 JSON Schema（Phase 0 的 `schemas/*.schema.json`）驱动结构校验，第二层校验枚举合法性、event 必填字段、禁止 legacy 字段名 |
+| `rules_advisory.go` | ADV-01~02: 警告级（journey 缺 status-board 条目、journey coverage gap） |
+| `validate.go` | `Validator` struct, `Validate() []ValidationResult`, `HasErrors() bool` |
+
+测试：table-driven, 每条规则一个正向 + 一个反向 case
+
+#### Step 1.4 — Journey Catalog `kernel/journey/catalog.go`（Day 12-13）
+
+`Catalog` struct: Get / List / CellJourneys / ContractJourneys / Status / CrossCellJourneys
+
+#### Step 1.5 — Scaffolder `kernel/scaffold/`（Day 13-14）
+
+`Scaffolder` struct + `CreateCell/Slice/Contract/Journey(opts)` — 用 `text/template` 生成 V3 格式 YAML
+
+**Week 1 并行**: 1.3 (validate) 和 1.4 (journey catalog) 和 1.5 (scaffold) 在 1.2 (parser) 完成后可并行
+
+### Week 2 (Days 15-21): Registry + Depcheck + Generator
+
+#### Step 1.6 — Contract/Cell Registry `kernel/registry/`（Day 15-16）
+
+- `ContractRegistry`: Get / ByKind / ByOwner / Producers / Consumers
+- `CellRegistry`: Get / SlicesFor / AllIDs
+
+#### Step 1.7 — Dependency Checker `kernel/governance/depcheck.go`（Day 16-17）
+
+- one-slice-one-cell 校验
+- unregistered contract 检测
+- circular cell dependency 检测（via contract graph）
+
+#### Step 1.8 — select-targets `kernel/governance/targets.go`（Day 17-18）
+
+- `TargetSelector.SelectFromFiles(files) → AffectedTargets`
+- `SelectFromSlice(sliceID) → AffectedTargets`
+- 映射：文件 → slice（目录约定）→ cell → journey + contract
+- **Advisory** 级别，非 blocking
+
+#### Step 1.9 — Assembly Generator `kernel/assembly/generator.go`（Day 18-20）
+
+- `GenerateEntrypoint(assemblyID) → []byte` — 用 `text/template` 生成 main.go（注册 cells、init、start、graceful shutdown）
+- `GenerateBoundary(assemblyID) → []byte` — 生成 `boundary.yaml`（exportedContracts、importedContracts、smokeTargets、fingerprint）
+
+**Week 2 并行**: 1.6→1.7→1.8 是链式依赖；1.9 (generator) 在 1.6 完成后可与 1.7/1.8 并行
+
+### Week 3 (Days 22-28): Verify + Outbox/Idempotency 接口 + CLI
+
+#### Step 1.10 — Verify Runner `kernel/slice/verify.go`（Day 22-23）
+
+- `VerifySlice(sliceID)` — 包装 `go test -run` 执行 unit + contract 测试
+- `VerifyCell(cellID)` — 执行 smoke 测试
+- `RunJourney(journeyID)` — 执行 auto passCriteria
+
+#### Step 1.11 — Outbox 接口 `kernel/outbox/outbox.go`（Day 23）
+
+纯接口：`Writer`（事务内写 entry）、`Relay`（发布 outbox）、`Publisher`（实际投递）
+
+#### Step 1.12 — Idempotency 接口 `kernel/idempotency/idempotency.go`（Day 23）
+
+纯接口：`Checker`（IsProcessed / MarkProcessed）
+
+#### Step 1.13 — CLI `cmd/gocell/`（Day 24-27）
+
+| 文件 | 子命令 |
+|------|--------|
+| `commands/root.go` | 入口 dispatch |
+| `commands/validate.go` | `gocell validate` — 运行 validate-meta |
+| `commands/scaffold.go` | `gocell scaffold cell\|slice\|contract\|journey` |
+| `commands/generate.go` | `gocell generate assembly\|indexes\|boundaries` |
+| `commands/check.go` | `gocell check contract-health\|slice-coverage\|...` |
+| `commands/verify.go` | `gocell verify slice\|cell\|journey\|targets` |
+
+#### Step 1.14 — Phase 1 Gate 测试（Day 28）
+
+```bash
+gocell scaffold cell --id=demo --type=core --level=L1 --team=demo
+gocell scaffold slice --id=demo-op --cell=demo
+gocell validate   # pass
+gocell generate assembly --id=core-bundle
+```
+
+### Phase 1 依赖图
+
+```
+kernel/metadata      ← yaml.v3 + kernel/cell
+kernel/registry      ← kernel/metadata
+kernel/governance    ← kernel/metadata + kernel/registry + pkg/errcode
+kernel/journey       ← kernel/metadata
+kernel/scaffold      ← kernel/metadata + text/template
+kernel/assembly(gen) ← kernel/metadata + kernel/registry
+kernel/slice(verify) ← kernel/metadata + os/exec
+kernel/outbox        ← stdlib (interfaces only)
+kernel/idempotency   ← stdlib (interfaces only)
+cmd/gocell           ← all kernel packages
+```
+
+**预估**: ~30 个文件, ~4600 行
+
+---
+
+## Phase 2: Runtime + Built-in Cells (Days 29-63)
+
+### Week 4-5 (Days 29-42): Runtime 层
+
+| 包 | 关键文件 | 内容 |
+|---|---|---|
+| `runtime/http/middleware/` | request_id, real_ip, recovery, access_log, security_headers, body_limit, rate_limit（各 .go） | 7 个 `func(http.Handler) http.Handler` 中间件，chi 兼容 |
+| `runtime/http/health/` | health.go | `/healthz` + `/readyz`，集成 Assembly.Health() |
+| `runtime/http/router/` | router.go | chi-based 路由构建器 |
+| `runtime/config/` | config.go, watcher.go | YAML/env 配置加载 + 文件变更触发 |
+| `runtime/bootstrap/` | bootstrap.go | 统一启动器（parse config → init assembly → start HTTP → start workers） |
+| `runtime/shutdown/` | shutdown.go | graceful shutdown（signal → timeout → 有序 teardown） |
+| `runtime/observability/metrics/` | metrics.go | Prometheus 注册 + HTTP 中间件 |
+| `runtime/observability/tracing/` | tracing.go | OpenTelemetry tracer |
+| `runtime/observability/logging/` | logging.go | slog handler + trace_id/span_id 关联 |
+| `runtime/worker/` | worker.go, job.go | 后台 worker 生命周期 + 异步 job 框架 |
+| `runtime/auth/jwt/` | jwt.go | RS256 验证 + Claims + kid rotation |
+| `runtime/auth/rbac/` | rbac.go | RBAC 中间件 |
+| `runtime/auth/servicetoken/` | servicetoken.go | 服务间认证 |
+
+**新增外部依赖**: `github.com/go-chi/chi/v5`, `golang.org/x/crypto`
+
+### Week 6 (Days 43-49): access-core Cell
+
+需要补齐至 master-plan 定义的 5 个 slice：
+
+| Slice | 现有? | 内容 |
+|-------|-------|------|
+| identity-manage | 新增 | 用户 CRUD, 锁定/解锁 |
+| session-login | 已有 YAML | OIDC/密码登录, JWT 签发, session 创建 |
+| session-refresh | 新增 | token 刷新, 滚动过期 |
+| session-logout | 新增 | session 吊销 + event.session.revoked 发布 |
+| authorization-decide | 新增 | RBAC 权限判定 |
+
+每个 slice 目录：`slice.yaml` + `handler.go` + `service.go` + `service_test.go`
+Cell 级：`cell.go`（AccessCore struct 实现 Cell 接口）+ `internal/domain/`（User/Session/Role entities）+ `internal/ports/`（Repository 接口）
+
+现有 session-validate 和 rbac-check slice 合并到 master-plan 定义的 slice 中。
+
+补齐契约：`event.session.revoked.v1`, `event.user.created.v1`, `event.user.locked.v1`, `http.auth.me.v1`
+补齐 Journey：J-session-refresh, J-session-logout, J-user-onboarding, J-account-lockout
+
+### Week 7 (Days 50-56): audit-core Cell
+
+补齐至 3 个 slice：audit-write, audit-verify, audit-archive
+- HMAC-SHA256 hash chain 实现
+- 消费 session.*/user.*/config.* 事件
+- 补齐契约：`event.audit.integrity-verified.v1`
+- 补齐 Journey: J-audit-login-trail（跨 cell）
+
+### Week 8 (Days 57-63): config-core Cell
+
+补齐至 4 个 slice：config-manage, config-publish, config-subscribe, feature-flag
+- 配置 CRUD + 版本管理 + 热更新事件
+- Feature flags（开关/灰度/rollout）
+- 补齐契约：`event.config.rollback.v1`, `http.config.flags.v1`
+- 补齐 Journey: J-config-hot-reload, J-config-rollback（跨 cell）
+
+**Phase 2 Gate**: 3 个 cell 在 core-bundle assembly 中运行，8 条 journey 通过
+
+---
+
+## Phase 3: Adapters (Days 64-77)
+
+| 包 | 关键内容 |
+|---|---|
+| `adapters/postgres/` | 连接池 + TxManager + Migrator + outbox Writer/Relay 实现 |
+| `adapters/redis/` | 连接 + 分布式锁 + idempotency.Checker 实现 |
+| `adapters/oidc/` | OIDC provider client + token exchange |
+| `adapters/s3/` | S3/MinIO client + presigned URL |
+| `adapters/rabbitmq/` | Publisher + Consumer（ConsumerBase + DLQ + retry） |
+| `adapters/websocket/` | WebSocket hub + signal-first 模式 |
+
+**新增外部依赖**: `pgx/v5`, `go-redis/v9`, `amqp091-go`, `nhooyr.io/websocket`
+
+testcontainers 集成测试验证 outbox→relay→consume 全链路
+
+**Phase 3 Gate**: 全链路 outbox→relay→consume, OIDC login, RabbitMQ DLQ, WebSocket push
+
+---
+
+## Phase 4: Examples + 文档 (Days 78-91)
+
+- `examples/sso-bff/` — SSO 完整登录流程
+- `examples/todo-order/` — CRUD + 事件驱动 + 自定义 cell
+- `examples/iot-device/` — L4 设备管理
+- README Getting Started
+- 模板：ADR / cell-design / contract-review / runbook / postmortem / Grafana dashboard
+- Optional adapter 接口桩
+
+**Phase 4 Gate**: 新项目 30 分钟内创建第一个 cell + slice + journey 并跑通
+
+---
+
+## 并行化策略
+
+```
+Phase 0 (sequential, small):
+  pkg/errcode ──┐
+  pkg/ctxkeys ──┼── kernel/cell ── kernel/assembly ── gocell.go [GATE]
+
+Phase 1 (3-4 parallel after metadata parser):
+  kernel/metadata ──┬── kernel/governance (validate)
+                    ├── kernel/journey (catalog)
+                    ├── kernel/scaffold
+                    ├── kernel/registry ── governance (depcheck, targets)
+                    └── kernel/assembly (generator)
+                    └──────────────────── cmd/gocell
+
+Phase 2 (6-8 parallel):
+  runtime/http ──┐
+  runtime/auth ──┤
+  runtime/obs  ──┼── cells/access-core ──┐
+  runtime/worker ┤   cells/audit-core  ──┼── Integration
+  runtime/config ┘   cells/config-core ──┘
+
+Phase 3 (5-6 parallel):
+  adapters/{postgres,redis,oidc,s3,rabbitmq,websocket} → integration chain
+```
+
+---
+
+## 开始执行的第一步
+
+**立即实现 Phase 0（21 个文件）**:
+1. `src/pkg/errcode/errcode.go` + test
+2. `src/pkg/ctxkeys/keys.go` + test
+3. `src/kernel/cell/types.go` + `interfaces.go` + `consistency.go` + tests
+4. `src/kernel/cell/base.go` + test
+5. `src/kernel/assembly/assembly.go` + test
+6. `src/kernel/metadata/schemas/*.schema.json`（7 个）+ `embed.go`
+7. `src/gocell.go` + `gocell_test.go`
+8. `go build ./... && go test ./...`
+
+---
+
+## 验证方式
+
+每个 Phase 结束时：
+
+| Phase | 验证命令 |
+|-------|---------|
+| 0 | `cd src && go build ./... && go test ./... -cover` — 编译通过，Gate 测试绿 |
+| 1 | `go build ./cmd/gocell && ./gocell validate && ./gocell scaffold cell --id=demo --type=core --level=L1 --team=demo` |
+| 2 | `./gocell verify cell --id=access-core && ./gocell verify journey --id=J-sso-login` |
+| 3 | `docker compose up -d && go test ./adapters/... -tags=integration` |
+| 4 | `cd examples/sso-bff && go run .` — 30 分钟内完成 |

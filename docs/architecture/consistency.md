@@ -1,98 +1,112 @@
-# GoCell Consistency Levels (L0-L4)
+# GoCell 一致性等级（L0-L4）
 
-## Overview
+## 概述
 
-Every Cell and Slice must declare a consistency level. This drives architectural decisions: transaction boundaries, outbox usage, replay requirements, and test strategy.
+每个 Cell 和 Slice 都必须声明一致性等级。这驱动架构决策：事务边界、Outbox 使用、Replay 要求和测试策略。
+
+---
 
 ## L0 — LocalOnly
 
-**Scope:** Single slice internal processing. No cross-cell propagation.
+**范围**：单 Slice 内部处理。无跨 Cell 传播。
 
-| Aspect | Rule |
-|--------|------|
-| Transaction | None or in-memory only |
-| Outbox | Not applicable |
-| Events | None published |
-| Test | Unit test sufficient |
+| 方面 | 规则 |
+|------|------|
+| 事务 | 无，或仅内存操作 |
+| Outbox | 不适用 |
+| 事件 | 不发布 |
+| 测试 | Unit 测试即可 |
 
-**Examples:** Input validation, pure computation, local formatting.
+**示例**：输入校验、纯计算、本地格式化。
+
+---
 
 ## L1 — LocalTx
 
-**Scope:** Single cell, local database transaction. Strong consistency within the cell.
+**范围**：单 Cell 内的本地数据库事务。Cell 内强一致性。
 
-| Aspect | Rule |
-|--------|------|
-| Transaction | Required — single DB transaction |
-| Outbox | Not required (no cross-cell effect) |
-| Events | None published outside cell |
-| Test | Transaction rollback/commit test |
+| 方面 | 规则 |
+|------|------|
+| 事务 | 必须 — 单数据库事务 |
+| Outbox | 不需要（无跨 Cell 影响） |
+| 事件 | 不对外发布 |
+| 测试 | 事务回滚/提交测试 |
 
-**Examples:** Session creation, audit log write, config entry update.
+**示例**：Session 创建、审计日志写入、配置项更新。
+
+---
 
 ## L2 — OutboxFact
 
-**Scope:** Local transaction + outbox publication. The cell writes business state AND an outbox entry in the same transaction, then a relay publishes the event.
+**范围**：本地事务 + Outbox 发布。Cell 将业务状态和 Outbox 条目写入同一事务，然后由 Relay 发布事件。
 
-| Aspect | Rule |
-|--------|------|
-| Transaction | Required — business write + outbox write in same tx |
-| Outbox | Required |
-| Events | Published as authoritative facts |
-| Consumer | Must be idempotent, must have consumed marker |
-| Test | Outbox write atomicity + consumer idempotency test |
+| 方面 | 规则 |
+|------|------|
+| 事务 | 必须 — 业务写入 + Outbox 写入在同一事务 |
+| Outbox | 必须 |
+| 事件 | 作为权威事实发布 |
+| 消费方 | 必须幂等，必须有 Consumed Marker |
+| 测试 | Outbox 原子性 + 消费者幂等测试 |
 
-**Examples:** `session.created`, `config.changed`, `user.locked`.
+**示例**：`session.created`、`config.changed`、`user.locked`。
 
-**Critical rule:** Never `eventbus.Publish()` directly after DB commit. Always go through outbox.
+**关键规则**：永远不要在 DB 提交后直接 `eventbus.Publish()`。必须通过 Outbox。
+
+---
 
 ## L3 — WorkflowEventual
 
-**Scope:** Cross-cell orchestration, projections, queries, notifications. Eventually consistent.
+**范围**：跨 Cell 编排、投影、查询、通知。最终一致性。
 
-| Aspect | Rule |
-|--------|------|
-| Transaction | Consumer-side only |
-| Outbox | Consumer may use outbox for further propagation |
-| Events | Consumed from L2 producers |
-| Projection | Must be rebuildable (discard + replay) |
-| Test | Replay test + projection rebuild test |
+| 方面 | 规则 |
+|------|------|
+| 事务 | 仅消费方侧 |
+| Outbox | 消费方可用 Outbox 进一步传播 |
+| 事件 | 从 L2 Producer 消费 |
+| 投影 | 必须可重建（丢弃 + 重放） |
+| 测试 | Replay 测试 + 投影重建测试 |
 
-**Examples:** Fleet query view, audit timeline, compliance tracking.
+**示例**：设备列表查询视图、审计时间线、合规追踪。
 
-**Critical rule:** Projections must never become authoritative truth.
+**关键规则**：投影永远不得升格为权威真相。
+
+---
 
 ## L4 — DeviceLatent
 
-**Scope:** Depends on device coming online. Long delay, weak closure guarantee.
+**范围**：依赖设备上线。长延迟，弱闭环保证。
 
-| Aspect | Rule |
-|--------|------|
-| Transaction | Application-level state machine |
-| Outbox | May be used for initial dispatch |
-| Closure | Depends on device callback (hours to days) |
-| Test | Timeout test + late-arrival test + retry test |
+| 方面 | 规则 |
+|------|------|
+| 事务 | 应用级状态机 |
+| Outbox | 可用于初始分发 |
+| 闭环 | 依赖设备回调（数小时到数天） |
+| 测试 | 超时测试 + 迟到处理测试 + 重试测试 |
 
-**Examples:** SyncML command ACK, certificate renewal, device inventory refresh.
+**示例**：SyncML 命令 ACK、证书续期、设备清单刷新。
 
-**Critical rule:** L4 must not be treated as ordinary async. Requires explicit timeout handling, retry budget, and late-arrival merge strategy.
+**关键规则**：L4 不得被当作普通异步处理。需要显式的超时处理、重试预算和迟到合并策略。
 
-## Verification Matrix
+---
 
-| Level | Unit | Contract | Smoke | Journey | Replay |
-|-------|------|----------|-------|---------|--------|
-| L0 | Required | — | — | — | — |
-| L1 | Required | — | Required | — | — |
-| L2 | Required | Required | Required | Required | — |
-| L3 | Required | Required | Required | Required | Required |
-| L4 | Required | Required | Required | Required | Required |
+## 验证矩阵
 
-## Decision Framework
+| 等级 | Unit | Contract | Smoke | Journey | Replay |
+|------|------|----------|-------|---------|--------|
+| L0 | 必须 | — | — | — | — |
+| L1 | 必须 | — | 必须 | — | — |
+| L2 | 必须 | 必须 | 必须 | 必须 | — |
+| L3 | 必须 | 必须 | 必须 | 必须 | 必须 |
+| L4 | 必须 | 必须 | 必须 | 必须 | 必须 |
 
-When implementing a new capability, ask:
+---
 
-1. Does it write to DB? → At least L1
-2. Do other cells need to know? → L2 (outbox)
-3. Is the consumer a projection or query? → L3
-4. Does closure depend on external device? → L4
-5. Is it pure computation? → L0
+## 决策框架
+
+实现新功能时，按以下顺序判断：
+
+1. 会写数据库吗？→ 至少 L1
+2. 其他 Cell 需要知道吗？→ L2（Outbox）
+3. 消费方是投影或查询？→ L3
+4. 闭环依赖外部设备？→ L4
+5. 是纯计算？→ L0
