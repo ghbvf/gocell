@@ -2,8 +2,10 @@ package cell
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -86,6 +88,29 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 	assert.Equal(t, "cc1", c.ConsumedContracts()[0].ID())
 }
 
+func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "copy-test"})
+	s := NewBaseSlice("s1", "copy-test", L0)
+	c.AddSlice(s)
+	pc := NewBaseContract("pc1", ContractHTTP, "copy-test", L1)
+	c.AddProducedContract(pc)
+	cc := NewBaseContract("cc1", ContractEvent, "other", L2)
+	c.AddConsumedContract(cc)
+
+	// Mutating the returned slice must not affect the internal state.
+	slices := c.OwnedSlices()
+	slices[0] = nil
+	assert.NotNil(t, c.OwnedSlices()[0], "OwnedSlices should return a defensive copy")
+
+	produced := c.ProducedContracts()
+	produced[0] = nil
+	assert.NotNil(t, c.ProducedContracts()[0], "ProducedContracts should return a defensive copy")
+
+	consumed := c.ConsumedContracts()
+	consumed[0] = nil
+	assert.NotNil(t, c.ConsumedContracts()[0], "ConsumedContracts should return a defensive copy")
+}
+
 func TestBaseCellReadyStates(t *testing.T) {
 	c := NewBaseCell(CellMetadata{ID: "r"})
 
@@ -103,6 +128,72 @@ func TestBaseCellReadyStates(t *testing.T) {
 	// Stop: not ready.
 	require.NoError(t, c.Stop(context.Background()))
 	assert.False(t, c.Ready())
+}
+
+// ---------------------------------------------------------------------------
+// BaseCell state machine — invalid transitions
+// ---------------------------------------------------------------------------
+
+func TestBaseCellDoubleInit(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "dbl-init"})
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+
+	err := c.Init(context.Background(), Dependencies{})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrLifecycleInvalid, ecErr.Code)
+}
+
+func TestBaseCellStartWithoutInit(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "no-init"})
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrLifecycleInvalid, ecErr.Code)
+}
+
+func TestBaseCellDoubleStart(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "dbl-start"})
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+	require.NoError(t, c.Start(context.Background()))
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrLifecycleInvalid, ecErr.Code)
+}
+
+func TestBaseCellStopWithoutStart(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "no-start"})
+
+	// Stop on a brand-new cell is a no-op.
+	require.NoError(t, c.Stop(context.Background()))
+}
+
+func TestBaseCellInitThenStopSkipStart(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "init-stop"})
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+
+	// Stop from initialized is a no-op.
+	require.NoError(t, c.Stop(context.Background()))
+}
+
+func TestBaseCellRestart(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "restart"})
+
+	// Full lifecycle.
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Stop(context.Background()))
+
+	// Re-init from stopped state should succeed.
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+	require.NoError(t, c.Start(context.Background()))
+	assert.True(t, c.Ready())
 }
 
 // ---------------------------------------------------------------------------

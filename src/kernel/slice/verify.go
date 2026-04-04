@@ -5,6 +5,7 @@ package slice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -214,12 +215,8 @@ func runGoTest(ctx context.Context, dir string, args []string) (output string, p
 	return output, false, fmt.Errorf("go test execution failed: %w", runErr)
 }
 
-// isExitError checks whether err is an *exec.ExitError and assigns it to target.
-// This is a helper to avoid importing errors in the main flow.
+// isExitError checks whether err (or any wrapped error in its chain) is an
+// *exec.ExitError and assigns it to target.
 func isExitError(err error, target **exec.ExitError) bool {
-	if ee, ok := err.(*exec.ExitError); ok {
-		*target = ee
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }

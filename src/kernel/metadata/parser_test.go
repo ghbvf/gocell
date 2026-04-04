@@ -507,6 +507,164 @@ verify:
 	assert.Equal(t, "access-core", sl.BelongsToCell)
 }
 
+func TestParseFS_DuplicateCellID(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+type: core
+consistencyLevel: L2
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_access_core
+verify:
+  smoke:
+    - smoke.access-core.startup
+`)},
+		"cells/access-core-v2/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+type: core
+consistencyLevel: L2
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_access_core
+verify:
+  smoke:
+    - smoke.access-core.startup
+`)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "access-core")
+}
+
+func TestParseFS_DuplicateContractID(t *testing.T) {
+	fs := fstest.MapFS{
+		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: access-core
+  clients: []
+`)},
+		"contracts/http/auth/login/v2/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: access-core
+  clients: []
+`)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "http.auth.login.v1")
+}
+
+func TestParseFS_DuplicateJourneyID(t *testing.T) {
+	// fstest.MapFS does not allow two files with the same path, so we simulate
+	// duplicate journey IDs by placing them in different directories.
+	// However, matchJourneyYAML only matches "journeys/J-*.yaml" (exactly 2 segments).
+	// Instead we use two journey files with different names but the same id field.
+	fs := fstest.MapFS{
+		"journeys/J-sso-login.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+goal: SSO login
+owner:
+  team: platform
+  role: journey-owner
+cells: []
+contracts: []
+passCriteria: []
+`)},
+		"journeys/J-sso-login-copy.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+goal: SSO login copy
+owner:
+  team: platform
+  role: journey-owner
+cells: []
+contracts: []
+passCriteria: []
+`)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "J-sso-login")
+}
+
+func TestParseFS_DuplicateAssemblyID(t *testing.T) {
+	fs := fstest.MapFS{
+		"assemblies/core-bundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
+cells:
+  - access-core
+build:
+  entrypoint: src/cmd/core-bundle/main.go
+  binary: core-bundle
+  deployTemplate: k8s
+`)},
+		"assemblies/core-bundle-v2/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
+cells:
+  - access-core
+build:
+  entrypoint: src/cmd/core-bundle/main.go
+  binary: core-bundle
+  deployTemplate: k8s
+`)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "core-bundle")
+}
+
+func TestParseFS_DuplicateSliceID(t *testing.T) {
+	// Two slice files in different cell directories but producing the same composite key
+	// is unlikely since key = cellID/sliceID. Instead, we can't have two files at the
+	// same path in fstest.MapFS. So we create a scenario where the same cell directory
+	// has a duplicate slice id — but that requires the same path which isn't possible.
+	// The realistic scenario: two different cell dirs contain slices that map to the
+	// same key (cellID/sliceID), which can't happen since cellID comes from the path.
+	// Instead, test that two slices in the same cell with the same id: field fail.
+	// This requires two different slice directories under the same cell, both declaring
+	// the same id in YAML.
+	fs := fstest.MapFS{
+		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+belongsToCell: access-core
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`)},
+		"cells/access-core/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+belongsToCell: access-core
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "dup-slice")
+}
+
 func TestParseFS_CellWithL0Dependencies(t *testing.T) {
 	fs := fstest.MapFS{
 		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core

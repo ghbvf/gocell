@@ -123,6 +123,10 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
+	if _, exists := pm.Cells[m.ID]; exists {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
+	}
 	pm.Cells[m.ID] = &m
 	return nil
 }
@@ -142,6 +146,10 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 
 	key := cellID + "/" + m.ID
+	if _, exists := pm.Slices[key]; exists {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("duplicate slice ID %q: %s and previous", key, path))
+	}
 	pm.Slices[key] = &m
 	return nil
 }
@@ -150,6 +158,10 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m ContractMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
+	}
+	if _, exists := pm.Contracts[m.ID]; exists {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("duplicate contract ID %q: %s and previous", m.ID, path))
 	}
 	pm.Contracts[m.ID] = &m
 	return nil
@@ -160,6 +172,10 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
+	if _, exists := pm.Journeys[m.ID]; exists {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("duplicate journey ID %q: %s and previous", m.ID, path))
+	}
 	pm.Journeys[m.ID] = &m
 	return nil
 }
@@ -168,6 +184,10 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m AssemblyMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
+	}
+	if _, exists := pm.Assemblies[m.ID]; exists {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))
 	}
 	pm.Assemblies[m.ID] = &m
 	return nil

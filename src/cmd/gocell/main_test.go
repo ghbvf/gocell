@@ -20,7 +20,11 @@ func TestFindRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
+	t.Cleanup(func() {
+		if chErr := os.Chdir(orig); chErr != nil {
+			t.Logf("cleanup: failed to restore working directory: %v", chErr)
+		}
+	})
 
 	// findRoot should find the go.mod in the src/ directory (or wherever it is
 	// relative to the test binary). Walk up from current test dir to find it.
@@ -108,7 +112,9 @@ func TestFormatResultsContainsCodeAndMessage(t *testing.T) {
 
 	formatResults(results)
 
-	_ = w.Close()
+	if closeErr := w.Close(); closeErr != nil {
+		t.Logf("pipe close: %v", closeErr)
+	}
 	os.Stdout = old
 
 	buf := make([]byte, 4096)
@@ -161,14 +167,14 @@ func TestRunValidate(t *testing.T) {
 	}
 	// Run validate with explicit root. It may return an error if there are
 	// validation errors in the project, but it should not panic.
-	_ = runValidate([]string{"--root", root})
+	// We only assert no panic; validation errors are expected.
+	t.Logf("runValidate result: %v", runValidate([]string{"--root", root}))
 }
 
 func TestRunValidateNoRoot(t *testing.T) {
 	// Running without --root should auto-detect.
-	err := runValidate([]string{})
 	// May succeed or fail with validation errors; just ensure no panic.
-	_ = err
+	t.Logf("runValidate result: %v", runValidate([]string{}))
 }
 
 func TestRunScaffoldNoArgs(t *testing.T) {

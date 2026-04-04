@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// DefaultTTL is the standard idempotency key TTL per the EventBus specification.
+const DefaultTTL = 24 * time.Hour
+
 // Checker provides idempotency checking for event consumers.
 // The standard TTL is 24 hours per the EventBus specification.
 type Checker interface {

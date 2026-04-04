@@ -2,6 +2,7 @@ package governance
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 )
@@ -177,7 +178,16 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 func (v *Validator) validateTOPO06() []ValidationResult {
 	var results []ValidationResult
 	cellAssembly := make(map[string]string) // cellID -> assemblyID
-	for _, a := range v.project.Assemblies {
+
+	// Sort assembly keys for deterministic error output.
+	assemblyKeys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		assemblyKeys = append(assemblyKeys, k)
+	}
+	sort.Strings(assemblyKeys)
+
+	for _, key := range assemblyKeys {
+		a := v.project.Assemblies[key]
 		for i, cellRef := range a.Cells {
 			if existing, ok := cellAssembly[cellRef]; ok {
 				results = append(results, ValidationResult{

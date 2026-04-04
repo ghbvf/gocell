@@ -7,14 +7,39 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// validateFMT01 checks that contract.lifecycle is one of {draft, active, deprecated}.
-func (v *Validator) validateFMT01() []ValidationResult {
-	var results []ValidationResult
-	validLifecycles := map[string]bool{
+// Package-level lookup maps for validation rules, avoiding per-call allocation.
+var (
+	validLifecycles = map[string]bool{
 		string(cell.LifecycleDraft):      true,
 		string(cell.LifecycleActive):     true,
 		string(cell.LifecycleDeprecated): true,
 	}
+	validCellTypes = map[string]bool{
+		string(cell.CellTypeCore):    true,
+		string(cell.CellTypeEdge):    true,
+		string(cell.CellTypeSupport): true,
+	}
+	validRoles = map[string]bool{
+		string(cell.RoleServe):     true,
+		string(cell.RoleCall):      true,
+		string(cell.RolePublish):   true,
+		string(cell.RoleSubscribe): true,
+		string(cell.RoleHandle):    true,
+		string(cell.RoleInvoke):    true,
+		string(cell.RoleProvide):   true,
+		string(cell.RoleRead):      true,
+	}
+	validKinds = map[string]bool{
+		string(cell.ContractHTTP):       true,
+		string(cell.ContractEvent):      true,
+		string(cell.ContractCommand):    true,
+		string(cell.ContractProjection): true,
+	}
+)
+
+// validateFMT01 checks that contract.lifecycle is one of {draft, active, deprecated}.
+func (v *Validator) validateFMT01() []ValidationResult {
+	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if !validLifecycles[c.Lifecycle] {
 			results = append(results, ValidationResult{
@@ -33,13 +58,8 @@ func (v *Validator) validateFMT01() []ValidationResult {
 // validateFMT02 checks that cell.type is one of {core, edge, support}.
 func (v *Validator) validateFMT02() []ValidationResult {
 	var results []ValidationResult
-	validTypes := map[string]bool{
-		string(cell.CellTypeCore):    true,
-		string(cell.CellTypeEdge):    true,
-		string(cell.CellTypeSupport): true,
-	}
 	for _, c := range v.project.Cells {
-		if !validTypes[c.Type] {
+		if !validCellTypes[c.Type] {
 			results = append(results, ValidationResult{
 				Code:      "FMT-02",
 				Severity:  SeverityError,
@@ -127,16 +147,6 @@ func (v *Validator) validateFMT04() []ValidationResult {
 // validateFMT05 checks that contractUsages[].role is one of the 8 valid roles.
 func (v *Validator) validateFMT05() []ValidationResult {
 	var results []ValidationResult
-	validRoles := map[string]bool{
-		string(cell.RoleServe):     true,
-		string(cell.RoleCall):      true,
-		string(cell.RolePublish):   true,
-		string(cell.RoleSubscribe): true,
-		string(cell.RoleHandle):    true,
-		string(cell.RoleInvoke):    true,
-		string(cell.RoleProvide):   true,
-		string(cell.RoleRead):      true,
-	}
 	for key, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if !validRoles[cu.Role] {
@@ -211,12 +221,6 @@ func (v *Validator) validateFMT07() []ValidationResult {
 // validateFMT09 checks that contract.kind is one of {http, event, command, projection}.
 func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
-	validKinds := map[string]bool{
-		string(cell.ContractHTTP):       true,
-		string(cell.ContractEvent):      true,
-		string(cell.ContractCommand):    true,
-		string(cell.ContractProjection): true,
-	}
 	for _, c := range v.project.Contracts {
 		if !validKinds[c.Kind] {
 			results = append(results, ValidationResult{

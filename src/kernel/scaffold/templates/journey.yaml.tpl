@@ -1,5 +1,5 @@
 id: {{.ID}}
-goal: {{.Goal}}
+goal: "{{.Goal}}"
 owner:
   team: {{.OwnerTeam}}
   role: journey-owner

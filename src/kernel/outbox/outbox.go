@@ -17,6 +17,7 @@ type Entry struct {
 	EventType     string
 	Payload       []byte
 	CreatedAt     time.Time
+	Metadata      map[string]string // optional metadata (ref: Watermill Message.Metadata)
 }
 
 // Writer writes outbox entries within a transaction.

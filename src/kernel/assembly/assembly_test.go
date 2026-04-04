@@ -171,6 +171,9 @@ func TestAssemblyInitFailure(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bad")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
 
 	// The good cell was Init'd but never Start'd, so unhealthy.
 	health := a.Health()
@@ -206,6 +209,9 @@ func TestAssemblyStartFailureRollback(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bad")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrLifecycleInvalid, ec.Code)
 
 	// good was started then rolled back (Stop called)
 	assert.Equal(t, []string{"good"}, order, "rollback should Stop already-started cells")
@@ -262,6 +268,9 @@ func TestAssemblyStopContinuesOnError(t *testing.T) {
 	require.Error(t, err)
 	// First error should be from "bad2" (last registered, stopped first).
 	assert.Contains(t, err.Error(), "bad2")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrLifecycleInvalid, ec.Code)
 	// Both fail-stop cells should have been called despite errors.
 	assert.True(t, bad1.stopCalled)
 	assert.True(t, bad2.stopCalled)

@@ -51,6 +51,7 @@ type Validator struct {
 	root       string                   // project root for file existence checks
 	now        func() time.Time         // clock function (injectable for tests)
 	fileExists func(path string) bool   // file existence check (injectable for tests)
+	actorSet   map[string]bool          // pre-built set of external actor IDs
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -65,6 +66,10 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			Assemblies: map[string]*metadata.AssemblyMeta{},
 		}
 	}
+	actorSet := make(map[string]bool, len(project.Actors))
+	for _, a := range project.Actors {
+		actorSet[a.ID] = true
+	}
 	return &Validator{
 		project: project,
 		root:    root,
@@ -73,6 +78,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			_, err := os.Stat(path)
 			return err == nil
 		},
+		actorSet: actorSet,
 	}
 }
 

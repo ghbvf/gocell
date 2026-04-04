@@ -126,14 +126,10 @@ func isWithinRoot(root, target string) bool {
 // --- actor helpers ---
 
 // actorExists checks if an actor ID is a known cell or external actor.
+// It uses the pre-built actorSet for O(1) external actor lookup.
 func (v *Validator) actorExists(id string) bool {
 	if _, ok := v.project.Cells[id]; ok {
 		return true
 	}
-	for _, a := range v.project.Actors {
-		if a.ID == id {
-			return true
-		}
-	}
-	return false
+	return v.actorSet[id]
 }

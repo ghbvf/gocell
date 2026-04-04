@@ -337,6 +337,15 @@ func TestCreateContract_IDTooShort(t *testing.T) {
 	requireErrCode(t, err, ErrScaffoldInvalidOpts)
 }
 
+func TestCreateContract_IDPrefixMismatchKind(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	err := s.CreateContract(ContractOpts{ID: "event.auth.login.v1", Kind: "http", OwnerCell: "c"})
+	requireErrCode(t, err, ErrScaffoldInvalidOpts)
+	assert.Contains(t, err.Error(), "prefix")
+	assert.Contains(t, err.Error(), "must match kind")
+}
+
 func TestCreateContract_Conflict(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
@@ -429,7 +438,7 @@ func TestCreateJourney(t *testing.T) {
 	outPath := filepath.Join(root, "journeys", "J-sso-login.yaml")
 	content := readGenerated(t, outPath)
 	assert.Contains(t, content, "id: sso-login")
-	assert.Contains(t, content, "goal: User completes SSO login and obtains a valid session")
+	assert.Contains(t, content, `goal: "User completes SSO login and obtains a valid session"`)
 	assert.Contains(t, content, "team: platform")
 	assert.Contains(t, content, "role: journey-owner")
 	assert.Contains(t, content, "- access-core")

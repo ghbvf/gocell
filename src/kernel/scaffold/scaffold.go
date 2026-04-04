@@ -132,6 +132,10 @@ func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 		return errcode.New(ErrScaffoldInvalidOpts,
 			fmt.Sprintf("contract ID %q must have at least 3 dot-separated segments (kind.domain.version)", opts.ID))
 	}
+	if parts[0] != opts.Kind {
+		return errcode.New(ErrScaffoldInvalidOpts,
+			fmt.Sprintf("contract ID prefix %q must match kind %q", parts[0], opts.Kind))
+	}
 
 	// Build path from all parts.
 	pathParts := append([]string{s.root, "contracts"}, parts...)
