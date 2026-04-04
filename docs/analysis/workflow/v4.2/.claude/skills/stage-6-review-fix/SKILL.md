@@ -1,0 +1,173 @@
+---
+name: stage-6-review-fix
+description: "Review-Fix循环: 6席位ReviewBench+上下文注入+Reasoning Blindness+tech-debt标签"
+allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
+---
+
+# 阶段 6: Review-Fix 循环（最多 3 轮）
+
+**执行者**: 总负责人派发 Reviewer + 开发者修复
+
+**入口条件**: S5 出口通过（tasks.md 全 [x] + build/test 绿）
+
+---
+
+## 6 个命名 Review Bench 席位定义
+
+| 席位 | 审查焦点 | 核心检查项 |
+|------|---------|-----------|
+| **架构一致性 Reviewer** | DDD 分层、聚合边界、模块耦合 | Handler 无业务逻辑？Entity 无直接序列化？跨聚合走 EventBus？ |
+| **安全/权限 Reviewer** | 认证鉴权、数据暴露、攻击面、供应链 | JWT 中间件？列表强制分页？无 localhost 回退？ |
+| **测试/回归 Reviewer** | 测试覆盖、回归风险、边界用例 | domain >= 80%？application >= 60%？E2E 覆盖关键路径？ |
+| **运维/部署 Reviewer** | Docker/CI 配置、migration 安全、环境一致性 | migration up/down 对？新字段有默认值？CONCURRENTLY 索引？ |
+| **DX/可维护性 Reviewer** | 代码可读性、命名、复杂度、文档内链 | 认知复杂度 <= 15？同义字符串 < 3 次？空实现有理由？ |
+| **产品/用户体验 Reviewer** | 交互流程、错误提示、空状态、用户路径 | 空状态有意义？错误提示友好？导航可达？Loading 状态？ |
+
+---
+
+## 上下文注入强化
+
+每个 Reviewer Agent 的 prompt 必须强制注入以下 4 项上下文：
+
+1. **kernel-constraints.md**（已有） — 内核约束基准
+2. **git diff main...{branch} --stat**（新增） — 变更范围概览
+3. **specs/{branch}/spec.md 最新版**（新增） — 需求对照基准
+4. **当前 commit hash**（新增） — 审查基准版本锚定
+
+获取变更范围：
+```bash
+git diff main...{branch} --stat
+```
+
+## Reasoning Blindness 指令
+
+所有 Reviewer 的 prompt 必须包含以下指令：
+
+```
+审查纪律: 直接审查代码变更和测试覆盖。不参考 Agent 对自身工作的描述。
+不因"Agent 说它已测试"就跳过验证。自行确认事实。
+```
+
+---
+
+## 操作步骤
+
+### Round 1（全量）
+
+**6.1** 派发 6 个命名席位 review Agent(subagent_type=Explore)：
+
+每个 Reviewer prompt 模板：
+```
+角色: {席位名称} Reviewer
+审查焦点: {上表对应焦点}
+
+上下文（必须阅读后再审查）:
+1. kernel-constraints.md: {注入内容}
+2. 变更范围: {git diff --stat 结果}
+3. spec.md: {注入最新版}
+4. 审查基准版本: {commit hash}
+
+审查纪律: 直接审查代码变更和测试覆盖。不参考 Agent 对自身工作的描述。
+不因"Agent 说它已测试"就跳过验证。自行确认事实。
+
+增加检查维度: 实现是否违反 Kernel Guardian定义的内核约束？
+
+产出格式:
+每条 finding 必须包含:
+- 严重级别: P0(阻塞) / P1(重要) / P2(建议)
+- 发现席位: {席位名称}
+- 受影响文件: {文件路径}
+- 问题描述: {具体问题}
+- 建议修复: {修复方案}
+```
+
+**6.2** 收集 findings → 产出 `specs/{branch}/review-findings.md`
+
+review-findings.md 格式：
+```markdown
+# Review Findings — Phase {N}
+
+## 审查基准版本
+Commit: {hash}
+Branch: {branch}
+变更范围: {文件数} files changed
+
+## P0（阻塞）
+| # | 席位 | 文件 | 问题 | 建议修复 |
+|---|------|------|------|---------|
+
+## P1（重要）
+| # | 席位 | 文件 | 问题 | 建议修复 |
+|---|------|------|------|---------|
+
+## P2（建议）
+| # | 席位 | 文件 | 问题 | 建议修复 |
+|---|------|------|------|---------|
+```
+
+**6.3** 总负责人裁决: 哪些修/哪些延迟
+
+**6.4** 派发开发者修复 P0 + 选定的 P1
+
+**6.5** 验证: build + test
+
+### Round 2（聚焦）
+
+**6.6** 派发聚焦 review（只检查修复区域 + 回归风险）
+
+**6.7** VERIFIED → 进入阶段 7; ISSUE → 修复 → Round 3
+
+### Round 3（最终）
+
+**6.8** 只检查 P0
+
+**6.9** 总负责人: 将 P1+ 记录到 `specs/{branch}/tech-debt.md`
+
+### tech-debt.md 格式
+
+```markdown
+# Tech Debt — Phase {N}
+
+## 分类说明
+- [TECH]: 技术债务（代码质量、架构退化、测试缺失）
+- [PRODUCT]: 产品债务（降级体验、缺失功能、临时方案）
+
+## 延迟项
+| # | 标签 | 来源席位 | 问题 | 延迟理由 | 建议修复时机 |
+|---|------|---------|------|---------|-------------|
+| 1 | [TECH] | 架构一致性 | ... | ... | Phase N+1 |
+| 2 | [PRODUCT] | 产品/UX | ... | ... | Phase N+2 |
+
+## 统计
+- [TECH] 新增: {N} 条
+- [PRODUCT] 新增: {N} 条
+- 上一 Phase 遗留已解决: {N} 条
+```
+
+**6.10** 仍有 P0 → 升级到架构师裁决
+
+### 阶段门检查
+
+```bash
+bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S6 --check exit
+```
+
+---
+
+## 硬性产出物
+
+| 文件 | 路径 | 责任角色 |
+|------|------|---------|
+| review-findings.md | `specs/{branch}/review-findings.md` | 6 个 Reviewer |
+| tech-debt.md | `specs/{branch}/tech-debt.md` | 总负责人 |
+| 修复后的代码 | `src/` | 开发者 |
+
+## 出口条件
+
+```
+[ ] 无 P0 遗留
+[ ] review-findings.md 已写且含审查基准版本（commit hash）
+[ ] tech-debt.md 已写且每条含 [TECH] 或 [PRODUCT] 标签
+[ ] build + test 绿
+[ ] phase-gate-check.sh --stage S6 --check exit = PASS
+```
