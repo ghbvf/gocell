@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/registry"
 )
 
 // TestResult represents the outcome of a single test target.
@@ -32,7 +31,6 @@ type VerifyResult struct {
 // Runner executes verification tests.
 type Runner struct {
 	project *metadata.ProjectMeta
-	cells   *registry.CellRegistry
 	root    string // project root for running go test
 }
 
@@ -41,7 +39,6 @@ type Runner struct {
 func NewRunner(project *metadata.ProjectMeta, root string) *Runner {
 	return &Runner{
 		project: project,
-		cells:   registry.NewCellRegistry(project),
 		root:    root,
 	}
 }

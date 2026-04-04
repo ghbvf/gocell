@@ -158,3 +158,6 @@ func (c *BaseContract) Kind() ContractKind        { return c.kind }
 func (c *BaseContract) OwnerCell() string          { return c.owner }
 func (c *BaseContract) ConsistencyLevel() Level   { return c.level }
 func (c *BaseContract) Lifecycle() Lifecycle       { return c.lc }
+
+// SetLifecycle updates the governance lifecycle state of the contract.
+func (c *BaseContract) SetLifecycle(lc Lifecycle) { c.lc = lc }

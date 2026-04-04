@@ -148,16 +148,13 @@ func TestValidProject_ZeroErrors(t *testing.T) {
 	// Use empty root to skip filesystem checks (REF-11, REF-12).
 	val := NewValidator(pm, "")
 	results := val.Validate()
-	errs := val.Errors(results)
+	errs := FilterErrors(results)
 	assert.Empty(t, errs, "valid project should have 0 errors, got: %v", errs)
 }
 
 // --- test: HasErrors / Errors / Warnings ---
 
 func TestFilterFunctions(t *testing.T) {
-	pm := validProject()
-	val := NewValidator(pm, ".")
-
 	results := []ValidationResult{
 		{Code: "ERR-1", Severity: SeverityError},
 		{Code: "WARN-1", Severity: SeverityWarning},
@@ -165,12 +162,12 @@ func TestFilterFunctions(t *testing.T) {
 		{Code: "WARN-2", Severity: SeverityWarning},
 	}
 
-	assert.True(t, val.HasErrors(results))
-	assert.Len(t, val.Errors(results), 2)
-	assert.Len(t, val.Warnings(results), 2)
+	assert.True(t, HasErrors(results))
+	assert.Len(t, FilterErrors(results), 2)
+	assert.Len(t, FilterWarnings(results), 2)
 
-	assert.False(t, val.HasErrors(val.Warnings(results)))
-	assert.False(t, val.HasErrors(nil))
+	assert.False(t, HasErrors(FilterWarnings(results)))
+	assert.False(t, HasErrors(nil))
 }
 
 // --- REF rules ---
@@ -939,12 +936,7 @@ func TestVERIFY02(t *testing.T) {
 }
 
 func TestVERIFY02_TimeOverride(t *testing.T) {
-	// Verify that nowFunc override works correctly.
-	original := nowFunc
-	defer func() { nowFunc = original }()
-	nowFunc = func() time.Time {
-		return time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
-	}
+	t.Parallel()
 
 	pm := validProject()
 	pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
@@ -952,6 +944,9 @@ func TestVERIFY02_TimeOverride(t *testing.T) {
 	}
 
 	val := NewValidator(pm, "")
+	val.now = func() time.Time {
+		return time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	}
 	got := findByCode(val.validateVERIFY02(), "VERIFY-02")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "expired")
@@ -1200,6 +1195,91 @@ func TestFMT05(t *testing.T) {
 	}
 }
 
+// --- FMT-09: contract.kind must be in {http, event, command, projection} ---
+
+func TestFMT09(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "valid kinds",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "invalid kind grpc",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.test.v1"] = &metadata.ContractMeta{
+					ID:               "grpc.test.v1",
+					Kind:             "grpc",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "empty kind",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["empty.kind.v1"] = &metadata.ContractMeta{
+					ID:               "empty.kind.v1",
+					Kind:             "",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "valid kind command",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
+					ID:               "command.test.v1",
+					Kind:             "command",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Handler: "access-core"},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "valid kind projection",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
+					ID:               "projection.test.v1",
+					Kind:             "projection",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Provider: "access-core"},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT09(), "FMT-09")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueInvalid, r.IssueType)
+			}
+		})
+	}
+}
+
 // --- ADV rules ---
 
 func TestADV01(t *testing.T) {
@@ -1352,9 +1432,9 @@ func TestValidate_AggregatesAllRules(t *testing.T) {
 	assert.NotEmpty(t, findByCode(results, "FMT-01"))
 	assert.NotEmpty(t, findByCode(results, "ADV-01"))
 
-	assert.True(t, val.HasErrors(results))
-	assert.NotEmpty(t, val.Errors(results))
-	assert.NotEmpty(t, val.Warnings(results))
+	assert.True(t, HasErrors(results))
+	assert.NotEmpty(t, FilterErrors(results))
+	assert.NotEmpty(t, FilterWarnings(results))
 }
 
 func TestValidate_EmptyProject(t *testing.T) {

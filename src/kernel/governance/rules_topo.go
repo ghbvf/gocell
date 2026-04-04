@@ -4,40 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
-
-// contractProvider returns the provider cell/actor for a contract based on its kind.
-func contractProvider(c *metadata.ContractMeta) string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
-		return c.Endpoints.Server
-	case cell.ContractEvent:
-		return c.Endpoints.Publisher
-	case cell.ContractCommand:
-		return c.Endpoints.Handler
-	case cell.ContractProjection:
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
-}
-
-// contractConsumers returns the consumer cell/actor list for a contract based on its kind.
-func contractConsumers(c *metadata.ContractMeta) []string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
-		return c.Endpoints.Clients
-	case cell.ContractEvent:
-		return c.Endpoints.Subscribers
-	case cell.ContractCommand:
-		return c.Endpoints.Invokers
-	case cell.ContractProjection:
-		return c.Endpoints.Readers
-	default:
-		return nil
-	}
-}
 
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
 func (v *Validator) validateTOPO01() []ValidationResult {
@@ -166,7 +133,11 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 	// Build set of L0 cells.
 	l0Cells := make(map[string]bool)
 	for _, c := range v.project.Cells {
-		if c.ConsistencyLevel == "L0" {
+		level, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			continue // FMT-03 covers invalid levels
+		}
+		if level == cell.L0 {
 			l0Cells[c.ID] = true
 		}
 	}
@@ -228,22 +199,3 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 	return results
 }
 
-// --- helpers ---
-
-func containsRole(roles []cell.ContractRole, target cell.ContractRole) bool {
-	for _, r := range roles {
-		if r == target {
-			return true
-		}
-	}
-	return false
-}
-
-func containsString(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-	return false
-}

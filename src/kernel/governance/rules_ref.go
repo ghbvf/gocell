@@ -2,7 +2,6 @@ package governance
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -190,36 +189,6 @@ func (v *Validator) validateREF09() []ValidationResult {
 	return results
 }
 
-// --- file path helpers ---
-
-func cellFile(cellID string) string {
-	return fmt.Sprintf("cells/%s/cell.yaml", cellID)
-}
-
-func sliceFile(key string) string {
-	// key is "cellID/sliceID"
-	parts := strings.SplitN(key, "/", 2)
-	if len(parts) == 2 {
-		return fmt.Sprintf("cells/%s/slices/%s/slice.yaml", parts[0], parts[1])
-	}
-	return key
-}
-
-func contractFile(contractID string) string {
-	// contract IDs are like "http.auth.login.v1"
-	// directory: contracts/http/auth/login/v1/contract.yaml
-	segments := strings.Split(contractID, ".")
-	return fmt.Sprintf("contracts/%s/contract.yaml", strings.Join(segments, "/"))
-}
-
-func journeyFile(journeyID string) string {
-	return fmt.Sprintf("journeys/%s.yaml", journeyID)
-}
-
-func assemblyFile(assemblyID string) string {
-	return fmt.Sprintf("assemblies/%s/assembly.yaml", assemblyID)
-}
-
 // validateREF10 checks that every assembly has a non-empty build.entrypoint.
 func (v *Validator) validateREF10() []ValidationResult {
 	var results []ValidationResult
@@ -236,13 +205,6 @@ func (v *Validator) validateREF10() []ValidationResult {
 		}
 	}
 	return results
-}
-
-// isWithinRoot checks that target resolves to a path inside root.
-func isWithinRoot(root, target string) bool {
-	cleanRoot := filepath.Clean(root) + string(os.PathSeparator)
-	cleanTarget := filepath.Clean(target)
-	return strings.HasPrefix(cleanTarget, cleanRoot) || cleanTarget == filepath.Clean(root)
 }
 
 // validateREF11 checks that assembly.build.entrypoint file exists on disk.
@@ -270,7 +232,7 @@ func (v *Validator) validateREF11() []ValidationResult {
 			})
 			continue
 		}
-		if _, err := os.Stat(fullPath); err != nil {
+		if !v.fileExists(fullPath) {
 			results = append(results, ValidationResult{
 				Code:      "REF-11",
 				Severity:  SeverityError,
@@ -282,19 +244,6 @@ func (v *Validator) validateREF11() []ValidationResult {
 		}
 	}
 	return results
-}
-
-// repositoryRoot returns the repository root from the project root.
-// If root ends with "src", the repository root is the parent directory.
-func repositoryRoot(root string) string {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return root
-	}
-	if filepath.Base(absRoot) == "src" {
-		return filepath.Dir(absRoot)
-	}
-	return absRoot
 }
 
 // validateREF12 checks that contract.schemaRefs files exist on disk.
@@ -335,7 +284,7 @@ func (v *Validator) validateREF12() []ValidationResult {
 				})
 				continue
 			}
-			if _, err := os.Stat(fullPath); err != nil {
+			if !v.fileExists(fullPath) {
 				results = append(results, ValidationResult{
 					Code:      "REF-12",
 					Severity:  SeverityError,
@@ -348,13 +297,6 @@ func (v *Validator) validateREF12() []ValidationResult {
 		}
 	}
 	return results
-}
-
-// contractDirFromID converts a contract ID to its directory path.
-// "http.auth.login.v1" -> "contracts/http/auth/login/v1"
-func contractDirFromID(id string) string {
-	segments := strings.Split(id, ".")
-	return filepath.Join("contracts", filepath.Join(segments...))
 }
 
 // validateREF13 checks that the contract provider actor exists as a cell or actor.
@@ -422,15 +364,3 @@ func (v *Validator) validateREF15() []ValidationResult {
 	return results
 }
 
-// actorExists checks if an actor ID is a known cell or external actor.
-func (v *Validator) actorExists(id string) bool {
-	if _, ok := v.project.Cells[id]; ok {
-		return true
-	}
-	for _, a := range v.project.Actors {
-		if a.ID == id {
-			return true
-		}
-	}
-	return false
-}

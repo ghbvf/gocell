@@ -176,6 +176,26 @@ func TestBaseContractAccessors(t *testing.T) {
 	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default lifecycle should be active")
 }
 
+func TestBaseContractSetLifecycle(t *testing.T) {
+	c := NewBaseContract("api-v1", ContractHTTP, "access-core", L1)
+	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default should be active")
+
+	tests := []struct {
+		name string
+		lc   Lifecycle
+	}{
+		{"draft", LifecycleDraft},
+		{"deprecated", LifecycleDeprecated},
+		{"back to active", LifecycleActive},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c.SetLifecycle(tt.lc)
+			assert.Equal(t, tt.lc, c.Lifecycle())
+		})
+	}
+}
+
 func TestBaseContractAllKinds(t *testing.T) {
 	tests := []struct {
 		kind ContractKind

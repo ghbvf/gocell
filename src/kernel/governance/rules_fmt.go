@@ -158,7 +158,11 @@ func (v *Validator) validateFMT05() []ValidationResult {
 func (v *Validator) validateFMT06() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
-		if c.ConsistencyLevel != "L0" && c.Schema.Primary == "" {
+		level, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			continue // FMT-03 covers invalid levels
+		}
+		if level != cell.L0 && c.Schema.Primary == "" {
 			results = append(results, ValidationResult{
 				Code:      "FMT-06",
 				Severity:  SeverityError,
@@ -198,6 +202,30 @@ func (v *Validator) validateFMT07() []ValidationResult {
 				File:      contractFile(c.ID),
 				Field:     field,
 				Message:   fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT09 checks that contract.kind is one of {http, event, command, projection}.
+func (v *Validator) validateFMT09() []ValidationResult {
+	var results []ValidationResult
+	validKinds := map[string]bool{
+		string(cell.ContractHTTP):       true,
+		string(cell.ContractEvent):      true,
+		string(cell.ContractCommand):    true,
+		string(cell.ContractProjection): true,
+	}
+	for _, c := range v.project.Contracts {
+		if !validKinds[c.Kind] {
+			results = append(results, ValidationResult{
+				Code:      "FMT-09",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      contractFile(c.ID),
+				Field:     "kind",
+				Message:   fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
 			})
 		}
 	}

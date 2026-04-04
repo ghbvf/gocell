@@ -92,7 +92,7 @@ func TestNewRunner(t *testing.T) {
 	require.NotNil(t, r)
 	assert.Equal(t, proj, r.project)
 	assert.Equal(t, "/some/root", r.root)
-	assert.NotNil(t, r.cells)
+	assert.Equal(t, "/some/root", r.root)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,12 @@
 // instead of K8s field.Path linked lists.
 package governance
 
-import "github.com/ghbvf/gocell/kernel/metadata"
+import (
+	"os"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+)
 
 // Severity of a validation result.
 type Severity string
@@ -32,19 +37,20 @@ const (
 
 // ValidationResult represents a single validation finding.
 type ValidationResult struct {
-	Code      string            // e.g., "REF-01", "TOPO-03"
-	Severity  Severity          //nolint:unused
-	IssueType IssueType         //nolint:unused
-	File      string            // YAML file path
-	Field     string            // field path within YAML, e.g. "contractUsages[0].role"
-	Message   string            //nolint:unused
-	Details   map[string]string //nolint:unused
+	Code      string    // e.g., "REF-01", "TOPO-03"
+	Severity  Severity
+	IssueType IssueType
+	File      string // YAML file path
+	Field     string // field path within YAML, e.g. "contractUsages[0].role"
+	Message   string
 }
 
 // Validator runs all validation rules against a parsed project.
 type Validator struct {
-	project *metadata.ProjectMeta
-	root    string // project root for file existence checks
+	project    *metadata.ProjectMeta
+	root       string                   // project root for file existence checks
+	now        func() time.Time         // clock function (injectable for tests)
+	fileExists func(path string) bool   // file existence check (injectable for tests)
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -59,7 +65,15 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			Assemblies: map[string]*metadata.AssemblyMeta{},
 		}
 	}
-	return &Validator{project: project, root: root}
+	return &Validator{
+		project: project,
+		root:    root,
+		now:     time.Now,
+		fileExists: func(path string) bool {
+			_, err := os.Stat(path)
+			return err == nil
+		},
+	}
 }
 
 // Validate runs all rules and returns all findings.
@@ -105,6 +119,7 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT06()...)
 	results = append(results, v.validateFMT07()...)
 	results = append(results, v.validateFMT08()...)
+	results = append(results, v.validateFMT09()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)
@@ -116,7 +131,7 @@ func (v *Validator) Validate() []ValidationResult {
 }
 
 // HasErrors returns true if any result has SeverityError.
-func (v *Validator) HasErrors(results []ValidationResult) bool {
+func HasErrors(results []ValidationResult) bool {
 	for i := range results {
 		if results[i].Severity == SeverityError {
 			return true
@@ -125,8 +140,8 @@ func (v *Validator) HasErrors(results []ValidationResult) bool {
 	return false
 }
 
-// Errors returns only error-severity results.
-func (v *Validator) Errors(results []ValidationResult) []ValidationResult {
+// FilterErrors returns only error-severity results.
+func FilterErrors(results []ValidationResult) []ValidationResult {
 	var out []ValidationResult
 	for i := range results {
 		if results[i].Severity == SeverityError {
@@ -136,8 +151,8 @@ func (v *Validator) Errors(results []ValidationResult) []ValidationResult {
 	return out
 }
 
-// Warnings returns only warning-severity results.
-func (v *Validator) Warnings(results []ValidationResult) []ValidationResult {
+// FilterWarnings returns only warning-severity results.
+func FilterWarnings(results []ValidationResult) []ValidationResult {
 	var out []ValidationResult
 	for i := range results {
 		if results[i].Severity == SeverityWarning {
