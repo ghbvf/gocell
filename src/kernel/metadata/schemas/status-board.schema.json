@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/status-board.schema.json",
+  "title": "GoCell Status Board",
+  "description": "Operational layer tracking journey delivery status. Does not participate in architectural legality checks. Entries with missing journeys produce warnings, not errors.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["journeyId", "state", "risk", "updatedAt"],
+    "additionalProperties": false,
+    "properties": {
+      "journeyId": {
+        "type": "string",
+        "description": "Reference to a journey id (must start with J-).",
+        "pattern": "^J-.+"
+      },
+      "state": {
+        "type": "string",
+        "description": "Current delivery state of the journey.",
+        "enum": ["todo", "doing", "blocked", "ready"]
+      },
+      "risk": {
+        "type": "string",
+        "description": "Current risk assessment.",
+        "enum": ["low", "medium", "high"]
+      },
+      "blocker": {
+        "type": "string",
+        "description": "Description of the blocking issue, if any. Empty string when unblocked."
+      },
+      "updatedAt": {
+        "type": "string",
+        "format": "date",
+        "description": "Date when this entry was last updated (YYYY-MM-DD)."
+      }
+    }
+  }
+}

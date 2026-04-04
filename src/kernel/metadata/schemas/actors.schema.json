@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/actors.schema.json",
+  "title": "GoCell Actor Registry",
+  "description": "Registry of external actors that participate in contracts but are not part of the Cell model. maxConsistencyLevel constrains the provider role only, not the consumer role.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "type"],
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Unique actor identifier.",
+        "pattern": "^[a-z][a-z0-9-]*$"
+      },
+      "type": {
+        "type": "string",
+        "description": "Actor type. Currently only 'external' is supported.",
+        "enum": ["external"]
+      },
+      "maxConsistencyLevel": {
+        "type": "string",
+        "description": "Maximum consistency level this actor can operate at in a provider role.",
+        "enum": ["L0", "L1", "L2", "L3", "L4"]
+      }
+    }
+  }
+}

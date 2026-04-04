@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/contract.schema.json",
+  "title": "GoCell Contract Descriptor",
+  "description": "Defines a Contract, the cross-Cell boundary protocol. All interactions between L1+ Cells require a contract. The endpoints structure varies by kind (http, event, command, projection).",
+  "type": "object",
+  "required": ["id", "kind", "consistencyLevel", "lifecycle", "endpoints"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique contract identifier in the form {kind}.{domain-path}.{version}.",
+      "pattern": "^(http|event|command|projection)\\..+\\.v[0-9]+$"
+    },
+    "kind": {
+      "type": "string",
+      "description": "Contract kind that determines the endpoint structure.",
+      "enum": ["http", "event", "command", "projection"]
+    },
+    "ownerCell": {
+      "type": "string",
+      "description": "The cell that owns (provides) this contract. Defaults to the provider endpoint cell. May be omitted."
+    },
+    "consistencyLevel": {
+      "type": "string",
+      "description": "Consistency level for this contract. Must not exceed the provider cell's consistency level.",
+      "enum": ["L0", "L1", "L2", "L3", "L4"]
+    },
+    "lifecycle": {
+      "type": "string",
+      "description": "Lifecycle stage. Transitions are one-way: draft -> active -> deprecated.",
+      "enum": ["draft", "active", "deprecated"]
+    },
+    "endpoints": {
+      "type": "object",
+      "description": "Provider and consumer endpoints. Structure depends on the contract kind."
+    },
+    "schemaRefs": {
+      "type": "object",
+      "description": "References to JSON Schema files for request/response or payload validation. Paths are relative to the contract.yaml directory.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "replayable": {
+      "type": "boolean",
+      "description": "Whether the event or projection supports replay. Required for kind=event and kind=projection."
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "description": "Field used as the idempotency key. Required for kind=event."
+    },
+    "deliverySemantics": {
+      "type": "string",
+      "description": "Delivery guarantee. Required for kind=event.",
+      "enum": ["at-least-once", "exactly-once"]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "http" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "required": ["server", "clients"],
+            "additionalProperties": false,
+            "properties": {
+              "server": {
+                "type": "string",
+                "description": "The cell or actor that serves this HTTP endpoint."
+              },
+              "clients": {
+                "type": "array",
+                "description": "Cells or actors that call this HTTP endpoint.",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "event" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["replayable", "idempotencyKey", "deliverySemantics"],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "required": ["publisher", "subscribers"],
+            "additionalProperties": false,
+            "properties": {
+              "publisher": {
+                "type": "string",
+                "description": "The cell that publishes this event."
+              },
+              "subscribers": {
+                "type": "array",
+                "description": "Cells or actors that subscribe to this event.",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "command" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "required": ["handler", "invokers"],
+            "additionalProperties": false,
+            "properties": {
+              "handler": {
+                "type": "string",
+                "description": "The cell that handles this command."
+              },
+              "invokers": {
+                "type": "array",
+                "description": "Cells or actors that invoke this command.",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "projection" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["replayable"],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "required": ["provider", "readers"],
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "type": "string",
+                "description": "The cell that provides this projection."
+              },
+              "readers": {
+                "type": "array",
+                "description": "Cells or actors that read this projection.",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

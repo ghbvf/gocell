@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/assembly.schema.json",
+  "title": "GoCell Assembly Descriptor",
+  "description": "Defines an Assembly, the physical packaging unit. An assembly groups cells into a single deployable binary. Boundary information is generated into a separate file by tooling.",
+  "type": "object",
+  "required": ["id", "cells", "build"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique assembly identifier. Must equal the directory name under src/assemblies/.",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "cells": {
+      "type": "array",
+      "description": "List of cell ids included in this assembly.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "build": {
+      "type": "object",
+      "description": "Build configuration for the assembly.",
+      "required": ["entrypoint", "binary", "deployTemplate"],
+      "additionalProperties": false,
+      "properties": {
+        "entrypoint": {
+          "type": "string",
+          "description": "Path to the main.go entrypoint, relative to the repository root."
+        },
+        "binary": {
+          "type": "string",
+          "description": "Output binary name."
+        },
+        "deployTemplate": {
+          "type": "string",
+          "description": "Deployment template identifier (e.g. k8s, docker-compose)."
+        }
+      }
+    }
+  }
+}

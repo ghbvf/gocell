@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/journey.schema.json",
+  "title": "GoCell Journey Descriptor",
+  "description": "Defines a Journey, the acceptance truth. A Journey specifies what 'done' means for a user-facing capability. It is not a dependency truth.",
+  "type": "object",
+  "required": ["id", "goal", "owner", "cells", "passCriteria"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique journey identifier. Must start with 'J-'.",
+      "pattern": "^J-.+"
+    },
+    "goal": {
+      "type": "string",
+      "description": "Human-readable goal describing what the journey achieves."
+    },
+    "owner": {
+      "type": "object",
+      "description": "Team and role responsible for the journey.",
+      "required": ["team", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "type": "string",
+          "description": "Owning team name."
+        },
+        "role": {
+          "type": "string",
+          "description": "Ownership role, typically 'journey-owner'."
+        }
+      }
+    },
+    "cells": {
+      "type": "array",
+      "description": "Routing anchors: cells involved in this journey. This is best-effort, not an exhaustive list.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "contracts": {
+      "type": "array",
+      "description": "Acceptance curation: contracts directly asserted by passCriteria. Not the full dependency graph.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "passCriteria": {
+      "type": "array",
+      "description": "Acceptance criteria. Each entry defines a check that must pass for the journey to be considered complete.",
+      "items": {
+        "type": "object",
+        "required": ["text", "mode"],
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Human-readable description of the criterion."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Whether this criterion is verified automatically or manually.",
+            "enum": ["auto", "manual"]
+          },
+          "checkRef": {
+            "type": "string",
+            "description": "Reference to an automated check. Required when mode is 'auto'."
+          }
+        },
+        "if": {
+          "properties": { "mode": { "const": "auto" } },
+          "required": ["mode"]
+        },
+        "then": {
+          "required": ["checkRef"]
+        }
+      },
+      "minItems": 1
+    }
+  }
+}
