@@ -108,7 +108,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 				continue
 			}
 			consumers := contractConsumers(c)
-			if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
+			if len(consumers) > 0 && !containsString(consumers, "*") && !containsString(consumers, s.BelongsToCell) {
 				results = append(results, ValidationResult{
 					Code:      "TOPO-03",
 					Severity:  SeverityError,

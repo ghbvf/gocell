@@ -52,8 +52,16 @@ func New(cfg Config) *CoreAssembly {
 }
 
 // Register adds a Cell to the assembly. It returns an error if the Cell ID is
-// empty or already registered.
+// empty, already registered, or the assembly has already been started.
 func (a *CoreAssembly) Register(c cell.Cell) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.state != stateStopped {
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("assembly %q: cannot register in state %d", a.id, a.state))
+	}
+
 	id := c.ID()
 	if id == "" {
 		return errcode.New(errcode.ErrValidationFailed, "cell ID must not be empty")

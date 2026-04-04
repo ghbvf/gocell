@@ -227,6 +227,23 @@ func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	require.Error(t, err, "double start should fail")
 }
 
+func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
+	a := New(Config{ID: "reg-after-start"})
+	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
+	require.NoError(t, a.Register(c1))
+	require.NoError(t, a.Start(context.Background()))
+
+	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "c2", Type: cell.CellTypeCore})
+	err := a.Register(c2)
+	require.Error(t, err, "register after start should fail")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "cannot register")
+
+	require.NoError(t, a.Stop(context.Background()))
+}
+
 func TestAssemblyStopContinuesOnError(t *testing.T) {
 	a := New(Config{ID: "stop-err"})
 

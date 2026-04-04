@@ -238,6 +238,13 @@ func (v *Validator) validateREF10() []ValidationResult {
 	return results
 }
 
+// isWithinRoot checks that target resolves to a path inside root.
+func isWithinRoot(root, target string) bool {
+	cleanRoot := filepath.Clean(root) + string(os.PathSeparator)
+	cleanTarget := filepath.Clean(target)
+	return strings.HasPrefix(cleanTarget, cleanRoot) || cleanTarget == filepath.Clean(root)
+}
+
 // validateREF11 checks that assembly.build.entrypoint file exists on disk.
 // Skipped when root is empty.
 func (v *Validator) validateREF11() []ValidationResult {
@@ -252,6 +259,17 @@ func (v *Validator) validateREF11() []ValidationResult {
 		// The entrypoint path is relative to the repository root (parent of go.mod directory).
 		repoRoot := repositoryRoot(v.root)
 		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
+		if !isWithinRoot(repoRoot, fullPath) {
+			results = append(results, ValidationResult{
+				Code:      "REF-11",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      assemblyFile(a.ID),
+				Field:     "build.entrypoint",
+				Message:   fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root", a.ID, a.Build.Entrypoint),
+			})
+			continue
+		}
 		if _, err := os.Stat(fullPath); err != nil {
 			results = append(results, ValidationResult{
 				Code:      "REF-11",
@@ -306,6 +324,17 @@ func (v *Validator) validateREF12() []ValidationResult {
 				continue
 			}
 			fullPath := filepath.Join(contractDir, ref.value)
+			if !isWithinRoot(contractDir, fullPath) {
+				results = append(results, ValidationResult{
+					Code:      "REF-12",
+					Severity:  SeverityError,
+					IssueType: IssueInvalid,
+					File:      contractFile(c.ID),
+					Field:     ref.field,
+					Message:   fmt.Sprintf("contract %q %s %q: path escapes project root", c.ID, ref.field, ref.value),
+				})
+				continue
+			}
 			if _, err := os.Stat(fullPath); err != nil {
 				results = append(results, ValidationResult{
 					Code:      "REF-12",

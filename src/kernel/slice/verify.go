@@ -148,10 +148,17 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 }
 
 // parseSliceKey splits "cellID/sliceID" into its parts.
+// It rejects cellID or sliceID containing path traversal sequences or separators.
 func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid slice key %q: expected format \"cellID/sliceID\"", key)
+	}
+	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
+		return "", "", fmt.Errorf("invalid cellID: contains path separator or traversal")
+	}
+	if strings.Contains(parts[1], "..") || strings.ContainsAny(parts[1], `/\`) {
+		return "", "", fmt.Errorf("invalid sliceID: contains path separator or traversal")
 	}
 	return parts[0], parts[1], nil
 }

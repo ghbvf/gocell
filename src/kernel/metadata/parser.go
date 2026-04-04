@@ -132,7 +132,16 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
-	key := m.BelongsToCell + "/" + m.ID
+
+	// Extract cellID from path: cells/{cellID}/slices/{sliceID}/slice.yaml
+	parts := splitPath(path)
+	cellID := parts[1] // guaranteed by matchSliceYAML: len == 5, parts[0]=="cells"
+
+	if m.BelongsToCell == "" {
+		m.BelongsToCell = cellID
+	}
+
+	key := cellID + "/" + m.ID
 	pm.Slices[key] = &m
 	return nil
 }

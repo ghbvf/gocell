@@ -25,12 +25,16 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 		}
 		waiverSet := make(map[string]bool)
 		for _, w := range s.Verify.Waivers {
-			// Check expiry before considering the waiver valid.
-			if w.ExpiresAt != "" {
-				t, err := time.Parse("2006-01-02", w.ExpiresAt)
-				if err == nil && t.Before(nowFunc().Truncate(24*time.Hour)) {
-					continue // expired waiver, not valid
-				}
+			// Only non-empty, parseable, and not-yet-expired waivers are valid.
+			if w.ExpiresAt == "" {
+				continue // missing expiresAt, invalid waiver
+			}
+			t, err := time.Parse("2006-01-02", w.ExpiresAt)
+			if err != nil {
+				continue // unparseable expiresAt, invalid waiver
+			}
+			if t.Before(nowFunc().Truncate(24 * time.Hour)) {
+				continue // expired waiver, not valid
 			}
 			waiverSet[w.Contract] = true
 		}

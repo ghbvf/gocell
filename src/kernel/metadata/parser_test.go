@@ -482,6 +482,31 @@ verify:
 	assert.Equal(t, "2026-06-01", sl.Verify.Waivers[0].ExpiresAt)
 }
 
+func TestParseFS_SliceOmitsBelongsToCell(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`)},
+	}
+
+	p := NewParser("")
+	pm, err := p.ParseFS(fs)
+	require.NoError(t, err)
+
+	// Map key should be cellID/sliceID, not "/session-login"
+	assert.Len(t, pm.Slices, 1)
+	assert.Contains(t, pm.Slices, "access-core/session-login")
+	assert.NotContains(t, pm.Slices, "/session-login")
+
+	// BelongsToCell should be backfilled from path
+	sl := pm.Slices["access-core/session-login"]
+	require.NotNil(t, sl)
+	assert.Equal(t, "access-core", sl.BelongsToCell)
+}
+
 func TestParseFS_CellWithL0Dependencies(t *testing.T) {
 	fs := fstest.MapFS{
 		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core

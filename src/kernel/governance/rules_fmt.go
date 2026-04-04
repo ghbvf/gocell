@@ -211,7 +211,15 @@ func (v *Validator) validateFMT08() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		parts := strings.SplitN(c.ID, ".", 2)
 		if len(parts) < 2 {
-			continue // malformed ID, other rules may catch this
+			results = append(results, ValidationResult{
+				Code:      "FMT-08",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      contractFile(c.ID),
+				Field:     "id",
+				Message:   fmt.Sprintf("contract ID %q format is invalid (missing '.' separator)", c.ID),
+			})
+			continue
 		}
 		prefix := parts[0]
 		if prefix != c.Kind {

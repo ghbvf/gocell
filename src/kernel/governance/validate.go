@@ -48,7 +48,17 @@ type Validator struct {
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
+// If project is nil, an empty ProjectMeta is used to avoid nil-pointer panics.
 func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
+	if project == nil {
+		project = &metadata.ProjectMeta{
+			Cells:      map[string]*metadata.CellMeta{},
+			Slices:     map[string]*metadata.SliceMeta{},
+			Contracts:  map[string]*metadata.ContractMeta{},
+			Journeys:   map[string]*metadata.JourneyMeta{},
+			Assemblies: map[string]*metadata.AssemblyMeta{},
+		}
+	}
 	return &Validator{project: project, root: root}
 }
 
