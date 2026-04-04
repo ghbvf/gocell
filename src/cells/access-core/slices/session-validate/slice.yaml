@@ -1,0 +1,8 @@
+id: session-validate
+belongsToCell: access-core
+contractUsages: []
+verify:
+  unit:
+    - unit.session-validate.service
+  contract: []
+  waivers: []

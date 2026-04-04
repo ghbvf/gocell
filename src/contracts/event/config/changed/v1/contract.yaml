@@ -1,0 +1,12 @@
+id: event.config.changed.v1
+kind: event
+ownerCell: config-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: config-core
+  subscribers:
+    - access-core
+replayable: false
+idempotencyKey: event_id
+deliverySemantics: at-least-once

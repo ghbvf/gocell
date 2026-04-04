@@ -1,0 +1,11 @@
+id: event.audit.appended.v1
+kind: event
+ownerCell: audit-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: audit-core
+  subscribers: []
+replayable: true
+idempotencyKey: event_id
+deliverySemantics: at-least-once

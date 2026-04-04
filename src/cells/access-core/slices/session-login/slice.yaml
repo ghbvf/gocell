@@ -1,0 +1,20 @@
+id: session-login
+belongsToCell: access-core
+contractUsages:
+  - contract: http.auth.login.v1
+    role: serve
+  - contract: event.session.created.v1
+    role: publish
+  - contract: http.config.get.v1
+    role: call
+verify:
+  unit:
+    - unit.session-login.service
+  contract:
+    - contract.http.auth.login.v1.serve
+    - contract.event.session.created.v1.publish
+  waivers:
+    - contract: http.config.get.v1
+      owner: platform-team
+      reason: 只读配置调用，集成测试已覆盖
+      expiresAt: 2026-06-01

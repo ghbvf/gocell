@@ -1,0 +1,12 @@
+id: audit-core
+type: core
+consistencyLevel: L2
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_audit_core
+verify:
+  smoke:
+    - smoke.audit-core.startup
+l0Dependencies: []

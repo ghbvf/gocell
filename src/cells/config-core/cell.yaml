@@ -1,0 +1,12 @@
+id: config-core
+type: core
+consistencyLevel: L2
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_config_core
+verify:
+  smoke:
+    - smoke.config-core.startup
+l0Dependencies: []

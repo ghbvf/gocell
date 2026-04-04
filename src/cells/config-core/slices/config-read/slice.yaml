@@ -1,0 +1,11 @@
+id: config-read
+belongsToCell: config-core
+contractUsages:
+  - contract: http.config.get.v1
+    role: serve
+verify:
+  unit:
+    - unit.config-read.service
+  contract:
+    - contract.http.config.get.v1.serve
+  waivers: []

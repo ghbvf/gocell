@@ -1,0 +1,9 @@
+generatedAt: "2026-04-04T10:30:00Z"
+sourceFingerprint: "sha256:placeholder"
+exportedContracts:
+  - http.auth.login.v1
+importedContracts: []
+smokeTargets:
+  - smoke.access-core.startup
+  - smoke.audit-core.startup
+  - smoke.config-core.startup

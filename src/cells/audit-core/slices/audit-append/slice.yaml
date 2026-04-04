@@ -1,0 +1,11 @@
+id: audit-append
+belongsToCell: audit-core
+contractUsages:
+  - contract: event.audit.appended.v1
+    role: publish
+verify:
+  unit:
+    - unit.audit-append.service
+  contract:
+    - contract.event.audit.appended.v1.publish
+  waivers: []

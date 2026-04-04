@@ -1,0 +1,8 @@
+id: audit-query
+belongsToCell: audit-core
+contractUsages: []
+verify:
+  unit:
+    - unit.audit-query.service
+  contract: []
+  waivers: []

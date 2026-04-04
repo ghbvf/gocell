@@ -1,0 +1,21 @@
+id: J-sso-login
+goal: 用户完成 SSO 登录并获得有效 session
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - access-core
+  - audit-core
+  - config-core
+contracts:
+  - http.auth.login.v1
+  - event.session.created.v1
+passCriteria:
+  - text: OIDC 重定向完成
+    mode: auto
+    checkRef: journey.J-sso-login.oidc-redirect
+  - text: Session 写入数据库
+    mode: auto
+    checkRef: journey.J-sso-login.session-db
+  - text: 安全审查签核
+    mode: manual

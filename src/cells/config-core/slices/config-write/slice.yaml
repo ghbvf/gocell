@@ -1,0 +1,11 @@
+id: config-write
+belongsToCell: config-core
+contractUsages:
+  - contract: event.config.changed.v1
+    role: publish
+verify:
+  unit:
+    - unit.config-write.service
+  contract:
+    - contract.event.config.changed.v1.publish
+  waivers: []
