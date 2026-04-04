@@ -1,0 +1,11 @@
+id: feature-flag
+belongsToCell: config-core
+contractUsages:
+  - contract: http.config.flags.v1
+    role: serve
+verify:
+  unit:
+    - unit.feature-flag.service
+  contract:
+    - contract.http.config.flags.v1.serve
+  waivers: []

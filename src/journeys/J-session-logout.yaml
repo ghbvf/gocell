@@ -1,0 +1,20 @@
+id: J-session-logout
+goal: 用户主动登出并吊销 session，审计事件正确记录
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - access-core
+  - audit-core
+contracts:
+  - event.session.revoked.v1
+passCriteria:
+  - text: Session 标记为已吊销
+    mode: auto
+    checkRef: journey.J-session-logout.session-revoke
+  - text: session.revoked 事件发布成功
+    mode: auto
+    checkRef: journey.J-session-logout.event-publish
+  - text: 审计记录写入确认
+    mode: auto
+    checkRef: journey.J-session-logout.audit-record

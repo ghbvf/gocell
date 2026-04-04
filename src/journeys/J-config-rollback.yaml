@@ -1,0 +1,24 @@
+id: J-config-rollback
+goal: 配置版本回滚后所有订阅 cell 回退生效，审计记录完整
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - config-core
+  - access-core
+  - audit-core
+contracts:
+  - event.config.rollback.v1
+passCriteria:
+  - text: 配置回滚到指定版本
+    mode: auto
+    checkRef: journey.J-config-rollback.version-revert
+  - text: config.rollback 事件发布成功
+    mode: auto
+    checkRef: journey.J-config-rollback.event-publish
+  - text: 所有订阅 cell 应用回滚配置
+    mode: auto
+    checkRef: journey.J-config-rollback.cell-apply
+  - text: 审计记录回滚操作
+    mode: auto
+    checkRef: journey.J-config-rollback.audit-record

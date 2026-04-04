@@ -1,5 +1,7 @@
 # GoCell 协作说明
 
+> 本文件是 `.specify/memory/constitution.md`（GoCell 项目宪法）的实施细则。当二者冲突时，以宪法为准。
+
 Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 
 ## 工作方式

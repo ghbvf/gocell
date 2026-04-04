@@ -1,0 +1,11 @@
+id: session-logout
+belongsToCell: access-core
+contractUsages:
+  - contract: event.session.revoked.v1
+    role: publish
+verify:
+  unit:
+    - unit.session-logout.service
+  contract:
+    - contract.event.session.revoked.v1.publish
+  waivers: []

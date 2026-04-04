@@ -1,0 +1,21 @@
+id: J-config-hot-reload
+goal: 配置变更后所有订阅 cell 热更新生效，服务保持健康
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - config-core
+  - access-core
+  - audit-core
+contracts:
+  - event.config.changed.v1
+passCriteria:
+  - text: 配置变更写入并发布 config.changed 事件
+    mode: auto
+    checkRef: journey.J-config-hot-reload.config-publish
+  - text: access-core 接收并应用新配置
+    mode: auto
+    checkRef: journey.J-config-hot-reload.access-apply
+  - text: 所有订阅 cell 健康检查通过
+    mode: auto
+    checkRef: journey.J-config-hot-reload.health-verify

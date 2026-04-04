@@ -1,0 +1,14 @@
+id: config-publish
+belongsToCell: config-core
+contractUsages:
+  - contract: event.config.changed.v1
+    role: publish
+  - contract: event.config.rollback.v1
+    role: publish
+verify:
+  unit:
+    - unit.config-publish.service
+  contract:
+    - contract.event.config.changed.v1.publish
+    - contract.event.config.rollback.v1.publish
+  waivers: []

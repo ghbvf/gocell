@@ -1,0 +1,8 @@
+id: authorization-decide
+belongsToCell: access-core
+contractUsages: []
+verify:
+  unit:
+    - unit.authorization-decide.service
+  contract: []
+  waivers: []

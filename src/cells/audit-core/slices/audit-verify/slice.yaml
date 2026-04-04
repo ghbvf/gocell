@@ -1,0 +1,11 @@
+id: audit-verify
+belongsToCell: audit-core
+contractUsages:
+  - contract: event.audit.integrity-verified.v1
+    role: publish
+verify:
+  unit:
+    - unit.audit-verify.service
+  contract:
+    - contract.event.audit.integrity-verified.v1.publish
+  waivers: []

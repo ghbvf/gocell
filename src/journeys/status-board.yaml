@@ -3,3 +3,38 @@
   risk: low
   blocker: ""
   updatedAt: 2026-04-04
+- journeyId: J-session-refresh
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-session-logout
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-user-onboarding
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-account-lockout
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-audit-login-trail
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-config-hot-reload
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05
+- journeyId: J-config-rollback
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-05

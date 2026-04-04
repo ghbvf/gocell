@@ -1,0 +1,19 @@
+id: J-session-refresh
+goal: 用户使用 refresh token 刷新 session 并获得新的 access token
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - access-core
+contracts:
+  - http.auth.login.v1
+passCriteria:
+  - text: Refresh token 验证通过
+    mode: auto
+    checkRef: journey.J-session-refresh.token-verify
+  - text: 新 access token 签发成功
+    mode: auto
+    checkRef: journey.J-session-refresh.token-issue
+  - text: 旧 token 失效确认
+    mode: auto
+    checkRef: journey.J-session-refresh.old-token-revoke

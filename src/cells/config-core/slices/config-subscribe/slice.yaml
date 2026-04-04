@@ -1,0 +1,11 @@
+id: config-subscribe
+belongsToCell: config-core
+contractUsages:
+  - contract: event.config.changed.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.config-subscribe.service
+  contract:
+    - contract.event.config.changed.v1.subscribe
+  waivers: []

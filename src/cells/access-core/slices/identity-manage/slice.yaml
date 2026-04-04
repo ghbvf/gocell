@@ -1,0 +1,14 @@
+id: identity-manage
+belongsToCell: access-core
+contractUsages:
+  - contract: event.user.created.v1
+    role: publish
+  - contract: event.user.locked.v1
+    role: publish
+verify:
+  unit:
+    - unit.identity-manage.service
+  contract:
+    - contract.event.user.created.v1.publish
+    - contract.event.user.locked.v1.publish
+  waivers: []

@@ -1,0 +1,22 @@
+id: J-account-lockout
+goal: 多次登录失败后账户自动锁定，管理员可手动解锁
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - access-core
+contracts:
+  - event.user.locked.v1
+passCriteria:
+  - text: 连续失败达阈值后账户锁定
+    mode: auto
+    checkRef: journey.J-account-lockout.auto-lock
+  - text: user.locked 事件发布成功
+    mode: auto
+    checkRef: journey.J-account-lockout.event-publish
+  - text: 锁定期间登录被拒绝
+    mode: auto
+    checkRef: journey.J-account-lockout.login-reject
+  - text: 管理员解锁后可正常登录
+    mode: auto
+    checkRef: journey.J-account-lockout.admin-unlock

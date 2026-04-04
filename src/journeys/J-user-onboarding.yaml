@@ -1,0 +1,22 @@
+id: J-user-onboarding
+goal: 新用户完成创建并具备登录能力
+owner:
+  team: platform
+  role: journey-owner
+cells:
+  - access-core
+contracts:
+  - event.user.created.v1
+passCriteria:
+  - text: 用户记录创建成功
+    mode: auto
+    checkRef: journey.J-user-onboarding.user-create
+  - text: 默认角色分配完成
+    mode: auto
+    checkRef: journey.J-user-onboarding.role-assign
+  - text: user.created 事件发布成功
+    mode: auto
+    checkRef: journey.J-user-onboarding.event-publish
+  - text: 新用户可成功登录
+    mode: auto
+    checkRef: journey.J-user-onboarding.login-verify
