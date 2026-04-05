@@ -46,7 +46,7 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 
 	o, ok := r.orders[id]
 	if !ok {
-		return nil, errcode.New(errcode.ErrCellNotFound,
+		return nil, errcode.New(errcode.ErrOrderNotFound,
 			fmt.Sprintf("order %q not found", id))
 	}
 	// Return a copy.

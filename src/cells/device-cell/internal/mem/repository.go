@@ -49,7 +49,7 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 
 	d, ok := r.devices[id]
 	if !ok {
-		return nil, errcode.New(errcode.ErrCellNotFound,
+		return nil, errcode.New(errcode.ErrDeviceNotFound,
 			fmt.Sprintf("device %q not found", id))
 	}
 	out := *d
@@ -103,7 +103,7 @@ func (r *CommandRepository) Ack(_ context.Context, deviceID, cmdID string) error
 
 	cmd, ok := r.commands[cmdID]
 	if !ok {
-		return errcode.New(errcode.ErrCellNotFound,
+		return errcode.New(errcode.ErrCommandNotFound,
 			fmt.Sprintf("command %q not found", cmdID))
 	}
 	if cmd.DeviceID != deviceID {

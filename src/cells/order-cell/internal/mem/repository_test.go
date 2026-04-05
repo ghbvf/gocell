@@ -86,7 +86,7 @@ func TestOrderRepository_GetByID(t *testing.T) {
 			name:    "not found",
 			id:      "ord-missing",
 			wantErr: true,
-			errCode: errcode.ErrCellNotFound,
+			errCode: errcode.ErrOrderNotFound,
 		},
 	}
 

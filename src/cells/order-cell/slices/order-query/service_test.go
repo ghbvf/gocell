@@ -39,7 +39,7 @@ func TestService_GetByID(t *testing.T) {
 			id:      "ord-missing",
 			seed:    nil,
 			wantErr: true,
-			errCode: errcode.ErrCellNotFound,
+			errCode: errcode.ErrOrderNotFound,
 		},
 	}
 

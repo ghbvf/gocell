@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,10 +62,11 @@ func TestDeviceRepository_Create(t *testing.T) {
 
 func TestDeviceRepository_GetByID(t *testing.T) {
 	tests := []struct {
-		name    string
-		setup   func(*DeviceRepository)
-		id      string
-		wantErr bool
+		name     string
+		setup    func(*DeviceRepository)
+		id       string
+		wantErr  bool
+		wantCode errcode.Code
 	}{
 		{
 			name: "existing device",
@@ -77,10 +79,11 @@ func TestDeviceRepository_GetByID(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "non-existent device returns error",
-			setup:   func(_ *DeviceRepository) {},
-			id:      "dev-missing",
-			wantErr: true,
+			name:     "non-existent device returns error",
+			setup:    func(_ *DeviceRepository) {},
+			id:       "dev-missing",
+			wantErr:  true,
+			wantCode: errcode.ErrDeviceNotFound,
 		},
 	}
 
@@ -93,6 +96,11 @@ func TestDeviceRepository_GetByID(t *testing.T) {
 			if tc.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, device)
+				if tc.wantCode != "" {
+					var ecErr *errcode.Error
+					require.ErrorAs(t, err, &ecErr)
+					assert.Equal(t, tc.wantCode, ecErr.Code)
+				}
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tc.id, device.ID)
@@ -204,6 +212,7 @@ func TestCommandRepository_Ack(t *testing.T) {
 		deviceID string
 		cmdID    string
 		wantErr  bool
+		wantCode errcode.Code
 	}{
 		{
 			name: "ack pending command",
@@ -234,6 +243,7 @@ func TestCommandRepository_Ack(t *testing.T) {
 			deviceID: "dev-1",
 			cmdID:    "cmd-missing",
 			wantErr:  true,
+			wantCode: errcode.ErrCommandNotFound,
 		},
 		{
 			name: "wrong device returns error",
@@ -256,6 +266,11 @@ func TestCommandRepository_Ack(t *testing.T) {
 			err := repo.Ack(ctx, tc.deviceID, tc.cmdID)
 			if tc.wantErr {
 				assert.Error(t, err)
+				if tc.wantCode != "" {
+					var ecErr *errcode.Error
+					require.ErrorAs(t, err, &ecErr)
+					assert.Equal(t, tc.wantCode, ecErr.Code)
+				}
 			} else {
 				require.NoError(t, err)
 			}
