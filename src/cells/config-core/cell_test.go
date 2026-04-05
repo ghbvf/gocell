@@ -9,17 +9,24 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// noopWriter is a no-op outbox.Writer for testing.
+type noopWriter struct{}
+
+func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
+
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithPublisher(eventbus.New()),
+		WithOutboxWriter(noopWriter{}),
 	)
 }
 

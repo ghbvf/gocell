@@ -136,6 +136,12 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
+	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
+		slog.Warn("access-core: outboxWriter not injected, L2 consistency not guaranteed")
+		return errcode.New(errcode.ErrCellMissingOutbox, "access-core (L2) requires outboxWriter injection")
+	}
+
 	// Resolve signing key from Dependencies.Config if not set via option.
 	if len(c.signingKey) == 0 {
 		if key, ok := deps.Config["access.signing_key"]; ok {

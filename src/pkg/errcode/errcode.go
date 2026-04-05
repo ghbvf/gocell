@@ -27,7 +27,12 @@ const (
 	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
 	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
 	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
-	ErrBusClosed        Code = "ERR_BUS_CLOSED"
+	ErrBusClosed          Code = "ERR_BUS_CLOSED"
+	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrAdapterNoTx        Code = "ERR_ADAPTER_NO_TX"
+	ErrAuthKeyInvalid     Code = "ERR_AUTH_KEY_INVALID"
+	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
+	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,11 @@ import (
 
 var testKey = []byte("test-signing-key-32bytes-long!!!!")
 
+// noopWriter is a no-op outbox.Writer for testing.
+type noopWriter struct{}
+
+func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
+
 func newTestCell() *AccessCore {
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
@@ -24,6 +30,7 @@ func newTestCell() *AccessCore {
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithPublisher(eventbus.New()),
 		WithSigningKey(testKey),
+		WithOutboxWriter(noopWriter{}),
 	)
 }
 
