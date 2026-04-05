@@ -67,7 +67,8 @@ func validProject() *metadata.ProjectMeta {
 					{Contract: "event.session.created.v1", Role: "subscribe"},
 				},
 				Verify: metadata.SliceVerifyMeta{
-					Unit: []string{"unit.audit-write.handler"},
+					Unit:     []string{"unit.audit-write.handler"},
+					Contract: []string{"contract.event.session.created.v1.subscribe"},
 				},
 			},
 		},
@@ -96,6 +97,18 @@ func validProject() *metadata.ProjectMeta {
 				Replayable:        &replayable,
 				IdempotencyKey:    "session-id",
 				DeliverySemantics: "at-least-once",
+			},
+			"projection.session.active.v1": {
+				ID:               "projection.session.active.v1",
+				Kind:             "projection",
+				OwnerCell:        "access-core",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Provider: "access-core",
+					Readers:  []string{"audit-core"},
+				},
+				Replayable: &replayable,
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
@@ -821,12 +834,11 @@ func TestVERIFY01(t *testing.T) {
 			wantCount: 1,
 		},
 		{
-			name: "consumer role does not require verify entry",
+			name: "consumer role without verify entry triggers error",
 			setup: func(pm *metadata.ProjectMeta) {
-				// audit-core/audit-write has subscribe (consumer) role with no verify.contract entries
-				// This should NOT trigger VERIFY-01
+				pm.Slices["audit-core/audit-write"].Verify.Contract = nil
 			},
-			wantCount: 0,
+			wantCount: 1,
 		},
 	}
 	for _, tt := range tests {
@@ -1144,6 +1156,20 @@ func TestFMT04(t *testing.T) {
 			name: "http contract does not require event fields",
 			setup: func(pm *metadata.ProjectMeta) {
 				// http contract has no replayable/idempotencyKey/deliverySemantics and that's fine
+			},
+			wantCount: 0,
+		},
+		{
+			name: "projection contract missing replayable",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["projection.session.active.v1"].Replayable = nil
+			},
+			wantCount: 1,
+		},
+		{
+			name: "projection contract with replayable set",
+			setup: func(pm *metadata.ProjectMeta) {
+				// projection contract already has replayable in validProject
 			},
 			wantCount: 0,
 		},

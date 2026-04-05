@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -84,7 +85,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	}
 
 	entry := outbox.Entry{
-		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:        id.New("evt"),
 		EventType: topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),

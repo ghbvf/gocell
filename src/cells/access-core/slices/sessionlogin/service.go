@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -103,7 +104,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Issue JWT.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
-	sessionID := fmt.Sprintf("sess-%d", now.UnixNano())
+	sessionID := id.New("sess")
 
 	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
 	if err != nil {
@@ -151,6 +152,7 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 		"iat": jwt.NewNumericDate(time.Now()),
 		"exp": jwt.NewNumericDate(expiresAt),
 		"iss": "gocell-access-core",
+		"aud": jwt.ClaimStrings{"gocell"},
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles

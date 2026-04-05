@@ -158,6 +158,29 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		cfg = config.NewFromMap(make(map[string]any))
 	}
 
+	// Step 1.5: Start config watcher (if config file provided).
+	if b.configPath != "" {
+		watcher, err := config.NewWatcher(b.configPath)
+		if err != nil {
+			slog.Warn("bootstrap: config watcher not available", slog.Any("error", err))
+		} else {
+			yamlPath, envPrefix := b.configPath, b.envPrefix
+			watcher.OnChange(func(evt config.WatchEvent) {
+				if rc, ok := cfg.(config.Reloader); ok {
+					if err := rc.Reload(yamlPath, envPrefix); err != nil {
+						slog.Error("bootstrap: config reload failed", slog.Any("error", err))
+					} else {
+						slog.Info("bootstrap: config reloaded", slog.String("path", evt.Path))
+					}
+				}
+			})
+			watcher.Start()
+			teardowns = append(teardowns, func(_ context.Context) error {
+				return watcher.Close()
+			})
+		}
+	}
+
 	// Step 2: Initialise eventbus.
 	eb := b.eventBus
 	if eb == nil {

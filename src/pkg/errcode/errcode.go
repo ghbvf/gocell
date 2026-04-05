@@ -25,6 +25,8 @@ const (
 	ErrAuthForbidden    Code = "ERR_AUTH_FORBIDDEN"
 	ErrRateLimited      Code = "ERR_RATE_LIMITED"
 	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
+	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
+	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

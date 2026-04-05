@@ -18,9 +18,20 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
+func envOrDefault(key, fallback string) []byte {
+	if v := os.Getenv(key); v != "" {
+		return []byte(v)
+	}
+	slog.Warn("using dev-only default key; set env var for production", slog.String("var", key))
+	return []byte(fallback)
+}
+
 func main() {
 	// Create shared event bus.
 	eb := eventbus.New()
+
+	signingKey := envOrDefault("GOCELL_SIGNING_KEY", "dev-signing-key-replace-in-prod!!")
+	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	// Create cells with in-memory repositories.
 	configCell := configcore.NewConfigCore(
@@ -30,12 +41,12 @@ func main() {
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
-		accesscore.WithSigningKey([]byte("dev-signing-key-replace-in-prod!!")),
+		accesscore.WithSigningKey(signingKey),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
-		auditcore.WithHMACKey([]byte("dev-hmac-key-replace-in-prod!!!!")),
+		auditcore.WithHMACKey(hmacKey),
 	)
 
 	// Create assembly and register cells in dependency order.
