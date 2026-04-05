@@ -17,3 +17,4 @@
   failed: evidence/validate/result.txt: pattern '(0 errors|PASS|valid)'
 [2026-04-06 03:14:24] S7/exit: PASS (branch=feat/003-phase4-examples-docs)
 [2026-04-06 03:14:39] S8/entry: PASS (branch=feat/003-phase4-examples-docs)
+[2026-04-06 03:23:32] S8/exit: PASS (branch=feat/003-phase4-examples-docs)
