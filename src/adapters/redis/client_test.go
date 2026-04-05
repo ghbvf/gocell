@@ -1,0 +1,91 @@
+package redis
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestConfigDefaults(t *testing.T) {
+	cfg := Config{}
+	cfg.defaults()
+
+	assert.Equal(t, ModeStandalone, cfg.Mode)
+	assert.Equal(t, "localhost:6379", cfg.Addr)
+	assert.Equal(t, 5*time.Second, cfg.DialTimeout)
+	assert.Equal(t, 3*time.Second, cfg.ReadTimeout)
+	assert.Equal(t, 3*time.Second, cfg.WriteTimeout)
+	assert.Equal(t, 30*time.Second, cfg.DistLockTTL)
+}
+
+func TestConfigDefaultsPreserveExisting(t *testing.T) {
+	cfg := Config{
+		Addr:        "redis:6380",
+		Mode:        ModeSentinel,
+		DialTimeout: 10 * time.Second,
+		ReadTimeout: 7 * time.Second,
+		DistLockTTL: 60 * time.Second,
+	}
+	cfg.defaults()
+
+	assert.Equal(t, ModeSentinel, cfg.Mode)
+	assert.Equal(t, "redis:6380", cfg.Addr)
+	assert.Equal(t, 10*time.Second, cfg.DialTimeout)
+	assert.Equal(t, 7*time.Second, cfg.ReadTimeout)
+	assert.Equal(t, 7*time.Second, cfg.WriteTimeout) // Defaults to ReadTimeout.
+	assert.Equal(t, 60*time.Second, cfg.DistLockTTL)
+}
+
+func TestClientHealth_Success(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	err := client.Health(context.Background())
+	assert.NoError(t, err)
+}
+
+func TestClientHealth_Failure(t *testing.T) {
+	mock := newMockCmdable()
+	mock.pingErr = errMock
+	client := newClientFromCmdable(mock, Config{})
+
+	err := client.Health(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+	assert.Contains(t, err.Error(), "health check failed")
+}
+
+func TestClientClose_Success(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	err := client.Close()
+	assert.NoError(t, err)
+	assert.True(t, mock.closed)
+}
+
+func TestClientClose_Failure(t *testing.T) {
+	mock := newMockCmdable()
+	mock.closeErr = errMock
+	client := newClientFromCmdable(mock, Config{})
+
+	err := client.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+}
+
+func TestClientConfigReturned(t *testing.T) {
+	mock := newMockCmdable()
+	cfg := Config{
+		Addr: "custom:6379",
+		DB:   3,
+	}
+	client := newClientFromCmdable(mock, cfg)
+
+	got := client.Config()
+	assert.Equal(t, "custom:6379", got.Addr)
+	assert.Equal(t, 3, got.DB)
+}
