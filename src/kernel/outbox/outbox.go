@@ -11,7 +11,9 @@ import (
 
 // Entry represents a single outbox record to be published.
 type Entry struct {
-	ID            string
+	// ID is the canonical idempotency identifier. Consumers SHOULD use this
+	// field to construct idempotency keys.
+	ID string
 	AggregateID   string
 	AggregateType string
 	EventType     string
@@ -24,6 +26,10 @@ type Entry struct {
 // The implementation must ensure the outbox write is atomic with the
 // business state write (same DB transaction).
 type Writer interface {
+	// Write persists an outbox entry atomically with the caller's business state.
+	// Implementations that require transactional guarantees SHOULD use a
+	// context-embedded transaction pattern (e.g., extract tx from context via
+	// TxFromContext(ctx)) to participate in the caller's transaction scope.
 	Write(ctx context.Context, entry Entry) error
 }
 

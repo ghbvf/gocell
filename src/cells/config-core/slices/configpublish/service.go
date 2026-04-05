@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -67,7 +67,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 
 	now := time.Now()
 	version := &domain.ConfigVersion{
-		ID:          id.New("ver"),
+		ID:          uid.NewWithPrefix("ver"),
 		ConfigID:    entry.ID,
 		Version:     entry.Version,
 		Value:       entry.Value,
@@ -131,7 +131,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
-			ID:        id.New("evt"),
+			ID:        uid.NewWithPrefix("evt"),
 			EventType: topic,
 			Payload:   payload,
 		}

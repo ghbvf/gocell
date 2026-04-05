@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -118,7 +118,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Issue JWT.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
-	sessionID := id.New("sess")
+	sessionID := uid.NewWithPrefix("sess")
 
 	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
 	if err != nil {
@@ -148,7 +148,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	})
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
-			ID:        id.New("evt"),
+			ID:        uid.NewWithPrefix("evt"),
 			EventType: TopicSessionCreated,
 			Payload:   payload,
 		}

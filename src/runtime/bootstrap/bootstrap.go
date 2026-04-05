@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -60,10 +62,31 @@ func WithWorkers(ws ...worker.Worker) Option {
 	}
 }
 
-// WithEventBus sets a pre-built InMemoryEventBus.
+// WithPublisher sets the outbox.Publisher used for event publishing.
+//
+// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+func WithPublisher(p outbox.Publisher) Option {
+	return func(b *Bootstrap) {
+		b.publisher = p
+	}
+}
+
+// WithSubscriber sets the outbox.Subscriber used for event consumption.
+//
+// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+func WithSubscriber(s outbox.Subscriber) Option {
+	return func(b *Bootstrap) {
+		b.subscriber = s
+	}
+}
+
+// WithEventBus is a convenience method that sets both Publisher and Subscriber
+// from an InMemoryEventBus. It is equivalent to calling WithPublisher(eb) and
+// WithSubscriber(eb). Retained for backward compatibility.
 func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
 	return func(b *Bootstrap) {
-		b.eventBus = eb
+		b.publisher = eb
+		b.subscriber = eb
 	}
 }
 
@@ -96,7 +119,8 @@ type Bootstrap struct {
 	httpAddr        string
 	assembly        *assembly.CoreAssembly
 	workers         []worker.Worker
-	eventBus        *eventbus.InMemoryEventBus
+	publisher       outbox.Publisher
+	subscriber      outbox.Subscriber
 	routerOpts      []router.Option
 	shutdownTimeout time.Duration
 	listener        net.Listener
@@ -119,7 +143,7 @@ func New(opts ...Option) *Bootstrap {
 //
 // Startup sequence (ref: uber-go/fx app.go Run):
 //  1. Load config
-//  2. Initialise eventbus
+//  2. Initialise publisher/subscriber (default: InMemoryEventBus for both)
 //  3. Initialise assembly (inject config into Dependencies.Config)
 //  4. Cell.Init -> Cell.Start (assembly.Start)
 //  5. RegisterRoutes for HTTPRegistrar cells
@@ -127,7 +151,7 @@ func New(opts ...Option) *Bootstrap {
 //  7. Start HTTP server
 //  8. Start workers
 //  9. Wait for signal (runtime/shutdown)
-//  10. Shutdown: stop workers -> drain HTTP -> stop assembly -> close eventbus
+//  10. Shutdown: stop workers -> drain HTTP -> stop assembly -> close subscriber/publisher
 //
 // If any step fails, already-started components are rolled back in reverse.
 func (b *Bootstrap) Run(ctx context.Context) error {
@@ -181,14 +205,29 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 2: Initialise eventbus.
-	eb := b.eventBus
-	if eb == nil {
-		eb = eventbus.New()
+	// Step 2: Initialise publisher and subscriber.
+	// If neither publisher nor subscriber is set, create a default InMemoryEventBus
+	// that satisfies both roles — preserving the original single-bus behaviour.
+	pub := b.publisher
+	sub := b.subscriber
+	if pub == nil && sub == nil {
+		eb := eventbus.New()
+		pub = eb
+		sub = eb
 	}
-	teardowns = append(teardowns, func(_ context.Context) error {
-		return eb.Close()
-	})
+	// Register teardown for subscriber (if it implements io.Closer).
+	if cl, ok := sub.(io.Closer); ok {
+		teardowns = append(teardowns, func(_ context.Context) error {
+			return cl.Close()
+		})
+	}
+	// Register teardown for publisher (if it implements io.Closer and is not
+	// the same instance as the subscriber — avoid double-close).
+	if cl, ok := pub.(io.Closer); ok && any(pub) != any(sub) {
+		teardowns = append(teardowns, func(_ context.Context) error {
+			return cl.Close()
+		})
+	}
 
 	// Step 3-4: Initialise and start assembly.
 	asm := b.assembly
@@ -223,10 +262,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 6: Register event subscriptions for cells implementing EventRegistrar.
-	for _, id := range asm.CellIDs() {
-		c := asm.Cell(id)
-		if er, ok := c.(cell.EventRegistrar); ok {
-			er.RegisterSubscriptions(eb)
+	if sub != nil {
+		for _, id := range asm.CellIDs() {
+			c := asm.Cell(id)
+			if er, ok := c.(cell.EventRegistrar); ok {
+				er.RegisterSubscriptions(sub)
+			}
 		}
 	}
 

@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -85,7 +85,7 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 	})
 	if s.outboxWriter != nil {
 		outboxEntry := outbox.Entry{
-			ID:        id.New("evt"),
+			ID:        uid.NewWithPrefix("evt"),
 			EventType: TopicIntegrityVerified,
 			Payload:   payload,
 		}
