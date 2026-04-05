@@ -4,13 +4,5 @@ ownerCell: device-cell
 consistencyLevel: L4
 lifecycle: active
 endpoints:
-  - method: POST
-    path: /api/v1/devices
-  - method: POST
-    path: /api/v1/devices/{id}/commands
-  - method: GET
-    path: /api/v1/devices/{id}/commands
-  - method: POST
-    path: /api/v1/devices/{id}/commands/{cmdId}/ack
-  - method: GET
-    path: /api/v1/devices/{id}/status
+  server: device-cell
+  clients: []

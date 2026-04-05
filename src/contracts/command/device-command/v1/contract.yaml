@@ -3,6 +3,9 @@ kind: command
 ownerCell: device-cell
 consistencyLevel: L4
 lifecycle: active
+endpoints:
+  handler: device-cell
+  invokers: []
 description: >
   L4 command primitive: commands are enqueued by the server and polled by
   devices on their own schedule. The device acknowledges execution via an

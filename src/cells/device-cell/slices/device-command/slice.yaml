@@ -6,5 +6,8 @@ contractUsages:
   - contract: command.device-command.v1
     role: handle
 verify:
-  unit: device-command/unit
-  contract: device-command/contract
+  unit:
+    - unit.device-command.service
+  contract:
+    - contract.http.device.v1.serve
+    - contract.command.device-command.v1.handle

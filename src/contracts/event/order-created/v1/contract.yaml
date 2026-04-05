@@ -3,6 +3,9 @@ kind: event
 ownerCell: order-cell
 consistencyLevel: L2
 lifecycle: active
+endpoints:
+  publisher: order-cell
+  subscribers: []
 replayable: true
 idempotencyKey: order-created:{event_id}
 deliverySemantics: at-least-once

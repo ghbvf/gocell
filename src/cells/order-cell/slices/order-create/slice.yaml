@@ -6,5 +6,8 @@ contractUsages:
   - contract: event.order-created.v1
     role: publish
 verify:
-  unit: order-create/unit
-  contract: order-create/contract
+  unit:
+    - unit.order-create.service
+  contract:
+    - contract.http.order.v1.serve
+    - contract.event.order-created.v1.publish
