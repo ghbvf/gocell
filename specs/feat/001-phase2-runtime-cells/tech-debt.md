@@ -52,6 +52,8 @@
 | 33 | [TECH] | review-031 S8 | 7 处 ID 生成用 UnixNano 可碰撞+可预测（identitymanage, sessionlogin, auditappend, configwrite, configpublish, eventbus） | 需引入 crypto/rand UUID，7 处同步改 | 新分支 |
 | 34 | [TECH] | review-031 S9 | access-core 端点无 auth/authz 中间件保护，知道 ID 即可操作 | 需先确认公开/保护端点策略 | 新分支 |
 | 35 | [PRODUCT] | review-031 + 用户审查 | /metrics 返回 JSON 非 Prometheus text format，go.mod 无 prometheus/otel 依赖，与 spec/AC 交付口径不一致 | 依赖拉取受网络限制。需修正 spec 措辞为"接口+stub" | 新分支(文档) |
+| ~~36~~ | ~~[TECH]~~ | ~~review-031 S7~~ | ~~RequestID 中间件接受任意客户端输入 — 无长度限制/字符校验，可 log injection~~ | **本 PR 已修复**: 限长 128 + 拒绝控制字符 | ~~新分支~~ |
+| 37 | [TECH] | review-031 C-DC1 | audit hash chain 状态纯内存，重启后断链 — 新 entry PrevHash="" 不连接已持久化条目 | Init 时需从 repo 加载 last entry seed chain。需 adapter 持久化就绪后才有意义 | Phase 3 |
 
 ### CONCERNS — Phase 3 处理
 

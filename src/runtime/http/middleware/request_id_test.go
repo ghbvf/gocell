@@ -43,6 +43,36 @@ func TestRequestID_GeneratesUUID(t *testing.T) {
 	assert.Equal(t, capturedID, rec.Header().Get("X-Request-Id"))
 }
 
+func TestRequestID_RejectsTooLong(t *testing.T) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := ctxkeys.RequestIDFrom(r.Context())
+		assert.True(t, ok)
+		assert.NotEqual(t, "x-long", id[:5], "should not use oversized client ID")
+		assert.Len(t, id, 36) // replaced with generated UUID
+	}))
+
+	longID := make([]byte, 200)
+	for i := range longID {
+		longID[i] = 'a'
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", string(longID))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+}
+
+func TestRequestID_RejectsControlChars(t *testing.T) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := ctxkeys.RequestIDFrom(r.Context())
+		assert.Len(t, id, 36) // replaced with generated UUID
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "evil\nfake-log-entry")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+}
+
 func TestRequestID_UniquenessAcrossRequests(t *testing.T) {
 	ids := make(map[string]bool)
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
