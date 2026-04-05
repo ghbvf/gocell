@@ -141,6 +141,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if len(c.signingKey) == 0 {
 		return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key is required")
 	}
+	if len(c.signingKey) < 32 {
+		return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key must be at least 32 bytes")
+	}
 
 	// identity-manage
 	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger)
