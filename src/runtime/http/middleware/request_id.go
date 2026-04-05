@@ -17,16 +17,28 @@ const headerRequestID = "X-Request-Id"
 // RequestID reads the request ID from the X-Request-Id header, or generates a
 // new UUID v4 if absent. The ID is stored in the request context via
 // ctxkeys.RequestID and echoed back in the response header.
+const maxRequestIDLen = 128
+
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(headerRequestID)
-		if id == "" {
+		if id == "" || len(id) > maxRequestIDLen || containsControl(id) {
 			id = newUUID()
 		}
 		w.Header().Set(headerRequestID, id)
 		ctx := ctxkeys.WithRequestID(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// containsControl reports whether s contains any ASCII control character.
+func containsControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // newUUID generates a UUID v4 string.
