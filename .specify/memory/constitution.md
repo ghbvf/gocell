@@ -154,9 +154,7 @@ TDD 是所有代码的强制要求：
 | 层 | 最低覆盖率 | 测试风格 |
 |---|-----------|---------|
 | `kernel/` | ≥ 90% | table-driven test |
-| `cells/` domain | ≥ 80% | unit + contract test |
-| `runtime/` | ≥ 70% | unit + integration |
-| `adapters/` | ≥ 60% | integration（testcontainers） |
+| 其他层（新增/修改代码） | ≥ 80% | unit + contract / integration |
 
 验证矩阵（按一致性等级）：
 

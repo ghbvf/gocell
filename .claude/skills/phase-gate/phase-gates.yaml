@@ -1,0 +1,143 @@
+# Phase Gate 准入准出规则声明
+# 消费者: .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh
+# 规则: 每阶段 entry/exit 均为硬性条件,FAIL 则阻塞
+# 跳过: 如 phase-charter.md 的 Scope 声明标注 N/A + 理由,检查脚本跳过对应文件
+
+stages:
+  S0:
+    entry: {}
+    exit:
+      required_files:
+        - phase-charter.md
+        - role-roster.md
+        - product-context.md
+      content_checks:
+        - file: phase-charter.md
+          pattern: "(目标|范围|非目标)"
+        - file: role-roster.md
+          pattern: "(ON|OFF)"
+
+  S1:
+    entry:
+      required_files:
+        - phase-charter.md
+        - role-roster.md
+        - product-context.md
+    exit:
+      required_files:
+        - spec.md
+        - checklists/requirements.md
+      content_checks:
+        - file: spec.md
+          pattern: "(文档|DevOps|测试|contract test|journey test)"
+
+  S2:
+    entry:
+      required_files:
+        - spec.md
+    exit:
+      required_files:
+        - kernel-constraints.md
+        - review-architect.md
+        - review-roadmap.md
+        - review-product-manager.md
+      content_checks:
+        - file: kernel-constraints.md
+          pattern: "(集成风险|分层隔离|核心约束|元数据合规|契约完整性)"
+
+  S3:
+    entry:
+      required_files:
+        - kernel-constraints.md
+        - review-architect.md
+        - review-roadmap.md
+        - review-product-manager.md
+    exit:
+      required_files:
+        - decisions.md
+      content_checks:
+        - file: decisions.md
+          pattern: "(采纳|拒绝|延迟|accept|reject|defer)"
+
+  S4:
+    entry:
+      required_files:
+        - decisions.md
+    exit:
+      required_files:
+        - plan.md
+        - tasks.md
+        - product-acceptance-criteria.md
+        # 注: task-dependency-analysis.md 检查点从 S4 出口移到 S5.1 入口条件,允许在 S5.1 之前完成; fallback 使用 tasks.md 内嵌依赖图
+      content_checks:
+        - file: tasks.md
+          pattern: "(contract test|journey test|测试编写|E2E)"
+        - file: tasks.md
+          pattern: "(cell.yaml|slice.yaml|gocell validate|元数据)"
+        - file: tasks.md
+          pattern: "(文档|godoc|README)"
+        - file: product-acceptance-criteria.md
+          pattern: "(P1|P2|P3)"
+
+  S5:
+    entry:
+      required_files:
+        - tasks.md
+        - product-acceptance-criteria.md
+    exit:
+      required_files:
+        - tasks.md
+      content_checks:
+        - file: tasks.md
+          check: no_unchecked_tasks
+
+  S6:
+    entry:
+      required_files:
+        - tasks.md
+    exit:
+      required_files:
+        - review-findings.md
+        - tech-debt.md
+      content_checks:
+        - file: review-findings.md
+          pattern: "(P0|P1|P2)"
+        - file: tech-debt.md
+          pattern: "(\\[TECH\\]|\\[PRODUCT\\])"
+
+  S7:
+    entry:
+      required_files:
+        - review-findings.md
+        - tech-debt.md
+    exit:
+      required_files:
+        - qa-report.md
+        - user-signoff.md
+      content_checks:
+        - file: qa-report.md
+          pattern: "(go test|contract test|journey test|coverage|PASS|FAIL)"
+        - file: user-signoff.md
+          pattern: "(APPROVE|CONDITIONAL|REJECT)"
+
+  S8:
+    entry:
+      required_files:
+        - qa-report.md
+        - tech-debt.md
+        - user-signoff.md
+      content_checks:
+        - file: user-signoff.md
+          pattern: "(APPROVE|CONDITIONAL|REJECT)"
+    exit:
+      required_files:
+        - kernel-review-report.md
+        - product-review-report.md
+        - phase-report.md
+      content_checks:
+        - file: kernel-review-report.md
+          pattern: "(绿|黄|红|GREEN|YELLOW|RED)"
+        - file: product-review-report.md
+          pattern: "(绿|黄|红|GREEN|YELLOW|RED)"
+        - file: phase-report.md
+          pattern: "(变更摘要|关键决策)"
