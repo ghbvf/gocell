@@ -10,8 +10,10 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -89,7 +91,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
 
-	accessToken, err := s.issueToken(session.UserID, roleNames, expiresAt, session.ID)
+	// Rotate session ID on refresh to prevent session fixation (SEC-08).
+	newSessionID := uid.NewWithPrefix("sess")
+
+	accessToken, err := s.issueToken(session.UserID, roleNames, expiresAt, newSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
@@ -100,16 +105,27 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
 
-	// Update session with new tokens.
-	session.AccessToken = accessToken
-	session.RefreshToken = newRefreshToken
-	session.ExpiresAt = expiresAt
+	// Delete old session and create a new one with rotated ID.
+	oldSessionID := session.ID
+	if err := s.sessionRepo.Delete(ctx, oldSessionID); err != nil {
+		s.logger.Warn("session-refresh: failed to delete old session",
+			slog.Any("error", err), slog.String("old_session_id", oldSessionID))
+	}
 
-	if err := s.sessionRepo.Update(ctx, session); err != nil {
+	newSession, err := domain.NewSession(session.UserID, accessToken, newRefreshToken, expiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("session-refresh: create new session: %w", err)
+	}
+	newSession.ID = newSessionID
+
+	if err := s.sessionRepo.Create(ctx, newSession); err != nil {
 		return nil, fmt.Errorf("session-refresh: persist: %w", err)
 	}
 
-	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
+	s.logger.Info("token refreshed",
+		slog.String("user_id", session.UserID),
+		slog.String("old_session_id", oldSessionID),
+		slog.String("new_session_id", newSessionID))
 
 	return &TokenPair{
 		AccessToken:  accessToken,

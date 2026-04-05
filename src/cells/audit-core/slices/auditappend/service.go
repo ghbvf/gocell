@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -75,7 +75,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Append to hash chain.
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
-	auditEntry.ID = id.New("audit")
+	auditEntry.ID = uid.NewWithPrefix("audit")
 
 	// Persist.
 	if err := s.repo.Append(ctx, auditEntry); err != nil {
