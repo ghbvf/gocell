@@ -3,11 +3,13 @@ package auditcore
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,4 +122,29 @@ type stubMux struct {
 }
 
 func (m *stubMux) Handle(_ string, _ http.Handler) { m.handleCount++ }
+func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
+	m.handleCount++
+	fn(m)
+}
+func (m *stubMux) Mount(_ string, _ http.Handler)  { m.handleCount++ }
 func (m *stubMux) Group(_ func(cell.RouteMux))     { m.handleCount++ }
+
+func TestAuditCore_RouteQueryEntries(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, http.StatusNotFound, rec.Code,
+		"GET /api/v1/audit/entries should not return 404 (got %d)", rec.Code)
+}

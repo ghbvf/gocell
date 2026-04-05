@@ -6,8 +6,7 @@ package accesscore
 import (
 	"context"
 	"log/slog"
-
-	"github.com/go-chi/chi/v5"
+	"net/http"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -20,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -130,6 +130,18 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
+	// Resolve signing key from Dependencies.Config if not set via option.
+	if len(c.signingKey) == 0 {
+		if key, ok := deps.Config["access.signing_key"]; ok {
+			if keyStr, ok := key.(string); ok && keyStr != "" {
+				c.signingKey = []byte(keyStr)
+			}
+		}
+	}
+	if len(c.signingKey) == 0 {
+		return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key is required")
+	}
+
 	// identity-manage
 	identitySvc := identitymanage.NewService(c.userRepo, c.publisher, c.logger)
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
@@ -168,18 +180,20 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 // RegisterRoutes registers HTTP routes for access-core.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
-	// Identity management: /api/v1/access/users
-	mux.Handle("/api/v1/access/users/*", c.identityHandler.Routes())
+	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
+		// Identity management: /api/v1/access/users
+		sub.Mount("/users", c.identityHandler.Routes())
 
-	// Session endpoints: /api/v1/access/sessions
-	sessionRouter := chi.NewRouter()
-	sessionRouter.Post("/login", c.loginHandler.HandleLogin)
-	sessionRouter.Post("/refresh", c.refreshHandler.HandleRefresh)
-	sessionRouter.Delete("/{id}", c.logoutHandler.HandleLogout)
-	mux.Handle("/api/v1/access/sessions/*", sessionRouter)
+		// Session endpoints: /api/v1/access/sessions
+		sub.Route("/sessions", func(s cell.RouteMux) {
+			s.Handle("POST /login", http.HandlerFunc(c.loginHandler.HandleLogin))
+			s.Handle("POST /refresh", http.HandlerFunc(c.refreshHandler.HandleRefresh))
+			s.Handle("DELETE /{id}", http.HandlerFunc(c.logoutHandler.HandleLogout))
+		})
 
-	// RBAC queries: /api/v1/access/roles
-	mux.Handle("/api/v1/access/roles/*", c.rbacHandler.Routes())
+		// RBAC queries: /api/v1/access/roles
+		sub.Mount("/roles", c.rbacHandler.Routes())
+	})
 }
 
 // RegisterSubscriptions is a no-op for access-core in Phase 2.

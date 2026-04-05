@@ -15,12 +15,23 @@ import (
 
 // mockRouteMux implements RouteMux for testing.
 type mockRouteMux struct {
+	prefix string
 	routes []string
 	groups int
 }
 
 func (m *mockRouteMux) Handle(pattern string, _ http.Handler) {
-	m.routes = append(m.routes, pattern)
+	m.routes = append(m.routes, m.prefix+pattern)
+}
+
+func (m *mockRouteMux) Route(pattern string, fn func(RouteMux)) {
+	sub := &mockRouteMux{prefix: m.prefix + pattern}
+	fn(sub)
+	m.routes = append(m.routes, sub.routes...)
+}
+
+func (m *mockRouteMux) Mount(pattern string, _ http.Handler) {
+	m.routes = append(m.routes, m.prefix+pattern+"/*")
 }
 
 func (m *mockRouteMux) Group(fn func(RouteMux)) {
@@ -182,4 +193,24 @@ func TestRouteMux_Group(t *testing.T) {
 
 	assert.Equal(t, 1, mux.groups)
 	assert.Equal(t, []string{"/api/v1/health", "/api/v1/ready"}, mux.routes)
+}
+
+func TestRouteMux_Route(t *testing.T) {
+	mux := &mockRouteMux{}
+
+	mux.Route("/api/v1", func(sub RouteMux) {
+		sub.Handle("/ping", http.NotFoundHandler())
+		sub.Route("/sessions", func(s RouteMux) {
+			s.Handle("/login", http.NotFoundHandler())
+		})
+	})
+
+	assert.Contains(t, mux.routes, "/api/v1/ping")
+	assert.Contains(t, mux.routes, "/api/v1/sessions/login")
+}
+
+func TestRouteMux_Mount(t *testing.T) {
+	mux := &mockRouteMux{}
+	mux.Mount("/api/v1/users", http.NotFoundHandler())
+	assert.Equal(t, []string{"/api/v1/users/*"}, mux.routes)
 }

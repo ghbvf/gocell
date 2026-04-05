@@ -3,11 +3,14 @@ package configcore
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,10 +90,76 @@ type stubMux struct {
 	handleCount int
 }
 
-func (m *stubMux) Handle(_ string, _ http.Handler) {
+func (m *stubMux) Handle(_ string, _ http.Handler) { m.handleCount++ }
+func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
+	fn(m)
+}
+func (m *stubMux) Mount(_ string, _ http.Handler)  { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))     { m.handleCount++ }
+
+// initCellWithRouter creates an initialized ConfigCore with routes registered
+// on a real chi-based router, ready for HTTP testing.
+func initCellWithRouter(t *testing.T) *router.Router {
+	t.Helper()
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+	return r
 }
 
-func (m *stubMux) Group(_ func(cell.RouteMux)) {
-	m.handleCount++
+func TestConfigCore_RouteConfigList(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, http.StatusNotFound, rec.Code,
+		"GET /api/v1/config/ should not return 404 (got %d)", rec.Code)
+}
+
+func TestConfigCore_RouteConfigCreate(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	body := `{"key":"app.name","value":"test"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, http.StatusNotFound, rec.Code,
+		"POST /api/v1/config/ should not return 404 (got %d)", rec.Code)
+}
+
+func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
+	r.ServeHTTP(rec, req)
+
+	// A business-logic 404 returns a JSON error body with an error code;
+	// a routing 404 returns plain text. Verify the route matched by checking
+	// the response is JSON (meaning our handler ran, not the router's default 404).
+	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json",
+		"GET /api/v1/config/{key} should return JSON (route matched), got plain text (routing 404)")
+}
+
+func TestConfigCore_RouteFlagsList(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, http.StatusNotFound, rec.Code,
+		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
 }

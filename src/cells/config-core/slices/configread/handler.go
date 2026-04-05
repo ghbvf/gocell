@@ -21,12 +21,13 @@ func NewHandler(svc *Service) *Handler {
 // Routes returns a chi.Router with config-read routes.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.handleList)
-	r.Get("/{key}", h.handleGet)
+	r.Get("/", h.HandleList)
+	r.Get("/{key}", h.HandleGet)
 	return r
 }
 
-func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+// HandleGet handles GET /{key} — returns a single config entry.
+func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	entry, err := h.svc.GetByKey(r.Context(), key)
@@ -38,7 +39,8 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entry})
 }
 
-func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+// HandleList handles GET / — returns all config entries.
+func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	entries, err := h.svc.List(r.Context())
 	if err != nil {
 		httputil.WriteDomainError(w, err)

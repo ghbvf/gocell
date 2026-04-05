@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/config-core/slices/configpublish"
@@ -129,29 +127,28 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 // RegisterRoutes registers HTTP routes for config-core.
 func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
-	// All config routes under /api/v1/config using a single router.
-	configRouter := chi.NewRouter()
-	configRouter.Route("/", func(r chi.Router) {
-		// config-read
-		r.Get("/", wrapRouter(c.readHandler.Routes()))
-		r.Get("/{key}", wrapRouter(c.readHandler.Routes()))
-		// config-write
-		r.Post("/", wrapRouter(c.writeHandler.Routes()))
-		r.Put("/{key}", wrapRouter(c.writeHandler.Routes()))
-		r.Delete("/{key}", wrapRouter(c.writeHandler.Routes()))
-		// config-publish
-		r.Post("/{key}/publish", wrapRouter(c.publishHandler.Routes()))
-		r.Post("/{key}/rollback", wrapRouter(c.publishHandler.Routes()))
+	mux.Route("/api/v1", func(v1 cell.RouteMux) {
+		// Config CRUD + publish/rollback under /api/v1/config.
+		v1.Route("/config", func(cfg cell.RouteMux) {
+			// config-read
+			cfg.Handle("GET /", http.HandlerFunc(c.readHandler.HandleList))
+			cfg.Handle("GET /{key}", http.HandlerFunc(c.readHandler.HandleGet))
+			// config-write
+			cfg.Handle("POST /", http.HandlerFunc(c.writeHandler.HandleCreate))
+			cfg.Handle("PUT /{key}", http.HandlerFunc(c.writeHandler.HandleUpdate))
+			cfg.Handle("DELETE /{key}", http.HandlerFunc(c.writeHandler.HandleDelete))
+			// config-publish
+			cfg.Handle("POST /{key}/publish", http.HandlerFunc(c.publishHandler.HandlePublish))
+			cfg.Handle("POST /{key}/rollback", http.HandlerFunc(c.publishHandler.HandleRollback))
+		})
+
+		// feature-flag: /api/v1/flags
+		v1.Route("/flags", func(f cell.RouteMux) {
+			f.Handle("GET /", http.HandlerFunc(c.flagHandler.HandleList))
+			f.Handle("GET /{key}", http.HandlerFunc(c.flagHandler.HandleGet))
+			f.Handle("POST /{key}/evaluate", http.HandlerFunc(c.flagHandler.HandleEvaluate))
+		})
 	})
-	mux.Handle("/api/v1/config/*", configRouter)
-
-	// feature-flag: /api/v1/flags
-	mux.Handle("/api/v1/flags/*", c.flagHandler.Routes())
-}
-
-// wrapRouter converts a chi.Router to an http.HandlerFunc for inline mounting.
-func wrapRouter(r chi.Router) func(w http.ResponseWriter, req *http.Request) {
-	return r.ServeHTTP
 }
 
 // RegisterSubscriptions registers event subscriptions for config-core.
