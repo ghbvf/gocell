@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestResult represents the outcome of a single test target.
@@ -54,7 +55,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 	}
 
 	if _, ok := r.project.Slices[sliceKey]; !ok {
-		return nil, fmt.Errorf("slice %q not found in project metadata", sliceKey)
+		return nil, errcode.New(errcode.ErrSliceNotFound, fmt.Sprintf("slice %q not found in project metadata", sliceKey))
 	}
 
 	pkg := fmt.Sprintf("./cells/%s/slices/%s/...", cellID, sliceID)
@@ -81,7 +82,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 // It runs `go test ./cells/{cellID}/... -v -run Smoke` from the project root.
 func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, error) {
 	if r.project.Cells[cellID] == nil {
-		return nil, fmt.Errorf("cell %q not found in project metadata", cellID)
+		return nil, errcode.New(errcode.ErrCellNotFound, fmt.Sprintf("cell %q not found in project metadata", cellID))
 	}
 
 	pkg := fmt.Sprintf("./cells/%s/...", cellID)
@@ -110,7 +111,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResult, error) {
 	journey := r.project.Journeys[journeyID]
 	if journey == nil {
-		return nil, fmt.Errorf("journey %q not found in project metadata", journeyID)
+		return nil, errcode.New(errcode.ErrJourneyNotFound, fmt.Sprintf("journey %q not found in project metadata", journeyID))
 	}
 
 	result := &VerifyResult{
@@ -150,13 +151,13 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("invalid slice key %q: expected format \"cellID/sliceID\"", key)
+		return "", "", errcode.New(errcode.ErrValidationFailed, fmt.Sprintf("invalid slice key %q: expected format \"cellID/sliceID\"", key))
 	}
 	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
-		return "", "", fmt.Errorf("invalid cellID: contains path separator or traversal")
+		return "", "", errcode.New(errcode.ErrValidationFailed, "invalid cellID: contains path separator or traversal")
 	}
 	if strings.Contains(parts[1], "..") || strings.ContainsAny(parts[1], `/\`) {
-		return "", "", fmt.Errorf("invalid sliceID: contains path separator or traversal")
+		return "", "", errcode.New(errcode.ErrValidationFailed, "invalid sliceID: contains path separator or traversal")
 	}
 	return parts[0], parts[1], nil
 }
@@ -212,7 +213,7 @@ func runGoTest(ctx context.Context, dir string, args []string) (output string, p
 	}
 
 	// Other error: command couldn't execute at all.
-	return output, false, fmt.Errorf("go test execution failed: %w", runErr)
+	return output, false, errcode.Wrap(errcode.ErrTestExecution, "go test execution failed", runErr)
 }
 
 // isExitError checks whether err (or any wrapped error in its chain) is an

@@ -124,6 +124,7 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 		"iat": jwt.NewNumericDate(time.Now()),
 		"exp": jwt.NewNumericDate(expiresAt),
 		"iss": "gocell-access-core",
+		"aud": jwt.ClaimStrings{"gocell"},
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles

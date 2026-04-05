@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -52,7 +53,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 
 	now := time.Now()
 	entry := &domain.ConfigEntry{
-		ID:        fmt.Sprintf("cfg-%d", now.UnixNano()),
+		ID:        id.New("cfg"),
 		Key:       input.Key,
 		Value:     input.Value,
 		Version:   1,

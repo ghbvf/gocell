@@ -28,6 +28,12 @@ type Config interface {
 	Keys() []string
 }
 
+// Reloader is an optional interface for configs that support hot-reloading.
+// The concrete *config returned by Load implements this; NewFromMap does not.
+type Reloader interface {
+	Reload(yamlPath, envPrefix string) error
+}
+
 // config is the default in-memory implementation of Config.
 type config struct {
 	mu   sync.RWMutex

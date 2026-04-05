@@ -5,13 +5,13 @@ package auditappend
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -75,7 +75,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Append to hash chain.
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
-	auditEntry.ID = fmt.Sprintf("audit-%d", auditEntry.Timestamp.UnixNano())
+	auditEntry.ID = id.New("audit")
 
 	// Persist.
 	if err := s.repo.Append(ctx, auditEntry); err != nil {

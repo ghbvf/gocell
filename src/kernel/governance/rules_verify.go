@@ -7,7 +7,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// validateVERIFY01 checks that every provider-role contractUsage has a matching
+// validateVERIFY01 checks that every contractUsage has a matching
 // verify.contract entry or a valid waiver.
 //
 // verify.contract format: "contract.{contractID}.{role}"
@@ -37,9 +37,6 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 		}
 
 		for i, cu := range s.ContractUsages {
-			if !cell.IsProviderRole(cell.ContractRole(cu.Role)) {
-				continue
-			}
 			verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
 			if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
 				results = append(results, ValidationResult{
@@ -49,7 +46,7 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 					File:      sliceFile(key),
 					Field:     fmt.Sprintf("contractUsages[%d]", i),
 					Message: fmt.Sprintf(
-						"provider-role usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
+						"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
 						cu.Contract, cu.Role, s.ID,
 					),
 				})

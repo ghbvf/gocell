@@ -103,42 +103,49 @@ func (v *Validator) validateFMT03() []ValidationResult {
 	return results
 }
 
-// validateFMT04 checks that event-type contracts include replayable, idempotencyKey, deliverySemantics.
+// validateFMT04 checks that event-type contracts include replayable, idempotencyKey, deliverySemantics,
+// and that projection-type contracts include replayable.
 func (v *Validator) validateFMT04() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if cell.ContractKind(c.Kind) != cell.ContractEvent {
-			continue
+		kind := cell.ContractKind(c.Kind)
+
+		// Both event and projection contracts require replayable.
+		if kind == cell.ContractEvent || kind == cell.ContractProjection {
+			if c.Replayable == nil {
+				results = append(results, ValidationResult{
+					Code:      "FMT-04",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      contractFile(c.ID),
+					Field:     "replayable",
+					Message:   fmt.Sprintf("%s contract %q must specify replayable", c.Kind, c.ID),
+				})
+			}
 		}
-		if c.Replayable == nil {
-			results = append(results, ValidationResult{
-				Code:      "FMT-04",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "replayable",
-				Message:   fmt.Sprintf("event contract %q must specify replayable", c.ID),
-			})
-		}
-		if c.IdempotencyKey == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-04",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "idempotencyKey",
-				Message:   fmt.Sprintf("event contract %q must specify idempotencyKey", c.ID),
-			})
-		}
-		if c.DeliverySemantics == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-04",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "deliverySemantics",
-				Message:   fmt.Sprintf("event contract %q must specify deliverySemantics", c.ID),
-			})
+
+		// Only event contracts require idempotencyKey and deliverySemantics.
+		if kind == cell.ContractEvent {
+			if c.IdempotencyKey == "" {
+				results = append(results, ValidationResult{
+					Code:      "FMT-04",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      contractFile(c.ID),
+					Field:     "idempotencyKey",
+					Message:   fmt.Sprintf("event contract %q must specify idempotencyKey", c.ID),
+				})
+			}
+			if c.DeliverySemantics == "" {
+				results = append(results, ValidationResult{
+					Code:      "FMT-04",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      contractFile(c.ID),
+					Field:     "deliverySemantics",
+					Message:   fmt.Sprintf("event contract %q must specify deliverySemantics", c.ID),
+				})
+			}
 		}
 	}
 	return results

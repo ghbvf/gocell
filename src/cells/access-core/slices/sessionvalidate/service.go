@@ -66,6 +66,10 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 		claims.IssuedAt = iat.Time
 	}
 
+	if aud, err := mapClaims.GetAudience(); err == nil {
+		claims.Audience = aud
+	}
+
 	// Extract roles.
 	if rolesRaw, ok := mapClaims["roles"].([]any); ok {
 		for _, r := range rolesRaw {
@@ -105,6 +109,7 @@ func IssueTestToken(signingKey []byte, subject string, roles []string, ttl time.
 		"iat": jwt.NewNumericDate(now),
 		"exp": jwt.NewNumericDate(now.Add(ttl)),
 		"iss": "gocell-access-core",
+		"aud": jwt.ClaimStrings{"gocell"},
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles

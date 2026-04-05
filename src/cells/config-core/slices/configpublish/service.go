@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -53,7 +54,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 
 	now := time.Now()
 	version := &domain.ConfigVersion{
-		ID:          fmt.Sprintf("ver-%d", now.UnixNano()),
+		ID:          id.New("ver"),
 		ConfigID:    entry.ID,
 		Version:     entry.Version,
 		Value:       entry.Value,
