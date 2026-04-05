@@ -17,7 +17,8 @@ if [[ -z "$BRANCH" ]]; then
   exit 1
 fi
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# scripts/ -> stage-7-qa/ -> skills/ -> .claude/ -> repo_root
+REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 EVIDENCE_DIR="$REPO_ROOT/specs/$BRANCH/evidence"
 PASS=true
 SUMMARY=()

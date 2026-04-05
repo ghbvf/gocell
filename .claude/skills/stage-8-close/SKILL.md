@@ -196,13 +196,13 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 
 质量:
 [ ] qa-report.md 记录测试范围和结果
-[ ] Playwright E2E 测试存在
+[ ] Playwright E2E 测试存在（有 UI 时；否则标注 N/A）
 [ ] tech-debt-registry.md 已汇总更新
 [ ] kernel-review-report.md 存在且 7 维度已评分
 [ ] product-context.md 存在
 [ ] product-acceptance-criteria.md 存在
 [ ] product-review-report.md 存在
-[ ] user-signoff.md 存在且四视角完整
+[ ] user-signoff.md 存在且三视角完整（纯后端 Phase UI 视角标 N/A）
 [ ] user-signoff.md 判定非 REJECT
 [ ] review-findings.md 存在
 
