@@ -40,7 +40,7 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 			return nil, errcode.New(ErrValidateInvalidToken, "unexpected signing method")
 		}
 		return s.signingKey, nil
-	})
+	}, jwt.WithAudience("gocell"), jwt.WithIssuer("gocell-access-core"))
 	if err != nil {
 		return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "invalid token")
 	}
