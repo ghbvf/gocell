@@ -7,7 +7,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -166,21 +165,15 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			}
 		}
 		if len(c.signingKey) == 0 && (c.jwtIssuer == nil || c.jwtVerifier == nil) {
-			return errcode.New("ERR_AUTH_MISSING_KEY", "JWT issuer/verifier or signing key is required")
+			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT issuer/verifier or signing key is required")
 		}
 		if len(c.signingKey) > 0 && len(c.signingKey) < 32 {
-			return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key must be at least 32 bytes")
+			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT signing key must be at least 32 bytes")
 		}
-		// Fallback: generate an ephemeral RSA key pair from the HMAC key seed.
-		// This maintains backward compatibility while switching to RS256 internally.
+		// Fail-fast: WithSigningKey is deprecated. RS256 key pair required.
 		if c.jwtIssuer == nil || c.jwtVerifier == nil {
-			priv, pub := auth.MustGenerateTestKeyPair()
-			if c.jwtIssuer == nil {
-				c.jwtIssuer = auth.NewJWTIssuer(priv, "gocell-access-core", 15*time.Minute)
-			}
-			if c.jwtVerifier == nil {
-				c.jwtVerifier = auth.NewJWTVerifier(pub)
-			}
+			return errcode.New(errcode.ErrAuthKeyInvalid,
+				"RS256 key pair required: use WithJWTIssuer + WithJWTVerifier (WithSigningKey is deprecated)")
 		}
 	}
 
