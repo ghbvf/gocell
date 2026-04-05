@@ -11,6 +11,8 @@ import (
 
 // New generates a random ID with the given prefix.
 // Format: "{prefix}-{16 hex chars}" (8 random bytes = 64 bits of entropy).
+// 64-bit entropy is sufficient for single-process in-memory use. For globally
+// unique IDs across distributed systems, consider UUID v4 (128 bits).
 // Example: New("usr") → "usr-a1b2c3d4e5f67890"
 func New(prefix string) string {
 	var b [8]byte

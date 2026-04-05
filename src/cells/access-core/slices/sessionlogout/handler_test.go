@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
@@ -41,9 +40,9 @@ func TestHandleLogout(t *testing.T) {
 			wantStatus: http.StatusNoContent,
 		},
 		{
-			name:       "nonexistent session returns 500",
+			name:       "nonexistent session returns 404",
 			path:       "/no-such-sess",
-			wantStatus: http.StatusInternalServerError,
+			wantStatus: http.StatusNotFound,
 		},
 	}
 
@@ -52,13 +51,7 @@ func TestHandleLogout(t *testing.T) {
 			r := setup()
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, tc.path, nil))
-			if tc.wantStatus == http.StatusNoContent {
-				assert.Equal(t, tc.wantStatus, w.Code)
-			} else {
-				// The error wraps a non-errcode error (fmt.Errorf),
-				// so WriteDomainError maps it to 500.
-				require.GreaterOrEqual(t, w.Code, 400)
-			}
+			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
 }
