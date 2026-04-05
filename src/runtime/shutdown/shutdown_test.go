@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManager_Shutdown_RunsHooks(t *testing.T) {
+func TestManager_Shutdown_RunsHooksLIFO(t *testing.T) {
 	m := New(WithTimeout(5 * time.Second))
 
 	var order []int
@@ -24,30 +24,36 @@ func TestManager_Shutdown_RunsHooks(t *testing.T) {
 		order = append(order, 2)
 		return nil
 	})
+	m.Register(func(ctx context.Context) error {
+		order = append(order, 3)
+		return nil
+	})
 
 	err := m.Shutdown()
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2}, order)
+	// LIFO: last registered (3) runs first, then 2, then 1.
+	assert.Equal(t, []int{3, 2, 1}, order)
 }
 
-func TestManager_Shutdown_HookError(t *testing.T) {
+func TestManager_Shutdown_HookErrorContinues(t *testing.T) {
 	m := New(WithTimeout(5 * time.Second))
+
+	var firstCalled atomic.Bool
+	m.Register(func(ctx context.Context) error {
+		firstCalled.Store(true)
+		return nil
+	})
 
 	expectedErr := errors.New("hook failed")
 	m.Register(func(ctx context.Context) error {
 		return expectedErr
 	})
 
-	var secondCalled atomic.Bool
-	m.Register(func(ctx context.Context) error {
-		secondCalled.Store(true)
-		return nil
-	})
-
+	// LIFO: hook 2 (fail) runs first, then hook 1 should still run.
 	err := m.Shutdown()
 	assert.ErrorIs(t, err, expectedErr)
-	// Second hook should not be called because first failed.
-	assert.False(t, secondCalled.Load())
+	// First hook should still be called despite second (run first in LIFO) failing.
+	assert.True(t, firstCalled.Load(), "remaining hooks must execute even after a failure")
 }
 
 func TestManager_Shutdown_Timeout(t *testing.T) {
@@ -61,6 +67,30 @@ func TestManager_Shutdown_Timeout(t *testing.T) {
 
 	err := m.Shutdown()
 	assert.Error(t, err)
+}
+
+func TestManager_Shutdown_AllHooksRunOnError(t *testing.T) {
+	m := New(WithTimeout(5 * time.Second))
+
+	var order []int
+	m.Register(func(ctx context.Context) error {
+		order = append(order, 1)
+		return nil
+	})
+	m.Register(func(ctx context.Context) error {
+		order = append(order, 2)
+		return errors.New("hook 2 failed")
+	})
+	m.Register(func(ctx context.Context) error {
+		order = append(order, 3)
+		return nil
+	})
+
+	err := m.Shutdown()
+	// Hook 2 fails, but hook 1 should still run.
+	assert.Error(t, err)
+	// LIFO: 3, 2, 1 — all three should be called.
+	assert.Equal(t, []int{3, 2, 1}, order)
 }
 
 func TestManager_DefaultTimeout(t *testing.T) {

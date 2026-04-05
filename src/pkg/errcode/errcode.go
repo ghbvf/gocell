@@ -27,6 +27,7 @@ const (
 	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
 	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
 	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
+	ErrBusClosed        Code = "ERR_BUS_CLOSED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

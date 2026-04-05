@@ -147,6 +147,19 @@ func TestWriteDomainError_PlainError(t *testing.T) {
 	assert.Equal(t, "internal server error", errObj["message"])
 }
 
+func TestStatusRecorder(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sr := NewStatusRecorder(rec)
+
+	// Default status should be 200.
+	assert.Equal(t, http.StatusOK, sr.Status)
+
+	// WriteHeader should capture the status.
+	sr.WriteHeader(http.StatusNotFound)
+	assert.Equal(t, http.StatusNotFound, sr.Status)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
 func TestWriteDomainError_WithDetails(t *testing.T) {
 	ecErr := errcode.WithDetails(
 		errcode.New("ERR_VALIDATION_REQUIRED_FIELD", "field missing"),

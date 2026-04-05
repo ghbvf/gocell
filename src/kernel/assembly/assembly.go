@@ -133,13 +133,15 @@ func (a *CoreAssembly) Start(ctx context.Context) error {
 
 // Stop stops every registered Cell in reverse registration order. If multiple
 // Cells fail, Stop continues and returns the first error encountered.
+// Stop is only allowed from the Started state; calling Stop in any other state
+// is a no-op.
 //
 // ref: uber-go/fx app.go — Stop 尽力而为，不因某个 hook 失败而中止。
 func (a *CoreAssembly) Stop(ctx context.Context) error {
 	a.mu.Lock()
-	if a.state == stateStopping {
+	if a.state != stateStarted {
 		a.mu.Unlock()
-		return nil // 防止重入
+		return nil // Only allow Stop from Started state.
 	}
 	a.state = stateStopping
 	a.mu.Unlock()

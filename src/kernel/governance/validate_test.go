@@ -2176,3 +2176,56 @@ func TestNewValidator_NilProject(t *testing.T) {
 	results := val.Validate()
 	assert.Empty(t, results)
 }
+
+// --- FMT-10: banned field names and slash-separated contract IDs ---
+
+func TestFMT10(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "no banned names",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "cell with banned ID cellId",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["cellId"] = &metadata.CellMeta{
+					ID:               "cellId",
+					Type:             "core",
+					ConsistencyLevel: "L1",
+					Owner:            metadata.OwnerMeta{Team: "t", Role: "r"},
+					Schema:           metadata.SchemaMeta{Primary: "s"},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"s"}},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "contract with slash separator",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http/auth/login/v1"] = &metadata.ContractMeta{
+					ID:               "http/auth/login/v1",
+					Kind:             "http",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+				}
+			},
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT10(), "FMT-10")
+			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,6 +97,44 @@ func TestWorkerGroup_Stop(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, w1.stopped.Load())
 	assert.True(t, w2.stopped.Load())
+}
+
+func TestWorkerGroup_StopSerialReverseOrder(t *testing.T) {
+	g := NewWorkerGroup()
+	var order []string
+	var mu sync.Mutex
+
+	// Create workers that record their stop order.
+	for _, name := range []string{"first", "second", "third"} {
+		w := newTestWorker()
+		n := name
+		w.stopErr = nil
+		// Override Stop to record order.
+		g.Add(&orderWorker{testWorker: w, name: n, order: &order, mu: &mu})
+	}
+
+	err := g.Stop(context.Background())
+	require.NoError(t, err)
+
+	// Serial reverse: third, second, first.
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"third", "second", "first"}, order)
+}
+
+// orderWorker wraps testWorker and records stop order.
+type orderWorker struct {
+	*testWorker
+	name  string
+	order *[]string
+	mu    *sync.Mutex
+}
+
+func (w *orderWorker) Stop(ctx context.Context) error {
+	w.mu.Lock()
+	*w.order = append(*w.order, w.name)
+	w.mu.Unlock()
+	return w.testWorker.Stop(ctx)
 }
 
 func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
