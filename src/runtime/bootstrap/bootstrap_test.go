@@ -30,7 +30,8 @@ func TestNew_Defaults(t *testing.T) {
 	b := New()
 	assert.Equal(t, ":8080", b.httpAddr)
 	assert.Nil(t, b.assembly)
-	assert.Nil(t, b.eventBus)
+	assert.Nil(t, b.publisher)
+	assert.Nil(t, b.subscriber)
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -46,7 +47,9 @@ func TestNew_WithOptions(t *testing.T) {
 
 	assert.Equal(t, ":9090", b.httpAddr)
 	assert.Equal(t, asm, b.assembly)
-	assert.Equal(t, eb, b.eventBus)
+	// WithEventBus sets both publisher and subscriber to the same instance.
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
@@ -99,6 +102,36 @@ func TestBootstrap_CellLookup(t *testing.T) {
 
 	assert.NotNil(t, asm.Cell("lookup"))
 	assert.Nil(t, asm.Cell("nonexistent"))
+}
+
+func TestNew_WithPublisherAndSubscriber(t *testing.T) {
+	eb := eventbus.New()
+
+	b := New(
+		WithPublisher(eb),
+		WithSubscriber(eb),
+	)
+
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
+}
+
+func TestNew_WithPublisherOnly(t *testing.T) {
+	eb := eventbus.New()
+
+	b := New(WithPublisher(eb))
+
+	assert.Equal(t, eb, b.publisher)
+	assert.Nil(t, b.subscriber)
+}
+
+func TestNew_WithSubscriberOnly(t *testing.T) {
+	eb := eventbus.New()
+
+	b := New(WithSubscriber(eb))
+
+	assert.Nil(t, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
 }
 
 func TestBootstrap_RunContextCancel(t *testing.T) {
