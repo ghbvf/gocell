@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.49.0
 	gopkg.in/yaml.v3 v3.0.1
