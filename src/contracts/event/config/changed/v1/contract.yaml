@@ -7,8 +7,6 @@ endpoints:
   publisher: config-core
   subscribers:
     - access-core
-    - audit-core
-    - config-core
 replayable: false
 idempotencyKey: event_id
 deliverySemantics: at-least-once

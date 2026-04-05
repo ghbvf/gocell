@@ -35,7 +35,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 - kernel/ 不依赖 runtime/、adapters/、cells/（只依赖标准库 + pkg/）
 - cells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
-- runtime/ 可依赖 kernel/ 和 pkg/，不依赖 cells/、adapters/
+- runtime/ 不依赖 cells/、adapters/
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口
 - examples/ 可以依赖所有层
 

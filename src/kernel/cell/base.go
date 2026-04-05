@@ -3,28 +3,6 @@ package cell
 import (
 	"context"
 	"fmt"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
-)
-
-// Compile-time interface compliance checks.
-var (
-	_ Cell     = (*BaseCell)(nil)
-	_ Slice    = (*BaseSlice)(nil)
-	_ Contract = (*BaseContract)(nil)
-)
-
-// ---------------------------------------------------------------------------
-// cellState — lifecycle state machine for BaseCell
-// ---------------------------------------------------------------------------
-
-type cellState int
-
-const (
-	cellStateNew         cellState = iota // zero-value: not yet initialised
-	cellStateInitialized                  // Init completed
-	cellStateStarted                      // Start completed
-	cellStateStopped                      // Stop completed
 )
 
 // ---------------------------------------------------------------------------
@@ -38,7 +16,8 @@ type BaseCell struct {
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
-	state    cellState
+	started  bool
+	healthy  bool
 }
 
 // NewBaseCell creates a BaseCell from declarative metadata.
@@ -46,80 +25,45 @@ func NewBaseCell(meta CellMetadata) *BaseCell {
 	return &BaseCell{meta: meta}
 }
 
-func (b *BaseCell) ID() string             { return b.meta.ID }
-func (b *BaseCell) Type() CellType         { return b.meta.Type }
-func (b *BaseCell) ConsistencyLevel() Level { return b.meta.ConsistencyLevel }
-func (b *BaseCell) Metadata() CellMetadata { return b.meta }
+func (b *BaseCell) ID() string               { return b.meta.ID }
+func (b *BaseCell) Type() CellType            { return b.meta.Type }
+func (b *BaseCell) ConsistencyLevel() Level   { return b.meta.ConsistencyLevel }
+func (b *BaseCell) Metadata() CellMetadata    { return b.meta }
+func (b *BaseCell) OwnedSlices() []Slice      { return b.slices }
+func (b *BaseCell) ProducedContracts() []Contract { return b.produced }
+func (b *BaseCell) ConsumedContracts() []Contract { return b.consumed }
 
-// OwnedSlices returns a copy of the owned slice list.
-func (b *BaseCell) OwnedSlices() []Slice {
-	out := make([]Slice, len(b.slices))
-	copy(out, b.slices)
-	return out
-}
-
-// ProducedContracts returns a copy of the produced contract list.
-func (b *BaseCell) ProducedContracts() []Contract {
-	out := make([]Contract, len(b.produced))
-	copy(out, b.produced)
-	return out
-}
-
-// ConsumedContracts returns a copy of the consumed contract list.
-func (b *BaseCell) ConsumedContracts() []Contract {
-	out := make([]Contract, len(b.consumed))
-	copy(out, b.consumed)
-	return out
-}
-
-// Init prepares the cell. Only allowed from the new or stopped state.
+// Init prepares the cell. After Init the cell is not yet started.
 func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
-	if b.state != cellStateNew && b.state != cellStateStopped {
-		return errcode.New(errcode.ErrLifecycleInvalid,
-			fmt.Sprintf("cell %q: Init requires state new or stopped, current state: %d", b.meta.ID, b.state))
-	}
-	b.state = cellStateInitialized
+	b.healthy = false
 	return nil
 }
 
-// Start transitions the cell to the running state. Only allowed from
-// the initialized state.
+// Start transitions the cell to the running state.
 func (b *BaseCell) Start(_ context.Context) error {
-	if b.state != cellStateInitialized {
-		return errcode.New(errcode.ErrLifecycleInvalid,
-			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
-	}
-	b.state = cellStateStarted
+	b.started = true
+	b.healthy = true
 	return nil
 }
 
-// Stop transitions the cell to the stopped state. Only allowed from the
-// started state; calling Stop from new or initialized is a no-op.
+// Stop transitions the cell to the stopped state.
 func (b *BaseCell) Stop(_ context.Context) error {
-	switch b.state {
-	case cellStateStarted:
-		b.state = cellStateStopped
-		return nil
-	case cellStateNew, cellStateInitialized:
-		// no-op: nothing to tear down
-		return nil
-	default:
-		// already stopped — also a no-op
-		return nil
-	}
+	b.started = false
+	b.healthy = false
+	return nil
 }
 
 // Health returns the current HealthStatus.
 func (b *BaseCell) Health() HealthStatus {
-	if b.state == cellStateStarted {
+	if b.healthy {
 		return HealthStatus{Status: "healthy"}
 	}
 	return HealthStatus{Status: "unhealthy"}
 }
 
-// Ready returns true when the cell is in the started state.
+// Ready returns true when the cell is both started and healthy.
 func (b *BaseCell) Ready() bool {
-	return b.state == cellStateStarted
+	return b.started && b.healthy
 }
 
 // AddSlice appends a Slice to this cell's owned slice list.
@@ -214,6 +158,3 @@ func (c *BaseContract) Kind() ContractKind        { return c.kind }
 func (c *BaseContract) OwnerCell() string          { return c.owner }
 func (c *BaseContract) ConsistencyLevel() Level   { return c.level }
 func (c *BaseContract) Lifecycle() Lifecycle       { return c.lc }
-
-// SetLifecycle updates the governance lifecycle state of the contract.
-func (c *BaseContract) SetLifecycle(lc Lifecycle) { c.lc = lc }

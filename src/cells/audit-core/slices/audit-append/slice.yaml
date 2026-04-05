@@ -3,27 +3,9 @@ belongsToCell: audit-core
 contractUsages:
   - contract: event.audit.appended.v1
     role: publish
-  - contract: event.session.created.v1
-    role: subscribe
-  - contract: event.session.revoked.v1
-    role: subscribe
-  - contract: event.user.created.v1
-    role: subscribe
-  - contract: event.user.locked.v1
-    role: subscribe
-  - contract: event.config.changed.v1
-    role: subscribe
-  - contract: event.config.rollback.v1
-    role: subscribe
 verify:
   unit:
     - unit.audit-append.service
   contract:
     - contract.event.audit.appended.v1.publish
-    - contract.event.session.created.v1.subscribe
-    - contract.event.session.revoked.v1.subscribe
-    - contract.event.user.created.v1.subscribe
-    - contract.event.user.locked.v1.subscribe
-    - contract.event.config.changed.v1.subscribe
-    - contract.event.config.rollback.v1.subscribe
   waivers: []

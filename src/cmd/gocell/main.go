@@ -1,42 +1,54 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
-)
 
-var commands = map[string]func(args []string) error{
-	"validate": runValidate,
-	"scaffold": runScaffold,
-	"generate": runGenerate,
-	"check":    runCheck,
-	"verify":   runVerify,
-}
+	"github.com/ghbvf/gocell/internal/meta"
+)
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		usage()
+		os.Exit(2)
 	}
-	cmd, ok := commands[os.Args[1]]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		printUsage()
-		os.Exit(1)
-	}
-	if err := cmd(os.Args[2:]); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+
+	switch os.Args[1] {
+	case "validate-meta":
+		if err := runValidateMeta(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	default:
+		usage()
+		os.Exit(2)
 	}
 }
 
-func printUsage() {
-	fmt.Println("Usage: gocell <command> [args]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  validate    Validate all metadata (blocking)")
-	fmt.Println("  scaffold    Generate new cell/slice/contract/journey")
-	fmt.Println("  generate    Generate assembly code and derived files")
-	fmt.Println("  check       Run targeted architecture analysis")
-	fmt.Println("  verify      Run tests (slice/cell/journey)")
+func runValidateMeta(args []string) error {
+	fs := flag.NewFlagSet("validate-meta", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	root := fs.String("root", ".", "metadata root directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	result, err := meta.ValidateRepository(*root)
+	if err != nil {
+		return err
+	}
+
+	result.Print(os.Stdout)
+	if result.HasErrors() {
+		return fmt.Errorf("validate-meta failed")
+	}
+
+	return nil
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  gocell validate-meta [-root .]")
 }

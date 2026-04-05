@@ -6,7 +6,7 @@ owner:
 cells:
   - access-core
 contracts:
-  - http.auth.refresh.v1
+  - http.auth.login.v1
 passCriteria:
   - text: Refresh token 验证通过
     mode: auto

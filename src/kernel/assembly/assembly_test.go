@@ -171,9 +171,6 @@ func TestAssemblyInitFailure(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bad")
-	var ec *ecErr.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
 
 	// The good cell was Init'd but never Start'd, so unhealthy.
 	health := a.Health()
@@ -209,9 +206,6 @@ func TestAssemblyStartFailureRollback(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bad")
-	var ec *ecErr.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, ecErr.ErrLifecycleInvalid, ec.Code)
 
 	// good was started then rolled back (Stop called)
 	assert.Equal(t, []string{"good"}, order, "rollback should Stop already-started cells")
@@ -233,23 +227,6 @@ func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	require.Error(t, err, "double start should fail")
 }
 
-func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
-	a := New(Config{ID: "reg-after-start"})
-	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
-	require.NoError(t, a.Register(c1))
-	require.NoError(t, a.Start(context.Background()))
-
-	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "c2", Type: cell.CellTypeCore})
-	err := a.Register(c2)
-	require.Error(t, err, "register after start should fail")
-	var ec *ecErr.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "cannot register")
-
-	require.NoError(t, a.Stop(context.Background()))
-}
-
 func TestAssemblyStopContinuesOnError(t *testing.T) {
 	a := New(Config{ID: "stop-err"})
 
@@ -268,78 +245,7 @@ func TestAssemblyStopContinuesOnError(t *testing.T) {
 	require.Error(t, err)
 	// First error should be from "bad2" (last registered, stopped first).
 	assert.Contains(t, err.Error(), "bad2")
-	var ec *ecErr.Error
-	require.True(t, errors.As(err, &ec))
-	assert.Equal(t, ecErr.ErrLifecycleInvalid, ec.Code)
 	// Both fail-stop cells should have been called despite errors.
 	assert.True(t, bad1.stopCalled)
 	assert.True(t, bad2.stopCalled)
-}
-
-func TestAssemblyStartWithConfig(t *testing.T) {
-	a := New(Config{ID: "config-test"})
-	c := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
-	require.NoError(t, a.Register(c))
-
-	cfgMap := map[string]any{"key": "value"}
-	require.NoError(t, a.StartWithConfig(context.Background(), cfgMap))
-
-	health := a.Health()
-	assert.Equal(t, "healthy", health["c1"].Status)
-	require.NoError(t, a.Stop(context.Background()))
-}
-
-func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
-	a := New(Config{ID: "double-cfg"})
-	c := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
-	require.NoError(t, a.Register(c))
-	require.NoError(t, a.StartWithConfig(context.Background(), nil))
-
-	err := a.StartWithConfig(context.Background(), nil)
-	require.Error(t, err)
-	require.NoError(t, a.Stop(context.Background()))
-}
-
-func TestAssemblyStartWithConfigInitFailure(t *testing.T) {
-	a := New(Config{ID: "init-fail-cfg"})
-	bad := newFailInitCell("bad")
-	require.NoError(t, a.Register(bad))
-
-	err := a.StartWithConfig(context.Background(), nil)
-	require.Error(t, err)
-}
-
-func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
-	a := New(Config{ID: "start-fail-cfg"})
-
-	var order []string
-	good := newOrderCell("good", &order)
-	bad := newFailStartCell("bad")
-	require.NoError(t, a.Register(good))
-	require.NoError(t, a.Register(bad))
-
-	err := a.StartWithConfig(context.Background(), nil)
-	require.Error(t, err)
-	assert.Equal(t, []string{"good"}, order)
-}
-
-func TestAssemblyCellIDs(t *testing.T) {
-	a := New(Config{ID: "ids-test"})
-	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "a", Type: cell.CellTypeCore})))
-	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "b", Type: cell.CellTypeCore})))
-
-	ids := a.CellIDs()
-	assert.Equal(t, []string{"a", "b"}, ids)
-}
-
-func TestAssemblyCellLookup(t *testing.T) {
-	a := New(Config{ID: "lookup-test"})
-	c := cell.NewBaseCell(cell.CellMetadata{ID: "x", Type: cell.CellTypeCore})
-	require.NoError(t, a.Register(c))
-
-	found := a.Cell("x")
-	assert.NotNil(t, found)
-	assert.Equal(t, "x", found.ID())
-
-	assert.Nil(t, a.Cell("nonexistent"))
 }

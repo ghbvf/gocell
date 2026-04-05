@@ -5,13 +5,10 @@ contractUsages:
     role: publish
   - contract: event.user.locked.v1
     role: publish
-  - contract: http.auth.me.v1
-    role: serve
 verify:
   unit:
     - unit.identity-manage.service
   contract:
     - contract.event.user.created.v1.publish
     - contract.event.user.locked.v1.publish
-    - contract.http.auth.me.v1.serve
   waivers: []
