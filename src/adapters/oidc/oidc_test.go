@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,6 +96,13 @@ func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httpt
 			t.Errorf("failed to encode userinfo: %v", err)
 		}
 	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
+		return nil
+	}
+	ln.Close()
 
 	server := httptest.NewServer(mux)
 	serverURL = server.URL

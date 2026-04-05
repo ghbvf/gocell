@@ -1,0 +1,11 @@
+id: device-cell
+type: edge
+consistencyLevel: L4
+owner:
+  team: examples
+  role: device-owner
+schema:
+  primary: devices
+verify:
+  smoke:
+    - device-cell/smoke

@@ -58,9 +58,20 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *AccessCore) { c.logger = l }
 }
 
-// WithSigningKey sets the JWT signing key.
+// Deprecated: Use WithJWTIssuer and WithJWTVerifier instead.
+// WithSigningKey sets the JWT signing key for backward compatibility.
 func WithSigningKey(key []byte) Option {
 	return func(c *AccessCore) { c.signingKey = key }
+}
+
+// WithJWTIssuer sets the RS256 JWT issuer for token signing.
+func WithJWTIssuer(issuer *auth.JWTIssuer) Option {
+	return func(c *AccessCore) { c.jwtIssuer = issuer }
+}
+
+// WithJWTVerifier sets the RS256 JWT verifier for token validation.
+func WithJWTVerifier(verifier *auth.JWTVerifier) Option {
+	return func(c *AccessCore) { c.jwtVerifier = verifier }
 }
 
 // WithOutboxWriter sets the outbox.Writer for transactional event publishing.
@@ -87,7 +98,9 @@ type AccessCore struct {
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	logger       *slog.Logger
-	signingKey   []byte
+	signingKey   []byte // Deprecated: kept for backward compatibility with WithSigningKey.
+	jwtIssuer    *auth.JWTIssuer
+	jwtVerifier  *auth.JWTVerifier
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -136,19 +149,32 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	// Resolve signing key from Dependencies.Config if not set via option.
-	if len(c.signingKey) == 0 {
-		if key, ok := deps.Config["access.signing_key"]; ok {
-			if keyStr, ok := key.(string); ok && keyStr != "" {
-				c.signingKey = []byte(keyStr)
+	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
+		slog.Warn("access-core: outboxWriter not injected, L2 consistency not guaranteed")
+		return errcode.New(errcode.ErrCellMissingOutbox, "access-core (L2) requires outboxWriter injection")
+	}
+
+	// Build JWTIssuer/JWTVerifier from signingKey when not explicitly injected (backward compat).
+	if c.jwtIssuer == nil || c.jwtVerifier == nil {
+		if len(c.signingKey) == 0 {
+			if key, ok := deps.Config["access.signing_key"]; ok {
+				if keyStr, ok := key.(string); ok && keyStr != "" {
+					c.signingKey = []byte(keyStr)
+				}
 			}
 		}
-	}
-	if len(c.signingKey) == 0 {
-		return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key is required")
-	}
-	if len(c.signingKey) < 32 {
-		return errcode.New("ERR_AUTH_MISSING_KEY", "JWT signing key must be at least 32 bytes")
+		if len(c.signingKey) == 0 && (c.jwtIssuer == nil || c.jwtVerifier == nil) {
+			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT issuer/verifier or signing key is required")
+		}
+		if len(c.signingKey) > 0 && len(c.signingKey) < 32 {
+			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT signing key must be at least 32 bytes")
+		}
+		// Fail-fast: WithSigningKey is deprecated. RS256 key pair required.
+		if c.jwtIssuer == nil || c.jwtVerifier == nil {
+			return errcode.New(errcode.ErrAuthKeyInvalid,
+				"RS256 key pair required: use WithJWTIssuer + WithJWTVerifier (WithSigningKey is deprecated)")
+		}
 	}
 
 	// identity-manage
@@ -165,12 +191,12 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.outboxWriter != nil {
 		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
 	}
-	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.signingKey, c.logger, loginOpts...)
+	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.jwtIssuer, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
 
 	// session-refresh
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.signingKey, c.logger)
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 
@@ -184,7 +210,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("session-logout", "access-core", cell.L2))
 
 	// session-validate
-	c.validateSvc = sessionvalidate.NewService(c.signingKey, c.sessionRepo, c.logger)
+	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
 
 	// authorization-decide

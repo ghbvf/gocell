@@ -1,0 +1,13 @@
+id: device-register
+belongsToCell: device-cell
+contractUsages:
+  - contract: http.device.v1
+    role: serve
+  - contract: event.device-registered.v1
+    role: publish
+verify:
+  unit:
+    - unit.device-register.service
+  contract:
+    - contract.http.device.v1.serve
+    - contract.event.device-registered.v1.publish

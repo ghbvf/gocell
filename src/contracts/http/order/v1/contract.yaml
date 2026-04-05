@@ -1,0 +1,8 @@
+id: http.order.v1
+kind: http
+ownerCell: order-cell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: order-cell
+  clients: []

@@ -1,0 +1,8 @@
+id: http.device.v1
+kind: http
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: device-cell
+  clients: []

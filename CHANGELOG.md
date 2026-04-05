@@ -4,6 +4,49 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - Phase 4: Examples + Documentation
+
+> Branch: `feat/003-phase4-examples-docs`
+> 变更规模: 20 commits
+> git log base: `28ac80f..e15462d`
+
+### feat
+
+- **examples/todo-order**: 自定义 order-cell golden-path 示例（L2-L3，outbox pattern + RabbitMQ + in-memory repo），附 docker-compose.yml + README (`8d03190`)
+- **examples/sso-bff**: 3 个内置 Cell（access-core + audit-core + config-core）组合示例（L1-L2），附 docker-compose.yml + README (`764c179`)
+- **examples/iot-device**: L4 DeviceLatent 一致性示例（命令回执 + WebSocket 推送），附 docker-compose.yml + README (`3a3f8ca`)
+- **cells/access-core**: RS256 完整迁移——引入 WithJWTIssuer/WithJWTVerifier Option；三个 slice（sessionlogin / sessionvalidate / sessionrefresh）迁移到 JWTIssuer/JWTVerifier 接口 (`01d49f1`)
+- **cells/access-core + audit-core + config-core**: outboxWriter fail-fast——L2+ Cell 的 Init 阶段检查 outboxWriter 是否注入，缺失时返回 ERR_CELL_MISSING_OUTBOX (`2ff2acc`)
+- **runtime/auth**: 新增 MustGenerateTestKeyPair + LoadRSAKeyPairFromPEM RSA helper（测试辅助工具） (`d52336c`)
+- **ci**: GitHub Actions CI 工作流——build / test / vet / gocell validate / integration / kernel coverage gate (`3d79543`)
+- **Wave 0**: S3 GOCELL_S3_* env prefix 对齐（fallback to S3_* + slog.Warn deprecation）；root docker-compose.yml 补全 start_period: 15s；testcontainers-go v0.41.0 加入 go.mod (`2a0f7cb`)
+
+### test
+
+- **adapters/postgres**: 替换全部 t.Skip stub 为 testcontainers 集成测试（Pool / TxManager / Migrator / OutboxWriter / OutboxRelay） (`84aa617`)
+- **adapters/redis + rabbitmq**: 替换全部 t.Skip stub 为 testcontainers 集成测试（Client / DistLock / IdempotencyChecker / Publisher / Subscriber / ConsumerBase / DLQ） (`494856a`)
+- **integration**: 新增 outbox 全链路集成测试——postgres outbox write → relay → rabbitmq publish → consumer → redis idempotency check（FR-6.5） (`b1dfddc`)
+
+### docs
+
+- **README**: Getting Started——5 分钟快速开始 + 30 分钟完整教程（core concepts / consistency levels / Cell 结构说明） (`67f2a3e`)
+- **templates**: 6 个项目模板——adr.md / cell-design.md / contract-review.md / runbook.md / postmortem.md / grafana-dashboard.json (`638feca`)
+- **specs**: Phase 4 S0-S4 规格文档——charter / reviews / decisions / plan / tasks (`0d49743`)
+
+### fix
+
+- **S6 P0 fixes**: errcode 常量替换 string literal；access-core 移除 ephemeral RSA key 生成路径；WithEventBus 添加 // Deprecated 注释 (`eace83a`)
+- **metadata**: 新 contract / slice 的 YAML 格式对齐 (`f59d0dc`)
+- **tests**: httptest sandbox TCP 监听跳过 guard（非沙箱环境自动跳过） (`26d34ac`)
+- **evidence**: S7 evidence 格式修正——journey/result.txt + validate PASS 行 (`e15462d`)
+
+### chore
+
+- Phase 4 S7 QA 验证报告 + user-signoff + evidence (`a93fb0b`)
+- tech-debt.md 添加 [TECH]/[PRODUCT] 分类标签 (`ad68298`)
+
+---
+
 ## [Unreleased] - Phase 3: Adapters
 
 > Branch: `feat/002-phase3-adapters`

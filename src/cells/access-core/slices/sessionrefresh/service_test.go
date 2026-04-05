@@ -6,30 +6,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testKey = []byte("test-signing-key-32bytes-long!!!!")
+var (
+	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
+	testIssuer              = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	testVerifier            = auth.NewJWTVerifier(testPubKey)
+)
 
 func newTestService() (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	return NewService(sessionRepo, roleRepo, testKey, slog.Default()), sessionRepo
+	return NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
 }
 
 func issueTestToken(sub string) string {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": sub,
-		"exp": jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		"iat": jwt.NewNumericDate(time.Now()),
-	})
-	s, _ := token.SignedString(testKey)
-	return s
+	tok, _ := testIssuer.Issue(sub, nil, nil)
+	return tok
 }
 
 func TestService_Refresh(t *testing.T) {
@@ -125,15 +123,11 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 	svc, _ := newTestService()
 
-	// Create a token with a different signing method (e.g. none attack).
-	claims := jwt.MapClaims{
-		"sub": "usr-1",
-		"exp": jwt.NewNumericDate(time.Now().Add(time.Hour)),
-	}
-	// Use unsigned token ("none" algorithm attack).
-	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-	tokenStr, _ := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	// Tokens signed with a different key should be rejected by the verifier.
+	otherPriv, _ := auth.MustGenerateTestKeyPair()
+	otherIssuer := auth.NewJWTIssuer(otherPriv, "gocell-access-core", time.Hour)
+	tokenStr, _ := otherIssuer.Issue("usr-1", nil, nil)
 
 	_, err := svc.Refresh(context.Background(), tokenStr)
-	assert.Error(t, err, "should reject token with 'none' signing method")
+	assert.Error(t, err, "should reject token signed with a different key")
 }

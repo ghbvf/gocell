@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -16,12 +17,18 @@ import (
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
+// noopWriter is a no-op outbox.Writer for testing.
+type noopWriter struct{}
+
+func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
+
 func newTestCell() *AuditCore {
 	return NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
 		WithHMACKey(testHMACKey),
+		WithOutboxWriter(noopWriter{}),
 	)
 }
 
@@ -78,6 +85,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
+		WithOutboxWriter(noopWriter{}),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{

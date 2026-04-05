@@ -19,7 +19,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// testKey is declared in service_test.go
+// testIssuer is declared in service_test.go
 
 func setup() http.Handler {
 	userRepo := mem.NewUserRepository()
@@ -30,7 +30,7 @@ func setup() http.Handler {
 	}
 	_ = userRepo.Create(context.Background(), user)
 
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), eventbus.New(), testKey, slog.Default())
+	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), eventbus.New(), testIssuer, slog.Default())
 	r := chi.NewRouter()
 	r.Post("/login", NewHandler(svc).HandleLogin)
 	return r

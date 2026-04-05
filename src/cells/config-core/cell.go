@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/slices/featureflag"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Compile-time interface checks.
@@ -102,6 +103,12 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
+	}
+
+	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
+		slog.Warn("config-core: outboxWriter not injected, L2 consistency not guaranteed")
+		return errcode.New(errcode.ErrCellMissingOutbox, "config-core (L2) requires outboxWriter injection")
 	}
 
 	// config-write slice

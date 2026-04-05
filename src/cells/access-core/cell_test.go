@@ -6,16 +6,28 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testKey = []byte("test-signing-key-32bytes-long!!!!")
+var (
+	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
+	testIssuer              = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	testVerifier            = auth.NewJWTVerifier(testPubKey)
+)
+
+// noopWriter is a no-op outbox.Writer for testing.
+type noopWriter struct{}
+
+func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
 
 func newTestCell() *AccessCore {
 	return NewAccessCore(
@@ -23,7 +35,9 @@ func newTestCell() *AccessCore {
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithPublisher(eventbus.New()),
-		WithSigningKey(testKey),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(noopWriter{}),
 	)
 }
 

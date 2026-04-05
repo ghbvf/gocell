@@ -1,0 +1,12 @@
+ok  	github.com/ghbvf/gocell/kernel/assembly	0.461s	coverage: 95.6% of statements
+?   	github.com/ghbvf/gocell/kernel/assembly/gentpl	[no test files]
+ok  	github.com/ghbvf/gocell/kernel/cell	0.873s	coverage: 99.2% of statements
+ok  	github.com/ghbvf/gocell/kernel/governance	1.212s	coverage: 96.2% of statements
+ok  	github.com/ghbvf/gocell/kernel/idempotency	(cached)	coverage: [no statements]
+ok  	github.com/ghbvf/gocell/kernel/journey	(cached)	coverage: 100.0% of statements
+ok  	github.com/ghbvf/gocell/kernel/metadata	1.582s	coverage: 97.1% of statements
+?   	github.com/ghbvf/gocell/kernel/metadata/schemas	[no test files]
+ok  	github.com/ghbvf/gocell/kernel/outbox	(cached)	coverage: [no statements]
+ok  	github.com/ghbvf/gocell/kernel/registry	(cached)	coverage: 100.0% of statements
+ok  	github.com/ghbvf/gocell/kernel/scaffold	1.978s	coverage: 93.2% of statements
+ok  	github.com/ghbvf/gocell/kernel/slice	5.663s	coverage: 94.2% of statements

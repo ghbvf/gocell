@@ -1,0 +1,15 @@
+id: J-order-create
+goal: "Create an order, publish event via outbox, consume and confirm"
+owner:
+  team: examples
+  role: order-owner
+cells:
+  - order-cell
+contracts:
+  - http.order.v1
+  - event.order-created.v1
+passCriteria:
+  - text: "POST /api/v1/orders returns 201 with order ID"
+    mode: auto
+  - text: "event.order.created consumed within 5s"
+    mode: manual

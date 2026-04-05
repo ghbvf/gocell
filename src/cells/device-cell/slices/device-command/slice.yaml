@@ -1,0 +1,13 @@
+id: device-command
+belongsToCell: device-cell
+contractUsages:
+  - contract: http.device.v1
+    role: serve
+  - contract: command.device-command.v1
+    role: handle
+verify:
+  unit:
+    - unit.device-command.service
+  contract:
+    - contract.http.device.v1.serve
+    - contract.command.device-command.v1.handle

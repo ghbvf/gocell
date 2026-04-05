@@ -80,6 +80,7 @@ func WithSubscriber(s outbox.Subscriber) Option {
 	}
 }
 
+// Deprecated: Use WithPublisher and WithSubscriber instead.
 // WithEventBus is a convenience method that sets both Publisher and Subscriber
 // from an InMemoryEventBus. It is equivalent to calling WithPublisher(eb) and
 // WithSubscriber(eb). Retained for backward compatibility.

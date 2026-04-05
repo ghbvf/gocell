@@ -36,18 +36,37 @@ type Config struct {
 }
 
 // ConfigFromEnv creates a Config from environment variables.
+// It first tries GOCELL_S3_* prefixed variables, then falls back to the
+// legacy S3_* prefix (logging a deprecation warning for each fallback).
 //
-//	S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+//	Primary:  GOCELL_S3_ENDPOINT, GOCELL_S3_REGION, GOCELL_S3_BUCKET,
+//	          GOCELL_S3_ACCESS_KEY, GOCELL_S3_SECRET_KEY, GOCELL_S3_USE_PATH_STYLE
+//	Fallback: S3_ENDPOINT, S3_REGION, S3_BUCKET,
+//	          S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_USE_PATH_STYLE
 func ConfigFromEnv() Config {
 	return Config{
-		Endpoint:       os.Getenv("S3_ENDPOINT"),
-		Region:         os.Getenv("S3_REGION"),
-		Bucket:         os.Getenv("S3_BUCKET"),
-		AccessKeyID:    os.Getenv("S3_ACCESS_KEY_ID"),
-		SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
-		UsePathStyle:   os.Getenv("S3_USE_PATH_STYLE") == "true",
+		Endpoint:       envWithFallback("GOCELL_S3_ENDPOINT", "S3_ENDPOINT"),
+		Region:         envWithFallback("GOCELL_S3_REGION", "S3_REGION"),
+		Bucket:         envWithFallback("GOCELL_S3_BUCKET", "S3_BUCKET"),
+		AccessKeyID:    envWithFallback("GOCELL_S3_ACCESS_KEY", "S3_ACCESS_KEY_ID"),
+		SecretAccessKey: envWithFallback("GOCELL_S3_SECRET_KEY", "S3_SECRET_ACCESS_KEY"),
+		UsePathStyle:   envWithFallback("GOCELL_S3_USE_PATH_STYLE", "S3_USE_PATH_STYLE") == "true",
 		HTTPTimeout:    30 * time.Second,
 	}
+}
+
+// envWithFallback reads the primary env var; if empty, falls back to the
+// legacy var and emits a deprecation warning via slog.Warn.
+func envWithFallback(primary, legacy string) string {
+	if v := os.Getenv(primary); v != "" {
+		return v
+	}
+	if v := os.Getenv(legacy); v != "" {
+		slog.Warn("deprecated S3_* env vars used, migrate to GOCELL_S3_*",
+			slog.String("var", legacy))
+		return v
+	}
+	return ""
 }
 
 // Validate checks that required Config fields are populated.

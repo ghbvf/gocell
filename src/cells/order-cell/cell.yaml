@@ -1,0 +1,11 @@
+id: order-cell
+type: core
+consistencyLevel: L2
+owner:
+  team: examples
+  role: order-owner
+schema:
+  primary: orders
+verify:
+  smoke:
+    - order-cell/smoke

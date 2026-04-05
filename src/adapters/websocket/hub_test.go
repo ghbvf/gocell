@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,6 +26,13 @@ func setupTestHub(t *testing.T, handler MessageHandler) (*Hub, *httptest.Server)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", UpgradeHandler(hub, UpgradeConfig{}))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
+		return nil, nil
+	}
+	ln.Close()
 
 	server := httptest.NewServer(mux)
 	return hub, server

@@ -1,0 +1,10 @@
+id: device-status
+belongsToCell: device-cell
+contractUsages:
+  - contract: http.device.v1
+    role: serve
+verify:
+  unit:
+    - unit.device-status.service
+  contract:
+    - contract.http.device.v1.serve

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
@@ -17,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const (
@@ -25,8 +25,7 @@ const (
 	ErrLoginInvalidInput errcode.Code = "ERR_AUTH_LOGIN_INVALID_INPUT"
 	ErrLoginFailed       errcode.Code = "ERR_AUTH_LOGIN_FAILED"
 
-	accessTokenTTL  = 15 * time.Minute
-	refreshTokenTTL = 7 * 24 * time.Hour
+	accessTokenTTL = 15 * time.Minute
 )
 
 // TokenPair holds the issued access and refresh tokens.
@@ -55,28 +54,16 @@ func WithTxManager(tx TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
-// WithSigningMethod overrides the default JWT signing method and key.
-// method should be jwt.SigningMethodRS256 with an *rsa.PrivateKey, or
-// jwt.SigningMethodHS256 with a []byte key.
-func WithSigningMethod(method jwt.SigningMethod, key any) Option {
-	return func(s *Service) {
-		s.signingMethod = method
-		s.signingKeyAny = key
-	}
-}
-
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo      ports.UserRepository
-	sessionRepo   ports.SessionRepository
-	roleRepo      ports.RoleRepository
-	publisher     outbox.Publisher
-	outboxWriter  outbox.Writer
-	txRunner      TxRunner
-	signingKey    []byte            // default HS256 key
-	signingMethod jwt.SigningMethod // overridden via WithSigningMethod
-	signingKeyAny any               // overridden via WithSigningMethod
-	logger        *slog.Logger
+	userRepo     ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	roleRepo     ports.RoleRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	txRunner     TxRunner
+	issuer       *auth.JWTIssuer
+	logger       *slog.Logger
 }
 
 // NewService creates a session-login Service.
@@ -85,7 +72,7 @@ func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
 	pub outbox.Publisher,
-	signingKey []byte,
+	issuer *auth.JWTIssuer,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
@@ -94,7 +81,7 @@ func NewService(
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
 		publisher:   pub,
-		signingKey:  signingKey,
+		issuer:      issuer,
 		logger:      logger,
 	}
 	for _, o := range opts {
@@ -139,18 +126,17 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		roleNames = append(roleNames, r.Name)
 	}
 
-	// Issue JWT.
+	// Issue JWT via RS256 issuer.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
 	sessionID := uid.NewWithPrefix("sess")
 
-	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
+	accessToken, err := s.issueToken(user.ID, roleNames)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue access token: %w", err)
 	}
 
-	refreshExpiry := now.Add(refreshTokenTTL)
-	refreshToken, err := s.issueToken(user.ID, nil, refreshExpiry, "")
+	refreshToken, err := s.issueToken(user.ID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue refresh token: %w", err)
 	}
@@ -212,26 +198,6 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time, sid string) (string, error) {
-	claims := jwt.MapClaims{
-		"sub": subject,
-		"iat": jwt.NewNumericDate(time.Now()),
-		"exp": jwt.NewNumericDate(expiresAt),
-		"iss": "gocell-access-core",
-		"aud": jwt.ClaimStrings{"gocell"},
-	}
-	if len(roles) > 0 {
-		claims["roles"] = roles
-	}
-	if sid != "" {
-		claims["sid"] = sid
-	}
-
-	// Use overridden signing method/key if configured, otherwise default HS256.
-	if s.signingMethod != nil && s.signingKeyAny != nil {
-		token := jwt.NewWithClaims(s.signingMethod, claims)
-		return token.SignedString(s.signingKeyAny)
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(s.signingKey)
+func (s *Service) issueToken(subject string, roles []string) (string, error) {
+	return s.issuer.Issue(subject, roles, []string{"gocell"})
 }

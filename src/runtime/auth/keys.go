@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -9,6 +10,30 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// MustGenerateTestKeyPair generates a 2048-bit RSA key pair for testing.
+// It panics on error, following the Go test helper convention (e.g., template.Must).
+// Do NOT use in production code.
+func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic(fmt.Sprintf("auth: failed to generate test RSA key pair: %v", err))
+	}
+	return priv, &priv.PublicKey
+}
+
+// LoadRSAKeyPairFromPEM parses PEM-encoded RSA private and public keys.
+func LoadRSAKeyPairFromPEM(privPEM, pubPEM []byte) (*rsa.PrivateKey, *rsa.PublicKey, error) {
+	priv, err := parseRSAPrivateKey(privPEM)
+	if err != nil {
+		return nil, nil, err
+	}
+	pub, err := parseRSAPublicKey(pubPEM)
+	if err != nil {
+		return nil, nil, err
+	}
+	return priv, pub, nil
+}
 
 const (
 	// EnvJWTPrivateKey is the environment variable for the PEM-encoded RSA private key.

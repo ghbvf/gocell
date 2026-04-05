@@ -1,0 +1,10 @@
+id: order-query
+belongsToCell: order-cell
+contractUsages:
+  - contract: http.order.v1
+    role: serve
+verify:
+  unit:
+    - unit.order-query.service
+  contract:
+    - contract.http.order.v1.serve
