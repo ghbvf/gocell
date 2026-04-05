@@ -28,13 +28,22 @@ var Topics = []string{
 	"event.config.rollback.v1",
 }
 
+// Option configures an audit-append Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service appends events to the hash chain and persists them.
 type Service struct {
-	mu        sync.Mutex
-	repo      ports.AuditRepository
-	chain     *domain.HashChain
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	mu           sync.Mutex
+	repo         ports.AuditRepository
+	chain        *domain.HashChain
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 }
 
 // NewService creates an audit-append Service.
@@ -43,13 +52,18 @@ func NewService(
 	hmacKey []byte,
 	pub outbox.Publisher,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		repo:      repo,
 		chain:     domain.NewHashChain(hmacKey),
 		publisher: pub,
 		logger:    logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // HandleEvent processes an incoming event by appending it to the hash chain.
@@ -89,7 +103,17 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 		"audit_entry_id": auditEntry.ID,
 		"event_type":     entry.EventType,
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
+	if s.outboxWriter != nil {
+		outboxEntry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: TopicAuditAppended,
+			Payload:   appendedPayload,
+		}
+		if writeErr := s.outboxWriter.Write(ctx, outboxEntry); writeErr != nil {
+			s.logger.Error("audit-append: failed to write outbox entry",
+				slog.Any("error", writeErr))
+		}
+	} else if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
 		s.logger.Error("audit-append: failed to publish appended event",
 			slog.Any("error", pubErr))
 	}

@@ -8,6 +8,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
+const (
+	errInvalidTimeFormat = "ERR_VALIDATION_INVALID_TIME_FORMAT"
+)
+
 // Handler provides HTTP endpoints for audit queries.
 type Handler struct {
 	svc *Service
@@ -27,14 +31,22 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
-		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
-			filters.From = t
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, errInvalidTimeFormat,
+				"invalid 'from' parameter: expected RFC3339 format")
+			return
 		}
+		filters.From = t
 	}
 	if toStr := r.URL.Query().Get("to"); toStr != "" {
-		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
-			filters.To = t
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			httputil.WriteError(w, http.StatusBadRequest, errInvalidTimeFormat,
+				"invalid 'to' parameter: expected RFC3339 format")
+			return
 		}
+		filters.To = t
 	}
 
 	entries, err := h.svc.Query(r.Context(), filters)

@@ -23,20 +23,33 @@ const (
 	ErrConfigInvalidInput errcode.Code = "ERR_CONFIG_INVALID_INPUT"
 )
 
+// Option configures a config-write Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service implements config write business logic.
 type Service struct {
-	repo      ports.ConfigRepository
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo         ports.ConfigRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 }
 
 // NewService creates a config-write Service.
-func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{
+func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{
 		repo:      repo,
 		publisher: pub,
 		logger:    logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // CreateInput holds parameters for creating a config entry.
@@ -127,6 +140,20 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 		"value":   entry.Value,
 		"version": entry.Version,
 	})
+	if s.outboxWriter != nil {
+		outboxEntry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: TopicConfigChanged,
+			Payload:   payload,
+		}
+		if err := s.outboxWriter.Write(ctx, outboxEntry); err != nil {
+			s.logger.Error("config-write: failed to write outbox entry",
+				slog.Any("error", err),
+				slog.String("key", entry.Key),
+			)
+		}
+		return
+	}
 	if err := s.publisher.Publish(ctx, TopicConfigChanged, payload); err != nil {
 		s.logger.Error("config-write: failed to publish event",
 			slog.Any("error", err),

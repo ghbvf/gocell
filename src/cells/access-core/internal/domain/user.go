@@ -19,9 +19,21 @@ type UserStatus string
 const (
 	// StatusActive indicates the user account is active and usable.
 	StatusActive UserStatus = "active"
+	// StatusSuspended indicates the user account is suspended (e.g. by admin).
+	StatusSuspended UserStatus = "suspended"
 	// StatusLocked indicates the user account is locked and cannot authenticate.
 	StatusLocked UserStatus = "locked"
 )
+
+// ValidUserStatus returns true if the given status is a known valid status.
+func ValidUserStatus(s UserStatus) bool {
+	switch s {
+	case StatusActive, StatusSuspended, StatusLocked:
+		return true
+	default:
+		return false
+	}
+}
 
 // User is the identity aggregate root for access-core.
 type User struct {
