@@ -27,11 +27,9 @@ func runGenerate(args []string) error {
 	case "assembly":
 		return generateAssembly(subArgs)
 	case "indexes":
-		fmt.Println("generate indexes: not implemented yet")
-		return nil
+		return fmt.Errorf("not implemented: gocell generate indexes")
 	case "boundaries":
-		fmt.Println("generate boundaries: not implemented yet")
-		return nil
+		return fmt.Errorf("not implemented: gocell generate boundaries")
 	default:
 		return fmt.Errorf("unknown generate type: %s (expected assembly, indexes, or boundaries)", subtype)
 	}

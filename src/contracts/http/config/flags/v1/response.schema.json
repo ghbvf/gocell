@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.v1.response",
+  "type": "object",
+  "description": "Placeholder schema — to be defined when implementing the endpoint"
+}

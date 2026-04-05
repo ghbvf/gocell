@@ -266,15 +266,15 @@ func TestRunGenerateUnknownType(t *testing.T) {
 
 func TestRunGenerateIndexes(t *testing.T) {
 	err := runGenerate([]string{"indexes"})
-	if err != nil {
-		t.Errorf("generate indexes should return nil, got: %v", err)
+	if err == nil {
+		t.Error("generate indexes should return not-implemented error")
 	}
 }
 
 func TestRunGenerateBoundaries(t *testing.T) {
 	err := runGenerate([]string{"boundaries"})
-	if err != nil {
-		t.Errorf("generate boundaries should return nil, got: %v", err)
+	if err == nil {
+		t.Error("generate boundaries should return not-implemented error")
 	}
 }
 
@@ -311,8 +311,8 @@ func TestRunCheckPlaceholders(t *testing.T) {
 	placeholders := []string{"slice-coverage", "assembly-completeness", "journey-readiness", "l0-imports"}
 	for _, name := range placeholders {
 		err := runCheck([]string{name})
-		if err != nil {
-			t.Errorf("check %s should succeed (placeholder), got: %v", name, err)
+		if err == nil {
+			t.Errorf("check %s should return not-implemented error", name)
 		}
 	}
 }
