@@ -107,7 +107,34 @@ func TestService_Update(t *testing.T) {
 		Username: "upd", Email: "old@e.f", Password: "hash",
 	})
 
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: "new@e.f"})
+	newEmail := "new@e.f"
+	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@e.f", updated.Email)
+}
+
+func TestService_Update_PatchSemantics(t *testing.T) {
+	svc := newTestService()
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "patch", Email: "p@e.f", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Update only name, email should stay unchanged.
+	newName := "patchedName"
+	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Name: &newName})
+	require.NoError(t, err)
+	assert.Equal(t, "patchedName", updated.Username)
+	assert.Equal(t, "p@e.f", updated.Email)
+
+	// Update status to suspended.
+	suspended := "suspended"
+	updated, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &suspended})
+	require.NoError(t, err)
+	assert.Equal(t, "suspended", string(updated.Status))
+
+	// Invalid status should fail.
+	badStatus := "deleted"
+	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &badStatus})
+	assert.Error(t, err)
 }

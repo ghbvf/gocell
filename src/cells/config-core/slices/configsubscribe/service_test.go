@@ -73,8 +73,8 @@ func TestService_HandleEvent_InvalidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
 	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
 
-	// Should not return error (permanent failure, do not retry).
+	// Should return error so ConsumerBase routes to dead letter after retries.
 	err := svc.HandleEvent(context.Background(), entry)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, 0, svc.Cache().Len())
 }

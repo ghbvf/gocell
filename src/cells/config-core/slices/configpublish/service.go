@@ -25,20 +25,33 @@ const (
 	ErrPublishInvalidInput errcode.Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"
 )
 
+// Option configures a config-publish Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service implements config publish/rollback business logic.
 type Service struct {
-	repo      ports.ConfigRepository
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo         ports.ConfigRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 }
 
 // NewService creates a config-publish Service.
-func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{
+func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{
 		repo:      repo,
 		publisher: pub,
 		logger:    logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Publish creates a versioned snapshot of a config entry.
@@ -71,10 +84,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		"config_id": entry.ID,
 		"version":   version.Version,
 	})
-	if err := s.publisher.Publish(ctx, TopicConfigChanged, payload); err != nil {
-		s.logger.Error("config-publish: failed to publish event",
-			slog.Any("error", err), slog.String("key", key))
-	}
+	s.publishEvent(ctx, TopicConfigChanged, payload, key)
 
 	s.logger.Info("config version published",
 		slog.String("key", key), slog.Int("version", version.Version))
@@ -111,12 +121,28 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 		"target_version": targetVersion,
 		"new_version":    entry.Version,
 	})
-	if err := s.publisher.Publish(ctx, TopicConfigRollback, payload); err != nil {
-		s.logger.Error("config-publish: failed to publish rollback event",
-			slog.Any("error", err), slog.String("key", key))
-	}
+	s.publishEvent(ctx, TopicConfigRollback, payload, key)
 
 	s.logger.Info("config rolled back",
 		slog.String("key", key), slog.Int("target_version", targetVersion))
 	return entry, nil
+}
+
+func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) {
+	if s.outboxWriter != nil {
+		entry := outbox.Entry{
+			ID:        id.New("evt"),
+			EventType: topic,
+			Payload:   payload,
+		}
+		if err := s.outboxWriter.Write(ctx, entry); err != nil {
+			s.logger.Error("config-publish: failed to write outbox entry",
+				slog.Any("error", err), slog.String("key", key))
+		}
+		return
+	}
+	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
+		s.logger.Error("config-publish: failed to publish event",
+			slog.Any("error", err), slog.String("key", key))
+	}
 }

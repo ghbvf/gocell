@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/id"
 )
 
 const (
@@ -19,11 +20,20 @@ const (
 	ErrLogoutInvalidInput errcode.Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 )
 
+// Option configures a session-logout Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service implements session revocation.
 type Service struct {
-	sessionRepo ports.SessionRepository
-	publisher   outbox.Publisher
-	logger      *slog.Logger
+	sessionRepo  ports.SessionRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 }
 
 // NewService creates a session-logout Service.
@@ -31,12 +41,17 @@ func NewService(
 	sessionRepo ports.SessionRepository,
 	pub outbox.Publisher,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		sessionRepo: sessionRepo,
 		publisher:   pub,
 		logger:      logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Logout revokes a session by its ID.
@@ -64,7 +79,17 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": sessionID, "user_id": session.UserID,
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, payload); pubErr != nil {
+	if s.outboxWriter != nil {
+		entry := outbox.Entry{
+			ID:        id.New("evt"),
+			EventType: TopicSessionRevoked,
+			Payload:   payload,
+		}
+		if writeErr := s.outboxWriter.Write(ctx, entry); writeErr != nil {
+			s.logger.Error("session-logout: failed to write outbox entry",
+				slog.Any("error", writeErr))
+		}
+	} else if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, payload); pubErr != nil {
 		s.logger.Error("session-logout: failed to publish event",
 			slog.Any("error", pubErr))
 	}

@@ -17,16 +17,18 @@ var _ ports.SessionRepository = (*SessionRepository)(nil)
 
 // SessionRepository is an in-memory implementation of ports.SessionRepository.
 type SessionRepository struct {
-	mu         sync.RWMutex
-	byID       map[string]*domain.Session
-	byRefresh  map[string]*domain.Session
+	mu              sync.RWMutex
+	byID            map[string]*domain.Session
+	byRefresh       map[string]*domain.Session
+	byPrevRefresh   map[string]*domain.Session
 }
 
 // NewSessionRepository creates an empty in-memory SessionRepository.
 func NewSessionRepository() *SessionRepository {
 	return &SessionRepository{
-		byID:      make(map[string]*domain.Session),
-		byRefresh: make(map[string]*domain.Session),
+		byID:          make(map[string]*domain.Session),
+		byRefresh:     make(map[string]*domain.Session),
+		byPrevRefresh: make(map[string]*domain.Session),
 	}
 }
 
@@ -37,6 +39,9 @@ func (r *SessionRepository) Create(_ context.Context, session *domain.Session) e
 	clone := *session
 	r.byID[session.ID] = &clone
 	r.byRefresh[session.RefreshToken] = &clone
+	if session.PreviousRefreshToken != "" {
+		r.byPrevRefresh[session.PreviousRefreshToken] = &clone
+	}
 	return nil
 }
 
@@ -64,6 +69,18 @@ func (r *SessionRepository) GetByRefreshToken(_ context.Context, token string) (
 	return &clone, nil
 }
 
+func (r *SessionRepository) GetByPreviousRefreshToken(_ context.Context, token string) (*domain.Session, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	s, ok := r.byPrevRefresh[token]
+	if !ok {
+		return nil, errcode.New(ErrSessionNotFound, "session not found by previous refresh token")
+	}
+	clone := *s
+	return &clone, nil
+}
+
 func (r *SessionRepository) Update(_ context.Context, session *domain.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -75,10 +92,17 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 
 	// Remove old refresh-token index entry.
 	delete(r.byRefresh, old.RefreshToken)
+	// Remove old previous-refresh-token index entry.
+	if old.PreviousRefreshToken != "" {
+		delete(r.byPrevRefresh, old.PreviousRefreshToken)
+	}
 
 	clone := *session
 	r.byID[session.ID] = &clone
 	r.byRefresh[session.RefreshToken] = &clone
+	if session.PreviousRefreshToken != "" {
+		r.byPrevRefresh[session.PreviousRefreshToken] = &clone
+	}
 	return nil
 }
 
@@ -103,6 +127,9 @@ func (r *SessionRepository) Delete(_ context.Context, id string) error {
 		return errcode.New(ErrSessionNotFound, "session not found: "+id)
 	}
 	delete(r.byRefresh, s.RefreshToken)
+	if s.PreviousRefreshToken != "" {
+		delete(r.byPrevRefresh, s.PreviousRefreshToken)
+	}
 	delete(r.byID, id)
 	return nil
 }
