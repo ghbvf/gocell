@@ -94,3 +94,181 @@ func TestLifecycleValues(t *testing.T) {
 	assert.Equal(t, Lifecycle("active"), LifecycleActive)
 	assert.Equal(t, Lifecycle("deprecated"), LifecycleDeprecated)
 }
+
+// ---------------------------------------------------------------------------
+// ParseCellType
+// ---------------------------------------------------------------------------
+
+func TestParseCellTypeRoundTrip(t *testing.T) {
+	tests := []struct {
+		input string
+		want  CellType
+	}{
+		{"core", CellTypeCore},
+		{"edge", CellTypeEdge},
+		{"support", CellTypeSupport},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseCellType(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.input, string(got))
+		})
+	}
+}
+
+func TestParseCellTypeInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "Core"},
+		{"unknown", "gateway"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseCellType(tt.input)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseContractKind
+// ---------------------------------------------------------------------------
+
+func TestParseContractKindRoundTrip(t *testing.T) {
+	tests := []struct {
+		input string
+		want  ContractKind
+	}{
+		{"http", ContractHTTP},
+		{"event", ContractEvent},
+		{"command", ContractCommand},
+		{"projection", ContractProjection},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseContractKind(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.input, string(got))
+		})
+	}
+}
+
+func TestParseContractKindInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "HTTP"},
+		{"unknown", "grpc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseContractKind(tt.input)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseContractRole
+// ---------------------------------------------------------------------------
+
+func TestParseContractRoleRoundTrip(t *testing.T) {
+	tests := []struct {
+		input string
+		want  ContractRole
+	}{
+		{"serve", RoleServe},
+		{"call", RoleCall},
+		{"publish", RolePublish},
+		{"subscribe", RoleSubscribe},
+		{"handle", RoleHandle},
+		{"invoke", RoleInvoke},
+		{"provide", RoleProvide},
+		{"read", RoleRead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseContractRole(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.input, string(got))
+		})
+	}
+}
+
+func TestParseContractRoleInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "Serve"},
+		{"unknown", "emit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseContractRole(tt.input)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ParseLifecycle
+// ---------------------------------------------------------------------------
+
+func TestParseLifecycleRoundTrip(t *testing.T) {
+	tests := []struct {
+		input string
+		want  Lifecycle
+	}{
+		{"draft", LifecycleDraft},
+		{"active", LifecycleActive},
+		{"deprecated", LifecycleDeprecated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParseLifecycle(tt.input)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.input, string(got))
+		})
+	}
+}
+
+func TestParseLifecycleInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty", ""},
+		{"uppercase", "Active"},
+		{"unknown", "archived"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseLifecycle(tt.input)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}

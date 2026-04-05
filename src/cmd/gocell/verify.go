@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/slice"
 )
 
 // runVerify implements:
@@ -48,26 +50,21 @@ func verifySlice(args []string) error {
 		return fmt.Errorf("--id is required")
 	}
 
-	root, err := findRoot()
+	root, project, err := parseProjectMeta()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return err
 	}
 
-	parser := metadata.NewParser(root)
-	project, err := parser.Parse()
+	runner := slice.NewRunner(project, root)
+	result, err := runner.VerifySlice(context.Background(), *id)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf("verify slice: %w", err)
 	}
 
-	slice, ok := project.Slices[*id]
-	if !ok {
-		return fmt.Errorf("slice %q not found", *id)
+	printVerifyResult(result)
+	if !result.Passed {
+		return fmt.Errorf("verify slice %s: FAILED", *id)
 	}
-
-	fmt.Printf("Verify slice: %s\n", *id)
-	fmt.Printf("  Unit tests:     %s\n", formatTestList(slice.Verify.Unit))
-	fmt.Printf("  Contract tests: %s\n", formatTestList(slice.Verify.Contract))
-	fmt.Println("\nNote: test execution is not implemented yet; showing declared verify targets.")
 	return nil
 }
 
@@ -82,41 +79,21 @@ func verifyCell(args []string) error {
 		return fmt.Errorf("--id is required")
 	}
 
-	root, err := findRoot()
+	root, project, err := parseProjectMeta()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return err
 	}
 
-	parser := metadata.NewParser(root)
-	project, err := parser.Parse()
+	runner := slice.NewRunner(project, root)
+	result, err := runner.VerifyCell(context.Background(), *id)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf("verify cell: %w", err)
 	}
 
-	cell, ok := project.Cells[*id]
-	if !ok {
-		return fmt.Errorf("cell %q not found", *id)
+	printVerifyResult(result)
+	if !result.Passed {
+		return fmt.Errorf("verify cell %s: FAILED", *id)
 	}
-
-	fmt.Printf("Verify cell: %s\n", *id)
-	fmt.Printf("  Smoke tests: %s\n", formatTestList(cell.Verify.Smoke))
-
-	// Also list all slices and their verify targets.
-	var sliceCount int
-	for key, s := range project.Slices {
-		if s.BelongsToCell == *id {
-			sliceCount++
-			fmt.Printf("  Slice %s:\n", key)
-			fmt.Printf("    Unit:     %s\n", formatTestList(s.Verify.Unit))
-			fmt.Printf("    Contract: %s\n", formatTestList(s.Verify.Contract))
-		}
-	}
-
-	if sliceCount == 0 {
-		fmt.Println("  (no slices)")
-	}
-
-	fmt.Println("\nNote: test execution is not implemented yet; showing declared verify targets.")
 	return nil
 }
 
@@ -131,32 +108,21 @@ func verifyJourney(args []string) error {
 		return fmt.Errorf("--id is required")
 	}
 
-	root, err := findRoot()
+	root, project, err := parseProjectMeta()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return err
 	}
 
-	parser := metadata.NewParser(root)
-	project, err := parser.Parse()
+	runner := slice.NewRunner(project, root)
+	result, err := runner.RunJourney(context.Background(), *id)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf("verify journey: %w", err)
 	}
 
-	j, ok := project.Journeys[*id]
-	if !ok {
-		return fmt.Errorf("journey %q not found", *id)
+	printVerifyResult(result)
+	if !result.Passed {
+		return fmt.Errorf("verify journey %s: FAILED", *id)
 	}
-
-	fmt.Printf("Verify journey: %s\n", *id)
-	fmt.Printf("  Goal:      %s\n", j.Goal)
-	fmt.Printf("  Cells:     %s\n", strings.Join(j.Cells, ", "))
-	fmt.Printf("  Contracts: %s\n", strings.Join(j.Contracts, ", "))
-	fmt.Printf("  Pass criteria: %d\n", len(j.PassCriteria))
-	for i, pc := range j.PassCriteria {
-		fmt.Printf("    [%d] (%s) %s\n", i+1, pc.Mode, pc.Text)
-	}
-
-	fmt.Println("\nNote: test execution is not implemented yet; showing declared journey spec.")
 	return nil
 }
 
@@ -171,15 +137,9 @@ func verifyTargets(args []string) error {
 		return fmt.Errorf("--files is required")
 	}
 
-	root, err := findRoot()
+	_, project, err := parseProjectMeta()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
-	}
-
-	parser := metadata.NewParser(root)
-	project, err := parser.Parse()
-	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return err
 	}
 
 	fileList := strings.Split(*files, ",")
@@ -202,6 +162,45 @@ func verifyTargets(args []string) error {
 	}
 
 	return nil
+}
+
+// parseProjectMeta finds the project root, parses metadata, and returns both.
+func parseProjectMeta() (root string, project *metadata.ProjectMeta, err error) {
+	root, err = findRoot()
+	if err != nil {
+		return "", nil, fmt.Errorf("cannot find project root: %w", err)
+	}
+
+	parser := metadata.NewParser(root)
+	project, err = parser.Parse()
+	if err != nil {
+		return "", nil, fmt.Errorf("metadata parse: %w", err)
+	}
+	return root, project, nil
+}
+
+// printVerifyResult prints a VerifyResult to stdout.
+func printVerifyResult(r *slice.VerifyResult) {
+	status := "PASSED"
+	if !r.Passed {
+		status = "FAILED"
+	}
+	fmt.Printf("Verify %s: %s\n", r.TargetID, status)
+	for _, tr := range r.Results {
+		marker := "PASS"
+		if !tr.Passed {
+			marker = "FAIL"
+		}
+		fmt.Printf("  [%s] %s\n", marker, tr.Name)
+		if tr.Output != "" {
+			for _, line := range strings.Split(strings.TrimRight(tr.Output, "\n"), "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+	}
+	for _, e := range r.Errors {
+		fmt.Printf("  error: %v\n", e)
+	}
 }
 
 func printTargetList(label string, items []string) {

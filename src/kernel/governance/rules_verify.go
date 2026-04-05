@@ -7,9 +7,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// nowFunc is the function used to get the current time. It can be overridden in tests.
-var nowFunc = time.Now
-
 // validateVERIFY01 checks that every provider-role contractUsage has a matching
 // verify.contract entry or a valid waiver.
 //
@@ -25,12 +22,16 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 		}
 		waiverSet := make(map[string]bool)
 		for _, w := range s.Verify.Waivers {
-			// Check expiry before considering the waiver valid.
-			if w.ExpiresAt != "" {
-				t, err := time.Parse("2006-01-02", w.ExpiresAt)
-				if err == nil && t.Before(nowFunc().Truncate(24*time.Hour)) {
-					continue // expired waiver, not valid
-				}
+			// Only non-empty, parseable, and not-yet-expired waivers are valid.
+			if w.ExpiresAt == "" {
+				continue // missing expiresAt, invalid waiver
+			}
+			t, err := time.Parse("2006-01-02", w.ExpiresAt)
+			if err != nil {
+				continue // unparseable expiresAt, invalid waiver
+			}
+			if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
+				continue // expired waiver, not valid
 			}
 			waiverSet[w.Contract] = true
 		}
@@ -117,7 +118,7 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 				})
 				continue
 			}
-			if t.Before(nowFunc().Truncate(24 * time.Hour)) {
+			if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
 				results = append(results, ValidationResult{
 					Code:      "VERIFY-02",
 					Severity:  SeverityError,
@@ -141,7 +142,11 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 			if !ok {
 				continue // REF-09 covers missing cells
 			}
-			if target.ConsistencyLevel != "L0" {
+			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
+			if parseErr != nil {
+				continue // FMT-03 covers invalid levels
+			}
+			if targetLevel != cell.L0 {
 				results = append(results, ValidationResult{
 					Code:      "VERIFY-03",
 					Severity:  SeverityError,

@@ -148,16 +148,13 @@ func TestValidProject_ZeroErrors(t *testing.T) {
 	// Use empty root to skip filesystem checks (REF-11, REF-12).
 	val := NewValidator(pm, "")
 	results := val.Validate()
-	errs := val.Errors(results)
+	errs := FilterErrors(results)
 	assert.Empty(t, errs, "valid project should have 0 errors, got: %v", errs)
 }
 
 // --- test: HasErrors / Errors / Warnings ---
 
 func TestFilterFunctions(t *testing.T) {
-	pm := validProject()
-	val := NewValidator(pm, ".")
-
 	results := []ValidationResult{
 		{Code: "ERR-1", Severity: SeverityError},
 		{Code: "WARN-1", Severity: SeverityWarning},
@@ -165,12 +162,12 @@ func TestFilterFunctions(t *testing.T) {
 		{Code: "WARN-2", Severity: SeverityWarning},
 	}
 
-	assert.True(t, val.HasErrors(results))
-	assert.Len(t, val.Errors(results), 2)
-	assert.Len(t, val.Warnings(results), 2)
+	assert.True(t, HasErrors(results))
+	assert.Len(t, FilterErrors(results), 2)
+	assert.Len(t, FilterWarnings(results), 2)
 
-	assert.False(t, val.HasErrors(val.Warnings(results)))
-	assert.False(t, val.HasErrors(nil))
+	assert.False(t, HasErrors(FilterWarnings(results)))
+	assert.False(t, HasErrors(nil))
 }
 
 // --- REF rules ---
@@ -585,6 +582,14 @@ func TestTOPO03(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name: "wildcard consumer allows any cell",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"*"}
+				// audit-core/audit-write subscribes to this contract; "*" should match
+			},
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -782,6 +787,40 @@ func TestVERIFY01(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name: "waiver with empty expiresAt does not cover",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+					"contract.event.session.created.v1.publish",
+				}
+				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+					{
+						Contract:  "http.auth.login.v1",
+						Owner:     "platform",
+						Reason:    "missing-expiry",
+						ExpiresAt: "",
+					},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "waiver with unparseable expiresAt does not cover",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+					"contract.event.session.created.v1.publish",
+				}
+				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+					{
+						Contract:  "http.auth.login.v1",
+						Owner:     "platform",
+						Reason:    "bad-date",
+						ExpiresAt: "not-a-date",
+					},
+				}
+			},
+			wantCount: 1,
+		},
+		{
 			name: "consumer role does not require verify entry",
 			setup: func(pm *metadata.ProjectMeta) {
 				// audit-core/audit-write has subscribe (consumer) role with no verify.contract entries
@@ -897,12 +936,7 @@ func TestVERIFY02(t *testing.T) {
 }
 
 func TestVERIFY02_TimeOverride(t *testing.T) {
-	// Verify that nowFunc override works correctly.
-	original := nowFunc
-	defer func() { nowFunc = original }()
-	nowFunc = func() time.Time {
-		return time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
-	}
+	t.Parallel()
 
 	pm := validProject()
 	pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
@@ -910,6 +944,9 @@ func TestVERIFY02_TimeOverride(t *testing.T) {
 	}
 
 	val := NewValidator(pm, "")
+	val.now = func() time.Time {
+		return time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	}
 	got := findByCode(val.validateVERIFY02(), "VERIFY-02")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "expired")
@@ -1158,6 +1195,91 @@ func TestFMT05(t *testing.T) {
 	}
 }
 
+// --- FMT-09: contract.kind must be in {http, event, command, projection} ---
+
+func TestFMT09(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "valid kinds",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "invalid kind grpc",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["grpc.test.v1"] = &metadata.ContractMeta{
+					ID:               "grpc.test.v1",
+					Kind:             "grpc",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "empty kind",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["empty.kind.v1"] = &metadata.ContractMeta{
+					ID:               "empty.kind.v1",
+					Kind:             "",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "valid kind command",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
+					ID:               "command.test.v1",
+					Kind:             "command",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Handler: "access-core"},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "valid kind projection",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
+					ID:               "projection.test.v1",
+					Kind:             "projection",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Provider: "access-core"},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT09(), "FMT-09")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueInvalid, r.IssueType)
+			}
+		})
+	}
+}
+
 // --- ADV rules ---
 
 func TestADV01(t *testing.T) {
@@ -1310,9 +1432,9 @@ func TestValidate_AggregatesAllRules(t *testing.T) {
 	assert.NotEmpty(t, findByCode(results, "FMT-01"))
 	assert.NotEmpty(t, findByCode(results, "ADV-01"))
 
-	assert.True(t, val.HasErrors(results))
-	assert.NotEmpty(t, val.Errors(results))
-	assert.NotEmpty(t, val.Warnings(results))
+	assert.True(t, HasErrors(results))
+	assert.NotEmpty(t, FilterErrors(results))
+	assert.NotEmpty(t, FilterWarnings(results))
 }
 
 func TestValidate_EmptyProject(t *testing.T) {
@@ -1446,9 +1568,10 @@ func TestFMT07(t *testing.T) {
 
 func TestFMT08(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(*metadata.ProjectMeta)
-		wantCount int
+		name          string
+		setup         func(*metadata.ProjectMeta)
+		wantCount     int
+		wantIssueType IssueType
 	}{
 		{
 			name:      "kind matches ID prefix",
@@ -1460,7 +1583,8 @@ func TestFMT08(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].Kind = "event" // ID starts with "http"
 			},
-			wantCount: 1,
+			wantCount:     1,
+			wantIssueType: IssueMismatch,
 		},
 		{
 			name: "contract with matching kind",
@@ -1476,6 +1600,21 @@ func TestFMT08(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			name: "contract ID without dot separator",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["nodot"] = &metadata.ContractMeta{
+					ID:               "nodot",
+					Kind:             "http",
+					OwnerCell:        "access-core",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+				}
+			},
+			wantCount:     1,
+			wantIssueType: IssueInvalid,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1486,7 +1625,7 @@ func TestFMT08(t *testing.T) {
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
-				assert.Equal(t, IssueMismatch, r.IssueType)
+				assert.Equal(t, tt.wantIssueType, r.IssueType)
 			}
 		})
 	}
@@ -1942,4 +2081,72 @@ func TestActorExists(t *testing.T) {
 	assert.True(t, val.actorExists("access-core"), "cell should be a known actor")
 	assert.True(t, val.actorExists("edge-bff"), "external actor should be known")
 	assert.False(t, val.actorExists("nonexistent"), "unknown ID should not exist")
+}
+
+// --- S1: isWithinRoot path traversal guard ---
+
+func TestIsWithinRoot(t *testing.T) {
+	tests := []struct {
+		name   string
+		root   string
+		target string
+		want   bool
+	}{
+		{"inside root", "/project/src", "/project/src/cmd/main.go", true},
+		{"equals root", "/project/src", "/project/src", true},
+		{"escapes root", "/project/src", "/project/etc/passwd", false},
+		{"dot-dot escapes", "/project/src", "/project/src/../etc/passwd", false},
+		{"different tree", "/project/src", "/other/place", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWithinRoot(tt.root, tt.target)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// --- S1: REF-11 path traversal ---
+
+func TestREF11_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+
+	pm := validProject()
+	pm.Assemblies["core-bundle"].Build.Entrypoint = "../../../etc/passwd"
+	val := NewValidator(pm, srcDir)
+	got := findByCode(val.validateREF11(), "REF-11")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Message, "path escapes project root")
+	assert.Equal(t, IssueInvalid, got[0].IssueType)
+}
+
+// --- S1: REF-12 path traversal ---
+
+func TestREF12_PathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+	contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+	pm := validProject()
+	pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
+		Request: "../../evil.json",
+	}
+	val := NewValidator(pm, tmpDir)
+	got := findByCode(val.validateREF12(), "REF-12")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Message, "path escapes project root")
+	assert.Equal(t, IssueInvalid, got[0].IssueType)
+}
+
+// --- S2: NewValidator with nil project ---
+
+func TestNewValidator_NilProject(t *testing.T) {
+	val := NewValidator(nil, ".")
+	require.NotNil(t, val)
+
+	// Should not panic and should return empty results.
+	results := val.Validate()
+	assert.Empty(t, results)
 }

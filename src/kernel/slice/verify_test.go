@@ -92,7 +92,7 @@ func TestNewRunner(t *testing.T) {
 	require.NotNil(t, r)
 	assert.Equal(t, proj, r.project)
 	assert.Equal(t, "/some/root", r.root)
-	assert.NotNil(t, r.cells)
+	assert.Equal(t, "/some/root", r.root)
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +113,12 @@ func TestParseSliceKey(t *testing.T) {
 		{"empty cell", "/session-create", "", "", true},
 		{"empty slice", "access-core/", "", "", true},
 		{"empty string", "", "", "", true},
+		{"cellID with dot-dot", "../../etc/session-create", "", "", true},
+		{"cellID with slash", "access/core/session-create", "", "", true},
+		{"cellID with backslash", "access\\core/session-create", "", "", true},
+		{"sliceID with dot-dot", "access-core/..%2fsession-create/..", "", "", true},
+		{"sliceID with slash", "access-core/some/path", "", "", true},
+		{"sliceID with backslash", "access-core/some\\path", "", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

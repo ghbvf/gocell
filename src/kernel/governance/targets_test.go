@@ -8,7 +8,7 @@ import (
 )
 
 // targetsProject returns a ProjectMeta for impact-analysis tests.
-// 2 cells, 3 slices (some with contractUsages), 2 contracts, 2 journeys.
+// 2 cells, 3 slices (some with contractUsages), 2 contracts, 2 journeys, 1 assembly.
 func targetsProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
@@ -65,14 +65,25 @@ func targetsProject() *metadata.ProjectMeta {
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-sso-login": {
-				ID:    "J-sso-login",
-				Goal:  "SSO login flow",
-				Cells: []string{"access-core", "audit-core"},
+				ID:        "J-sso-login",
+				Goal:      "SSO login flow",
+				Cells:     []string{"access-core", "audit-core"},
+				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
 			},
 			"J-audit-trail": {
 				ID:    "J-audit-trail",
 				Goal:  "Audit trail for login",
 				Cells: []string{"audit-core"},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"core-bundle": {
+				ID:    "core-bundle",
+				Cells: []string{"access-core", "audit-core"},
+				Build: metadata.BuildMeta{
+					Entrypoint: "src/cmd/core-bundle/main.go",
+					Binary:     "core-bundle",
+				},
 			},
 		},
 	}
@@ -259,4 +270,58 @@ func TestSelectFromSlice_ExpandsJourneysCorrectly(t *testing.T) {
 	assert.Equal(t, []string{"access-core"}, result.Cells)
 	assert.Equal(t, []string{"http.auth.login.v1"}, result.Contracts)
 	assert.Equal(t, []string{"J-sso-login"}, result.Journeys)
+}
+
+func TestSelectFromFiles_JourneyFile(t *testing.T) {
+	ts := NewTargetSelector(targetsProject())
+	result := ts.SelectFromFiles([]string{
+		"journeys/J-sso-login.yaml",
+	})
+
+	// J-sso-login references access-core and audit-core, so all their slices are affected.
+	assert.Equal(t, []string{
+		"access-core/session-login", "access-core/session-refresh", "audit-core/audit-write",
+	}, result.Slices)
+	assert.Equal(t, []string{"access-core", "audit-core"}, result.Cells)
+	// Contracts come from slice contractUsages + journey.Contracts (merged).
+	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
+	assert.Equal(t, []string{"J-audit-trail", "J-sso-login"}, result.Journeys)
+}
+
+func TestSelectFromFiles_AssemblyFile(t *testing.T) {
+	ts := NewTargetSelector(targetsProject())
+	result := ts.SelectFromFiles([]string{
+		"assemblies/core-bundle/assembly.yaml",
+	})
+
+	// core-bundle contains access-core and audit-core, so all their slices are affected.
+	assert.Equal(t, []string{
+		"access-core/session-login", "access-core/session-refresh", "audit-core/audit-write",
+	}, result.Slices)
+	assert.Equal(t, []string{"access-core", "audit-core"}, result.Cells)
+}
+
+func TestSelectFromFiles_JourneyStatusBoard(t *testing.T) {
+	ts := NewTargetSelector(targetsProject())
+	// status-board.yaml is not a J-*.yaml journey file; it should return empty.
+	result := ts.SelectFromFiles([]string{
+		"journeys/status-board.yaml",
+	})
+
+	assert.Nil(t, result.Slices)
+	assert.Nil(t, result.Cells)
+	assert.Nil(t, result.Journeys)
+	assert.Nil(t, result.Contracts)
+}
+
+func TestSelectFromFiles_NonexistentJourney(t *testing.T) {
+	ts := NewTargetSelector(targetsProject())
+	result := ts.SelectFromFiles([]string{
+		"journeys/J-nonexistent.yaml",
+	})
+
+	assert.Nil(t, result.Slices)
+	assert.Nil(t, result.Cells)
+	assert.Nil(t, result.Journeys)
+	assert.Nil(t, result.Contracts)
 }

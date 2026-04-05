@@ -39,8 +39,14 @@ func NewTargetSelector(project *metadata.ProjectMeta) *TargetSelector {
 //  2. Slice -> cell (via belongsToCell)
 //  3. Slice -> contracts (via contractUsages)
 //  4. Cell -> journeys (via journey.cells)
+//  5. journeys/J-*.yaml -> journey -> cells -> slices + contracts
+//  6. assemblies/{id}/assembly.yaml -> assembly -> cells -> slices
+//
+// ref: K8s kubectl diff — impact analysis across all resource types
 func (ts *TargetSelector) SelectFromFiles(files []string) *AffectedTargets {
 	sliceSet := make(map[string]struct{})
+	cellSet := make(map[string]struct{})
+	contractSet := make(map[string]struct{})
 
 	for _, f := range files {
 		// Normalize path separators and clean.
@@ -49,10 +55,38 @@ func (ts *TargetSelector) SelectFromFiles(files []string) *AffectedTargets {
 		if ts.matchSliceFromCellsPath(f, sliceSet) {
 			continue
 		}
-		ts.matchSlicesFromContractPath(f, sliceSet)
+		if ts.matchSlicesFromContractPath(f, sliceSet) {
+			continue
+		}
+		if ts.matchFromJourneyPath(f, cellSet, contractSet) {
+			continue
+		}
+		ts.matchFromAssemblyPath(f, cellSet)
 	}
 
-	return ts.expandFromSlices(sliceSet)
+	// Expand cells collected from journey/assembly paths into slices.
+	for key, s := range ts.project.Slices {
+		if _, ok := cellSet[s.BelongsToCell]; ok {
+			sliceSet[key] = struct{}{}
+		}
+	}
+
+	result := ts.expandFromSlices(sliceSet)
+
+	// Merge extra contracts from journey paths that may not be referenced
+	// by any slice's contractUsages.
+	if len(contractSet) > 0 {
+		merged := make(map[string]struct{})
+		for _, c := range result.Contracts {
+			merged[c] = struct{}{}
+		}
+		for c := range contractSet {
+			merged[c] = struct{}{}
+		}
+		result.Contracts = sortedKeys(merged)
+	}
+
+	return result
 }
 
 // SelectFromSlice takes a slice key ("cellID/sliceID") and expands
@@ -107,9 +141,10 @@ func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet map[string]
 // matchSlicesFromContractPath handles paths under contracts/.
 // It derives the contract ID from the directory path and finds all slices
 // that reference that contract via contractUsages.
-func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[string]struct{}) {
+// Returns true if the path was consumed (matched contracts/ prefix).
+func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[string]struct{}) bool {
 	if !strings.HasPrefix(f, "contracts/") {
-		return
+		return false
 	}
 
 	// Contract directory: contracts/{kind}/{domain...}/{version}/
@@ -117,12 +152,12 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 	// Example: contracts/http/auth/login/v1/contract.yaml -> http.auth.login.v1
 	contractID := ts.contractIDFromPath(f)
 	if contractID == "" {
-		return
+		return true
 	}
 
 	// Check that contract exists.
 	if _, ok := ts.project.Contracts[contractID]; !ok {
-		return
+		return true
 	}
 
 	// Reverse lookup: find all slices that use this contract.
@@ -134,6 +169,73 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 			}
 		}
 	}
+	return true
+}
+
+// matchFromJourneyPath handles paths under journeys/.
+// Only J-*.yaml files are treated as journey files; other files (e.g.
+// status-board.yaml) are ignored.
+// Returns true if the path was consumed (matched journeys/ prefix).
+func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]struct{}, contractSet map[string]struct{}) bool {
+	if !strings.HasPrefix(f, "journeys/") {
+		return false
+	}
+
+	// Extract filename: journeys/J-sso-login.yaml -> J-sso-login.yaml
+	base := path.Base(f)
+
+	// Only J-*.yaml files are journey definitions.
+	if !strings.HasPrefix(base, "J-") || !strings.HasSuffix(base, ".yaml") {
+		return true
+	}
+
+	// Journey ID is the filename without the .yaml extension.
+	journeyID := strings.TrimSuffix(base, ".yaml")
+
+	journey, ok := ts.project.Journeys[journeyID]
+	if !ok {
+		return true
+	}
+
+	// Add journey's cells to the cell set.
+	for _, cellID := range journey.Cells {
+		cellSet[cellID] = struct{}{}
+	}
+
+	// Add journey's contracts to the contract set.
+	for _, contractID := range journey.Contracts {
+		contractSet[contractID] = struct{}{}
+	}
+
+	return true
+}
+
+// matchFromAssemblyPath handles paths under assemblies/.
+// Expects: assemblies/{id}/assembly.yaml
+// Returns true if the path was consumed (matched assemblies/ prefix).
+func (ts *TargetSelector) matchFromAssemblyPath(f string, cellSet map[string]struct{}) bool {
+	if !strings.HasPrefix(f, "assemblies/") {
+		return false
+	}
+
+	parts := strings.Split(f, "/")
+	// parts[0] = "assemblies", parts[1] = assemblyID, ...
+	if len(parts) < 2 {
+		return true
+	}
+	assemblyID := parts[1]
+
+	asm, ok := ts.project.Assemblies[assemblyID]
+	if !ok {
+		return true
+	}
+
+	// Add assembly's cells to the cell set.
+	for _, cellID := range asm.Cells {
+		cellSet[cellID] = struct{}{}
+	}
+
+	return true
 }
 
 // contractIDFromPath extracts a contract ID from a file path under contracts/.

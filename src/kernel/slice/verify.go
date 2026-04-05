@@ -5,13 +5,13 @@ package slice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/registry"
 )
 
 // TestResult represents the outcome of a single test target.
@@ -32,7 +32,6 @@ type VerifyResult struct {
 // Runner executes verification tests.
 type Runner struct {
 	project *metadata.ProjectMeta
-	cells   *registry.CellRegistry
 	root    string // project root for running go test
 }
 
@@ -41,7 +40,6 @@ type Runner struct {
 func NewRunner(project *metadata.ProjectMeta, root string) *Runner {
 	return &Runner{
 		project: project,
-		cells:   registry.NewCellRegistry(project),
 		root:    root,
 	}
 }
@@ -148,10 +146,17 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 }
 
 // parseSliceKey splits "cellID/sliceID" into its parts.
+// It rejects cellID or sliceID containing path traversal sequences or separators.
 func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("invalid slice key %q: expected format \"cellID/sliceID\"", key)
+	}
+	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
+		return "", "", fmt.Errorf("invalid cellID: contains path separator or traversal")
+	}
+	if strings.Contains(parts[1], "..") || strings.ContainsAny(parts[1], `/\`) {
+		return "", "", fmt.Errorf("invalid sliceID: contains path separator or traversal")
 	}
 	return parts[0], parts[1], nil
 }
@@ -210,12 +215,8 @@ func runGoTest(ctx context.Context, dir string, args []string) (output string, p
 	return output, false, fmt.Errorf("go test execution failed: %w", runErr)
 }
 
-// isExitError checks whether err is an *exec.ExitError and assigns it to target.
-// This is a helper to avoid importing errors in the main flow.
+// isExitError checks whether err (or any wrapped error in its chain) is an
+// *exec.ExitError and assigns it to target.
 func isExitError(err error, target **exec.ExitError) bool {
-	if ee, ok := err.(*exec.ExitError); ok {
-		*target = ee
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }

@@ -11,6 +11,7 @@ package assembly
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -52,8 +53,16 @@ func New(cfg Config) *CoreAssembly {
 }
 
 // Register adds a Cell to the assembly. It returns an error if the Cell ID is
-// empty or already registered.
+// empty, already registered, or the assembly has already been started.
 func (a *CoreAssembly) Register(c cell.Cell) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.state != stateStopped {
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("assembly %q: cannot register in state %d", a.id, a.state))
+	}
+
 	id := c.ID()
 	if id == "" {
 		return errcode.New(errcode.ErrValidationFailed, "cell ID must not be empty")
@@ -93,7 +102,8 @@ func (a *CoreAssembly) Start(ctx context.Context) error {
 			a.mu.Lock()
 			a.state = stateStopped
 			a.mu.Unlock()
-			return fmt.Errorf("assembly: init cell %q: %w", c.ID(), err)
+			return errcode.Wrap(errcode.ErrValidationFailed,
+				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
 		}
 	}
 
@@ -102,12 +112,16 @@ func (a *CoreAssembly) Start(ctx context.Context) error {
 		if err := c.Start(ctx); err != nil {
 			// Rollback: stop cells [0..i-1] in reverse order.
 			for j := i - 1; j >= 0; j-- {
-				_ = a.cells[j].Stop(ctx) // best-effort rollback
+				if stopErr := a.cells[j].Stop(ctx); stopErr != nil {
+					slog.Warn("rollback: failed to stop cell",
+						"cell", a.cells[j].ID(), "error", stopErr)
+				}
 			}
 			a.mu.Lock()
 			a.state = stateStopped
 			a.mu.Unlock()
-			return fmt.Errorf("assembly: start cell %q: %w", c.ID(), err)
+			return errcode.Wrap(errcode.ErrLifecycleInvalid,
+				fmt.Sprintf("assembly: start cell %q", c.ID()), err)
 		}
 	}
 
@@ -134,7 +148,8 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 	for i := len(a.cells) - 1; i >= 0; i-- {
 		if err := a.cells[i].Stop(ctx); err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("assembly: stop cell %q: %w", a.cells[i].ID(), err)
+				firstErr = errcode.Wrap(errcode.ErrLifecycleInvalid,
+					fmt.Sprintf("assembly: stop cell %q", a.cells[i].ID()), err)
 			}
 		}
 	}

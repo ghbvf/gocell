@@ -2,42 +2,10 @@ package governance
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 )
-
-// contractProvider returns the provider cell/actor for a contract based on its kind.
-func contractProvider(c *metadata.ContractMeta) string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
-		return c.Endpoints.Server
-	case cell.ContractEvent:
-		return c.Endpoints.Publisher
-	case cell.ContractCommand:
-		return c.Endpoints.Handler
-	case cell.ContractProjection:
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
-}
-
-// contractConsumers returns the consumer cell/actor list for a contract based on its kind.
-func contractConsumers(c *metadata.ContractMeta) []string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
-		return c.Endpoints.Clients
-	case cell.ContractEvent:
-		return c.Endpoints.Subscribers
-	case cell.ContractCommand:
-		return c.Endpoints.Invokers
-	case cell.ContractProjection:
-		return c.Endpoints.Readers
-	default:
-		return nil
-	}
-}
 
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
 func (v *Validator) validateTOPO01() []ValidationResult {
@@ -108,7 +76,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 				continue
 			}
 			consumers := contractConsumers(c)
-			if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
+			if len(consumers) > 0 && !containsString(consumers, "*") && !containsString(consumers, s.BelongsToCell) {
 				results = append(results, ValidationResult{
 					Code:      "TOPO-03",
 					Severity:  SeverityError,
@@ -166,7 +134,11 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 	// Build set of L0 cells.
 	l0Cells := make(map[string]bool)
 	for _, c := range v.project.Cells {
-		if c.ConsistencyLevel == "L0" {
+		level, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			continue // FMT-03 covers invalid levels
+		}
+		if level == cell.L0 {
 			l0Cells[c.ID] = true
 		}
 	}
@@ -206,7 +178,16 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 func (v *Validator) validateTOPO06() []ValidationResult {
 	var results []ValidationResult
 	cellAssembly := make(map[string]string) // cellID -> assemblyID
-	for _, a := range v.project.Assemblies {
+
+	// Sort assembly keys for deterministic error output.
+	assemblyKeys := make([]string, 0, len(v.project.Assemblies))
+	for k := range v.project.Assemblies {
+		assemblyKeys = append(assemblyKeys, k)
+	}
+	sort.Strings(assemblyKeys)
+
+	for _, key := range assemblyKeys {
+		a := v.project.Assemblies[key]
 		for i, cellRef := range a.Cells {
 			if existing, ok := cellAssembly[cellRef]; ok {
 				results = append(results, ValidationResult{
@@ -228,22 +209,3 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 	return results
 }
 
-// --- helpers ---
-
-func containsRole(roles []cell.ContractRole, target cell.ContractRole) bool {
-	for _, r := range roles {
-		if r == target {
-			return true
-		}
-	}
-	return false
-}
-
-func containsString(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-	return false
-}

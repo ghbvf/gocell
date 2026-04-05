@@ -1,14 +1,8 @@
 id: session-refresh
 belongsToCell: access-core
-contractUsages:
-  - contract: http.auth.login.v1
-    role: call
+contractUsages: []
 verify:
   unit:
     - unit.session-refresh.service
   contract: []
-  waivers:
-    - contract: http.auth.login.v1
-      owner: platform-team
-      reason: 内部调用 login 端点刷新 token，集成测试已覆盖
-      expiresAt: 2026-06-01
+  waivers: []

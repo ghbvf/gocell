@@ -85,6 +85,5 @@ func checkPlaceholder(name string, args []string) error {
 		return err
 	}
 
-	fmt.Printf("check %s: not implemented yet\n", name)
-	return nil
+	return fmt.Errorf("not implemented: gocell check %s", name)
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -27,11 +28,9 @@ func runGenerate(args []string) error {
 	case "assembly":
 		return generateAssembly(subArgs)
 	case "indexes":
-		fmt.Println("generate indexes: not implemented yet")
-		return nil
+		return fmt.Errorf("not implemented: gocell generate indexes")
 	case "boundaries":
-		fmt.Println("generate boundaries: not implemented yet")
-		return nil
+		return fmt.Errorf("not implemented: gocell generate boundaries")
 	default:
 		return fmt.Errorf("unknown generate type: %s (expected assembly, indexes, or boundaries)", subtype)
 	}
@@ -84,19 +83,33 @@ func generateAssembly(args []string) error {
 		return fmt.Errorf("generate boundary: %w", err)
 	}
 
-	// Write files.
-	assemblyDir := filepath.Join(root, "assemblies", *id)
-	if err := os.MkdirAll(assemblyDir, 0o755); err != nil {
-		return fmt.Errorf("create assembly dir: %w", err)
+	// Determine entrypoint path from assembly metadata.
+	// ref: go-zero goctl — generated file paths driven by configuration
+	asm := project.Assemblies[*id]
+	entrypointRel := asm.Build.Entrypoint
+	if entrypointRel == "" {
+		entrypointRel = filepath.Join("cmd", *id, "main.go")
 	}
+	// The entrypoint path in assembly.yaml is relative to the project root
+	// (go.mod parent). If it starts with "src/" and our working root IS src/,
+	// strip that prefix so the file lands in the correct location.
+	entrypointRel = strings.TrimPrefix(entrypointRel, "src/")
 
-	entrypointPath := filepath.Join(assemblyDir, "main.go")
+	entrypointPath := filepath.Join(root, entrypointRel)
+	if err := os.MkdirAll(filepath.Dir(entrypointPath), 0o755); err != nil {
+		return fmt.Errorf("create entrypoint dir: %w", err)
+	}
 	if err := os.WriteFile(entrypointPath, entrypoint, 0o644); err != nil {
 		return fmt.Errorf("write entrypoint: %w", err)
 	}
 	fmt.Printf("Generated: %s\n", entrypointPath)
 
-	boundaryPath := filepath.Join(assemblyDir, "boundary.yaml")
+	// Boundary goes into assemblies/{id}/generated/ (generated artifacts directory).
+	generatedDir := filepath.Join(root, "assemblies", *id, "generated")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		return fmt.Errorf("create generated dir: %w", err)
+	}
+	boundaryPath := filepath.Join(generatedDir, "boundary.yaml")
 	if err := os.WriteFile(boundaryPath, boundary, 0o644); err != nil {
 		return fmt.Errorf("write boundary: %w", err)
 	}

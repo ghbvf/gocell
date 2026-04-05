@@ -96,3 +96,79 @@ const (
 	LifecycleActive     Lifecycle = "active"
 	LifecycleDeprecated Lifecycle = "deprecated"
 )
+
+// ParseCellType parses a string into a CellType.
+// Returns errcode.ErrValidationFailed for unrecognised input.
+func ParseCellType(s string) (CellType, error) {
+	switch s {
+	case "core":
+		return CellTypeCore, nil
+	case "edge":
+		return CellTypeEdge, nil
+	case "support":
+		return CellTypeSupport, nil
+	default:
+		return "", errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("invalid cell type: %q", s))
+	}
+}
+
+// ParseContractKind parses a string into a ContractKind.
+// Returns errcode.ErrValidationFailed for unrecognised input.
+func ParseContractKind(s string) (ContractKind, error) {
+	switch s {
+	case "http":
+		return ContractHTTP, nil
+	case "event":
+		return ContractEvent, nil
+	case "command":
+		return ContractCommand, nil
+	case "projection":
+		return ContractProjection, nil
+	default:
+		return "", errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("invalid contract kind: %q", s))
+	}
+}
+
+// ParseContractRole parses a string into a ContractRole.
+// Returns errcode.ErrValidationFailed for unrecognised input.
+func ParseContractRole(s string) (ContractRole, error) {
+	switch s {
+	case "serve":
+		return RoleServe, nil
+	case "call":
+		return RoleCall, nil
+	case "publish":
+		return RolePublish, nil
+	case "subscribe":
+		return RoleSubscribe, nil
+	case "handle":
+		return RoleHandle, nil
+	case "invoke":
+		return RoleInvoke, nil
+	case "provide":
+		return RoleProvide, nil
+	case "read":
+		return RoleRead, nil
+	default:
+		return "", errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("invalid contract role: %q", s))
+	}
+}
+
+// ParseLifecycle parses a string into a Lifecycle.
+// Returns errcode.ErrValidationFailed for unrecognised input.
+func ParseLifecycle(s string) (Lifecycle, error) {
+	switch s {
+	case "draft":
+		return LifecycleDraft, nil
+	case "active":
+		return LifecycleActive, nil
+	case "deprecated":
+		return LifecycleDeprecated, nil
+	default:
+		return "", errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("invalid lifecycle: %q", s))
+	}
+}
