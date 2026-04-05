@@ -103,14 +103,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Issue JWT.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
+	sessionID := fmt.Sprintf("sess-%d", now.UnixNano())
 
-	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt)
+	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue access token: %w", err)
 	}
 
 	refreshExpiry := now.Add(refreshTokenTTL)
-	refreshToken, err := s.issueToken(user.ID, nil, refreshExpiry)
+	refreshToken, err := s.issueToken(user.ID, nil, refreshExpiry, "")
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue refresh token: %w", err)
 	}
@@ -120,7 +121,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	if err != nil {
 		return nil, fmt.Errorf("session-login: create session: %w", err)
 	}
-	session.ID = fmt.Sprintf("sess-%d", now.UnixNano())
+	session.ID = sessionID
 
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
 		return nil, fmt.Errorf("session-login: persist session: %w", err)
@@ -144,7 +145,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time) (string, error) {
+func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time, sid string) (string, error) {
 	claims := jwt.MapClaims{
 		"sub": subject,
 		"iat": jwt.NewNumericDate(time.Now()),
@@ -153,6 +154,9 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles
+	}
+	if sid != "" {
+		claims["sid"] = sid
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

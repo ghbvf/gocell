@@ -21,7 +21,9 @@ func TestWatcher_OnChange(t *testing.T) {
 	defer func() { _ = w.Close() }()
 
 	var called atomic.Int32
-	w.OnChange(func() {
+	var lastEvent WatchEvent
+	w.OnChange(func(evt WatchEvent) {
+		lastEvent = evt
 		called.Add(1)
 	})
 
@@ -37,6 +39,8 @@ func TestWatcher_OnChange(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
 	}, 2*time.Second, 50*time.Millisecond, "expected OnChange callback to fire")
+
+	assert.Equal(t, file, lastEvent.Path, "WatchEvent.Path should be the watched file")
 }
 
 func TestWatcher_Close(t *testing.T) {

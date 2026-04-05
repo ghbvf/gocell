@@ -143,7 +143,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// identity-manage
-	identitySvc := identitymanage.NewService(c.userRepo, c.publisher, c.logger)
+	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger)
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
 	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
 
@@ -163,7 +163,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("session-logout", "access-core", cell.L2))
 
 	// session-validate
-	c.validateSvc = sessionvalidate.NewService(c.signingKey, c.logger)
+	c.validateSvc = sessionvalidate.NewService(c.signingKey, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
 
 	// authorization-decide

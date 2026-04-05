@@ -8,11 +8,16 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// WatchEvent carries information about a file change detected by the Watcher.
+type WatchEvent struct {
+	Path string // Path of the changed file.
+}
+
 // Watcher monitors a file for changes and invokes registered callbacks.
 type Watcher struct {
 	path      string
 	watcher   *fsnotify.Watcher
-	callbacks []func()
+	callbacks []func(WatchEvent)
 	mu        sync.Mutex
 	done      chan struct{}
 }
@@ -36,7 +41,7 @@ func NewWatcher(path string) (*Watcher, error) {
 }
 
 // OnChange registers a callback that fires when the watched file changes.
-func (w *Watcher) OnChange(fn func()) {
+func (w *Watcher) OnChange(fn func(WatchEvent)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.callbacks = append(w.callbacks, fn)
@@ -57,10 +62,11 @@ func (w *Watcher) loop() {
 			}
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 				w.mu.Lock()
-				cbs := make([]func(), len(w.callbacks))
+				cbs := make([]func(WatchEvent), len(w.callbacks))
 				copy(cbs, w.callbacks)
 				w.mu.Unlock()
 
+				evt := WatchEvent{Path: w.path}
 				for _, fn := range cbs {
 					func() {
 						defer func() {
@@ -68,7 +74,7 @@ func (w *Watcher) loop() {
 								slog.Error("config watcher callback panic", slog.Any("panic", r))
 							}
 						}()
-						fn()
+						fn(evt)
 					}()
 				}
 			}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +14,7 @@ import (
 )
 
 func newTestService() *Service {
-	return NewService(mem.NewUserRepository(), eventbus.New(), slog.Default())
+	return NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
 }
 
 func TestService_Create(t *testing.T) {
@@ -57,6 +59,35 @@ func TestService_LockUnlock(t *testing.T) {
 	require.NoError(t, svc.Unlock(context.Background(), user.ID))
 	unlocked, _ := svc.GetByID(context.Background(), user.ID)
 	assert.False(t, unlocked.IsLocked())
+}
+
+func TestService_Lock_RevokesSession(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	svc := NewService(mem.NewUserRepository(), sessionRepo, eventbus.New(), slog.Default())
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "carol", Email: "c@d.e", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Seed a session for this user.
+	session := &domain.Session{
+		ID:           "sess-carol",
+		UserID:       user.ID,
+		AccessToken:  "at",
+		RefreshToken: "rt",
+		ExpiresAt:    time.Now().Add(time.Hour),
+		CreatedAt:    time.Now(),
+	}
+	require.NoError(t, sessionRepo.Create(context.Background(), session))
+
+	// Lock the user — sessions should be revoked.
+	require.NoError(t, svc.Lock(context.Background(), user.ID))
+
+	// Verify session was revoked.
+	got, err := sessionRepo.GetByID(context.Background(), "sess-carol")
+	require.NoError(t, err)
+	assert.True(t, got.IsRevoked(), "session should be revoked after user lock")
 }
 
 func TestService_Delete(t *testing.T) {
