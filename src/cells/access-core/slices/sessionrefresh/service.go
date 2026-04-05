@@ -17,6 +17,7 @@ import (
 const (
 	ErrRefreshInvalidInput errcode.Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrRefreshFailed       errcode.Code = "ERR_AUTH_REFRESH_FAILED"
+	ErrRefreshTokenReuse   errcode.Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
 
 	accessTokenTTL  = 15 * time.Minute
 	refreshTokenTTL = 7 * 24 * time.Hour
@@ -53,12 +54,15 @@ func NewService(
 }
 
 // Refresh validates the refresh token and issues a new token pair.
+// Implements refresh token rotation: the old refresh token is invalidated
+// after a successful refresh. If a previously rotated-out token is reused,
+// the entire session is revoked (reuse detection).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	if refreshToken == "" {
 		return nil, errcode.New(ErrRefreshInvalidInput, "refresh token is required")
 	}
 
-	// Verify the refresh token JWT signature.
+	// Verify the refresh token JWT signature and signing method.
 	_, err := jwt.Parse(refreshToken, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -69,9 +73,24 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, errcode.New(ErrRefreshFailed, "invalid refresh token")
 	}
 
-	// Look up the session.
+	// Look up the session by current refresh token.
 	session, err := s.sessionRepo.GetByRefreshToken(ctx, refreshToken)
 	if err != nil {
+		// Check for refresh token reuse: if the token was previously valid
+		// but has been rotated out, revoke the entire session to prevent
+		// stolen token replay attacks.
+		if reuseSession, reuseErr := s.sessionRepo.GetByPreviousRefreshToken(ctx, refreshToken); reuseErr == nil {
+			reuseSession.Revoke()
+			if updateErr := s.sessionRepo.Update(ctx, reuseSession); updateErr != nil {
+				s.logger.Error("session-refresh: failed to revoke session on token reuse",
+					slog.Any("error", updateErr),
+					slog.String("session_id", reuseSession.ID))
+			}
+			s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
+				slog.String("session_id", reuseSession.ID),
+				slog.String("user_id", reuseSession.UserID))
+			return nil, errcode.New(ErrRefreshTokenReuse, "refresh token reuse detected, session revoked")
+		}
 		return nil, errcode.New(ErrRefreshFailed, "session not found")
 	}
 
@@ -100,7 +119,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
 
-	// Update session with new tokens.
+	// Rotate refresh token: store old token for reuse detection.
+	session.PreviousRefreshToken = session.RefreshToken
 	session.AccessToken = accessToken
 	session.RefreshToken = newRefreshToken
 	session.ExpiresAt = expiresAt

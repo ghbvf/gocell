@@ -13,13 +13,14 @@ const (
 
 // Session represents an authenticated user session with tokens and expiry.
 type Session struct {
-	ID           string
-	UserID       string
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-	RevokedAt    *time.Time // nil = not revoked
-	CreatedAt    time.Time
+	ID                   string
+	UserID               string
+	AccessToken          string
+	RefreshToken         string
+	PreviousRefreshToken string     // tracks the last rotated-out refresh token for reuse detection
+	ExpiresAt            time.Time
+	RevokedAt            *time.Time // nil = not revoked
+	CreatedAt            time.Time
 }
 
 // NewSession creates a new session for the given user.

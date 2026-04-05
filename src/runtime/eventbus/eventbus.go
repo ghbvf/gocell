@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -85,7 +85,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	}
 
 	entry := outbox.Entry{
-		ID:        id.New("evt"),
+		ID:        uid.NewWithPrefix("evt"),
 		EventType: topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),

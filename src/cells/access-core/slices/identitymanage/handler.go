@@ -50,6 +50,7 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/", h.handleCreate)
 	r.Get("/{id}", h.handleGet)
 	r.Put("/{id}", h.handleUpdate)
+	r.Patch("/{id}", h.handlePatch)
 	r.Delete("/{id}", h.handleDelete)
 	r.Post("/{id}/lock", h.handleLock)
 	r.Post("/{id}/unlock", h.handleUnlock)
@@ -98,7 +99,49 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.svc.Update(r.Context(), UpdateInput{ID: id, Email: req.Email})
+	input := UpdateInput{ID: id}
+	if req.Email != "" {
+		input.Email = &req.Email
+	}
+	user, err := h.svc.Update(r.Context(), input)
+	if err != nil {
+		httputil.WriteDomainError(w, err)
+		return
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
+}
+
+func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// JSON merge patch: only fields present in the JSON body are updated.
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+		return
+	}
+
+	input := UpdateInput{ID: id}
+	if v, ok := raw["name"]; ok {
+		var name string
+		if err := json.Unmarshal(v, &name); err == nil {
+			input.Name = &name
+		}
+	}
+	if v, ok := raw["email"]; ok {
+		var email string
+		if err := json.Unmarshal(v, &email); err == nil {
+			input.Email = &email
+		}
+	}
+	if v, ok := raw["status"]; ok {
+		var status string
+		if err := json.Unmarshal(v, &status); err == nil {
+			input.Status = &status
+		}
+	}
+
+	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
 		httputil.WriteDomainError(w, err)
 		return

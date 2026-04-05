@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -24,17 +24,30 @@ const (
 	ErrIdentityInput errcode.Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 )
 
+// Option configures an identity-manage Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service implements identity management business logic.
 type Service struct {
-	repo        ports.UserRepository
-	sessionRepo ports.SessionRepository
-	publisher   outbox.Publisher
-	logger      *slog.Logger
+	repo         ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 }
 
 // NewService creates an identity-manage Service.
-func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
+func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // CreateInput holds parameters for creating a user.
@@ -61,7 +74,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	user.ID = id.New("usr")
+	user.ID = uid.NewWithPrefix("usr")
 
 	if err := s.repo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("identity-manage: create: %w", err)
@@ -83,13 +96,17 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) 
 	return user, nil
 }
 
-// UpdateInput holds parameters for updating a user.
+// UpdateInput holds parameters for updating a user (JSON merge patch semantics).
+// Nil pointer fields mean "do not update"; non-nil means "set to this value".
 type UpdateInput struct {
-	ID    string
-	Email string
+	ID     string
+	Name   *string
+	Email  *string
+	Status *string
 }
 
-// Update modifies user attributes.
+// Update modifies user attributes using JSON merge patch semantics:
+// only non-nil fields are applied; missing fields are left unchanged.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
 	if input.ID == "" {
 		return nil, errcode.New(ErrIdentityInput, "id is required")
@@ -100,8 +117,18 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, fmt.Errorf("identity-manage: update: %w", err)
 	}
 
-	if input.Email != "" {
-		user.Email = input.Email
+	if input.Name != nil {
+		user.Username = *input.Name
+	}
+	if input.Email != nil {
+		user.Email = *input.Email
+	}
+	if input.Status != nil {
+		status := domain.UserStatus(*input.Status)
+		if *input.Status != string(domain.StatusActive) && *input.Status != string(domain.StatusSuspended) {
+			return nil, errcode.New(ErrIdentityInput, "status must be 'active' or 'suspended'")
+		}
+		user.Status = status
 	}
 	user.UpdatedAt = time.Now()
 
@@ -174,6 +201,18 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 
 func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) {
 	data, _ := json.Marshal(payload)
+	if s.outboxWriter != nil {
+		entry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: topic,
+			Payload:   data,
+		}
+		if err := s.outboxWriter.Write(ctx, entry); err != nil {
+			s.logger.Error("identity-manage: failed to write outbox entry",
+				slog.Any("error", err), slog.String("topic", topic))
+		}
+		return
+	}
 	if err := s.publisher.Publish(ctx, topic, data); err != nil {
 		s.logger.Error("identity-manage: failed to publish event",
 			slog.Any("error", err), slog.String("topic", topic))

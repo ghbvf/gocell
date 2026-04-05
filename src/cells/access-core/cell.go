@@ -63,6 +63,11 @@ func WithSigningKey(key []byte) Option {
 	return func(c *AccessCore) { c.signingKey = key }
 }
 
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(c *AccessCore) { c.outboxWriter = w }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -76,12 +81,13 @@ func WithInMemoryDefaults() Option {
 // AccessCore is the access-core Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
-	publisher   outbox.Publisher
-	logger      *slog.Logger
-	signingKey  []byte
+	userRepo     ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	roleRepo     ports.RoleRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
+	signingKey   []byte
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -146,12 +152,20 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// identity-manage
-	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger)
+	var identityOpts []identitymanage.Option
+	if c.outboxWriter != nil {
+		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
+	}
+	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
 	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
 
 	// session-login
-	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.signingKey, c.logger)
+	var loginOpts []sessionlogin.Option
+	if c.outboxWriter != nil {
+		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
+	}
+	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.signingKey, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
 
@@ -161,7 +175,11 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 
 	// session-logout
-	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger)
+	var logoutOpts []sessionlogout.Option
+	if c.outboxWriter != nil {
+		logoutOpts = append(logoutOpts, sessionlogout.WithOutboxWriter(c.outboxWriter))
+	}
+	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
 	c.AddSlice(cell.NewBaseSlice("session-logout", "access-core", cell.L2))
 

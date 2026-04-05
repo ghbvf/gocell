@@ -5,6 +5,7 @@ package configsubscribe
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -71,10 +72,11 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 	}
 
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-subscribe: failed to unmarshal event",
+		s.logger.Error("config-subscribe: failed to unmarshal event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		// Permanent error: do not retry.
-		return nil
+		// Permanent error: return error so ConsumerBase routes to dead letter
+		// after exhausting retries.
+		return fmt.Errorf("config-subscribe: unmarshal payload: %w", err)
 	}
 
 	s.cache.mu.Lock()

@@ -1,6 +1,9 @@
 // Package main is the entry point for the core-bundle assembly.
 // It bootstraps config-core, access-core, and audit-core with in-memory
-// repositories, suitable for development and integration testing.
+// repositories by default, suitable for development and integration testing.
+//
+// Set GOCELL_ADAPTER_MODE=real to enable real adapter wiring (requires
+// GOCELL_POSTGRES_DSN, GOCELL_REDIS_ADDR, GOCELL_RABBITMQ_URL).
 package main
 
 import (
@@ -27,27 +30,65 @@ func envOrDefault(key, fallback string) []byte {
 }
 
 func main() {
-	// Create shared event bus.
-	eb := eventbus.New()
-
 	signingKey := envOrDefault("GOCELL_SIGNING_KEY", "dev-signing-key-replace-in-prod!!")
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
-	// Create cells with in-memory repositories.
-	configCell := configcore.NewConfigCore(
-		configcore.WithInMemoryDefaults(),
-		configcore.WithPublisher(eb),
+	// Determine adapter mode: "real" for production adapters, default for in-memory.
+	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
+
+	// Create shared event bus (in-memory by default).
+	// When GOCELL_ADAPTER_MODE=real, a real message broker adapter would replace
+	// this; for now we always use the in-memory event bus as a fallback.
+	eb := eventbus.New()
+
+	// Build cell options based on adapter mode.
+	var (
+		configOpts []configcore.Option
+		accessOpts []accesscore.Option
+		auditOpts  []auditcore.Option
 	)
-	accessCell := accesscore.NewAccessCore(
-		accesscore.WithInMemoryDefaults(),
+
+	if adapterMode == "real" {
+		slog.Info("adapter mode: real — adapter stubs prepared (connect in integration tests)")
+
+		// TODO(Phase 3): Wire real adapters here when available:
+		//   postgresDSN := os.Getenv("GOCELL_POSTGRES_DSN")
+		//   redisAddr   := os.Getenv("GOCELL_REDIS_ADDR")
+		//   rabbitmqURL := os.Getenv("GOCELL_RABBITMQ_URL")
+		//
+		// Real adapter initialization:
+		//   pgPool := adapters.NewPostgresPool(postgresDSN)
+		//   outboxWriter := adapters.NewPostgresOutboxWriter(pgPool)
+		//   configOpts = append(configOpts, configcore.WithOutboxWriter(outboxWriter))
+		//   accessOpts = append(accessOpts, accesscore.WithOutboxWriter(outboxWriter))
+		//   auditOpts  = append(auditOpts, auditcore.WithOutboxWriter(outboxWriter))
+
+		// Fallback to in-memory until real adapters are implemented.
+		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
+		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
+		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
+	} else {
+		slog.Info("adapter mode: in-memory (development)")
+		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
+		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
+		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
+	}
+
+	// Common options.
+	configOpts = append(configOpts, configcore.WithPublisher(eb))
+	accessOpts = append(accessOpts,
 		accesscore.WithPublisher(eb),
 		accesscore.WithSigningKey(signingKey),
 	)
-	auditCell := auditcore.NewAuditCore(
-		auditcore.WithInMemoryDefaults(),
+	auditOpts = append(auditOpts,
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
 	)
+
+	// Create cells.
+	configCell := configcore.NewConfigCore(configOpts...)
+	accessCell := accesscore.NewAccessCore(accessOpts...)
+	auditCell := auditcore.NewAuditCore(auditOpts...)
 
 	// Create assembly and register cells in dependency order.
 	asm := assembly.New(assembly.Config{ID: "core-bundle"})
