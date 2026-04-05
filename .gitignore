@@ -33,6 +33,7 @@ Thumbs.db
 __debug_bin*
 
 # Temporary
+/tools/
 tmp/
 *.tmp
 
