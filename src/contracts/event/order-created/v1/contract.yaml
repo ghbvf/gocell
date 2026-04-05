@@ -1,0 +1,8 @@
+id: event.order-created.v1
+kind: event
+ownerCell: order-cell
+consistencyLevel: L2
+lifecycle: active
+replayable: true
+idempotencyKey: order-created:{event_id}
+deliverySemantics: at-least-once

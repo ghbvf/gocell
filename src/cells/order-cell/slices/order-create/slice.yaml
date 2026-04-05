@@ -1,0 +1,10 @@
+id: order-create
+belongsToCell: order-cell
+contractUsages:
+  - contract: http.order.v1
+    role: serve
+  - contract: event.order-created.v1
+    role: publish
+verify:
+  unit: order-create/unit
+  contract: order-create/contract

@@ -1,0 +1,12 @@
+id: http.order.v1
+kind: http
+ownerCell: order-cell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  - method: POST
+    path: /api/v1/orders
+  - method: GET
+    path: /api/v1/orders/{id}
+  - method: GET
+    path: /api/v1/orders
