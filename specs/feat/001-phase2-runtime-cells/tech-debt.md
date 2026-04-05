@@ -102,9 +102,11 @@
 | 76 | [TECH] | C-P1 | mapCodeToStatus 用 strings.Contains 匹配 — 顺序敏感、歧义 | Phase 3 |
 | 77 | [TECH] | C-P2 | WriteJSON 忽略 json.Encode 错误 | Phase 3 |
 | 78 | [TECH] | C-P3 | CLI exit code 不区分（usage error / validation error 都是 1） | Phase 3 |
+| 79 | [TECH] | PR#4-A1 | cells/ 层 service.go 约 15 处 fmt.Errorf 跨边界暴露非结构化错误（sessionlogin 4 处、sessionrefresh 3 处、sessionlogout 2 处、identitymanage 2 处、configwrite 2 处、configpublish 2 处），应改为 errcode.Wrap。#27 仅修了 kernel/，cells/ 同类问题未清理 | Phase 3 |
+| 80 | [TECH] | PR#4-D2 | bootstrap config reload 仅更新 cfg 对象，不传播到 assembly/cells — Run() 在启动时将 cfg 快照为 cfgMap 传给 asm.StartWithConfig()，之后 watcher 触发的 Reload 只更新 cfg，cells 仍用初始快照值。完整链路（cfg 变更→通知 cells→cells 重读）属 J-config-hot-reload journey 范围 | Phase 3 |
 
 ## 统计
-- [TECH] 新增: 23 条 (S6) + 49 条 (review-031) = 72 条
+- [TECH] 新增: 23 条 (S6) + 49 条 (review-031) + 2 条 (PR#4 review) = 74 条
 - [PRODUCT] 新增: 3 条 (S6) + 1 条 (review-031) = 4 条
 - 本 PR 已修复: 路由 404 + logout persist + INVALID_TOKEN 映射 + JWT key 校验 + workerErrCh + ServiceToken nil secret
 - 上一 Phase 遗留已解决: 0 条（首次启用工作流）
