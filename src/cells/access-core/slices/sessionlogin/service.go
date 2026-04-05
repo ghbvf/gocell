@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -36,14 +36,23 @@ type TokenPair struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
+// Option configures a session-login Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
-	publisher   outbox.Publisher
-	signingKey  []byte
-	logger      *slog.Logger
+	userRepo     ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	roleRepo     ports.RoleRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	signingKey   []byte
+	logger       *slog.Logger
 }
 
 // NewService creates a session-login Service.
@@ -54,8 +63,9 @@ func NewService(
 	pub outbox.Publisher,
 	signingKey []byte,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		userRepo:    userRepo,
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
@@ -63,6 +73,10 @@ func NewService(
 		signingKey:  signingKey,
 		logger:      logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // LoginInput holds login parameters.
@@ -104,7 +118,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Issue JWT.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
-	sessionID := id.New("sess")
+	sessionID := uid.NewWithPrefix("sess")
 
 	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
 	if err != nil {
@@ -132,7 +146,17 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": session.ID, "user_id": user.ID,
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
+	if s.outboxWriter != nil {
+		entry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: TopicSessionCreated,
+			Payload:   payload,
+		}
+		if writeErr := s.outboxWriter.Write(ctx, entry); writeErr != nil {
+			s.logger.Error("session-login: failed to write outbox entry",
+				slog.Any("error", writeErr))
+		}
+	} else if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
 		s.logger.Error("session-login: failed to publish event",
 			slog.Any("error", pubErr))
 	}

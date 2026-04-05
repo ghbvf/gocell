@@ -1,6 +1,9 @@
 // Package id provides cryptographically random ID generation for the GoCell
 // framework. All entity IDs should use this package instead of time-based
 // approaches (e.g., UnixNano) to avoid collisions and predictability.
+//
+// Deprecated: Use pkg/uid which provides UUID v4 (128-bit entropy) instead of
+// the 64-bit hex IDs from this package.
 package id
 
 import (

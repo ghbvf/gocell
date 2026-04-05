@@ -1,0 +1,8 @@
+[2026-04-05 18:08:13] S0/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:21:51] S0/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:26:45] S1/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:36:18] S2/exit: FAIL (branch=feat/002-phase3-adapters)
+  failed: kernel-constraints.md: pattern '(集成风险|分层隔离|核心约束|元数据合规|契约完整性)'
+[2026-04-05 18:36:38] S2/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:43:01] S3/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:56:43] S4/exit: PASS (branch=feat/002-phase3-adapters)

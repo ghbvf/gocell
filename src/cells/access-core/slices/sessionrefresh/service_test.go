@@ -90,3 +90,50 @@ func TestService_Refresh(t *testing.T) {
 		})
 	}
 }
+
+func TestService_Refresh_TokenRotation(t *testing.T) {
+	svc, repo := newTestService()
+
+	// Create a session with a known refresh token.
+	rt1 := issueTestToken("usr-rot")
+	sess, err := domain.NewSession("usr-rot", "at", rt1, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-rot"
+	require.NoError(t, repo.Create(context.Background(), sess))
+
+	// First refresh should succeed and rotate the token.
+	pair1, err := svc.Refresh(context.Background(), rt1)
+	require.NoError(t, err)
+	assert.NotEqual(t, rt1, pair1.RefreshToken, "refresh token should be rotated")
+
+	// The old token should no longer work for a normal refresh (session not found by that token).
+	// But it should be detected as reuse and revoke the session.
+	_, err = svc.Refresh(context.Background(), rt1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reuse")
+
+	// The session should now be revoked.
+	revokedSess, err := repo.GetByID(context.Background(), "sess-rot")
+	require.NoError(t, err)
+	assert.True(t, revokedSess.IsRevoked(), "session should be revoked after token reuse detection")
+
+	// Even the new token should fail because the session is revoked.
+	_, err = svc.Refresh(context.Background(), pair1.RefreshToken)
+	require.Error(t, err)
+}
+
+func TestService_Refresh_SigningMethodCheck(t *testing.T) {
+	svc, _ := newTestService()
+
+	// Create a token with a different signing method (e.g. none attack).
+	claims := jwt.MapClaims{
+		"sub": "usr-1",
+		"exp": jwt.NewNumericDate(time.Now().Add(time.Hour)),
+	}
+	// Use unsigned token ("none" algorithm attack).
+	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
+	tokenStr, _ := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+
+	_, err := svc.Refresh(context.Background(), tokenStr)
+	assert.Error(t, err, "should reject token with 'none' signing method")
+}

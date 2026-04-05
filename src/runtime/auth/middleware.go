@@ -9,12 +9,39 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
+// DefaultPublicEndpoints is the default set of paths that do not require
+// authentication.
+var DefaultPublicEndpoints = []string{
+	"/healthz",
+	"/readyz",
+	"/api/v1/auth/login",
+	"/api/v1/auth/callback",
+}
+
 // AuthMiddleware extracts a Bearer token from the Authorization header,
 // verifies it using the provided TokenVerifier, and stores the resulting
 // Claims in the request context. On failure, it returns a 401 JSON response.
-func AuthMiddleware(verifier TokenVerifier) func(http.Handler) http.Handler {
+//
+// publicEndpoints specifies paths that bypass authentication. If nil,
+// DefaultPublicEndpoints is used.
+func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.Handler) http.Handler {
+	whitelist := publicEndpoints
+	if whitelist == nil {
+		whitelist = DefaultPublicEndpoints
+	}
+	publicSet := make(map[string]bool, len(whitelist))
+	for _, p := range whitelist {
+		publicSet[p] = true
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip authentication for whitelisted endpoints.
+			if publicSet[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			token := extractBearerToken(r)
 			if token == "" {
 				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")

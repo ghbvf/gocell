@@ -71,7 +71,7 @@ func New(opts ...Option) *Router {
 	// Default middleware chain.
 	r.mux.Use(
 		middleware.RequestID,
-		middleware.RealIP,
+		middleware.RealIP(nil),
 		middleware.Recovery,
 		middleware.AccessLog,
 		middleware.SecurityHeaders,
