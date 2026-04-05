@@ -16,4 +16,13 @@ const (
 
 	// ErrAdapterPGMigrate indicates a migration execution or tracking failure.
 	ErrAdapterPGMigrate errcode.Code = "ERR_ADAPTER_PG_MIGRATE"
+
+	// ErrAdapterPGNoTx indicates outbox.Writer.Write was called outside a transaction.
+	ErrAdapterPGNoTx errcode.Code = "ERR_ADAPTER_NO_TX"
+
+	// ErrAdapterPGMarshal indicates a JSON marshal failure for outbox entry.
+	ErrAdapterPGMarshal errcode.Code = "ERR_ADAPTER_PG_MARSHAL"
+
+	// ErrAdapterPGPublish indicates the outbox relay failed to publish an entry.
+	ErrAdapterPGPublish errcode.Code = "ERR_ADAPTER_PG_PUBLISH"
 )
