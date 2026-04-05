@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, "feat/**"]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: src/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1 -timeout 5m
+
+      - name: Validate metadata
+        run: go run ./cmd/gocell validate
+
+      - name: Validate examples metadata
+        run: |
+          for dir in examples/*/; do
+            if [ -d "$dir" ]; then
+              echo "--- Validating $dir ---"
+              go run ./cmd/gocell validate --root "$dir" || true
+            fi
+          done
+
+      - name: Check layering — examples no internal imports
+        run: |
+          if grep -rn "cells/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports cells/*/internal/"
+            exit 1
+          fi
+          if grep -rn "adapters/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports adapters/*/internal/"
+            exit 1
+          fi
+          echo "PASS: no internal import violations"
+
+      - name: Kernel coverage gate
+        run: |
+          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
+          awk '/coverage:/ {
+            split($NF, a, "%");
+            if (a[1]+0 < 90) {
+              print "FAIL: " $1 " coverage " $NF " < 90%";
+              exit 1
+            }
+          }' /tmp/kernel-cov.txt
+          echo "PASS: kernel coverage >= 90%"
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: build-test
+    defaults:
+      run:
+        working-directory: src
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: gocell
+          POSTGRES_PASSWORD: gocell_dev
+          POSTGRES_DB: gocell_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gocell"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3.12-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: gocell
+          RABBITMQ_DEFAULT_PASS: gocell_dev
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: src/go.sum
+
+      - name: Integration tests
+        run: go test -tags=integration ./adapters/... -count=1 -timeout 5m
