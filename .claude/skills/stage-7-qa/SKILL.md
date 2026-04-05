@@ -122,7 +122,7 @@ specs/{branch}/evidence/
 - **CONDITIONAL**: 均>=3
 - **REJECT**: 任一<3 或存在 P0 问题
 
-> **注意**: 如 role-roster.md 中前端开发者=OFF，使用者验证的 UI 视角（视角 A）标记为 N/A，仅执行 API + 框架视角（视角 B、C）。user-signoff.md 仍需产出，但 UI 部分标注 `N/A:SCOPE_IRRELEVANT`。视角 C（框架集成者）始终执行。
+> **注意**: 如 role-roster.md 中前端开发者=OFF，使用者验证的 UI 视角（视角 A）标记为 N/A，仅执行 B（开发者）、C（框架集成者）、D（Vibe Coder）三个视角。user-signoff.md 仍需产出，但 UI 部分标注 `N/A:SCOPE_IRRELEVANT`。
 
 ### 步骤 7.3: 总负责人编写 qa-report.md
 

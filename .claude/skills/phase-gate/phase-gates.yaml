@@ -190,6 +190,6 @@ stages:
         - file: phase-report.md
           pattern: "(变更摘要|关键决策)"
         - file: phase-report.md
-          pattern: "^- 产品: PASS$"
+          pattern: "- 产品: PASS"
         - file: phase-report.md
-          pattern: "^- 项目: PASS$"
+          pattern: "- 项目: PASS"

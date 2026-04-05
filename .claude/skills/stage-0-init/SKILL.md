@@ -32,12 +32,14 @@ Core Mandatory（必须全部 ON，5 角色）:
 [ ] 项目经理 — S4 依赖分析 + S5.1 batch 划分 + S5.4 进度跟踪 + S8.3-B 流程完成确认
 [ ] Kernel Guardian — S2 kernel-constraints + S4 tasks 审查 + S8.2 Phase 回顾
 
-Conditional Delivery（逐一标注 ON/OFF + 理由）:
-[ ] 后端开发者 — S5 实施  → ON / OFF（理由:_______）
+始终启用:
+[ ] 后端开发者 — S5 实施
+[ ] 文档工程师 — S5 文档 + S8.2 收尾
+[ ] DevOps — S5 部署配置 + S7.0 测试环境
+[ ] QA 自动化 — S5 编写测试 + S7 执行测试
+
+Conditional Delivery（仅前端开发者按需启用）:
 [ ] 前端开发者 — S5 实施  → ON / OFF（理由:_______）
-[ ] 文档工程师 — S5 文档 + S8.2 收尾  → ON / OFF（理由:_______）
-[ ] DevOps — S5 部署配置 + S7.0 测试环境  → ON / OFF（理由:_______）
-[ ] QA 自动化 — S5 编写测试 + S7 执行测试  → ON / OFF（理由:_______）
 
 Review Bench（6 个命名席位，S6 全部参与）:
 [ ] 架构一致性 Reviewer
@@ -154,14 +156,18 @@ Governance（治理层）:
 | 项目经理 | ON | |
 | Kernel Guardian | ON | |
 
+## 始终启用
+| 角色 | 状态 |
+|------|------|
+| 后端开发者 | ON |
+| 文档工程师 | ON |
+| DevOps | ON |
+| QA 自动化 | ON |
+
 ## Conditional Delivery
 | 角色 | 状态 | 理由 |
 |------|------|------|
-| 后端开发者 | ON/OFF | {理由} |
 | 前端开发者 | ON/OFF | {理由} |
-| 文档工程师 | ON/OFF | {理由} |
-| DevOps | ON/OFF | {理由} |
-| QA 自动化 | ON/OFF | {理由} |
 
 ## Review Bench
 | 席位 | 状态 |
