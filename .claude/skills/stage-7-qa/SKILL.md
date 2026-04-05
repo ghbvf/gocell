@@ -9,7 +9,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 **硬阻塞门**: 阶段 6 完成后**自动进入**。不是总负责人决定是否执行。`qa-report.md` 不存在则阶段 8 拒绝进入。
 
-**执行者**: DevOps（环境部署）+ QA Agent（执行测试）+ 使用者（四视角验证）
+**执行者**: DevOps（环境部署）+ QA Agent（执行测试）+ 产品经理（主持四视角验证）+ 使用者
 
 **入口条件**: S6 出口通过（review-findings.md + tech-debt.md 存在）
 
@@ -39,7 +39,7 @@ git pull origin {branch}
 
 ### 步骤 7.1: 执行自动化测试
 
-派发 DevOps Agent（name=devops）执行测试套件：
+派发 QA Agent 执行测试套件：
 
 ```bash
 bash .claude/skills/stage-7-qa/scripts/run-qa.sh --branch {branch}

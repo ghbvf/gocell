@@ -66,15 +66,16 @@ Governance（治理层）:
 
 ### 步骤 3.1: 根据 role-roster.md 生成 N/A 声明
 
-对每个标记为 OFF 的角色，在 phase-charter.md 中追加对应的 N/A 声明，使 gate 脚本自动豁免相关文件检查：
+唯一可 OFF 的 Conditional 角色是**前端开发者**（无 UI 变化时）。其余角色（后端、DevOps、QA、文档工程师）始终启用。
 
-| 角色 OFF | 自动追加的 N/A 声明 |
-|----------|-------------------|
-| QA 自动化 | N/A:SCOPE_IRRELEVANT evidence/playwright/result.txt |
-| 前端开发者 | N/A:SCOPE_IRRELEVANT playwright.config.ts |
-| DevOps | N/A:SCOPE_IRRELEVANT docker-compose.test.yml |
+前端开发者 OFF 时，在 phase-charter.md 中追加 N/A 声明：
 
-如所有角色均为 ON，跳过此步骤。
+| N/A 声明 |
+|---------|
+| N/A:SCOPE_IRRELEVANT evidence/playwright/result.txt |
+| N/A:SCOPE_IRRELEVANT playwright.config.ts |
+
+如前端开发者为 ON，跳过此步骤。
 
 ### 步骤 4: 连续性检查 [AGENT]
 

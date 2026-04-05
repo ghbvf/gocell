@@ -24,11 +24,11 @@
 
 | 角色 | 职责 | 启用条件 |
 |------|------|----------|
-| 后端开发者 | S5 实施 | 几乎每 Phase 启用 |
+| 后端开发者 | S5 实施 | 始终启用 |
 | 前端开发者 | S5 实施 | 有 UI 变化时启用 |
-| 文档工程师 | S5 文档 + S8.2 收尾 | 几乎每 Phase 启用 |
-| DevOps | S5 部署配置 + S7.0 测试环境 | 几乎每 Phase 启用 |
-| QA 自动化 | S5 编写测试 + S7 执行测试 | 几乎每 Phase 启用 |
+| 文档工程师 | S5 文档 + S8.2 收尾 | 始终启用 |
+| DevOps | S5 部署配置 + S7.0 测试环境 | 始终启用 |
+| QA 自动化 | S5 编写测试 + S7 执行测试 | 始终启用 |
 
 ### Review Bench（6 个命名席位，S6 审查）
 
@@ -130,10 +130,10 @@ go test ./...
 | S1 Specify | stage-1-specify | phase-charter.md, role-roster.md, product-context.md | spec.md, checklists/requirements.md | 总负责人 |
 | S2 审查 | stage-2-review | spec.md | kernel-constraints.md, review-architect.md, review-roadmap.md, review-product-manager.md | 架构师 + Roadmap + KG + PM |
 | S3 裁决 | stage-3-decide | kernel-constraints.md, review-architect.md, review-roadmap.md, review-product-manager.md | decisions.md, spec.md(更新) | 总负责人 |
-| S4 Plan | stage-4-plan | decisions.md | plan.md, tasks.md, research.md, product-acceptance-criteria.md | 总负责人 + KG + PM + 项目经理 |
+| S4 Plan | stage-4-plan | decisions.md | plan.md, tasks.md, research.md, product-acceptance-criteria.md, pr-plan.md | 总负责人 + KG + PM + 项目经理 |
 | S5 实施 | stage-5-implement | tasks.md, product-acceptance-criteria.md | tasks.md(全部完成) | 开发者 + 文档 + DevOps |
 | S6 Review-Fix | stage-6-review-fix | tasks.md | review-findings.md, tech-debt.md | 6 席位 Reviewer |
-| S7 QA | stage-7-qa | review-findings.md, tech-debt.md | qa-report.md, user-signoff.md, evidence/*/ | DevOps + PM |
+| S7 QA | stage-7-qa | review-findings.md, tech-debt.md | qa-report.md, user-signoff.md, evidence/*/ | DevOps + QA + PM（主持）+ 使用者 |
 | S8 收尾 | stage-8-close | qa-report.md, tech-debt.md, user-signoff.md, evidence/*/ | kernel-review-report.md, product-review-report.md, phase-report.md, CHANGELOG.md | 全角色 |
 
 ---
@@ -201,6 +201,7 @@ go test ./...
 | `research.md` | S4 | S5（实施参考） |
 | `data-model.md` | S4 | S5（实施参考） |
 | `product-acceptance-criteria.md` | S4 | S7（QA 引用 AC 编号）、S8（产品验收分级标准） |
+| `pr-plan.md` | S4 | S5（Wave/PR 划分 + 进度跟踪） |
 | `task-dependency-analysis.md` | S4（或 S5.1 前） | S5.1（batch 划分输入） |
 | `e2e/*.spec.ts` | S5（QA 编写） | S7（执行测试） |
 | `review-findings.md` | S6 | S6（修复依据）、S8（项目经理检查） |

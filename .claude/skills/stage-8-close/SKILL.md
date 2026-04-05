@@ -247,7 +247,15 @@ G. 产品 Tech Debt — 产品层面的妥协（[PRODUCT] 标签）
 
 **仅在产品 PASS AND 项目 PASS 后执行。**
 
-1. 将 8.2 收尾文档 commit + push 到 feature 分支：
+1. 将双确认结果写入 phase-report.md（固定格式，gate 校验依赖此格式）：
+
+```markdown
+## 双确认结果
+- 产品: PASS
+- 项目: PASS
+```
+
+2. 将 8.2 收尾文档 commit + push 到 feature 分支：
 
 ```bash
 git add specs/ docs/ CHANGELOG.md
