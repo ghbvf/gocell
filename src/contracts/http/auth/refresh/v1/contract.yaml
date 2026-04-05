@@ -1,0 +1,11 @@
+id: http.auth.refresh.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: access-core
+  clients: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
