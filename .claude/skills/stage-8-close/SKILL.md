@@ -20,25 +20,26 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ```
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S8 --branch {branch} --check entry
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check entry
 ```
 
 ---
 
-## 8.1 总负责人: 创建 PR（不合并）
+## 8.1 总负责人: 验证所有 PR 已合入
 
+确认 pr-plan.md 中所有 PR 状态为 merged：
 ```bash
-# 总负责人自行判断需要提交的文件范围，避免意外包含敏感或无关文件
-git add <相关文件>
-git commit -m "feat: Phase {N} — {Phase 名称}"
-git push -u origin {branch}
-gh pr create --title "Phase {N}: {Phase 名称}" --body "..."
+# 检查 develop 分支包含所有 PR 的代码
+git checkout develop && git pull
+cd src && go build ./... && go vet ./... && go test ./... -count=1
 ```
 
-PR 描述包含:
-- Phase 目标
-- 关键变更摘要
-- 已知 tech debt（引用 tech-debt.md）
+如有收尾文档变更（specs/、docs/ 下的文档），提交到 develop：
+```bash
+git add specs/ docs/ CHANGELOG.md
+git commit -m "docs: Phase {N} closing -- {Phase 名称}"
+git push
+```
 
 ---
 
@@ -59,7 +60,7 @@ PR 描述包含:
 任务: 完成以下 5 项收尾文档:
 1. specs/{branch}/phase-report.md — Phase 总结报告
 2. CHANGELOG.md 追加 — 使用 git log 生成初稿:
-   git log main...{branch} --oneline --no-merges
+   git log --oneline --no-merges --since="Phase 开始日期"
    然后按 Conventional Commits 分组整理
 3. docs/tech-debt-registry.md 汇总更新 — 合并本 Phase tech-debt.md
 4. docs/architecture.md 更新（如有结构变化）
@@ -69,7 +70,7 @@ PR 描述包含:
 产出: 上述 5 项文档
 ```
 
-**CHANGELOG 自动化**: 文档工程师必须先运行 `git log main...{branch} --oneline --no-merges` 获取 commit 列表作为初稿，不手写。
+**CHANGELOG 自动化**: 文档工程师必须先运行 `git log --oneline --no-merges --since="Phase 开始日期"` 获取 commit 列表作为初稿，不手写。
 
 ### 路径 C: Kernel Guardian Phase 回顾
 
@@ -84,10 +85,10 @@ PR 描述包含:
 - specs/{branch}/tech-debt.md
 - specs/{branch}/qa-report.md
 - specs/{branch}/role-roster.md
-- git log main...{branch}
+- git log --oneline --no-merges --since="Phase 开始日期"
 
 7 个维度:
-A. 工作流完整性 — 8 阶段是否全执行
+A. 工作流完整性 — 9 阶段(S0-S8)是否全执行
 B. Speckit 合规 — 是否由 Speckit 生成而非手写
 C. 角色完整性 — 适用角色是否全参与
    评分标准:
@@ -195,13 +196,13 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 
 质量:
 [ ] qa-report.md 记录测试范围和结果
-[ ] Playwright E2E 测试存在
+[ ] Playwright E2E 测试存在（有 UI 时；否则标注 N/A）
 [ ] tech-debt-registry.md 已汇总更新
 [ ] kernel-review-report.md 存在且 7 维度已评分
 [ ] product-context.md 存在
 [ ] product-acceptance-criteria.md 存在
 [ ] product-review-report.md 存在
-[ ] user-signoff.md 存在且四视角完整
+[ ] user-signoff.md 存在且三视角完整（纯后端 Phase UI 视角标 N/A）
 [ ] user-signoff.md 判定非 REJECT
 [ ] review-findings.md 存在
 
@@ -220,20 +221,16 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 
 ---
 
-## 8.4 双 PASS 后合并
+## 8.4 双 PASS 后收尾
 
 **仅在产品 PASS AND 项目 PASS 后执行。**
 
 1. 阶段门最终检查:
    ```bash
-   bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S8 --branch {branch} --check exit
+   python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
    ```
-2. 将 8.2 收尾文档 commit + push 到 PR 分支
-3. 合并 PR:
-   ```bash
-   gh pr merge
-   ```
-4. 确认合并成功
+2. 将 8.2 收尾文档 commit + push 到 develop
+3. 确认 Phase 完成
 
 ---
 
@@ -258,6 +255,5 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 [ ] CHANGELOG.md 已更新
 [ ] 产品 PASS
 [ ] 项目 PASS
-[ ] PR 已合并
-[ ] phase-gate-check.sh --stage S8 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS
 ```

@@ -107,10 +107,33 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
 
 **注**: task-dependency-analysis.md 如未在 S4 完成，则为 S5.1 入口条件。Fallback: 如不存在，使用 tasks.md 内嵌依赖图进行 batch 划分。
 
-### 步骤 7: 阶段门检查
+### 步骤 7: 项目经理产出 pr-plan.md
+
+基于 task-dependency-analysis.md 的依赖图和 batch 建议，将 tasks 分组为可独立交付的 PR 单元：
+
+产出: `specs/{branch}/pr-plan.md`
+
+格式：
+| PR | scope | tasks | depends | verify | branch |
+|----|-------|-------|---------|--------|--------|
+| PR-1 | kernel/metadata (types + parser) | T01-T03 | none | go test ./kernel/metadata/... | phase-{N}/pr-1-metadata |
+| PR-2 | kernel/cell + registry | T04-T06 | PR-1 | go test ./kernel/cell/... ./kernel/registry/... | phase-{N}/pr-2-registry |
+
+划分原则：
+- 每个 PR 可独立编译验证（go build 通过）
+- 每个 PR 可独立测试（verify 列的命令通过）
+- 依赖关系显式声明，标注可并行的 Wave 组
+- 实施过程中如果某个 PR 过大，developer 在 handoff note 中标记，项目经理决定是否拆分
+
+Wave 分组示例：
+Wave 1: PR-1, PR-2（并行，无互相依赖）
+Wave 2: PR-3, PR-4（并行，都只依赖 Wave 1）
+Wave 3: PR-5（串行，依赖 Wave 2）
+
+### 步骤 8: 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S4 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S4 --branch {branch} --check exit
 ```
 
 ---
@@ -136,6 +159,7 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S4 --bra
 | research.md | `specs/{branch}/research.md` | Speckit |
 | product-acceptance-criteria.md | `specs/{branch}/product-acceptance-criteria.md` | 产品经理 |
 | task-dependency-analysis.md | `specs/{branch}/task-dependency-analysis.md` | 项目经理 |
+| pr-plan.md | `specs/{branch}/pr-plan.md` | 项目经理 |
 
 ## 出口条件
 
@@ -146,7 +170,8 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S4 --bra
 [ ] 一致性检查通过（speckit.analyze 无严重问题）
 [ ] Kernel Guardian确认无遗漏
 [ ] product-acceptance-criteria.md 已产出且含 P1/P2/P3 分级
-[ ] phase-gate-check.sh --stage S4 --branch {branch} --check exit = PASS
+[ ] pr-plan.md 存在且每个 PR 有 scope + verify + depends
+[ ] phase-gate-check.py --stage S4 --branch {branch} --check exit = PASS
 ```
 
 **禁止**: 手写 tasks.md（Speckit 生成，仅允许追加缺失的非代码任务和内核集成验证任务）

@@ -1,4 +1,3 @@
-
 ---
 name: roadmap
 description: Roadmap 规划师 - PRD 对齐审查、范围控制、Phase 间依赖分析与 roadmap 回灌
@@ -7,7 +6,7 @@ tools:
   - Glob
   - Grep
   - Write
-  - Bash
+  - Edit
 model: opus
 effort: high
 permissionMode: auto

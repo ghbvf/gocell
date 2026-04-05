@@ -1,7 +1,13 @@
-# Phase Gate 准入准出规则声明
-# 消费者: .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh
-# 规则: 每阶段 entry/exit 均为硬性条件,FAIL 则阻塞
-# 跳过: 如 phase-charter.md 的 Scope 声明标注 N/A + 理由,检查脚本跳过对应文件
+# Phase Gate 准入准出规则声明（唯一可执行合同）
+# 消费者: .claude/skills/phase-gate/scripts/phase-gate-check.py
+# 规则: 每阶段 entry/exit 均为硬性条件，FAIL 则阻塞
+# 跳过: phase-charter.md 中声明 N/A:<SCOPE_IRRELEVANT|RESOURCE_UNAVAILABLE|DEFERRED> <filename>
+#
+# 检查类型:
+#   required_files  — specs/{branch}/ 下的文件（存在且非空）
+#   repo_files      — repo root 下的文件（存在且非空）
+#   content_checks  — specs/{branch}/ 下文件的内容 pattern 或 special check
+#   command_checks  — 执行命令，检查退出码为 0
 
 stages:
   S0:
@@ -68,7 +74,8 @@ stages:
         - plan.md
         - tasks.md
         - product-acceptance-criteria.md
-        # 注: task-dependency-analysis.md 检查点从 S4 出口移到 S5.1 入口条件,允许在 S5.1 之前完成; fallback 使用 tasks.md 内嵌依赖图
+        - research.md
+        - pr-plan.md
       content_checks:
         - file: tasks.md
           pattern: "(contract test|journey test|测试编写|E2E)"
@@ -87,9 +94,22 @@ stages:
     exit:
       required_files:
         - tasks.md
+        - pr-plan.md
       content_checks:
         - file: tasks.md
           check: no_unchecked_tasks
+        - file: pr-plan.md
+          pattern: "merged"
+      command_checks:
+        - args: ["go", "build", "./..."]
+          cwd: src
+          desc: "go build 编译通过"
+        - args: ["go", "vet", "./..."]
+          cwd: src
+          desc: "go vet 静态检查通过"
+        - args: ["go", "test", "./...", "-count=1"]
+          cwd: src
+          desc: "go test 全量测试通过"
 
   S6:
     entry:
@@ -114,11 +134,22 @@ stages:
       required_files:
         - qa-report.md
         - user-signoff.md
+        - evidence/go-test/result.txt
+        - evidence/validate/result.txt
+        - evidence/journey/result.txt
       content_checks:
         - file: qa-report.md
-          pattern: "(go test|contract test|journey test|coverage|PASS|FAIL)"
+          pattern: "(go test.*PASS|coverage|全量测试通过)"
         - file: user-signoff.md
           pattern: "(APPROVE|CONDITIONAL|REJECT)"
+        - file: evidence/go-test/result.txt
+          pattern: "(PASS|ok)"
+        - file: evidence/validate/result.txt
+          pattern: "(0 errors|PASS|valid)"
+      command_checks:
+        - args: ["go", "test", "./...", "-count=1"]
+          cwd: src
+          desc: "go test 全量测试通过"
 
   S8:
     entry:
@@ -126,14 +157,19 @@ stages:
         - qa-report.md
         - tech-debt.md
         - user-signoff.md
+        - evidence/go-test/result.txt
+        - evidence/validate/result.txt
+        - evidence/journey/result.txt
       content_checks:
         - file: user-signoff.md
-          pattern: "(APPROVE|CONDITIONAL|REJECT)"
+          pattern: "(APPROVE|CONDITIONAL)"
     exit:
       required_files:
         - kernel-review-report.md
         - product-review-report.md
         - phase-report.md
+      repo_files:
+        - CHANGELOG.md
       content_checks:
         - file: kernel-review-report.md
           pattern: "(绿|黄|红|GREEN|YELLOW|RED)"

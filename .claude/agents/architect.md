@@ -6,7 +6,7 @@ tools:
   - Glob
   - Grep
   - Write
-  - Bash
+  - Edit
 model: opus
 effort: high
 permissionMode: auto
@@ -53,6 +53,7 @@ N. [维度] 建议内容 — 理由: ... — 影响: 高/中/低
 
 ## 约束
 
+- **与 Kernel Guardian 的分工**: Architect 负责接口稳定性与破坏性变更裁决；Kernel Guardian 负责分层隔离与元数据合规。分层检查由 Guardian 主导，架构决策由 Architect 主导。
 - 实际读取代码（Read/Grep/Glob），不凭记忆推断
 - 接口兼容性判断基于实际导出符号，不猜测
 - 建议必须有具体代码引用

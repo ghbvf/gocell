@@ -1,7 +1,7 @@
 ---
 name: stage-0-init
 description: "Phase 启动: 角色完整性+连续性+过载保护+产品上下文"
-argument-hint: "[branch-name]"
+argument-hint: "[phase-goal-or-doc-path]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ---
 
@@ -174,7 +174,7 @@ Governance（治理层）:
 执行出口检查：
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S0 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S0 --branch {branch} --check exit
 ```
 
 ---
@@ -195,5 +195,5 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S0 --bra
 [ ] product-context.md 已产出且非空
 [ ] 角色完整性检查通过（Core Mandatory 全部 ON）
 [ ] 连续性检查通过（如适用）
-[ ] phase-gate-check.sh --stage S0 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S0 --branch {branch} --check exit = PASS
 ```
