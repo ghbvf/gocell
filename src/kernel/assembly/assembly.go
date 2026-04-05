@@ -168,3 +168,71 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 	}
 	return result
 }
+
+// StartWithConfig is like Start but injects the given config map into
+// Dependencies.Config before initialising cells.
+func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]any) error {
+	a.mu.Lock()
+	if a.state != stateStopped {
+		a.mu.Unlock()
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, a.state))
+	}
+	a.state = stateStarting
+	a.mu.Unlock()
+
+	deps := cell.Dependencies{
+		Cells:     a.cellMap,
+		Contracts: make(map[string]cell.Contract),
+		Config:    cfgMap,
+	}
+
+	for _, c := range a.cells {
+		if err := c.Init(ctx, deps); err != nil {
+			a.mu.Lock()
+			a.state = stateStopped
+			a.mu.Unlock()
+			return errcode.Wrap(errcode.ErrValidationFailed,
+				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
+		}
+	}
+
+	for i, c := range a.cells {
+		if err := c.Start(ctx); err != nil {
+			for j := i - 1; j >= 0; j-- {
+				if stopErr := a.cells[j].Stop(ctx); stopErr != nil {
+					slog.Warn("rollback: failed to stop cell",
+						"cell", a.cells[j].ID(), "error", stopErr)
+				}
+			}
+			a.mu.Lock()
+			a.state = stateStopped
+			a.mu.Unlock()
+			return errcode.Wrap(errcode.ErrLifecycleInvalid,
+				fmt.Sprintf("assembly: start cell %q", c.ID()), err)
+		}
+	}
+
+	a.mu.Lock()
+	a.state = stateStarted
+	a.mu.Unlock()
+	return nil
+}
+
+// CellIDs returns the IDs of all registered cells in registration order.
+func (a *CoreAssembly) CellIDs() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ids := make([]string, len(a.cells))
+	for i, c := range a.cells {
+		ids[i] = c.ID()
+	}
+	return ids
+}
+
+// Cell returns the registered Cell with the given ID, or nil if not found.
+func (a *CoreAssembly) Cell(id string) cell.Cell {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cellMap[id]
+}

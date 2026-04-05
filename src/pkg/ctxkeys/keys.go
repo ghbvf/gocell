@@ -16,6 +16,9 @@ const (
 	JourneyID     ctxKey = "journey_id"
 	TraceID       ctxKey = "trace_id"
 	SpanID        ctxKey = "span_id"
+	RequestID     ctxKey = "request_id"
+	RealIP        ctxKey = "real_ip"
+	Subject       ctxKey = "subject"
 )
 
 // --- CellID ---
@@ -93,5 +96,44 @@ func WithSpanID(ctx context.Context, id string) context.Context {
 // SpanIDFrom extracts the span ID from ctx. The boolean indicates presence.
 func SpanIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(SpanID).(string)
+	return v, ok
+}
+
+// --- RequestID ---
+
+// WithRequestID returns a new context carrying the given request ID.
+func WithRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, RequestID, id)
+}
+
+// RequestIDFrom extracts the request ID from ctx. The boolean indicates presence.
+func RequestIDFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(RequestID).(string)
+	return v, ok
+}
+
+// --- RealIP ---
+
+// WithRealIP returns a new context carrying the client's real IP address.
+func WithRealIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, RealIP, ip)
+}
+
+// RealIPFrom extracts the client's real IP from ctx. The boolean indicates presence.
+func RealIPFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(RealIP).(string)
+	return v, ok
+}
+
+// --- Subject ---
+
+// WithSubject returns a new context carrying the authenticated subject identifier.
+func WithSubject(ctx context.Context, sub string) context.Context {
+	return context.WithValue(ctx, Subject, sub)
+}
+
+// SubjectFrom extracts the authenticated subject from ctx. The boolean indicates presence.
+func SubjectFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(Subject).(string)
 	return v, ok
 }

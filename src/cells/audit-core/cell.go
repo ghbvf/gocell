@@ -1,0 +1,158 @@
+// Package auditcore implements the audit-core Cell: tamper-evident audit log
+// with hash chain, event consumption, integrity verification, and query.
+package auditcore
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+
+	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/cells/audit-core/slices/auditappend"
+	"github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive"
+	"github.com/ghbvf/gocell/cells/audit-core/slices/auditquery"
+	"github.com/ghbvf/gocell/cells/audit-core/slices/auditverify"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// Compile-time interface checks.
+var (
+	_ cell.Cell           = (*AuditCore)(nil)
+	_ cell.HTTPRegistrar  = (*AuditCore)(nil)
+	_ cell.EventRegistrar = (*AuditCore)(nil)
+)
+
+// Option configures an AuditCore Cell.
+type Option func(*AuditCore)
+
+// WithAuditRepository sets the AuditRepository.
+func WithAuditRepository(r ports.AuditRepository) Option {
+	return func(c *AuditCore) { c.auditRepo = r }
+}
+
+// WithArchiveStore sets the ArchiveStore.
+func WithArchiveStore(s ports.ArchiveStore) Option {
+	return func(c *AuditCore) { c.archiveStore = s }
+}
+
+// WithPublisher sets the outbox Publisher.
+func WithPublisher(p outbox.Publisher) Option {
+	return func(c *AuditCore) { c.publisher = p }
+}
+
+// WithLogger sets the structured logger.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *AuditCore) { c.logger = l }
+}
+
+// WithHMACKey sets the HMAC key for hash chain operations.
+func WithHMACKey(key []byte) Option {
+	return func(c *AuditCore) { c.hmacKey = key }
+}
+
+// WithInMemoryDefaults configures in-memory repositories for development
+// and testing. Not suitable for production use.
+func WithInMemoryDefaults() Option {
+	return func(c *AuditCore) {
+		c.auditRepo = mem.NewAuditRepository()
+		c.archiveStore = mem.NewArchiveStore()
+	}
+}
+
+// AuditCore is the audit-core Cell implementation.
+type AuditCore struct {
+	*cell.BaseCell
+	auditRepo    ports.AuditRepository
+	archiveStore ports.ArchiveStore
+	publisher    outbox.Publisher
+	logger       *slog.Logger
+	hmacKey      []byte
+
+	// Slice services.
+	appendSvc  *auditappend.Service
+	verifySvc  *auditverify.Service
+	archiveSvc *auditarchive.Service
+	queryHandler *auditquery.Handler
+}
+
+// NewAuditCore creates a new AuditCore Cell.
+func NewAuditCore(opts ...Option) *AuditCore {
+	c := &AuditCore{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:               "audit-core",
+			Type:             cell.CellTypeCore,
+			ConsistencyLevel: cell.L3,
+			Owner:            cell.Owner{Team: "platform", Role: "audit-owner"},
+			Schema:           cell.SchemaConfig{Primary: "audit_entries"},
+			Verify:           cell.CellVerify{Smoke: []string{"audit-core/smoke"}},
+		}),
+		logger: slog.Default(),
+	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
+}
+
+// Init constructs all 4 slices.
+func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
+	// Resolve HMAC key from Dependencies.Config if not set via option.
+	if len(c.hmacKey) == 0 {
+		if raw, ok := deps.Config["audit.hmac_key"]; ok {
+			if s, ok := raw.(string); ok && s != "" {
+				c.hmacKey = []byte(s)
+			}
+		}
+	}
+	if len(c.hmacKey) == 0 {
+		return errcode.New(errcode.ErrValidationFailed,
+			"audit-core: HMAC key is required (set via WithHMACKey or config audit.hmac_key)")
+	}
+
+	if err := c.BaseCell.Init(ctx, deps); err != nil {
+		return err
+	}
+
+	// audit-append
+	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger)
+	c.AddSlice(cell.NewBaseSlice("audit-append", "audit-core", cell.L3))
+
+	// audit-verify
+	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger)
+	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L0))
+
+	// audit-archive (stub)
+	c.archiveSvc = auditarchive.NewService()
+	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L3))
+
+	// audit-query
+	querySvc := auditquery.NewService(c.auditRepo, c.logger)
+	c.queryHandler = auditquery.NewHandler(querySvc)
+	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
+
+	return nil
+}
+
+// RegisterRoutes registers HTTP routes for audit-core.
+func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
+	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
+		sub.Handle("GET /entries", http.HandlerFunc(c.queryHandler.HandleQuery))
+	})
+}
+
+// RegisterSubscriptions registers event subscriptions for all 6 topics.
+func (c *AuditCore) RegisterSubscriptions(sub outbox.Subscriber) {
+	for _, topic := range auditappend.Topics {
+		topic := topic
+		go func() {
+			ctx := context.Background()
+			if err := sub.Subscribe(ctx, topic, c.appendSvc.HandleEvent); err != nil {
+				c.logger.Error("audit-core: subscription ended",
+					slog.Any("error", err), slog.String("topic", topic))
+			}
+		}()
+	}
+}

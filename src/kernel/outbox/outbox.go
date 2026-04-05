@@ -37,3 +37,22 @@ type Relay interface {
 type Publisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
 }
+
+// Subscriber consumes events from a topic.
+//
+// ref: ThreeDotsLabs/watermill message/pubsub.go Subscriber interface
+// Adopted: Close() for clean shutdown; topic-based subscription model.
+// Deviated: callback-based handler instead of channel-based (<-chan *Message)
+// to align with GoCell's ConsumerBase pattern and simplify consumer lifecycle.
+type Subscriber interface {
+	// Subscribe registers a handler for the given topic. The handler is called
+	// for each incoming entry. Returning a non-nil error from the handler
+	// signals a transient failure (retry/NACK); permanent failures should be
+	// routed to a dead-letter queue by the implementation.
+	//
+	// Subscribe blocks until ctx is cancelled or an unrecoverable error occurs.
+	Subscribe(ctx context.Context, topic string, handler func(context.Context, Entry) error) error
+
+	// Close terminates all active subscriptions and releases resources.
+	Close() error
+}

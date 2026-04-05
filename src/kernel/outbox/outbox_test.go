@@ -29,6 +29,32 @@ func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byt
 
 var _ Publisher = (*mockPublisher)(nil)
 
+type mockSubscriber struct{}
+
+func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler func(context.Context, Entry) error) error {
+	return nil
+}
+func (m *mockSubscriber) Close() error { return nil }
+
+var _ Subscriber = (*mockSubscriber)(nil)
+
+func TestSubscriberInterface(t *testing.T) {
+	var sub Subscriber = &mockSubscriber{}
+
+	t.Run("Subscribe returns nil on success", func(t *testing.T) {
+		handler := func(ctx context.Context, entry Entry) error {
+			return nil
+		}
+		err := sub.Subscribe(context.Background(), "test.topic", handler)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Close returns nil on success", func(t *testing.T) {
+		err := sub.Close()
+		assert.NoError(t, err)
+	})
+}
+
 func TestEntryFields(t *testing.T) {
 	e := Entry{
 		ID:            "1",

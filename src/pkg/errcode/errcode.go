@@ -20,6 +20,13 @@ const (
 	ErrDependencyCycle  Code = "ERR_DEPENDENCY_CYCLE"
 	ErrValidationFailed Code = "ERR_VALIDATION_FAILED"
 	ErrReferenceBroken  Code = "ERR_REFERENCE_BROKEN"
+	ErrInternal         Code = "ERR_INTERNAL"
+	ErrAuthUnauthorized Code = "ERR_AUTH_UNAUTHORIZED"
+	ErrAuthForbidden    Code = "ERR_AUTH_FORBIDDEN"
+	ErrRateLimited      Code = "ERR_RATE_LIMITED"
+	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
+	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
+	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
 )
 
 // Error is a structured error that carries a machine-readable Code, a
