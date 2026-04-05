@@ -29,6 +29,7 @@ const (
 	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
 	ErrBusClosed          Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrSessionNotFound    Code = "ERR_SESSION_NOT_FOUND"
 	ErrAdapterNoTx        Code = "ERR_ADAPTER_NO_TX"
 	ErrAuthKeyInvalid     Code = "ERR_AUTH_KEY_INVALID"
 	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"

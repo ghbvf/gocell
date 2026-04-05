@@ -37,7 +37,7 @@ jobs:
           for dir in examples/*/; do
             if [ -d "$dir" ]; then
               echo "--- Validating $dir ---"
-              go run ./cmd/gocell validate --root "$dir" || true
+              go run ./cmd/gocell validate --root "$dir"
             fi
           done
 

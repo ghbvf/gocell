@@ -38,7 +38,16 @@ curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
 
 Save the returned `token` and `sessionId` for subsequent calls.
 
-### 3. List users
+### 3. Refresh token
+
+```bash
+curl -s -X POST http://localhost:8081/api/v1/access/sessions/refresh \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer {token}" \
+  -d '{"sessionId":"{sessionId}"}' | jq
+```
+
+### 4. List users
 
 ```bash
 curl -s http://localhost:8081/api/v1/access/users | jq
@@ -72,7 +81,26 @@ curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -d '{"value":"SSO Portal v2"}' | jq
 ```
 
-### 8. Health checks
+### 8. Read a config entry
+
+```bash
+curl -s http://localhost:8081/api/v1/config/site.title | jq
+```
+
+### 9. List feature flags
+
+```bash
+curl -s http://localhost:8081/api/v1/config/flags | jq
+```
+
+### 10. Verify audit trail after login/logout
+
+```bash
+# After performing login + logout, check that audit entries were recorded
+curl -s http://localhost:8081/api/v1/audit/entries | jq '.[] | {action: .eventType, at: .createdAt}'
+```
+
+### 11. Health checks
 
 ```bash
 curl -s http://localhost:8081/healthz | jq
