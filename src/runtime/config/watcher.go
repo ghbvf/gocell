@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -50,6 +51,17 @@ func (w *Watcher) OnChange(fn func(WatchEvent)) {
 // Start begins watching for file changes in a goroutine. It blocks until
 // Close is called or an unrecoverable error occurs.
 func (w *Watcher) Start() {
+	go w.loop()
+}
+
+// StartWithContext begins watching using the provided context. When ctx is
+// cancelled, the watcher is closed automatically. This allows the watcher
+// to be tied to a parent shutdown context.
+func (w *Watcher) StartWithContext(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		_ = w.Close()
+	}()
 	go w.loop()
 }
 

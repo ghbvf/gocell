@@ -44,7 +44,7 @@ func New(opts ...Option) *Manager {
 }
 
 // Register adds a hook that will be called during shutdown.
-// Hooks are called in registration order.
+// Hooks are called in LIFO order (last registered, first executed).
 func (m *Manager) Register(h Hook) {
 	m.hooks = append(m.hooks, h)
 }
@@ -75,14 +75,22 @@ func (m *Manager) Shutdown() error {
 }
 
 func (m *Manager) runHooks(ctx context.Context) error {
-	for i, h := range m.hooks {
-		if err := h(ctx); err != nil {
+	var firstErr error
+	// Execute hooks in LIFO order: last registered, first executed.
+	for i := len(m.hooks) - 1; i >= 0; i-- {
+		if err := m.hooks[i](ctx); err != nil {
 			slog.Error("shutdown hook failed",
 				slog.Int("hook_index", i),
 				slog.Any("error", err),
 			)
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			// Continue executing remaining hooks even on failure.
 		}
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	return ctx.Err()
 }

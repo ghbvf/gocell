@@ -694,3 +694,79 @@ l0Dependencies:
 	assert.Equal(t, "shared-crypto", cell.L0Dependencies[0].Cell)
 	assert.Equal(t, "deterministic hashing", cell.L0Dependencies[0].Reason)
 }
+
+// --- empty id validation ---
+
+func TestParseFS_EmptyCellID(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/empty/cell.yaml": &fstest.MapFile{Data: []byte(`id: ""
+type: core
+consistencyLevel: L1
+owner:
+  team: t
+  role: r
+`)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cell id is empty")
+}
+
+func TestParseFS_EmptySliceID(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/access-core/slices/empty/slice.yaml": &fstest.MapFile{Data: []byte(`id: ""
+belongsToCell: access-core
+`)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slice id is empty")
+}
+
+func TestParseFS_EmptyContractID(t *testing.T) {
+	fs := fstest.MapFS{
+		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: ""
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+`)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "contract id is empty")
+}
+
+func TestParseFS_EmptyJourneyID(t *testing.T) {
+	fs := fstest.MapFS{
+		"journeys/J-empty.yaml": &fstest.MapFile{Data: []byte(`id: ""
+goal: test
+owner:
+  team: t
+  role: r
+cells: []
+`)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "journey id is empty")
+}
+
+func TestParseFS_EmptyAssemblyID(t *testing.T) {
+	fs := fstest.MapFS{
+		"assemblies/empty/assembly.yaml": &fstest.MapFile{Data: []byte(`id: ""
+cells: []
+build:
+  entrypoint: main.go
+  binary: app
+`)},
+	}
+	p := NewParser("")
+	_, err := p.ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "assembly id is empty")
+}

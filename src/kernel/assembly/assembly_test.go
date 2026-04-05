@@ -186,8 +186,29 @@ func TestAssemblyStopWithoutStart(t *testing.T) {
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "c", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 
-	// Stop before Start should not panic.
+	// Stop before Start is a no-op (state guard: only Started allows Stop).
 	require.NoError(t, a.Stop(context.Background()))
+}
+
+func TestAssemblyStopOnlyFromStarted(t *testing.T) {
+	a := New(Config{ID: "guard-test"})
+	var order []string
+	c := newOrderCell("c1", &order)
+	require.NoError(t, a.Register(c))
+
+	// Stop before Start: should be a no-op (no cells stopped).
+	require.NoError(t, a.Stop(context.Background()))
+	assert.Empty(t, order, "Stop from Stopped state should be a no-op")
+
+	// Start, then Stop from Started state works.
+	require.NoError(t, a.Start(context.Background()))
+	require.NoError(t, a.Stop(context.Background()))
+	assert.Equal(t, []string{"c1"}, order)
+
+	// Stop again: should be no-op (state is Stopped now).
+	order = nil
+	require.NoError(t, a.Stop(context.Background()))
+	assert.Empty(t, order, "Double Stop should be a no-op")
 }
 
 func TestAssemblyStopEmpty(t *testing.T) {

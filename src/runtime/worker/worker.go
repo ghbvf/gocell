@@ -71,31 +71,23 @@ func (g *WorkerGroup) Start(ctx context.Context) error {
 	return firstErr
 }
 
-// Stop stops all workers concurrently in reverse registration order.
+// Stop stops all workers serially in reverse registration order.
+// Each worker is stopped before the next to ensure safe teardown ordering.
 func (g *WorkerGroup) Stop(ctx context.Context) error {
 	g.mu.Lock()
 	workers := make([]Worker, len(g.workers))
 	copy(workers, g.workers)
 	g.mu.Unlock()
 
-	var (
-		wg      sync.WaitGroup
-		errOnce sync.Once
-		firstErr error
-	)
-
-	// Stop in reverse order.
+	var firstErr error
+	// Stop in reverse order, serially.
 	for i := len(workers) - 1; i >= 0; i-- {
-		wg.Add(1)
-		go func(w Worker) {
-			defer wg.Done()
-			if err := w.Stop(ctx); err != nil {
-				slog.Error("worker stop failed", slog.Any("error", err))
-				errOnce.Do(func() { firstErr = err })
+		if err := workers[i].Stop(ctx); err != nil {
+			slog.Error("worker stop failed", slog.Any("error", err))
+			if firstErr == nil {
+				firstErr = err
 			}
-		}(workers[i])
+		}
 	}
-
-	wg.Wait()
 	return firstErr
 }

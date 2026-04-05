@@ -3,6 +3,7 @@ package cell
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -33,12 +34,20 @@ const (
 
 // BaseCell is the default implementation of the Cell interface.
 // Embed or compose it to get a working Cell with minimal boilerplate.
+// All state-accessing methods are protected by a mutex for safe concurrent use.
 type BaseCell struct {
+	mu       sync.Mutex
 	meta     CellMetadata
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
 	state    cellState
+
+	// shutdownCtx is created in Start and cancelled in Stop.
+	// Goroutines spawned by the cell should use this context instead of
+	// context.Background() so they are properly cancelled on shutdown.
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 }
 
 // NewBaseCell creates a BaseCell from declarative metadata.
@@ -74,6 +83,8 @@ func (b *BaseCell) ConsumedContracts() []Contract {
 
 // Init prepares the cell. Only allowed from the new or stopped state.
 func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {
 		return errcode.New(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Init requires state new or stopped, current state: %d", b.meta.ID, b.state))
@@ -83,21 +94,32 @@ func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
 }
 
 // Start transitions the cell to the running state. Only allowed from
-// the initialized state.
+// the initialized state. A shutdownCtx is created that will be cancelled
+// when Stop is called — goroutines should use ShutdownCtx() instead of
+// context.Background().
 func (b *BaseCell) Start(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.state != cellStateInitialized {
 		return errcode.New(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
 	}
+	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.Background())
 	b.state = cellStateStarted
 	return nil
 }
 
 // Stop transitions the cell to the stopped state. Only allowed from the
 // started state; calling Stop from new or initialized is a no-op.
+// Cancels the shutdownCtx to signal goroutines to exit.
 func (b *BaseCell) Stop(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	switch b.state {
 	case cellStateStarted:
+		if b.shutdownCancel != nil {
+			b.shutdownCancel()
+		}
 		b.state = cellStateStopped
 		return nil
 	case cellStateNew, cellStateInitialized:
@@ -111,6 +133,8 @@ func (b *BaseCell) Stop(_ context.Context) error {
 
 // Health returns the current HealthStatus.
 func (b *BaseCell) Health() HealthStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.state == cellStateStarted {
 		return HealthStatus{Status: "healthy"}
 	}
@@ -119,7 +143,22 @@ func (b *BaseCell) Health() HealthStatus {
 
 // Ready returns true when the cell is in the started state.
 func (b *BaseCell) Ready() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.state == cellStateStarted
+}
+
+// ShutdownCtx returns a context that is cancelled when Stop is called.
+// It should be used by goroutines spawned by the cell instead of
+// context.Background(). Returns context.Background() if the cell has
+// not been started.
+func (b *BaseCell) ShutdownCtx() context.Context {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.shutdownCtx != nil {
+		return b.shutdownCtx
+	}
+	return context.Background()
 }
 
 // AddSlice appends a Slice to this cell's owned slice list.

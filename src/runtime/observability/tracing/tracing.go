@@ -16,6 +16,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // Span represents a unit of work in a trace.
@@ -98,23 +99,12 @@ func Middleware(tracer Tracer) func(http.Handler) http.Handler {
 			ctx, span := tracer.Start(r.Context(), spanName)
 			defer span.End()
 
-			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			rec := httputil.NewStatusRecorder(w)
 			next.ServeHTTP(rec, r.WithContext(ctx))
 
-			span.SetAttribute("http.status_code", rec.status)
+			span.SetAttribute("http.status_code", rec.Status)
 		})
 	}
-}
-
-// statusRecorder captures the response status code for span attributes.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (sr *statusRecorder) WriteHeader(code int) {
-	sr.status = code
-	sr.ResponseWriter.WriteHeader(code)
 }
 
 // generateID creates a random hex-encoded ID of the given byte length.
