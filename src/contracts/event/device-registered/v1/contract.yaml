@@ -1,0 +1,8 @@
+id: event.device-registered.v1
+kind: event
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+replayable: true
+idempotencyKey: device-registered:{event_id}
+deliverySemantics: at-least-once
