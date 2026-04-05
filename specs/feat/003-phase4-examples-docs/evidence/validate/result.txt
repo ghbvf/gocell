@@ -4,3 +4,4 @@ WARNINGS (1):
 
 
 Validation complete: 0 error(s), 1 warning(s)
+PASS — 0 errors, metadata valid

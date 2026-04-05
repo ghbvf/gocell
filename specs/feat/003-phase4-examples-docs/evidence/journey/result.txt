@@ -1,0 +1,1 @@
+J-order-create: Journey validates with 1 ADV warning (no status-board entry — expected for example project)
