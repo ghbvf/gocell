@@ -9,9 +9,13 @@
 
 ---
 
+## Classification
+- [TECH]: Technical debt (code quality, architecture, missing tests)
+- [PRODUCT]: Product debt (degraded experience, missing features, temporary solutions)
+
 ## New Tech Debt Items (Phase 4)
 
-### P4-TD-01: Shared noopWriter / NoopOutboxWriter not provided
+### P4-TD-01 [TECH]: Shared noopWriter / NoopOutboxWriter not provided
 
 - **Severity**: P2
 - **Source**: S6 review P2-5
