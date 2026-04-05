@@ -4,24 +4,29 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testKey = []byte("test-signing-key-32bytes-long!!!!")
+var (
+	testPrivKey, _ = auth.MustGenerateTestKeyPair()
+	testIssuer     = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+)
 
 func newTestService() (*Service, *mem.UserRepository) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	eb := eventbus.New()
-	return NewService(userRepo, sessionRepo, roleRepo, eb, testKey, slog.Default()), userRepo
+	return NewService(userRepo, sessionRepo, roleRepo, eb, testIssuer, slog.Default()), userRepo
 }
 
 // seedUser creates a user with a bcrypt-hashed password.

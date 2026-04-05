@@ -8,11 +8,15 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testKey = []byte("test-signing-key-32bytes-long!!!!")
+var (
+	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
+	testVerifier            = auth.NewJWTVerifier(testPubKey)
+)
 
 func TestService_Verify(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
@@ -49,7 +53,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "valid token without sid",
 			token: func() string {
-				tok, _ := IssueTestToken(testKey, "usr-1", []string{"admin"}, time.Hour)
+				tok, _ := IssueTestToken(testPrivKey, "usr-1", []string{"admin"}, time.Hour)
 				return tok
 			},
 			wantSub: "usr-1",
@@ -58,7 +62,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "valid token with active session",
 			token: func() string {
-				tok, _ := IssueTestToken(testKey, "usr-1", []string{"admin"}, time.Hour, "sess-active")
+				tok, _ := IssueTestToken(testPrivKey, "usr-1", []string{"admin"}, time.Hour, "sess-active")
 				return tok
 			},
 			wantSub: "usr-1",
@@ -67,7 +71,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "token with revoked session",
 			token: func() string {
-				tok, _ := IssueTestToken(testKey, "usr-2", nil, time.Hour, "sess-revoked")
+				tok, _ := IssueTestToken(testPrivKey, "usr-2", nil, time.Hour, "sess-revoked")
 				return tok
 			},
 			wantErr: true,
@@ -75,7 +79,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "token with non-existent session",
 			token: func() string {
-				tok, _ := IssueTestToken(testKey, "usr-1", nil, time.Hour, "sess-nonexistent")
+				tok, _ := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-nonexistent")
 				return tok
 			},
 			wantErr: true,
@@ -93,7 +97,7 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "expired token",
 			token: func() string {
-				tok, _ := IssueTestToken(testKey, "usr-1", nil, -time.Hour)
+				tok, _ := IssueTestToken(testPrivKey, "usr-1", nil, -time.Hour)
 				return tok
 			},
 			wantErr: true,
@@ -101,7 +105,8 @@ func TestService_Verify(t *testing.T) {
 		{
 			name: "wrong signing key",
 			token: func() string {
-				tok, _ := IssueTestToken([]byte("wrong-key-32bytes-aaaaaaaaaaaaaaa"), "usr-1", nil, time.Hour)
+				wrongPriv, _ := auth.MustGenerateTestKeyPair()
+				tok, _ := IssueTestToken(wrongPriv, "usr-1", nil, time.Hour)
 				return tok
 			},
 			wantErr: true,
@@ -110,7 +115,7 @@ func TestService_Verify(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(testKey, sessionRepo, slog.Default())
+			svc := NewService(testVerifier, sessionRepo, slog.Default())
 
 			claims, err := svc.Verify(context.Background(), tt.token())
 			if tt.wantErr {
@@ -129,9 +134,9 @@ func TestService_Verify(t *testing.T) {
 
 func TestService_Verify_NilSessionRepo(t *testing.T) {
 	// When sessionRepo is nil (backward compatibility), sid claim is ignored.
-	svc := NewService(testKey, nil, slog.Default())
+	svc := NewService(testVerifier, nil, slog.Default())
 
-	tok, err := IssueTestToken(testKey, "usr-1", nil, time.Hour, "sess-any")
+	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
 
 	claims, err := svc.Verify(context.Background(), tok)

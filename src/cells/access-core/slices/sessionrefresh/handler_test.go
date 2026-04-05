@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -19,17 +18,10 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 )
 
-// testKey is declared in service_test.go
+// testIssuer/testVerifier are declared in service_test.go
 
 func issueRefreshToken(userID string) string {
-	claims := jwt.MapClaims{
-		"sub": userID,
-		"exp": jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
-		"iat": jwt.NewNumericDate(time.Now()),
-		"iss": "gocell-access-core",
-		"aud": jwt.ClaimStrings{"gocell"},
-	}
-	tok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(testKey)
+	tok, _ := testIssuer.Issue(userID, nil, []string{"gocell"})
 	return tok
 }
 
@@ -41,7 +33,7 @@ func setup() (http.Handler, string) {
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), testKey, slog.Default())
+	svc := NewService(sessionRepo, mem.NewRoleRepository(), testIssuer, testVerifier, slog.Default())
 	r := chi.NewRouter()
 	r.Post("/refresh", NewHandler(svc).HandleRefresh)
 	return r, refreshTok

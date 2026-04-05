@@ -22,93 +22,30 @@ const (
 // Compile-time check: Service implements auth.TokenVerifier.
 var _ auth.TokenVerifier = (*Service)(nil)
 
-// Option configures a session-validate Service.
-type Option func(*Service)
-
-// WithSigningMethod overrides the default JWT verification method and key.
-// For RS256, pass jwt.SigningMethodRS256 with an *rsa.PublicKey.
-// For HS256 (default), pass jwt.SigningMethodHS256 with a []byte key.
-func WithSigningMethod(method jwt.SigningMethod, key any) Option {
-	return func(s *Service) {
-		s.verifyMethod = method
-		s.verifyKeyAny = key
-	}
-}
-
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	signingKey   []byte            // default HS256 key
-	verifyMethod jwt.SigningMethod // overridden via WithSigningMethod
-	verifyKeyAny any               // overridden via WithSigningMethod
-	sessionRepo  ports.SessionRepository
-	logger       *slog.Logger
+	verifier    auth.TokenVerifier
+	sessionRepo ports.SessionRepository
+	logger      *slog.Logger
 }
 
 // NewService creates a session-validate Service.
-func NewService(signingKey []byte, sessionRepo ports.SessionRepository, logger *slog.Logger, opts ...Option) *Service {
-	s := &Service{signingKey: signingKey, sessionRepo: sessionRepo, logger: logger}
-	for _, o := range opts {
-		o(s)
-	}
-	return s
+func NewService(verifier auth.TokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
+	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger}
 }
 
 // Verify validates the token string and returns decoded Claims.
+// It delegates JWT verification to the injected TokenVerifier (RS256) and
+// additionally checks session revocation status when the Extra["sid"] claim
+// is present.
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
-	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
-		// Accept configured signing method (e.g. RS256) when set.
-		if s.verifyMethod != nil && s.verifyKeyAny != nil {
-			if t.Method.Alg() != s.verifyMethod.Alg() {
-				return nil, errcode.New(ErrValidateInvalidToken, "unexpected signing method")
-			}
-			return s.verifyKeyAny, nil
-		}
-		// Default: accept HMAC (HS256) only.
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errcode.New(ErrValidateInvalidToken, "unexpected signing method")
-		}
-		return s.signingKey, nil
-	}, jwt.WithAudience("gocell"), jwt.WithIssuer("gocell-access-core"))
+	claims, err := s.verifier.Verify(ctx, tokenStr)
 	if err != nil {
 		return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "invalid token")
 	}
 
-	mapClaims, ok := token.Claims.(jwt.MapClaims)
-	if !ok || !token.Valid {
-		return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "invalid token claims")
-	}
-
-	claims := auth.Claims{
-		Issuer: stringClaim(mapClaims, "iss"),
-	}
-
-	if sub, ok := mapClaims["sub"].(string); ok {
-		claims.Subject = sub
-	}
-
-	if exp, err := mapClaims.GetExpirationTime(); err == nil && exp != nil {
-		claims.ExpiresAt = exp.Time
-	}
-
-	if iat, err := mapClaims.GetIssuedAt(); err == nil && iat != nil {
-		claims.IssuedAt = iat.Time
-	}
-
-	if aud, err := mapClaims.GetAudience(); err == nil {
-		claims.Audience = aud
-	}
-
-	// Extract roles.
-	if rolesRaw, ok := mapClaims["roles"].([]any); ok {
-		for _, r := range rolesRaw {
-			if rs, ok := r.(string); ok {
-				claims.Roles = append(claims.Roles, rs)
-			}
-		}
-	}
-
-	// Check session revocation if sid claim is present.
-	if sid, ok := mapClaims["sid"].(string); ok && sid != "" && s.sessionRepo != nil {
+	// Check session revocation if sid claim is present in Extra.
+	if sid, ok := claims.Extra["sid"].(string); ok && sid != "" && s.sessionRepo != nil {
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
 			return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "session not found")
@@ -119,13 +56,6 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 	}
 
 	return claims, nil
-}
-
-func stringClaim(m jwt.MapClaims, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
 }
 
 // IssueTestToken creates a signed JWT for testing purposes.

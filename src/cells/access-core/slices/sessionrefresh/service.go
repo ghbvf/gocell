@@ -4,15 +4,13 @@ package sessionrefresh
 
 import (
 	"context"
-	"crypto/rsa"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const (
@@ -20,8 +18,7 @@ const (
 	ErrRefreshFailed       errcode.Code = "ERR_AUTH_REFRESH_FAILED"
 	ErrRefreshTokenReuse   errcode.Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
 
-	accessTokenTTL  = 15 * time.Minute
-	refreshTokenTTL = 7 * 24 * time.Hour
+	accessTokenTTL = 15 * time.Minute
 )
 
 // TokenPair holds the issued access and refresh tokens.
@@ -34,38 +31,29 @@ type TokenPair struct {
 // Option configures a session-refresh Service.
 type Option func(*Service)
 
-// WithSigningMethod overrides the default JWT signing method and key.
-// method should be jwt.SigningMethodRS256 with an *rsa.PrivateKey, or
-// jwt.SigningMethodHS256 with a []byte key.
-func WithSigningMethod(method jwt.SigningMethod, key any) Option {
-	return func(s *Service) {
-		s.signingMethod = method
-		s.signingKeyAny = key
-	}
-}
-
 // Service implements token refresh logic.
 type Service struct {
-	sessionRepo   ports.SessionRepository
-	roleRepo      ports.RoleRepository
-	signingKey    []byte            // default HS256 key
-	signingMethod jwt.SigningMethod // overridden via WithSigningMethod
-	signingKeyAny any               // overridden via WithSigningMethod
-	logger        *slog.Logger
+	sessionRepo ports.SessionRepository
+	roleRepo    ports.RoleRepository
+	issuer      *auth.JWTIssuer
+	verifier    auth.TokenVerifier
+	logger      *slog.Logger
 }
 
 // NewService creates a session-refresh Service.
 func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
-	signingKey []byte,
+	issuer *auth.JWTIssuer,
+	verifier auth.TokenVerifier,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	s := &Service{
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
-		signingKey:  signingKey,
+		issuer:      issuer,
+		verifier:    verifier,
 		logger:      logger,
 	}
 	for _, o := range opts {
@@ -83,20 +71,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, errcode.New(ErrRefreshInvalidInput, "refresh token is required")
 	}
 
-	// Verify the refresh token JWT signature and signing method.
-	_, err := jwt.Parse(refreshToken, func(t *jwt.Token) (any, error) {
-		// Accept RSA (RS256) when configured, otherwise HMAC (HS256).
-		if s.signingMethod != nil && s.signingKeyAny != nil {
-			if t.Method.Alg() != s.signingMethod.Alg() {
-				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-			}
-			return s.verifyKey(), nil
-		}
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		return s.signingKey, nil
-	})
+	// Verify the refresh token JWT signature via RS256 verifier.
+	_, err := s.verifier.Verify(ctx, refreshToken)
 	if err != nil {
 		return nil, errcode.New(ErrRefreshFailed, "invalid refresh token")
 	}
@@ -136,13 +112,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
 
-	accessToken, err := s.issueToken(session.UserID, roleNames, expiresAt, session.ID)
+	accessToken, err := s.issueToken(session.UserID, roleNames)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
 
-	newRefreshExpiry := now.Add(refreshTokenTTL)
-	newRefreshToken, err := s.issueToken(session.UserID, nil, newRefreshExpiry, "")
+	newRefreshToken, err := s.issueToken(session.UserID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
@@ -166,35 +141,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time, sid string) (string, error) {
-	claims := jwt.MapClaims{
-		"sub": subject,
-		"iat": jwt.NewNumericDate(time.Now()),
-		"exp": jwt.NewNumericDate(expiresAt),
-		"iss": "gocell-access-core",
-		"aud": jwt.ClaimStrings{"gocell"},
-	}
-	if len(roles) > 0 {
-		claims["roles"] = roles
-	}
-	if sid != "" {
-		claims["sid"] = sid
-	}
-
-	// Use overridden signing method/key if configured, otherwise default HS256.
-	if s.signingMethod != nil && s.signingKeyAny != nil {
-		token := jwt.NewWithClaims(s.signingMethod, claims)
-		return token.SignedString(s.signingKeyAny)
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(s.signingKey)
-}
-
-// verifyKey returns the key used for token verification. For RSA, this is the
-// public key extracted from the private key; for HMAC, it's the raw signing key.
-func (s *Service) verifyKey() any {
-	if pk, ok := s.signingKeyAny.(*rsa.PrivateKey); ok {
-		return &pk.PublicKey
-	}
-	return s.signingKeyAny
+func (s *Service) issueToken(subject string, roles []string) (string, error) {
+	return s.issuer.Issue(subject, roles, []string{"gocell"})
 }
