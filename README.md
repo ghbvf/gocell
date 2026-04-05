@@ -1,5 +1,7 @@
 # GoCell
 
+> **早期开发阶段** — kernel（运行时原语 + 治理工具链）已实现，runtime / adapters / cells 业务逻辑在 Phase 2-4 实现中。
+
 Cell-native Go 工程底座。
 
 GoCell 提供 Cell/Slice 运行时原语、治理工具链和内置 Cell，用于构建基于 Slice-Cell 架构的可靠 Go 服务。
