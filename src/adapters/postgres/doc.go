@@ -1,9 +1,16 @@
-// Package postgres provides PostgreSQL adapter implementations for the GoCell
-// framework. It includes connection pooling, transaction management, outbox
-// pattern support, migration helpers, and error mapping.
+// Package postgres provides a PostgreSQL adapter for the GoCell framework.
 //
-// ref: jackc/pgx v5 — connection pool, transaction lifecycle
-// Adopted: pgxpool.Pool wrapping, context-based tx propagation.
-// Deviated: explicit TxFromContext helper instead of pgx BeginFunc pattern,
-// to align with GoCell's outbox.Writer transactional boundary requirement.
+// It wraps pgx/v5 to offer:
+//   - Pool: connection pool with DSN/env-based configuration and Health() probe.
+//   - TxManager: RunInTx with context-embedded pgx.Tx, savepoint nesting, and
+//     automatic panic rollback.
+//   - Migrator: embed.FS-driven SQL migrations with up/down/status and a
+//     schema_migrations tracking table.
+//   - RowScanner / QueryBuilder helpers for reducing boilerplate in repository
+//     implementations.
+//
+// Error codes use the ERR_ADAPTER_PG_* prefix (see errcode.go in this package).
+//
+// ref: Watermill watermill-sql schema_adapter_postgresql.go — adopted advisory
+// locking for migration init; diverged by using embed.FS instead of inline SQL.
 package postgres

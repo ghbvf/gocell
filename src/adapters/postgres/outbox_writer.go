@@ -31,14 +31,14 @@ func NewOutboxWriter() *OutboxWriter {
 // transaction from the context. Returns ErrAdapterPGNoTx if no transaction
 // is present.
 func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
-	tx := TxFromContext(ctx)
-	if tx == nil {
+	tx, ok := TxFromContext(ctx)
+	if !ok {
 		return errcode.New(ErrAdapterPGNoTx, "outbox write requires a transaction in context")
 	}
 
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "outbox: failed to marshal metadata", err)
+		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
 	}
 
 	createdAt := entry.CreatedAt

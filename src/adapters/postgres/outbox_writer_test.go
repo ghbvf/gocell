@@ -8,6 +8,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,9 +35,9 @@ func TestOutboxWriter_Write_NoTx(t *testing.T) {
 
 func TestOutboxWriter_Write_Success(t *testing.T) {
 	w := NewOutboxWriter()
-	tx := &mockTx{}
+	tx := &mockOutboxTx{}
 
-	ctx := ContextWithTx(context.Background(), tx)
+	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
 		ID:            "e-2",
 		AggregateID:   "agg-2",
@@ -67,9 +69,9 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 	w := NewOutboxWriter()
-	tx := &mockTx{}
+	tx := &mockOutboxTx{}
 
-	ctx := ContextWithTx(context.Background(), tx)
+	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
 		ID:        "e-3",
 		EventType: "test.event",
@@ -88,9 +90,9 @@ func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 
 func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 	w := NewOutboxWriter()
-	tx := &mockTx{execErr: errcode.New(ErrAdapterPGQuery, "exec failed")}
+	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "exec failed")}
 
-	ctx := ContextWithTx(context.Background(), tx)
+	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
 		ID:        "e-4",
 		EventType: "test",
@@ -106,8 +108,10 @@ func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 	assert.Equal(t, ErrAdapterPGQuery, ec.Code)
 }
 
-// mockTx records exec calls for assertion.
-type mockTx struct {
+// mockOutboxTx records exec calls for assertion.
+// Embeds pgx.Tx to satisfy the full interface; only Exec/Commit/Rollback are overridden.
+type mockOutboxTx struct {
+	pgx.Tx
 	execCalls []execCall
 	execErr   error
 }
@@ -117,21 +121,13 @@ type execCall struct {
 	args []any
 }
 
-func (m *mockTx) Exec(_ context.Context, sql string, args ...any) (int64, error) {
+func (m *mockOutboxTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	m.execCalls = append(m.execCalls, execCall{sql: sql, args: args})
 	if m.execErr != nil {
-		return 0, m.execErr
+		return pgconn.NewCommandTag(""), m.execErr
 	}
-	return 1, nil
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
-func (m *mockTx) Query(_ context.Context, _ string, _ ...any) (Rows, error) {
-	return nil, nil
-}
-
-func (m *mockTx) QueryRow(_ context.Context, _ string, _ ...any) Row {
-	return nil
-}
-
-func (m *mockTx) Commit(_ context.Context) error   { return nil }
-func (m *mockTx) Rollback(_ context.Context) error { return nil }
+func (m *mockOutboxTx) Commit(_ context.Context) error   { return nil }
+func (m *mockOutboxTx) Rollback(_ context.Context) error { return nil }

@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -61,7 +61,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	user.ID = id.New("usr")
+	user.ID = uid.NewWithPrefix("usr")
 
 	if err := s.repo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("identity-manage: create: %w", err)

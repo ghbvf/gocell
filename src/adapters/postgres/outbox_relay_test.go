@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,17 +141,17 @@ type mockDBTX struct {
 	execErr   error
 }
 
-func (m *mockDBTX) Exec(_ context.Context, sql string, args ...any) (int64, error) {
+func (m *mockDBTX) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.execCalls = append(m.execCalls, execCall{sql: sql, args: args})
 	if m.execErr != nil {
-		return 0, m.execErr
+		return pgconn.NewCommandTag(""), m.execErr
 	}
-	return 1, nil
+	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
 
-func (m *mockDBTX) Query(_ context.Context, _ string, _ ...any) (Rows, error) {
+func (m *mockDBTX) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.queryRows == nil {
@@ -158,14 +160,11 @@ func (m *mockDBTX) Query(_ context.Context, _ string, _ ...any) (Rows, error) {
 	return m.queryRows, nil
 }
 
-func (m *mockDBTX) QueryRow(_ context.Context, _ string, _ ...any) Row {
-	return nil
-}
-
 type mockRowData struct {
 	values []any
 }
 
+// mockRows implements pgx.Rows for unit testing.
 type mockRows struct {
 	entries []mockRowData
 	idx     int
@@ -191,8 +190,13 @@ func (r *mockRows) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *mockRows) Close() {}
-func (r *mockRows) Err() error { return nil }
+func (r *mockRows) Close()                                         {}
+func (r *mockRows) Err() error                                     { return nil }
+func (r *mockRows) CommandTag() pgconn.CommandTag                   { return pgconn.NewCommandTag("") }
+func (r *mockRows) FieldDescriptions() []pgconn.FieldDescription    { return nil }
+func (r *mockRows) Values() ([]any, error)                         { return nil, nil }
+func (r *mockRows) RawValues() [][]byte                            { return nil }
+func (r *mockRows) Conn() *pgx.Conn                                { return nil }
 
 type publishCall struct {
 	topic   string

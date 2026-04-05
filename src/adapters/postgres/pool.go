@@ -4,120 +4,156 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PoolConfig holds the PostgreSQL connection pool settings.
-type PoolConfig struct {
-	DSN             string
-	MaxConns        int
-	MinConns        int
-	MaxConnLifetime time.Duration
-	MaxConnIdleTime time.Duration
+// Default pool configuration values.
+const (
+	defaultMaxConns     = 10
+	defaultIdleTimeout  = 5 * time.Minute
+	defaultMaxLifetime  = 1 * time.Hour
+	defaultHealthTimeout = 5 * time.Second
+)
+
+// Config holds PostgreSQL connection pool settings.
+// Fields are populated from an explicit struct literal or from environment
+// variables via ConfigFromEnv.
+type Config struct {
+	// DSN is the PostgreSQL connection string (e.g.
+	// "postgres://user:pass@localhost:5432/dbname?sslmode=disable").
+	// When empty, ConfigFromEnv reads PG_DSN.
+	DSN string
+
+	// MaxConns is the maximum number of connections in the pool.
+	// Default: 10. Env: PG_MAX_CONNS.
+	MaxConns int32
+
+	// IdleTimeout is how long an idle connection may remain in the pool.
+	// Default: 5m. Env: PG_IDLE_TIMEOUT (duration string).
+	IdleTimeout time.Duration
+
+	// MaxLifetime is the maximum lifetime of a connection.
+	// Default: 1h. Env: PG_MAX_LIFETIME (duration string).
+	MaxLifetime time.Duration
 }
 
-// DefaultPoolConfig returns a PoolConfig with sensible defaults.
-func DefaultPoolConfig(dsn string) PoolConfig {
-	return PoolConfig{
-		DSN:             dsn,
-		MaxConns:        10,
-		MinConns:        2,
-		MaxConnLifetime: 30 * time.Minute,
-		MaxConnIdleTime: 5 * time.Minute,
+// ConfigFromEnv builds a Config from environment variables.
+// Missing or unparseable values fall back to defaults.
+func ConfigFromEnv() Config {
+	cfg := Config{
+		DSN:         os.Getenv("PG_DSN"),
+		MaxConns:    defaultMaxConns,
+		IdleTimeout: defaultIdleTimeout,
+		MaxLifetime: defaultMaxLifetime,
+	}
+
+	if v := os.Getenv("PG_MAX_CONNS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
+			cfg.MaxConns = int32(n)
+		}
+	}
+	if v := os.Getenv("PG_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.IdleTimeout = d
+		}
+	}
+	if v := os.Getenv("PG_MAX_LIFETIME"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MaxLifetime = d
+		}
+	}
+	return cfg
+}
+
+// applyDefaults fills zero-valued fields with default values.
+func (c *Config) applyDefaults() {
+	if c.MaxConns <= 0 {
+		c.MaxConns = defaultMaxConns
+	}
+	if c.IdleTimeout <= 0 {
+		c.IdleTimeout = defaultIdleTimeout
+	}
+	if c.MaxLifetime <= 0 {
+		c.MaxLifetime = defaultMaxLifetime
 	}
 }
 
-// Pool wraps a database connection pool. In production this wraps pgxpool.Pool;
-// this stub provides the interface for higher-level adapter code.
+// Pool wraps a pgxpool.Pool with health checking and lifecycle management.
 type Pool struct {
-	dsn    string
-	config PoolConfig
+	inner  *pgxpool.Pool
+	config Config
 }
 
-// NewPool creates a new Pool. It does NOT open a connection yet; call
-// Connect() to establish the pool.
-func NewPool(cfg PoolConfig) *Pool {
-	return &Pool{
-		dsn:    cfg.DSN,
-		config: cfg,
-	}
-}
+// NewPool creates a new connection pool from the supplied Config.
+// It validates the DSN, applies defaults, and pings the database to confirm
+// connectivity.
+func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
+	cfg.applyDefaults()
 
-// Connect establishes the connection pool. In the stub implementation this
-// validates configuration only; a real implementation would call pgxpool.New().
-func (p *Pool) Connect(ctx context.Context) error {
-	if p.dsn == "" {
-		return errcode.New(ErrAdapterPGConnect, "postgres: DSN is empty")
+	if cfg.DSN == "" {
+		return nil, errcode.New(ErrAdapterPGConnect, "postgres DSN is empty")
 	}
-	slog.Info("postgres: pool connected",
-		slog.String("dsn", sanitizeDSN(p.dsn)),
-		slog.Int("max_conns", p.config.MaxConns),
+
+	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: parse DSN", err)
+	}
+
+	poolCfg.MaxConns = cfg.MaxConns
+	poolCfg.MaxConnIdleTime = cfg.IdleTimeout
+	poolCfg.MaxConnLifetime = cfg.MaxLifetime
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	if err != nil {
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: create pool", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: initial ping", err)
+	}
+
+	slog.Info("postgres pool connected",
+		slog.String("host", poolCfg.ConnConfig.Host),
+		slog.Int("max_conns", int(cfg.MaxConns)),
 	)
-	return nil
+
+	return &Pool{inner: pool, config: cfg}, nil
 }
 
-// Close shuts down the connection pool.
-func (p *Pool) Close() {
-	slog.Info("postgres: pool closed")
+// DB returns the underlying pgxpool.Pool for direct access.
+func (p *Pool) DB() *pgxpool.Pool {
+	return p.inner
 }
 
-// Health checks the connection pool liveness.
+// Health performs a ping against the database and returns nil if healthy.
 func (p *Pool) Health(ctx context.Context) error {
-	if p.dsn == "" {
-		return errcode.New(ErrAdapterPGConnect, "postgres: pool not connected")
+	ctx, cancel := context.WithTimeout(ctx, defaultHealthTimeout)
+	defer cancel()
+
+	if err := p.inner.Ping(ctx); err != nil {
+		return errcode.Wrap(ErrAdapterPGConnect, "postgres: health check failed", err)
 	}
 	return nil
 }
 
-// txKey is the context key for propagating a transaction.
-type txKey struct{}
-
-// ContextWithTx stores a Tx in the context for downstream use.
-func ContextWithTx(ctx context.Context, tx Tx) context.Context {
-	return context.WithValue(ctx, txKey{}, tx)
+// Close gracefully shuts down the connection pool.
+func (p *Pool) Close() {
+	p.inner.Close()
+	slog.Info("postgres pool closed")
 }
 
-// TxFromContext extracts a Tx from the context. Returns nil if absent.
-func TxFromContext(ctx context.Context) Tx {
-	tx, _ := ctx.Value(txKey{}).(Tx)
-	return tx
-}
-
-// Tx abstracts a database transaction to avoid direct pgx dependency.
-type Tx interface {
-	Exec(ctx context.Context, sql string, args ...any) (int64, error)
-	Query(ctx context.Context, sql string, args ...any) (Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) Row
-	Commit(ctx context.Context) error
-	Rollback(ctx context.Context) error
-}
-
-// Rows abstracts a result set.
-type Rows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Close()
-	Err() error
-}
-
-// Row abstracts a single-row result.
-type Row interface {
-	Scan(dest ...any) error
-}
-
-// DBTX abstracts both Pool and Tx for repository use.
-type DBTX interface {
-	Exec(ctx context.Context, sql string, args ...any) (int64, error)
-	Query(ctx context.Context, sql string, args ...any) (Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) Row
-}
-
-// sanitizeDSN removes the password from a DSN for safe logging.
-func sanitizeDSN(dsn string) string {
-	if len(dsn) > 20 {
-		return dsn[:20] + "***"
-	}
-	return fmt.Sprintf("<%d chars>", len(dsn))
+// Stats returns pool statistics as a formatted string for diagnostics.
+func (p *Pool) Stats() string {
+	s := p.inner.Stat()
+	return fmt.Sprintf(
+		"total=%d idle=%d acquired=%d constructing=%d max=%d",
+		s.TotalConns(), s.IdleConns(), s.AcquiredConns(),
+		s.ConstructingConns(), s.MaxConns(),
+	)
 }

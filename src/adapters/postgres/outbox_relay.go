@@ -10,6 +10,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Compile-time interface check.
@@ -34,16 +36,17 @@ func DefaultRelayConfig() RelayConfig {
 	}
 }
 
+// relayDB abstracts the database operations needed by OutboxRelay.
+type relayDB interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
 // OutboxRelay polls unpublished outbox entries from PostgreSQL and publishes
 // them via the provided outbox.Publisher. Entries are marked as published only
 // after successful delivery.
-//
-// ref: ThreeDotsLabs/watermill-sql offset_adapter_postgresql.go — polling relay
-// Adopted: SELECT ... FOR UPDATE SKIP LOCKED for concurrent-safe polling.
-// Deviated: separate cleanup goroutine for retention; signal-first polling
-// pattern instead of Watermill's subscription-based model.
 type OutboxRelay struct {
-	db     DBTX
+	db     relayDB
 	pub    outbox.Publisher
 	config RelayConfig
 
@@ -53,7 +56,8 @@ type OutboxRelay struct {
 }
 
 // NewOutboxRelay creates an OutboxRelay that polls from db and publishes via pub.
-func NewOutboxRelay(db DBTX, pub outbox.Publisher, cfg RelayConfig) *OutboxRelay {
+// db is typically pool.DB() (*pgxpool.Pool satisfies relayDB).
+func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRelay {
 	return &OutboxRelay{
 		db:     db,
 		pub:    pub,
@@ -140,24 +144,24 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 			e            outbox.Entry
 			metadataJSON []byte
 		)
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&e.ID, &e.AggregateID, &e.AggregateType, &e.EventType,
 			&e.Payload, &metadataJSON, &e.CreatedAt,
-		); err != nil {
-			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: scan failed", err)
+		); scanErr != nil {
+			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: scan failed", scanErr)
 		}
 		if len(metadataJSON) > 0 {
-			if err := json.Unmarshal(metadataJSON, &e.Metadata); err != nil {
+			if jsonErr := json.Unmarshal(metadataJSON, &e.Metadata); jsonErr != nil {
 				slog.Warn("outbox relay: metadata unmarshal failed",
 					slog.String("entry_id", e.ID),
-					slog.Any("error", err),
+					slog.Any("error", jsonErr),
 				)
 			}
 		}
 		entries = append(entries, e)
 	}
-	if err := rows.Err(); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: rows iteration failed", err)
+	if rows.Err() != nil {
+		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: rows iteration failed", rows.Err())
 	}
 
 	for _, e := range entries {
@@ -193,7 +197,7 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 
 // markPublished sets an entry's published flag to true.
 func (r *OutboxRelay) markPublished(ctx context.Context, id string) error {
-	const query = `UPDATE outbox_entries SET published = true WHERE id = $1`
+	const query = `UPDATE outbox_entries SET published = true, published_at = now() WHERE id = $1`
 	_, err := r.db.Exec(ctx, query, id)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery,
@@ -231,13 +235,13 @@ func (r *OutboxRelay) cleanupLoop(ctx context.Context) {
 // deletePublishedBefore removes published entries older than the cutoff time.
 func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Time) error {
 	const query = `DELETE FROM outbox_entries WHERE published = true AND created_at < $1`
-	affected, err := r.db.Exec(ctx, query, before)
+	ct, err := r.db.Exec(ctx, query, before)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete old entries failed", err)
 	}
-	if affected > 0 {
+	if ct.RowsAffected() > 0 {
 		slog.Info("outbox relay: cleaned up old entries",
-			slog.Int64("deleted", affected),
+			slog.Int64("deleted", ct.RowsAffected()),
 		)
 	}
 	return nil
