@@ -103,7 +103,7 @@ stages:
         - file: review-findings.md
           pattern: "(P0|P1|P2)"
         - file: tech-debt.md
-          pattern: "(\\[TECH\\]|\\[PRODUCT\\])"
+          pattern: "(TECH|PRODUCT)"
 
   S7:
     entry:

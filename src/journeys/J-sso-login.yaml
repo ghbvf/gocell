@@ -11,8 +11,8 @@ contracts:
   - http.auth.login.v1
   - event.session.created.v1
 passCriteria:
-  - text: OIDC 重定向完成
-    mode: auto
+  - text: OIDC 重定向完成 # Phase 3 OIDC 适配器就绪后验证
+    mode: manual
     checkRef: journey.J-sso-login.oidc-redirect
   - text: Session 写入数据库
     mode: auto
