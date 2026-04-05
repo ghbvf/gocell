@@ -1,0 +1,6 @@
+WARNINGS (1):
+  [ADV-01] journey "J-order-create" has no entry in status-board.yaml
+         at journeys/J-order-create.yaml -> id
+
+
+Validation complete: 0 error(s), 1 warning(s)
