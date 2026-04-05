@@ -91,11 +91,14 @@ for jfile in "$REPO_ROOT"/src/journeys/J-*.yaml; do
 done
 if [[ $JOURNEY_COUNT -eq 0 ]]; then
   SUMMARY+=("[SKIP] journey tests (no J-*.yaml)")
+  echo "no J-*.yaml found — skipped" > "$EVIDENCE_DIR/journey/result.txt"
 elif [[ $JOURNEY_FAIL -gt 0 ]]; then
   SUMMARY+=("[FAIL] journey tests ($JOURNEY_FAIL/$JOURNEY_COUNT failed)")
+  echo "FAIL: $JOURNEY_FAIL/$JOURNEY_COUNT failed" > "$EVIDENCE_DIR/journey/result.txt"
   PASS=false
 else
   SUMMARY+=("[PASS] journey tests ($JOURNEY_COUNT passed)")
+  echo "PASS: $JOURNEY_COUNT journeys passed" > "$EVIDENCE_DIR/journey/result.txt"
 fi
 
 # 5. Summary

@@ -101,11 +101,14 @@ stages:
         - file: pr-plan.md
           pattern: "merged"
       command_checks:
-        - cmd: "cd src && go build ./..."
+        - args: ["go", "build", "./..."]
+          cwd: src
           desc: "go build 编译通过"
-        - cmd: "cd src && go vet ./..."
+        - args: ["go", "vet", "./..."]
+          cwd: src
           desc: "go vet 静态检查通过"
-        - cmd: "cd src && go test ./... -count=1"
+        - args: ["go", "test", "./...", "-count=1"]
+          cwd: src
           desc: "go test 全量测试通过"
 
   S6:
@@ -133,6 +136,7 @@ stages:
         - user-signoff.md
         - evidence/go-test/result.txt
         - evidence/validate/result.txt
+        - evidence/journey/result.txt
       content_checks:
         - file: qa-report.md
           pattern: "(go test.*PASS|coverage|全量测试通过)"
@@ -143,7 +147,8 @@ stages:
         - file: evidence/validate/result.txt
           pattern: "(0 errors|PASS|valid)"
       command_checks:
-        - cmd: "cd src && go test ./... -count=1"
+        - args: ["go", "test", "./...", "-count=1"]
+          cwd: src
           desc: "go test 全量测试通过"
 
   S8:
@@ -154,6 +159,7 @@ stages:
         - user-signoff.md
         - evidence/go-test/result.txt
         - evidence/validate/result.txt
+        - evidence/journey/result.txt
       content_checks:
         - file: user-signoff.md
           pattern: "(APPROVE|CONDITIONAL)"

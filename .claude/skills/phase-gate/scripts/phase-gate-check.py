@@ -182,37 +182,59 @@ def check_content(
     return failures
 
 
-# 允许执行的命令前缀白名单（防止 YAML 篡改执行任意 shell）
-ALLOWED_CMD_PREFIXES = (
-    "go ", "cd src && go ", "cd src/ && go ",
-    "gocell ", "./gocell ",
-    "npx playwright ",
-)
+# 允许执行的可执行文件白名单（不使用 shell，直接执行）
+ALLOWED_EXECUTABLES = {"go", "gocell", "npx", "bash", "python3"}
+
+
+def _parse_command(cmd_spec: dict, repo_root: Path) -> tuple[list[str], Path]:
+    """
+    解析 command_check 配置为 (argv, cwd)。
+    支持两种格式:
+      - args: ["go", "test", "./..."]  （推荐，无 shell）
+      - cmd: "go test ./..."           （兼容，用 shlex 拆分）
+    可选 cwd 字段指定工作目录（相对于 repo_root）。
+    """
+    import shlex
+
+    cwd = repo_root
+    if "cwd" in cmd_spec:
+        cwd = repo_root / cmd_spec["cwd"]
+
+    if "args" in cmd_spec:
+        return cmd_spec["args"], cwd
+
+    cmd = cmd_spec.get("cmd", "").strip()
+    if not cmd:
+        return [], cwd
+
+    return shlex.split(cmd), cwd
 
 
 def check_commands(commands: list, repo_root: Path) -> list:
-    """执行命令检查，验证退出码为 0。返回 failures。"""
+    """执行命令检查，验证退出码为 0。不使用 shell。返回 failures。"""
     failures = []
     for cmd_spec in commands:
-        cmd = cmd_spec.get("cmd", "").strip()
-        desc = cmd_spec.get("desc", cmd)
+        desc = cmd_spec.get("desc", str(cmd_spec.get("cmd", cmd_spec.get("args", ""))))
         timeout_sec = cmd_spec.get("timeout", 120)
 
+        argv, cwd = _parse_command(cmd_spec, repo_root)
+
         # fail-closed: 空命令视为 FAIL
-        if not cmd:
+        if not argv:
             print(f"  [FAIL] {desc} — empty command (misconfigured)")
             failures.append(f"command misconfigured: {desc}")
             continue
 
-        # 白名单校验
-        if not any(cmd.startswith(prefix) for prefix in ALLOWED_CMD_PREFIXES):
-            print(f"  [FAIL] {desc} — command not in allowlist: {cmd}")
-            failures.append(f"command not allowed: {cmd}")
+        # 白名单: 只校验可执行文件名
+        executable = Path(argv[0]).name
+        if executable not in ALLOWED_EXECUTABLES:
+            print(f"  [FAIL] {desc} — executable not in allowlist: {executable}")
+            failures.append(f"command not allowed: {executable}")
             continue
 
         try:
             result = subprocess.run(
-                cmd, shell=True, cwd=str(repo_root),
+                argv, shell=False, cwd=str(cwd),
                 capture_output=True, text=True, timeout=timeout_sec,
             )
             if result.returncode == 0:

@@ -27,7 +27,7 @@ echo "=== PR Submit: $BRANCH ==="
 
 # 1. Build
 echo "--- go build ---"
-if ! (cd src && go build ./...); then
+if ! go -C "$REPO_ROOT/src" build ./...; then
   echo "FAIL: go build"
   exit 1
 fi
@@ -35,7 +35,7 @@ echo "[PASS] go build"
 
 # 2. Vet
 echo "--- go vet ---"
-if ! (cd src && go vet ./...); then
+if ! go -C "$REPO_ROOT/src" vet ./...; then
   echo "FAIL: go vet"
   exit 1
 fi
@@ -43,7 +43,7 @@ echo "[PASS] go vet"
 
 # 3. Test
 echo "--- go test ---"
-if ! (cd src && go test ./... -count=1); then
+if ! go -C "$REPO_ROOT/src" test ./... -count=1; then
   echo "FAIL: go test"
   exit 1
 fi
