@@ -19,25 +19,25 @@
 
 ## PR 总览表
 
-| PR | scope | tasks | depends | verify 命令 | branch |
-|----|-------|-------|---------|------------|--------|
-| PR-01 | runtime/auth RS256 + key helper | T01, T02, T03 | - | `go test ./runtime/auth/...` | `phase-4/pr-01-auth-rs256` |
-| PR-02 | access-core RS256 切换 | T04, T05, T06, T07, T08 | PR-01 | `go test ./cells/access-core/...` | `phase-4/pr-02-access-rs256` |
-| PR-03 | outboxWriter fail-fast + errcode | T09, T10, T11, T12, T13 | - | `go test ./cells/... ./pkg/...` | `phase-4/pr-03-outbox-failfast` |
-| PR-04 | S3 env prefix + docker infra | T14, T15, T16, T17 | - | `go test ./adapters/s3/...` | `phase-4/pr-04-s3-env-infra` |
-| PR-05 | testcontainers go.mod | T18 | - | `go build ./...` | `phase-4/pr-05-testcontainers-dep` |
-| PR-06 | postgres integration tests | T19, T20, T21, T22, T26 | PR-05 | `go test -tags=integration ./adapters/postgres/...` | `phase-4/pr-06-postgres-integration` |
-| PR-07 | redis + rabbitmq integration tests | T23, T24 | PR-05 | `go test -tags=integration ./adapters/redis/... ./adapters/rabbitmq/...` | `phase-4/pr-07-redis-rabbitmq-integration` |
-| PR-08 | outbox full chain integration | T25 | PR-06, PR-07 | `go test -tags=integration -run TestIntegration_OutboxFullChain ./adapters/...` | `phase-4/pr-08-outbox-fullchain` |
-| PR-09 | todo-order example | T27, T28, T29, T30, T31, T32, T33, T34, T35, T36, T37, T38 | PR-02, PR-03 | `cd examples/todo-order && go build .` | `phase-4/pr-09-example-todo-order` |
-| PR-10 | sso-bff example | T39, T40, T41, T42 | PR-02, PR-03 | `cd examples/sso-bff && go build .` | `phase-4/pr-10-example-sso-bff` |
-| PR-11 | iot-device example | T43, T44, T45, T46, T47, T48, T49 | PR-02, PR-03 | `cd examples/iot-device && go build .` | `phase-4/pr-11-example-iot-device` |
-| PR-12 | CI workflow | T50, T51 | PR-05, PR-08 | `act push --job test` (本地) 或提交后检查 CI | `phase-4/pr-12-ci-workflow` |
-| PR-13 | README getting started | T52, T53, T54, T55 | PR-09 | 文档审查（无 go build） | `phase-4/pr-13-readme` |
-| PR-14 | project templates | T56, T57, T58, T59, T60, T61 | - | 文档审查（无 go build） | `phase-4/pr-14-templates` |
-| PR-15 | godoc + CHANGELOG + capability docs | T62, T63, T64, T65 | PR-09, PR-10, PR-11 | `go doc ./examples/...` | `phase-4/pr-15-docs` |
-| PR-16 | final validation + gate | T66, T67, T68, T69, T70, T71, T72, T73, T74 | PR-09, PR-10, PR-11, PR-12, PR-13 | `go build ./... && go test ./... && go vet ./... && gocell validate` | `phase-4/pr-16-validation-gate` |
-| PR-17 | KG verification | T75, T76, T77, T78, T79, T80, T81, T82, T83, T84, T85, T86, T87, T88 | PR-16 | 各 KG 任务独立 grep/审查命令（见详细说明） | `phase-4/pr-17-kg-verification` |
+| PR | scope | tasks | depends | status |
+|----|-------|-------|---------|--------|
+| PR-01 | runtime/auth RS256 + key helper | T01, T02, T03 | - | merged |
+| PR-02 | access-core RS256 切换 | T04, T05, T06, T07, T08 | PR-01 | merged |
+| PR-03 | outboxWriter fail-fast + errcode | T09, T10, T11, T12, T13 | - | merged |
+| PR-04 | S3 env prefix + docker infra | T14, T15, T16, T17 | - | merged |
+| PR-05 | testcontainers go.mod | T18 | - | merged |
+| PR-06 | postgres integration tests | T19, T20, T21, T22, T26 | PR-05 | merged |
+| PR-07 | redis + rabbitmq integration tests | T23, T24 | PR-05 | merged |
+| PR-08 | outbox full chain integration | T25 | PR-06, PR-07 | merged |
+| PR-09 | todo-order example | T27-T38 | PR-02, PR-03 | merged |
+| PR-10 | sso-bff example | T39-T42 | PR-02, PR-03 | merged |
+| PR-11 | iot-device example | T43-T49 | PR-02, PR-03 | merged |
+| PR-12 | CI workflow | T50, T51 | PR-05, PR-08 | merged |
+| PR-13 | README getting started | T52-T55 | PR-09 | merged |
+| PR-14 | project templates | T56-T61 | - | merged |
+| PR-15 | docs (YAML fixes + validation) | T62-T65 | PR-09, PR-10, PR-11 | merged |
+| PR-16 | final validation + gate | T66-T74 | all | merged |
+| PR-17 | KG verification | T75-T88 | PR-16 | merged |
 
 ---
 

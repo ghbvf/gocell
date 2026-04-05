@@ -5,3 +5,6 @@
 [2026-04-06 01:24:53] S4/exit: FAIL (branch=feat/003-phase4-examples-docs)
   failed: tasks.md: pattern '(contract test|journey test|测试编写|E2E)'
 [2026-04-06 01:25:11] S4/exit: PASS (branch=feat/003-phase4-examples-docs)
+[2026-04-06 02:33:24] S5/exit: FAIL (branch=feat/003-phase4-examples-docs)
+  failed: pr-plan.md: pattern 'merged'
+  failed: command: go test 全量测试通过
