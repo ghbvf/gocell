@@ -74,7 +74,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 
 	session, err := s.sessionRepo.GetByID(ctx, sessionID)
 	if err != nil {
-		return errcode.New("ERR_SESSION_NOT_FOUND", "session not found")
+		return errcode.New(errcode.ErrSessionNotFound, "session not found")
 	}
 
 	if session.IsRevoked() {

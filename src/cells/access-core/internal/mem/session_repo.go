@@ -9,10 +9,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	ErrSessionNotFound errcode.Code = "ERR_AUTH_SESSION_NOT_FOUND"
-)
-
 var _ ports.SessionRepository = (*SessionRepository)(nil)
 
 // SessionRepository is an in-memory implementation of ports.SessionRepository.
@@ -51,7 +47,7 @@ func (r *SessionRepository) GetByID(_ context.Context, id string) (*domain.Sessi
 
 	s, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.New(ErrSessionNotFound, "session not found: "+id)
+		return nil, errcode.New(errcode.ErrSessionNotFound, "session not found: "+id)
 	}
 	clone := *s
 	return &clone, nil
@@ -63,7 +59,7 @@ func (r *SessionRepository) GetByRefreshToken(_ context.Context, token string) (
 
 	s, ok := r.byRefresh[token]
 	if !ok {
-		return nil, errcode.New(ErrSessionNotFound, "session not found by refresh token")
+		return nil, errcode.New(errcode.ErrSessionNotFound, "session not found by refresh token")
 	}
 	clone := *s
 	return &clone, nil
@@ -75,7 +71,7 @@ func (r *SessionRepository) GetByPreviousRefreshToken(_ context.Context, token s
 
 	s, ok := r.byPrevRefresh[token]
 	if !ok {
-		return nil, errcode.New(ErrSessionNotFound, "session not found by previous refresh token")
+		return nil, errcode.New(errcode.ErrSessionNotFound, "session not found by previous refresh token")
 	}
 	clone := *s
 	return &clone, nil
@@ -87,7 +83,7 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 
 	old, ok := r.byID[session.ID]
 	if !ok {
-		return errcode.New(ErrSessionNotFound, "session not found: "+session.ID)
+		return errcode.New(errcode.ErrSessionNotFound, "session not found: "+session.ID)
 	}
 
 	// Remove old refresh-token index entry.
@@ -124,7 +120,7 @@ func (r *SessionRepository) Delete(_ context.Context, id string) error {
 
 	s, ok := r.byID[id]
 	if !ok {
-		return errcode.New(ErrSessionNotFound, "session not found: "+id)
+		return errcode.New(errcode.ErrSessionNotFound, "session not found: "+id)
 	}
 	delete(r.byRefresh, s.RefreshToken)
 	if s.PreviousRefreshToken != "" {

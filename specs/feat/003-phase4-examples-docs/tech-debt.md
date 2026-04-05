@@ -121,6 +121,16 @@
 
 ---
 
+## Tier 0 Review Deferred Items (3 complex P2)
+
+| ID | 来源 | 问题 | 延迟理由 | Target |
+|----|------|------|---------|--------|
+| P4-TD-09 [TECH] | Tier0 F-06 | List endpoints 缺少 page 字段和分页 | 触及 4 个 handler + 4 个测试，改动面大 | Tier 1 全量 review |
+| P4-TD-10 [TECH] | Tier0 F-07 | POST 201 响应未包装 `{"data":...}` 格式 | 涉及响应格式统一，可能是 breaking change | Tier 1 全量 review |
+| P4-TD-11 [TECH] | Tier0 F-14 | in-memory repository 缺少并发访问测试 | 需新写 goroutine 竞争测试，工作量 30min+ | Tier 1 全量 review |
+
+---
+
 ## Summary
 
 Phase 4 successfully delivers:
