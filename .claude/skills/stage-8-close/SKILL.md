@@ -20,7 +20,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ```
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S8 --branch {branch} --check entry
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check entry
 ```
 
 ---
@@ -87,7 +87,7 @@ PR 描述包含:
 - git log main...{branch}
 
 7 个维度:
-A. 工作流完整性 — 8 阶段是否全执行
+A. 工作流完整性 — 9 阶段(S0-S8)是否全执行
 B. Speckit 合规 — 是否由 Speckit 生成而非手写
 C. 角色完整性 — 适用角色是否全参与
    评分标准:
@@ -226,7 +226,7 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 
 1. 阶段门最终检查:
    ```bash
-   bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S8 --branch {branch} --check exit
+   python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
    ```
 2. 将 8.2 收尾文档 commit + push 到 PR 分支
 3. 合并 PR:
@@ -259,5 +259,5 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 [ ] 产品 PASS
 [ ] 项目 PASS
 [ ] PR 已合并
-[ ] phase-gate-check.sh --stage S8 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS
 ```

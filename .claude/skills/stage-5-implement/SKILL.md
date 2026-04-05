@@ -97,7 +97,7 @@ screenshot: 'only-on-failure',  // 失败时截图
 ### 5.6 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S5 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S5 --branch {branch} --check exit
 ```
 
 ---
@@ -122,7 +122,7 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S5 --bra
 [ ] e2e/*.spec.ts 存在（有 UI 时；否则标注 N/A）
 [ ] 本 Phase 新增的 API endpoint 在 contracts/ 或 OpenAPI spec 中有对应定义
 [ ] playwright.config.ts 含 trace: 'on' 配置（有 UI 时；否则标注 N/A）
-[ ] phase-gate-check.sh --stage S5 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S5 --branch {branch} --check exit = PASS
 ```
 
 **约束**: 只执行 tasks.md 中的任务，不自行添加。

@@ -13,16 +13,18 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 ---
 
-## 6 个命名 Review Bench 席位定义
+## 6 个命名 Review Bench 席位
 
-| 席位 | 审查焦点 | 核心检查项 |
-|------|---------|-----------|
-| **架构一致性 Reviewer** | DDD 分层、聚合边界、模块耦合 | Handler 无业务逻辑？Entity 无直接序列化？跨聚合走 EventBus？ |
-| **安全/权限 Reviewer** | 认证鉴权、数据暴露、攻击面、供应链 | JWT 中间件？列表强制分页？无 localhost 回退？ |
-| **测试/回归 Reviewer** | 测试覆盖、回归风险、边界用例 | domain >= 80%？application >= 60%？E2E 覆盖关键路径？ |
-| **运维/部署 Reviewer** | Docker/CI 配置、migration 安全、环境一致性 | migration up/down 对？新字段有默认值？CONCURRENTLY 索引？ |
-| **DX/可维护性 Reviewer** | 代码可读性、命名、复杂度、文档内链 | 认知复杂度 <= 15？同义字符串 < 3 次？空实现有理由？ |
-| **产品/用户体验 Reviewer** | 交互流程、错误提示、空状态、用户路径 | 空状态有意义？错误提示友好？导航可达？Loading 状态？ |
+| 席位 | 审查焦点 |
+|------|---------|
+| **席位 1: 架构一致性** | DDD 分层、聚合边界、模块耦合 |
+| **席位 2: 安全/权限** | 认证鉴权、数据暴露、攻击面 |
+| **席位 3: 测试/回归** | 测试覆盖、回归风险、边界用例 |
+| **席位 4: 运维/部署** | Docker/CI、migration 安全 |
+| **席位 5: DX/可维护性** | 可读性、命名、复杂度 |
+| **席位 6: 产品/用户体验** | 交互流程、错误提示、空状态 |
+
+> 各席位的详细审查标准和阈值定义在 `.claude/agents/reviewer.md` 中（唯一真相源）。
 
 ---
 
@@ -145,7 +147,7 @@ Branch: {branch}
 ### 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S6 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S6 --branch {branch} --check exit
 ```
 
 ---
@@ -165,5 +167,5 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S6 --bra
 [ ] review-findings.md 已写且含审查基准版本（commit hash）
 [ ] tech-debt.md 已写且每条含 [TECH] 或 [PRODUCT] 标签
 [ ] build + test 绿
-[ ] phase-gate-check.sh --stage S6 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S6 --branch {branch} --check exit = PASS
 ```

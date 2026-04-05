@@ -98,7 +98,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
 ### 步骤 5: 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S3 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S3 --branch {branch} --check exit
 ```
 
 ---
@@ -117,5 +117,5 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S3 --bra
 [ ] decisions.md 已写且含 ADR 格式
 [ ] decisions.md 含 Kernel Guardian 约束裁决表（每条均标注 accept/reject/defer）
 [ ] decisions.md 含延迟项列表
-[ ] phase-gate-check.sh --stage S3 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S3 --branch {branch} --check exit = PASS
 ```

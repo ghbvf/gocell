@@ -110,7 +110,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
 ### 步骤 7: 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S4 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S4 --branch {branch} --check exit
 ```
 
 ---
@@ -146,7 +146,7 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S4 --bra
 [ ] 一致性检查通过（speckit.analyze 无严重问题）
 [ ] Kernel Guardian确认无遗漏
 [ ] product-acceptance-criteria.md 已产出且含 P1/P2/P3 分级
-[ ] phase-gate-check.sh --stage S4 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S4 --branch {branch} --check exit = PASS
 ```
 
 **禁止**: 手写 tasks.md（Speckit 生成，仅允许追加缺失的非代码任务和内核集成验证任务）

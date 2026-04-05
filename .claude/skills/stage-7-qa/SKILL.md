@@ -31,26 +31,40 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 测试脚本已在 S5 编写完成。
 
-1. 运行 Go 测试:
+1. 运行 Go 测试（从 src/ 目录执行）:
    ```bash
-   go test ./... -v -count=1
+   cd src && go test ./... -v -count=1 2>&1 | tee ../specs/{branch}/evidence/go-test/result.txt
    ```
-2. 运行元数据验证（V3 验证规则全集）:
+2. 运行元数据验证:
    ```bash
-   gocell validate
+   gocell validate 2>&1 | tee specs/{branch}/evidence/validate/result.txt
    ```
-3. 运行 Journey 验收测试（验证业务闭环）:
+3. 运行 Journey 验收测试（逐个 journey 执行）:
    ```bash
-   gocell verify --journeys
+   gocell verify journey --id=<journeyID> 2>&1 | tee specs/{branch}/evidence/journey/<journeyID>.txt
    ```
+   对 `src/journeys/` 下每个 J-*.yaml 执行一次。
 4. 运行 Playwright E2E 测试（**仅 role-roster.md 中 QA自动化=ON 且存在 UI 组件时执行**）:
    ```bash
    npx playwright test
    ```
-   如不适用，在 qa-report.md 中标注 `E2E: N/A — SCOPE_IRRELEVANT`。
+   如不适用，在 qa-report.md 中标注 `E2E: N/A:SCOPE_IRRELEVANT`。
 5. 收集结果，补充回归脚本（如发现 S5 遗漏的场景）
-6. **证据采集**（Playwright 适用时）: 确认 `specs/{branch}/evidence/playwright/` 目录包含 trace + screenshots。需配置 playwright.config.ts 的 `outputDir` 指向此目录。
-7. 证据路径: `specs/{branch}/evidence/playwright/`（trace zip + screenshot png）
+
+**统一证据目录结构**:
+```
+specs/{branch}/evidence/
+├── go-test/          # go test 输出
+│   └── result.txt
+├── validate/         # gocell validate 输出
+│   └── result.txt
+├── journey/          # journey 验收测试（每个 journey 一个文件）
+│   ├── J-001.txt
+│   └── J-002.txt
+└── playwright/       # Playwright trace + screenshots（有 UI 时）
+    ├── trace.zip
+    └── *.png
+```
 
 ### 步骤 7.2: 使用者四视角验证
 
@@ -60,7 +74,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 - A1. 项目列表页加载 → 3 秒内渲染 + 表头含义清晰
 - A2. 创建项目 → 成功反馈 + 列表自动刷新
 - A3. 点击项目 → 导航到详情页 + URL 含标识
-- A4. 整体: PM 能否通过 UI 回答"项���状态如何"
+- A4. 整体: PM 能否通过 UI 回答"项目状态如何"
 
 **视角 B — 开发者（UI + API 混合）**:
 - B1. API 请求 → 正确响应 + 合理响应时间
@@ -100,12 +114,12 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 内容必须包含:
 1. Go test / contract test / journey test 范围和结果
 2. gocell validate 验证结果
-3. Playwright 测试范围和结果���如适用）
+3. Playwright 测试范围和结果（如适用）
 4. 覆盖的用户场景
 5. 未覆盖的场景（记录原因）
 6. 手动验证结论
 7. 引用 `product-acceptance-criteria.md` 中的 AC 编号
-8. **每条结论必须引用证据路径**（`specs/{branch}/evidence/playwright/` 下的具体文件）
+8. **每条结论必须引用证据路径**（`specs/{branch}/evidence/{go-test|validate|journey|playwright}/` 下的具体文件）
 
 ---
 
@@ -115,17 +129,20 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 |--------|------|------|
 | qa-report.md | `specs/{branch}/qa-report.md` | 测试结果报告 |
 | user-signoff.md | `specs/{branch}/user-signoff.md` | 四视角使用者签收 |
-| evidence/ | `specs/{branch}/evidence/playwright/` | Playwright trace + screenshots |
+| evidence/go-test/ | `specs/{branch}/evidence/go-test/` | go test 输出 |
+| evidence/validate/ | `specs/{branch}/evidence/validate/` | gocell validate 输出 |
+| evidence/journey/ | `specs/{branch}/evidence/journey/` | journey 验收输出 |
+| evidence/playwright/ | `specs/{branch}/evidence/playwright/` | Playwright trace + screenshots（有 UI 时） |
 
 ---
 
 ## 出口条件
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S7 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S7 --branch {branch} --check exit
 ```
 
-**绝对禁止跳过此阶段。** 即使没有 UI 变化，也需要运行已有的测��确认无回归。
+**绝对禁止跳过此阶段。** 即使没有 UI 变化，也需要运行已有的测试确认无回归。
 
 ---
 
@@ -135,4 +152,4 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S7 --bra
 - [ ] user-signoff.md 已写入 specs/{branch}/（或 N/A 声明已在 phase-charter.md 中记录）
 - [ ] qa-report.md 包含 gocell validate 验证结果
 - [ ] qa-report.md 每条结论引用证据路径
-- [ ] phase-gate-check.sh --stage S7 --branch {branch} --check exit = PASS
+- [ ] phase-gate-check.py --stage S7 --branch {branch} --check exit = PASS

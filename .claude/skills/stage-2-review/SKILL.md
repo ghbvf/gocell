@@ -55,7 +55,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 (a) 从 GoCell 内核集成角度的 5-10 条修改建议
 (b) 集成风险评估（高/中/低）
 (c) 本 Phase 必须验证的内核约束清单
-(d) 工作流可执行性评估 — spec 能否走完 8 阶段？哪里可能卡住？
+(d) 工作流可执行性评估 — spec 能否走完 9 阶段(S0-S8)？哪里可能卡住？
 输入: specs/{branch}/spec.md + specs/{branch}/product-context.md + GoCell 内核代码
 产出: specs/{branch}/kernel-constraints.md
 ```
@@ -88,7 +88,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ### 步骤 4: 阶段门检查
 
 ```bash
-bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S2 --branch {branch} --check exit
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S2 --branch {branch} --check exit
 ```
 
 ---
@@ -110,5 +110,5 @@ bash .claude/skills/phase-gate/scripts/bash/phase-gate-check.sh --stage S2 --bra
 [ ] review-roadmap.md 已产出且非空
 [ ] kernel-constraints.md 已产出且含 (a)(b)(c)(d) 四部分
 [ ] 产品经理审查意见已产出
-[ ] phase-gate-check.sh --stage S2 --branch {branch} --check exit = PASS
+[ ] phase-gate-check.py --stage S2 --branch {branch} --check exit = PASS
 ```
