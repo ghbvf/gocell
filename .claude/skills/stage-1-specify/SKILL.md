@@ -18,13 +18,18 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill]
 ### 步骤 1: 创建并切换到 Feature Branch
 
 ```bash
-git checkout -b feat/{number}-{short-name} main
+git checkout -b feat/{number}-{short-name} develop
+```
+
+```bash
+git push -u origin feat/{number}-{short-name}
 ```
 
 **重要**:
 - `{number}` 为全局递增编号，通过 `git branch --list 'feat/*' | wc -l` 推算下一个可用编号
 - `{short-name}` 为简短描述（kebab-case）
 - 只运行一次，不重复创建
+- 创建后立即 push 到 remote，确保 S5 per-PR 能以此为 base 创建 PR
 
 ### 步骤 2: 执行 Speckit Specify
 

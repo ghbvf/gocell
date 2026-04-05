@@ -25,21 +25,36 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branc
 
 ---
 
-## 8.1 总负责人: 验证所有 PR 已合入
+## 8.1 总负责人: 创建 PR（不合并）
 
-确认 pr-plan.md 中所有 PR 状态为 merged：
+确认 pr-plan.md 中所有 PR 已合入 feature 分支，验证代码健康：
+
 ```bash
-# 检查 develop 分支包含所有 PR 的代码
-git checkout develop && git pull
-cd src && go build ./... && go vet ./... && go test ./... -count=1
+git push -u origin {branch}
 ```
 
-如有收尾文档变更（specs/、docs/ 下的文档），提交到 develop：
 ```bash
-git add specs/ docs/ CHANGELOG.md
-git commit -m "docs: Phase {N} closing -- {Phase 名称}"
-git push
+go build ./...
 ```
+
+```bash
+go vet ./...
+```
+
+```bash
+go test ./... -count=1
+```
+
+创建指向 develop 的 PR：
+
+```bash
+gh pr create --base develop --title "Phase {N}: {Phase 名称}" --body "..."
+```
+
+PR 描述包含:
+- Phase 目标
+- 关键变更摘要
+- 已知 tech debt（引用 tech-debt.md）
 
 ---
 
@@ -132,7 +147,8 @@ C. 错误路径覆盖率 — spec Edge Cases vs E2E 覆盖的比例
 D. 文档链路完整性 — OpenAPI 含新 endpoints？README 引用新功能？部署文档含新配置？
 E. 功能完整度 — spec 中定义的功能是否全部实现
 F. 成功标准达成度 — product-context.md 中的成功标准是否满足
-G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
+G. 产品 Tech Debt — 产品层面的妥协（[PRODUCT] 标签）
+   本 Phase 新增: N 条，上一 Phase 遗留已解决: M 条
 
 产出: specs/{branch}/product-review-report.md
 包含: 不超过 3 条必须修复项
@@ -202,7 +218,7 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 [ ] product-context.md 存在
 [ ] product-acceptance-criteria.md 存在
 [ ] product-review-report.md 存在
-[ ] user-signoff.md 存在且三视角完整（纯后端 Phase UI 视角标 N/A）
+[ ] user-signoff.md 存在且四视角完整（纯后端 Phase UI 视角标 N/A）
 [ ] user-signoff.md 判定非 REJECT
 [ ] review-findings.md 存在
 
@@ -219,18 +235,53 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 - **项目 FAIL** → 回到 8.2 补做流程相关修复 → 仅重走 8.3-B
 - 单方 FAIL 不影响另一方已获得的 PASS
 
+### 回退限制
+
+- 产品/项目 FAIL 最多回退 1 次
+- 回退只能补文档/配置，不能改代码（改代码必须回 S6）
+- 2 次 FAIL → Phase 挂起，总负责人裁决
+
 ---
 
 ## 8.4 双 PASS 后收尾
 
 **仅在产品 PASS AND 项目 PASS 后执行。**
 
-1. 阶段门最终检查:
-   ```bash
-   python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
-   ```
-2. 将 8.2 收尾文档 commit + push 到 develop
-3. 确认 Phase 完成
+1. 将双确认结果写入 phase-report.md（固定格式，gate 校验依赖此格式）：
+
+```markdown
+## 双确认结果
+- 产品: PASS
+- 项目: PASS
+```
+
+2. 将 8.2 收尾文档 commit + push 到 feature 分支：
+
+```bash
+git add specs/ docs/ CHANGELOG.md
+```
+
+```bash
+git commit -m "docs: Phase {N} closing — {Phase 名称}"
+```
+
+```bash
+git push origin {branch}
+```
+
+2. 阶段门最终检查:
+
+```bash
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
+```
+
+3. 合并 PR（保留 per-PR commit 粒度，便于 bisect/revert）：
+
+```bash
+gh pr merge {pr-url} --merge
+```
+
+4. 确认 Phase 完成
 
 ---
 
@@ -249,11 +300,11 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 ## 出口条件
 
 ```
-[ ] kernel-review-report.md 存在且 7 维度已评分
-[ ] product-review-report.md 存在且 7 维度已评分
-[ ] phase-report.md 存在
-[ ] CHANGELOG.md 已更新
-[ ] 产品 PASS
-[ ] 项目 PASS
-[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS
+[ ] kernel-review-report.md 存在且 7 维度已评分 [GATE]
+[ ] product-review-report.md 存在且 7 维度已评分 [GATE]
+[ ] phase-report.md 存在 [GATE]
+[ ] CHANGELOG.md 已更新 [GATE]
+[ ] 产品 PASS [AGENT]
+[ ] 项目 PASS [AGENT]
+[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS [GATE]
 ```

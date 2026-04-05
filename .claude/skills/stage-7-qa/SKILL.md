@@ -1,6 +1,6 @@
 ---
 name: stage-7-qa
-description: "QA+使用者验证: 环境部署+测试执行+三视角验证"
+description: "QA+使用者验证: 环境部署+测试执行+四视角验证"
 argument-hint: "[branch-name]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ---
@@ -9,7 +9,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 **硬阻塞门**: 阶段 6 完成后**自动进入**。不是总负责人决定是否执行。`qa-report.md` 不存在则阶段 8 拒绝进入。
 
-**执行者**: DevOps（环境部署）+ QA Agent（执行测试）+ 使用者（三视角验证）
+**执行者**: DevOps（环境部署）+ QA Agent（执行测试）+ 产品经理（主持四视角验证）+ 使用者
 
 **入口条件**: S6 出口通过（review-findings.md + tech-debt.md 存在）
 
@@ -18,6 +18,16 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ## 操作步骤
 
 ### 步骤 7.0: DevOps 部署测试环境
+
+确认工作目录在 feature 分支最新状态：
+
+```bash
+git checkout {branch}
+```
+
+```bash
+git pull origin {branch}
+```
 
 派发 DevOps Agent:
 
@@ -29,7 +39,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 ### 步骤 7.1: 执行自动化测试
 
-派发 DevOps Agent（name=devops）执行测试套件：
+派发 QA Agent 执行测试套件：
 
 ```bash
 bash .claude/skills/stage-7-qa/scripts/run-qa.sh --branch {branch}
@@ -60,9 +70,11 @@ specs/{branch}/evidence/
     └── *.png
 ```
 
-### 步骤 7.2: 使用者三视角验证
+### 步骤 7.2: 使用者四视角验证
 
-派发 Product Manager Agent（name=product-manager）主持三视角验证。按三个 Persona 视角顺序执行:
+输入: specs/{branch}/product-context.md（成功标准 + persona 定义）
+
+派发 Product Manager Agent（name=product-manager）主持四视角验证。按四个 Persona 视角顺序执行:
 
 **视角 A — PM（浏览器 UI 全流程）**:
 - A1. 项目列表页加载 → 3 秒内渲染 + 表头含义清晰
@@ -92,6 +104,14 @@ specs/{branch}/evidence/
 - C5. 错误信息可定位 → errcode 错误码能帮助开发者定位问题，非裸 "internal error"
 - C6. 整体: 新开发者能否在 30 分钟内跑通一个 example 并理解 Cell 模型
 
+**Persona D: Vibe Coder（纯 API 使用者）**
+不看源码，只用 API/CLI。关注：
+- D1: API 文档是否足够让不看代码的人完成任务
+- D2: 错误信息是否自解释（不需要查源码）
+- D3: 示例代码（examples/）是否可直接运行
+- D4: go get + import path 是否符合 Go 惯例
+- D5: godoc 是否覆盖公开 API
+
 每视角评分 1-5:
 - 1=不可用 2=有明显摩擦 3=可接受 4=流畅 5=优秀
 
@@ -102,7 +122,7 @@ specs/{branch}/evidence/
 - **CONDITIONAL**: 均>=3
 - **REJECT**: 任一<3 或存在 P0 问题
 
-> **注意**: 如 role-roster.md 中前端开发者=OFF，使用者验证的 UI 视角（视角 A）标记为 N/A，仅执行 API + 框架视角（视角 B、C）。user-signoff.md 仍需产出，但 UI 部分标注 `N/A — SCOPE_IRRELEVANT`。视角 C（框架集成者）始终执行。
+> **注意**: 如 role-roster.md 中前端开发者=OFF，使用者验证的 UI 视角（视角 A）标记为 N/A，仅执行 B（开发者）、C（框架集成者）、D（Vibe Coder）三个视角。user-signoff.md 仍需产出，但 UI 部分标注 `N/A:SCOPE_IRRELEVANT`。
 
 ### 步骤 7.3: 总负责人编写 qa-report.md
 
@@ -117,6 +137,19 @@ specs/{branch}/evidence/
 6. 手动验证结论
 7. 引用 `product-acceptance-criteria.md` 中的 AC 编号
 8. **每条结论必须引用证据路径**（`specs/{branch}/evidence/{go-test|validate|journey|playwright}/` 下的具体文件）
+9. **AC 逐条判定**章节（格式见下）
+
+qa-report.md 必须包含"AC 逐条判定"章节：
+
+```markdown
+## AC 逐条判定
+| AC 编号 | 优先级 | 判定 | 证据引用 |
+|---------|--------|------|---------|
+| AC-1 | P1 | PASS | evidence/go-test/result.txt:L42 |
+| AC-2 | P2 | SKIP | 纯后端，无 UI |
+```
+
+每条 AC 必须标注 PASS/FAIL/SKIP + 证据路径引用。
 
 ---
 
@@ -125,7 +158,7 @@ specs/{branch}/evidence/
 | 产出物 | 路径 | 说明 |
 |--------|------|------|
 | qa-report.md | `specs/{branch}/qa-report.md` | 测试结果报告 |
-| user-signoff.md | `specs/{branch}/user-signoff.md` | 三视角使用者签收 |
+| user-signoff.md | `specs/{branch}/user-signoff.md` | 四视角使用者签收 |
 | evidence/go-test/ | `specs/{branch}/evidence/go-test/` | go test 输出 |
 | evidence/validate/ | `specs/{branch}/evidence/validate/` | gocell validate 输出 |
 | evidence/journey/ | `specs/{branch}/evidence/journey/` | journey 验收输出 |
@@ -145,8 +178,8 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S7 --branc
 
 ## 出口检查清单
 
-- [ ] qa-report.md 已写入 specs/{branch}/
-- [ ] user-signoff.md 已写入 specs/{branch}/（或 N/A 声明已在 phase-charter.md 中记录）
-- [ ] qa-report.md 包含 gocell validate 验证结果
-- [ ] qa-report.md 每条结论引用证据路径
-- [ ] phase-gate-check.py --stage S7 --branch {branch} --check exit = PASS
+- [ ] qa-report.md 已写入 specs/{branch}/ [GATE]
+- [ ] user-signoff.md 已写入 specs/{branch}/（或 N/A 声明已在 phase-charter.md 中记录） [GATE]
+- [ ] qa-report.md 包含 gocell validate 验证结果 [GATE]
+- [ ] qa-report.md 每条结论引用证据路径 [AGENT]
+- [ ] phase-gate-check.py --stage S7 --branch {branch} --check exit = PASS [GATE]

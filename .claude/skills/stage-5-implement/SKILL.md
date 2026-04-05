@@ -47,7 +47,7 @@ screenshot: 'only-on-failure',  // 失败时截图
 
 **Wave 开始前检查**:
 1. 清理残留 worktree: `git worktree list`，有上一 Wave 残留的先 `git worktree remove`
-2. 确认 develop 已包含前置 Wave 的所有 PR: `git log --oneline -5`
+2. 确认 feature 分支已包含前置 Wave 的所有 PR: `git log --oneline -5`
 
 **并行冲突预防**: 同一 Wave 内的 PR 不应修改同一个文件。如果 pr-plan.md 中同 Wave 的两个 PR 有文件交叉，将其中一个移到下一个 Wave 串行执行。
 
@@ -67,10 +67,17 @@ git worktree add .claude/worktrees/{pr-name} -b {pr-branch}
 Agent(run_in_background=true):
   工作目录: .claude/worktrees/{pr-name}
   任务: 实施 pr-plan.md 中该 PR 的 tasks
+  上下文: 读取 specs/{branch}/product-context.md 了解 persona + 范围边界
+  
+  对标规则（当任务涉及 kernel/cells/runtime/adapters 时执行）:
+  1. 查 docs/references/framework-comparison.md 找到对标文件路径
+  2. WebFetch 从 GitHub 拉取对标源码
+  3. 在 handoff note 中注明: ref: {framework} {file} + 采纳/偏离理由
   
   完成后执行提交脚本:
   bash .claude/skills/stage-5-implement/scripts/pr-submit.sh \
-    --branch {pr-branch} --title "{PR 标题}"
+    --branch {pr-branch} --title "{PR 标题}" --base {branch}
+  注意: --base 填 feature 分支名（如 feat/002-xxx），不是 {pr-branch}
   
   回报格式:
   - PR URL
@@ -126,8 +133,8 @@ git worktree remove .claude/worktrees/{pr-name}
 ### 5.3 Wave 完成后
 
 当前 Wave 所有 PR merge 后：
-1. `git checkout develop`
-2. `git pull`
+1. `git checkout {branch}`
+2. `git pull origin {branch}`
 
 进入下一个 Wave（回到 5.2）。
 
@@ -156,14 +163,14 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S5 --branc
 ## 出口条件
 
 ```
-[ ] tasks.md 所有任务标记 [x]
-[ ] 开发者 Agent 报告 build + test 全绿
-[ ] e2e/*.spec.ts 存在（有 UI 时；否则标注 N/A）
-[ ] 本 Phase 新增的 API endpoint 在 contracts/ 或 OpenAPI spec 中有对应定义
-[ ] playwright.config.ts 含 trace: 'on' 配置（有 UI 时；否则标注 N/A）
-[ ] pr-plan.md 中所有 PR 标记 merged
-[ ] 每个 PR 已通过 review（无 P0 遗留）
-[ ] phase-gate-check.py --stage S5 --branch {branch} --check exit = PASS
+[ ] [GATE]  tasks.md 所有任务标记 [x]
+[ ] [GATE]  开发者 Agent 报告 build + test 全绿
+[ ] [AGENT] e2e/*.spec.ts 存在（有 UI 时；否则标注 N/A）
+[ ] [AGENT] 本 Phase 新增的 API endpoint 在 contracts/ 或 OpenAPI spec 中有对应定义
+[ ] [AGENT] playwright.config.ts 含 trace: 'on' 配置（有 UI 时；否则标注 N/A）
+[ ] [GATE]  pr-plan.md 中所有 PR 标记 merged
+[ ] [AGENT] 每个 PR 已通过 review（无 P0 遗留）
+[ ] [GATE]  phase-gate-check.py --stage S5 --branch {branch} --check exit = PASS
 ```
 
 **约束**: 只执行 tasks.md 中的任务，不自行添加。

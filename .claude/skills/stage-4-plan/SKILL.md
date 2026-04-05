@@ -39,10 +39,11 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
 [ ] 文档工程师的任务（OpenAPI/用户文档/部署文档）
 [ ] DevOps 的任务（Docker/CI/部署配置更新）
 [ ] QA 自动化的任务（Playwright E2E 测试编写 — 在 S5 执行）
-[ ] DevOps: 安装 Playwright + playwright.config.ts（首次 Phase 做，后续复用）
-[ ] DevOps: docker-compose.test.yml（PG + GoCell App 测试环境）
+[ ] DevOps: 安装 Playwright + playwright.config.ts（role-roster.md 中 QA自动化=ON 时；否则确认 phase-charter.md 含 N/A 声明）
+[ ] DevOps: docker-compose.test.yml（role-roster.md 中 DevOps=ON 时；否则确认 phase-charter.md 含 N/A 声明）
 [ ] 后端开发者: 种子数据脚本（seed-test-data.sh 或 Go test helper）
-[ ] QA 自动化: Playwright E2E 测试编写（3 用户视角，在 S5 执行）
+[ ] QA 自动化: Playwright E2E 测试编写（role-roster.md 中 QA自动化=ON 时；否则确认 phase-charter.md 含 N/A 声明）
+[ ] 涉及 kernel/cells/runtime/adapters 的任务标注了对标框架（查 docs/references/framework-comparison.md）
 ```
 
 如缺失，手动追加。**这是唯一允许手动修改 tasks.md 的场景。**
@@ -164,13 +165,13 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S4 --branc
 ## 出口条件
 
 ```
-[ ] plan.md 存在且非空
-[ ] tasks.md 存在且含文档+DevOps+QA 测试编写+内核集成验证任务
-[ ] tasks.md 内容检查通过（含 Playwright/E2E 关键词 + Docker/部署关键词 + OpenAPI/文档关键词）
-[ ] 一致性检查通过（speckit.analyze 无严重问题）
-[ ] Kernel Guardian确认无遗漏
-[ ] product-acceptance-criteria.md 已产出且含 P1/P2/P3 分级
-[ ] pr-plan.md 存在且每个 PR 有 scope + verify + depends
+[ ] plan.md 存在且非空 [GATE]
+[ ] tasks.md 存在且含文档+DevOps+QA 测试编写+内核集成验证任务 [GATE]
+[ ] tasks.md 内容检查通过（含 Playwright/E2E 关键词 + Docker/部署关键词 + OpenAPI/文档关键词） [GATE]
+[ ] 一致性检查通过（speckit.analyze 无严重问题） [AGENT]
+[ ] Kernel Guardian确认无遗漏 [AGENT]
+[ ] product-acceptance-criteria.md 已产出且含 P1/P2/P3 分级 [GATE]
+[ ] pr-plan.md 存在且每个 PR 有 scope + verify + depends [GATE]
 [ ] phase-gate-check.py --stage S4 --branch {branch} --check exit = PASS
 ```
 

@@ -3,11 +3,11 @@ set -euo pipefail
 
 # pr-submit.sh — PR 实施完成后的提交流程
 # Usage: bash .claude/skills/stage-5-implement/scripts/pr-submit.sh \
-#          --branch <pr-branch> --title "<PR title>" --base develop
+#          --branch <pr-branch> --title "<PR title>" --base <target-branch>
 
 BRANCH=""
 TITLE=""
-BASE="develop"
+BASE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,8 +18,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$BRANCH" || -z "$TITLE" ]]; then
-  echo "Usage: pr-submit.sh --branch <branch> --title <title> [--base develop]"
+if [[ -z "$BRANCH" || -z "$TITLE" || -z "$BASE" ]]; then
+  echo "Usage: pr-submit.sh --branch <branch> --title <title> --base <target-branch>"
+  exit 1
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# 检测 go.mod 位置，兼容主 repo 和 worktree
+if [[ -f "$REPO_ROOT/go.mod" ]]; then
+  GO_MODULE_ROOT="$REPO_ROOT"
+elif [[ -f "$REPO_ROOT/src/go.mod" ]]; then
+  GO_MODULE_ROOT="$REPO_ROOT/src"
+else
+  echo "ERROR: go.mod not found under $REPO_ROOT"
   exit 1
 fi
 
@@ -27,7 +39,7 @@ echo "=== PR Submit: $BRANCH ==="
 
 # 1. Build
 echo "--- go build ---"
-if ! go -C "$REPO_ROOT/src" build ./...; then
+if ! go -C "$GO_MODULE_ROOT" build ./...; then
   echo "FAIL: go build"
   exit 1
 fi
@@ -35,7 +47,7 @@ echo "[PASS] go build"
 
 # 2. Vet
 echo "--- go vet ---"
-if ! go -C "$REPO_ROOT/src" vet ./...; then
+if ! go -C "$GO_MODULE_ROOT" vet ./...; then
   echo "FAIL: go vet"
   exit 1
 fi
@@ -43,7 +55,7 @@ echo "[PASS] go vet"
 
 # 3. Test
 echo "--- go test ---"
-if ! go -C "$REPO_ROOT/src" test ./... -count=1; then
+if ! go -C "$GO_MODULE_ROOT" test ./... -count=1; then
   echo "FAIL: go test"
   exit 1
 fi
@@ -51,7 +63,9 @@ echo "[PASS] go test"
 
 # 4. Commit
 echo "--- git commit ---"
-git add -A
+echo "--- staged files ---"
+git status --short
+git add .
 if git diff --cached --quiet; then
   echo "WARN: no changes to commit"
 else
