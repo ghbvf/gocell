@@ -3,11 +3,11 @@ set -euo pipefail
 
 # pr-submit.sh — PR 实施完成后的提交流程
 # Usage: bash .claude/skills/stage-5-implement/scripts/pr-submit.sh \
-#          --branch <pr-branch> --title "<PR title>" --base develop
+#          --branch <pr-branch> --title "<PR title>" --base <target-branch>
 
 BRANCH=""
 TITLE=""
-BASE="develop"
+BASE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,10 +18,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$BRANCH" || -z "$TITLE" ]]; then
-  echo "Usage: pr-submit.sh --branch <branch> --title <title> [--base develop]"
+if [[ -z "$BRANCH" || -z "$TITLE" || -z "$BASE" ]]; then
+  echo "Usage: pr-submit.sh --branch <branch> --title <title> --base <target-branch>"
   exit 1
 fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 echo "=== PR Submit: $BRANCH ==="
 
@@ -51,7 +53,9 @@ echo "[PASS] go test"
 
 # 4. Commit
 echo "--- git commit ---"
-git add -A
+echo "--- staged files ---"
+git status --short
+git add -A -- src/ contracts/ docs/ examples/ cmd/ kernel/ cells/ runtime/ adapters/ pkg/
 if git diff --cached --quiet; then
   echo "WARN: no changes to commit"
 else

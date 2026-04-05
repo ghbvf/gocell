@@ -43,6 +43,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Skill, Agent]
 [ ] DevOps: docker-compose.test.yml（PG + GoCell App 测试环境）
 [ ] 后端开发者: 种子数据脚本（seed-test-data.sh 或 Go test helper）
 [ ] QA 自动化: Playwright E2E 测试编写（3 用户视角，在 S5 执行）
+[ ] 涉及 kernel/cells/runtime/adapters 的任务标注了对标框架（查 docs/references/framework-comparison.md）
 ```
 
 如缺失，手动追加。**这是唯一允许手动修改 tasks.md 的场景。**

@@ -19,6 +19,16 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 ### 步骤 7.0: DevOps 部署测试环境
 
+确认工作目录在 feature 分支最新状态：
+
+```bash
+git checkout {branch}
+```
+
+```bash
+git pull origin {branch}
+```
+
 派发 DevOps Agent:
 
 1. 使用 docker-compose.test.yml 启动 PG + GoCell App 测试环境

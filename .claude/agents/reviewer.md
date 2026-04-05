@@ -26,7 +26,7 @@ permissionMode: auto
 审查前必须自行获取以下材料作为基准（不依赖外部注入）：
 
 1. 核心约束清单 — 检查实现是否违反
-2. 变更范围 — 自行运行 `git diff main...HEAD --stat` 获取概览
+2. 变更范围 — 自行运行 `git diff develop...HEAD --stat` 获取概览
 3. 需求规格 — 对照需求检查实现偏离
 4. 审查基准版本 — 自行运行 `git rev-parse HEAD` 记录
 
@@ -43,7 +43,7 @@ permissionMode: auto
 派发时通过指令指定席位编号。每个席位有独立的审查焦点。
 
 ### 席位 1: 架构一致性 Reviewer
-审查焦点: GoCell 分层依赖方向、Cell 聚合边界、kernel/ 接口稳定性、adapters/ 接口实现、cmd/ 装配职责、一致性级别标注、跨 Cell contract 版本语义
+审查焦点: GoCell 分层依赖方向、Cell 聚合边界、kernel/ 接口稳定性、adapters/ 接口实现、cmd/ 装配职责、一致性级别标注、跨 Cell contract 版本语义、对标框架对齐（运行 `git log --grep="ref:" --oneline` 确认涉及 kernel/cells/runtime/adapters 的 commit 含 ref: 标记，缺失则为 P1）
 
 ### 席位 2: 安全/权限 Reviewer
 审查焦点: JWT 中间件覆盖、`/internal/v1/` 调用方声明与鉴权、数据暴露风险、攻击面（输入校验/SQL注入/XSS）、生产配置安全（无 localhost 回退/noop）、安全封装复用

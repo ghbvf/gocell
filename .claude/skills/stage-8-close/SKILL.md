@@ -25,21 +25,36 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branc
 
 ---
 
-## 8.1 总负责人: 验证所有 PR 已合入
+## 8.1 总负责人: 创建 PR（不合并）
 
-确认 pr-plan.md 中所有 PR 状态为 merged：
+确认 pr-plan.md 中所有 PR 已合入 feature 分支，验证代码健康：
+
 ```bash
-# 检查 develop 分支包含所有 PR 的代码
-git checkout develop && git pull
-cd src && go build ./... && go vet ./... && go test ./... -count=1
+git push -u origin {branch}
 ```
 
-如有收尾文档变更（specs/、docs/ 下的文档），提交到 develop：
 ```bash
-git add specs/ docs/ CHANGELOG.md
-git commit -m "docs: Phase {N} closing -- {Phase 名称}"
-git push
+go build ./...
 ```
+
+```bash
+go vet ./...
+```
+
+```bash
+go test ./... -count=1
+```
+
+创建指向 develop 的 PR：
+
+```bash
+gh pr create --base develop --title "Phase {N}: {Phase 名称}" --body "..."
+```
+
+PR 描述包含:
+- Phase 目标
+- 关键变更摘要
+- 已知 tech debt（引用 tech-debt.md）
 
 ---
 
@@ -225,12 +240,33 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 
 **仅在产品 PASS AND 项目 PASS 后执行。**
 
-1. 阶段门最终检查:
-   ```bash
-   python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
-   ```
-2. 将 8.2 收尾文档 commit + push 到 develop
-3. 确认 Phase 完成
+1. 将 8.2 收尾文档 commit + push 到 feature 分支：
+
+```bash
+git add specs/ docs/ CHANGELOG.md
+```
+
+```bash
+git commit -m "docs: Phase {N} closing — {Phase 名称}"
+```
+
+```bash
+git push origin {branch}
+```
+
+2. 阶段门最终检查:
+
+```bash
+python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S8 --branch {branch} --check exit
+```
+
+3. 合并 PR（保留 per-PR commit 粒度，便于 bisect/revert）：
+
+```bash
+gh pr merge {pr-url} --merge
+```
+
+4. 确认 Phase 完成
 
 ---
 
