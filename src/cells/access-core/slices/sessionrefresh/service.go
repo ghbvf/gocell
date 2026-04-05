@@ -59,7 +59,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}
 
 	// Verify the refresh token JWT signature.
-	_, err := jwt.Parse(refreshToken, func(_ *jwt.Token) (any, error) {
+	_, err := jwt.Parse(refreshToken, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
 		return s.signingKey, nil
 	})
 	if err != nil {
@@ -86,13 +89,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
 
-	accessToken, err := s.issueToken(session.UserID, roleNames, expiresAt)
+	accessToken, err := s.issueToken(session.UserID, roleNames, expiresAt, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
 
 	newRefreshExpiry := now.Add(refreshTokenTTL)
-	newRefreshToken, err := s.issueToken(session.UserID, nil, newRefreshExpiry)
+	newRefreshToken, err := s.issueToken(session.UserID, nil, newRefreshExpiry, "")
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
@@ -115,7 +118,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time) (string, error) {
+func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time, sid string) (string, error) {
 	claims := jwt.MapClaims{
 		"sub": subject,
 		"iat": jwt.NewNumericDate(time.Now()),
@@ -124,6 +127,9 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles
+	}
+	if sid != "" {
+		claims["sid"] = sid
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

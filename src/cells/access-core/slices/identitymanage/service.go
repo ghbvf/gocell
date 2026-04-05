@@ -25,14 +25,15 @@ const (
 
 // Service implements identity management business logic.
 type Service struct {
-	repo      ports.UserRepository
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo        ports.UserRepository
+	sessionRepo ports.SessionRepository
+	publisher   outbox.Publisher
+	logger      *slog.Logger
 }
 
 // NewService creates an identity-manage Service.
-func NewService(repo ports.UserRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{repo: repo, publisher: pub, logger: logger}
+func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
+	return &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
 }
 
 // CreateInput holds parameters for creating a user.
@@ -137,6 +138,12 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	user.Lock()
 	if err := s.repo.Update(ctx, user); err != nil {
 		return fmt.Errorf("identity-manage: lock: %w", err)
+	}
+
+	// Revoke all sessions for the locked user so existing tokens become invalid.
+	if err := s.sessionRepo.RevokeByUserID(ctx, id); err != nil {
+		s.logger.Error("identity-manage: failed to revoke sessions on lock",
+			slog.Any("error", err), slog.String("user_id", id))
 	}
 
 	s.publish(ctx, TopicUserLocked, map[string]any{"user_id": id})

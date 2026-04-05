@@ -1,9 +1,9 @@
-# PR #3 Review: Phase 2 — Runtime + Built-in Cells
+# PR #3 Review: Phase 2 — Runtime + Built-in Cells（模块级深度审查）
 
 > **PR**: feat/001-phase2-runtime-cells → main
 > **Scope**: 295 files, +34575/-2654 | 182 Go, 75 MD, 3 YAML
 > **审查日期**: 2026-04-05
-> **审查方式**: 3 并行 agent 分层审查（kernel / cells / runtime）
+> **审查方式**: 8 并行 agent 模块级审查（governance / metadata / lifecycle / access-core / audit+config / http / services / cmd+pkg）
 
 ---
 
@@ -11,272 +11,351 @@
 
 | 类别 | 数量 | 阻塞? |
 |------|------|-------|
-| 安全问题 | 6 | Yes |
-| 架构违规 | 1 | Yes |
-| Concerns | 21 | No, but should fix |
-| 亮点 | 7 | — |
+| 安全问题 | 9 | Yes |
+| 架构/规范违规 | 5 | Yes |
+| Concerns | 42 | No, should fix |
+| 亮点 | 30+ | — |
 
 ---
 
-## BLOCKING — 安全问题（6 个）
+## 一、BLOCKING — 安全问题（9 个）
 
-### S-2 [Critical] session logout 没有持久化 revoke 状态
+### S1 [Critical] session logout 未持久化 revoke 状态 ❌ **已更正：实际已持久化**
 
-**文件**: `src/cells/access-core/slices/sessionlogout/service.go:48-70`
+> **审查结论矛盾**：第一轮审查(3-agent)报告 logout 未调 `sessionRepo.Update()`。但第二轮 access-core 深度审查确认 `sessionlogout/service.go:57-61` **确实调了 `session.Revoke()` + `s.sessionRepo.Update(ctx, session)`**，revocation 已持久化。
+>
+> **降级为非阻塞**。但存在相关测试 bug（见 C-AC3）。
 
-`Logout` 方法获取 session（in-memory repo 返回 clone），对 clone 调用 `session.Revoke()`，发布事件、写日志——但 **从未调用 `s.sessionRepo.Update(ctx, session)`** 持久化撤销状态。撤销仅存在于局部变量，函数返回即丢失。
+### S2 [Critical] sessionrefresh JWT 解析缺少签名方法校验 — algorithm confusion
 
-后果：
-- "已退出"的 session 实际仍然有效，access token 继续工作直到自然过期
-- 再次调用 Logout 不会检测到已撤销（幂等检查永远不触发）
-- session-refresh slice 会愉快地续期一个"已撤销"的 session
+**文件**: `cells/access-core/slices/sessionrefresh/service.go:62`
 
-**修复**: 在 `session.Revoke()` 之后添加 `s.sessionRepo.Update(ctx, session)`。
+`sessionvalidate` 正确检查 `t.Method.(*jwt.SigningMethodHMAC)` 防止 `alg: none` 攻击，但 `sessionrefresh` 的 `jwt.Parse` **未做此检查**。攻击者可构造 `alg: none` 的 refresh token 绕过签名验证。
 
-### S-1 [High] ERR_AUTH_INVALID_TOKEN 映射到 HTTP 500 而不是 401
+**修复**: 添加与 sessionvalidate 相同的 signing method 校验。
 
-**文件**: `src/pkg/httputil/response.go:68-88`
+### S3 [High] User Lock 不撤销已有 session
 
-`ERR_AUTH_INVALID_TOKEN` 不匹配 `mapCodeToStatus` 的任何规则（包含 `INVALID` 但映射检查的是 `INVALID_INPUT`，也不匹配 `UNAUTHORIZED`/`LOGIN_FAILED`/`REFRESH_FAILED`），fallthrough 到默认 500。
+**文件**: `cells/access-core/slices/identitymanage/service.go`
 
-**修复**: 在 `mapCodeToStatus` 中添加 `INVALID_TOKEN` → 401 映射。
+`Lock()` 仅阻止新登录，不撤销已有 session。`sessionvalidate.Verify()` 是纯 JWT 无状态验证，不检查 user lock 状态。被锁用户的 access token 在 15 分钟内仍可用，refresh token 7 天内仍可用。
 
-### S-R1 [High] RealIP 中间件无条件信任 X-Forwarded-For
+**修复**: Lock 时调 `sessionRepo.RevokeByUserID()` 或 Verify 时检查 user 状态。
 
-**文件**: `src/runtime/http/middleware/real_ip.go:25-30`
+### S4 [High] RealIP 无条件信任 X-Forwarded-For — IP 伪造
 
-攻击者可设置 `X-Forwarded-For: 127.0.0.1` 绕过 IP 级 rate limit。无 trusted proxies 列表。
+**文件**: `runtime/http/middleware/real_ip.go:25-30`
 
-**修复**: 添加 `TrustedProxies []string` 参数，仅在连接 RemoteAddr 属于可信代理时信任转发头。
+**修复**: 添加 `TrustedProxies` 参数。
 
-### S-R2 [High] ServiceToken HMAC 只签 method+path
+### S5 [High] ServiceToken HMAC 只签 method+path — 重放 + 参数篡改
 
-**文件**: `src/runtime/auth/servicetoken.go:30-31`
+**文件**: `runtime/auth/servicetoken.go:30-31`
 
-```go
-mac.Write([]byte(r.Method + " " + r.URL.Path))
-```
+不含 query string、timestamp/nonce。Token 可无限重放，且可附加任意 query 参数。
 
-不含 query string、body 或 timestamp/nonce。Token 可重放，且 `GET /internal/v1/users` 的 token 对 `GET /internal/v1/users?admin=true` 同样有效。
+**修复**: 包含 query string + timestamp header + 短窗口校验。
 
-**修复**: 至少包含 query string。理想方案：加入 timestamp + 短窗口（如 5 分钟）。
+### S6 [Medium] ServiceToken 不拒绝空 secret
 
-### S-R3 [Medium] ServiceToken 不拒绝空 secret
+**文件**: `runtime/auth/servicetoken.go:14`
 
-**文件**: `src/runtime/auth/servicetoken.go:14`
+> **审查结论矛盾**：review-services 确认 line 15-22 已有 `len(secret) == 0` 校验返回 500。但缺少测试覆盖。
+>
+> **降级为 Concern**：补充测试即可。
 
-`ServiceTokenMiddleware(nil)` 或 `ServiceTokenMiddleware([]byte{})` 会用空 key 计算 HMAC，任何人可伪造有效 token。
+### S7 [Medium] RequestID 接受任意客户端输入 — log injection
 
-**修复**: `len(secret) == 0` 时 panic 或返回 error。
+**文件**: `runtime/http/middleware/request_id.go:22-24`
 
-### S-R4 [Low] RequestID 接受任意长度客户端输入
+**修复**: 限制 128 字符 + 拒绝控制字符。
 
-**文件**: `src/runtime/http/middleware/request_id.go:22-24`
+### S8 [Medium] ID 生成用 time.Now().UnixNano() — 可碰撞 + 可预测
 
-无长度限制或字符校验。恶意客户端可注入超长字符串或控制字符，污染日志（log injection）。
+**文件**: 7 处（identitymanage, sessionlogin, auditappend, configwrite, configpublish, eventbus）
 
-**修复**: 限制最大 128 字符，拒绝含控制字符的输入，不合法时重新生成。
+可预测的 session ID 使攻击者能猜测并撤销他人 session。
 
----
+**修复**: 使用 `crypto/rand` UUID。
 
-## BLOCKING — 架构违规（1 个）
+### S9 [Medium] access-core 端点无 auth/authz 保护
 
-### V-1 slice/verify.go 使用 fmt.Errorf 导出错误
+**文件**: `cells/access-core/cell.go` RegisterRoutes
 
-**文件**: `src/kernel/slice/verify.go` — 7 处（行 57, 84, 113, 153, 156, 159, 215）
+DELETE /sessions/{id}、POST /{id}/lock 等端点无认证保护。知道 session ID 的任何人可撤销他人 session。
 
-导出方法 `VerifySlice`、`VerifyCell`、`RunJourney` 返回 `fmt.Errorf(...)` 给调用方。违反 CLAUDE.md 规定的 `pkg/errcode` 规范。
-
-**修复**: 将 7 处 `fmt.Errorf` 替换为 `errcode.New` 或 `errcode.Wrap`。
+**修复**: 在路由注册时挂载 auth middleware。
 
 ---
 
-## CONCERNS — kernel 层（6 个）
+## 二、BLOCKING — 架构/规范违规（5 个）
 
-### C-K1 Start 和 StartWithConfig ~95% 重复代码
+### V1 slice/verify.go 使用 fmt.Errorf 导出错误
 
-**文件**: `src/kernel/assembly/assembly.go:83-132` vs `174-220`
+**文件**: `kernel/slice/verify.go` — 7 处
 
-~40 行 copy-paste，仅 `deps.Config` 赋值方式不同。任何 start/rollback 逻辑 bug 需修两处。
+**修复**: 替换为 `errcode.New` / `errcode.Wrap`。
 
-**建议**: `Start` 委托 `StartWithConfig(ctx, make(map[string]any))`，或提取 `startInternal`。
+### V2 VERIFY-01 只检查 provider 角色，V3 spec 要求所有角色
 
-### C-K2 Stop 允许从 stateStopped 重复调用
+**文件**: `kernel/governance/rules_verify.go:40`
 
-**文件**: `src/kernel/assembly/assembly.go:138-161`
+V3 spec: "每个 contractUsages 条目必须有 verify.contract 或 waiver"。实现跳过了 consumer 角色（call/subscribe/invoke/read）。
 
-仅防护 `stateStopping` 重入，未防护 `stateStopped` 再次调用。依赖子 Cell 自身处理 double-stop。
+**修复**: 检查所有角色，或更新 spec 明确 consumer 豁免。
 
-**建议**: 添加 `if a.state != stateStarted { return nil }`。
+### V3 Projection `replayable` 必填字段未校验
 
-### C-K3 depcheck.go 重复定义 isProviderRole
+**文件**: `kernel/governance/rules_fmt.go:107-145`
 
-**文件**: `src/kernel/governance/depcheck.go:214-221`
+V3 spec: "Projection 额外必填：replayable"。FMT-04 只检查 event 类型。
 
-与 `cell.IsProviderRole` 功能重复，仅参数类型不同（`string` vs `ContractRole`）。
+**修复**: 扩展 FMT-04 覆盖 projection。
 
-**建议**: 调用 `cell.IsProviderRole(cell.ContractRole(cu.Role))`。
+### V4 httputil/response.go 零测试
 
-### C-K4 FMT-09 / FMT-08 顺序问题
+**文件**: `pkg/httputil/response.go`
 
-**文件**: `src/kernel/governance/rules_fmt.go:222-269`
+HTTP 状态码映射是所有 API 的出口，当前 0 测试。CLAUDE.md 要求 >= 80% 覆盖率。
 
-源码中 FMT-09 在 FMT-08 前面。`validate.go` 调用序 FMT-08 → FMT-09，导致 invalid-kind 的 contract 同时报两个错误。
+**修复**: 添加 mapCodeToStatus、WriteDomainError、WriteError 的完整测试。
 
-**建议**: 先调 FMT-09（kind 合法性）再调 FMT-08（前缀匹配）。
+### V5 access-core 4 个 slice 覆盖率低于 80%
 
-### C-K5 helpers.go isWithinRoot 跨平台路径边界
+identitymanage 42.3%、rbaccheck 41.2%、sessionlogin 64.7%、sessionlogout 60.7%、sessionrefresh 66.0%。Handler 层零测试。
 
-**文件**: `src/kernel/governance/helpers.go:120-124`
-
-前缀匹配依赖 `os.PathSeparator`，跨平台可能有边界问题。GoCell 当前仅 Linux/macOS，风险低。
-
-### C-K6 StatusBoardEntry YAML tag journeyId
-
-**文件**: `src/kernel/metadata/types.go:138`
-
-`yaml:"journeyId"` — 需确认与现有 YAML 文件和命名约定一致。项目禁用了 `cellId`/`sliceId` 等旧名，但 `journeyId` 未在禁用列表中。
+**修复**: 补充 handler HTTP 测试。
 
 ---
 
-## CONCERNS — cells 层（7 个）
+## 三、CONCERNS（42 个，按模块分组）
 
-### C-C1 ID 生成用 time.Now().UnixNano()，并发碰撞
+### kernel/governance（7 个）
 
-**文件**: 5 处 service.go（identitymanage, sessionlogin, auditappend, configwrite, configpublish）
+| # | 问题 | 文件 |
+|---|------|------|
+| C-G1 | DFS 只找第一个环，多环需反复修 | depcheck.go:140 |
+| C-G2 | depcheck.go 重复定义 isProviderRole | depcheck.go:214 |
+| C-G3 | Map 遍历非确定性，多错误时输出顺序不稳定 | 多个 rules 文件 |
+| C-G4 | TOPO-04 检查 ownerCell 而非 provider actor 的一致性级别 | rules_topo.go:98 |
+| C-G5 | 缺少 cell.verify.smoke / slice.verify.unit 非空校验 | 未实现 |
+| C-G6 | 缺少禁用字段名 (cellId/sliceId 等) 检测 | 未实现 |
+| C-G7 | FMT-09/FMT-08 调用顺序导致 invalid-kind 同时报两个错误 | rules_fmt.go |
 
-逻辑在 service 层，会带入生产。并发请求在同一纳秒内产生相同 ID → map 覆盖。
+### kernel/metadata+registry（6 个）
 
-**建议**: 使用 UUID 或 atomic counter。
+| # | 问题 | 文件 |
+|---|------|------|
+| C-M1 | Registry 线程安全未文档化（build-once-read-many 模式） | registry/cell.go |
+| C-M2 | Parser 接受 `id: ""` 不报错 | metadata/parser.go |
+| C-M3 | SchemaRefsMeta.Payload 缺少测试 | metadata/types_test.go |
+| C-M4 | Catalog CellJourneys/ContractJourneys O(n*m) 无索引 | journey/catalog.go |
+| C-M5 | ContractRegistry.Consumers() 方法名与禁用 YAML 字段名碰撞 | registry/contract.go:79 |
+| C-M6 | StatusBoardEntry YAML tag `journeyId` 需确认命名约定 | metadata/types.go:138 |
 
-### C-C2 订阅 goroutine 用 context.Background()，Stop 时泄漏
+### kernel/lifecycle（7 个）
 
-**文件**: `src/cells/audit-core/cell.go:148-155`, `src/cells/config-core/cell.go:159-165`
+| # | 问题 | 文件 |
+|---|------|------|
+| C-L1 | Start 和 StartWithConfig ~95% 重复代码 | assembly/assembly.go |
+| C-L2 | Stop 允许从 stateStopped 重复调用 | assembly/assembly.go:138 |
+| C-L3 | BaseCell 无线程安全（Health/Ready 可从不同 goroutine 调用） | cell/base.go |
+| C-L4 | outbox.Entry.Metadata 未测试 | outbox/outbox_test.go |
+| C-L5 | idempotency.DefaultTTL 未测试 | idempotency_test.go |
+| C-L6 | contract ID 格式不一致：scaffold 用点分 vs generator 用斜杠 | scaffold vs generator |
+| C-L7 | scaffold cell.yaml.tpl 的 verify.smoke 格式约定未文档化 | scaffold/templates |
 
-`RegisterSubscriptions` 的 goroutine 无取消机制。
+### cells/access-core（7 个）
 
-**建议**: Init 时创建 `context.WithCancel`，Stop 时调 `cancel()`。
+| # | 问题 | 文件 |
+|---|------|------|
+| C-AC1 | issueToken + TokenPair + TTL 常量在 login/refresh 两处重复 | sessionlogin + sessionrefresh |
+| C-AC2 | Session refresh 存在 TOCTOU 竞态（并发 refresh 覆盖） | sessionrefresh/service.go |
+| C-AC3 | "already revoked is idempotent" 测试实际未测试幂等性 | sessionlogout/service_test.go:53 |
+| C-AC4 | Service 层 Create 返回含 PasswordHash 的 domain.User | identitymanage/service.go |
+| C-AC5 | Session.ExpiresAt 追踪 access token 过期而非 session 过期 | sessionlogin/service.go:119 |
+| C-AC6 | UserRepository.Update byName 索引改名时残留 | mem/user_repo.go:73 |
+| C-AC7 | 无 JWT `jti` claim，token 不可单独撤销 | sessionlogin/sessionrefresh |
 
-### C-C3 UserRepository.Update byName 索引残留
+### cells/audit+config（9 个）
 
-**文件**: `src/cells/access-core/internal/mem/user_repo.go:73-85`
+| # | 问题 | 文件 |
+|---|------|------|
+| C-DC1 | **Hash chain 状态纯内存，重启后断链** | auditappend/service.go:49 |
+| C-DC2 | **订阅 goroutine 用 context.Background()，Stop 时泄漏** | audit-core/cell.go:150, config-core/cell.go:159 |
+| C-DC3 | TopicConfigChanged 常量 3 处重复 | configwrite/configpublish/configsubscribe |
+| C-DC4 | audit query 时间参数解析失败静默忽略 | auditquery/handler.go:29 |
+| C-DC5 | configsubscribe unmarshal 失败 ACK 而非 dead letter | configsubscribe/service.go:73 |
+| C-DC6 | auditappend publish 失败仅 log 不重试（L3 cell 缺 outbox 保证） | auditappend/service.go:92 |
+| C-DC7 | configpublish.Rollback 不校验 version > 0 | configpublish/service.go:84 |
+| C-DC8 | config-core handler 直接依赖 chi.URLParam — router 耦合 | 多个 handler.go |
+| C-DC9 | auditarchive 是纯 stub，ArchiveStore 已定义但未接线（dead code） | auditarchive + cell.go |
 
-改 username 时未删除旧 `byName` 条目。当前 `identitymanage.Update` 不改 username，但 repo 实现有潜伏 bug。
+### runtime/http（5 个）
 
-### C-C4 audit hash chain 状态纯内存，重启后断链
+| # | 问题 | 文件 |
+|---|------|------|
+| C-H1 | statusRecorder 在 3 个包重复，不支持 Flusher/Hijacker | access_log/tracing/metrics |
+| C-H2 | 默认 middleware chain 缺 RateLimit | router/router.go:72 |
+| C-H3 | Rate limiter Retry-After 硬编码 "1" | rate_limit.go:27 |
+| C-H4 | HSTS 缺 includeSubDomains | security_headers.go:13 |
+| C-H5 | access_log_test.go slog.SetDefault 测试隔离 bug | access_log_test.go:18-20 |
 
-**文件**: `src/cells/audit-core/slices/auditappend/service.go:47-53`
+### runtime/services（7 个）
 
-重启后 `PrevHash = ""`，不连接已持久化条目。破坏链完整性。
+| # | 问题 | 文件 |
+|---|------|------|
+| C-S1 | auth middleware 用 slog.Warn 而非 slog.WarnContext — 无 request_id | auth/middleware.go:26 |
+| C-S2 | shutdown.Manager 第一个 hook 失败中断剩余 hook | shutdown/shutdown.go:78 |
+| C-S3 | shutdown.Manager 是 FIFO 顺序而非 LIFO（bootstrap 补偿但 API 误导） | shutdown/shutdown.go:78 |
+| C-S4 | config watcher 无 debounce | config/watcher.go:58 |
+| C-S5 | EventBus "bus is closed" 用 fmt.Errorf 而非 errcode | eventbus/eventbus.go:83 |
+| C-S6 | Worker.Stop 注释说 reverse order 但实际并发执行 | worker/worker.go:75 |
+| C-S7 | PeriodicWorker 正常关闭时返回 context.Canceled 被 log 为 Error | worker/periodic.go:33 |
 
-**建议**: Init 时从 repo 加载最后一条 entry 来 seed chain 初始状态。
+### cmd+pkg（4 个）
 
-### C-C5 issueToken 重复实现
-
-**文件**: `sessionlogin/service.go:147-160`, `sessionrefresh/service.go:118-131`
-
-完全相同的 token 生成逻辑。
-
-**建议**: 提取到 `access-core/internal/token` 共享包。
-
-### C-C6 audit query 时间参数解析失败静默忽略
-
-**文件**: `src/cells/audit-core/slices/auditquery/handler.go:29-38`
-
-`time.Parse` 失败时不报错，零值导致返回全部条目。应返回 400。
-
-### C-C7 TopicConfigChanged 常量在 3 个 slice 中重复定义
-
-**文件**: configwrite/configpublish/configsubscribe 各自定义
-
-违反 EventBus 规范："stream 名 ≥ 3 次使用抽常量，禁止重复定义"。
-
-**建议**: 提取到 config-core 包级或 internal/constants。
-
----
-
-## CONCERNS — runtime 层（8 个）
-
-### C-R1 shutdown.runHooks 成功但 ctx 过期时返回 DeadlineExceeded
-
-**文件**: `src/runtime/shutdown/shutdown.go:87`
-
-所有 hook 成功执行但 context 恰好过期 → 返回 `context.DeadlineExceeded`，误导调用方。
-
-**建议**: hook 全部成功时返回 `nil`。
-
-### C-R2 statusRecorder 在 3 个包中重复
-
-**文件**: `middleware/access_log.go`, `observability/tracing/tracing.go`, `observability/metrics/metrics.go`
-
-三个近乎相同的 ResponseWriter wrapper，且都不支持 `http.Flusher`/`http.Hijacker`（SSE/WebSocket 不工作）。
-
-**建议**: 提取到 `pkg/httputil`，实现接口委托。
-
-### C-R3 access_log statusRecorder 未处理隐式 WriteHeader
-
-**文件**: `src/runtime/http/middleware/access_log.go:12-18`
-
-`Write()` 无显式 `WriteHeader()` 时，status 字段初始化为 200 掩盖了未观测。`metrics.go` 的 `metricsRecorder` 正确处理了此场景。
-
-### C-R4 EventBus entry ID 用 UnixNano，高并发不唯一
-
-**文件**: `src/runtime/eventbus/eventbus.go:88`
-
-dev/test 场景可接受，但应文档注明或改用 UUID。
-
-### C-R5 auth middleware warn 日志缺 request_id
-
-**文件**: `src/runtime/auth/middleware.go:26-29, 72-75`
-
-token 验证失败的 warn 日志缺少 `request_id` 关联字段，违反可观测性规范。
-
-### C-R6 config watcher 无 debounce
-
-**文件**: `src/runtime/config/watcher.go:58`
-
-vim/IDE 保存触发多次 Write/Create 事件，导致多次 reload（可能读到半写文件）。
-
-**建议**: 添加 ~100ms debounce timer。
-
-### C-R7 WorkerGroup.Stop 注释说 reverse order 但实际并发
-
-**文件**: `src/runtime/worker/worker.go:75-99`
-
-循环逆序但每个 Stop 在独立 goroutine，无实际顺序保证。注释误导。
-
-### C-R8 httputil.mapCodeToStatus 用 strings.Contains 匹配
-
-**文件**: `src/pkg/httputil/response.go:67-89`
-
-顺序敏感且脆弱。`ERR_SOMETHING_NOT_FOUND_VALIDATION` 会匹配 `NOT_FOUND` 而不是 `VALIDATION`。
-
-**建议**: 改用显式 map 或 `strings.HasSuffix`。
+| # | 问题 | 文件 |
+|---|------|------|
+| C-P1 | mapCodeToStatus 用 strings.Contains 匹配 — 顺序敏感、歧义 | httputil/response.go:68 |
+| C-P2 | WriteJSON 忽略 json.Encode 错误 | httputil/response.go:19 |
+| C-P3 | CLI exit code 不区分（usage error / validation error 都是 1） | cmd/gocell/main.go |
+| C-P4 | core-bundle hardcoded dev secrets 无生产环境保护 | cmd/core-bundle/main.go:33,38 |
 
 ---
 
-## 亮点
+## 四、Spec vs 实现覆盖率
 
-1. **0 架构依赖违规** — kernel 不依赖 runtime/cells，cells 不跨 Cell import，runtime 不依赖 cells
+### V3 校验规则覆盖
+
+| V3 规则 | 实现 | 状态 |
+|---------|------|------|
+| slice.belongsToCell → existing Cell | REF-01 | ✅ |
+| contractUsages[].contract → existing contract | REF-02 | ✅ |
+| contract.ownerCell must be Cell | REF-03 | ✅ |
+| schemaRefs files exist | REF-12 | ✅ |
+| cell.id / slice.id == directory name | REF-04, REF-05 | ✅ |
+| contractUsages.role matches kind | TOPO-01 | ✅ |
+| Provider: belongsToCell == contract provider | TOPO-02 | ✅ |
+| Consumer: belongsToCell in consumers | TOPO-03 | ✅ |
+| contract.consistencyLevel ≤ provider level | TOPO-04 | ⚠️ 检查 ownerCell 而非 provider |
+| L0 Cell 不在契约端点 | TOPO-05 | ✅ |
+| Cell 最多属于一个 assembly | TOPO-06 | ✅ |
+| **contractUsage 需 verify 或 waiver** | VERIFY-01 | ❌ **只查 provider** |
+| verify 标识符前缀格式 | — | ❌ 未实现 |
+| L0 deps 声明 + 校验 | VERIFY-03, REF-09 | ✅ |
+| lifecycle ∈ {draft, active, deprecated} | FMT-01 | ✅ |
+| cell.type ∈ {core, edge, support} | FMT-02 | ✅ |
+| 动态字段不在非 status-board 文件 | — | ❌ 未实现 |
+| deprecated 契约不被新引用 | ADV-02 | ✅ (warning) |
+| **Projection replayable 必填** | — | ❌ **未实现** |
+
+**覆盖率**: 12/15 (80%)。3 条 gap 中 2 条为 BLOCKING（V2, V3）。
+
+### V3 字段覆盖（Go types vs spec）
+
+**100% 覆盖**。所有 V3 模型字段在 Go 类型中正确表示，YAML tag 匹配，无禁用字段名。
+
+---
+
+## 五、亮点
+
+1. **0 层依赖违规** — kernel/runtime/cells 三层依赖方向完全正确
 2. **kernel 覆盖率 93-100%**，table-driven 测试质量高
-3. **bcrypt 密码哈希正确**，`UserResponse` DTO 正确排除 `PasswordHash`
-4. **in-memory repo 全部 clone 语义 + RWMutex**，无竞态
-5. **Recovery 中间件不泄露内部错误**，AccessLog 不 dump body
-6. **Bootstrap LIFO 回滚模式**（ref: uber-go/fx）实现正确
-7. **governance validate** 注入 `now`/`fileExists`，测试可确定性执行
+3. **governance 37 条校验规则**，超出 spec 的 22 条额外规则均合理
+4. **bcrypt 密码哈希正确**，UserResponse DTO 正确排除 PasswordHash
+5. **in-memory repo 全部 clone + RWMutex**，无竞态
+6. **Recovery 不泄露内部错误**，AccessLog 不 dump body
+7. **Bootstrap LIFO 回滚**（ref: uber-go/fx）正确实现
+8. **HMAC-SHA256 hash chain** 密码学实现正确
+9. **Feature flag** 确定性百分比评估（SHA256 bucketing）正确
+10. **governance validate** 注入 `now`/`fileExists`，测试可确定性
 
 ---
 
-## 建议修复优先级
+## 六、修复优先级
 
-| 优先级 | 项目 | 工作量 |
-|--------|------|--------|
-| P0 | S-2 logout 不生效 | 1 行 |
-| P0 | S-1 token 错误码映射 | 1 行 |
-| P1 | S-R2+S-R3 ServiceToken HMAC + 空 secret | ~20 行 |
-| P1 | S-R1 RealIP trusted proxies | ~30 行 |
-| P1 | V-1 errcode 替换 | 7 处 |
-| P2 | C-C2 goroutine 泄漏 | ~15 行/cell |
-| P2 | C-C1 UUID 替换 UnixNano | 5 处 |
-| P2 | C-R2 statusRecorder 提取 | ~40 行 |
-| P3 | 其余 concerns | 按需 |
+### P0 — 合入前必修
+
+| # | 工作量 | 说明 |
+|---|--------|------|
+| S2 sessionrefresh signing method 校验 | 3 行 | copy sessionvalidate 的检查 |
+| V2 VERIFY-01 consumer 角色校验 | 10 行 | 删除 `continue` 或更新 spec |
+| V3 Projection replayable 校验 | 5 行 | 扩展 FMT-04 |
+| S5 ServiceToken HMAC 范围 | ~20 行 | 加 query + timestamp |
+| S4 RealIP trusted proxies | ~30 行 | 添加配置参数 |
+| V1 errcode 替换 | 7 处 | fmt.Errorf → errcode |
+
+### P1 — 合入后一周内
+
+| # | 工作量 | 说明 |
+|---|--------|------|
+| S3 Lock 不撤销 session | ~15 行 | 添加 RevokeByUserID |
+| S8 UUID 替换 UnixNano | 7 处 | 引入 google/uuid |
+| S9 access-core 端点挂 auth | ~10 行 | 路由级 middleware |
+| V4 httputil 测试 | ~100 行 | 全量 status mapping 测试 |
+| V5 access-core 覆盖率 | ~200 行 | handler HTTP 测试 |
+| C-DC1 hash chain 重启恢复 | ~15 行 | Init 时 seed prevHash |
+| C-DC2 订阅 goroutine 取消 | ~15 行/cell | context.WithCancel |
+| C-S2 shutdown hook 不中断 | 5 行 | 改 return 为 continue |
+
+### P2 — Phase 3 前
+
+| # | 说明 |
+|---|------|
+| C-P1 mapCodeToStatus 改显式 map | 消除 strings.Contains 歧义 |
+| C-AC1 issueToken 提取共享包 | 消除 login/refresh 重复 |
+| C-H1 statusRecorder 提取 + Flusher/Hijacker | SSE/WebSocket 支持 |
+| C-DC3 TopicConfigChanged 抽常量 | 消除 3 处重复 |
+| C-S1 auth 日志用 slog.WarnContext | 关联字段注入 |
+| C-L1 Start/StartWithConfig 去重 | 40 行重复 |
+| C-G5/C-G6 补充 smoke/unit 非空 + 禁用字段校验 | spec 完整性 |
+
+---
+
+## 七、审查方法论对比
+
+本 PR 进行了两轮审查，第二轮显著优于第一轮。
+
+### 方法对比
+
+| 维度 | 第一轮（3 agent） | 第二轮（8 agent） |
+|------|-------------------|-------------------|
+| 拆分粒度 | 按层：kernel / cells / runtime | 按模块：governance / metadata / lifecycle / access-core / audit+config / http / services / cmd+pkg |
+| 每 agent 文件数 | 60-100 | 15-25 |
+| 审查深度 | 广度扫描 | 逐文件深入 + spec 对照 |
+| 发现总数 | 7 blocking + 21 concerns | 14 blocking + 42 concerns |
+
+### 第二轮独有发现（第一轮遗漏）
+
+| 发现 | 严重度 | 遗漏原因 |
+|------|--------|---------|
+| sessionrefresh JWT algorithm confusion（S2） | **Critical** | 第一轮 cells agent 覆盖 75 文件，未逐行对比 login vs refresh 的 jwt.Parse |
+| User Lock 不撤销已有 session（S3） | **High** | 需要跨 slice 理解 validate 是无状态的，粗粒度审查未做此关联 |
+| access-core 端点无 auth 保护（S9） | **Medium** | 第一轮聚焦代码质量，未审查路由注册的安全配置 |
+| VERIFY-01 只查 provider 角色（V2） | **Blocking** | 第一轮无 spec vs 实现对照分析 |
+| Projection replayable 未校验（V3） | **Blocking** | 同上 |
+| httputil/response.go 零测试（V4） | **Blocking** | 第一轮 runtime agent 范围太大，pkg/ 被边缘化 |
+| 5 个 slice 覆盖率 < 80%（V5） | **Blocking** | 第一轮未做逐包覆盖率检查 |
+| shutdown.Manager 首 hook 失败中断（C-S2） | Concern | 第一轮只看了 bootstrap 层（正确），未深入 Manager 本身 |
+| contract ID 格式 scaffold vs generator 不一致（C-L6） | Concern | 需要对比两个独立模块的格式约定，粗粒度审查未覆盖 |
+
+### 第一轮误报（第二轮纠正）
+
+| 误报 | 原因 |
+|------|------|
+| "session logout 未持久化 revoke" | 第一轮 cells agent 覆盖文件过多，sessionlogout/service.go 的 `Update` 调用被遗漏。第二轮 access-core 专项 agent 逐行确认 line 57-61 确实调了 Update |
+
+### 结论
+
+**大型 PR（200+ 文件）必须按模块拆分审查**。关键收益：
+1. 每 agent 焦点 15-25 文件，逐行深入而非广度扫描
+2. 支持 spec vs 实现对照（需要 agent 同时理解 spec 文档和代码）
+3. 跨模块一致性检查（如 scaffold vs generator 格式、login vs refresh 安全校验）
+4. 降低误报率（第一轮 1 个误报，第二轮 0 个）
+
+**后续 PR 审查规则**：
+- < 50 文件：单 agent 即可
+- 50-100 文件：按层拆 2-3 agent
+- 100+ 文件：按模块拆 6-8 agent，每 agent ≤ 25 文件
+- 安全敏感模块（auth、session、crypto）始终独立 agent
