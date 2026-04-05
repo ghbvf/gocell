@@ -177,3 +177,49 @@ func TestMyCell_Lifecycle(t *testing.T) {
     require.NoError(t, c.Stop(ctx))
 }
 ```
+
+## Integration Testing
+
+Integration tests verify adapter behaviour against real infrastructure. They use the `//go:build integration` build tag and are excluded from the default `go test ./...`.
+
+### Writing Integration Tests for Your Cell
+
+1. Create `integration_test.go` in your Cell or adapter package.
+2. Add `//go:build integration` as the first line.
+3. Read infrastructure addresses from environment variables (see `docs/guides/integration-testing.md`).
+4. Each test should be self-contained: create its own resources, run assertions, then clean up.
+
+```go
+//go:build integration
+
+package mycell
+
+import "testing"
+
+func TestIntegration_MyCellSmoke(t *testing.T) {
+    // Boot cell with real adapters
+    c := NewMyCell(
+        WithPostgresRepo(realRepo),
+    )
+    ctx := context.Background()
+    deps := cell.Dependencies{...}
+
+    require.NoError(t, c.Init(ctx, deps))
+    require.NoError(t, c.Start(ctx))
+    defer c.Stop(ctx)
+
+    // Exercise real adapter paths
+    // ...
+}
+```
+
+### Running
+
+```bash
+docker compose up -d          # boot infrastructure
+cd src
+go test -tags integration ./adapters/postgres/... -count=1 -v
+go test -tags integration ./tests/integration/... -count=1 -v
+```
+
+See `docs/guides/integration-testing.md` for full details and environment variable reference.
