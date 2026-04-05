@@ -6,7 +6,7 @@ tools:
   - Glob
   - Grep
   - Write
-  - Bash
+  - Edit
 model: opus
 effort: high
 permissionMode: auto

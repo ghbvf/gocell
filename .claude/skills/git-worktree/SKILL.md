@@ -36,3 +36,37 @@ description: Git Worktree 项目约定（编号、基准分支、权限兼容、
 | Experiment | 900–999 | experiment, poc, spike |
 
 编号取范围内已有最大值 +1，`printf "%03d"` 格式化。扫描 `specs/` + `git branch -a` 确定。
+
+## Per-PR Worktree 约定
+
+S5 per-PR 实施时，每个 PR 使用独立 worktree：
+
+### 创建
+```bash
+git worktree add .claude/worktrees/{pr-name} -b {pr-branch}
+```
+- `{pr-name}`: 来自 pr-plan.md 的分支名最后一段（如 `pr-1-metadata`）
+- `{pr-branch}`: 完整分支名（如 `phase-1/pr-1-metadata`）
+- 不指定 start-point，默认基于当前 HEAD（即 develop 最新状态）
+
+### 命名
+```
+.claude/worktrees/pr-1-metadata/
+.claude/worktrees/pr-2-registry/
+.claude/worktrees/pr-3-governance/
+```
+
+### 生命周期
+1. S5.2a 创建 worktree
+2. Developer Agent 在 worktree 中实施 + commit + push + create PR
+3. Reviewer Agent 审查 PR diff
+4. Fixer Agent 在同一 worktree 中修复（如需要）
+5. PR merge 后立即删除: `git worktree remove .claude/worktrees/{pr-name}`
+
+### 与编号 worktree 的区别
+| | 编号 worktree | Per-PR worktree |
+|---|---|---|
+| 用途 | 长期特性分支 | 短期 PR 实施 |
+| 命名 | `NNN-short-name` | `pr-{K}-{name}` |
+| 生命周期 | 手动创建和删除 | PR merge 后自动删除 |
+| 目录 | `worktrees/` | `.claude/worktrees/` |

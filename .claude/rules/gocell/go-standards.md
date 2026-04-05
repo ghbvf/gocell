@@ -80,7 +80,7 @@ paths:
 - kernel/ >= 90%(table-driven test)
 - 新增/修改代码 >= 80%
 - handler 层用 httptest,覆盖参数校验和错误码
-- mock 放 internal/mock/,使用 testify
+- mock 定义在测试文件中（*_test.go 同包）
 - 关键一致性测试禁止默认 t.Skip
 
 ## 数据库迁移
@@ -133,10 +133,6 @@ paths:
 - verify.unit: 单元测试命令
 - verify.contract: 契约测试命令
 - owner/consistencyLevel/allowedFiles: 缺省时继承 cell.yaml
-
-### 禁止使用的旧字段名
-
-cellId / sliceId / contractId / assemblyId / ownedSlices / authoritativeData / producer / consumers / callsContracts / publishes / consumes
 
 ### CLI 工具
 

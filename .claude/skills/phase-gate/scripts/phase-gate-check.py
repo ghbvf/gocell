@@ -6,7 +6,8 @@ Usage:
   python3 phase-gate-check.py --stage S0 --branch <branch> --check entry|exit
 
 读取 phase-gates.yaml，校验 required_files + content_checks + repo_files + command_checks。
-任何解析失败、未知阶段、空检查集均视为 FAIL。
+任何解析失败、未知阶段均视为 FAIL。空检查集 {} 除 S0 entry 外也视为 FAIL。
+command_checks 受白名单约束（ALLOWED_CMD_PREFIXES），空命令视为 FAIL。
 """
 
 import argparse
@@ -31,7 +32,11 @@ def find_repo_root() -> Path:
     """从脚本位置回溯找到 repo root。"""
     script_dir = Path(__file__).resolve().parent
     # scripts/ → phase-gate/ → skills/ → .claude/ → repo_root
-    return script_dir.parents[3]
+    root = script_dir.parents[3]
+    if not (root / ".git").exists():
+        print(f"ERROR: computed repo root has no .git directory: {root}")
+        sys.exit(1)
+    return root
 
 
 def parse_args():
@@ -84,8 +89,8 @@ def parse_na_declarations(charter_file: Path) -> dict[str, str]:
     content = charter_file.read_text()
     # 匹配 N/A:SCOPE_IRRELEVANT spec.md 或 spec.md N/A:DEFERRED
     pattern = re.compile(
-        r"(?:N/A:(\w+)\s+([\w./\-]+))|(?:([\w./\-]+)\s+N/A:(\w+))",
-        re.IGNORECASE,
+        r"^(?:[-*]\s+)?(?:N/A:(\w+)\s+([\w./\-]+))|(?:^(?:[-*]\s+)?([\w./\-]+)\s+N/A:(\w+))",
+        re.IGNORECASE | re.MULTILINE,
     )
     for m in pattern.finditer(content):
         if m.group(1):
@@ -165,24 +170,50 @@ def check_content(
             else:
                 print(f"  [PASS] {file} — all tasks checked")
         elif pattern:
-            if re.search(pattern, content):
-                print(f"  [PASS] {file} — pattern matched: {pattern}")
-            else:
-                print(f"  [FAIL] {file} — pattern not found: {pattern}")
-                failures.append(f"{file}: pattern '{pattern}'")
+            try:
+                if re.search(pattern, content):
+                    print(f"  [PASS] {file} — pattern matched: {pattern}")
+                else:
+                    print(f"  [FAIL] {file} — pattern not found: {pattern}")
+                    failures.append(f"{file}: pattern '{pattern}'")
+            except re.error as e:
+                print(f"  [FAIL] {file} — invalid regex: {pattern} ({e})")
+                failures.append(f"{file}: invalid regex '{pattern}'")
     return failures
+
+
+# 允许执行的命令前缀白名单（防止 YAML 篡改执行任意 shell）
+ALLOWED_CMD_PREFIXES = (
+    "go ", "cd src && go ", "cd src/ && go ",
+    "gocell ", "./gocell ",
+    "npx playwright ",
+)
 
 
 def check_commands(commands: list, repo_root: Path) -> list:
     """执行命令检查，验证退出码为 0。返回 failures。"""
     failures = []
     for cmd_spec in commands:
-        cmd = cmd_spec.get("cmd", "")
+        cmd = cmd_spec.get("cmd", "").strip()
         desc = cmd_spec.get("desc", cmd)
+        timeout_sec = cmd_spec.get("timeout", 120)
+
+        # fail-closed: 空命令视为 FAIL
+        if not cmd:
+            print(f"  [FAIL] {desc} — empty command (misconfigured)")
+            failures.append(f"command misconfigured: {desc}")
+            continue
+
+        # 白名单校验
+        if not any(cmd.startswith(prefix) for prefix in ALLOWED_CMD_PREFIXES):
+            print(f"  [FAIL] {desc} — command not in allowlist: {cmd}")
+            failures.append(f"command not allowed: {cmd}")
+            continue
+
         try:
             result = subprocess.run(
                 cmd, shell=True, cwd=str(repo_root),
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=timeout_sec,
             )
             if result.returncode == 0:
                 print(f"  [PASS] {desc}")
@@ -192,7 +223,7 @@ def check_commands(commands: list, repo_root: Path) -> list:
                     print(f"         {result.stderr.strip()[:200]}")
                 failures.append(f"command: {desc}")
         except subprocess.TimeoutExpired:
-            print(f"  [FAIL] {desc} — timeout (60s)")
+            print(f"  [FAIL] {desc} — timeout ({timeout_sec}s)")
             failures.append(f"command timeout: {desc}")
         except Exception as e:
             print(f"  [FAIL] {desc} — {e}")
@@ -208,11 +239,25 @@ def main():
     data = load_gates(gates_file)
     check_config = get_stage_check(data, args.stage, args.check)
 
-    # 如果 check_config 是空 dict（如 S0 entry: {}），视为无条件通过
-    if not check_config:
-        check_config = {}
+    # fail-closed: 非 S0 entry 的空配置视为 FAIL（防止误配 {} 静默放行）
+    if not check_config or not isinstance(check_config, dict):
+        if args.stage == "S0" and args.check == "entry":
+            check_config = {}  # S0 entry 无条件通过（设计意图）
+        else:
+            print(f"FAIL — {args.stage} {args.check}: empty or invalid config (fail-closed)")
+            sys.exit(1)
 
-    specs_dir = repo_root / "specs" / args.branch
+    # Validate branch name: prevent path traversal
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]*$', args.branch) or '..' in args.branch:
+        print(f"ERROR: invalid branch name: {args.branch}")
+        sys.exit(1)
+
+    # Verify specs_dir stays within repo
+    specs_dir = (repo_root / "specs" / args.branch).resolve()
+    if not str(specs_dir).startswith(str(repo_root.resolve())):
+        print(f"ERROR: branch name escapes repo root: {args.branch}")
+        sys.exit(1)
+
     charter_file = specs_dir / "phase-charter.md"
     audit_log = specs_dir / "gate-audit.log"
     specs_dir.mkdir(parents=True, exist_ok=True)

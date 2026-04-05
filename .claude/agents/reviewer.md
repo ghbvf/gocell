@@ -6,8 +6,8 @@ tools:
   - Glob
   - Grep
   - Write
-  - Bash
-model: sonnet
+  - Edit
+model: opus
 effort: high
 permissionMode: auto
 # isolation: worktree

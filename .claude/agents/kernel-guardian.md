@@ -70,6 +70,7 @@ examples/   — 可以依赖所有层
 
 ## 约束
 
+- **与 Architect 的分工**: Guardian 主导分层隔离检查与元数据合规；Architect 主导接口稳定性与架构决策。二者交叉领域由 Guardian 从合规视角、Architect 从设计视角分别审查。
 - 实际探索代码库（Read/Grep/Glob），不凭记忆推断
 - 分层违规检查：用 Grep 搜索 import 路径，验证依赖方向
 - 维度评分必须有证据支撑，不接受无依据的"绿"

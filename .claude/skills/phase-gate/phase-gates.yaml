@@ -74,6 +74,8 @@ stages:
         - plan.md
         - tasks.md
         - product-acceptance-criteria.md
+        - research.md
+        - pr-plan.md
       content_checks:
         - file: tasks.md
           pattern: "(contract test|journey test|测试编写|E2E)"
@@ -92,14 +94,19 @@ stages:
     exit:
       required_files:
         - tasks.md
+        - pr-plan.md
       content_checks:
         - file: tasks.md
           check: no_unchecked_tasks
-      # S5 硬出口: build/test 由开发者 agent 自报，gate 无法独立验证
-      # 但 contracts/OpenAPI 存在性可以检查
+        - file: pr-plan.md
+          pattern: "merged"
       command_checks:
         - cmd: "cd src && go build ./..."
           desc: "go build 编译通过"
+        - cmd: "cd src && go vet ./..."
+          desc: "go vet 静态检查通过"
+        - cmd: "cd src && go test ./... -count=1"
+          desc: "go test 全量测试通过"
 
   S6:
     entry:
@@ -124,11 +131,20 @@ stages:
       required_files:
         - qa-report.md
         - user-signoff.md
+        - evidence/go-test/result.txt
+        - evidence/validate/result.txt
       content_checks:
         - file: qa-report.md
-          pattern: "(go test|contract test|journey test|coverage|PASS|FAIL)"
+          pattern: "(go test.*PASS|coverage|全量测试通过)"
         - file: user-signoff.md
           pattern: "(APPROVE|CONDITIONAL|REJECT)"
+        - file: evidence/go-test/result.txt
+          pattern: "(PASS|ok)"
+        - file: evidence/validate/result.txt
+          pattern: "(0 errors|PASS|valid)"
+      command_checks:
+        - cmd: "cd src && go test ./... -count=1"
+          desc: "go test 全量测试通过"
 
   S8:
     entry:
@@ -136,9 +152,11 @@ stages:
         - qa-report.md
         - tech-debt.md
         - user-signoff.md
+        - evidence/go-test/result.txt
+        - evidence/validate/result.txt
       content_checks:
         - file: user-signoff.md
-          pattern: "(APPROVE|CONDITIONAL|REJECT)"
+          pattern: "(APPROVE|CONDITIONAL)"
     exit:
       required_files:
         - kernel-review-report.md

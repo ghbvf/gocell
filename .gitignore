@@ -38,7 +38,6 @@ tmp/
 
 # Claude Code
 worktrees/
-.claude/worktrees/
 
 # Build output
 src/gocell

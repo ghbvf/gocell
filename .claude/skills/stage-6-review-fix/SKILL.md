@@ -5,11 +5,13 @@ argument-hint: "[branch-name]"
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 ---
 
-# 阶段 6: Review-Fix 循环（最多 3 轮）
+# 阶段 6: 集成审查 + Tech Debt 整理
+
+S5 per-PR 循环中每个 PR 已通过独立 review。本阶段对集成后的完整代码做最终审查，聚焦跨 PR 交互和集成风险。
 
 **执行者**: 总负责人派发 Reviewer + 开发者修复
 
-**入口条件**: S5 出口通过（tasks.md 全 [x] + build/test 绿）
+**入口条件**: S5 出口通过（pr-plan.md 所有 PR merged + 全量 build/test 绿）
 
 ---
 
@@ -33,7 +35,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 每个 Reviewer Agent 启动后必须自行获取以下 4 项上下文（不由总负责人注入）：
 
 1. **kernel-constraints.md** — 内核约束基准，读取 `specs/{branch}/kernel-constraints.md`
-2. **git diff stat** — 自行运行 `git diff main...HEAD --stat` 获取变更范围概览
+2. **git diff stat** -- 自行运行 `git diff develop...HEAD --stat` 获取变更范围概览
 3. **spec.md** — 需求对照基准，读取 `specs/{branch}/spec.md`
 4. **当前 commit hash** — 自行运行 `git rev-parse HEAD` 记录审查基准版本
 
@@ -61,9 +63,12 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent]
 
 启动后自行获取上下文（不依赖总负责人注入）:
 1. 读取 specs/{branch}/kernel-constraints.md
-2. 运行 git diff main...HEAD --stat 获取变更范围
+2. 运行 git diff develop...HEAD --stat 获取变更范围
 3. 读取 specs/{branch}/spec.md
 4. 运行 git rev-parse HEAD 记录审查基准版本
+
+集成焦点: 关注跨 PR 的交互问题 -- 接口不匹配、重复定义、遗漏的集成测试。
+各 PR 内部逻辑已在 S5 审查过，不需要重复。
 
 审查纪律: 直接审查代码变更和测试覆盖。不参考 Agent 对自身工作的描述。
 不因"Agent 说它已测试"就跳过验证。自行确认事实。
