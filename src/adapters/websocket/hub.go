@@ -9,7 +9,7 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -157,7 +157,7 @@ func (h *Hub) Stop(_ context.Context) error {
 
 // Register adds a WebSocket connection to the Hub and starts reading from it.
 func (h *Hub) Register(ctx context.Context, wsConn *websocket.Conn) string {
-	connID := id.New("ws")
+	connID := uid.NewWithPrefix("ws")
 	conn := &Conn{
 		ID:   connID,
 		conn: wsConn,

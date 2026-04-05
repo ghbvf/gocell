@@ -25,7 +25,7 @@ type UserInfo struct {
 func (p *Provider) GetUserInfo(ctx context.Context, accessToken string) (*UserInfo, error) {
 	doc, err := p.Discover(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("oidc userinfo: %w", err)
+		return nil, errcode.Wrap(ErrAdapterOIDCUserInfo, "oidc userinfo: discovery failed", err)
 	}
 
 	if doc.UserinfoEndpoint == "" {

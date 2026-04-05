@@ -28,12 +28,23 @@ var Topics = []string{
 	"event.config.rollback.v1",
 }
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures an audit-append Service.
 type Option func(*Service)
 
 // WithOutboxWriter sets the outbox.Writer for transactional event publishing.
 func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
 }
 
 // Service appends events to the hash chain and persists them.
@@ -43,6 +54,7 @@ type Service struct {
 	chain        *domain.HashChain
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 
@@ -91,31 +103,48 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
 	auditEntry.ID = uid.NewWithPrefix("audit")
 
-	// Persist.
-	if err := s.repo.Append(ctx, auditEntry); err != nil {
-		s.logger.Error("audit-append: failed to persist entry",
-			slog.Any("error", err), slog.String("event_id", entry.ID))
-		return err // transient, will be retried
-	}
-
 	// Publish audit.appended event.
 	appendedPayload, _ := json.Marshal(map[string]any{
 		"audit_entry_id": auditEntry.ID,
 		"event_type":     entry.EventType,
 	})
-	if s.outboxWriter != nil {
-		outboxEntry := outbox.Entry{
-			ID:        uid.NewWithPrefix("evt"),
-			EventType: TopicAuditAppended,
-			Payload:   appendedPayload,
+
+	// Wrap persist + outbox write in a transaction for L2 atomicity.
+	persistAndPublish := func(txCtx context.Context) error {
+		if err := s.repo.Append(txCtx, auditEntry); err != nil {
+			return err // transient, will be retried
 		}
-		if writeErr := s.outboxWriter.Write(ctx, outboxEntry); writeErr != nil {
-			s.logger.Error("audit-append: failed to write outbox entry",
-				slog.Any("error", writeErr))
+		if s.outboxWriter != nil {
+			outboxEntry := outbox.Entry{
+				ID:        uid.NewWithPrefix("evt"),
+				EventType: TopicAuditAppended,
+				Payload:   appendedPayload,
+			}
+			if writeErr := s.outboxWriter.Write(txCtx, outboxEntry); writeErr != nil {
+				return writeErr
+			}
 		}
-	} else if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
-		s.logger.Error("audit-append: failed to publish appended event",
-			slog.Any("error", pubErr))
+		return nil
+	}
+
+	var persistErr error
+	if s.txRunner != nil {
+		persistErr = s.txRunner.RunInTx(ctx, persistAndPublish)
+	} else {
+		persistErr = persistAndPublish(ctx)
+	}
+	if persistErr != nil {
+		s.logger.Error("audit-append: failed to persist entry",
+			slog.Any("error", persistErr), slog.String("event_id", entry.ID))
+		return persistErr
+	}
+
+	// Fallback direct publish when outbox is not in use.
+	if s.outboxWriter == nil {
+		if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
+			s.logger.Error("audit-append: failed to publish appended event",
+				slog.Any("error", pubErr))
+		}
 	}
 
 	s.logger.Info("audit entry appended",

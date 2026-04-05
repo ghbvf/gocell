@@ -180,7 +180,7 @@ func (v *Verifier) getKey(ctx context.Context, kid string) (*rsa.PublicKey, erro
 func (v *Verifier) fetchJWKS(ctx context.Context) error {
 	doc, err := v.provider.Discover(ctx)
 	if err != nil {
-		return fmt.Errorf("oidc jwks: %w", err)
+		return errcode.Wrap(ErrAdapterOIDCJWKS, "oidc jwks: discovery failed", err)
 	}
 
 	if doc.JWKSURI == "" {
@@ -255,12 +255,12 @@ func (v *Verifier) fetchJWKS(ctx context.Context) error {
 func parseRSAPublicKey(key JWK) (*rsa.PublicKey, error) {
 	nBytes, err := base64.RawURLEncoding.DecodeString(key.N)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: decode modulus: %w", err)
+		return nil, errcode.Wrap(ErrAdapterOIDCJWKS, "oidc: decode modulus", err)
 	}
 
 	eBytes, err := base64.RawURLEncoding.DecodeString(key.E)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: decode exponent: %w", err)
+		return nil, errcode.Wrap(ErrAdapterOIDCJWKS, "oidc: decode exponent", err)
 	}
 
 	n := new(big.Int).SetBytes(nBytes)

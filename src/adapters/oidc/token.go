@@ -27,7 +27,7 @@ type TokenResponse struct {
 func (p *Provider) ExchangeCode(ctx context.Context, code string) (*TokenResponse, error) {
 	doc, err := p.Discover(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("oidc exchange: %w", err)
+		return nil, errcode.Wrap(ErrAdapterOIDCToken, "oidc exchange: discovery failed", err)
 	}
 
 	if doc.TokenEndpoint == "" {

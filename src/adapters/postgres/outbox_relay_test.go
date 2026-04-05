@@ -160,6 +160,36 @@ func (m *mockDBTX) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error
 	return m.queryRows, nil
 }
 
+func (m *mockDBTX) Begin(_ context.Context) (pgx.Tx, error) {
+	return &mockRelayTx{db: m}, nil
+}
+
+// mockRelayTx implements pgx.Tx for unit testing. It delegates Query/Exec to the
+// underlying mockDBTX so existing test assertions on execCalls still work.
+type mockRelayTx struct {
+	db *mockDBTX
+}
+
+func (t *mockRelayTx) Begin(_ context.Context) (pgx.Tx, error)   { return t, nil }
+func (t *mockRelayTx) Commit(_ context.Context) error             { return nil }
+func (t *mockRelayTx) Rollback(_ context.Context) error           { return nil }
+func (t *mockRelayTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+func (t *mockRelayTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
+func (t *mockRelayTx) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+func (t *mockRelayTx) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
+	return nil, nil
+}
+func (t *mockRelayTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return t.db.Exec(ctx, sql, args...)
+}
+func (t *mockRelayTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return t.db.Query(ctx, sql, args...)
+}
+func (t *mockRelayTx) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
+func (t *mockRelayTx) Conn() *pgx.Conn                                        { return nil }
+
 type mockRowData struct {
 	values []any
 }

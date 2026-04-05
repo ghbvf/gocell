@@ -3,19 +3,22 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Compile-time interface check.
-var _ outbox.Relay = (*OutboxRelay)(nil)
+// Compile-time interface checks.
+var (
+	_ outbox.Relay  = (*OutboxRelay)(nil)
+	_ worker.Worker = (*OutboxRelay)(nil)
+)
 
 // RelayConfig configures the outbox relay behaviour.
 type RelayConfig struct {
@@ -40,6 +43,7 @@ func DefaultRelayConfig() RelayConfig {
 type relayDB interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // OutboxRelay polls unpublished outbox entries from PostgreSQL and publishes
@@ -122,8 +126,23 @@ func (r *OutboxRelay) pollLoop(ctx context.Context) {
 	}
 }
 
-// pollOnce fetches a batch of unpublished entries and publishes them.
+// pollOnce fetches a batch of unpublished entries within an explicit
+// transaction (required for FOR UPDATE SKIP LOCKED) and publishes them.
+// Successfully published entries are marked as published and committed;
+// on any failure the transaction is rolled back.
 func (r *OutboxRelay) pollOnce(ctx context.Context) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGConnect, "outbox relay: begin tx failed", err)
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
 	const fetchQuery = `SELECT id, aggregate_id, aggregate_type, event_type,
 		payload, metadata, created_at
 		FROM outbox_entries
@@ -132,7 +151,7 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED`
 
-	rows, err := r.db.Query(ctx, fetchQuery, r.config.BatchSize)
+	rows, err := tx.Query(ctx, fetchQuery, r.config.BatchSize)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: fetch query failed", err)
 	}
@@ -184,7 +203,8 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 			continue
 		}
 
-		if err := r.markPublished(ctx, e.ID); err != nil {
+		const markQuery = `UPDATE outbox_entries SET published = true, published_at = now() WHERE id = $1`
+		if _, err := tx.Exec(ctx, markQuery, e.ID); err != nil {
 			slog.Error("outbox relay: mark published failed",
 				slog.String("entry_id", e.ID),
 				slog.Any("error", err),
@@ -192,17 +212,11 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 		}
 	}
 
-	return nil
-}
-
-// markPublished sets an entry's published flag to true.
-func (r *OutboxRelay) markPublished(ctx context.Context, id string) error {
-	const query = `UPDATE outbox_entries SET published = true, published_at = now() WHERE id = $1`
-	_, err := r.db.Exec(ctx, query, id)
-	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery,
-			fmt.Sprintf("outbox relay: mark published failed for %s", id), err)
+	if err := tx.Commit(ctx); err != nil {
+		return errcode.Wrap(ErrAdapterPGConnect, "outbox relay: commit tx failed", err)
 	}
+	committed = true
+
 	return nil
 }
 

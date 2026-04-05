@@ -238,7 +238,7 @@ func deriveSigningKey(secret, dateStamp, region, service string) []byte {
 func (c *Client) doRequest(ctx context.Context, method, url string, body io.Reader, payload []byte, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
-		return nil, fmt.Errorf("s3: create request: %w", err)
+		return nil, errcode.Wrap(ErrAdapterS3Upload, "s3: create request", err)
 	}
 
 	if contentType != "" {
@@ -249,7 +249,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body io.Read
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("s3: request failed: %w", err)
+		return nil, errcode.Wrap(ErrAdapterS3Upload, "s3: request failed", err)
 	}
 
 	return resp, nil

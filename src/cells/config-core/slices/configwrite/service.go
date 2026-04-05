@@ -23,6 +23,12 @@ const (
 	ErrConfigInvalidInput errcode.Code = "ERR_CONFIG_INVALID_INPUT"
 )
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures a config-write Service.
 type Option func(*Service)
 
@@ -31,11 +37,17 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service implements config write business logic.
 type Service struct {
 	repo         ports.ConfigRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 
@@ -74,11 +86,16 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		UpdatedAt: now,
 	}
 
-	if err := s.repo.Create(ctx, entry); err != nil {
-		return nil, fmt.Errorf("config-write: create: %w", err)
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Create(txCtx, entry); err != nil {
+			return fmt.Errorf("config-write: create: %w", err)
+		}
+		s.publishChange(txCtx, "created", entry)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	s.publishChange(ctx, "created", entry)
 	s.logger.Info("config entry created", slog.String("key", entry.Key))
 	return entry, nil
 }
@@ -104,11 +121,16 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 	entry.Version++
 	entry.UpdatedAt = time.Now()
 
-	if err := s.repo.Update(ctx, entry); err != nil {
-		return nil, fmt.Errorf("config-write: update: %w", err)
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, entry); err != nil {
+			return fmt.Errorf("config-write: update: %w", err)
+		}
+		s.publishChange(txCtx, "updated", entry)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	s.publishChange(ctx, "updated", entry)
 	s.logger.Info("config entry updated", slog.String("key", entry.Key), slog.Int("version", entry.Version))
 	return entry, nil
 }
@@ -124,13 +146,27 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("config-write: delete: %w", err)
 	}
 
-	if err := s.repo.Delete(ctx, key); err != nil {
-		return fmt.Errorf("config-write: delete: %w", err)
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Delete(txCtx, key); err != nil {
+			return fmt.Errorf("config-write: delete: %w", err)
+		}
+		s.publishChange(txCtx, "deleted", entry)
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	s.publishChange(ctx, "deleted", entry)
 	s.logger.Info("config entry deleted", slog.String("key", key))
 	return nil
+}
+
+// runInTx executes fn in a transaction if txRunner is configured, otherwise
+// executes directly.
+func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }
 
 func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) {

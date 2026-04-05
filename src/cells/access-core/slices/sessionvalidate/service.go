@@ -4,6 +4,7 @@ package sessionvalidate
 
 import (
 	"context"
+	"crypto/rsa"
 	"log/slog"
 	"time"
 
@@ -21,21 +22,48 @@ const (
 // Compile-time check: Service implements auth.TokenVerifier.
 var _ auth.TokenVerifier = (*Service)(nil)
 
+// Option configures a session-validate Service.
+type Option func(*Service)
+
+// WithSigningMethod overrides the default JWT verification method and key.
+// For RS256, pass jwt.SigningMethodRS256 with an *rsa.PublicKey.
+// For HS256 (default), pass jwt.SigningMethodHS256 with a []byte key.
+func WithSigningMethod(method jwt.SigningMethod, key any) Option {
+	return func(s *Service) {
+		s.verifyMethod = method
+		s.verifyKeyAny = key
+	}
+}
+
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	signingKey  []byte
-	sessionRepo ports.SessionRepository
-	logger      *slog.Logger
+	signingKey   []byte            // default HS256 key
+	verifyMethod jwt.SigningMethod // overridden via WithSigningMethod
+	verifyKeyAny any               // overridden via WithSigningMethod
+	sessionRepo  ports.SessionRepository
+	logger       *slog.Logger
 }
 
 // NewService creates a session-validate Service.
-func NewService(signingKey []byte, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
-	return &Service{signingKey: signingKey, sessionRepo: sessionRepo, logger: logger}
+func NewService(signingKey []byte, sessionRepo ports.SessionRepository, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{signingKey: signingKey, sessionRepo: sessionRepo, logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Verify validates the token string and returns decoded Claims.
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
+		// Accept configured signing method (e.g. RS256) when set.
+		if s.verifyMethod != nil && s.verifyKeyAny != nil {
+			if t.Method.Alg() != s.verifyMethod.Alg() {
+				return nil, errcode.New(ErrValidateInvalidToken, "unexpected signing method")
+			}
+			return s.verifyKeyAny, nil
+		}
+		// Default: accept HMAC (HS256) only.
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, errcode.New(ErrValidateInvalidToken, "unexpected signing method")
 		}
@@ -102,7 +130,8 @@ func stringClaim(m jwt.MapClaims, key string) string {
 
 // IssueTestToken creates a signed JWT for testing purposes.
 // An optional sessionID can be provided to include the "sid" claim.
-func IssueTestToken(signingKey []byte, subject string, roles []string, ttl time.Duration, sessionID ...string) (string, error) {
+// signingKey can be []byte (HS256) or *rsa.PrivateKey (RS256).
+func IssueTestToken(signingKey any, subject string, roles []string, ttl time.Duration, sessionID ...string) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub": subject,
@@ -117,6 +146,16 @@ func IssueTestToken(signingKey []byte, subject string, roles []string, ttl time.
 	if len(sessionID) > 0 && sessionID[0] != "" {
 		claims["sid"] = sessionID[0]
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(signingKey)
+
+	switch k := signingKey.(type) {
+	case *rsa.PrivateKey:
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		return token.SignedString(k)
+	case []byte:
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		return token.SignedString(k)
+	default:
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		return token.SignedString(signingKey)
+	}
 }

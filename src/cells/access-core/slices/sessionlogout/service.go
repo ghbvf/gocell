@@ -20,6 +20,12 @@ const (
 	ErrLogoutInvalidInput errcode.Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 )
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures a session-logout Service.
 type Option func(*Service)
 
@@ -28,11 +34,17 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service implements session revocation.
 type Service struct {
 	sessionRepo  ports.SessionRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 
@@ -71,27 +83,45 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 
 	session.Revoke()
 
-	if err := s.sessionRepo.Update(ctx, session); err != nil {
-		return fmt.Errorf("session-logout: persist revoke: %w", err)
-	}
-
 	// Publish event.
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": sessionID, "user_id": session.UserID,
 	})
-	if s.outboxWriter != nil {
-		entry := outbox.Entry{
-			ID:        uid.NewWithPrefix("evt"),
-			EventType: TopicSessionRevoked,
-			Payload:   payload,
+
+	// Wrap session update + outbox write in a transaction for L2 atomicity.
+	persistAndPublish := func(txCtx context.Context) error {
+		if err := s.sessionRepo.Update(txCtx, session); err != nil {
+			return fmt.Errorf("session-logout: persist revoke: %w", err)
 		}
-		if writeErr := s.outboxWriter.Write(ctx, entry); writeErr != nil {
-			s.logger.Error("session-logout: failed to write outbox entry",
-				slog.Any("error", writeErr))
+		if s.outboxWriter != nil {
+			entry := outbox.Entry{
+				ID:        uid.NewWithPrefix("evt"),
+				EventType: TopicSessionRevoked,
+				Payload:   payload,
+			}
+			if writeErr := s.outboxWriter.Write(txCtx, entry); writeErr != nil {
+				return fmt.Errorf("session-logout: write outbox entry: %w", writeErr)
+			}
 		}
-	} else if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, payload); pubErr != nil {
-		s.logger.Error("session-logout: failed to publish event",
-			slog.Any("error", pubErr))
+		return nil
+	}
+
+	if s.txRunner != nil {
+		if err := s.txRunner.RunInTx(ctx, persistAndPublish); err != nil {
+			return err
+		}
+	} else {
+		if err := persistAndPublish(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Fallback direct publish when outbox is not in use.
+	if s.outboxWriter == nil {
+		if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, payload); pubErr != nil {
+			s.logger.Error("session-logout: failed to publish event",
+				slog.Any("error", pubErr))
+		}
 	}
 
 	s.logger.Info("session revoked",

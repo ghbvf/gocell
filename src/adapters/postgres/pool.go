@@ -26,19 +26,19 @@ const (
 type Config struct {
 	// DSN is the PostgreSQL connection string (e.g.
 	// "postgres://user:pass@localhost:5432/dbname?sslmode=disable").
-	// When empty, ConfigFromEnv reads PG_DSN.
+	// When empty, ConfigFromEnv reads GOCELL_PG_DSN.
 	DSN string
 
 	// MaxConns is the maximum number of connections in the pool.
-	// Default: 10. Env: PG_MAX_CONNS.
+	// Default: 10. Env: GOCELL_PG_MAX_CONNS.
 	MaxConns int32
 
 	// IdleTimeout is how long an idle connection may remain in the pool.
-	// Default: 5m. Env: PG_IDLE_TIMEOUT (duration string).
+	// Default: 5m. Env: GOCELL_PG_IDLE_TIMEOUT (duration string).
 	IdleTimeout time.Duration
 
 	// MaxLifetime is the maximum lifetime of a connection.
-	// Default: 1h. Env: PG_MAX_LIFETIME (duration string).
+	// Default: 1h. Env: GOCELL_PG_MAX_LIFETIME (duration string).
 	MaxLifetime time.Duration
 }
 
@@ -46,23 +46,23 @@ type Config struct {
 // Missing or unparseable values fall back to defaults.
 func ConfigFromEnv() Config {
 	cfg := Config{
-		DSN:         os.Getenv("PG_DSN"),
+		DSN:         os.Getenv("GOCELL_PG_DSN"),
 		MaxConns:    defaultMaxConns,
 		IdleTimeout: defaultIdleTimeout,
 		MaxLifetime: defaultMaxLifetime,
 	}
 
-	if v := os.Getenv("PG_MAX_CONNS"); v != "" {
+	if v := os.Getenv("GOCELL_PG_MAX_CONNS"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			cfg.MaxConns = int32(n)
 		}
 	}
-	if v := os.Getenv("PG_IDLE_TIMEOUT"); v != "" {
+	if v := os.Getenv("GOCELL_PG_IDLE_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.IdleTimeout = d
 		}
 	}
-	if v := os.Getenv("PG_MAX_LIFETIME"); v != "" {
+	if v := os.Getenv("GOCELL_PG_MAX_LIFETIME"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.MaxLifetime = d
 		}

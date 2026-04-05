@@ -4,6 +4,7 @@ package sessionrefresh
 
 import (
 	"context"
+	"crypto/rsa"
 	"fmt"
 	"log/slog"
 	"time"
@@ -30,12 +31,27 @@ type TokenPair struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
+// Option configures a session-refresh Service.
+type Option func(*Service)
+
+// WithSigningMethod overrides the default JWT signing method and key.
+// method should be jwt.SigningMethodRS256 with an *rsa.PrivateKey, or
+// jwt.SigningMethodHS256 with a []byte key.
+func WithSigningMethod(method jwt.SigningMethod, key any) Option {
+	return func(s *Service) {
+		s.signingMethod = method
+		s.signingKeyAny = key
+	}
+}
+
 // Service implements token refresh logic.
 type Service struct {
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
-	signingKey  []byte
-	logger      *slog.Logger
+	sessionRepo   ports.SessionRepository
+	roleRepo      ports.RoleRepository
+	signingKey    []byte            // default HS256 key
+	signingMethod jwt.SigningMethod // overridden via WithSigningMethod
+	signingKeyAny any               // overridden via WithSigningMethod
+	logger        *slog.Logger
 }
 
 // NewService creates a session-refresh Service.
@@ -44,13 +60,18 @@ func NewService(
 	roleRepo ports.RoleRepository,
 	signingKey []byte,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
 		signingKey:  signingKey,
 		logger:      logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Refresh validates the refresh token and issues a new token pair.
@@ -64,6 +85,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 
 	// Verify the refresh token JWT signature and signing method.
 	_, err := jwt.Parse(refreshToken, func(t *jwt.Token) (any, error) {
+		// Accept RSA (RS256) when configured, otherwise HMAC (HS256).
+		if s.signingMethod != nil && s.signingKeyAny != nil {
+			if t.Method.Alg() != s.signingMethod.Alg() {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return s.verifyKey(), nil
+		}
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
@@ -153,6 +181,20 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 		claims["sid"] = sid
 	}
 
+	// Use overridden signing method/key if configured, otherwise default HS256.
+	if s.signingMethod != nil && s.signingKeyAny != nil {
+		token := jwt.NewWithClaims(s.signingMethod, claims)
+		return token.SignedString(s.signingKeyAny)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(s.signingKey)
+}
+
+// verifyKey returns the key used for token verification. For RSA, this is the
+// public key extracted from the private key; for HMAC, it's the raw signing key.
+func (s *Service) verifyKey() any {
+	if pk, ok := s.signingKeyAny.(*rsa.PrivateKey); ok {
+		return &pk.PublicKey
+	}
+	return s.signingKeyAny
 }

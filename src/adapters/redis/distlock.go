@@ -168,7 +168,7 @@ func (d *DistLock) renewLoop(ctx context.Context, lock *Lock, ttl time.Duration)
 func randomToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("random token: %w", err)
+		return "", errcode.Wrap(ErrAdapterRedisLockAcquire, "redis: random token generation failed", err)
 	}
 	return hex.EncodeToString(b), nil
 }

@@ -25,6 +25,12 @@ type VerifyResult struct {
 	EntriesChecked    int  `json:"entriesChecked"`
 }
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures an audit-verify Service.
 type Option func(*Service)
 
@@ -33,12 +39,18 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service verifies hash chain integrity.
 type Service struct {
 	repo         ports.AuditRepository
 	chain        *domain.HashChain
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 

@@ -25,6 +25,12 @@ const (
 	ErrPublishInvalidInput errcode.Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"
 )
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures a config-publish Service.
 type Option func(*Service)
 
@@ -33,11 +39,17 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service implements config publish/rollback business logic.
 type Service struct {
 	repo         ports.ConfigRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 
@@ -74,17 +86,22 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		PublishedAt: &now,
 	}
 
-	if err := s.repo.PublishVersion(ctx, version); err != nil {
-		return nil, fmt.Errorf("config-publish: publish version: %w", err)
-	}
-
 	payload, _ := json.Marshal(map[string]any{
 		"action":    "published",
 		"key":       key,
 		"config_id": entry.ID,
 		"version":   version.Version,
 	})
-	s.publishEvent(ctx, TopicConfigChanged, payload, key)
+
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.PublishVersion(txCtx, version); err != nil {
+			return fmt.Errorf("config-publish: publish version: %w", err)
+		}
+		s.publishEvent(txCtx, TopicConfigChanged, payload, key)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 
 	s.logger.Info("config version published",
 		slog.String("key", key), slog.Int("version", version.Version))
@@ -111,21 +128,35 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	entry.Version++
 	entry.UpdatedAt = time.Now()
 
-	if err := s.repo.Update(ctx, entry); err != nil {
-		return nil, fmt.Errorf("config-publish: rollback update: %w", err)
-	}
-
 	payload, _ := json.Marshal(map[string]any{
 		"action":         "rollback",
 		"key":            key,
 		"target_version": targetVersion,
 		"new_version":    entry.Version,
 	})
-	s.publishEvent(ctx, TopicConfigRollback, payload, key)
+
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, entry); err != nil {
+			return fmt.Errorf("config-publish: rollback update: %w", err)
+		}
+		s.publishEvent(txCtx, TopicConfigRollback, payload, key)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 
 	s.logger.Info("config rolled back",
 		slog.String("key", key), slog.Int("target_version", targetVersion))
 	return entry, nil
+}
+
+// runInTx executes fn in a transaction if txRunner is configured, otherwise
+// executes directly.
+func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }
 
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) {

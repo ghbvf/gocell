@@ -2,7 +2,6 @@ package rabbitmq
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"math"
 	"sync"
@@ -173,7 +172,7 @@ func WithDialFunc(dial DialFunc) ConnectionOption {
 func (c *Connection) connect() error {
 	conn, err := c.dial(c.config.URL)
 	if err != nil {
-		return fmt.Errorf("rabbitmq: dial: %w", err)
+		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: dial", err)
 	}
 
 	c.mu.Lock()

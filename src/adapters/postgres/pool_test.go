@@ -11,7 +11,7 @@ import (
 
 func TestConfigFromEnv_Defaults(t *testing.T) {
 	// Clear any env vars that might be set.
-	for _, key := range []string{"PG_DSN", "PG_MAX_CONNS", "PG_IDLE_TIMEOUT", "PG_MAX_LIFETIME"} {
+	for _, key := range []string{"GOCELL_PG_DSN", "GOCELL_PG_MAX_CONNS", "GOCELL_PG_IDLE_TIMEOUT", "GOCELL_PG_MAX_LIFETIME"} {
 		t.Setenv(key, "")
 	}
 
@@ -24,10 +24,10 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 }
 
 func TestConfigFromEnv_CustomValues(t *testing.T) {
-	t.Setenv("PG_DSN", "postgres://test:test@localhost:5432/testdb")
-	t.Setenv("PG_MAX_CONNS", "25")
-	t.Setenv("PG_IDLE_TIMEOUT", "10m")
-	t.Setenv("PG_MAX_LIFETIME", "2h")
+	t.Setenv("GOCELL_PG_DSN", "postgres://test:test@localhost:5432/testdb")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "25")
+	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "10m")
+	t.Setenv("GOCELL_PG_MAX_LIFETIME", "2h")
 
 	cfg := ConfigFromEnv()
 
@@ -38,10 +38,10 @@ func TestConfigFromEnv_CustomValues(t *testing.T) {
 }
 
 func TestConfigFromEnv_InvalidValues(t *testing.T) {
-	t.Setenv("PG_DSN", "postgres://localhost/db")
-	t.Setenv("PG_MAX_CONNS", "not-a-number")
-	t.Setenv("PG_IDLE_TIMEOUT", "bad-duration")
-	t.Setenv("PG_MAX_LIFETIME", "bad-duration")
+	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "not-a-number")
+	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "bad-duration")
+	t.Setenv("GOCELL_PG_MAX_LIFETIME", "bad-duration")
 
 	cfg := ConfigFromEnv()
 
@@ -52,8 +52,8 @@ func TestConfigFromEnv_InvalidValues(t *testing.T) {
 }
 
 func TestConfigFromEnv_NegativeMaxConns(t *testing.T) {
-	t.Setenv("PG_DSN", "postgres://localhost/db")
-	t.Setenv("PG_MAX_CONNS", "-5")
+	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "-5")
 
 	cfg := ConfigFromEnv()
 	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)

@@ -24,6 +24,12 @@ const (
 	ErrIdentityInput errcode.Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 )
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Option configures an identity-manage Service.
 type Option func(*Service)
 
@@ -32,12 +38,18 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service implements identity management business logic.
 type Service struct {
 	repo         ports.UserRepository
 	sessionRepo  ports.SessionRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     TxRunner
 	logger       *slog.Logger
 }
 
@@ -76,13 +88,17 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 
 	user.ID = uid.NewWithPrefix("usr")
 
-	if err := s.repo.Create(ctx, user); err != nil {
-		return nil, fmt.Errorf("identity-manage: create: %w", err)
+	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Create(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: create: %w", err)
+		}
+		s.publish(txCtx, TopicUserCreated, eventPayload)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	s.publish(ctx, TopicUserCreated, map[string]any{
-		"user_id": user.ID, "username": user.Username,
-	})
 	s.logger.Info("user created", slog.String("user_id", user.ID))
 	return user, nil
 }
@@ -164,17 +180,21 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	}
 
 	user.Lock()
-	if err := s.repo.Update(ctx, user); err != nil {
-		return fmt.Errorf("identity-manage: lock: %w", err)
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: lock: %w", err)
+		}
+		// Revoke all sessions for the locked user so existing tokens become invalid.
+		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
+			s.logger.Error("identity-manage: failed to revoke sessions on lock",
+				slog.Any("error", err), slog.String("user_id", id))
+		}
+		s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id})
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	// Revoke all sessions for the locked user so existing tokens become invalid.
-	if err := s.sessionRepo.RevokeByUserID(ctx, id); err != nil {
-		s.logger.Error("identity-manage: failed to revoke sessions on lock",
-			slog.Any("error", err), slog.String("user_id", id))
-	}
-
-	s.publish(ctx, TopicUserLocked, map[string]any{"user_id": id})
 	s.logger.Info("user locked", slog.String("user_id", id))
 	return nil
 }
@@ -217,4 +237,13 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 		s.logger.Error("identity-manage: failed to publish event",
 			slog.Any("error", err), slog.String("topic", topic))
 	}
+}
+
+// runInTx executes fn in a transaction if txRunner is configured, otherwise
+// executes directly.
+func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }
