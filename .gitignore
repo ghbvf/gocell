@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+.venv/
 bin/
 dist/
 
@@ -36,6 +37,7 @@ tmp/
 *.tmp
 
 # Claude Code
+worktrees/
 .claude/worktrees/
 
 # Build output
