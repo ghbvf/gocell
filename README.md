@@ -1,143 +1,274 @@
 # GoCell
 
-> **Phase 3 完成** — 6 个外部系统适配器（postgres / redis / oidc / s3 / rabbitmq / websocket）已实现，安全加固完成，Phase 2 技术债务系统性偿还（约 65/74 条 RESOLVED）。examples/ 示例项目在 Phase 4 实现中。
+Cell-native Go Engineering Foundation.
 
-Cell-native Go 工程底座。
+GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-in Cells for building reliable Go services with the Slice-Cell architecture.
 
-GoCell 提供 Cell/Slice 运行时原语、治理工具链和内置 Cell，用于构建基于 Slice-Cell 架构的可靠 Go 服务。
-
-## 内置 Cell
-
-- **config-core** — 配置热更新、功能开关、版本发布与回滚（5 Slices: config-write / config-read / config-publish / config-subscribe / feature-flag）
-- **access-core** — 身份管理、JWT Session 生命周期、RBAC 授权（7 Slices: identity-manage / session-login / session-refresh / session-logout / session-validate / authorization-decide / rbac-check）
-- **audit-core** — 基于 HMAC-SHA256 哈希链的防篡改审计追踪（4 Slices: audit-append / audit-verify / audit-archive / audit-query）
-
-## Adapter 层
-
-| Adapter | 核心能力 | 实现的 kernel 接口 |
-|---------|---------|-----------------|
-| `adapters/postgres` | Pool (pgx/v5)、TxManager、Migrator、OutboxWriter、OutboxRelay | `outbox.Writer`、`outbox.Relay`、`worker.Worker` |
-| `adapters/redis` | Client (go-redis/v9)、DistLock、IdempotencyChecker、Cache | `idempotency.Checker` |
-| `adapters/oidc` | OIDC Provider Client、Token Exchange、JWKS 验证 | — |
-| `adapters/s3` | S3/MinIO Client、PresignedURL、ConfigFromEnv | — |
-| `adapters/rabbitmq` | Publisher、Subscriber、ConsumerBase (DLQ + retry) | `outbox.Publisher`、`outbox.Subscriber` |
-| `adapters/websocket` | WebSocket Hub、signal-first 推送、Origin 白名单 | — |
-
-每个 adapter 均提供：`Health(ctx) error`、编译时接口断言、`doc.go`、统一 `GOCELL_*` 环境变量前缀。
-
-## Runtime 层
-
-- **bootstrap** — 统一应用生命周期管理（配置加载 → Assembly 启动 → HTTP 服务 → 事件订阅 → 优雅关闭）；支持 `WithPublisher` / `WithSubscriber` 接口注入
-- **config** — YAML + 环境变量配置加载，支持热更新，已集成 bootstrap 生命周期
-- **eventbus** — 内存事件总线（开发/测试用，支持重试 + 死信队列）
-- **http/middleware** — RequestID / RealIP (trustedProxies) / Recovery / AccessLog / SecurityHeaders / BodyLimit / RateLimit
-- **http/router** — 基于 chi 的路由构建器
-- **http/health** — 健康检查端点
-- **shutdown** — 信号捕获 + 优雅关闭管理
-- **worker** — 后台任务编排
-- **auth** — RS256 JWTIssuer / JWTVerifier / RBAC / ServiceToken（timestamp 防重放）
-
-## Kernel
-
-- Cell/Slice/Assembly 运行时 + 生命周期管理（LIFO 关闭顺序、BaseCell 互斥锁）
-- 元数据治理（cell.yaml / slice.yaml / contract.yaml）
-- Assembly 代码生成
-- Journey Catalog 和 Status Board
-- 契约注册、依赖检查、影响面分析
-- 事务性 Outbox（outbox.Writer / outbox.Relay / outbox.Publisher / outbox.Subscriber）
-- 幂等检查（idempotency.Checker）
-- 统一错误码（pkg/errcode）
-
-## 快速开始
-
-### 一键启动完整基础设施（PostgreSQL + Redis + RabbitMQ + MinIO）
+## Quick Start (5 minutes)
 
 ```bash
-cp .env.example .env
-docker compose up -d
-# 等待所有服务 healthy（约 30 秒）
+git clone https://github.com/ghbvf/gocell.git
+cd gocell/src
+go run ./examples/todo-order
 ```
 
-### 启动 core-bundle（3 个内建 Cell）
+Open another terminal:
 
 ```bash
-cd src && go run ./cmd/core-bundle
-# HTTP server listening on :8080
-# 健康检查: GET /healthz
-# 配置 API: /api/v1/config/*
-# 认证 API: /api/v1/access/*
-# 审计 API: /api/v1/audit/*
+# Create an order
+curl -s -X POST http://localhost:8082/api/v1/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"item":"my first order"}' | jq .
+
+# List orders
+curl -s http://localhost:8082/api/v1/orders | jq .
 ```
 
-### 自定义 Assembly（with Adapter 注入）
+Check the application logs — you should see `event.order.created consumed`.
+
+## Core Concepts
+
+```
+┌─────────────────────────────────────────────────┐
+│  Assembly        (physical deployment unit)      │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐ │
+│  │ Cell       │  │ Cell       │  │ Cell       │ │
+│  │ ┌────────┐ │  │ ┌────────┐ │  │ ┌────────┐ │ │
+│  │ │ Slice  │ │  │ │ Slice  │ │  │ │ Slice  │ │ │
+│  │ └────────┘ │  │ └────────┘ │  │ └────────┘ │ │
+│  │ ┌────────┐ │  │ ┌────────┐ │  │ ┌────────┐ │ │
+│  │ │ Slice  │ │  │ │ Slice  │ │  │ │ Slice  │ │ │
+│  │ └────────┘ │  │ └────────┘ │  │ └────────┘ │ │
+│  └──────┬─────┘  └──────┬─────┘  └──────┬─────┘ │
+│         └───── Contract ─┘───── Contract ┘       │
+└─────────────────────────────────────────────────┘
+```
+
+| Concept | Description |
+|---------|-------------|
+| **Cell** | Independent domain unit with lifecycle (Init/Start/Stop/Health). Types: core, edge, support. |
+| **Slice** | A single responsibility within a Cell (e.g., `session-login`, `order-create`). |
+| **Contract** | Cross-Cell communication boundary (HTTP, event, command). Cells never import each other directly. |
+| **Assembly** | Physical deployment — groups Cells into a runnable binary. |
+| **Journey** | End-to-end acceptance specification spanning multiple Cells and Contracts. |
+
+### Consistency Levels (L0-L4)
+
+| Level | Name | Pattern | Example |
+|-------|------|---------|---------|
+| L0 | LocalOnly | Single slice, no side effects | Validation, computation |
+| L1 | LocalTx | Single cell transaction | Session creation |
+| L2 | OutboxFact | Transaction + outbox event | Order creation + event publish |
+| L3 | WorkflowEventual | Cross-cell eventual consistency | Audit trail, projections |
+| L4 | DeviceLatent | High-latency device loop | Command → ack with timeout |
+
+## 30-Minute Tutorial: Create Your First Cell
+
+Follow these steps to create a custom Cell from scratch.
+
+### Step 1: Create Cell directory and metadata
+
+```bash
+mkdir -p src/cells/my-cell/slices/my-action
+```
+
+Create `src/cells/my-cell/cell.yaml`:
+```yaml
+id: my-cell
+type: core
+consistencyLevel: L1
+owner:
+  team: my-team
+  role: my-owner
+schema:
+  primary: my_table
+verify:
+  smoke:
+    - my-cell/smoke
+```
+
+Create `src/cells/my-cell/slices/my-action/slice.yaml`:
+```yaml
+id: my-action
+belongsToCell: my-cell
+contractUsages:
+  - contract: http.my-api.v1
+    role: serve
+verify:
+  unit: my-action/unit
+  contract: my-action/contract
+```
+
+### Step 2: Define the domain
+
+Create `src/cells/my-cell/internal/domain/model.go`:
+```go
+package domain
+
+type Item struct {
+    ID   string
+    Name string
+}
+
+type ItemRepository interface {
+    Create(ctx context.Context, item *Item) error
+    GetByID(ctx context.Context, id string) (*Item, error)
+}
+```
+
+### Step 3: Implement the Cell
+
+Create `src/cells/my-cell/cell.go`:
+```go
+package mycell
+
+import (
+    "context"
+    "log/slog"
+    "github.com/ghbvf/gocell/kernel/cell"
+)
+
+type MyCell struct {
+    *cell.BaseCell
+    logger *slog.Logger
+}
+
+func New() *MyCell {
+    return &MyCell{
+        BaseCell: cell.NewBaseCell(cell.CellMetadata{
+            ID: "my-cell", Type: cell.CellTypeCore,
+            ConsistencyLevel: cell.L1,
+            Owner: cell.Owner{Team: "my-team", Role: "my-owner"},
+            Schema: cell.SchemaConfig{Primary: "my_table"},
+            Verify: cell.CellVerify{Smoke: []string{"my-cell/smoke"}},
+        }),
+        logger: slog.Default(),
+    }
+}
+
+func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
+    return c.BaseCell.Init(ctx, deps)
+}
+
+func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
+    mux.Handle("GET /api/v1/hello", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Write([]byte(`{"message":"hello from my-cell"}`))
+    }))
+}
+```
+
+### Step 4: Create a main.go
 
 ```go
 package main
 
 import (
     "context"
-    "log/slog"
-    "os"
     "os/signal"
     "syscall"
 
-    configcore "github.com/ghbvf/gocell/cells/config-core"
+    mycell "github.com/ghbvf/gocell/cells/my-cell"
     "github.com/ghbvf/gocell/kernel/assembly"
-    "github.com/ghbvf/gocell/adapters/postgres"
-    "github.com/ghbvf/gocell/adapters/rabbitmq"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 func main() {
-    pg, _ := postgres.NewPool(ctx, postgres.ConfigFromEnv())
-    txMgr := postgres.NewTxManager(pg)
-    outboxWriter := postgres.NewOutboxWriter(txMgr)
-
-    rmqConn, _ := rabbitmq.NewConnection(rabbitmq.ConfigFromEnv())
-    publisher, _ := rabbitmq.NewPublisher(rmqConn, rabbitmq.PublisherConfig{})
-
-    configCell := configcore.NewConfigCore(
-        configcore.WithPublisher(publisher),
-        configcore.WithOutboxWriter(outboxWriter),
-    )
-
-    asm := assembly.New(assembly.Config{ID: "my-app"})
-    asm.Register(configCell)
-
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
+
+    asm := assembly.New(assembly.Config{ID: "my-app"})
+    asm.Register(mycell.New())
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
         bootstrap.WithHTTPAddr(":8080"),
-        bootstrap.WithPublisher(publisher),
     )
-    if err := app.Run(ctx); err != nil {
-        slog.Error("application failed", "error", err)
-        os.Exit(1)
-    }
+    app.Run(ctx)
 }
 ```
 
-## 目录结构
+### Step 5: Build and run
+
+```bash
+cd src && go build ./cmd/my-app && ./my-app
+# In another terminal:
+curl http://localhost:8080/api/v1/hello
+# {"message":"hello from my-cell"}
+```
+
+## Example Projects
+
+| Example | Complexity | What it demonstrates |
+|---------|-----------|---------------------|
+| [todo-order](src/examples/todo-order/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
+| [sso-bff](src/examples/sso-bff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
+| [iot-device](src/examples/iot-device/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
+
+## Architecture
 
 ```
 src/
-├── kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
-├── cells/        — Cell 实现（access-core / audit-core / config-core）
-├── contracts/    — 跨 Cell 边界契约（按 {kind}/{domain}/{version}/ 组织）
-├── journeys/     — Journey 验收规格 + status-board.yaml
-├── assemblies/   — 物理打包配置
-├── fixtures/     — 测试夹具
-├── runtime/      — 通用运行时（http / auth / worker / observability）
-├── adapters/     — 外部系统适配（postgres / redis / oidc / s3 / rabbitmq / websocket）
-├── pkg/          — 共享工具包（errcode / ctxkeys / uid）
-├── cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
-├── examples/     — 示例项目（sso-bff / todo-order / iot-device，Phase 4）
-├── generated/    — 工具生成产物（禁止手工编辑）
-└── actors.yaml   — 外部 Actor 注册
+├── kernel/       — Cell/Slice runtime + governance tools (framework core)
+├── cells/        — Cell implementations (access-core / audit-core / config-core / order-cell / device-cell)
+├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)
+├── journeys/     — Journey acceptance specs + status-board.yaml
+├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
+├── adapters/     — External system adapters (postgres / redis / oidc / s3 / rabbitmq / websocket)
+├── pkg/          — Shared utilities (errcode / ctxkeys / uid / httputil)
+├── cmd/          — CLI (gocell validate / scaffold / generate / check / verify)
+├── examples/     — Example projects (sso-bff / todo-order / iot-device)
+├── templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
+└── generated/    — Tool-generated artifacts (indexes, derived views)
 ```
 
-## 许可证
+### Layer Dependencies
+
+```
+kernel/    ← stdlib + pkg/ + gopkg.in/yaml.v3 (no runtime, adapters, cells)
+runtime/   ← kernel/ + pkg/ (no cells, adapters)
+cells/     ← kernel/ + runtime/ (no adapters — interface decoupling)
+adapters/  ← kernel/ + runtime/ + pkg/ + external libs (no cells)
+examples/  ← all layers
+```
+
+## Built-in Cells
+
+- **access-core** — Identity management, JWT session lifecycle (RS256), RBAC authorization (7 Slices)
+- **audit-core** — Tamper-proof audit trail with HMAC-SHA256 hash chain (4 Slices)
+- **config-core** — Configuration management with versioning, publishing, and feature flags (5 Slices)
+
+## Adapters
+
+| Adapter | Capabilities | Kernel Interface |
+|---------|-------------|-----------------|
+| `adapters/postgres` | Pool, TxManager, Migrator, OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.Relay` |
+| `adapters/redis` | Client, DistLock, IdempotencyChecker, Cache | `idempotency.Checker` |
+| `adapters/oidc` | OIDC Provider, Token Exchange, JWKS Verification | — |
+| `adapters/s3` | S3/MinIO Client, PresignedURL | — |
+| `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
+| `adapters/websocket` | WebSocket Hub, signal-first push | — |
+
+## Using in Your Project
+
+```bash
+# Set up Go private module access
+export GOPRIVATE=github.com/ghbvf/gocell
+
+# Add to your project
+go get github.com/ghbvf/gocell@latest
+```
+
+## Project Templates
+
+GoCell includes templates for common engineering documents:
+
+- `templates/adr.md` — Architecture Decision Record
+- `templates/cell-design.md` — Cell design document
+- `templates/contract-review.md` — Contract review checklist
+- `templates/runbook.md` — Operations runbook
+- `templates/postmortem.md` — Incident postmortem
+- `templates/grafana-dashboard.json` — Grafana monitoring dashboard
+
+## License
 
 [MIT](LICENSE)
