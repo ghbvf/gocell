@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -28,13 +28,34 @@ var Topics = []string{
 	"event.config.rollback.v1",
 }
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// Option configures an audit-append Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service appends events to the hash chain and persists them.
 type Service struct {
-	mu        sync.Mutex
-	repo      ports.AuditRepository
-	chain     *domain.HashChain
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	mu           sync.Mutex
+	repo         ports.AuditRepository
+	chain        *domain.HashChain
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	txRunner     TxRunner
+	logger       *slog.Logger
 }
 
 // NewService creates an audit-append Service.
@@ -43,13 +64,18 @@ func NewService(
 	hmacKey []byte,
 	pub outbox.Publisher,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		repo:      repo,
 		chain:     domain.NewHashChain(hmacKey),
 		publisher: pub,
 		logger:    logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // HandleEvent processes an incoming event by appending it to the hash chain.
@@ -75,23 +101,50 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Append to hash chain.
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
-	auditEntry.ID = id.New("audit")
-
-	// Persist.
-	if err := s.repo.Append(ctx, auditEntry); err != nil {
-		s.logger.Error("audit-append: failed to persist entry",
-			slog.Any("error", err), slog.String("event_id", entry.ID))
-		return err // transient, will be retried
-	}
+	auditEntry.ID = uid.NewWithPrefix("audit")
 
 	// Publish audit.appended event.
 	appendedPayload, _ := json.Marshal(map[string]any{
 		"audit_entry_id": auditEntry.ID,
 		"event_type":     entry.EventType,
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
-		s.logger.Error("audit-append: failed to publish appended event",
-			slog.Any("error", pubErr))
+
+	// Wrap persist + outbox write in a transaction for L2 atomicity.
+	persistAndPublish := func(txCtx context.Context) error {
+		if err := s.repo.Append(txCtx, auditEntry); err != nil {
+			return err // transient, will be retried
+		}
+		if s.outboxWriter != nil {
+			outboxEntry := outbox.Entry{
+				ID:        uid.NewWithPrefix("evt"),
+				EventType: TopicAuditAppended,
+				Payload:   appendedPayload,
+			}
+			if writeErr := s.outboxWriter.Write(txCtx, outboxEntry); writeErr != nil {
+				return writeErr
+			}
+		}
+		return nil
+	}
+
+	var persistErr error
+	if s.txRunner != nil {
+		persistErr = s.txRunner.RunInTx(ctx, persistAndPublish)
+	} else {
+		persistErr = persistAndPublish(ctx)
+	}
+	if persistErr != nil {
+		s.logger.Error("audit-append: failed to persist entry",
+			slog.Any("error", persistErr), slog.String("event_id", entry.ID))
+		return persistErr
+	}
+
+	// Fallback direct publish when outbox is not in use.
+	if s.outboxWriter == nil {
+		if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
+			s.logger.Error("audit-append: failed to publish appended event",
+				slog.Any("error", pubErr))
+		}
 	}
 
 	s.logger.Info("audit entry appended",

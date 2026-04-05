@@ -123,6 +123,10 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
+	if m.ID == "" {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("cell id is empty in %s", path))
+	}
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
@@ -135,6 +139,10 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m SliceMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
+	}
+	if m.ID == "" {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("slice id is empty in %s", path))
 	}
 
 	// Extract cellID from path: cells/{cellID}/slices/{sliceID}/slice.yaml
@@ -159,6 +167,10 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
+	if m.ID == "" {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("contract id is empty in %s", path))
+	}
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate contract ID %q: %s and previous", m.ID, path))
@@ -172,6 +184,10 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
 	}
+	if m.ID == "" {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("journey id is empty in %s", path))
+	}
 	if _, exists := pm.Journeys[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate journey ID %q: %s and previous", m.ID, path))
@@ -184,6 +200,10 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m AssemblyMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
 		return err
+	}
+	if m.ID == "" {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("assembly id is empty in %s", path))
 	}
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,

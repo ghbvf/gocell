@@ -276,7 +276,7 @@
 
 ### AC-8.2: session-login — 密码登录 [S3 决策点: 决策 8]
 - **优先级**: P1
-- **验收标准**: 密码验证通过后创建 Session，签发 JWT access token + refresh token（RS256 签名）；发布 `event.session.created.v1` 事件。Phase 2 仅支持密码登录，不支持 OIDC
+- **验收标准**: 密码验证通过后创建 Session，签发 JWT access token + refresh token（HS256 签名（Phase 2），RS256 迁移至 Phase 3 (tech-debt #6)）；发布 `event.session.created.v1` 事件。Phase 2 仅支持密码登录，不支持 OIDC
 - **验证方式**: [单元测试] [集成测试]
 - **关联任务**: T-051
 

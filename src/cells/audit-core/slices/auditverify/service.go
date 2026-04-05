@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -24,12 +25,33 @@ type VerifyResult struct {
 	EntriesChecked    int  `json:"entriesChecked"`
 }
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// Option configures an audit-verify Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service verifies hash chain integrity.
 type Service struct {
-	repo      ports.AuditRepository
-	chain     *domain.HashChain
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo         ports.AuditRepository
+	chain        *domain.HashChain
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	txRunner     TxRunner
+	logger       *slog.Logger
 }
 
 // NewService creates an audit-verify Service.
@@ -38,13 +60,18 @@ func NewService(
 	hmacKey []byte,
 	pub outbox.Publisher,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		repo:      repo,
 		chain:     domain.NewHashChain(hmacKey),
 		publisher: pub,
 		logger:    logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // VerifyChain verifies the integrity of all entries in the given range.
@@ -68,7 +95,17 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 		"first_invalid_index": firstInvalid,
 		"entries_checked":     len(entries),
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, payload); pubErr != nil {
+	if s.outboxWriter != nil {
+		outboxEntry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: TopicIntegrityVerified,
+			Payload:   payload,
+		}
+		if writeErr := s.outboxWriter.Write(ctx, outboxEntry); writeErr != nil {
+			s.logger.Error("audit-verify: failed to write outbox entry",
+				slog.Any("error", writeErr))
+		}
+	} else if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, payload); pubErr != nil {
 		s.logger.Error("audit-verify: failed to publish event",
 			slog.Any("error", pubErr))
 	}

@@ -1,0 +1,132 @@
+package postgres
+
+import (
+	"os"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestConfigFromEnv_Defaults(t *testing.T) {
+	// Clear any env vars that might be set.
+	for _, key := range []string{"GOCELL_PG_DSN", "GOCELL_PG_MAX_CONNS", "GOCELL_PG_IDLE_TIMEOUT", "GOCELL_PG_MAX_LIFETIME"} {
+		t.Setenv(key, "")
+	}
+
+	cfg := ConfigFromEnv()
+
+	assert.Equal(t, "", cfg.DSN)
+	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
+	assert.Equal(t, defaultIdleTimeout, cfg.IdleTimeout)
+	assert.Equal(t, defaultMaxLifetime, cfg.MaxLifetime)
+}
+
+func TestConfigFromEnv_CustomValues(t *testing.T) {
+	t.Setenv("GOCELL_PG_DSN", "postgres://test:test@localhost:5432/testdb")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "25")
+	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "10m")
+	t.Setenv("GOCELL_PG_MAX_LIFETIME", "2h")
+
+	cfg := ConfigFromEnv()
+
+	assert.Equal(t, "postgres://test:test@localhost:5432/testdb", cfg.DSN)
+	assert.Equal(t, int32(25), cfg.MaxConns)
+	assert.Equal(t, 10*time.Minute, cfg.IdleTimeout)
+	assert.Equal(t, 2*time.Hour, cfg.MaxLifetime)
+}
+
+func TestConfigFromEnv_InvalidValues(t *testing.T) {
+	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "not-a-number")
+	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "bad-duration")
+	t.Setenv("GOCELL_PG_MAX_LIFETIME", "bad-duration")
+
+	cfg := ConfigFromEnv()
+
+	// Invalid values should fall back to defaults.
+	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
+	assert.Equal(t, defaultIdleTimeout, cfg.IdleTimeout)
+	assert.Equal(t, defaultMaxLifetime, cfg.MaxLifetime)
+}
+
+func TestConfigFromEnv_NegativeMaxConns(t *testing.T) {
+	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
+	t.Setenv("GOCELL_PG_MAX_CONNS", "-5")
+
+	cfg := ConfigFromEnv()
+	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
+}
+
+func TestConfig_ApplyDefaults(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       Config
+		wantConns   int32
+		wantIdle    time.Duration
+		wantMaxLife time.Duration
+	}{
+		{
+			name:        "all zero",
+			input:       Config{},
+			wantConns:   defaultMaxConns,
+			wantIdle:    defaultIdleTimeout,
+			wantMaxLife: defaultMaxLifetime,
+		},
+		{
+			name:        "partial set",
+			input:       Config{MaxConns: 20},
+			wantConns:   20,
+			wantIdle:    defaultIdleTimeout,
+			wantMaxLife: defaultMaxLifetime,
+		},
+		{
+			name:        "all set",
+			input:       Config{MaxConns: 5, IdleTimeout: 2 * time.Minute, MaxLifetime: 30 * time.Minute},
+			wantConns:   5,
+			wantIdle:    2 * time.Minute,
+			wantMaxLife: 30 * time.Minute,
+		},
+		{
+			name:        "negative conns",
+			input:       Config{MaxConns: -1},
+			wantConns:   defaultMaxConns,
+			wantIdle:    defaultIdleTimeout,
+			wantMaxLife: defaultMaxLifetime,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.input.applyDefaults()
+			assert.Equal(t, tt.wantConns, tt.input.MaxConns)
+			assert.Equal(t, tt.wantIdle, tt.input.IdleTimeout)
+			assert.Equal(t, tt.wantMaxLife, tt.input.MaxLifetime)
+		})
+	}
+}
+
+func TestNewPool_EmptyDSN(t *testing.T) {
+	_, err := NewPool(t.Context(), Config{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DSN is empty")
+}
+
+func TestNewPool_InvalidDSN(t *testing.T) {
+	_, err := NewPool(t.Context(), Config{DSN: "://invalid"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse DSN")
+}
+
+func TestNewPool_UnreachableHost(t *testing.T) {
+	if os.Getenv("PG_INTEGRATION") == "" {
+		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")
+	}
+	_, err := NewPool(t.Context(), Config{
+		DSN:     "postgres://nobody:nopass@127.0.0.1:1/nonexistent",
+		MaxConns: 1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_PG_CONNECT")
+}

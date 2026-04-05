@@ -48,6 +48,11 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *ConfigCore) { c.logger = l }
 }
 
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(c *ConfigCore) { c.outboxWriter = w }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -60,10 +65,11 @@ func WithInMemoryDefaults() Option {
 // ConfigCore is the config-core Cell implementation.
 type ConfigCore struct {
 	*cell.BaseCell
-	configRepo ports.ConfigRepository
-	flagRepo   ports.FlagRepository
-	publisher  outbox.Publisher
-	logger     *slog.Logger
+	configRepo   ports.ConfigRepository
+	flagRepo     ports.FlagRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	logger       *slog.Logger
 
 	// Slice services and handlers.
 	writeHandler     *configwrite.Handler
@@ -99,7 +105,11 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// config-write slice
-	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger)
+	var writeOpts []configwrite.Option
+	if c.outboxWriter != nil {
+		writeOpts = append(writeOpts, configwrite.WithOutboxWriter(c.outboxWriter))
+	}
+	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, writeOpts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("config-write", "config-core", cell.L2))
 
@@ -109,7 +119,11 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
 	// config-publish slice
-	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger)
+	var publishOpts []configpublish.Option
+	if c.outboxWriter != nil {
+		publishOpts = append(publishOpts, configpublish.WithOutboxWriter(c.outboxWriter))
+	}
+	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
 

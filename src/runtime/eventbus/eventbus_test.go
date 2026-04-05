@@ -206,6 +206,18 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	<-done
 }
 
+func TestHealth(t *testing.T) {
+	bus := New()
+	assert.Equal(t, "healthy", bus.Health())
+
+	_ = bus.Close()
+	assert.Equal(t, "closed", bus.Health())
+}
+
+func TestTopicConfigChangedConstant(t *testing.T) {
+	assert.Equal(t, "event.config.changed.v1", TopicConfigChanged)
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)

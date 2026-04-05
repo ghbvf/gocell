@@ -16,7 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -36,14 +36,47 @@ type TokenPair struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// Option configures a session-login Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
+// WithSigningMethod overrides the default JWT signing method and key.
+// method should be jwt.SigningMethodRS256 with an *rsa.PrivateKey, or
+// jwt.SigningMethodHS256 with a []byte key.
+func WithSigningMethod(method jwt.SigningMethod, key any) Option {
+	return func(s *Service) {
+		s.signingMethod = method
+		s.signingKeyAny = key
+	}
+}
+
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
-	publisher   outbox.Publisher
-	signingKey  []byte
-	logger      *slog.Logger
+	userRepo      ports.UserRepository
+	sessionRepo   ports.SessionRepository
+	roleRepo      ports.RoleRepository
+	publisher     outbox.Publisher
+	outboxWriter  outbox.Writer
+	txRunner      TxRunner
+	signingKey    []byte            // default HS256 key
+	signingMethod jwt.SigningMethod // overridden via WithSigningMethod
+	signingKeyAny any               // overridden via WithSigningMethod
+	logger        *slog.Logger
 }
 
 // NewService creates a session-login Service.
@@ -54,8 +87,9 @@ func NewService(
 	pub outbox.Publisher,
 	signingKey []byte,
 	logger *slog.Logger,
+	opts ...Option,
 ) *Service {
-	return &Service{
+	s := &Service{
 		userRepo:    userRepo,
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
@@ -63,6 +97,10 @@ func NewService(
 		signingKey:  signingKey,
 		logger:      logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // LoginInput holds login parameters.
@@ -104,7 +142,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Issue JWT.
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
-	sessionID := id.New("sess")
+	sessionID := uid.NewWithPrefix("sess")
 
 	accessToken, err := s.issueToken(user.ID, roleNames, expiresAt, sessionID)
 	if err != nil {
@@ -124,17 +162,45 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}
 	session.ID = sessionID
 
-	if err := s.sessionRepo.Create(ctx, session); err != nil {
-		return nil, fmt.Errorf("session-login: persist session: %w", err)
-	}
-
 	// Publish event.
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": session.ID, "user_id": user.ID,
 	})
-	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
-		s.logger.Error("session-login: failed to publish event",
-			slog.Any("error", pubErr))
+
+	// Wrap session create + outbox write in a transaction for L2 atomicity.
+	persistAndPublish := func(txCtx context.Context) error {
+		if err := s.sessionRepo.Create(txCtx, session); err != nil {
+			return fmt.Errorf("session-login: persist session: %w", err)
+		}
+		if s.outboxWriter != nil {
+			entry := outbox.Entry{
+				ID:        uid.NewWithPrefix("evt"),
+				EventType: TopicSessionCreated,
+				Payload:   payload,
+			}
+			if writeErr := s.outboxWriter.Write(txCtx, entry); writeErr != nil {
+				return fmt.Errorf("session-login: write outbox entry: %w", writeErr)
+			}
+		}
+		return nil
+	}
+
+	if s.txRunner != nil {
+		if err := s.txRunner.RunInTx(ctx, persistAndPublish); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := persistAndPublish(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// Fallback direct publish when outbox is not in use.
+	if s.outboxWriter == nil {
+		if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
+			s.logger.Error("session-login: failed to publish event",
+				slog.Any("error", pubErr))
+		}
 	}
 
 	s.logger.Info("user logged in",
@@ -161,6 +227,11 @@ func (s *Service) issueToken(subject string, roles []string, expiresAt time.Time
 		claims["sid"] = sid
 	}
 
+	// Use overridden signing method/key if configured, otherwise default HS256.
+	if s.signingMethod != nil && s.signingKeyAny != nil {
+		token := jwt.NewWithClaims(s.signingMethod, claims)
+		return token.SignedString(s.signingKeyAny)
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString(s.signingKey)
 }

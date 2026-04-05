@@ -197,6 +197,55 @@ func TestBaseCellRestart(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// BaseCell shutdownCtx
+// ---------------------------------------------------------------------------
+
+func TestBaseCellShutdownCtx(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "ctx-test"})
+
+	// Before Start, ShutdownCtx should return context.Background().
+	ctx := c.ShutdownCtx()
+	require.NotNil(t, ctx)
+	assert.Nil(t, ctx.Err(), "context should not be cancelled before Start")
+
+	// Start: shutdownCtx is created.
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+	require.NoError(t, c.Start(context.Background()))
+
+	ctx = c.ShutdownCtx()
+	require.NotNil(t, ctx)
+	assert.Nil(t, ctx.Err(), "context should not be cancelled while running")
+
+	// Stop: shutdownCtx is cancelled.
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Error(t, ctx.Err(), "context should be cancelled after Stop")
+}
+
+func TestBaseCellConcurrentHealthReady(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "concurrent"})
+	require.NoError(t, c.Init(context.Background(), Dependencies{}))
+	require.NoError(t, c.Start(context.Background()))
+
+	// Concurrent Health and Ready calls should not race.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			_ = c.Health()
+			_ = c.Ready()
+		}
+	}()
+
+	for i := 0; i < 100; i++ {
+		_ = c.Health()
+		_ = c.Ready()
+	}
+	<-done
+
+	require.NoError(t, c.Stop(context.Background()))
+}
+
+// ---------------------------------------------------------------------------
 // BaseSlice
 // ---------------------------------------------------------------------------
 

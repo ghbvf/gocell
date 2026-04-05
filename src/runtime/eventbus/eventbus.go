@@ -9,18 +9,23 @@ package eventbus
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
+
+	// TopicConfigChanged is the canonical event topic for config change
+	// events. Cells that publish or subscribe to config changes should
+	// reference this constant instead of defining their own.
+	TopicConfigChanged = "event.config.changed.v1"
 )
 
 // DeadLetter represents a message that exhausted retries.
@@ -81,11 +86,11 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	defer b.mu.RUnlock()
 
 	if b.closed {
-		return fmt.Errorf("eventbus: bus is closed")
+		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
 
 	entry := outbox.Entry{
-		ID:        id.New("evt"),
+		ID:        uid.NewWithPrefix("evt"),
 		EventType: topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),
@@ -123,7 +128,7 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler 
 	if b.closed {
 		b.mu.Unlock()
 		cancel()
-		return fmt.Errorf("eventbus: bus is closed")
+		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
 	b.subs[topic] = append(b.subs[topic], sub)
 	b.mu.Unlock()
@@ -160,6 +165,17 @@ func (b *InMemoryEventBus) Close() error {
 		}
 	}
 	return nil
+}
+
+// Health returns the current status of the event bus.
+// Returns "healthy" when the bus is open, "closed" when it has been shut down.
+func (b *InMemoryEventBus) Health() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.closed {
+		return "closed"
+	}
+	return "healthy"
 }
 
 // DeadLetterLen returns the number of dead letter messages.

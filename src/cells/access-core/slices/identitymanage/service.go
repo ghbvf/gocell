@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/id"
+	"github.com/ghbvf/gocell/pkg/uid"
 )
 
 const (
@@ -24,17 +24,42 @@ const (
 	ErrIdentityInput errcode.Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 )
 
+// TxRunner executes a function within a database transaction.
+// When nil, the service falls back to sequential (non-transactional) execution.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// Option configures an identity-manage Service.
+type Option func(*Service)
+
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(s *Service) { s.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx TxRunner) Option {
+	return func(s *Service) { s.txRunner = tx }
+}
+
 // Service implements identity management business logic.
 type Service struct {
-	repo        ports.UserRepository
-	sessionRepo ports.SessionRepository
-	publisher   outbox.Publisher
-	logger      *slog.Logger
+	repo         ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
+	txRunner     TxRunner
+	logger       *slog.Logger
 }
 
 // NewService creates an identity-manage Service.
-func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
+func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // CreateInput holds parameters for creating a user.
@@ -61,15 +86,19 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	user.ID = id.New("usr")
+	user.ID = uid.NewWithPrefix("usr")
 
-	if err := s.repo.Create(ctx, user); err != nil {
-		return nil, fmt.Errorf("identity-manage: create: %w", err)
+	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Create(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: create: %w", err)
+		}
+		s.publish(txCtx, TopicUserCreated, eventPayload)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	s.publish(ctx, TopicUserCreated, map[string]any{
-		"user_id": user.ID, "username": user.Username,
-	})
 	s.logger.Info("user created", slog.String("user_id", user.ID))
 	return user, nil
 }
@@ -83,13 +112,17 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) 
 	return user, nil
 }
 
-// UpdateInput holds parameters for updating a user.
+// UpdateInput holds parameters for updating a user (JSON merge patch semantics).
+// Nil pointer fields mean "do not update"; non-nil means "set to this value".
 type UpdateInput struct {
-	ID    string
-	Email string
+	ID     string
+	Name   *string
+	Email  *string
+	Status *string
 }
 
-// Update modifies user attributes.
+// Update modifies user attributes using JSON merge patch semantics:
+// only non-nil fields are applied; missing fields are left unchanged.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
 	if input.ID == "" {
 		return nil, errcode.New(ErrIdentityInput, "id is required")
@@ -100,8 +133,18 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, fmt.Errorf("identity-manage: update: %w", err)
 	}
 
-	if input.Email != "" {
-		user.Email = input.Email
+	if input.Name != nil {
+		user.Username = *input.Name
+	}
+	if input.Email != nil {
+		user.Email = *input.Email
+	}
+	if input.Status != nil {
+		status := domain.UserStatus(*input.Status)
+		if *input.Status != string(domain.StatusActive) && *input.Status != string(domain.StatusSuspended) {
+			return nil, errcode.New(ErrIdentityInput, "status must be 'active' or 'suspended'")
+		}
+		user.Status = status
 	}
 	user.UpdatedAt = time.Now()
 
@@ -137,17 +180,21 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	}
 
 	user.Lock()
-	if err := s.repo.Update(ctx, user); err != nil {
-		return fmt.Errorf("identity-manage: lock: %w", err)
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: lock: %w", err)
+		}
+		// Revoke all sessions for the locked user so existing tokens become invalid.
+		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
+			s.logger.Error("identity-manage: failed to revoke sessions on lock",
+				slog.Any("error", err), slog.String("user_id", id))
+		}
+		s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id})
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	// Revoke all sessions for the locked user so existing tokens become invalid.
-	if err := s.sessionRepo.RevokeByUserID(ctx, id); err != nil {
-		s.logger.Error("identity-manage: failed to revoke sessions on lock",
-			slog.Any("error", err), slog.String("user_id", id))
-	}
-
-	s.publish(ctx, TopicUserLocked, map[string]any{"user_id": id})
 	s.logger.Info("user locked", slog.String("user_id", id))
 	return nil
 }
@@ -174,8 +221,29 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 
 func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) {
 	data, _ := json.Marshal(payload)
+	if s.outboxWriter != nil {
+		entry := outbox.Entry{
+			ID:        uid.NewWithPrefix("evt"),
+			EventType: topic,
+			Payload:   data,
+		}
+		if err := s.outboxWriter.Write(ctx, entry); err != nil {
+			s.logger.Error("identity-manage: failed to write outbox entry",
+				slog.Any("error", err), slog.String("topic", topic))
+		}
+		return
+	}
 	if err := s.publisher.Publish(ctx, topic, data); err != nil {
 		s.logger.Error("identity-manage: failed to publish event",
 			slog.Any("error", err), slog.String("topic", topic))
 	}
+}
+
+// runInTx executes fn in a transaction if txRunner is configured, otherwise
+// executes directly.
+func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }

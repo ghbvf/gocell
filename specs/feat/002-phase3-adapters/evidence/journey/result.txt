@@ -1,0 +1,99 @@
+=== J-account-lockout ===
+Verify J-account-lockout: FAILED
+  [FAIL] journey.J-account-lockout.auto-lock
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-account-lockout.event-publish
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-account-lockout.login-reject
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-account-lockout.admin-unlock
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-audit-login-trail ===
+Verify J-audit-login-trail: FAILED
+  [FAIL] journey.J-audit-login-trail.event-consume
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-audit-login-trail.hash-chain
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-audit-login-trail.integrity-verify
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-config-hot-reload ===
+Verify J-config-hot-reload: FAILED
+  [FAIL] journey.J-config-hot-reload.config-publish
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-config-hot-reload.access-apply
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-config-hot-reload.health-verify
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-config-rollback ===
+Verify J-config-rollback: FAILED
+  [FAIL] journey.J-config-rollback.version-revert
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-config-rollback.event-publish
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-config-rollback.cell-apply
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-config-rollback.audit-record
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-session-logout ===
+Verify J-session-logout: FAILED
+  [FAIL] journey.J-session-logout.session-revoke
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-session-logout.event-publish
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-session-logout.audit-record
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-session-refresh ===
+Verify J-session-refresh: FAILED
+  [FAIL] journey.J-session-refresh.token-verify
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-session-refresh.token-issue
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-session-refresh.old-token-revoke
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-sso-login ===
+Verify J-sso-login: FAILED
+  [FAIL] journey.J-sso-login.session-db
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented
+=== J-user-onboarding ===
+Verify J-user-onboarding: FAILED
+  [FAIL] journey.J-user-onboarding.user-create
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-user-onboarding.role-assign
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-user-onboarding.event-publish
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+  [FAIL] journey.J-user-onboarding.login-verify
+    go: warning: "./journeys/..." matched no packages
+    no packages to test
+SKIP: verify journey not implemented

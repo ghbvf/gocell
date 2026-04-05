@@ -40,9 +40,9 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 		return errcode.New(ErrUserDuplicate, "username already exists: "+user.Username)
 	}
 
-	clone := *user
-	r.byID[user.ID] = &clone
-	r.byName[user.Username] = &clone
+	c := cloneUser(user)
+	r.byID[user.ID] = c
+	r.byName[user.Username] = c
 	return nil
 }
 
@@ -54,8 +54,7 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 	if !ok {
 		return nil, errcode.New(ErrUserNotFound, "user not found: "+id)
 	}
-	clone := *u
-	return &clone, nil
+	return cloneUser(u), nil
 }
 
 func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
@@ -66,8 +65,7 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 	if !ok {
 		return nil, errcode.New(ErrUserNotFound, "user not found: "+username)
 	}
-	clone := *u
-	return &clone, nil
+	return cloneUser(u), nil
 }
 
 func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
@@ -78,10 +76,23 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 		return errcode.New(ErrUserNotFound, "user not found: "+user.ID)
 	}
 
-	clone := *user
-	r.byID[user.ID] = &clone
-	r.byName[user.Username] = &clone
+	c := cloneUser(user)
+	r.byID[user.ID] = c
+	r.byName[user.Username] = c
 	return nil
+}
+
+// cloneUser creates a deep copy of a User to avoid sharing pointers across map entries.
+func cloneUser(u *domain.User) *domain.User {
+	return &domain.User{
+		ID:           u.ID,
+		Username:     u.Username,
+		Email:        u.Email,
+		PasswordHash: u.PasswordHash,
+		Status:       u.Status,
+		CreatedAt:    u.CreatedAt,
+		UpdatedAt:    u.UpdatedAt,
+	}
 }
 
 func (r *UserRepository) Delete(_ context.Context, id string) error {

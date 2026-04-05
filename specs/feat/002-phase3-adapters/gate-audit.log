@@ -1,0 +1,22 @@
+[2026-04-05 18:08:13] S0/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:21:51] S0/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:26:45] S1/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:36:18] S2/exit: FAIL (branch=feat/002-phase3-adapters)
+  failed: kernel-constraints.md: pattern '(集成风险|分层隔离|核心约束|元数据合规|契约完整性)'
+[2026-04-05 18:36:38] S2/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:43:01] S3/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 18:56:43] S4/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 23:14:56] S5/exit: FAIL (branch=feat/002-phase3-adapters)
+  failed: tasks.md: 90 unchecked tasks
+  failed: pr-plan.md: pattern 'merged'
+  failed: command: go vet 静态检查通过
+  failed: command: go test 全量测试通过
+[2026-04-05 23:17:24] S5/exit: FAIL (branch=feat/002-phase3-adapters)
+  failed: command: go test 全量测试通过
+[2026-04-05 23:19:47] S5/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-05 23:51:31] S6/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-06 00:06:09] S7/exit: FAIL (branch=feat/002-phase3-adapters)
+  failed: evidence/validate/result.txt: pattern '(0 errors|PASS|valid)'
+[2026-04-06 00:06:58] S7/exit: PASS (branch=feat/002-phase3-adapters)
+[2026-04-06 00:07:42] S8/entry: PASS (branch=feat/002-phase3-adapters)
+[2026-04-06 00:22:31] S8/exit: PASS (branch=feat/002-phase3-adapters)

@@ -1,0 +1,2960 @@
+=== RUN   TestPhase0Gate
+--- PASS: TestPhase0Gate (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell	0.984s
+=== RUN   TestConfig_Validate
+=== RUN   TestConfig_Validate/valid_config
+=== RUN   TestConfig_Validate/missing_issuer
+=== RUN   TestConfig_Validate/missing_client_ID
+--- PASS: TestConfig_Validate (0.00s)
+    --- PASS: TestConfig_Validate/valid_config (0.00s)
+    --- PASS: TestConfig_Validate/missing_issuer (0.00s)
+    --- PASS: TestConfig_Validate/missing_client_ID (0.00s)
+=== RUN   TestProvider_Discover
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51514 jwks_uri=http://127.0.0.1:51514/jwks
+--- PASS: TestProvider_Discover (0.07s)
+=== RUN   TestProvider_ExchangeCode
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51516 jwks_uri=http://127.0.0.1:51516/jwks
+--- PASS: TestProvider_ExchangeCode (0.04s)
+=== RUN   TestVerifier_Verify
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51518 jwks_uri=http://127.0.0.1:51518/jwks
+2026/04/05 23:53:20 INFO oidc: JWKS fetched key_count=1
+--- PASS: TestVerifier_Verify (0.02s)
+=== RUN   TestVerifier_Verify_WrongAudience
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51520 jwks_uri=http://127.0.0.1:51520/jwks
+2026/04/05 23:53:20 INFO oidc: JWKS fetched key_count=1
+--- PASS: TestVerifier_Verify_WrongAudience (0.04s)
+=== RUN   TestVerifier_Verify_ExpiredToken
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51522 jwks_uri=http://127.0.0.1:51522/jwks
+2026/04/05 23:53:20 INFO oidc: JWKS fetched key_count=1
+--- PASS: TestVerifier_Verify_ExpiredToken (0.03s)
+=== RUN   TestProvider_GetUserInfo
+2026/04/05 23:53:20 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51524 jwks_uri=http://127.0.0.1:51524/jwks
+--- PASS: TestProvider_GetUserInfo (0.09s)
+=== RUN   TestProvider_GetUserInfo_Unauthorized
+2026/04/05 23:53:21 INFO oidc: discovery document fetched issuer=http://127.0.0.1:51526 jwks_uri=http://127.0.0.1:51526/jwks
+--- PASS: TestProvider_GetUserInfo_Unauthorized (0.09s)
+=== RUN   TestParseRSAPublicKey
+--- PASS: TestParseRSAPublicKey (0.04s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/oidc	1.748s
+=== RUN   TestErrorCodes_Prefix
+--- PASS: TestErrorCodes_Prefix (0.00s)
+=== RUN   TestErrorCodes_Unique
+--- PASS: TestErrorCodes_Unique (0.00s)
+=== RUN   TestErrorCodes_CanCreateErrors
+--- PASS: TestErrorCodes_CanCreateErrors (0.00s)
+=== RUN   TestQueryBuilder_SimpleQuery
+--- PASS: TestQueryBuilder_SimpleQuery (0.00s)
+=== RUN   TestQueryBuilder_MultipleParams
+--- PASS: TestQueryBuilder_MultipleParams (0.00s)
+=== RUN   TestQueryBuilder_AppendIf
+=== RUN   TestQueryBuilder_AppendIf/condition_true
+=== RUN   TestQueryBuilder_AppendIf/condition_false
+--- PASS: TestQueryBuilder_AppendIf (0.00s)
+    --- PASS: TestQueryBuilder_AppendIf/condition_true (0.00s)
+    --- PASS: TestQueryBuilder_AppendIf/condition_false (0.00s)
+=== RUN   TestQueryBuilder_NextParam
+--- PASS: TestQueryBuilder_NextParam (0.00s)
+=== RUN   TestQueryBuilder_Reset
+--- PASS: TestQueryBuilder_Reset (0.00s)
+=== RUN   TestQueryBuilder_SQL
+--- PASS: TestQueryBuilder_SQL (0.00s)
+=== RUN   TestQueryBuilder_Empty
+--- PASS: TestQueryBuilder_Empty (0.00s)
+=== RUN   TestQueryBuilder_ComplexQuery
+--- PASS: TestQueryBuilder_ComplexQuery (0.00s)
+=== RUN   TestParseMigrationFilename
+=== RUN   TestParseMigrationFilename/valid_up_migration
+=== RUN   TestParseMigrationFilename/valid_down_migration
+=== RUN   TestParseMigrationFilename/wrong_direction_suffix
+=== RUN   TestParseMigrationFilename/no_underscore
+=== RUN   TestParseMigrationFilename/empty_version
+=== RUN   TestParseMigrationFilename/not_sql_file
+=== RUN   TestParseMigrationFilename/multi-digit_version
+--- PASS: TestParseMigrationFilename (0.00s)
+    --- PASS: TestParseMigrationFilename/valid_up_migration (0.00s)
+    --- PASS: TestParseMigrationFilename/valid_down_migration (0.00s)
+    --- PASS: TestParseMigrationFilename/wrong_direction_suffix (0.00s)
+    --- PASS: TestParseMigrationFilename/no_underscore (0.00s)
+    --- PASS: TestParseMigrationFilename/empty_version (0.00s)
+    --- PASS: TestParseMigrationFilename/not_sql_file (0.00s)
+    --- PASS: TestParseMigrationFilename/multi-digit_version (0.00s)
+=== RUN   TestListMigrations_Ordering
+--- PASS: TestListMigrations_Ordering (0.00s)
+=== RUN   TestListMigrations_EmptyFS
+--- PASS: TestListMigrations_EmptyFS (0.00s)
+=== RUN   TestNewMigrator_DefaultTableName
+--- PASS: TestNewMigrator_DefaultTableName (0.00s)
+=== RUN   TestNewMigrator_CustomTableName
+--- PASS: TestNewMigrator_CustomTableName (0.00s)
+=== RUN   TestMigrationsFS_SubDirectory
+--- PASS: TestMigrationsFS_SubDirectory (0.00s)
+=== RUN   TestMigrationDirection_Values
+--- PASS: TestMigrationDirection_Values (0.00s)
+=== RUN   TestOutboxRelay_StartStop
+2026/04/05 23:53:21 INFO outbox relay: started poll_interval=50ms batch_size=100
+2026/04/05 23:53:21 INFO outbox relay: stopped
+--- PASS: TestOutboxRelay_StartStop (0.20s)
+=== RUN   TestOutboxRelay_PollOnce_NoEntries
+--- PASS: TestOutboxRelay_PollOnce_NoEntries (0.00s)
+=== RUN   TestOutboxRelay_PollOnce_PublishesEntries
+--- PASS: TestOutboxRelay_PollOnce_PublishesEntries (0.00s)
+=== RUN   TestOutboxRelay_PollOnce_PublishError
+2026/04/05 23:53:21 ERROR outbox relay: publish failed entry_id=e-2 event_type=test error="assert.AnError general error for testing"
+--- PASS: TestOutboxRelay_PollOnce_PublishError (0.00s)
+=== RUN   TestDefaultRelayConfig
+--- PASS: TestDefaultRelayConfig (0.00s)
+=== RUN   TestOutboxWriter_Write_NoTx
+--- PASS: TestOutboxWriter_Write_NoTx (0.00s)
+=== RUN   TestOutboxWriter_Write_Success
+--- PASS: TestOutboxWriter_Write_Success (0.00s)
+=== RUN   TestOutboxWriter_Write_ZeroCreatedAt
+--- PASS: TestOutboxWriter_Write_ZeroCreatedAt (0.00s)
+=== RUN   TestOutboxWriter_Write_TxExecError
+--- PASS: TestOutboxWriter_Write_TxExecError (0.00s)
+=== RUN   TestConfigFromEnv_Defaults
+--- PASS: TestConfigFromEnv_Defaults (0.00s)
+=== RUN   TestConfigFromEnv_CustomValues
+--- PASS: TestConfigFromEnv_CustomValues (0.00s)
+=== RUN   TestConfigFromEnv_InvalidValues
+--- PASS: TestConfigFromEnv_InvalidValues (0.00s)
+=== RUN   TestConfigFromEnv_NegativeMaxConns
+--- PASS: TestConfigFromEnv_NegativeMaxConns (0.00s)
+=== RUN   TestConfig_ApplyDefaults
+=== RUN   TestConfig_ApplyDefaults/all_zero
+=== RUN   TestConfig_ApplyDefaults/partial_set
+=== RUN   TestConfig_ApplyDefaults/all_set
+=== RUN   TestConfig_ApplyDefaults/negative_conns
+--- PASS: TestConfig_ApplyDefaults (0.00s)
+    --- PASS: TestConfig_ApplyDefaults/all_zero (0.00s)
+    --- PASS: TestConfig_ApplyDefaults/partial_set (0.00s)
+    --- PASS: TestConfig_ApplyDefaults/all_set (0.00s)
+    --- PASS: TestConfig_ApplyDefaults/negative_conns (0.00s)
+=== RUN   TestNewPool_EmptyDSN
+--- PASS: TestNewPool_EmptyDSN (0.00s)
+=== RUN   TestNewPool_InvalidDSN
+--- PASS: TestNewPool_InvalidDSN (0.00s)
+=== RUN   TestNewPool_UnreachableHost
+    pool_test.go:124: skipping integration test; set PG_INTEGRATION=1 to run
+--- SKIP: TestNewPool_UnreachableHost (0.00s)
+=== RUN   TestCtxWithTx_RoundTrip
+--- PASS: TestCtxWithTx_RoundTrip (0.00s)
+=== RUN   TestTxFromContext_NilContext
+--- PASS: TestTxFromContext_NilContext (0.00s)
+=== RUN   TestSavepointDepth
+--- PASS: TestSavepointDepth (0.00s)
+=== RUN   TestSavepointDepth_Nesting
+--- PASS: TestSavepointDepth_Nesting (0.00s)
+=== RUN   TestNewTxManager
+--- PASS: TestNewTxManager (0.00s)
+=== RUN   TestRunInTx_Savepoint_ExecSequence
+--- PASS: TestRunInTx_Savepoint_ExecSequence (0.00s)
+=== RUN   TestRunInTx_Savepoint_Rollback_OnError
+--- PASS: TestRunInTx_Savepoint_Rollback_OnError (0.00s)
+=== RUN   TestRunInTx_Savepoint_Rollback_OnPanic
+--- PASS: TestRunInTx_Savepoint_Rollback_OnPanic (0.00s)
+=== RUN   TestRunInTx_NestedSavepoints
+--- PASS: TestRunInTx_NestedSavepoints (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/postgres	1.850s
+=== RUN   TestNewConnection_Success
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestNewConnection_Success (0.00s)
+=== RUN   TestNewConnection_DialFails
+--- PASS: TestNewConnection_DialFails (0.00s)
+=== RUN   TestConnection_Health_Closed
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_Health_Closed (0.00s)
+=== RUN   TestConnection_AcquireChannel
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_AcquireChannel (0.00s)
+=== RUN   TestConnection_AcquireChannel_ConnectionClosed
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_AcquireChannel_ConnectionClosed (0.00s)
+=== RUN   TestConnection_ReleaseChannel_PoolFull
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_ReleaseChannel_PoolFull (0.00s)
+=== RUN   TestConnection_AcquireFromPool
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_AcquireFromPool (0.00s)
+=== RUN   TestConnection_Close_Idempotent
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_Close_Idempotent (0.00s)
+=== RUN   TestConnection_WaitConnected
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_WaitConnected (0.00s)
+=== RUN   TestConnection_WaitConnected_Timeout
+--- PASS: TestConnection_WaitConnected_Timeout (0.05s)
+=== RUN   TestConfig_Defaults
+--- PASS: TestConfig_Defaults (0.00s)
+=== RUN   TestConnection_BackoffDelay
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+=== RUN   TestConnection_BackoffDelay/attempt_0
+=== RUN   TestConnection_BackoffDelay/attempt_1
+=== RUN   TestConnection_BackoffDelay/attempt_2
+=== RUN   TestConnection_BackoffDelay/attempt_10_(capped)
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestConnection_BackoffDelay (0.00s)
+    --- PASS: TestConnection_BackoffDelay/attempt_0 (0.00s)
+    --- PASS: TestConnection_BackoffDelay/attempt_1 (0.00s)
+    --- PASS: TestConnection_BackoffDelay/attempt_2 (0.00s)
+    --- PASS: TestConnection_BackoffDelay/attempt_10_(capped) (0.00s)
+=== RUN   TestSanitizeURL
+=== RUN   TestSanitizeURL/long_URL
+=== RUN   TestSanitizeURL/short_URL
+--- PASS: TestSanitizeURL (0.00s)
+    --- PASS: TestSanitizeURL/long_URL (0.00s)
+    --- PASS: TestSanitizeURL/short_URL (0.00s)
+=== RUN   TestPublisher_InterfaceCompliance
+--- PASS: TestPublisher_InterfaceCompliance (0.00s)
+=== RUN   TestPublisher_Publish_Success
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_Success (0.01s)
+=== RUN   TestPublisher_Publish_Nacked
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_Nacked (0.01s)
+=== RUN   TestPublisher_Publish_ConfirmTimeout
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_ConfirmTimeout (0.05s)
+=== RUN   TestPublisher_Publish_ContextCancelled
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_ContextCancelled (0.00s)
+=== RUN   TestPublisher_Publish_PublishError
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_PublishError (0.00s)
+=== RUN   TestPublisher_Publish_ConfirmModeError
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestPublisher_Publish_ConfirmModeError (0.00s)
+=== RUN   TestSubscriber_InterfaceCompliance
+--- PASS: TestSubscriber_InterfaceCompliance (0.00s)
+=== RUN   TestSubscriberConfig_Defaults
+--- PASS: TestSubscriberConfig_Defaults (0.00s)
+=== RUN   TestSubscriber_Subscribe_ProcessesDelivery
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber started topic=test.topic queue=test-queue consumer=cg-test-queue-test.topic prefetch=5
+2026/04/05 23:53:21 INFO rabbitmq: subscriber context cancelled topic=test.topic
+2026/04/05 23:53:21 INFO rabbitmq: subscriber closed gracefully
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Subscribe_ProcessesDelivery (0.05s)
+=== RUN   TestSubscriber_Subscribe_UnmarshalFailure_Nack
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber started topic=test.topic queue=test-queue consumer=cg-test-queue-test.topic prefetch=10
+2026/04/05 23:53:21 ERROR rabbitmq: unmarshal delivery failed, nacking without requeue topic=test.topic delivery_tag=1 error="invalid character 'o' in literal null (expecting 'u')"
+2026/04/05 23:53:21 INFO rabbitmq: subscriber context cancelled topic=test.topic
+2026/04/05 23:53:21 INFO rabbitmq: subscriber closed gracefully
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Subscribe_UnmarshalFailure_Nack (0.05s)
+=== RUN   TestSubscriber_Subscribe_HandlerError_NackWithRequeue
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber started topic=test.topic queue=test-queue consumer=cg-test-queue-test.topic prefetch=10
+2026/04/05 23:53:21 WARN rabbitmq: handler returned error, nacking with requeue topic=test.topic event_id=evt-002 error="transient error"
+2026/04/05 23:53:21 INFO rabbitmq: subscriber context cancelled topic=test.topic
+2026/04/05 23:53:21 INFO rabbitmq: subscriber closed gracefully
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Subscribe_HandlerError_NackWithRequeue (0.05s)
+=== RUN   TestSubscriber_Subscribe_DefaultQueueName
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber started topic=my.topic queue=my.topic consumer=cg-my.topic-my.topic prefetch=10
+2026/04/05 23:53:21 INFO rabbitmq: subscriber context cancelled topic=my.topic
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Subscribe_DefaultQueueName (0.00s)
+=== RUN   TestSubscriber_Close_Idempotent
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber closed gracefully
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Close_Idempotent (0.00s)
+=== RUN   TestSubscriber_Subscribe_AfterClose
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber closed gracefully
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_Subscribe_AfterClose (0.00s)
+=== RUN   TestSubscriber_DeliveryChannelClosed
+2026/04/05 23:53:21 INFO rabbitmq: connection established url=amqp://tes***
+2026/04/05 23:53:21 INFO rabbitmq: subscriber started topic=test.topic queue=test-queue consumer=cg-test-queue-test.topic prefetch=10
+2026/04/05 23:53:21 WARN rabbitmq: delivery channel closed, subscriber exiting topic=test.topic
+2026/04/05 23:53:21 INFO rabbitmq: connection closed
+--- PASS: TestSubscriber_DeliveryChannelClosed (0.02s)
+=== RUN   TestConsumerBaseConfig_Defaults
+--- PASS: TestConsumerBaseConfig_Defaults (0.00s)
+=== RUN   TestConsumerBase_Wrap_Success
+--- PASS: TestConsumerBase_Wrap_Success (0.00s)
+=== RUN   TestConsumerBase_Wrap_AlreadyProcessed
+--- PASS: TestConsumerBase_Wrap_AlreadyProcessed (0.00s)
+=== RUN   TestConsumerBase_Wrap_TransientError_Retry
+2026/04/05 23:53:21 WARN rabbitmq: transient error, retrying event_id=evt-002 topic=test.topic attempt=1 max_retries=3 backoff=10ms error="transient error"
+2026/04/05 23:53:21 WARN rabbitmq: transient error, retrying event_id=evt-002 topic=test.topic attempt=2 max_retries=3 backoff=20ms error="transient error"
+--- PASS: TestConsumerBase_Wrap_TransientError_Retry (0.03s)
+=== RUN   TestConsumerBase_Wrap_RetryExhausted_DLQ
+2026/04/05 23:53:21 WARN rabbitmq: transient error, retrying event_id=evt-003 topic=test.topic attempt=1 max_retries=2 backoff=10ms error="always fails"
+2026/04/05 23:53:21 ERROR rabbitmq: retry budget exhausted, routing to DLQ event_id=evt-003 topic=test.topic consumer_group=test-group retry_count=2 error="always fails"
+2026/04/05 23:53:21 ERROR rabbitmq: message routed to dead letter queue event_id=evt-003 topic=test.topic dlq_topic=test.topic.dlq consumer_group=test-group error="always fails" retry_count=2
+--- PASS: TestConsumerBase_Wrap_RetryExhausted_DLQ (0.01s)
+=== RUN   TestConsumerBase_Wrap_PermanentError_DLQ
+2026/04/05 23:53:21 WARN rabbitmq: permanent error, routing to DLQ event_id=evt-004 topic=test.topic consumer_group=test-group error="permanent: bad payload"
+2026/04/05 23:53:21 ERROR rabbitmq: message routed to dead letter queue event_id=evt-004 topic=test.topic dlq_topic=test.topic.dlq consumer_group=test-group error="permanent: bad payload" retry_count=1
+--- PASS: TestConsumerBase_Wrap_PermanentError_DLQ (0.00s)
+=== RUN   TestConsumerBase_Wrap_CustomDLQTopic
+2026/04/05 23:53:21 ERROR rabbitmq: retry budget exhausted, routing to DLQ event_id=evt-005 topic=test.topic consumer_group=test-group retry_count=1 error=fail
+2026/04/05 23:53:21 ERROR rabbitmq: message routed to dead letter queue event_id=evt-005 topic=test.topic dlq_topic=custom-dlq consumer_group=test-group error=fail retry_count=1
+--- PASS: TestConsumerBase_Wrap_CustomDLQTopic (0.00s)
+=== RUN   TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses
+2026/04/05 23:53:21 WARN rabbitmq: idempotency check failed, proceeding with handler event_id=evt-006 topic=test.topic consumer_group=test-group error="redis down"
+--- PASS: TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses (0.00s)
+=== RUN   TestConsumerBase_Wrap_ContextCancelled_DuringRetry
+2026/04/05 23:53:21 WARN rabbitmq: transient error, retrying event_id=evt-007 topic=test.topic attempt=1 max_retries=3 backoff=500ms error="transient error"
+--- PASS: TestConsumerBase_Wrap_ContextCancelled_DuringRetry (0.00s)
+=== RUN   TestPermanentError
+--- PASS: TestPermanentError (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/rabbitmq	2.330s
+=== RUN   TestCache_SetAndGet
+--- PASS: TestCache_SetAndGet (0.00s)
+=== RUN   TestCache_GetNonExistent
+--- PASS: TestCache_GetNonExistent (0.00s)
+=== RUN   TestCache_Delete
+--- PASS: TestCache_Delete (0.00s)
+=== RUN   TestCache_DeleteNonExistent
+--- PASS: TestCache_DeleteNonExistent (0.00s)
+=== RUN   TestCache_SetError
+--- PASS: TestCache_SetError (0.00s)
+=== RUN   TestCache_GetError
+--- PASS: TestCache_GetError (0.00s)
+=== RUN   TestCache_DeleteError
+--- PASS: TestCache_DeleteError (0.00s)
+=== RUN   TestCache_ViaClientConstructor
+--- PASS: TestCache_ViaClientConstructor (0.00s)
+=== RUN   TestSetJSON_And_GetJSON
+--- PASS: TestSetJSON_And_GetJSON (0.00s)
+=== RUN   TestGetJSON_NonExistent
+--- PASS: TestGetJSON_NonExistent (0.00s)
+=== RUN   TestGetJSON_UnmarshalError
+--- PASS: TestGetJSON_UnmarshalError (0.00s)
+=== RUN   TestGetJSON_GetError
+--- PASS: TestGetJSON_GetError (0.00s)
+=== RUN   TestSetJSON_MarshalError
+--- PASS: TestSetJSON_MarshalError (0.00s)
+=== RUN   TestSetJSON_SetError
+--- PASS: TestSetJSON_SetError (0.00s)
+=== RUN   TestConfigDefaults
+--- PASS: TestConfigDefaults (0.00s)
+=== RUN   TestConfigDefaultsPreserveExisting
+--- PASS: TestConfigDefaultsPreserveExisting (0.00s)
+=== RUN   TestClientHealth_Success
+--- PASS: TestClientHealth_Success (0.00s)
+=== RUN   TestClientHealth_Failure
+--- PASS: TestClientHealth_Failure (0.00s)
+=== RUN   TestClientClose_Success
+2026/04/05 23:53:21 INFO redis: connection closed
+--- PASS: TestClientClose_Success (0.00s)
+=== RUN   TestClientClose_Failure
+--- PASS: TestClientClose_Failure (0.00s)
+=== RUN   TestClientConfigReturned
+--- PASS: TestClientConfigReturned (0.00s)
+=== RUN   TestDistLock_AcquireAndRelease
+--- PASS: TestDistLock_AcquireAndRelease (0.00s)
+=== RUN   TestDistLock_AcquireAlreadyHeld
+--- PASS: TestDistLock_AcquireAlreadyHeld (0.00s)
+=== RUN   TestDistLock_AcquireSetNXError
+--- PASS: TestDistLock_AcquireSetNXError (0.00s)
+=== RUN   TestDistLock_ReleaseIdempotent
+2026/04/05 23:53:21 WARN redis: lock already released or expired key=test:lock:idem
+--- PASS: TestDistLock_ReleaseIdempotent (0.00s)
+=== RUN   TestDistLock_ReleaseEvalError
+--- PASS: TestDistLock_ReleaseEvalError (0.00s)
+=== RUN   TestDistLock_DefaultTTL
+--- PASS: TestDistLock_DefaultTTL (0.00s)
+=== RUN   TestDistLock_UsesClientConfigTTL
+--- PASS: TestDistLock_UsesClientConfigTTL (0.00s)
+=== RUN   TestRandomToken
+--- PASS: TestRandomToken (0.00s)
+=== RUN   TestIdempotencyChecker_MarkAndCheck
+--- PASS: TestIdempotencyChecker_MarkAndCheck (0.00s)
+=== RUN   TestIdempotencyChecker_MarkIdempotent
+--- PASS: TestIdempotencyChecker_MarkIdempotent (0.00s)
+=== RUN   TestIdempotencyChecker_IsProcessed_GetError
+--- PASS: TestIdempotencyChecker_IsProcessed_GetError (0.00s)
+=== RUN   TestIdempotencyChecker_MarkProcessed_SetNXError
+--- PASS: TestIdempotencyChecker_MarkProcessed_SetNXError (0.00s)
+=== RUN   TestIdempotencyChecker_ViaClientConstructor
+--- PASS: TestIdempotencyChecker_ViaClientConstructor (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/redis	2.370s
+=== RUN   TestConfig_Validate
+=== RUN   TestConfig_Validate/valid_config
+=== RUN   TestConfig_Validate/missing_endpoint
+=== RUN   TestConfig_Validate/missing_region
+=== RUN   TestConfig_Validate/missing_bucket
+=== RUN   TestConfig_Validate/missing_access_key
+=== RUN   TestConfig_Validate/missing_secret_key
+--- PASS: TestConfig_Validate (0.00s)
+    --- PASS: TestConfig_Validate/valid_config (0.00s)
+    --- PASS: TestConfig_Validate/missing_endpoint (0.00s)
+    --- PASS: TestConfig_Validate/missing_region (0.00s)
+    --- PASS: TestConfig_Validate/missing_bucket (0.00s)
+    --- PASS: TestConfig_Validate/missing_access_key (0.00s)
+    --- PASS: TestConfig_Validate/missing_secret_key (0.00s)
+=== RUN   TestConfigFromEnv
+--- PASS: TestConfigFromEnv (0.00s)
+=== RUN   TestClient_Health
+--- PASS: TestClient_Health (0.00s)
+=== RUN   TestClient_UploadDownloadDelete
+--- PASS: TestClient_UploadDownloadDelete (0.00s)
+=== RUN   TestClient_Upload_DefaultContentType
+--- PASS: TestClient_Upload_DefaultContentType (0.00s)
+=== RUN   TestClient_Delete_NotFound
+--- PASS: TestClient_Delete_NotFound (0.00s)
+=== RUN   TestClient_PresignedGet
+--- PASS: TestClient_PresignedGet (0.00s)
+=== RUN   TestClient_PresignedPut
+--- PASS: TestClient_PresignedPut (0.00s)
+=== RUN   TestClient_PresignedGet_InvalidTTL
+--- PASS: TestClient_PresignedGet_InvalidTTL (0.00s)
+=== RUN   TestClient_PresignedGet_TTLTooLong
+--- PASS: TestClient_PresignedGet_TTLTooLong (0.00s)
+=== RUN   TestDeriveSigningKey
+--- PASS: TestDeriveSigningKey (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/s3	3.480s
+=== RUN   TestHub_RegisterUnregister
+2026/04/05 23:53:22 INFO websocket hub: connection registered conn_id=ws-c46a1eab-c3cf-4c4f-a9c0-f5bda90f8200
+2026/04/05 23:53:22 INFO websocket: client connected conn_id=ws-c46a1eab-c3cf-4c4f-a9c0-f5bda90f8200 remote_addr=127.0.0.1:51529
+2026/04/05 23:53:22 INFO websocket hub: connection unregistered conn_id=ws-c46a1eab-c3cf-4c4f-a9c0-f5bda90f8200
+--- PASS: TestHub_RegisterUnregister (0.11s)
+=== RUN   TestHub_Broadcast
+2026/04/05 23:53:22 INFO websocket hub: connection registered conn_id=ws-c6b4b667-7f52-4799-a35a-a98700070799
+2026/04/05 23:53:22 INFO websocket: client connected conn_id=ws-c6b4b667-7f52-4799-a35a-a98700070799 remote_addr=127.0.0.1:51531
+2026/04/05 23:53:22 INFO websocket hub: connection registered conn_id=ws-d7aad322-a6c0-49c6-81d3-6358d4d3e5e3
+2026/04/05 23:53:22 INFO websocket: client connected conn_id=ws-d7aad322-a6c0-49c6-81d3-6358d4d3e5e3 remote_addr=127.0.0.1:51532
+2026/04/05 23:53:22 INFO websocket hub: connection unregistered conn_id=ws-d7aad322-a6c0-49c6-81d3-6358d4d3e5e3
+2026/04/05 23:53:22 INFO websocket hub: connection unregistered conn_id=ws-c6b4b667-7f52-4799-a35a-a98700070799
+--- PASS: TestHub_Broadcast (0.11s)
+=== RUN   TestHub_MessageHandler
+2026/04/05 23:53:22 INFO websocket hub: connection registered conn_id=ws-b137b319-158f-4ee8-afac-99edd51c8adb
+2026/04/05 23:53:22 INFO websocket: client connected conn_id=ws-b137b319-158f-4ee8-afac-99edd51c8adb remote_addr=127.0.0.1:51537
+2026/04/05 23:53:22 INFO websocket hub: connection unregistered conn_id=ws-b137b319-158f-4ee8-afac-99edd51c8adb
+--- PASS: TestHub_MessageHandler (0.30s)
+=== RUN   TestHub_Send
+2026/04/05 23:53:22 INFO websocket hub: connection registered conn_id=ws-c5bfab30-8ef2-44d4-a0a7-5a9c4448b397
+2026/04/05 23:53:22 INFO websocket: client connected conn_id=ws-c5bfab30-8ef2-44d4-a0a7-5a9c4448b397 remote_addr=127.0.0.1:51544
+2026/04/05 23:53:22 INFO websocket hub: connection unregistered conn_id=ws-c5bfab30-8ef2-44d4-a0a7-5a9c4448b397
+--- PASS: TestHub_Send (0.10s)
+=== RUN   TestHub_Send_NotFound
+--- PASS: TestHub_Send_NotFound (0.00s)
+=== RUN   TestHub_StartStop
+2026/04/05 23:53:22 INFO websocket hub: started ping_interval=50ms
+2026/04/05 23:53:23 INFO websocket hub: stopped
+--- PASS: TestHub_StartStop (0.20s)
+=== RUN   TestDefaultHubConfig
+--- PASS: TestDefaultHubConfig (0.00s)
+=== RUN   TestUpgradeHandler_AllowedOrigins
+--- PASS: TestUpgradeHandler_AllowedOrigins (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/adapters/websocket	3.619s
+=== RUN   TestAccessCore_Lifecycle
+--- PASS: TestAccessCore_Lifecycle (0.00s)
+=== RUN   TestAccessCore_Metadata
+--- PASS: TestAccessCore_Metadata (0.00s)
+=== RUN   TestAccessCore_TokenVerifierAndAuthorizer
+--- PASS: TestAccessCore_TokenVerifierAndAuthorizer (0.00s)
+=== RUN   TestAccessCore_RegisterRoutes
+--- PASS: TestAccessCore_RegisterRoutes (0.00s)
+=== RUN   TestAccessCore_RouteSessionLogin
+2026/04/05 23:53:22 INFO http request method=POST path=/api/v1/access/sessions/login status=401 duration_ms=0 request_id=40480fb4-363b-49c4-b5f0-0c9d44e1bcbe
+--- PASS: TestAccessCore_RouteSessionLogin (0.00s)
+=== RUN   TestAccessCore_RouteSessionRefresh
+2026/04/05 23:53:22 INFO http request method=POST path=/api/v1/access/sessions/refresh status=401 duration_ms=0 request_id=b0d5d21e-f17c-42da-b6ff-430082551946
+--- PASS: TestAccessCore_RouteSessionRefresh (0.00s)
+=== RUN   TestAccessCore_RouteUserCreate
+2026/04/05 23:53:22 INFO user created user_id=usr-7869e4cb-bec3-4834-812b-9ff267cfb37e
+2026/04/05 23:53:22 INFO http request method=POST path=/api/v1/access/users/ status=201 duration_ms=57 request_id=139e4a54-0ae8-44a0-a68c-af262c763e87
+--- PASS: TestAccessCore_RouteUserCreate (0.06s)
+=== RUN   TestAccessCore_RouteRolesList
+2026/04/05 23:53:22 INFO http request method=GET path=/api/v1/access/roles/user-1 status=200 duration_ms=0 request_id=0dc84223-c7a6-4e08-8f4e-a0a9e7ea1bbf
+--- PASS: TestAccessCore_RouteRolesList (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core	3.202s
+=== RUN   TestRole_HasPermission
+=== RUN   TestRole_HasPermission/has_exact_permission
+=== RUN   TestRole_HasPermission/has_another_permission
+=== RUN   TestRole_HasPermission/wrong_action
+=== RUN   TestRole_HasPermission/wrong_resource
+=== RUN   TestRole_HasPermission/both_wrong
+=== RUN   TestRole_HasPermission/cross-resource_match
+--- PASS: TestRole_HasPermission (0.00s)
+    --- PASS: TestRole_HasPermission/has_exact_permission (0.00s)
+    --- PASS: TestRole_HasPermission/has_another_permission (0.00s)
+    --- PASS: TestRole_HasPermission/wrong_action (0.00s)
+    --- PASS: TestRole_HasPermission/wrong_resource (0.00s)
+    --- PASS: TestRole_HasPermission/both_wrong (0.00s)
+    --- PASS: TestRole_HasPermission/cross-resource_match (0.00s)
+=== RUN   TestRole_HasPermission_EmptyPermissions
+--- PASS: TestRole_HasPermission_EmptyPermissions (0.00s)
+=== RUN   TestNewSession
+=== RUN   TestNewSession/valid_session
+=== RUN   TestNewSession/empty_userID
+=== RUN   TestNewSession/empty_accessToken
+=== RUN   TestNewSession/empty_refreshToken
+--- PASS: TestNewSession (0.00s)
+    --- PASS: TestNewSession/valid_session (0.00s)
+    --- PASS: TestNewSession/empty_userID (0.00s)
+    --- PASS: TestNewSession/empty_accessToken (0.00s)
+    --- PASS: TestNewSession/empty_refreshToken (0.00s)
+=== RUN   TestSession_Revoke
+=== RUN   TestSession_Revoke/new_session_is_not_revoked
+=== RUN   TestSession_Revoke/revoke_marks_session_revoked
+=== RUN   TestSession_Revoke/double_revoke_stays_revoked
+--- PASS: TestSession_Revoke (0.00s)
+    --- PASS: TestSession_Revoke/new_session_is_not_revoked (0.00s)
+    --- PASS: TestSession_Revoke/revoke_marks_session_revoked (0.00s)
+    --- PASS: TestSession_Revoke/double_revoke_stays_revoked (0.00s)
+=== RUN   TestSession_IsExpired
+=== RUN   TestSession_IsExpired/future_expiry_is_not_expired
+=== RUN   TestSession_IsExpired/past_expiry_is_expired
+--- PASS: TestSession_IsExpired (0.00s)
+    --- PASS: TestSession_IsExpired/future_expiry_is_not_expired (0.00s)
+    --- PASS: TestSession_IsExpired/past_expiry_is_expired (0.00s)
+=== RUN   TestNewUser
+=== RUN   TestNewUser/valid_user
+=== RUN   TestNewUser/empty_username
+=== RUN   TestNewUser/empty_email
+=== RUN   TestNewUser/empty_passwordHash
+--- PASS: TestNewUser (0.00s)
+    --- PASS: TestNewUser/valid_user (0.00s)
+    --- PASS: TestNewUser/empty_username (0.00s)
+    --- PASS: TestNewUser/empty_email (0.00s)
+    --- PASS: TestNewUser/empty_passwordHash (0.00s)
+=== RUN   TestUser_LockUnlock
+=== RUN   TestUser_LockUnlock/new_user_is_not_locked
+=== RUN   TestUser_LockUnlock/lock_sets_locked
+=== RUN   TestUser_LockUnlock/unlock_after_lock
+=== RUN   TestUser_LockUnlock/double_lock_remains_locked
+--- PASS: TestUser_LockUnlock (0.00s)
+    --- PASS: TestUser_LockUnlock/new_user_is_not_locked (0.00s)
+    --- PASS: TestUser_LockUnlock/lock_sets_locked (0.00s)
+    --- PASS: TestUser_LockUnlock/unlock_after_lock (0.00s)
+    --- PASS: TestUser_LockUnlock/double_lock_remains_locked (0.00s)
+=== RUN   TestUser_Lock_UpdatesTimestamp
+--- PASS: TestUser_Lock_UpdatesTimestamp (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/internal/domain	2.824s
+?   	github.com/ghbvf/gocell/cells/access-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/cells/access-core/internal/ports	[no test files]
+=== RUN   TestService_Authorize
+=== RUN   TestService_Authorize/authorized_via_role_permission
+=== RUN   TestService_Authorize/unauthorized_-_no_matching_permission
+=== RUN   TestService_Authorize/unauthorized_-_no_roles
+--- PASS: TestService_Authorize (0.00s)
+    --- PASS: TestService_Authorize/authorized_via_role_permission (0.00s)
+    --- PASS: TestService_Authorize/unauthorized_-_no_matching_permission (0.00s)
+    --- PASS: TestService_Authorize/unauthorized_-_no_roles (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide	2.440s
+=== RUN   TestHandler
+=== RUN   TestHandler/POST_/_valid_user_returns_201
+2026/04/05 23:53:23 INFO user created user_id=usr-e561ef3a-4446-4d16-ae98-56b09f7f4773
+=== RUN   TestHandler/POST_/_invalid_body_returns_400
+=== RUN   TestHandler/GET_/{id}_nonexistent_returns_404
+--- PASS: TestHandler (0.06s)
+    --- PASS: TestHandler/POST_/_valid_user_returns_201 (0.06s)
+    --- PASS: TestHandler/POST_/_invalid_body_returns_400 (0.00s)
+    --- PASS: TestHandler/GET_/{id}_nonexistent_returns_404 (0.00s)
+=== RUN   TestHandler_CreateThenGetThenDelete
+2026/04/05 23:53:24 INFO user created user_id=usr-335e568b-a5a6-416d-9639-f2600b5e6964
+2026/04/05 23:53:24 INFO user deleted user_id=usr-335e568b-a5a6-416d-9639-f2600b5e6964
+--- PASS: TestHandler_CreateThenGetThenDelete (0.05s)
+=== RUN   TestService_Create
+=== RUN   TestService_Create/valid
+2026/04/05 23:53:24 INFO user created user_id=usr-49a6c4ec-36d1-43d8-b236-3b51f23218d3
+=== RUN   TestService_Create/empty_username
+=== RUN   TestService_Create/empty_email
+=== RUN   TestService_Create/empty_password
+--- PASS: TestService_Create (0.13s)
+    --- PASS: TestService_Create/valid (0.04s)
+    --- PASS: TestService_Create/empty_username (0.04s)
+    --- PASS: TestService_Create/empty_email (0.04s)
+    --- PASS: TestService_Create/empty_password (0.00s)
+=== RUN   TestService_LockUnlock
+2026/04/05 23:53:24 INFO user created user_id=usr-36807027-bbdb-478b-a8cf-163cf12f3399
+2026/04/05 23:53:24 INFO user locked user_id=usr-36807027-bbdb-478b-a8cf-163cf12f3399
+2026/04/05 23:53:24 INFO user unlocked user_id=usr-36807027-bbdb-478b-a8cf-163cf12f3399
+--- PASS: TestService_LockUnlock (0.05s)
+=== RUN   TestService_Lock_RevokesSession
+2026/04/05 23:53:24 INFO user created user_id=usr-dbe13196-51fc-4994-830b-24963ac4941f
+2026/04/05 23:53:24 INFO user locked user_id=usr-dbe13196-51fc-4994-830b-24963ac4941f
+--- PASS: TestService_Lock_RevokesSession (0.05s)
+=== RUN   TestService_Delete
+2026/04/05 23:53:24 INFO user created user_id=usr-b41e5cfd-4fa7-4ea0-8af6-7fd30df426d3
+2026/04/05 23:53:24 INFO user deleted user_id=usr-b41e5cfd-4fa7-4ea0-8af6-7fd30df426d3
+--- PASS: TestService_Delete (0.05s)
+=== RUN   TestService_Update
+2026/04/05 23:53:24 INFO user created user_id=usr-6aef36b9-13aa-470e-8312-17196dd2f318
+2026/04/05 23:53:24 INFO user updated user_id=usr-6aef36b9-13aa-470e-8312-17196dd2f318
+--- PASS: TestService_Update (0.05s)
+=== RUN   TestService_Update_PatchSemantics
+2026/04/05 23:53:24 INFO user created user_id=usr-376acfa7-321f-44fe-a2bb-b16ff96c5ac0
+2026/04/05 23:53:24 INFO user updated user_id=usr-376acfa7-321f-44fe-a2bb-b16ff96c5ac0
+2026/04/05 23:53:24 INFO user updated user_id=usr-376acfa7-321f-44fe-a2bb-b16ff96c5ac0
+--- PASS: TestService_Update_PatchSemantics (0.04s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/identitymanage	3.216s
+=== RUN   TestHandler
+=== RUN   TestHandler/GET_/{userID}_returns_roles
+=== RUN   TestHandler/GET_/{userID}_no_roles_returns_empty
+=== RUN   TestHandler/GET_/{userID}/{roleName}_has_role
+=== RUN   TestHandler/GET_/{userID}/{roleName}_missing_role
+--- PASS: TestHandler (0.00s)
+    --- PASS: TestHandler/GET_/{userID}_returns_roles (0.00s)
+    --- PASS: TestHandler/GET_/{userID}_no_roles_returns_empty (0.00s)
+    --- PASS: TestHandler/GET_/{userID}/{roleName}_has_role (0.00s)
+    --- PASS: TestHandler/GET_/{userID}/{roleName}_missing_role (0.00s)
+=== RUN   TestService_HasRole
+=== RUN   TestService_HasRole/has_role
+=== RUN   TestService_HasRole/does_not_have_role
+=== RUN   TestService_HasRole/empty_input
+--- PASS: TestService_HasRole (0.00s)
+    --- PASS: TestService_HasRole/has_role (0.00s)
+    --- PASS: TestService_HasRole/does_not_have_role (0.00s)
+    --- PASS: TestService_HasRole/empty_input (0.00s)
+=== RUN   TestService_ListRoles
+--- PASS: TestService_ListRoles (0.00s)
+=== RUN   TestService_ListRolesEmptyInput
+--- PASS: TestService_ListRolesEmptyInput (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck	2.901s
+=== RUN   TestHandleLogin
+=== RUN   TestHandleLogin/valid_credentials_returns_201_with_tokens
+2026/04/05 23:53:24 INFO user logged in user_id=usr-1 session_id=sess-dbe2b82c-49b9-4c4f-abbb-98d79062b0e1
+=== RUN   TestHandleLogin/invalid_JSON_returns_400
+=== RUN   TestHandleLogin/wrong_password_returns_401
+--- PASS: TestHandleLogin (0.00s)
+    --- PASS: TestHandleLogin/valid_credentials_returns_201_with_tokens (0.00s)
+    --- PASS: TestHandleLogin/invalid_JSON_returns_400 (0.00s)
+    --- PASS: TestHandleLogin/wrong_password_returns_401 (0.00s)
+=== RUN   TestService_Login
+=== RUN   TestService_Login/valid_login
+2026/04/05 23:53:24 INFO user logged in user_id=usr-alice session_id=sess-36874b81-671e-4734-a1af-d54b5850909e
+=== RUN   TestService_Login/wrong_password
+=== RUN   TestService_Login/non-existent_user
+=== RUN   TestService_Login/empty_credentials
+=== RUN   TestService_Login/locked_user
+--- PASS: TestService_Login (0.24s)
+    --- PASS: TestService_Login/valid_login (0.10s)
+    --- PASS: TestService_Login/wrong_password (0.09s)
+    --- PASS: TestService_Login/non-existent_user (0.00s)
+    --- PASS: TestService_Login/empty_credentials (0.00s)
+    --- PASS: TestService_Login/locked_user (0.04s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin	2.979s
+=== RUN   TestHandleLogout
+=== RUN   TestHandleLogout/existing_session_returns_204
+2026/04/05 23:53:24 INFO session revoked session_id=sess-1 user_id=usr-1
+=== RUN   TestHandleLogout/nonexistent_session_returns_404
+--- PASS: TestHandleLogout (0.00s)
+    --- PASS: TestHandleLogout/existing_session_returns_204 (0.00s)
+    --- PASS: TestHandleLogout/nonexistent_session_returns_404 (0.00s)
+=== RUN   TestService_Logout
+=== RUN   TestService_Logout/valid_logout
+2026/04/05 23:53:24 INFO session revoked session_id=sess-1 user_id=usr-1
+=== RUN   TestService_Logout/empty_session_ID
+=== RUN   TestService_Logout/non-existent_session
+=== RUN   TestService_Logout/already_revoked_is_idempotent
+2026/04/05 23:53:24 INFO session revoked session_id=sess-rev user_id=usr-1
+--- PASS: TestService_Logout (0.00s)
+    --- PASS: TestService_Logout/valid_logout (0.00s)
+    --- PASS: TestService_Logout/empty_session_ID (0.00s)
+    --- PASS: TestService_Logout/non-existent_session (0.00s)
+    --- PASS: TestService_Logout/already_revoked_is_idempotent (0.00s)
+=== RUN   TestService_LogoutUser
+2026/04/05 23:53:24 INFO all sessions revoked for user user_id=usr-1
+--- PASS: TestService_LogoutUser (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout	3.039s
+=== RUN   TestHandleRefresh
+=== RUN   TestHandleRefresh/valid_refresh_token_returns_200_with_new_tokens
+2026/04/05 23:53:25 INFO token refreshed user_id=usr-1
+=== RUN   TestHandleRefresh/invalid_JSON_returns_400
+=== RUN   TestHandleRefresh/invalid_token_returns_401
+--- PASS: TestHandleRefresh (0.00s)
+    --- PASS: TestHandleRefresh/valid_refresh_token_returns_200_with_new_tokens (0.00s)
+    --- PASS: TestHandleRefresh/invalid_JSON_returns_400 (0.00s)
+    --- PASS: TestHandleRefresh/invalid_token_returns_401 (0.00s)
+=== RUN   TestService_Refresh
+=== RUN   TestService_Refresh/valid_refresh
+2026/04/05 23:53:25 INFO token refreshed user_id=usr-1
+=== RUN   TestService_Refresh/revoked_session
+=== RUN   TestService_Refresh/empty_token
+=== RUN   TestService_Refresh/invalid_JWT
+--- PASS: TestService_Refresh (0.00s)
+    --- PASS: TestService_Refresh/valid_refresh (0.00s)
+    --- PASS: TestService_Refresh/revoked_session (0.00s)
+    --- PASS: TestService_Refresh/empty_token (0.00s)
+    --- PASS: TestService_Refresh/invalid_JWT (0.00s)
+=== RUN   TestService_Refresh_TokenRotation
+2026/04/05 23:53:25 INFO token refreshed user_id=usr-rot
+2026/04/05 23:53:25 ERROR session-refresh: refresh token reuse detected, session revoked session_id=sess-rot user_id=usr-rot
+--- PASS: TestService_Refresh_TokenRotation (0.00s)
+=== RUN   TestService_Refresh_SigningMethodCheck
+--- PASS: TestService_Refresh_SigningMethodCheck (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh	2.606s
+=== RUN   TestService_Verify
+=== RUN   TestService_Verify/valid_token_without_sid
+=== RUN   TestService_Verify/valid_token_with_active_session
+=== RUN   TestService_Verify/token_with_revoked_session
+=== RUN   TestService_Verify/token_with_non-existent_session
+=== RUN   TestService_Verify/empty_token
+=== RUN   TestService_Verify/invalid_token
+=== RUN   TestService_Verify/expired_token
+=== RUN   TestService_Verify/wrong_signing_key
+--- PASS: TestService_Verify (0.00s)
+    --- PASS: TestService_Verify/valid_token_without_sid (0.00s)
+    --- PASS: TestService_Verify/valid_token_with_active_session (0.00s)
+    --- PASS: TestService_Verify/token_with_revoked_session (0.00s)
+    --- PASS: TestService_Verify/token_with_non-existent_session (0.00s)
+    --- PASS: TestService_Verify/empty_token (0.00s)
+    --- PASS: TestService_Verify/invalid_token (0.00s)
+    --- PASS: TestService_Verify/expired_token (0.00s)
+    --- PASS: TestService_Verify/wrong_signing_key (0.00s)
+=== RUN   TestService_Verify_NilSessionRepo
+--- PASS: TestService_Verify_NilSessionRepo (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate	2.676s
+=== RUN   TestAuditCore_Lifecycle
+--- PASS: TestAuditCore_Lifecycle (0.00s)
+=== RUN   TestAuditCore_Metadata
+--- PASS: TestAuditCore_Metadata (0.00s)
+=== RUN   TestAuditCore_MissingHMACKey
+--- PASS: TestAuditCore_MissingHMACKey (0.00s)
+=== RUN   TestAuditCore_HMACKeyFromConfig
+--- PASS: TestAuditCore_HMACKeyFromConfig (0.00s)
+=== RUN   TestAuditCore_RegisterRoutes
+--- PASS: TestAuditCore_RegisterRoutes (0.00s)
+=== RUN   TestAuditCore_RegisterSubscriptions
+--- PASS: TestAuditCore_RegisterSubscriptions (0.00s)
+=== RUN   TestAuditCore_RouteQueryEntries
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.session.created.v1
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.user.created.v1
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.config.rollback.v1
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.session.revoked.v1
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.user.locked.v1
+2026/04/05 23:53:26 ERROR audit-core: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed" topic=event.config.changed.v1
+2026/04/05 23:53:26 INFO http request method=GET path=/api/v1/audit/entries status=200 duration_ms=1 request_id=f30566f4-5153-44af-a61c-a38404fbc8e0
+--- PASS: TestAuditCore_RouteQueryEntries (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core	2.892s
+=== RUN   TestAuditRepository_Append
+--- PASS: TestAuditRepository_Append (0.00s)
+=== RUN   TestAuditRepository_Append_ZeroTimestamp
+--- PASS: TestAuditRepository_Append_ZeroTimestamp (0.00s)
+=== RUN   TestAuditRepository_Append_Error
+--- PASS: TestAuditRepository_Append_Error (0.00s)
+=== RUN   TestAuditRepository_GetRange
+--- PASS: TestAuditRepository_GetRange (0.00s)
+=== RUN   TestAuditRepository_GetRange_Empty
+--- PASS: TestAuditRepository_GetRange_Empty (0.00s)
+=== RUN   TestAuditRepository_GetRange_InvalidRange
+--- PASS: TestAuditRepository_GetRange_InvalidRange (0.00s)
+=== RUN   TestAuditRepository_Query_WithFilters
+--- PASS: TestAuditRepository_Query_WithFilters (0.00s)
+=== RUN   TestItoa
+--- PASS: TestItoa (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/postgres	3.084s
+=== RUN   TestArchiveStore_Archive
+--- PASS: TestArchiveStore_Archive (0.00s)
+=== RUN   TestArchiveStore_Archive_Empty
+--- PASS: TestArchiveStore_Archive_Empty (0.00s)
+=== RUN   TestArchiveStore_Archive_UploadError
+--- PASS: TestArchiveStore_Archive_UploadError (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/internal/adapters/s3archive	3.036s
+=== RUN   TestHashChain_Append
+=== RUN   TestHashChain_Append/single_entry_has_empty_PrevHash
+=== RUN   TestHashChain_Append/three_entries_form_linked_chain
+--- PASS: TestHashChain_Append (0.00s)
+    --- PASS: TestHashChain_Append/single_entry_has_empty_PrevHash (0.00s)
+    --- PASS: TestHashChain_Append/three_entries_form_linked_chain (0.00s)
+=== RUN   TestHashChain_Verify
+=== RUN   TestHashChain_Verify/intact_chain_is_valid
+=== RUN   TestHashChain_Verify/tampered_payload_at_index_2
+=== RUN   TestHashChain_Verify/tampered_hash_at_index_0_breaks_index_1_linkage
+=== RUN   TestHashChain_Verify/swapped_entries_break_chain
+=== RUN   TestHashChain_Verify/empty_slice_is_valid
+--- PASS: TestHashChain_Verify (0.00s)
+    --- PASS: TestHashChain_Verify/intact_chain_is_valid (0.00s)
+    --- PASS: TestHashChain_Verify/tampered_payload_at_index_2 (0.00s)
+    --- PASS: TestHashChain_Verify/tampered_hash_at_index_0_breaks_index_1_linkage (0.00s)
+    --- PASS: TestHashChain_Verify/swapped_entries_break_chain (0.00s)
+    --- PASS: TestHashChain_Verify/empty_slice_is_valid (0.00s)
+=== RUN   TestHashChain_DifferentKeys_DifferentHashes
+--- PASS: TestHashChain_DifferentKeys_DifferentHashes (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/internal/domain	2.760s
+?   	github.com/ghbvf/gocell/cells/audit-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/cells/audit-core/internal/ports	[no test files]
+=== RUN   TestService_HandleEvent
+=== RUN   TestService_HandleEvent/user_created_event
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-fa6e0742-f9b6-40f8-99a5-f5faa3d6f082 event_type=event.user.created.v1
+=== RUN   TestService_HandleEvent/session_created_event
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-949a7b3f-49c7-47b2-9d75-2ee3f9f4700f event_type=event.session.created.v1
+=== RUN   TestService_HandleEvent/empty_payload
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-976408a4-9ad9-4b14-a422-33c4e2cafadd event_type=event.config.changed.v1
+--- PASS: TestService_HandleEvent (0.00s)
+    --- PASS: TestService_HandleEvent/user_created_event (0.00s)
+    --- PASS: TestService_HandleEvent/session_created_event (0.00s)
+    --- PASS: TestService_HandleEvent/empty_payload (0.00s)
+=== RUN   TestService_HandleEvent_ChainGrows
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-53ce552a-7227-4efa-aafb-16358ed19060 event_type=event.user.created.v1
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-0b65653b-8d49-4bbb-9d72-bc8f960e7e5d event_type=event.user.created.v1
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-f5c1473e-4195-4550-800b-dcac46b8921e event_type=event.user.created.v1
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-cf688b29-520d-4eed-9e81-a9c1c5055258 event_type=event.user.created.v1
+2026/04/05 23:53:27 INFO audit entry appended entry_id=audit-da86e721-782e-4c09-a37c-cf75ae0af0a5 event_type=event.user.created.v1
+--- PASS: TestService_HandleEvent_ChainGrows (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditappend	2.973s
+=== RUN   TestService_Archive_ReturnsNotImplemented
+--- PASS: TestService_Archive_ReturnsNotImplemented (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive	3.300s
+=== RUN   TestHandleQuery_InvalidTimeFormat
+=== RUN   TestHandleQuery_InvalidTimeFormat/invalid_from_parameter
+=== RUN   TestHandleQuery_InvalidTimeFormat/invalid_to_parameter
+=== RUN   TestHandleQuery_InvalidTimeFormat/valid_RFC3339_from
+=== RUN   TestHandleQuery_InvalidTimeFormat/no_time_params
+--- PASS: TestHandleQuery_InvalidTimeFormat (0.00s)
+    --- PASS: TestHandleQuery_InvalidTimeFormat/invalid_from_parameter (0.00s)
+    --- PASS: TestHandleQuery_InvalidTimeFormat/invalid_to_parameter (0.00s)
+    --- PASS: TestHandleQuery_InvalidTimeFormat/valid_RFC3339_from (0.00s)
+    --- PASS: TestHandleQuery_InvalidTimeFormat/no_time_params (0.00s)
+=== RUN   TestService_Query
+=== RUN   TestService_Query/empty_repository
+=== RUN   TestService_Query/all_entries
+=== RUN   TestService_Query/filter_by_event_type
+=== RUN   TestService_Query/filter_by_actor
+--- PASS: TestService_Query (0.00s)
+    --- PASS: TestService_Query/empty_repository (0.00s)
+    --- PASS: TestService_Query/all_entries (0.00s)
+    --- PASS: TestService_Query/filter_by_event_type (0.00s)
+    --- PASS: TestService_Query/filter_by_actor (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditquery	3.300s
+=== RUN   TestService_VerifyChain_Empty
+2026/04/05 23:53:28 INFO hash chain verification completed valid=true entries_checked=0
+--- PASS: TestService_VerifyChain_Empty (0.00s)
+=== RUN   TestService_VerifyChain_ValidEntries
+2026/04/05 23:53:28 INFO hash chain verification completed valid=true entries_checked=3
+--- PASS: TestService_VerifyChain_ValidEntries (0.00s)
+=== RUN   TestService_VerifyChain_TamperedEntry
+2026/04/05 23:53:28 INFO hash chain verification completed valid=false entries_checked=3
+--- PASS: TestService_VerifyChain_TamperedEntry (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/audit-core/slices/auditverify	3.531s
+=== RUN   TestConfigCore_Lifecycle
+--- PASS: TestConfigCore_Lifecycle (0.00s)
+=== RUN   TestConfigCore_Metadata
+--- PASS: TestConfigCore_Metadata (0.00s)
+=== RUN   TestConfigCore_RegisterRoutes
+--- PASS: TestConfigCore_RegisterRoutes (0.00s)
+=== RUN   TestConfigCore_RegisterSubscriptions
+--- PASS: TestConfigCore_RegisterSubscriptions (0.00s)
+=== RUN   TestConfigCore_RouteConfigList
+2026/04/05 23:53:28 ERROR config-subscribe: subscription ended error="[ERR_BUS_CLOSED] eventbus: bus is closed"
+2026/04/05 23:53:28 INFO http request method=GET path=/api/v1/config/ status=200 duration_ms=0 request_id=cc01d9fa-8e9f-440e-8a51-0e5a1401ba99
+--- PASS: TestConfigCore_RouteConfigList (0.00s)
+=== RUN   TestConfigCore_RouteConfigCreate
+2026/04/05 23:53:28 INFO config entry created key=app.name
+2026/04/05 23:53:28 INFO http request method=POST path=/api/v1/config/ status=201 duration_ms=0 request_id=7ddce9a2-6f5d-4974-9969-4ec42ff4ed21
+--- PASS: TestConfigCore_RouteConfigCreate (0.00s)
+=== RUN   TestConfigCore_RouteConfigGetByKey
+2026/04/05 23:53:28 INFO http request method=GET path=/api/v1/config/app.name status=404 duration_ms=0 request_id=c66ea530-0378-41c2-97fd-3bc781813903
+--- PASS: TestConfigCore_RouteConfigGetByKey (0.00s)
+=== RUN   TestConfigCore_RouteFlagsList
+2026/04/05 23:53:28 INFO http request method=GET path=/api/v1/flags/ status=200 duration_ms=0 request_id=e7675139-1f1b-49f3-87e3-5d7ce089355d
+--- PASS: TestConfigCore_RouteFlagsList (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core	3.492s
+=== RUN   TestConfigRepository_Create
+--- PASS: TestConfigRepository_Create (0.00s)
+=== RUN   TestConfigRepository_Create_Error
+--- PASS: TestConfigRepository_Create_Error (0.00s)
+=== RUN   TestConfigRepository_GetByKey
+--- PASS: TestConfigRepository_GetByKey (0.00s)
+=== RUN   TestConfigRepository_GetByKey_NotFound
+--- PASS: TestConfigRepository_GetByKey_NotFound (0.00s)
+=== RUN   TestConfigRepository_Update
+--- PASS: TestConfigRepository_Update (0.00s)
+=== RUN   TestConfigRepository_Update_NotFound
+--- PASS: TestConfigRepository_Update_NotFound (0.00s)
+=== RUN   TestConfigRepository_Delete
+--- PASS: TestConfigRepository_Delete (0.00s)
+=== RUN   TestConfigRepository_Delete_NotFound
+--- PASS: TestConfigRepository_Delete_NotFound (0.00s)
+=== RUN   TestConfigRepository_List
+--- PASS: TestConfigRepository_List (0.00s)
+=== RUN   TestConfigRepository_PublishVersion
+--- PASS: TestConfigRepository_PublishVersion (0.00s)
+=== RUN   TestConfigRepository_GetVersion
+--- PASS: TestConfigRepository_GetVersion (0.00s)
+=== RUN   TestConfigRepository_GetVersion_NotFound
+--- PASS: TestConfigRepository_GetVersion_NotFound (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres	3.493s
+=== RUN   TestFeatureFlag_Evaluate_Boolean
+=== RUN   TestFeatureFlag_Evaluate_Boolean/enabled_boolean_flag_returns_true
+=== RUN   TestFeatureFlag_Evaluate_Boolean/disabled_boolean_flag_returns_false
+--- PASS: TestFeatureFlag_Evaluate_Boolean (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Boolean/enabled_boolean_flag_returns_true (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Boolean/disabled_boolean_flag_returns_false (0.00s)
+=== RUN   TestFeatureFlag_Evaluate_Percentage
+=== RUN   TestFeatureFlag_Evaluate_Percentage/0%_rollout_hits_nobody
+=== RUN   TestFeatureFlag_Evaluate_Percentage/100%_rollout_hits_everyone
+=== RUN   TestFeatureFlag_Evaluate_Percentage/50%_rollout_hits_roughly_half
+=== RUN   TestFeatureFlag_Evaluate_Percentage/10%_rollout_hits_roughly_10%
+=== RUN   TestFeatureFlag_Evaluate_Percentage/disabled_percentage_flag_hits_nobody
+--- PASS: TestFeatureFlag_Evaluate_Percentage (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Percentage/0%_rollout_hits_nobody (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Percentage/100%_rollout_hits_everyone (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Percentage/50%_rollout_hits_roughly_half (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Percentage/10%_rollout_hits_roughly_10% (0.00s)
+    --- PASS: TestFeatureFlag_Evaluate_Percentage/disabled_percentage_flag_hits_nobody (0.00s)
+=== RUN   TestFeatureFlag_Evaluate_Percentage_Deterministic
+--- PASS: TestFeatureFlag_Evaluate_Percentage_Deterministic (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/internal/domain	3.537s
+?   	github.com/ghbvf/gocell/cells/config-core/internal/mem	[no test files]
+?   	github.com/ghbvf/gocell/cells/config-core/internal/ports	[no test files]
+=== RUN   TestService_Publish
+=== RUN   TestService_Publish/valid_publish
+2026/04/05 23:53:30 INFO config version published key=app.name version=1
+=== RUN   TestService_Publish/empty_key
+=== RUN   TestService_Publish/non-existent_key
+--- PASS: TestService_Publish (0.00s)
+    --- PASS: TestService_Publish/valid_publish (0.00s)
+    --- PASS: TestService_Publish/empty_key (0.00s)
+    --- PASS: TestService_Publish/non-existent_key (0.00s)
+=== RUN   TestService_Rollback
+=== RUN   TestService_Rollback/valid_rollback
+2026/04/05 23:53:30 INFO config version published key=app.name version=1
+2026/04/05 23:53:30 INFO config rolled back key=app.name target_version=1
+=== RUN   TestService_Rollback/empty_key
+--- PASS: TestService_Rollback (0.00s)
+    --- PASS: TestService_Rollback/valid_rollback (0.00s)
+    --- PASS: TestService_Rollback/empty_key (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/slices/configpublish	3.513s
+=== RUN   TestService_GetByKey
+=== RUN   TestService_GetByKey/existing_key
+=== RUN   TestService_GetByKey/non-existent_key
+--- PASS: TestService_GetByKey (0.00s)
+    --- PASS: TestService_GetByKey/existing_key (0.00s)
+    --- PASS: TestService_GetByKey/non-existent_key (0.00s)
+=== RUN   TestService_List
+=== RUN   TestService_List/empty
+=== RUN   TestService_List/two_entries
+--- PASS: TestService_List (0.00s)
+    --- PASS: TestService_List/empty (0.00s)
+    --- PASS: TestService_List/two_entries (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/slices/configread	3.861s
+=== RUN   TestService_HandleEvent
+=== RUN   TestService_HandleEvent/created_event_updates_cache
+2026/04/05 23:53:30 INFO config-subscribe: cache updated key=app.name action=created
+=== RUN   TestService_HandleEvent/updated_event_updates_cache
+2026/04/05 23:53:30 INFO config-subscribe: cache updated key=k action=created
+2026/04/05 23:53:30 INFO config-subscribe: cache updated key=k action=updated
+=== RUN   TestService_HandleEvent/deleted_event_removes_from_cache
+2026/04/05 23:53:30 INFO config-subscribe: cache updated key=k action=created
+2026/04/05 23:53:30 INFO config-subscribe: key deleted from cache key=k
+--- PASS: TestService_HandleEvent (0.00s)
+    --- PASS: TestService_HandleEvent/created_event_updates_cache (0.00s)
+    --- PASS: TestService_HandleEvent/updated_event_updates_cache (0.00s)
+    --- PASS: TestService_HandleEvent/deleted_event_removes_from_cache (0.00s)
+=== RUN   TestService_HandleEvent_InvalidPayload
+2026/04/05 23:53:30 ERROR config-subscribe: failed to unmarshal event, routing to dead letter error="invalid character 'o' in literal null (expecting 'u')" entry_id=bad
+--- PASS: TestService_HandleEvent_InvalidPayload (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe	3.903s
+=== RUN   TestService_Create
+=== RUN   TestService_Create/valid_create
+2026/04/05 23:53:31 INFO config entry created key=app.name
+=== RUN   TestService_Create/empty_key
+=== RUN   TestService_Create/empty_value_is_allowed
+2026/04/05 23:53:31 INFO config entry created key=app.empty
+--- PASS: TestService_Create (0.00s)
+    --- PASS: TestService_Create/valid_create (0.00s)
+    --- PASS: TestService_Create/empty_key (0.00s)
+    --- PASS: TestService_Create/empty_value_is_allowed (0.00s)
+=== RUN   TestService_CreateDuplicate
+2026/04/05 23:53:31 INFO config entry created key=k
+--- PASS: TestService_CreateDuplicate (0.00s)
+=== RUN   TestService_Update
+=== RUN   TestService_Update/valid_update
+2026/04/05 23:53:31 INFO config entry created key=k
+2026/04/05 23:53:31 INFO config entry updated key=k version=2
+=== RUN   TestService_Update/update_non-existent
+=== RUN   TestService_Update/empty_key
+--- PASS: TestService_Update (0.00s)
+    --- PASS: TestService_Update/valid_update (0.00s)
+    --- PASS: TestService_Update/update_non-existent (0.00s)
+    --- PASS: TestService_Update/empty_key (0.00s)
+=== RUN   TestService_Delete
+=== RUN   TestService_Delete/valid_delete
+2026/04/05 23:53:31 INFO config entry created key=k
+2026/04/05 23:53:31 INFO config entry deleted key=k
+=== RUN   TestService_Delete/delete_non-existent
+=== RUN   TestService_Delete/empty_key
+--- PASS: TestService_Delete (0.00s)
+    --- PASS: TestService_Delete/valid_delete (0.00s)
+    --- PASS: TestService_Delete/delete_non-existent (0.00s)
+    --- PASS: TestService_Delete/empty_key (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/slices/configwrite	3.895s
+=== RUN   TestService_GetByKey
+=== RUN   TestService_GetByKey/existing_flag
+=== RUN   TestService_GetByKey/non-existent
+--- PASS: TestService_GetByKey (0.00s)
+    --- PASS: TestService_GetByKey/existing_flag (0.00s)
+    --- PASS: TestService_GetByKey/non-existent (0.00s)
+=== RUN   TestService_List
+--- PASS: TestService_List (0.00s)
+=== RUN   TestService_Evaluate
+=== RUN   TestService_Evaluate/boolean_enabled
+=== RUN   TestService_Evaluate/empty_key
+=== RUN   TestService_Evaluate/empty_subject
+--- PASS: TestService_Evaluate (0.00s)
+    --- PASS: TestService_Evaluate/boolean_enabled (0.00s)
+    --- PASS: TestService_Evaluate/empty_key (0.00s)
+    --- PASS: TestService_Evaluate/empty_subject (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cells/config-core/slices/featureflag	3.950s
+?   	github.com/ghbvf/gocell/cmd/core-bundle	[no test files]
+=== RUN   TestPrintUsage
+Usage: gocell <command> [args]
+
+Commands:
+  validate    Validate all metadata (blocking)
+  scaffold    Generate new cell/slice/contract/journey
+  generate    Generate assembly code and derived files
+  check       Run targeted architecture analysis
+  verify      Run tests (slice/cell/journey)
+--- PASS: TestPrintUsage (0.00s)
+=== RUN   TestFindRoot
+--- PASS: TestFindRoot (0.00s)
+=== RUN   TestReadModule
+--- PASS: TestReadModule (0.00s)
+=== RUN   TestReadModuleNotFound
+--- PASS: TestReadModuleNotFound (0.00s)
+=== RUN   TestFormatResults
+ERRORS (1):
+  [REF-01] cell ID is required
+         at cells/test/cell.yaml -> id
+
+WARNINGS (1):
+  [ADV-01] owner role is recommended
+         at cells/test/cell.yaml -> owner.role
+
+No issues found.
+--- PASS: TestFormatResults (0.00s)
+=== RUN   TestFormatResultsContainsCodeAndMessage
+--- PASS: TestFormatResultsContainsCodeAndMessage (0.00s)
+=== RUN   TestFormatTestList
+--- PASS: TestFormatTestList (0.00s)
+=== RUN   TestCommands
+--- PASS: TestCommands (0.00s)
+=== RUN   TestRunValidate
+No issues found.
+
+Validation complete: 0 error(s), 0 warning(s)
+    main_test.go:171: runValidate result: <nil>
+--- PASS: TestRunValidate (0.01s)
+=== RUN   TestRunValidateNoRoot
+No issues found.
+
+Validation complete: 0 error(s), 0 warning(s)
+    main_test.go:177: runValidate result: <nil>
+--- PASS: TestRunValidateNoRoot (0.00s)
+=== RUN   TestRunScaffoldNoArgs
+--- PASS: TestRunScaffoldNoArgs (0.00s)
+=== RUN   TestRunScaffoldUnknownType
+--- PASS: TestRunScaffoldUnknownType (0.00s)
+=== RUN   TestRunScaffoldCellMissingFlags
+--- PASS: TestRunScaffoldCellMissingFlags (0.00s)
+=== RUN   TestRunScaffoldCellMissingTeam
+--- PASS: TestRunScaffoldCellMissingTeam (0.00s)
+=== RUN   TestRunScaffoldSliceMissingFlags
+--- PASS: TestRunScaffoldSliceMissingFlags (0.00s)
+=== RUN   TestRunScaffoldContractMissingFlags
+--- PASS: TestRunScaffoldContractMissingFlags (0.00s)
+=== RUN   TestRunScaffoldJourneyMissingFlags
+--- PASS: TestRunScaffoldJourneyMissingFlags (0.00s)
+=== RUN   TestRunGenerateNoArgs
+--- PASS: TestRunGenerateNoArgs (0.00s)
+=== RUN   TestRunGenerateUnknownType
+--- PASS: TestRunGenerateUnknownType (0.00s)
+=== RUN   TestRunGenerateIndexes
+--- PASS: TestRunGenerateIndexes (0.00s)
+=== RUN   TestRunGenerateBoundaries
+--- PASS: TestRunGenerateBoundaries (0.00s)
+=== RUN   TestRunGenerateAssemblyMissingID
+--- PASS: TestRunGenerateAssemblyMissingID (0.00s)
+=== RUN   TestRunCheckNoArgs
+--- PASS: TestRunCheckNoArgs (0.00s)
+=== RUN   TestRunCheckUnknownType
+--- PASS: TestRunCheckUnknownType (0.00s)
+=== RUN   TestRunCheckContractHealth
+Contract Health (13 contracts):
+
+  ID                                       KIND         LIFECYCLE    OWNER
+  ---                                      ----         ---------    -----
+  event.audit.appended.v1                  event        active       audit-core
+  event.audit.integrity-verified.v1        event        active       audit-core
+  event.config.changed.v1                  event        active       config-core
+  event.config.rollback.v1                 event        active       config-core
+  event.session.created.v1                 event        active       access-core
+  event.session.revoked.v1                 event        active       access-core
+  event.user.created.v1                    event        active       access-core
+  event.user.locked.v1                     event        active       access-core
+  http.auth.login.v1                       http         active       access-core
+  http.auth.me.v1                          http         active       access-core
+  http.auth.refresh.v1                     http         active       access-core
+  http.config.flags.v1                     http         active       config-core
+  http.config.get.v1                       http         active       config-core
+--- PASS: TestRunCheckContractHealth (0.00s)
+=== RUN   TestRunCheckPlaceholders
+--- PASS: TestRunCheckPlaceholders (0.00s)
+=== RUN   TestRunVerifyNoArgs
+--- PASS: TestRunVerifyNoArgs (0.00s)
+=== RUN   TestRunVerifyUnknownType
+--- PASS: TestRunVerifyUnknownType (0.00s)
+=== RUN   TestRunVerifySliceMissingID
+--- PASS: TestRunVerifySliceMissingID (0.00s)
+=== RUN   TestRunVerifyCellMissingID
+--- PASS: TestRunVerifyCellMissingID (0.00s)
+=== RUN   TestRunVerifyJourneyMissingID
+--- PASS: TestRunVerifyJourneyMissingID (0.00s)
+=== RUN   TestRunVerifyTargetsMissingFiles
+--- PASS: TestRunVerifyTargetsMissingFiles (0.00s)
+=== RUN   TestRunVerifyTargets
+Affected targets:
+  Slices:
+    - access-core/authorization-decide
+    - access-core/identity-manage
+    - access-core/rbac-check
+    - access-core/session-login
+    - access-core/session-logout
+    - access-core/session-refresh
+    - access-core/session-validate
+  Cells:
+    - access-core
+  Contracts:
+    - event.session.created.v1
+    - event.session.revoked.v1
+    - event.user.created.v1
+    - event.user.locked.v1
+    - http.auth.login.v1
+    - http.auth.me.v1
+    - http.auth.refresh.v1
+    - http.config.get.v1
+  Journeys:
+    - J-account-lockout
+    - J-audit-login-trail
+    - J-config-hot-reload
+    - J-config-rollback
+    - J-session-logout
+    - J-session-refresh
+    - J-sso-login
+    - J-user-onboarding
+--- PASS: TestRunVerifyTargets (0.00s)
+=== RUN   TestRunVerifySliceNotFound
+--- PASS: TestRunVerifySliceNotFound (0.00s)
+=== RUN   TestRunVerifyCellNotFound
+--- PASS: TestRunVerifyCellNotFound (0.00s)
+=== RUN   TestRunVerifyJourneyNotFound
+--- PASS: TestRunVerifyJourneyNotFound (0.00s)
+=== RUN   TestPrintTargetList
+Test:
+    - a
+    - b
+--- PASS: TestPrintTargetList (0.00s)
+=== RUN   TestPrintResult
+  [TEST-01] msg
+         at test.yaml -> field
+  [TEST-02] msg
+         at test.yaml
+  [TEST-03] msg
+--- PASS: TestPrintResult (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/cmd/gocell	4.019s
+=== RUN   TestAssemblyStartStopHealthy
+--- PASS: TestAssemblyStartStopHealthy (0.00s)
+=== RUN   TestAssemblyStopReverseOrder
+--- PASS: TestAssemblyStopReverseOrder (0.00s)
+=== RUN   TestAssemblyDuplicateCellID
+--- PASS: TestAssemblyDuplicateCellID (0.00s)
+=== RUN   TestAssemblyEmptyCellID
+--- PASS: TestAssemblyEmptyCellID (0.00s)
+=== RUN   TestAssemblyInitFailure
+--- PASS: TestAssemblyInitFailure (0.00s)
+=== RUN   TestAssemblyStopWithoutStart
+--- PASS: TestAssemblyStopWithoutStart (0.00s)
+=== RUN   TestAssemblyStopOnlyFromStarted
+--- PASS: TestAssemblyStopOnlyFromStarted (0.00s)
+=== RUN   TestAssemblyStopEmpty
+--- PASS: TestAssemblyStopEmpty (0.00s)
+=== RUN   TestAssemblyStartFailureRollback
+--- PASS: TestAssemblyStartFailureRollback (0.00s)
+=== RUN   TestAssemblyDoubleStartPrevented
+--- PASS: TestAssemblyDoubleStartPrevented (0.00s)
+=== RUN   TestAssemblyRegisterAfterStartRejected
+--- PASS: TestAssemblyRegisterAfterStartRejected (0.00s)
+=== RUN   TestAssemblyStopContinuesOnError
+--- PASS: TestAssemblyStopContinuesOnError (0.00s)
+=== RUN   TestAssemblyStartWithConfig
+--- PASS: TestAssemblyStartWithConfig (0.00s)
+=== RUN   TestAssemblyStartWithConfigDoubleStart
+--- PASS: TestAssemblyStartWithConfigDoubleStart (0.00s)
+=== RUN   TestAssemblyStartWithConfigInitFailure
+--- PASS: TestAssemblyStartWithConfigInitFailure (0.00s)
+=== RUN   TestAssemblyStartWithConfigStartFailureRollback
+--- PASS: TestAssemblyStartWithConfigStartFailureRollback (0.00s)
+=== RUN   TestAssemblyCellIDs
+--- PASS: TestAssemblyCellIDs (0.00s)
+=== RUN   TestAssemblyCellLookup
+--- PASS: TestAssemblyCellLookup (0.00s)
+=== RUN   TestGenerateEntrypoint_ContainsAssemblyID
+--- PASS: TestGenerateEntrypoint_ContainsAssemblyID (0.00s)
+=== RUN   TestGenerateEntrypoint_ContainsCellComments
+--- PASS: TestGenerateEntrypoint_ContainsCellComments (0.00s)
+=== RUN   TestGenerateEntrypoint_ContainsModulePath
+--- PASS: TestGenerateEntrypoint_ContainsModulePath (0.00s)
+=== RUN   TestGenerateEntrypoint_ContainsDoNotEdit
+--- PASS: TestGenerateEntrypoint_ContainsDoNotEdit (0.00s)
+=== RUN   TestGenerateEntrypoint_NotFoundAssembly
+--- PASS: TestGenerateEntrypoint_NotFoundAssembly (0.00s)
+=== RUN   TestGenerateBoundary_ExportedContracts
+--- PASS: TestGenerateBoundary_ExportedContracts (0.00s)
+=== RUN   TestGenerateBoundary_NotExportedWhenAllConsumersInside
+--- PASS: TestGenerateBoundary_NotExportedWhenAllConsumersInside (0.00s)
+=== RUN   TestGenerateBoundary_ImportedContracts
+--- PASS: TestGenerateBoundary_ImportedContracts (0.00s)
+=== RUN   TestGenerateBoundary_SmokeTargets
+--- PASS: TestGenerateBoundary_SmokeTargets (0.00s)
+=== RUN   TestGenerateBoundary_FingerprintNonEmpty
+--- PASS: TestGenerateBoundary_FingerprintNonEmpty (0.00s)
+=== RUN   TestGenerateBoundary_ContainsAssemblyID
+--- PASS: TestGenerateBoundary_ContainsAssemblyID (0.00s)
+=== RUN   TestGenerateBoundary_NotFoundAssembly
+--- PASS: TestGenerateBoundary_NotFoundAssembly (0.00s)
+=== RUN   TestGenerateBoundary_EmptyAssembly
+--- PASS: TestGenerateBoundary_EmptyAssembly (0.00s)
+=== RUN   TestGenerateEntrypoint_EmptyAssembly
+--- PASS: TestGenerateEntrypoint_EmptyAssembly (0.00s)
+=== RUN   TestSourceFingerprint_Deterministic
+--- PASS: TestSourceFingerprint_Deterministic (0.00s)
+=== RUN   TestSourceFingerprint_NotFoundReturnsEmpty
+--- PASS: TestSourceFingerprint_NotFoundReturnsEmpty (0.00s)
+=== RUN   TestGenerateBoundary_CommandAndProjectionKinds
+--- PASS: TestGenerateBoundary_CommandAndProjectionKinds (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/assembly	3.973s
+?   	github.com/ghbvf/gocell/kernel/assembly/gentpl	[no test files]
+=== RUN   TestBaseCellLifecycle
+--- PASS: TestBaseCellLifecycle (0.00s)
+=== RUN   TestBaseCellAccessors
+--- PASS: TestBaseCellAccessors (0.00s)
+=== RUN   TestBaseCellSlicesAndContracts
+--- PASS: TestBaseCellSlicesAndContracts (0.00s)
+=== RUN   TestBaseCellSlicesAndContractsReturnCopy
+--- PASS: TestBaseCellSlicesAndContractsReturnCopy (0.00s)
+=== RUN   TestBaseCellReadyStates
+--- PASS: TestBaseCellReadyStates (0.00s)
+=== RUN   TestBaseCellDoubleInit
+--- PASS: TestBaseCellDoubleInit (0.00s)
+=== RUN   TestBaseCellStartWithoutInit
+--- PASS: TestBaseCellStartWithoutInit (0.00s)
+=== RUN   TestBaseCellDoubleStart
+--- PASS: TestBaseCellDoubleStart (0.00s)
+=== RUN   TestBaseCellStopWithoutStart
+--- PASS: TestBaseCellStopWithoutStart (0.00s)
+=== RUN   TestBaseCellInitThenStopSkipStart
+--- PASS: TestBaseCellInitThenStopSkipStart (0.00s)
+=== RUN   TestBaseCellRestart
+--- PASS: TestBaseCellRestart (0.00s)
+=== RUN   TestBaseCellShutdownCtx
+--- PASS: TestBaseCellShutdownCtx (0.00s)
+=== RUN   TestBaseCellConcurrentHealthReady
+--- PASS: TestBaseCellConcurrentHealthReady (0.00s)
+=== RUN   TestBaseSliceAccessors
+--- PASS: TestBaseSliceAccessors (0.00s)
+=== RUN   TestBaseSliceInit
+--- PASS: TestBaseSliceInit (0.00s)
+=== RUN   TestBaseSliceVerify
+--- PASS: TestBaseSliceVerify (0.00s)
+=== RUN   TestBaseSliceAllowedFilesDefault
+--- PASS: TestBaseSliceAllowedFilesDefault (0.00s)
+=== RUN   TestBaseSliceAllowedFilesCustom
+--- PASS: TestBaseSliceAllowedFilesCustom (0.00s)
+=== RUN   TestBaseSliceAffectedJourneys
+--- PASS: TestBaseSliceAffectedJourneys (0.00s)
+=== RUN   TestBaseContractAccessors
+--- PASS: TestBaseContractAccessors (0.00s)
+=== RUN   TestBaseContractSetLifecycle
+=== RUN   TestBaseContractSetLifecycle/draft
+=== RUN   TestBaseContractSetLifecycle/deprecated
+=== RUN   TestBaseContractSetLifecycle/back_to_active
+--- PASS: TestBaseContractSetLifecycle (0.00s)
+    --- PASS: TestBaseContractSetLifecycle/draft (0.00s)
+    --- PASS: TestBaseContractSetLifecycle/deprecated (0.00s)
+    --- PASS: TestBaseContractSetLifecycle/back_to_active (0.00s)
+=== RUN   TestBaseContractAllKinds
+=== RUN   TestBaseContractAllKinds/http
+=== RUN   TestBaseContractAllKinds/event
+=== RUN   TestBaseContractAllKinds/command
+=== RUN   TestBaseContractAllKinds/projection
+--- PASS: TestBaseContractAllKinds (0.00s)
+    --- PASS: TestBaseContractAllKinds/http (0.00s)
+    --- PASS: TestBaseContractAllKinds/event (0.00s)
+    --- PASS: TestBaseContractAllKinds/command (0.00s)
+    --- PASS: TestBaseContractAllKinds/projection (0.00s)
+=== RUN   TestValidRolesForKind
+=== RUN   TestValidRolesForKind/http
+=== RUN   TestValidRolesForKind/event
+=== RUN   TestValidRolesForKind/command
+=== RUN   TestValidRolesForKind/projection
+--- PASS: TestValidRolesForKind (0.00s)
+    --- PASS: TestValidRolesForKind/http (0.00s)
+    --- PASS: TestValidRolesForKind/event (0.00s)
+    --- PASS: TestValidRolesForKind/command (0.00s)
+    --- PASS: TestValidRolesForKind/projection (0.00s)
+=== RUN   TestValidRolesForKindUnknown
+--- PASS: TestValidRolesForKindUnknown (0.00s)
+=== RUN   TestIsProviderRole
+=== RUN   TestIsProviderRole/serve
+=== RUN   TestIsProviderRole/publish
+=== RUN   TestIsProviderRole/handle
+=== RUN   TestIsProviderRole/provide
+=== RUN   TestIsProviderRole/call
+=== RUN   TestIsProviderRole/subscribe
+=== RUN   TestIsProviderRole/invoke
+=== RUN   TestIsProviderRole/read
+=== RUN   TestIsProviderRole/unknown
+--- PASS: TestIsProviderRole (0.00s)
+    --- PASS: TestIsProviderRole/serve (0.00s)
+    --- PASS: TestIsProviderRole/publish (0.00s)
+    --- PASS: TestIsProviderRole/handle (0.00s)
+    --- PASS: TestIsProviderRole/provide (0.00s)
+    --- PASS: TestIsProviderRole/call (0.00s)
+    --- PASS: TestIsProviderRole/subscribe (0.00s)
+    --- PASS: TestIsProviderRole/invoke (0.00s)
+    --- PASS: TestIsProviderRole/read (0.00s)
+    --- PASS: TestIsProviderRole/unknown (0.00s)
+=== RUN   TestIsConsumerRole
+=== RUN   TestIsConsumerRole/call
+=== RUN   TestIsConsumerRole/subscribe
+=== RUN   TestIsConsumerRole/invoke
+=== RUN   TestIsConsumerRole/read
+=== RUN   TestIsConsumerRole/serve
+=== RUN   TestIsConsumerRole/publish
+=== RUN   TestIsConsumerRole/handle
+=== RUN   TestIsConsumerRole/provide
+=== RUN   TestIsConsumerRole/unknown
+--- PASS: TestIsConsumerRole (0.00s)
+    --- PASS: TestIsConsumerRole/call (0.00s)
+    --- PASS: TestIsConsumerRole/subscribe (0.00s)
+    --- PASS: TestIsConsumerRole/invoke (0.00s)
+    --- PASS: TestIsConsumerRole/read (0.00s)
+    --- PASS: TestIsConsumerRole/serve (0.00s)
+    --- PASS: TestIsConsumerRole/publish (0.00s)
+    --- PASS: TestIsConsumerRole/handle (0.00s)
+    --- PASS: TestIsConsumerRole/provide (0.00s)
+    --- PASS: TestIsConsumerRole/unknown (0.00s)
+=== RUN   TestHTTPRegistrar_TypeAssertion
+--- PASS: TestHTTPRegistrar_TypeAssertion (0.00s)
+=== RUN   TestHTTPRegistrar_NegativeTypeAssertion
+--- PASS: TestHTTPRegistrar_NegativeTypeAssertion (0.00s)
+=== RUN   TestEventRegistrar_TypeAssertion
+--- PASS: TestEventRegistrar_TypeAssertion (0.00s)
+=== RUN   TestEventRegistrar_NegativeTypeAssertion
+--- PASS: TestEventRegistrar_NegativeTypeAssertion (0.00s)
+=== RUN   TestDualRegistrar_BothInterfaces
+--- PASS: TestDualRegistrar_BothInterfaces (0.00s)
+=== RUN   TestRouteMux_Group
+--- PASS: TestRouteMux_Group (0.00s)
+=== RUN   TestRouteMux_Route
+--- PASS: TestRouteMux_Route (0.00s)
+=== RUN   TestRouteMux_Mount
+--- PASS: TestRouteMux_Mount (0.00s)
+=== RUN   TestParseLevelRoundTrip
+=== RUN   TestParseLevelRoundTrip/L0
+=== RUN   TestParseLevelRoundTrip/L1
+=== RUN   TestParseLevelRoundTrip/L2
+=== RUN   TestParseLevelRoundTrip/L3
+=== RUN   TestParseLevelRoundTrip/L4
+--- PASS: TestParseLevelRoundTrip (0.00s)
+    --- PASS: TestParseLevelRoundTrip/L0 (0.00s)
+    --- PASS: TestParseLevelRoundTrip/L1 (0.00s)
+    --- PASS: TestParseLevelRoundTrip/L2 (0.00s)
+    --- PASS: TestParseLevelRoundTrip/L3 (0.00s)
+    --- PASS: TestParseLevelRoundTrip/L4 (0.00s)
+=== RUN   TestParseLevelInvalid
+=== RUN   TestParseLevelInvalid/empty
+=== RUN   TestParseLevelInvalid/lowercase
+=== RUN   TestParseLevelInvalid/no_prefix
+=== RUN   TestParseLevelInvalid/out_of_range
+=== RUN   TestParseLevelInvalid/garbage
+--- PASS: TestParseLevelInvalid (0.00s)
+    --- PASS: TestParseLevelInvalid/empty (0.00s)
+    --- PASS: TestParseLevelInvalid/lowercase (0.00s)
+    --- PASS: TestParseLevelInvalid/no_prefix (0.00s)
+    --- PASS: TestParseLevelInvalid/out_of_range (0.00s)
+    --- PASS: TestParseLevelInvalid/garbage (0.00s)
+=== RUN   TestLevelStringOutOfRange
+--- PASS: TestLevelStringOutOfRange (0.00s)
+=== RUN   TestLevelConstants
+--- PASS: TestLevelConstants (0.00s)
+=== RUN   TestCellTypeValues
+--- PASS: TestCellTypeValues (0.00s)
+=== RUN   TestContractKindValues
+--- PASS: TestContractKindValues (0.00s)
+=== RUN   TestContractRoleValues
+--- PASS: TestContractRoleValues (0.00s)
+=== RUN   TestLifecycleValues
+--- PASS: TestLifecycleValues (0.00s)
+=== RUN   TestParseCellTypeRoundTrip
+=== RUN   TestParseCellTypeRoundTrip/core
+=== RUN   TestParseCellTypeRoundTrip/edge
+=== RUN   TestParseCellTypeRoundTrip/support
+--- PASS: TestParseCellTypeRoundTrip (0.00s)
+    --- PASS: TestParseCellTypeRoundTrip/core (0.00s)
+    --- PASS: TestParseCellTypeRoundTrip/edge (0.00s)
+    --- PASS: TestParseCellTypeRoundTrip/support (0.00s)
+=== RUN   TestParseCellTypeInvalid
+=== RUN   TestParseCellTypeInvalid/empty
+=== RUN   TestParseCellTypeInvalid/uppercase
+=== RUN   TestParseCellTypeInvalid/unknown
+--- PASS: TestParseCellTypeInvalid (0.00s)
+    --- PASS: TestParseCellTypeInvalid/empty (0.00s)
+    --- PASS: TestParseCellTypeInvalid/uppercase (0.00s)
+    --- PASS: TestParseCellTypeInvalid/unknown (0.00s)
+=== RUN   TestParseContractKindRoundTrip
+=== RUN   TestParseContractKindRoundTrip/http
+=== RUN   TestParseContractKindRoundTrip/event
+=== RUN   TestParseContractKindRoundTrip/command
+=== RUN   TestParseContractKindRoundTrip/projection
+--- PASS: TestParseContractKindRoundTrip (0.00s)
+    --- PASS: TestParseContractKindRoundTrip/http (0.00s)
+    --- PASS: TestParseContractKindRoundTrip/event (0.00s)
+    --- PASS: TestParseContractKindRoundTrip/command (0.00s)
+    --- PASS: TestParseContractKindRoundTrip/projection (0.00s)
+=== RUN   TestParseContractKindInvalid
+=== RUN   TestParseContractKindInvalid/empty
+=== RUN   TestParseContractKindInvalid/uppercase
+=== RUN   TestParseContractKindInvalid/unknown
+--- PASS: TestParseContractKindInvalid (0.00s)
+    --- PASS: TestParseContractKindInvalid/empty (0.00s)
+    --- PASS: TestParseContractKindInvalid/uppercase (0.00s)
+    --- PASS: TestParseContractKindInvalid/unknown (0.00s)
+=== RUN   TestParseContractRoleRoundTrip
+=== RUN   TestParseContractRoleRoundTrip/serve
+=== RUN   TestParseContractRoleRoundTrip/call
+=== RUN   TestParseContractRoleRoundTrip/publish
+=== RUN   TestParseContractRoleRoundTrip/subscribe
+=== RUN   TestParseContractRoleRoundTrip/handle
+=== RUN   TestParseContractRoleRoundTrip/invoke
+=== RUN   TestParseContractRoleRoundTrip/provide
+=== RUN   TestParseContractRoleRoundTrip/read
+--- PASS: TestParseContractRoleRoundTrip (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/serve (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/call (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/publish (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/subscribe (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/handle (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/invoke (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/provide (0.00s)
+    --- PASS: TestParseContractRoleRoundTrip/read (0.00s)
+=== RUN   TestParseContractRoleInvalid
+=== RUN   TestParseContractRoleInvalid/empty
+=== RUN   TestParseContractRoleInvalid/uppercase
+=== RUN   TestParseContractRoleInvalid/unknown
+--- PASS: TestParseContractRoleInvalid (0.00s)
+    --- PASS: TestParseContractRoleInvalid/empty (0.00s)
+    --- PASS: TestParseContractRoleInvalid/uppercase (0.00s)
+    --- PASS: TestParseContractRoleInvalid/unknown (0.00s)
+=== RUN   TestParseLifecycleRoundTrip
+=== RUN   TestParseLifecycleRoundTrip/draft
+=== RUN   TestParseLifecycleRoundTrip/active
+=== RUN   TestParseLifecycleRoundTrip/deprecated
+--- PASS: TestParseLifecycleRoundTrip (0.00s)
+    --- PASS: TestParseLifecycleRoundTrip/draft (0.00s)
+    --- PASS: TestParseLifecycleRoundTrip/active (0.00s)
+    --- PASS: TestParseLifecycleRoundTrip/deprecated (0.00s)
+=== RUN   TestParseLifecycleInvalid
+=== RUN   TestParseLifecycleInvalid/empty
+=== RUN   TestParseLifecycleInvalid/uppercase
+=== RUN   TestParseLifecycleInvalid/unknown
+--- PASS: TestParseLifecycleInvalid (0.00s)
+    --- PASS: TestParseLifecycleInvalid/empty (0.00s)
+    --- PASS: TestParseLifecycleInvalid/uppercase (0.00s)
+    --- PASS: TestParseLifecycleInvalid/unknown (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/cell	4.289s
+=== RUN   TestDEP01
+=== RUN   TestDEP01/belongsToCell_matches_key_cellID_—_no_error
+=== RUN   TestDEP01/belongsToCell_mismatches_key_cellID_—_error
+--- PASS: TestDEP01 (0.00s)
+    --- PASS: TestDEP01/belongsToCell_matches_key_cellID_—_no_error (0.00s)
+    --- PASS: TestDEP01/belongsToCell_mismatches_key_cellID_—_error (0.00s)
+=== RUN   TestDEP02_CycleDetected
+--- PASS: TestDEP02_CycleDetected (0.00s)
+=== RUN   TestDEP02_NoCycle
+--- PASS: TestDEP02_NoCycle (0.00s)
+=== RUN   TestDEP02_SingleCellNoExternalDeps
+--- PASS: TestDEP02_SingleCellNoExternalDeps (0.00s)
+=== RUN   TestDEP03_SameAssembly
+--- PASS: TestDEP03_SameAssembly (0.00s)
+=== RUN   TestDEP03_DifferentAssembly
+--- PASS: TestDEP03_DifferentAssembly (0.00s)
+=== RUN   TestDEP03_NoAssemblies
+--- PASS: TestDEP03_NoAssemblies (0.00s)
+=== RUN   TestDependencyChecker_EmptyProject
+--- PASS: TestDependencyChecker_EmptyProject (0.00s)
+=== RUN   TestDependencyChecker_NilProject
+--- PASS: TestDependencyChecker_NilProject (0.00s)
+=== RUN   TestSelectFromFiles_SliceDirectory
+--- PASS: TestSelectFromFiles_SliceDirectory (0.00s)
+=== RUN   TestSelectFromFiles_CellDirectoryNonSlices
+--- PASS: TestSelectFromFiles_CellDirectoryNonSlices (0.00s)
+=== RUN   TestSelectFromFiles_ContractDirectory
+--- PASS: TestSelectFromFiles_ContractDirectory (0.00s)
+=== RUN   TestSelectFromFiles_MultipleFilesMergedAndDeduped
+--- PASS: TestSelectFromFiles_MultipleFilesMergedAndDeduped (0.00s)
+=== RUN   TestSelectFromFiles_UnrelatedPaths
+--- PASS: TestSelectFromFiles_UnrelatedPaths (0.00s)
+=== RUN   TestSelectFromFiles_UnknownCell
+--- PASS: TestSelectFromFiles_UnknownCell (0.00s)
+=== RUN   TestSelectFromFiles_UnknownSlice
+--- PASS: TestSelectFromFiles_UnknownSlice (0.00s)
+=== RUN   TestSelectFromFiles_UnknownContract
+--- PASS: TestSelectFromFiles_UnknownContract (0.00s)
+=== RUN   TestSelectFromFiles_ContractSchemaFile
+--- PASS: TestSelectFromFiles_ContractSchemaFile (0.00s)
+=== RUN   TestSelectFromSlice_Basic
+--- PASS: TestSelectFromSlice_Basic (0.00s)
+=== RUN   TestSelectFromSlice_NonexistentSlice
+--- PASS: TestSelectFromSlice_NonexistentSlice (0.00s)
+=== RUN   TestSelectFromFiles_EmptyProject
+--- PASS: TestSelectFromFiles_EmptyProject (0.00s)
+=== RUN   TestSelectFromFiles_EmptyFileList
+--- PASS: TestSelectFromFiles_EmptyFileList (0.00s)
+=== RUN   TestSelectFromFiles_CellDirectoryDeepNonSlice
+--- PASS: TestSelectFromFiles_CellDirectoryDeepNonSlice (0.00s)
+=== RUN   TestSelectFromSlice_ExpandsJourneysCorrectly
+--- PASS: TestSelectFromSlice_ExpandsJourneysCorrectly (0.00s)
+=== RUN   TestSelectFromFiles_JourneyFile
+--- PASS: TestSelectFromFiles_JourneyFile (0.00s)
+=== RUN   TestSelectFromFiles_AssemblyFile
+--- PASS: TestSelectFromFiles_AssemblyFile (0.00s)
+=== RUN   TestSelectFromFiles_JourneyStatusBoard
+--- PASS: TestSelectFromFiles_JourneyStatusBoard (0.00s)
+=== RUN   TestSelectFromFiles_NonexistentJourney
+--- PASS: TestSelectFromFiles_NonexistentJourney (0.00s)
+=== RUN   TestValidProject_ZeroErrors
+--- PASS: TestValidProject_ZeroErrors (0.00s)
+=== RUN   TestFilterFunctions
+--- PASS: TestFilterFunctions (0.00s)
+=== RUN   TestREF01
+=== RUN   TestREF01/valid_belongsToCell
+=== RUN   TestREF01/missing_cell
+--- PASS: TestREF01 (0.00s)
+    --- PASS: TestREF01/valid_belongsToCell (0.00s)
+    --- PASS: TestREF01/missing_cell (0.00s)
+=== RUN   TestREF02
+=== RUN   TestREF02/valid_contract_references
+=== RUN   TestREF02/missing_contract
+--- PASS: TestREF02 (0.00s)
+    --- PASS: TestREF02/valid_contract_references (0.00s)
+    --- PASS: TestREF02/missing_contract (0.00s)
+=== RUN   TestREF03
+=== RUN   TestREF03/valid_ownerCell
+=== RUN   TestREF03/ownerCell_is_actor_not_cell
+--- PASS: TestREF03 (0.00s)
+    --- PASS: TestREF03/valid_ownerCell (0.00s)
+    --- PASS: TestREF03/ownerCell_is_actor_not_cell (0.00s)
+=== RUN   TestREF04
+=== RUN   TestREF04/id_matches_key
+=== RUN   TestREF04/id_mismatch
+--- PASS: TestREF04 (0.00s)
+    --- PASS: TestREF04/id_matches_key (0.00s)
+    --- PASS: TestREF04/id_mismatch (0.00s)
+=== RUN   TestREF05
+=== RUN   TestREF05/id_matches_directory
+=== RUN   TestREF05/id_mismatch
+--- PASS: TestREF05 (0.00s)
+    --- PASS: TestREF05/id_matches_directory (0.00s)
+    --- PASS: TestREF05/id_mismatch (0.00s)
+=== RUN   TestREF06
+=== RUN   TestREF06/valid_journey_cells
+=== RUN   TestREF06/journey_references_missing_cell
+--- PASS: TestREF06 (0.00s)
+    --- PASS: TestREF06/valid_journey_cells (0.00s)
+    --- PASS: TestREF06/journey_references_missing_cell (0.00s)
+=== RUN   TestREF07
+=== RUN   TestREF07/valid_journey_contracts
+=== RUN   TestREF07/journey_references_missing_contract
+--- PASS: TestREF07 (0.00s)
+    --- PASS: TestREF07/valid_journey_contracts (0.00s)
+    --- PASS: TestREF07/journey_references_missing_contract (0.00s)
+=== RUN   TestREF08
+=== RUN   TestREF08/valid_assembly_cells
+=== RUN   TestREF08/assembly_references_missing_cell
+--- PASS: TestREF08 (0.00s)
+    --- PASS: TestREF08/valid_assembly_cells (0.00s)
+    --- PASS: TestREF08/assembly_references_missing_cell (0.00s)
+=== RUN   TestREF09
+=== RUN   TestREF09/no_l0Dependencies
+=== RUN   TestREF09/valid_l0_dependency
+=== RUN   TestREF09/missing_l0_dependency_target
+--- PASS: TestREF09 (0.00s)
+    --- PASS: TestREF09/no_l0Dependencies (0.00s)
+    --- PASS: TestREF09/valid_l0_dependency (0.00s)
+    --- PASS: TestREF09/missing_l0_dependency_target (0.00s)
+=== RUN   TestTOPO01
+=== RUN   TestTOPO01/valid_roles_for_kinds
+=== RUN   TestTOPO01/wrong_role_for_http_contract
+--- PASS: TestTOPO01 (0.00s)
+    --- PASS: TestTOPO01/valid_roles_for_kinds (0.00s)
+    --- PASS: TestTOPO01/wrong_role_for_http_contract (0.00s)
+=== RUN   TestTOPO02
+=== RUN   TestTOPO02/provider_matches_contract_provider
+=== RUN   TestTOPO02/provider_mismatch
+--- PASS: TestTOPO02 (0.00s)
+    --- PASS: TestTOPO02/provider_matches_contract_provider (0.00s)
+    --- PASS: TestTOPO02/provider_mismatch (0.00s)
+=== RUN   TestTOPO03
+=== RUN   TestTOPO03/consumer_in_consumers_list
+=== RUN   TestTOPO03/consumer_not_in_consumers_list
+=== RUN   TestTOPO03/wildcard_consumer_allows_any_cell
+--- PASS: TestTOPO03 (0.00s)
+    --- PASS: TestTOPO03/consumer_in_consumers_list (0.00s)
+    --- PASS: TestTOPO03/consumer_not_in_consumers_list (0.00s)
+    --- PASS: TestTOPO03/wildcard_consumer_allows_any_cell (0.00s)
+=== RUN   TestTOPO04
+=== RUN   TestTOPO04/contract_level_within_cell_level
+=== RUN   TestTOPO04/contract_level_exceeds_cell_level
+--- PASS: TestTOPO04 (0.00s)
+    --- PASS: TestTOPO04/contract_level_within_cell_level (0.00s)
+    --- PASS: TestTOPO04/contract_level_exceeds_cell_level (0.00s)
+=== RUN   TestTOPO05
+=== RUN   TestTOPO05/no_L0_cells_in_contracts
+=== RUN   TestTOPO05/L0_cell_as_provider_in_contract
+=== RUN   TestTOPO05/L0_cell_as_consumer_in_contract
+--- PASS: TestTOPO05 (0.00s)
+    --- PASS: TestTOPO05/no_L0_cells_in_contracts (0.00s)
+    --- PASS: TestTOPO05/L0_cell_as_provider_in_contract (0.00s)
+    --- PASS: TestTOPO05/L0_cell_as_consumer_in_contract (0.00s)
+=== RUN   TestTOPO06
+=== RUN   TestTOPO06/each_cell_in_one_assembly
+=== RUN   TestTOPO06/cell_in_two_assemblies
+--- PASS: TestTOPO06 (0.00s)
+    --- PASS: TestTOPO06/each_cell_in_one_assembly (0.00s)
+    --- PASS: TestTOPO06/cell_in_two_assemblies (0.00s)
+=== RUN   TestVERIFY01
+=== RUN   TestVERIFY01/all_provider_usages_have_verify_entries
+=== RUN   TestVERIFY01/missing_verify_entry_for_provider
+=== RUN   TestVERIFY01/waiver_covers_missing_verify_entry
+=== RUN   TestVERIFY01/expired_waiver_does_not_cover
+=== RUN   TestVERIFY01/waiver_with_empty_expiresAt_does_not_cover
+=== RUN   TestVERIFY01/waiver_with_unparseable_expiresAt_does_not_cover
+=== RUN   TestVERIFY01/consumer_role_without_verify_entry_triggers_error
+--- PASS: TestVERIFY01 (0.00s)
+    --- PASS: TestVERIFY01/all_provider_usages_have_verify_entries (0.00s)
+    --- PASS: TestVERIFY01/missing_verify_entry_for_provider (0.00s)
+    --- PASS: TestVERIFY01/waiver_covers_missing_verify_entry (0.00s)
+    --- PASS: TestVERIFY01/expired_waiver_does_not_cover (0.00s)
+    --- PASS: TestVERIFY01/waiver_with_empty_expiresAt_does_not_cover (0.00s)
+    --- PASS: TestVERIFY01/waiver_with_unparseable_expiresAt_does_not_cover (0.00s)
+    --- PASS: TestVERIFY01/consumer_role_without_verify_entry_triggers_error (0.00s)
+=== RUN   TestVERIFY02
+=== RUN   TestVERIFY02/no_waivers
+=== RUN   TestVERIFY02/valid_future_waiver_with_all_fields
+=== RUN   TestVERIFY02/expired_waiver
+=== RUN   TestVERIFY02/invalid_date_format
+=== RUN   TestVERIFY02/missing_contract_field
+=== RUN   TestVERIFY02/missing_owner_field
+=== RUN   TestVERIFY02/missing_reason_field
+=== RUN   TestVERIFY02/missing_expiresAt_field
+=== RUN   TestVERIFY02/all_fields_missing
+--- PASS: TestVERIFY02 (0.00s)
+    --- PASS: TestVERIFY02/no_waivers (0.00s)
+    --- PASS: TestVERIFY02/valid_future_waiver_with_all_fields (0.00s)
+    --- PASS: TestVERIFY02/expired_waiver (0.00s)
+    --- PASS: TestVERIFY02/invalid_date_format (0.00s)
+    --- PASS: TestVERIFY02/missing_contract_field (0.00s)
+    --- PASS: TestVERIFY02/missing_owner_field (0.00s)
+    --- PASS: TestVERIFY02/missing_reason_field (0.00s)
+    --- PASS: TestVERIFY02/missing_expiresAt_field (0.00s)
+    --- PASS: TestVERIFY02/all_fields_missing (0.00s)
+=== RUN   TestVERIFY02_TimeOverride
+=== PAUSE TestVERIFY02_TimeOverride
+=== RUN   TestVERIFY03
+=== RUN   TestVERIFY03/no_l0Dependencies
+=== RUN   TestVERIFY03/l0_dependency_targets_L0_cell
+=== RUN   TestVERIFY03/l0_dependency_targets_non-L0_cell
+--- PASS: TestVERIFY03 (0.00s)
+    --- PASS: TestVERIFY03/no_l0Dependencies (0.00s)
+    --- PASS: TestVERIFY03/l0_dependency_targets_L0_cell (0.00s)
+    --- PASS: TestVERIFY03/l0_dependency_targets_non-L0_cell (0.00s)
+=== RUN   TestFMT01
+=== RUN   TestFMT01/valid_lifecycle
+=== RUN   TestFMT01/invalid_lifecycle
+=== RUN   TestFMT01/empty_lifecycle
+--- PASS: TestFMT01 (0.00s)
+    --- PASS: TestFMT01/valid_lifecycle (0.00s)
+    --- PASS: TestFMT01/invalid_lifecycle (0.00s)
+    --- PASS: TestFMT01/empty_lifecycle (0.00s)
+=== RUN   TestFMT02
+=== RUN   TestFMT02/valid_cell_types
+=== RUN   TestFMT02/invalid_cell_type
+--- PASS: TestFMT02 (0.00s)
+    --- PASS: TestFMT02/valid_cell_types (0.00s)
+    --- PASS: TestFMT02/invalid_cell_type (0.00s)
+=== RUN   TestFMT03
+=== RUN   TestFMT03/valid_consistency_levels
+=== RUN   TestFMT03/invalid_cell_consistency_level
+=== RUN   TestFMT03/invalid_contract_consistency_level
+--- PASS: TestFMT03 (0.00s)
+    --- PASS: TestFMT03/valid_consistency_levels (0.00s)
+    --- PASS: TestFMT03/invalid_cell_consistency_level (0.00s)
+    --- PASS: TestFMT03/invalid_contract_consistency_level (0.00s)
+=== RUN   TestFMT04
+=== RUN   TestFMT04/event_contract_with_all_required_fields
+=== RUN   TestFMT04/event_contract_missing_replayable
+=== RUN   TestFMT04/event_contract_missing_idempotencyKey
+=== RUN   TestFMT04/event_contract_missing_deliverySemantics
+=== RUN   TestFMT04/event_contract_missing_all_three
+=== RUN   TestFMT04/http_contract_does_not_require_event_fields
+=== RUN   TestFMT04/projection_contract_missing_replayable
+=== RUN   TestFMT04/projection_contract_with_replayable_set
+--- PASS: TestFMT04 (0.00s)
+    --- PASS: TestFMT04/event_contract_with_all_required_fields (0.00s)
+    --- PASS: TestFMT04/event_contract_missing_replayable (0.00s)
+    --- PASS: TestFMT04/event_contract_missing_idempotencyKey (0.00s)
+    --- PASS: TestFMT04/event_contract_missing_deliverySemantics (0.00s)
+    --- PASS: TestFMT04/event_contract_missing_all_three (0.00s)
+    --- PASS: TestFMT04/http_contract_does_not_require_event_fields (0.00s)
+    --- PASS: TestFMT04/projection_contract_missing_replayable (0.00s)
+    --- PASS: TestFMT04/projection_contract_with_replayable_set (0.00s)
+=== RUN   TestFMT05
+=== RUN   TestFMT05/valid_roles
+=== RUN   TestFMT05/invalid_role_string
+--- PASS: TestFMT05 (0.00s)
+    --- PASS: TestFMT05/valid_roles (0.00s)
+    --- PASS: TestFMT05/invalid_role_string (0.00s)
+=== RUN   TestFMT09
+=== RUN   TestFMT09/valid_kinds
+=== RUN   TestFMT09/invalid_kind_grpc
+=== RUN   TestFMT09/empty_kind
+=== RUN   TestFMT09/valid_kind_command
+=== RUN   TestFMT09/valid_kind_projection
+--- PASS: TestFMT09 (0.00s)
+    --- PASS: TestFMT09/valid_kinds (0.00s)
+    --- PASS: TestFMT09/invalid_kind_grpc (0.00s)
+    --- PASS: TestFMT09/empty_kind (0.00s)
+    --- PASS: TestFMT09/valid_kind_command (0.00s)
+    --- PASS: TestFMT09/valid_kind_projection (0.00s)
+=== RUN   TestADV01
+=== RUN   TestADV01/journey_in_status_board
+=== RUN   TestADV01/journey_missing_from_status_board
+--- PASS: TestADV01 (0.00s)
+    --- PASS: TestADV01/journey_in_status_board (0.00s)
+    --- PASS: TestADV01/journey_missing_from_status_board (0.00s)
+=== RUN   TestADV02
+=== RUN   TestADV02/no_deprecated_contracts
+=== RUN   TestADV02/deprecated_contract_still_used
+--- PASS: TestADV02 (0.00s)
+    --- PASS: TestADV02/no_deprecated_contracts (0.00s)
+    --- PASS: TestADV02/deprecated_contract_still_used (0.00s)
+=== RUN   TestContractProviderAndConsumers
+=== RUN   TestContractProviderAndConsumers/http
+=== RUN   TestContractProviderAndConsumers/event
+=== RUN   TestContractProviderAndConsumers/command
+=== RUN   TestContractProviderAndConsumers/projection
+=== RUN   TestContractProviderAndConsumers/unknown
+--- PASS: TestContractProviderAndConsumers (0.00s)
+    --- PASS: TestContractProviderAndConsumers/http (0.00s)
+    --- PASS: TestContractProviderAndConsumers/event (0.00s)
+    --- PASS: TestContractProviderAndConsumers/command (0.00s)
+    --- PASS: TestContractProviderAndConsumers/projection (0.00s)
+    --- PASS: TestContractProviderAndConsumers/unknown (0.00s)
+=== RUN   TestFilePathHelpers
+--- PASS: TestFilePathHelpers (0.00s)
+=== RUN   TestSliceFileFallback
+--- PASS: TestSliceFileFallback (0.00s)
+=== RUN   TestValidate_AggregatesAllRules
+--- PASS: TestValidate_AggregatesAllRules (0.00s)
+=== RUN   TestValidate_EmptyProject
+--- PASS: TestValidate_EmptyProject (0.00s)
+=== RUN   TestFMT06
+=== RUN   TestFMT06/all_non-L0_cells_have_schema.primary
+=== RUN   TestFMT06/L0_cell_without_schema.primary_is_ok
+=== RUN   TestFMT06/non-L0_cell_without_schema.primary
+--- PASS: TestFMT06 (0.00s)
+    --- PASS: TestFMT06/all_non-L0_cells_have_schema.primary (0.00s)
+    --- PASS: TestFMT06/L0_cell_without_schema.primary_is_ok (0.00s)
+    --- PASS: TestFMT06/non-L0_cell_without_schema.primary (0.00s)
+=== RUN   TestFMT07
+=== RUN   TestFMT07/all_contracts_have_providers
+=== RUN   TestFMT07/http_contract_missing_server
+=== RUN   TestFMT07/event_contract_missing_publisher
+=== RUN   TestFMT07/command_contract_missing_handler
+=== RUN   TestFMT07/projection_contract_missing_provider
+--- PASS: TestFMT07 (0.00s)
+    --- PASS: TestFMT07/all_contracts_have_providers (0.00s)
+    --- PASS: TestFMT07/http_contract_missing_server (0.00s)
+    --- PASS: TestFMT07/event_contract_missing_publisher (0.00s)
+    --- PASS: TestFMT07/command_contract_missing_handler (0.00s)
+    --- PASS: TestFMT07/projection_contract_missing_provider (0.00s)
+=== RUN   TestFMT08
+=== RUN   TestFMT08/kind_matches_ID_prefix
+=== RUN   TestFMT08/kind_does_not_match_ID_prefix
+=== RUN   TestFMT08/contract_with_matching_kind
+=== RUN   TestFMT08/contract_ID_without_dot_separator
+--- PASS: TestFMT08 (0.00s)
+    --- PASS: TestFMT08/kind_matches_ID_prefix (0.00s)
+    --- PASS: TestFMT08/kind_does_not_match_ID_prefix (0.00s)
+    --- PASS: TestFMT08/contract_with_matching_kind (0.00s)
+    --- PASS: TestFMT08/contract_ID_without_dot_separator (0.00s)
+=== RUN   TestREF10
+=== RUN   TestREF10/assembly_has_entrypoint
+=== RUN   TestREF10/assembly_missing_entrypoint
+--- PASS: TestREF10 (0.00s)
+    --- PASS: TestREF10/assembly_has_entrypoint (0.00s)
+    --- PASS: TestREF10/assembly_missing_entrypoint (0.00s)
+=== RUN   TestREF11
+=== RUN   TestREF11/skipped_when_root_is_empty
+=== RUN   TestREF11/entrypoint_file_exists
+=== RUN   TestREF11/entrypoint_file_does_not_exist
+--- PASS: TestREF11 (0.00s)
+    --- PASS: TestREF11/skipped_when_root_is_empty (0.00s)
+    --- PASS: TestREF11/entrypoint_file_exists (0.00s)
+    --- PASS: TestREF11/entrypoint_file_does_not_exist (0.00s)
+=== RUN   TestREF12
+=== RUN   TestREF12/skipped_when_root_is_empty
+=== RUN   TestREF12/no_schemaRefs_is_ok
+=== RUN   TestREF12/schemaRef_file_exists
+=== RUN   TestREF12/schemaRef_file_missing
+=== RUN   TestREF12/payload_schemaRef_missing
+--- PASS: TestREF12 (0.00s)
+    --- PASS: TestREF12/skipped_when_root_is_empty (0.00s)
+    --- PASS: TestREF12/no_schemaRefs_is_ok (0.00s)
+    --- PASS: TestREF12/schemaRef_file_exists (0.00s)
+    --- PASS: TestREF12/schemaRef_file_missing (0.00s)
+    --- PASS: TestREF12/payload_schemaRef_missing (0.00s)
+=== RUN   TestREF13
+=== RUN   TestREF13/provider_is_known_cell
+=== RUN   TestREF13/provider_is_known_actor
+=== RUN   TestREF13/provider_is_unknown
+=== RUN   TestREF13/empty_provider_skipped
+--- PASS: TestREF13 (0.00s)
+    --- PASS: TestREF13/provider_is_known_cell (0.00s)
+    --- PASS: TestREF13/provider_is_known_actor (0.00s)
+    --- PASS: TestREF13/provider_is_unknown (0.00s)
+    --- PASS: TestREF13/empty_provider_skipped (0.00s)
+=== RUN   TestREF14
+=== RUN   TestREF14/all_consumers_are_known
+=== RUN   TestREF14/wildcard_consumer_skipped
+=== RUN   TestREF14/unknown_consumer
+=== RUN   TestREF14/consumer_is_known_actor
+=== RUN   TestREF14/multiple_unknown_consumers
+--- PASS: TestREF14 (0.00s)
+    --- PASS: TestREF14/all_consumers_are_known (0.00s)
+    --- PASS: TestREF14/wildcard_consumer_skipped (0.00s)
+    --- PASS: TestREF14/unknown_consumer (0.00s)
+    --- PASS: TestREF14/consumer_is_known_actor (0.00s)
+    --- PASS: TestREF14/multiple_unknown_consumers (0.00s)
+=== RUN   TestREF15
+=== RUN   TestREF15/id_matches_key
+=== RUN   TestREF15/id_mismatch
+--- PASS: TestREF15 (0.00s)
+    --- PASS: TestREF15/id_matches_key (0.00s)
+    --- PASS: TestREF15/id_mismatch (0.00s)
+=== RUN   TestADV03
+=== RUN   TestADV03/no_waivers
+=== RUN   TestADV03/waiver_matches_contractUsage
+=== RUN   TestADV03/waiver_has_no_matching_contractUsage
+=== RUN   TestADV03/waiver_with_empty_contract_skipped
+--- PASS: TestADV03 (0.00s)
+    --- PASS: TestADV03/no_waivers (0.00s)
+    --- PASS: TestADV03/waiver_matches_contractUsage (0.00s)
+    --- PASS: TestADV03/waiver_has_no_matching_contractUsage (0.00s)
+    --- PASS: TestADV03/waiver_with_empty_contract_skipped (0.00s)
+=== RUN   TestADV04
+=== RUN   TestADV04/all_status-board_entries_reference_known_journeys
+=== RUN   TestADV04/status-board_references_unknown_journey
+=== RUN   TestADV04/empty_status-board
+--- PASS: TestADV04 (0.00s)
+    --- PASS: TestADV04/all_status-board_entries_reference_known_journeys (0.00s)
+    --- PASS: TestADV04/status-board_references_unknown_journey (0.00s)
+    --- PASS: TestADV04/empty_status-board (0.00s)
+=== RUN   TestContractDirFromID
+--- PASS: TestContractDirFromID (0.00s)
+=== RUN   TestRepositoryRoot
+=== RUN   TestRepositoryRoot/root_ending_in_src
+=== RUN   TestRepositoryRoot/root_not_ending_in_src
+--- PASS: TestRepositoryRoot (0.00s)
+    --- PASS: TestRepositoryRoot/root_ending_in_src (0.00s)
+    --- PASS: TestRepositoryRoot/root_not_ending_in_src (0.00s)
+=== RUN   TestActorExists
+--- PASS: TestActorExists (0.00s)
+=== RUN   TestIsWithinRoot
+=== RUN   TestIsWithinRoot/inside_root
+=== RUN   TestIsWithinRoot/equals_root
+=== RUN   TestIsWithinRoot/escapes_root
+=== RUN   TestIsWithinRoot/dot-dot_escapes
+=== RUN   TestIsWithinRoot/different_tree
+--- PASS: TestIsWithinRoot (0.00s)
+    --- PASS: TestIsWithinRoot/inside_root (0.00s)
+    --- PASS: TestIsWithinRoot/equals_root (0.00s)
+    --- PASS: TestIsWithinRoot/escapes_root (0.00s)
+    --- PASS: TestIsWithinRoot/dot-dot_escapes (0.00s)
+    --- PASS: TestIsWithinRoot/different_tree (0.00s)
+=== RUN   TestREF11_PathTraversal
+--- PASS: TestREF11_PathTraversal (0.00s)
+=== RUN   TestREF12_PathTraversal
+--- PASS: TestREF12_PathTraversal (0.00s)
+=== RUN   TestNewValidator_NilProject
+--- PASS: TestNewValidator_NilProject (0.00s)
+=== RUN   TestFMT10
+=== RUN   TestFMT10/no_banned_names
+=== RUN   TestFMT10/cell_with_banned_ID_cellId
+=== RUN   TestFMT10/contract_with_slash_separator
+--- PASS: TestFMT10 (0.00s)
+    --- PASS: TestFMT10/no_banned_names (0.00s)
+    --- PASS: TestFMT10/cell_with_banned_ID_cellId (0.00s)
+    --- PASS: TestFMT10/contract_with_slash_separator (0.00s)
+=== CONT  TestVERIFY02_TimeOverride
+--- PASS: TestVERIFY02_TimeOverride (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/governance	4.491s
+=== RUN   TestCheckerInterface
+--- PASS: TestCheckerInterface (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/idempotency	4.544s
+=== RUN   TestNewCatalog
+=== RUN   TestNewCatalog/nil_ProjectMeta_produces_empty_catalog
+=== RUN   TestNewCatalog/zero-value_ProjectMeta_produces_empty_catalog
+=== RUN   TestNewCatalog/populated_ProjectMeta
+--- PASS: TestNewCatalog (0.00s)
+    --- PASS: TestNewCatalog/nil_ProjectMeta_produces_empty_catalog (0.00s)
+    --- PASS: TestNewCatalog/zero-value_ProjectMeta_produces_empty_catalog (0.00s)
+    --- PASS: TestNewCatalog/populated_ProjectMeta (0.00s)
+=== RUN   TestGet
+=== RUN   TestGet/existing_journey
+=== RUN   TestGet/non-existing_journey
+=== RUN   TestGet/empty_id
+--- PASS: TestGet (0.00s)
+    --- PASS: TestGet/existing_journey (0.00s)
+    --- PASS: TestGet/non-existing_journey (0.00s)
+    --- PASS: TestGet/empty_id (0.00s)
+=== RUN   TestList
+=== RUN   TestList/sorted_by_ID
+=== RUN   TestList/empty_catalog
+--- PASS: TestList (0.00s)
+    --- PASS: TestList/sorted_by_ID (0.00s)
+    --- PASS: TestList/empty_catalog (0.00s)
+=== RUN   TestCellJourneys
+=== RUN   TestCellJourneys/access-core_referenced_by_all_three_journeys
+=== RUN   TestCellJourneys/audit-core_referenced_by_two_journeys
+=== RUN   TestCellJourneys/config-core_referenced_by_one_journey
+=== RUN   TestCellJourneys/unknown_cell_returns_empty
+--- PASS: TestCellJourneys (0.00s)
+    --- PASS: TestCellJourneys/access-core_referenced_by_all_three_journeys (0.00s)
+    --- PASS: TestCellJourneys/audit-core_referenced_by_two_journeys (0.00s)
+    --- PASS: TestCellJourneys/config-core_referenced_by_one_journey (0.00s)
+    --- PASS: TestCellJourneys/unknown_cell_returns_empty (0.00s)
+=== RUN   TestContractJourneys
+=== RUN   TestContractJourneys/event.session.created.v1_referenced_by_two_journeys
+=== RUN   TestContractJourneys/http.auth.login.v1_referenced_by_one_journey
+=== RUN   TestContractJourneys/event.user.created.v1_referenced_by_one_journey
+=== RUN   TestContractJourneys/unknown_contract_returns_empty
+--- PASS: TestContractJourneys (0.00s)
+    --- PASS: TestContractJourneys/event.session.created.v1_referenced_by_two_journeys (0.00s)
+    --- PASS: TestContractJourneys/http.auth.login.v1_referenced_by_one_journey (0.00s)
+    --- PASS: TestContractJourneys/event.user.created.v1_referenced_by_one_journey (0.00s)
+    --- PASS: TestContractJourneys/unknown_contract_returns_empty (0.00s)
+=== RUN   TestStatus
+=== RUN   TestStatus/existing_status_entry
+=== RUN   TestStatus/another_existing_status_entry
+=== RUN   TestStatus/journey_without_status_entry
+=== RUN   TestStatus/nonexistent_journey
+--- PASS: TestStatus (0.00s)
+    --- PASS: TestStatus/existing_status_entry (0.00s)
+    --- PASS: TestStatus/another_existing_status_entry (0.00s)
+    --- PASS: TestStatus/journey_without_status_entry (0.00s)
+    --- PASS: TestStatus/nonexistent_journey (0.00s)
+=== RUN   TestCrossCellJourneys
+=== RUN   TestCrossCellJourneys/returns_only_cross-cell_journeys_sorted_by_ID
+=== RUN   TestCrossCellJourneys/empty_catalog
+=== RUN   TestCrossCellJourneys/all_single-cell_journeys
+--- PASS: TestCrossCellJourneys (0.00s)
+    --- PASS: TestCrossCellJourneys/returns_only_cross-cell_journeys_sorted_by_ID (0.00s)
+    --- PASS: TestCrossCellJourneys/empty_catalog (0.00s)
+    --- PASS: TestCrossCellJourneys/all_single-cell_journeys (0.00s)
+=== RUN   TestCount
+=== RUN   TestCount/nil_project
+=== RUN   TestCount/populated_project
+=== RUN   TestCount/single_journey
+--- PASS: TestCount (0.00s)
+    --- PASS: TestCount/nil_project (0.00s)
+    --- PASS: TestCount/populated_project (0.00s)
+    --- PASS: TestCount/single_journey (0.00s)
+=== RUN   TestEmptyProjectMeta_NoPanic
+--- PASS: TestEmptyProjectMeta_NoPanic (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/journey	4.609s
+=== RUN   TestParseFS_FullProject
+--- PASS: TestParseFS_FullProject (0.00s)
+=== RUN   TestParseFS_EmptyProject
+--- PASS: TestParseFS_EmptyProject (0.00s)
+=== RUN   TestParseFS_MissingActorsNoError
+--- PASS: TestParseFS_MissingActorsNoError (0.00s)
+=== RUN   TestParseFS_InvalidYAML
+--- PASS: TestParseFS_InvalidYAML (0.00s)
+=== RUN   TestParseFS_InvalidSliceYAML
+--- PASS: TestParseFS_InvalidSliceYAML (0.00s)
+=== RUN   TestParseFS_InvalidContractYAML
+--- PASS: TestParseFS_InvalidContractYAML (0.00s)
+=== RUN   TestParseFS_InvalidJourneyYAML
+--- PASS: TestParseFS_InvalidJourneyYAML (0.00s)
+=== RUN   TestParseFS_InvalidAssemblyYAML
+--- PASS: TestParseFS_InvalidAssemblyYAML (0.00s)
+=== RUN   TestParseFS_InvalidStatusBoardYAML
+--- PASS: TestParseFS_InvalidStatusBoardYAML (0.00s)
+=== RUN   TestParseFS_InvalidActorsYAML
+--- PASS: TestParseFS_InvalidActorsYAML (0.00s)
+=== RUN   TestParseFS_DeepContractPath
+--- PASS: TestParseFS_DeepContractPath (0.00s)
+=== RUN   TestParseFS_NonMetadataFilesIgnored
+--- PASS: TestParseFS_NonMetadataFilesIgnored (0.00s)
+=== RUN   TestParseFS_JourneyPatternFiltering
+--- PASS: TestParseFS_JourneyPatternFiltering (0.00s)
+=== RUN   TestParseFS_MultipleSlicesSameCell
+--- PASS: TestParseFS_MultipleSlicesSameCell (0.00s)
+=== RUN   TestParseFS_SliceWithWaivers
+--- PASS: TestParseFS_SliceWithWaivers (0.00s)
+=== RUN   TestParseFS_SliceOmitsBelongsToCell
+--- PASS: TestParseFS_SliceOmitsBelongsToCell (0.00s)
+=== RUN   TestParseFS_DuplicateCellID
+--- PASS: TestParseFS_DuplicateCellID (0.00s)
+=== RUN   TestParseFS_DuplicateContractID
+--- PASS: TestParseFS_DuplicateContractID (0.00s)
+=== RUN   TestParseFS_DuplicateJourneyID
+--- PASS: TestParseFS_DuplicateJourneyID (0.00s)
+=== RUN   TestParseFS_DuplicateAssemblyID
+--- PASS: TestParseFS_DuplicateAssemblyID (0.00s)
+=== RUN   TestParseFS_DuplicateSliceID
+--- PASS: TestParseFS_DuplicateSliceID (0.00s)
+=== RUN   TestParseFS_CellWithL0Dependencies
+--- PASS: TestParseFS_CellWithL0Dependencies (0.00s)
+=== RUN   TestParseFS_EmptyCellID
+--- PASS: TestParseFS_EmptyCellID (0.00s)
+=== RUN   TestParseFS_EmptySliceID
+--- PASS: TestParseFS_EmptySliceID (0.00s)
+=== RUN   TestParseFS_EmptyContractID
+--- PASS: TestParseFS_EmptyContractID (0.00s)
+=== RUN   TestParseFS_EmptyJourneyID
+--- PASS: TestParseFS_EmptyJourneyID (0.00s)
+=== RUN   TestParseFS_EmptyAssemblyID
+--- PASS: TestParseFS_EmptyAssemblyID (0.00s)
+=== RUN   TestCellMetaRoundTrip
+--- PASS: TestCellMetaRoundTrip (0.00s)
+=== RUN   TestCellMetaEmptyL0Dependencies
+--- PASS: TestCellMetaEmptyL0Dependencies (0.00s)
+=== RUN   TestSliceMetaRoundTrip
+--- PASS: TestSliceMetaRoundTrip (0.00s)
+=== RUN   TestContractMetaHTTPRoundTrip
+--- PASS: TestContractMetaHTTPRoundTrip (0.00s)
+=== RUN   TestContractMetaEventRoundTrip
+--- PASS: TestContractMetaEventRoundTrip (0.00s)
+=== RUN   TestContractMetaOmitEmptySchemaRefs
+--- PASS: TestContractMetaOmitEmptySchemaRefs (0.00s)
+=== RUN   TestContractMetaNilReplayable
+--- PASS: TestContractMetaNilReplayable (0.00s)
+=== RUN   TestJourneyMetaRoundTrip
+--- PASS: TestJourneyMetaRoundTrip (0.00s)
+=== RUN   TestPassCriterionOmitEmptyCheckRef
+--- PASS: TestPassCriterionOmitEmptyCheckRef (0.00s)
+=== RUN   TestAssemblyMetaRoundTrip
+--- PASS: TestAssemblyMetaRoundTrip (0.00s)
+=== RUN   TestStatusBoardEntryRoundTrip
+--- PASS: TestStatusBoardEntryRoundTrip (0.00s)
+=== RUN   TestActorMetaRoundTrip
+--- PASS: TestActorMetaRoundTrip (0.00s)
+=== RUN   TestEndpointsMetaOmitEmpty
+=== RUN   TestEndpointsMetaOmitEmpty/http_only
+=== RUN   TestEndpointsMetaOmitEmpty/event_only
+=== RUN   TestEndpointsMetaOmitEmpty/command_only
+=== RUN   TestEndpointsMetaOmitEmpty/projection_only
+--- PASS: TestEndpointsMetaOmitEmpty (0.00s)
+    --- PASS: TestEndpointsMetaOmitEmpty/http_only (0.00s)
+    --- PASS: TestEndpointsMetaOmitEmpty/event_only (0.00s)
+    --- PASS: TestEndpointsMetaOmitEmpty/command_only (0.00s)
+    --- PASS: TestEndpointsMetaOmitEmpty/projection_only (0.00s)
+=== RUN   TestStatusBoardSliceRoundTrip
+--- PASS: TestStatusBoardSliceRoundTrip (0.00s)
+=== RUN   TestActorSliceRoundTrip
+--- PASS: TestActorSliceRoundTrip (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/metadata	4.626s
+?   	github.com/ghbvf/gocell/kernel/metadata/schemas	[no test files]
+=== RUN   TestSubscriberInterface
+=== RUN   TestSubscriberInterface/Subscribe_returns_nil_on_success
+=== RUN   TestSubscriberInterface/Close_returns_nil_on_success
+--- PASS: TestSubscriberInterface (0.00s)
+    --- PASS: TestSubscriberInterface/Subscribe_returns_nil_on_success (0.00s)
+    --- PASS: TestSubscriberInterface/Close_returns_nil_on_success (0.00s)
+=== RUN   TestEntryFields
+--- PASS: TestEntryFields (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/outbox	4.607s
+=== RUN   TestContractRegistry_Get
+=== RUN   TestContractRegistry_Get/existing_contract
+=== RUN   TestContractRegistry_Get/another_existing
+=== RUN   TestContractRegistry_Get/not_found
+--- PASS: TestContractRegistry_Get (0.00s)
+    --- PASS: TestContractRegistry_Get/existing_contract (0.00s)
+    --- PASS: TestContractRegistry_Get/another_existing (0.00s)
+    --- PASS: TestContractRegistry_Get/not_found (0.00s)
+=== RUN   TestContractRegistry_ByKind
+=== RUN   TestContractRegistry_ByKind/http_contracts
+=== RUN   TestContractRegistry_ByKind/event_contracts
+=== RUN   TestContractRegistry_ByKind/command_contracts
+=== RUN   TestContractRegistry_ByKind/projection_contracts
+=== RUN   TestContractRegistry_ByKind/unknown_kind
+--- PASS: TestContractRegistry_ByKind (0.00s)
+    --- PASS: TestContractRegistry_ByKind/http_contracts (0.00s)
+    --- PASS: TestContractRegistry_ByKind/event_contracts (0.00s)
+    --- PASS: TestContractRegistry_ByKind/command_contracts (0.00s)
+    --- PASS: TestContractRegistry_ByKind/projection_contracts (0.00s)
+    --- PASS: TestContractRegistry_ByKind/unknown_kind (0.00s)
+=== RUN   TestContractRegistry_ByOwner
+=== RUN   TestContractRegistry_ByOwner/access-core_owns_2
+=== RUN   TestContractRegistry_ByOwner/audit-core_owns_2
+=== RUN   TestContractRegistry_ByOwner/unknown_cell
+--- PASS: TestContractRegistry_ByOwner (0.00s)
+    --- PASS: TestContractRegistry_ByOwner/access-core_owns_2 (0.00s)
+    --- PASS: TestContractRegistry_ByOwner/audit-core_owns_2 (0.00s)
+    --- PASS: TestContractRegistry_ByOwner/unknown_cell (0.00s)
+=== RUN   TestContractRegistry_Provider
+=== RUN   TestContractRegistry_Provider/http_provider_is_server
+=== RUN   TestContractRegistry_Provider/event_provider_is_publisher
+=== RUN   TestContractRegistry_Provider/command_provider_is_handler
+=== RUN   TestContractRegistry_Provider/projection_provider_is_provider
+=== RUN   TestContractRegistry_Provider/not_found_returns_empty
+--- PASS: TestContractRegistry_Provider (0.00s)
+    --- PASS: TestContractRegistry_Provider/http_provider_is_server (0.00s)
+    --- PASS: TestContractRegistry_Provider/event_provider_is_publisher (0.00s)
+    --- PASS: TestContractRegistry_Provider/command_provider_is_handler (0.00s)
+    --- PASS: TestContractRegistry_Provider/projection_provider_is_provider (0.00s)
+    --- PASS: TestContractRegistry_Provider/not_found_returns_empty (0.00s)
+=== RUN   TestContractRegistry_Consumers
+=== RUN   TestContractRegistry_Consumers/http_consumers_are_clients
+=== RUN   TestContractRegistry_Consumers/event_consumers_are_subscribers
+=== RUN   TestContractRegistry_Consumers/command_consumers_are_invokers
+=== RUN   TestContractRegistry_Consumers/projection_consumers_are_readers
+=== RUN   TestContractRegistry_Consumers/not_found_returns_nil
+--- PASS: TestContractRegistry_Consumers (0.00s)
+    --- PASS: TestContractRegistry_Consumers/http_consumers_are_clients (0.00s)
+    --- PASS: TestContractRegistry_Consumers/event_consumers_are_subscribers (0.00s)
+    --- PASS: TestContractRegistry_Consumers/command_consumers_are_invokers (0.00s)
+    --- PASS: TestContractRegistry_Consumers/projection_consumers_are_readers (0.00s)
+    --- PASS: TestContractRegistry_Consumers/not_found_returns_nil (0.00s)
+=== RUN   TestContractRegistry_AllIDs
+--- PASS: TestContractRegistry_AllIDs (0.00s)
+=== RUN   TestContractRegistry_Count
+--- PASS: TestContractRegistry_Count (0.00s)
+=== RUN   TestContractRegistry_EmptyProject
+=== RUN   TestContractRegistry_EmptyProject/nil_project
+=== RUN   TestContractRegistry_EmptyProject/empty_project
+=== RUN   TestContractRegistry_EmptyProject/nil_contracts_map
+--- PASS: TestContractRegistry_EmptyProject (0.00s)
+    --- PASS: TestContractRegistry_EmptyProject/nil_project (0.00s)
+    --- PASS: TestContractRegistry_EmptyProject/empty_project (0.00s)
+    --- PASS: TestContractRegistry_EmptyProject/nil_contracts_map (0.00s)
+=== RUN   TestCellRegistry_Get
+=== RUN   TestCellRegistry_Get/existing_cell
+=== RUN   TestCellRegistry_Get/another_existing
+=== RUN   TestCellRegistry_Get/not_found
+--- PASS: TestCellRegistry_Get (0.00s)
+    --- PASS: TestCellRegistry_Get/existing_cell (0.00s)
+    --- PASS: TestCellRegistry_Get/another_existing (0.00s)
+    --- PASS: TestCellRegistry_Get/not_found (0.00s)
+=== RUN   TestCellRegistry_SlicesFor
+=== RUN   TestCellRegistry_SlicesFor/access-core_has_2_slices
+=== RUN   TestCellRegistry_SlicesFor/audit-core_has_1_slice
+=== RUN   TestCellRegistry_SlicesFor/unknown_cell_has_0
+--- PASS: TestCellRegistry_SlicesFor (0.00s)
+    --- PASS: TestCellRegistry_SlicesFor/access-core_has_2_slices (0.00s)
+    --- PASS: TestCellRegistry_SlicesFor/audit-core_has_1_slice (0.00s)
+    --- PASS: TestCellRegistry_SlicesFor/unknown_cell_has_0 (0.00s)
+=== RUN   TestCellRegistry_AllIDs
+--- PASS: TestCellRegistry_AllIDs (0.00s)
+=== RUN   TestCellRegistry_Count
+--- PASS: TestCellRegistry_Count (0.00s)
+=== RUN   TestCellRegistry_EmptyProject
+=== RUN   TestCellRegistry_EmptyProject/nil_project
+=== RUN   TestCellRegistry_EmptyProject/empty_project
+--- PASS: TestCellRegistry_EmptyProject (0.00s)
+    --- PASS: TestCellRegistry_EmptyProject/nil_project (0.00s)
+    --- PASS: TestCellRegistry_EmptyProject/empty_project (0.00s)
+=== RUN   TestContractRegistry_Provider_UnknownKind
+--- PASS: TestContractRegistry_Provider_UnknownKind (0.00s)
+=== RUN   TestContractRegistry_Consumers_UnknownKind
+--- PASS: TestContractRegistry_Consumers_UnknownKind (0.00s)
+=== RUN   TestContractRegistry_NilContractInMap
+--- PASS: TestContractRegistry_NilContractInMap (0.00s)
+=== RUN   TestCellRegistry_NilEntries
+--- PASS: TestCellRegistry_NilEntries (0.00s)
+=== RUN   TestCellRegistry_SliceFallbackCellID
+--- PASS: TestCellRegistry_SliceFallbackCellID (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/registry	4.612s
+=== RUN   TestCreateCell
+--- PASS: TestCreateCell (0.00s)
+=== RUN   TestCreateCell_Defaults
+--- PASS: TestCreateCell_Defaults (0.00s)
+=== RUN   TestCreateCell_Conflict
+--- PASS: TestCreateCell_Conflict (0.00s)
+=== RUN   TestCreateCell_MissingID
+--- PASS: TestCreateCell_MissingID (0.00s)
+=== RUN   TestCreateCell_MissingOwner
+--- PASS: TestCreateCell_MissingOwner (0.00s)
+=== RUN   TestCreateCell_ReplaceHyphen
+--- PASS: TestCreateCell_ReplaceHyphen (0.00s)
+=== RUN   TestCreateSlice
+--- PASS: TestCreateSlice (0.00s)
+=== RUN   TestCreateSlice_CellMissing
+--- PASS: TestCreateSlice_CellMissing (0.00s)
+=== RUN   TestCreateSlice_Conflict
+--- PASS: TestCreateSlice_Conflict (0.00s)
+=== RUN   TestCreateSlice_MissingID
+--- PASS: TestCreateSlice_MissingID (0.00s)
+=== RUN   TestCreateSlice_MissingCellID
+--- PASS: TestCreateSlice_MissingCellID (0.00s)
+=== RUN   TestCreateContractHTTP
+--- PASS: TestCreateContractHTTP (0.00s)
+=== RUN   TestCreateContractEvent
+--- PASS: TestCreateContractEvent (0.00s)
+=== RUN   TestCreateContractCommand
+--- PASS: TestCreateContractCommand (0.00s)
+=== RUN   TestCreateContractProjection
+--- PASS: TestCreateContractProjection (0.00s)
+=== RUN   TestCreateContract_InvalidKind
+--- PASS: TestCreateContract_InvalidKind (0.00s)
+=== RUN   TestCreateContract_MissingID
+--- PASS: TestCreateContract_MissingID (0.00s)
+=== RUN   TestCreateContract_MissingKind
+--- PASS: TestCreateContract_MissingKind (0.00s)
+=== RUN   TestCreateContract_MissingOwnerCell
+--- PASS: TestCreateContract_MissingOwnerCell (0.00s)
+=== RUN   TestCreateContract_IDTooShort
+--- PASS: TestCreateContract_IDTooShort (0.00s)
+=== RUN   TestCreateContract_IDPrefixMismatchKind
+--- PASS: TestCreateContract_IDPrefixMismatchKind (0.00s)
+=== RUN   TestCreateContract_Conflict
+--- PASS: TestCreateContract_Conflict (0.00s)
+=== RUN   TestCreateContract_IDParsing
+=== RUN   TestCreateContract_IDParsing/http_4_segments
+=== RUN   TestCreateContract_IDParsing/event_4_segments
+=== RUN   TestCreateContract_IDParsing/command_4_segments
+=== RUN   TestCreateContract_IDParsing/projection_4_segments
+=== RUN   TestCreateContract_IDParsing/deep_path_5_segments
+--- PASS: TestCreateContract_IDParsing (0.01s)
+    --- PASS: TestCreateContract_IDParsing/http_4_segments (0.00s)
+    --- PASS: TestCreateContract_IDParsing/event_4_segments (0.00s)
+    --- PASS: TestCreateContract_IDParsing/command_4_segments (0.00s)
+    --- PASS: TestCreateContract_IDParsing/projection_4_segments (0.00s)
+    --- PASS: TestCreateContract_IDParsing/deep_path_5_segments (0.00s)
+=== RUN   TestCreateJourney
+--- PASS: TestCreateJourney (0.00s)
+=== RUN   TestCreateJourney_WithJPrefix
+--- PASS: TestCreateJourney_WithJPrefix (0.00s)
+=== RUN   TestCreateJourney_Conflict
+--- PASS: TestCreateJourney_Conflict (0.00s)
+=== RUN   TestCreateJourney_MissingID
+--- PASS: TestCreateJourney_MissingID (0.00s)
+=== RUN   TestCreateJourney_MissingGoal
+--- PASS: TestCreateJourney_MissingGoal (0.00s)
+=== RUN   TestCreateJourney_MissingOwner
+--- PASS: TestCreateJourney_MissingOwner (0.00s)
+=== RUN   TestCreateJourney_NoCells
+--- PASS: TestCreateJourney_NoCells (0.00s)
+=== RUN   TestTemplateFS_ContainsAllTemplates
+--- PASS: TestTemplateFS_ContainsAllTemplates (0.00s)
+=== RUN   TestIntegration_CellSliceContractJourney
+--- PASS: TestIntegration_CellSliceContractJourney (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/scaffold	4.692s
+=== RUN   TestNewRunner
+--- PASS: TestNewRunner (0.00s)
+=== RUN   TestParseSliceKey
+=== RUN   TestParseSliceKey/valid_key
+=== RUN   TestParseSliceKey/another_valid_key
+=== RUN   TestParseSliceKey/no_slash
+=== RUN   TestParseSliceKey/empty_cell
+=== RUN   TestParseSliceKey/empty_slice
+=== RUN   TestParseSliceKey/empty_string
+=== RUN   TestParseSliceKey/cellID_with_dot-dot
+=== RUN   TestParseSliceKey/cellID_with_slash
+=== RUN   TestParseSliceKey/cellID_with_backslash
+=== RUN   TestParseSliceKey/sliceID_with_dot-dot
+=== RUN   TestParseSliceKey/sliceID_with_slash
+=== RUN   TestParseSliceKey/sliceID_with_backslash
+--- PASS: TestParseSliceKey (0.00s)
+    --- PASS: TestParseSliceKey/valid_key (0.00s)
+    --- PASS: TestParseSliceKey/another_valid_key (0.00s)
+    --- PASS: TestParseSliceKey/no_slash (0.00s)
+    --- PASS: TestParseSliceKey/empty_cell (0.00s)
+    --- PASS: TestParseSliceKey/empty_slice (0.00s)
+    --- PASS: TestParseSliceKey/empty_string (0.00s)
+    --- PASS: TestParseSliceKey/cellID_with_dot-dot (0.00s)
+    --- PASS: TestParseSliceKey/cellID_with_slash (0.00s)
+    --- PASS: TestParseSliceKey/cellID_with_backslash (0.00s)
+    --- PASS: TestParseSliceKey/sliceID_with_dot-dot (0.00s)
+    --- PASS: TestParseSliceKey/sliceID_with_slash (0.00s)
+    --- PASS: TestParseSliceKey/sliceID_with_backslash (0.00s)
+=== RUN   TestVerifySlice_NotFound
+=== RUN   TestVerifySlice_NotFound/invalid_key_format
+=== RUN   TestVerifySlice_NotFound/slice_not_in_project
+=== RUN   TestVerifySlice_NotFound/cell_not_in_project
+--- PASS: TestVerifySlice_NotFound (0.00s)
+    --- PASS: TestVerifySlice_NotFound/invalid_key_format (0.00s)
+    --- PASS: TestVerifySlice_NotFound/slice_not_in_project (0.00s)
+    --- PASS: TestVerifySlice_NotFound/cell_not_in_project (0.00s)
+=== RUN   TestVerifyCell_NotFound
+--- PASS: TestVerifyCell_NotFound (0.00s)
+=== RUN   TestRunJourney_NotFound
+--- PASS: TestRunJourney_NotFound (0.00s)
+=== RUN   TestRunJourney_NoAutoCheckRefs
+--- PASS: TestRunJourney_NoAutoCheckRefs (0.00s)
+=== RUN   TestCollectAutoCheckRefs
+=== RUN   TestCollectAutoCheckRefs/mixed_modes
+=== RUN   TestCollectAutoCheckRefs/no_auto
+=== RUN   TestCollectAutoCheckRefs/empty_list
+--- PASS: TestCollectAutoCheckRefs (0.00s)
+    --- PASS: TestCollectAutoCheckRefs/mixed_modes (0.00s)
+    --- PASS: TestCollectAutoCheckRefs/no_auto (0.00s)
+    --- PASS: TestCollectAutoCheckRefs/empty_list (0.00s)
+=== RUN   TestResolveCheckRef
+=== RUN   TestResolveCheckRef/journey_format
+=== RUN   TestResolveCheckRef/journey_with_dots_in_suffix
+=== RUN   TestResolveCheckRef/non-journey_prefix
+=== RUN   TestResolveCheckRef/single_part
+=== RUN   TestResolveCheckRef/two_parts_non-journey
+--- PASS: TestResolveCheckRef (0.00s)
+    --- PASS: TestResolveCheckRef/journey_format (0.00s)
+    --- PASS: TestResolveCheckRef/journey_with_dots_in_suffix (0.00s)
+    --- PASS: TestResolveCheckRef/non-journey_prefix (0.00s)
+    --- PASS: TestResolveCheckRef/single_part (0.00s)
+    --- PASS: TestResolveCheckRef/two_parts_non-journey (0.00s)
+=== RUN   TestRunGoTest_SuccessfulCommand
+--- PASS: TestRunGoTest_SuccessfulCommand (0.01s)
+=== RUN   TestRunGoTest_WithTempModule
+--- PASS: TestRunGoTest_WithTempModule (4.49s)
+=== RUN   TestRunGoTest_FailingTest
+--- PASS: TestRunGoTest_FailingTest (2.51s)
+=== RUN   TestRunGoTest_ContextCancelled
+--- PASS: TestRunGoTest_ContextCancelled (0.00s)
+=== RUN   TestVerifySlice_Integration
+--- PASS: TestVerifySlice_Integration (0.59s)
+=== RUN   TestVerifyCell_Integration
+--- PASS: TestVerifyCell_Integration (0.67s)
+=== RUN   TestRunJourney_Integration
+--- PASS: TestRunJourney_Integration (1.02s)
+=== RUN   TestIsExitError
+=== RUN   TestIsExitError/non-exit_error_returns_false
+=== RUN   TestIsExitError/exit_error_returns_true
+--- PASS: TestIsExitError (0.01s)
+    --- PASS: TestIsExitError/non-exit_error_returns_false (0.00s)
+    --- PASS: TestIsExitError/exit_error_returns_true (0.01s)
+PASS
+ok  	github.com/ghbvf/gocell/kernel/slice	13.938s
+=== RUN   TestCellIDRoundTrip
+=== RUN   TestCellIDRoundTrip/normal_id
+=== RUN   TestCellIDRoundTrip/empty_string
+--- PASS: TestCellIDRoundTrip (0.00s)
+    --- PASS: TestCellIDRoundTrip/normal_id (0.00s)
+    --- PASS: TestCellIDRoundTrip/empty_string (0.00s)
+=== RUN   TestSliceIDRoundTrip
+=== RUN   TestSliceIDRoundTrip/normal_id
+=== RUN   TestSliceIDRoundTrip/empty_string
+--- PASS: TestSliceIDRoundTrip (0.00s)
+    --- PASS: TestSliceIDRoundTrip/normal_id (0.00s)
+    --- PASS: TestSliceIDRoundTrip/empty_string (0.00s)
+=== RUN   TestCorrelationIDRoundTrip
+=== RUN   TestCorrelationIDRoundTrip/uuid
+=== RUN   TestCorrelationIDRoundTrip/empty_string
+--- PASS: TestCorrelationIDRoundTrip (0.00s)
+    --- PASS: TestCorrelationIDRoundTrip/uuid (0.00s)
+    --- PASS: TestCorrelationIDRoundTrip/empty_string (0.00s)
+=== RUN   TestJourneyIDRoundTrip
+=== RUN   TestJourneyIDRoundTrip/journey_id
+=== RUN   TestJourneyIDRoundTrip/empty_string
+--- PASS: TestJourneyIDRoundTrip (0.00s)
+    --- PASS: TestJourneyIDRoundTrip/journey_id (0.00s)
+    --- PASS: TestJourneyIDRoundTrip/empty_string (0.00s)
+=== RUN   TestTraceIDRoundTrip
+=== RUN   TestTraceIDRoundTrip/w3c_trace
+=== RUN   TestTraceIDRoundTrip/empty_string
+--- PASS: TestTraceIDRoundTrip (0.00s)
+    --- PASS: TestTraceIDRoundTrip/w3c_trace (0.00s)
+    --- PASS: TestTraceIDRoundTrip/empty_string (0.00s)
+=== RUN   TestSpanIDRoundTrip
+=== RUN   TestSpanIDRoundTrip/span_id
+=== RUN   TestSpanIDRoundTrip/empty_string
+--- PASS: TestSpanIDRoundTrip (0.00s)
+    --- PASS: TestSpanIDRoundTrip/span_id (0.00s)
+    --- PASS: TestSpanIDRoundTrip/empty_string (0.00s)
+=== RUN   TestFromMissingKey
+=== RUN   TestFromMissingKey/CellID_missing
+=== RUN   TestFromMissingKey/SliceID_missing
+=== RUN   TestFromMissingKey/CorrelationID_missing
+=== RUN   TestFromMissingKey/JourneyID_missing
+=== RUN   TestFromMissingKey/TraceID_missing
+=== RUN   TestFromMissingKey/SpanID_missing
+--- PASS: TestFromMissingKey (0.00s)
+    --- PASS: TestFromMissingKey/CellID_missing (0.00s)
+    --- PASS: TestFromMissingKey/SliceID_missing (0.00s)
+    --- PASS: TestFromMissingKey/CorrelationID_missing (0.00s)
+    --- PASS: TestFromMissingKey/JourneyID_missing (0.00s)
+    --- PASS: TestFromMissingKey/TraceID_missing (0.00s)
+    --- PASS: TestFromMissingKey/SpanID_missing (0.00s)
+=== RUN   TestMultipleKeysInSameContext
+--- PASS: TestMultipleKeysInSameContext (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/pkg/ctxkeys	4.603s
+=== RUN   TestNew
+=== RUN   TestNew/metadata_invalid
+=== RUN   TestNew/cell_not_found
+=== RUN   TestNew/dependency_cycle
+--- PASS: TestNew (0.00s)
+    --- PASS: TestNew/metadata_invalid (0.00s)
+    --- PASS: TestNew/cell_not_found (0.00s)
+    --- PASS: TestNew/dependency_cycle (0.00s)
+=== RUN   TestWrap
+=== RUN   TestWrap/wrap_stdlib_error
+=== RUN   TestWrap/wrap_errcode_error
+--- PASS: TestWrap (0.00s)
+    --- PASS: TestWrap/wrap_stdlib_error (0.00s)
+    --- PASS: TestWrap/wrap_errcode_error (0.00s)
+=== RUN   TestUnwrapNil
+--- PASS: TestUnwrapNil (0.00s)
+=== RUN   TestWithDetails
+=== RUN   TestWithDetails/add_details_to_error_without_existing_details
+=== RUN   TestWithDetails/merge_details_preserving_and_overwriting
+--- PASS: TestWithDetails (0.00s)
+    --- PASS: TestWithDetails/add_details_to_error_without_existing_details (0.00s)
+    --- PASS: TestWithDetails/merge_details_preserving_and_overwriting (0.00s)
+=== RUN   TestWithDetailsDDoesNotMutateOriginal
+--- PASS: TestWithDetailsDDoesNotMutateOriginal (0.00s)
+=== RUN   TestErrorFormat
+=== RUN   TestErrorFormat/without_cause
+=== RUN   TestErrorFormat/with_cause
+--- PASS: TestErrorFormat (0.00s)
+    --- PASS: TestErrorFormat/without_cause (0.00s)
+    --- PASS: TestErrorFormat/with_cause (0.00s)
+=== RUN   TestErrorsAsChain
+--- PASS: TestErrorsAsChain (0.00s)
+=== RUN   TestSentinelCodes
+--- PASS: TestSentinelCodes (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/pkg/errcode	4.596s
+=== RUN   TestMapCodeToStatus
+=== RUN   TestMapCodeToStatus/ERR_NOT_FOUND
+=== RUN   TestMapCodeToStatus/ERR_USER_NOT_FOUND
+=== RUN   TestMapCodeToStatus/ERR_VALIDATION_REQUIRED_FIELD
+=== RUN   TestMapCodeToStatus/ERR_AUTH_LOGIN_INVALID_INPUT
+=== RUN   TestMapCodeToStatus/ERR_AUTH_UNAUTHORIZED
+=== RUN   TestMapCodeToStatus/ERR_AUTH_INVALID_TOKEN
+=== RUN   TestMapCodeToStatus/ERR_AUTH_LOGIN_FAILED
+=== RUN   TestMapCodeToStatus/ERR_AUTH_REFRESH_FAILED
+=== RUN   TestMapCodeToStatus/ERR_AUTH_FORBIDDEN
+=== RUN   TestMapCodeToStatus/ERR_USER_LOCKED
+=== RUN   TestMapCodeToStatus/ERR_DUPLICATE_USER
+=== RUN   TestMapCodeToStatus/ERR_CONFLICT
+=== RUN   TestMapCodeToStatus/ERR_RATE_LIMITED
+=== RUN   TestMapCodeToStatus/ERR_TOO_LARGE
+=== RUN   TestMapCodeToStatus/ERR_INTERNAL
+=== RUN   TestMapCodeToStatus/ERR_UNKNOWN_CODE
+--- PASS: TestMapCodeToStatus (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_NOT_FOUND (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_USER_NOT_FOUND (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_VALIDATION_REQUIRED_FIELD (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_LOGIN_INVALID_INPUT (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_UNAUTHORIZED (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_INVALID_TOKEN (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_LOGIN_FAILED (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_REFRESH_FAILED (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_AUTH_FORBIDDEN (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_USER_LOCKED (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_DUPLICATE_USER (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_CONFLICT (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_RATE_LIMITED (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_TOO_LARGE (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_INTERNAL (0.00s)
+    --- PASS: TestMapCodeToStatus/ERR_UNKNOWN_CODE (0.00s)
+=== RUN   TestWriteError
+--- PASS: TestWriteError (0.00s)
+=== RUN   TestWriteJSON
+--- PASS: TestWriteJSON (0.00s)
+=== RUN   TestWriteDomainError_ErrcodeError
+=== RUN   TestWriteDomainError_ErrcodeError/not_found
+=== RUN   TestWriteDomainError_ErrcodeError/validation
+=== RUN   TestWriteDomainError_ErrcodeError/unauthorized
+=== RUN   TestWriteDomainError_ErrcodeError/forbidden
+--- PASS: TestWriteDomainError_ErrcodeError (0.00s)
+    --- PASS: TestWriteDomainError_ErrcodeError/not_found (0.00s)
+    --- PASS: TestWriteDomainError_ErrcodeError/validation (0.00s)
+    --- PASS: TestWriteDomainError_ErrcodeError/unauthorized (0.00s)
+    --- PASS: TestWriteDomainError_ErrcodeError/forbidden (0.00s)
+=== RUN   TestWriteDomainError_PlainError
+2026/04/05 23:53:37 ERROR unhandled error error="something went wrong"
+--- PASS: TestWriteDomainError_PlainError (0.00s)
+=== RUN   TestStatusRecorder
+--- PASS: TestStatusRecorder (0.00s)
+=== RUN   TestWriteDomainError_WithDetails
+--- PASS: TestWriteDomainError_WithDetails (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/pkg/httputil	4.610s
+=== RUN   TestNew
+=== RUN   TestNew/format
+=== RUN   TestNew/uniqueness
+=== RUN   TestNew/different_prefixes
+--- PASS: TestNew (0.00s)
+    --- PASS: TestNew/format (0.00s)
+    --- PASS: TestNew/uniqueness (0.00s)
+    --- PASS: TestNew/different_prefixes (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/pkg/id	4.606s
+=== RUN   TestNew
+=== RUN   TestNew/format_is_valid_UUID_v4
+=== RUN   TestNew/uniqueness_across_1000_sequential_calls
+=== RUN   TestNew/100_concurrent_calls_produce_100_unique_IDs
+--- PASS: TestNew (0.00s)
+    --- PASS: TestNew/format_is_valid_UUID_v4 (0.00s)
+    --- PASS: TestNew/uniqueness_across_1000_sequential_calls (0.00s)
+    --- PASS: TestNew/100_concurrent_calls_produce_100_unique_IDs (0.00s)
+=== RUN   TestNewWithPrefix
+=== RUN   TestNewWithPrefix/prepends_prefix
+=== RUN   TestNewWithPrefix/different_prefixes
+--- PASS: TestNewWithPrefix (0.00s)
+    --- PASS: TestNewWithPrefix/prepends_prefix (0.00s)
+    --- PASS: TestNewWithPrefix/different_prefixes (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/pkg/uid	4.535s
+=== RUN   TestClaims_ContextRoundTrip
+--- PASS: TestClaims_ContextRoundTrip (0.00s)
+=== RUN   TestClaims_MissingFromContext
+--- PASS: TestClaims_MissingFromContext (0.00s)
+=== RUN   TestJWTVerifier_RS256_ValidToken
+--- PASS: TestJWTVerifier_RS256_ValidToken (0.04s)
+=== RUN   TestJWTVerifier_RS256_ExpiredToken
+--- PASS: TestJWTVerifier_RS256_ExpiredToken (0.03s)
+=== RUN   TestJWTVerifier_RejectsHS256
+--- PASS: TestJWTVerifier_RejectsHS256 (0.01s)
+=== RUN   TestJWTVerifier_RejectsAlgNone
+--- PASS: TestJWTVerifier_RejectsAlgNone (0.03s)
+=== RUN   TestJWTVerifier_WrongKey
+--- PASS: TestJWTVerifier_WrongKey (0.13s)
+=== RUN   TestJWTVerifier_MalformedToken
+--- PASS: TestJWTVerifier_MalformedToken (0.03s)
+=== RUN   TestJWTIssuer_RoundTrip
+--- PASS: TestJWTIssuer_RoundTrip (0.01s)
+=== RUN   TestJWTIssuer_NoRolesNoAudience
+--- PASS: TestJWTIssuer_NoRolesNoAudience (0.07s)
+=== RUN   TestLoadKeysFromEnv_PKCS8
+--- PASS: TestLoadKeysFromEnv_PKCS8 (0.02s)
+=== RUN   TestLoadKeysFromEnv_BothMissing
+--- PASS: TestLoadKeysFromEnv_BothMissing (0.00s)
+=== RUN   TestLoadKeysFromEnv_PublicMissing
+--- PASS: TestLoadKeysFromEnv_PublicMissing (0.08s)
+=== RUN   TestLoadKeysFromEnv_InvalidPEM
+--- PASS: TestLoadKeysFromEnv_InvalidPEM (0.00s)
+=== RUN   TestLoadKeysFromEnv_ValidKeys
+--- PASS: TestLoadKeysFromEnv_ValidKeys (0.04s)
+=== RUN   TestAuthMiddleware_ValidToken
+--- PASS: TestAuthMiddleware_ValidToken (0.00s)
+=== RUN   TestAuthMiddleware_MissingToken
+--- PASS: TestAuthMiddleware_MissingToken (0.00s)
+=== RUN   TestAuthMiddleware_InvalidToken
+2026/04/05 23:53:38 WARN token verification failed error=expired path=/api/v1/data
+--- PASS: TestAuthMiddleware_InvalidToken (0.00s)
+=== RUN   TestAuthMiddleware_NonBearerScheme
+--- PASS: TestAuthMiddleware_NonBearerScheme (0.00s)
+=== RUN   TestAuthMiddleware_PublicEndpointDefaultWhitelist
+=== RUN   TestAuthMiddleware_PublicEndpointDefaultWhitelist//healthz
+=== RUN   TestAuthMiddleware_PublicEndpointDefaultWhitelist//readyz
+=== RUN   TestAuthMiddleware_PublicEndpointDefaultWhitelist//api/v1/auth/login
+=== RUN   TestAuthMiddleware_PublicEndpointDefaultWhitelist//api/v1/auth/callback
+--- PASS: TestAuthMiddleware_PublicEndpointDefaultWhitelist (0.00s)
+    --- PASS: TestAuthMiddleware_PublicEndpointDefaultWhitelist//healthz (0.00s)
+    --- PASS: TestAuthMiddleware_PublicEndpointDefaultWhitelist//readyz (0.00s)
+    --- PASS: TestAuthMiddleware_PublicEndpointDefaultWhitelist//api/v1/auth/login (0.00s)
+    --- PASS: TestAuthMiddleware_PublicEndpointDefaultWhitelist//api/v1/auth/callback (0.00s)
+=== RUN   TestAuthMiddleware_PublicEndpointCustomWhitelist
+--- PASS: TestAuthMiddleware_PublicEndpointCustomWhitelist (0.00s)
+=== RUN   TestAuthMiddleware_ProtectedEndpointNoToken
+--- PASS: TestAuthMiddleware_ProtectedEndpointNoToken (0.00s)
+=== RUN   TestRequireRole_HasRole
+--- PASS: TestRequireRole_HasRole (0.00s)
+=== RUN   TestRequireRole_MissingRole
+--- PASS: TestRequireRole_MissingRole (0.00s)
+=== RUN   TestRequireRole_NoClaims
+--- PASS: TestRequireRole_NoClaims (0.00s)
+=== RUN   TestRequireRole_AuthorizerFallback
+--- PASS: TestRequireRole_AuthorizerFallback (0.00s)
+=== RUN   TestRequireRole_AuthorizerError
+2026/04/05 23:53:38 ERROR authorization check failed error="policy engine down" subject=u1
+--- PASS: TestRequireRole_AuthorizerError (0.00s)
+=== RUN   TestServiceTokenMiddleware_ValidToken
+--- PASS: TestServiceTokenMiddleware_ValidToken (0.00s)
+=== RUN   TestServiceTokenMiddleware_InvalidToken
+--- PASS: TestServiceTokenMiddleware_InvalidToken (0.00s)
+=== RUN   TestServiceTokenMiddleware_MissingToken
+--- PASS: TestServiceTokenMiddleware_MissingToken (0.00s)
+=== RUN   TestServiceTokenMiddleware_WrongScheme
+--- PASS: TestServiceTokenMiddleware_WrongScheme (0.00s)
+=== RUN   TestServiceTokenMiddleware_DifferentPath
+--- PASS: TestServiceTokenMiddleware_DifferentPath (0.00s)
+=== RUN   TestServiceTokenMiddleware_EmptySecret
+--- PASS: TestServiceTokenMiddleware_EmptySecret (0.00s)
+=== RUN   TestServiceTokenMiddleware_ExpiredTimestamp
+--- PASS: TestServiceTokenMiddleware_ExpiredTimestamp (0.00s)
+=== RUN   TestServiceTokenMiddleware_ExactBoundary_Rejected
+--- PASS: TestServiceTokenMiddleware_ExactBoundary_Rejected (0.00s)
+=== RUN   TestServiceTokenMiddleware_JustWithinWindow
+--- PASS: TestServiceTokenMiddleware_JustWithinWindow (0.00s)
+=== RUN   TestServiceTokenMiddleware_FutureTimestamp_Rejected
+--- PASS: TestServiceTokenMiddleware_FutureTimestamp_Rejected (0.00s)
+=== RUN   TestServiceTokenMiddleware_InvalidFormat_NoColon
+--- PASS: TestServiceTokenMiddleware_InvalidFormat_NoColon (0.00s)
+=== RUN   TestGenerateServiceToken_Deterministic
+--- PASS: TestGenerateServiceToken_Deterministic (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/auth	4.982s
+=== RUN   TestNew_Defaults
+--- PASS: TestNew_Defaults (0.00s)
+=== RUN   TestNew_WithOptions
+--- PASS: TestNew_WithOptions (0.00s)
+=== RUN   TestNew_WithConfig
+--- PASS: TestNew_WithConfig (0.00s)
+=== RUN   TestBootstrap_RunWithInvalidConfig
+--- PASS: TestBootstrap_RunWithInvalidConfig (0.00s)
+=== RUN   TestBootstrap_AssemblyStartWithConfig
+--- PASS: TestBootstrap_AssemblyStartWithConfig (0.00s)
+=== RUN   TestBootstrap_CellIDs
+--- PASS: TestBootstrap_CellIDs (0.00s)
+=== RUN   TestBootstrap_CellLookup
+--- PASS: TestBootstrap_CellLookup (0.00s)
+=== RUN   TestNew_WithPublisherAndSubscriber
+--- PASS: TestNew_WithPublisherAndSubscriber (0.00s)
+=== RUN   TestNew_WithPublisherOnly
+--- PASS: TestNew_WithPublisherOnly (0.00s)
+=== RUN   TestNew_WithSubscriberOnly
+--- PASS: TestNew_WithSubscriberOnly (0.00s)
+=== RUN   TestBootstrap_RunContextCancel
+2026/04/05 23:53:38 INFO bootstrap: application started successfully
+2026/04/05 23:53:38 INFO bootstrap: context cancelled, shutting down
+2026/04/05 23:53:38 INFO bootstrap: initiating graceful shutdown
+2026/04/05 23:53:38 INFO bootstrap: draining HTTP server
+2026/04/05 23:53:38 INFO bootstrap: HTTP server starting addr=127.0.0.1:51611
+--- PASS: TestBootstrap_RunContextCancel (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/bootstrap	4.401s
+=== RUN   TestLoad_YAMLOnly
+--- PASS: TestLoad_YAMLOnly (0.00s)
+=== RUN   TestLoad_EnvOverridesYAML
+--- PASS: TestLoad_EnvOverridesYAML (0.00s)
+=== RUN   TestLoad_NoYAML
+--- PASS: TestLoad_NoYAML (0.00s)
+=== RUN   TestNewFromMap
+--- PASS: TestNewFromMap (0.00s)
+=== RUN   TestConfig_Keys
+--- PASS: TestConfig_Keys (0.00s)
+=== RUN   TestConfig_Scan
+--- PASS: TestConfig_Scan (0.00s)
+=== RUN   TestLoad_InvalidYAML
+--- PASS: TestLoad_InvalidYAML (0.00s)
+=== RUN   TestLoad_MissingFile
+--- PASS: TestLoad_MissingFile (0.00s)
+=== RUN   TestConfig_Reload
+--- PASS: TestConfig_Reload (0.00s)
+=== RUN   TestConfig_Reload_InvalidFile
+--- PASS: TestConfig_Reload_InvalidFile (0.00s)
+=== RUN   TestConfig_Reload_WithEnvOverride
+--- PASS: TestConfig_Reload_WithEnvOverride (0.00s)
+=== RUN   TestConfig_SetNested_OverwriteNonMap
+--- PASS: TestConfig_SetNested_OverwriteNonMap (0.00s)
+=== RUN   TestWatcher_OnChange
+--- PASS: TestWatcher_OnChange (0.05s)
+=== RUN   TestWatcher_Close
+--- PASS: TestWatcher_Close (0.00s)
+=== RUN   TestNewWatcher_InvalidPath
+--- PASS: TestNewWatcher_InvalidPath (0.00s)
+=== RUN   TestWatcher_StartWithContext
+--- PASS: TestWatcher_StartWithContext (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/config	4.551s
+=== RUN   TestPublishSubscribe
+--- PASS: TestPublishSubscribe (0.03s)
+=== RUN   TestPublish_NoSubscribers
+--- PASS: TestPublish_NoSubscribers (0.00s)
+=== RUN   TestSubscribe_RetryAndDeadLetter
+2026/04/05 23:53:39 WARN eventbus: handler error, retrying topic=retry.topic attempt=1 error="transient error" retry_delay=100ms
+2026/04/05 23:53:39 WARN eventbus: handler error, retrying topic=retry.topic attempt=2 error="transient error" retry_delay=200ms
+2026/04/05 23:53:39 WARN eventbus: handler error, retrying topic=retry.topic attempt=3 error="transient error" retry_delay=400ms
+2026/04/05 23:53:40 ERROR eventbus: retries exhausted, routing to dead letter topic=retry.topic entry_id=evt-61d5b9d3-b61c-499c-ad49-9e71bdaee4ef error="transient error"
+--- PASS: TestSubscribe_RetryAndDeadLetter (0.77s)
+=== RUN   TestClose_PreventsFurtherPublish
+--- PASS: TestClose_PreventsFurtherPublish (0.00s)
+=== RUN   TestClose_Idempotent
+--- PASS: TestClose_Idempotent (0.00s)
+=== RUN   TestSubscribe_ClosedBus
+--- PASS: TestSubscribe_ClosedBus (0.00s)
+=== RUN   TestMultipleSubscribers
+--- PASS: TestMultipleSubscribers (0.03s)
+=== RUN   TestSubscribe_SuccessAfterRetry
+2026/04/05 23:53:40 WARN eventbus: handler error, retrying topic=partial.fail attempt=1 error="not yet" retry_delay=100ms
+2026/04/05 23:53:40 WARN eventbus: handler error, retrying topic=partial.fail attempt=2 error="not yet" retry_delay=200ms
+--- PASS: TestSubscribe_SuccessAfterRetry (0.47s)
+=== RUN   TestHealth
+--- PASS: TestHealth (0.00s)
+=== RUN   TestTopicConfigChangedConstant
+--- PASS: TestTopicConfigChangedConstant (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/eventbus	5.814s
+=== RUN   TestLivezHandler
+=== RUN   TestLivezHandler/all_healthy
+=== RUN   TestLivezHandler/unhealthy_when_not_started
+--- PASS: TestLivezHandler (0.00s)
+    --- PASS: TestLivezHandler/all_healthy (0.00s)
+    --- PASS: TestLivezHandler/unhealthy_when_not_started (0.00s)
+=== RUN   TestReadyzHandler
+=== RUN   TestReadyzHandler/healthy_with_passing_checker
+=== RUN   TestReadyzHandler/unhealthy_when_checker_fails
+=== RUN   TestReadyzHandler/unhealthy_when_cell_not_started
+--- PASS: TestReadyzHandler (0.00s)
+    --- PASS: TestReadyzHandler/healthy_with_passing_checker (0.00s)
+    --- PASS: TestReadyzHandler/unhealthy_when_checker_fails (0.00s)
+    --- PASS: TestReadyzHandler/unhealthy_when_cell_not_started (0.00s)
+=== RUN   TestEmptyAssembly
+--- PASS: TestEmptyAssembly (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/http/health	4.469s
+=== RUN   TestAccessLog_LogsFields
+--- PASS: TestAccessLog_LogsFields (0.00s)
+=== RUN   TestAccessLog_DefaultStatus200
+--- PASS: TestAccessLog_DefaultStatus200 (0.00s)
+=== RUN   TestBodyLimit_UnderLimit
+--- PASS: TestBodyLimit_UnderLimit (0.00s)
+=== RUN   TestBodyLimit_ExactContentLengthOverLimit
+--- PASS: TestBodyLimit_ExactContentLengthOverLimit (0.00s)
+=== RUN   TestBodyLimit_MaxBytesReaderTriggered
+--- PASS: TestBodyLimit_MaxBytesReaderTriggered (0.00s)
+=== RUN   TestBodyLimit_DefaultLimit
+--- PASS: TestBodyLimit_DefaultLimit (0.00s)
+=== RUN   TestRateLimit_Allowed
+--- PASS: TestRateLimit_Allowed (0.00s)
+=== RUN   TestRateLimit_Rejected_DefaultRetryAfter
+--- PASS: TestRateLimit_Rejected_DefaultRetryAfter (0.00s)
+=== RUN   TestRateLimit_Rejected_DynamicRetryAfter
+--- PASS: TestRateLimit_Rejected_DynamicRetryAfter (0.00s)
+=== RUN   TestRateLimit_Rejected_DynamicRetryAfter_CeilRounding
+--- PASS: TestRateLimit_Rejected_DynamicRetryAfter_CeilRounding (0.00s)
+=== RUN   TestRateLimit_FallbackRemoteAddr
+--- PASS: TestRateLimit_FallbackRemoteAddr (0.00s)
+=== RUN   TestComputeRetryAfter_NonWindowedLimiter
+--- PASS: TestComputeRetryAfter_NonWindowedLimiter (0.00s)
+=== RUN   TestComputeRetryAfter_WindowedLimiter
+=== RUN   TestComputeRetryAfter_WindowedLimiter/60s/10
+=== RUN   TestComputeRetryAfter_WindowedLimiter/10s/3_(ceil)
+=== RUN   TestComputeRetryAfter_WindowedLimiter/1s/1
+=== RUN   TestComputeRetryAfter_WindowedLimiter/30s/100
+=== RUN   TestComputeRetryAfter_WindowedLimiter/zero_limit_fallback
+=== RUN   TestComputeRetryAfter_WindowedLimiter/zero_window_fallback
+--- PASS: TestComputeRetryAfter_WindowedLimiter (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/60s/10 (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/10s/3_(ceil) (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/1s/1 (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/30s/100 (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/zero_limit_fallback (0.00s)
+    --- PASS: TestComputeRetryAfter_WindowedLimiter/zero_window_fallback (0.00s)
+=== RUN   TestRealIP
+=== RUN   TestRealIP/trusted_proxy:_XFF_single
+=== RUN   TestRealIP/trusted_proxy:_XFF_chain_(first_entry)
+=== RUN   TestRealIP/trusted_proxy:_X-Real-Ip_when_no_XFF
+=== RUN   TestRealIP/trusted_proxy:_XFF_takes_precedence_over_X-Real-Ip
+=== RUN   TestRealIP/trusted_proxy:_fallback_to_RemoteAddr_when_no_headers
+=== RUN   TestRealIP/untrusted_proxy:_XFF_ignored,_use_RemoteAddr
+=== RUN   TestRealIP/untrusted_proxy:_X-Real-Ip_ignored,_use_RemoteAddr
+=== RUN   TestRealIP/untrusted_peer_despite_trusted_list:_XFF_ignored
+=== RUN   TestRealIP/no_trusted_proxies:_fallback_to_RemoteAddr_host
+=== RUN   TestRealIP/no_trusted_proxies:_RemoteAddr_without_port
+=== RUN   TestRealIP/nil_trusted_proxies_(empty_list):_XFF_ignored
+--- PASS: TestRealIP (0.00s)
+    --- PASS: TestRealIP/trusted_proxy:_XFF_single (0.00s)
+    --- PASS: TestRealIP/trusted_proxy:_XFF_chain_(first_entry) (0.00s)
+    --- PASS: TestRealIP/trusted_proxy:_X-Real-Ip_when_no_XFF (0.00s)
+    --- PASS: TestRealIP/trusted_proxy:_XFF_takes_precedence_over_X-Real-Ip (0.00s)
+    --- PASS: TestRealIP/trusted_proxy:_fallback_to_RemoteAddr_when_no_headers (0.00s)
+    --- PASS: TestRealIP/untrusted_proxy:_XFF_ignored,_use_RemoteAddr (0.00s)
+    --- PASS: TestRealIP/untrusted_proxy:_X-Real-Ip_ignored,_use_RemoteAddr (0.00s)
+    --- PASS: TestRealIP/untrusted_peer_despite_trusted_list:_XFF_ignored (0.00s)
+    --- PASS: TestRealIP/no_trusted_proxies:_fallback_to_RemoteAddr_host (0.00s)
+    --- PASS: TestRealIP/no_trusted_proxies:_RemoteAddr_without_port (0.00s)
+    --- PASS: TestRealIP/nil_trusted_proxies_(empty_list):_XFF_ignored (0.00s)
+=== RUN   TestRecovery_NoPanic
+--- PASS: TestRecovery_NoPanic (0.00s)
+=== RUN   TestRecovery_PanicString
+--- PASS: TestRecovery_PanicString (0.00s)
+=== RUN   TestRecovery_PanicError
+--- PASS: TestRecovery_PanicError (0.00s)
+=== RUN   TestRequestID_ExistingHeader
+--- PASS: TestRequestID_ExistingHeader (0.00s)
+=== RUN   TestRequestID_GeneratesUUID
+--- PASS: TestRequestID_GeneratesUUID (0.00s)
+=== RUN   TestRequestID_RejectsTooLong
+--- PASS: TestRequestID_RejectsTooLong (0.00s)
+=== RUN   TestRequestID_RejectsControlChars
+--- PASS: TestRequestID_RejectsControlChars (0.00s)
+=== RUN   TestRequestID_UniquenessAcrossRequests
+--- PASS: TestRequestID_UniquenessAcrossRequests (0.00s)
+=== RUN   TestSecurityHeaders
+=== RUN   TestSecurityHeaders/X-Content-Type-Options
+=== RUN   TestSecurityHeaders/X-Frame-Options
+=== RUN   TestSecurityHeaders/Strict-Transport-Security
+--- PASS: TestSecurityHeaders (0.00s)
+    --- PASS: TestSecurityHeaders/X-Content-Type-Options (0.00s)
+    --- PASS: TestSecurityHeaders/X-Frame-Options (0.00s)
+    --- PASS: TestSecurityHeaders/Strict-Transport-Security (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/http/middleware	4.380s
+=== RUN   TestRouterImplementsRouteMux
+--- PASS: TestRouterImplementsRouteMux (0.00s)
+=== RUN   TestHealthEndpoints
+2026/04/05 23:53:40 INFO http request method=GET path=/healthz status=200 duration_ms=0 request_id=9fc6450b-7588-4a62-8ae5-7bbbeb61f8e4
+2026/04/05 23:53:40 INFO http request method=GET path=/readyz status=200 duration_ms=0 request_id=d408c3ce-b896-49ec-8425-b149b4b59b78
+--- PASS: TestHealthEndpoints (0.00s)
+=== RUN   TestMetricsEndpoint
+2026/04/05 23:53:40 INFO http request method=GET path=/metrics status=200 duration_ms=0 request_id=bc88631d-eec1-41ba-9701-df7478fdd8f8
+--- PASS: TestMetricsEndpoint (0.00s)
+=== RUN   TestHandleAndServe
+2026/04/05 23:53:40 INFO http request method=GET path=/test status=200 duration_ms=0 request_id=1784bcd4-1a2a-4ffb-b0b5-65e8a0d874f1
+--- PASS: TestHandleAndServe (0.00s)
+=== RUN   TestRouteGroup
+2026/04/05 23:53:40 INFO http request method=GET path=/api/v1/ping status=200 duration_ms=0 request_id=fa744bae-cc7d-422b-8510-3038ecff5047
+--- PASS: TestRouteGroup (0.00s)
+=== RUN   TestGroup
+2026/04/05 23:53:40 INFO http request method=GET path=/grouped status=200 duration_ms=0 request_id=3de8dde8-a2c4-4732-a7b0-c1ddb7bad1cb
+--- PASS: TestGroup (0.00s)
+=== RUN   TestMount
+2026/04/05 23:53:40 INFO http request method=GET path=/sub/hello status=200 duration_ms=0 request_id=0faaf2f3-1b00-43a5-ab60-eb55aa224b09
+--- PASS: TestMount (0.00s)
+=== RUN   TestDefaultMiddlewareApplied
+2026/04/05 23:53:40 INFO http request method=GET path=/mid-test status=200 duration_ms=0 request_id=39e80b47-c4c1-4a2c-93bd-046342d5c8b5
+--- PASS: TestDefaultMiddlewareApplied (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/http/router	4.376s
+=== RUN   TestContextHandler_JSON_WithAllContextValues
+--- PASS: TestContextHandler_JSON_WithAllContextValues (0.00s)
+=== RUN   TestContextHandler_NoContextValues
+--- PASS: TestContextHandler_NoContextValues (0.00s)
+=== RUN   TestContextHandler_TextFormat
+--- PASS: TestContextHandler_TextFormat (0.00s)
+=== RUN   TestContextHandler_LevelFiltering
+--- PASS: TestContextHandler_LevelFiltering (0.00s)
+=== RUN   TestContextHandler_WithAttrs
+--- PASS: TestContextHandler_WithAttrs (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/observability/logging	4.308s
+=== RUN   TestMiddleware_RecordsMetrics
+--- PASS: TestMiddleware_RecordsMetrics (0.00s)
+=== RUN   TestMiddleware_DefaultStatus200
+--- PASS: TestMiddleware_DefaultStatus200 (0.00s)
+=== RUN   TestMiddleware_MultipleRequests
+--- PASS: TestMiddleware_MultipleRequests (0.00s)
+=== RUN   TestInMemoryCollector_Handler
+--- PASS: TestInMemoryCollector_Handler (0.00s)
+=== RUN   TestInMemoryCollector_Snapshot
+--- PASS: TestInMemoryCollector_Snapshot (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/observability/metrics	4.245s
+=== RUN   TestNewTracer_Start
+--- PASS: TestNewTracer_Start (0.00s)
+=== RUN   TestNewTracer_InheritsParentTraceID
+--- PASS: TestNewTracer_InheritsParentTraceID (0.00s)
+=== RUN   TestSpan_SetAttribute
+--- PASS: TestSpan_SetAttribute (0.00s)
+=== RUN   TestMiddleware_CreatesSpan
+--- PASS: TestMiddleware_CreatesSpan (0.00s)
+=== RUN   TestMiddleware_CapturesStatus
+--- PASS: TestMiddleware_CapturesStatus (0.00s)
+=== RUN   TestMiddleware_UniqueSpanIDs
+--- PASS: TestMiddleware_UniqueSpanIDs (0.00s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/observability/tracing	4.190s
+=== RUN   TestManager_Shutdown_RunsHooksLIFO
+--- PASS: TestManager_Shutdown_RunsHooksLIFO (0.00s)
+=== RUN   TestManager_Shutdown_HookErrorContinues
+2026/04/05 23:53:42 ERROR shutdown hook failed hook_index=1 error="hook failed"
+--- PASS: TestManager_Shutdown_HookErrorContinues (0.00s)
+=== RUN   TestManager_Shutdown_Timeout
+2026/04/05 23:53:42 ERROR shutdown hook failed hook_index=0 error="context deadline exceeded"
+--- PASS: TestManager_Shutdown_Timeout (0.05s)
+=== RUN   TestManager_Shutdown_AllHooksRunOnError
+2026/04/05 23:53:42 ERROR shutdown hook failed hook_index=1 error="hook 2 failed"
+--- PASS: TestManager_Shutdown_AllHooksRunOnError (0.00s)
+=== RUN   TestManager_DefaultTimeout
+--- PASS: TestManager_DefaultTimeout (0.00s)
+=== RUN   TestManager_NoHooks
+--- PASS: TestManager_NoHooks (0.00s)
+=== RUN   TestManager_Wait_Signal
+2026/04/05 23:53:42 INFO shutdown signal received signal=interrupt
+--- PASS: TestManager_Wait_Signal (0.05s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/shutdown	4.369s
+=== RUN   TestWorkerGroup_StartStop
+2026/04/05 23:53:42 ERROR worker exited with error error="context canceled"
+2026/04/05 23:53:42 ERROR worker exited with error error="context canceled"
+--- PASS: TestWorkerGroup_StartStop (0.01s)
+=== RUN   TestWorkerGroup_StartError
+2026/04/05 23:53:42 ERROR worker exited with error error="start failed"
+--- PASS: TestWorkerGroup_StartError (0.00s)
+=== RUN   TestWorkerGroup_Stop
+--- PASS: TestWorkerGroup_Stop (0.00s)
+=== RUN   TestWorkerGroup_StopSerialReverseOrder
+--- PASS: TestWorkerGroup_StopSerialReverseOrder (0.00s)
+=== RUN   TestPeriodicWorker_ExecutesFunction
+--- PASS: TestPeriodicWorker_ExecutesFunction (0.03s)
+=== RUN   TestPeriodicWorker_PanicIsolation
+2026/04/05 23:53:42 ERROR periodic worker panic panic="test panic"
+--- PASS: TestPeriodicWorker_PanicIsolation (0.03s)
+=== RUN   TestPeriodicWorker_Stop
+--- PASS: TestPeriodicWorker_Stop (0.02s)
+PASS
+ok  	github.com/ghbvf/gocell/runtime/worker	3.994s

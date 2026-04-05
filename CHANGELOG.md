@@ -4,6 +4,49 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - Phase 3: Adapters
+
+> Branch: `feat/002-phase3-adapters`
+> 变更规模: 191 files changed, 16398 insertions(+), 284 deletions(-)
+> git log base: `develop..HEAD`（`8dbc260` → `cbab9f3`）
+
+### feat
+
+- **adapters/postgres**: Pool (pgx/v5)、TxManager、Migrator、OutboxWriter、OutboxRelay (`b7bebb8`)
+- **adapters/redis**: Client (go-redis/v9)、DistLock、IdempotencyChecker、Cache (`dd6fc82`)
+- **adapters/rabbitmq**: Connection、Publisher、Subscriber、ConsumerBase (DLQ + retry + backoff) (`84d1531`)
+- **adapters/oidc + s3 + websocket**: OIDC Provider Client + S3/MinIO Client + WebSocket Hub (`43b5bca`)
+- **adapters/postgres (Cell repos)**: AuditRepository PG 实现、ConfigRepository PG 实现、outbox chain (`43b5bca`)
+- **runtime/security**: RS256 JWTIssuer + JWTVerifier、trustedProxies RealIP、ServiceToken timestamp 防重放、认证中间件 (`1551c12`)
+- **cells/access-core**: RS256 JWTIssuer/Verifier Option 注入、refresh token rotation + reuse detection、WithJWTIssuer/WithJWTVerifier (`44b1253`)
+- **cells/audit-core + config-core**: outbox.Writer 重构（7 处 publisher.Publish 替换）、ArchiveStore Cell 内部封装 (`44b1253`)
+- **pkg/uid**: crypto/rand UUID 生成器，替换 7 处 UnixNano ID (`3fe050a`)
+- **runtime/bootstrap**: 接口化重构——WithPublisher + WithSubscriber 替代具体类型注入；WithEventBus 保留向后兼容 (`e1bf267`)
+- **devops**: Docker Compose（PostgreSQL + Redis + RabbitMQ + MinIO）+ .env.example + Makefile + healthcheck (`9aabc62`)
+
+### fix
+
+- **kernel/lifecycle**: LIFO 关闭顺序 + BaseCell 互斥锁保护 + goroutine context 取消 (`6bda474`)
+- **kernel/governance**: FMT-10 空 id 检查 + governance 规则修复 (`6bda474`)
+- **kernel/errcode**: kernel 层 + eventbus 层统一接入 pkg/errcode，消除裸 errors.New (`6bda474`)
+- **cells**: 7 处 publisher.Publish 替换为 outbox.Writer.Write（L2 一致性绑定）(`44b1253`)
+- **runtime/auth**: RS256 集成、outbox transaction 绑定、env prefix 统一（GOCELL_*）、relay tx (`b8d7662`)
+- **runtime/config**: config watcher 集成到 bootstrap 生命周期 (`b8d7662`)
+- **cells/audit-core**: 审计查询 time.Parse 错误返回 400（替换静默忽略）(`44b1253`)
+- **cells/access-core**: PATCH user 扩展可更新字段（不再仅 email）(`44b1253`)
+- **go vet**: copylocks warning 修复；tasks/PRs 标记完成 (`67b060b`)
+- **evidence**: validate result.txt pattern 匹配修复 (`3c6e4de`)
+
+### chore
+
+- Phase 3 specs 初始化（S0-S4 完整）(`8dbc260`)
+- Wave 4：集成测试 stub、docs、KG verification (`c7a67c8`)
+- S5/S6/S7 gate PASS 审计日志更新 (`af24e05`, `538b304`, `cbab9f3`)
+- S6 review-findings + tech-debt + gate audit (`6414392`)
+- S7 QA report + user-signoff + evidence (`31dd60c`)
+
+---
+
 ## [Unreleased] - Phase 2: Runtime + Built-in Cells
 
 ### Added

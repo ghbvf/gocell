@@ -48,6 +48,11 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *AuditCore) { c.logger = l }
 }
 
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(c *AuditCore) { c.outboxWriter = w }
+}
+
 // WithHMACKey sets the HMAC key for hash chain operations.
 func WithHMACKey(key []byte) Option {
 	return func(c *AuditCore) { c.hmacKey = key }
@@ -68,6 +73,7 @@ type AuditCore struct {
 	auditRepo    ports.AuditRepository
 	archiveStore ports.ArchiveStore
 	publisher    outbox.Publisher
+	outboxWriter outbox.Writer
 	logger       *slog.Logger
 	hmacKey      []byte
 
@@ -117,11 +123,19 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// audit-append
-	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger)
+	var appendOpts []auditappend.Option
+	if c.outboxWriter != nil {
+		appendOpts = append(appendOpts, auditappend.WithOutboxWriter(c.outboxWriter))
+	}
+	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, appendOpts...)
 	c.AddSlice(cell.NewBaseSlice("audit-append", "audit-core", cell.L3))
 
 	// audit-verify
-	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger)
+	var verifyOpts []auditverify.Option
+	if c.outboxWriter != nil {
+		verifyOpts = append(verifyOpts, auditverify.WithOutboxWriter(c.outboxWriter))
+	}
+	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, verifyOpts...)
 	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L0))
 
 	// audit-archive (stub)
