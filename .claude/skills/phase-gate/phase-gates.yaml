@@ -100,6 +100,8 @@ stages:
           check: no_unchecked_tasks
         - file: pr-plan.md
           pattern: "merged"
+        - file: tasks.md
+          pattern: "(contract|OpenAPI|contracts/)"
       command_checks:
         - args: ["go", "build", "./..."]
           cwd: src
@@ -115,6 +117,12 @@ stages:
     entry:
       required_files:
         - tasks.md
+        - pr-plan.md
+      content_checks:
+        - file: tasks.md
+          check: no_unchecked_tasks
+        - file: pr-plan.md
+          pattern: "merged"
     exit:
       required_files:
         - review-findings.md
@@ -146,6 +154,8 @@ stages:
           pattern: "(PASS|ok)"
         - file: evidence/validate/result.txt
           pattern: "(0 errors|PASS|valid)"
+        - file: qa-report.md
+          pattern: "(AC-\\d+|AC \\d+|验收标准)"
       command_checks:
         - args: ["go", "test", "./...", "-count=1"]
           cwd: src
@@ -160,6 +170,8 @@ stages:
         - evidence/go-test/result.txt
         - evidence/validate/result.txt
         - evidence/journey/result.txt
+        - decisions.md
+        - review-findings.md
       content_checks:
         - file: user-signoff.md
           pattern: "(APPROVE|CONDITIONAL)"

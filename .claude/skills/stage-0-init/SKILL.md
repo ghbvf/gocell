@@ -64,7 +64,21 @@ Governance（治理层）:
 
 **红色警告**: 连续 2 Phase 跳过同一角色 → 必须在 phase-charter.md 中写明处理方案。
 
-### 步骤 4: 连续性检查
+### 步骤 3.1: 根据 role-roster.md 生成 N/A 声明
+
+对每个标记为 OFF 的角色，在 phase-charter.md 中追加对应的 N/A 声明，使 gate 脚本自动豁免相关文件检查：
+
+| 角色 OFF | 自动追加的 N/A 声明 |
+|----------|-------------------|
+| QA 自动化 | N/A:SCOPE_IRRELEVANT evidence/playwright/result.txt |
+| 前端开发者 | N/A:SCOPE_IRRELEVANT playwright.config.ts |
+| DevOps | N/A:SCOPE_IRRELEVANT docker-compose.test.yml |
+
+如所有角色均为 ON，跳过此步骤。
+
+### 步骤 4: 连续性检查 [AGENT]
+
+如果是 Phase 1（无前序 Phase），跳过此步骤。
 
 **仅 Phase 1+ 执行，首个 Phase 跳过此步骤。**
 

@@ -113,9 +113,9 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S3 --branc
 ## 出口条件
 
 ```
-[ ] spec.md 已通过 speckit.clarify 更新（非手动修改）
-[ ] decisions.md 已写且含 ADR 格式
-[ ] decisions.md 含 Kernel Guardian 约束裁决表（每条均标注 accept/reject/defer）
-[ ] decisions.md 含延迟项列表
+[ ] spec.md 已通过 speckit.clarify 更新（非手动修改） [AGENT]
+[ ] decisions.md 已写且含 ADR 格式 [GATE]
+[ ] decisions.md 含 Kernel Guardian 约束裁决表（每条均标注 accept/reject/defer） [GATE]
+[ ] decisions.md 含延迟项列表 [AGENT]
 [ ] phase-gate-check.py --stage S3 --branch {branch} --check exit = PASS
 ```

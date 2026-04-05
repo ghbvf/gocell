@@ -25,11 +25,21 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
+# 检测 go.mod 位置，兼容主 repo 和 worktree
+if [[ -f "$REPO_ROOT/go.mod" ]]; then
+  GO_MODULE_ROOT="$REPO_ROOT"
+elif [[ -f "$REPO_ROOT/src/go.mod" ]]; then
+  GO_MODULE_ROOT="$REPO_ROOT/src"
+else
+  echo "ERROR: go.mod not found under $REPO_ROOT"
+  exit 1
+fi
+
 echo "=== PR Submit: $BRANCH ==="
 
 # 1. Build
 echo "--- go build ---"
-if ! go -C "$REPO_ROOT/src" build ./...; then
+if ! go -C "$GO_MODULE_ROOT" build ./...; then
   echo "FAIL: go build"
   exit 1
 fi
@@ -37,7 +47,7 @@ echo "[PASS] go build"
 
 # 2. Vet
 echo "--- go vet ---"
-if ! go -C "$REPO_ROOT/src" vet ./...; then
+if ! go -C "$GO_MODULE_ROOT" vet ./...; then
   echo "FAIL: go vet"
   exit 1
 fi
@@ -45,7 +55,7 @@ echo "[PASS] go vet"
 
 # 3. Test
 echo "--- go test ---"
-if ! go -C "$REPO_ROOT/src" test ./... -count=1; then
+if ! go -C "$GO_MODULE_ROOT" test ./... -count=1; then
   echo "FAIL: go test"
   exit 1
 fi
@@ -55,7 +65,7 @@ echo "[PASS] go test"
 echo "--- git commit ---"
 echo "--- staged files ---"
 git status --short
-git add -A -- src/ contracts/ docs/ examples/ cmd/ kernel/ cells/ runtime/ adapters/ pkg/
+git add .
 if git diff --cached --quiet; then
   echo "WARN: no changes to commit"
 else

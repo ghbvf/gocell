@@ -67,6 +67,7 @@ git worktree add .claude/worktrees/{pr-name} -b {pr-branch}
 Agent(run_in_background=true):
   工作目录: .claude/worktrees/{pr-name}
   任务: 实施 pr-plan.md 中该 PR 的 tasks
+  上下文: 读取 specs/{branch}/product-context.md 了解 persona + 范围边界
   
   对标规则（当任务涉及 kernel/cells/runtime/adapters 时执行）:
   1. 查 docs/references/framework-comparison.md 找到对标文件路径
@@ -162,14 +163,14 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S5 --branc
 ## 出口条件
 
 ```
-[ ] tasks.md 所有任务标记 [x]
-[ ] 开发者 Agent 报告 build + test 全绿
-[ ] e2e/*.spec.ts 存在（有 UI 时；否则标注 N/A）
-[ ] 本 Phase 新增的 API endpoint 在 contracts/ 或 OpenAPI spec 中有对应定义
-[ ] playwright.config.ts 含 trace: 'on' 配置（有 UI 时；否则标注 N/A）
-[ ] pr-plan.md 中所有 PR 标记 merged
-[ ] 每个 PR 已通过 review（无 P0 遗留）
-[ ] phase-gate-check.py --stage S5 --branch {branch} --check exit = PASS
+[ ] [GATE]  tasks.md 所有任务标记 [x]
+[ ] [GATE]  开发者 Agent 报告 build + test 全绿
+[ ] [AGENT] e2e/*.spec.ts 存在（有 UI 时；否则标注 N/A）
+[ ] [AGENT] 本 Phase 新增的 API endpoint 在 contracts/ 或 OpenAPI spec 中有对应定义
+[ ] [AGENT] playwright.config.ts 含 trace: 'on' 配置（有 UI 时；否则标注 N/A）
+[ ] [GATE]  pr-plan.md 中所有 PR 标记 merged
+[ ] [AGENT] 每个 PR 已通过 review（无 P0 遗留）
+[ ] [GATE]  phase-gate-check.py --stage S5 --branch {branch} --check exit = PASS
 ```
 
 **约束**: 只执行 tasks.md 中的任务，不自行添加。

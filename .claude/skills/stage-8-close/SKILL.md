@@ -147,7 +147,8 @@ C. 错误路径覆盖率 — spec Edge Cases vs E2E 覆盖的比例
 D. 文档链路完整性 — OpenAPI 含新 endpoints？README 引用新功能？部署文档含新配置？
 E. 功能完整度 — spec 中定义的功能是否全部实现
 F. 成功标准达成度 — product-context.md 中的成功标准是否满足
-G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
+G. 产品 Tech Debt — 产品层面的妥协（[PRODUCT] 标签）
+   本 Phase 新增: N 条，上一 Phase 遗留已解决: M 条
 
 产出: specs/{branch}/product-review-report.md
 包含: 不超过 3 条必须修复项
@@ -217,7 +218,7 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 [ ] product-context.md 存在
 [ ] product-acceptance-criteria.md 存在
 [ ] product-review-report.md 存在
-[ ] user-signoff.md 存在且三视角完整（纯后端 Phase UI 视角标 N/A）
+[ ] user-signoff.md 存在且四视角完整（纯后端 Phase UI 视角标 N/A）
 [ ] user-signoff.md 判定非 REJECT
 [ ] review-findings.md 存在
 
@@ -233,6 +234,12 @@ G. 产品 Tech Debt — 产品层面的妥协（仅统计 [PRODUCT] 标签）
 - **产品 FAIL** → 回到 8.2 补做产品相关修复 → 仅重走 8.3-A
 - **项目 FAIL** → 回到 8.2 补做流程相关修复 → 仅重走 8.3-B
 - 单方 FAIL 不影响另一方已获得的 PASS
+
+### 回退限制
+
+- 产品/项目 FAIL 最多回退 1 次
+- 回退只能补文档/配置，不能改代码（改代码必须回 S6）
+- 2 次 FAIL → Phase 挂起，总负责人裁决
 
 ---
 
@@ -285,11 +292,11 @@ gh pr merge {pr-url} --merge
 ## 出口条件
 
 ```
-[ ] kernel-review-report.md 存在且 7 维度已评分
-[ ] product-review-report.md 存在且 7 维度已评分
-[ ] phase-report.md 存在
-[ ] CHANGELOG.md 已更新
-[ ] 产品 PASS
-[ ] 项目 PASS
-[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS
+[ ] kernel-review-report.md 存在且 7 维度已评分 [GATE]
+[ ] product-review-report.md 存在且 7 维度已评分 [GATE]
+[ ] phase-report.md 存在 [GATE]
+[ ] CHANGELOG.md 已更新 [GATE]
+[ ] 产品 PASS [AGENT]
+[ ] 项目 PASS [AGENT]
+[ ] phase-gate-check.py --stage S8 --branch {branch} --check exit = PASS [GATE]
 ```

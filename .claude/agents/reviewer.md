@@ -26,7 +26,7 @@ permissionMode: auto
 审查前必须自行获取以下材料作为基准（不依赖外部注入）：
 
 1. 核心约束清单 — 检查实现是否违反
-2. 变更范围 — 自行运行 `git diff develop...HEAD --stat` 获取概览
+2. 变更范围 — 根据派发 prompt 中指定的方式获取（S5 per-PR 审查使用 `gh pr diff`，S6 集成审查使用 `git diff develop...HEAD --stat`）
 3. 需求规格 — 对照需求检查实现偏离
 4. 审查基准版本 — 自行运行 `git rev-parse HEAD` 记录
 
