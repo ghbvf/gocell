@@ -145,6 +145,17 @@ func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 	a.cr.Handle(pattern, handler)
 }
 
+func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
+	a.cr.Route(pattern, func(cr chi.Router) {
+		sub := &chiRouterAdapter{cr}
+		fn(sub)
+	})
+}
+
+func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
+	a.cr.Mount(pattern, handler)
+}
+
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
 		sub := &chiRouterAdapter{cr}

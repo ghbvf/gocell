@@ -56,6 +56,10 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 
 	session.Revoke()
 
+	if err := s.sessionRepo.Update(ctx, session); err != nil {
+		return fmt.Errorf("session-logout: persist revoke: %w", err)
+	}
+
 	// Publish event.
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": sessionID, "user_id": session.UserID,

@@ -22,12 +22,13 @@ func NewHandler(svc *Service) *Handler {
 // Routes returns a chi.Router with config-publish routes.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Post("/{key}/publish", h.handlePublish)
-	r.Post("/{key}/rollback", h.handleRollback)
+	r.Post("/{key}/publish", h.HandlePublish)
+	r.Post("/{key}/rollback", h.HandleRollback)
 	return r
 }
 
-func (h *Handler) handlePublish(w http.ResponseWriter, r *http.Request) {
+// HandlePublish handles POST /{key}/publish — publishes a config entry.
+func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	version, err := h.svc.Publish(r.Context(), key)
@@ -39,7 +40,8 @@ func (h *Handler) handlePublish(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": version})
 }
 
-func (h *Handler) handleRollback(w http.ResponseWriter, r *http.Request) {
+// HandleRollback handles POST /{key}/rollback — rolls back a config entry.
+func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	var req struct {

@@ -22,13 +22,14 @@ func NewHandler(svc *Service) *Handler {
 // Routes returns a chi.Router with feature-flag routes.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Get("/", h.handleList)
-	r.Get("/{key}", h.handleGet)
-	r.Post("/{key}/evaluate", h.handleEvaluate)
+	r.Get("/", h.HandleList)
+	r.Get("/{key}", h.HandleGet)
+	r.Post("/{key}/evaluate", h.HandleEvaluate)
 	return r
 }
 
-func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+// HandleList handles GET / — returns all feature flags.
+func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	flags, err := h.svc.List(r.Context())
 	if err != nil {
 		httputil.WriteDomainError(w, err)
@@ -38,7 +39,8 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": flags, "total": len(flags)})
 }
 
-func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+// HandleGet handles GET /{key} — returns a single feature flag.
+func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	flag, err := h.svc.GetByKey(r.Context(), key)
@@ -50,7 +52,8 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": flag})
 }
 
-func (h *Handler) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+// HandleEvaluate handles POST /{key}/evaluate — evaluates a feature flag.
+func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	var req struct {

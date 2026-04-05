@@ -12,3 +12,6 @@
 [2026-04-05 12:46:59] S7/entry: PASS (branch=feat/001-phase2-runtime-cells)
 [2026-04-05 12:49:39] S7/exit: PASS (branch=feat/001-phase2-runtime-cells)
 [2026-04-05 12:49:50] S8/entry: PASS (branch=feat/001-phase2-runtime-cells)
+[2026-04-05 13:04:53] S8/exit: FAIL (branch=feat/001-phase2-runtime-cells)
+  content_fail: phase-report.md: pattern '(变更摘要|关键决策)' not found
+[2026-04-05 13:05:20] S8/exit: PASS (branch=feat/001-phase2-runtime-cells)

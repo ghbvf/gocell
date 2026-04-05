@@ -266,6 +266,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if err != nil {
 			return rollback(fmt.Errorf("bootstrap: http server: %w", err))
 		}
+	case err := <-workerErrCh:
+		if err != nil {
+			slog.Error("bootstrap: worker failed, initiating shutdown", slog.Any("error", err))
+			return rollback(fmt.Errorf("bootstrap: worker: %w", err))
+		}
 	}
 
 	// Step 10: Orderly shutdown.

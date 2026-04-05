@@ -24,7 +24,9 @@ import (
 // concrete implementations are provided by runtime/ or adapters/.
 type RouteMux interface {
 	Handle(pattern string, handler http.Handler)
-	Group(fn func(RouteMux))
+	Route(pattern string, fn func(sub RouteMux)) // sub-router with prefix stripping
+	Mount(pattern string, handler http.Handler)   // mount handler with prefix stripping
+	Group(fn func(RouteMux))                      // same-level grouping (no prefix change)
 }
 
 // HTTPRegistrar is optionally implemented by Cells that expose HTTP endpoints.

@@ -12,6 +12,14 @@ import (
 // The token is expected in the Authorization header as "ServiceToken <hex-encoded-hmac>".
 // The HMAC is computed over the request method and path using the shared secret.
 func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
+	if len(secret) == 0 {
+		// Fail-fast: refuse to create middleware with empty secret.
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeAuthError(w, http.StatusInternalServerError, "ERR_AUTH_UNAUTHORIZED", "service token not configured")
+			})
+		}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractServiceToken(r)

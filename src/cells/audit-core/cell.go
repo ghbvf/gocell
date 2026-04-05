@@ -138,7 +138,9 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 // RegisterRoutes registers HTTP routes for audit-core.
 func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle("/api/v1/audit/entries", http.HandlerFunc(c.queryHandler.HandleQuery))
+	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
+		sub.Handle("GET /entries", http.HandlerFunc(c.queryHandler.HandleQuery))
+	})
 }
 
 // RegisterSubscriptions registers event subscriptions for all 6 topics.

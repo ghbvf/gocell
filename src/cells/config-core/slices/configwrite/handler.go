@@ -22,13 +22,14 @@ func NewHandler(svc *Service) *Handler {
 // Routes returns a chi.Router with config-write routes.
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
-	r.Post("/", h.handleCreate)
-	r.Put("/{key}", h.handleUpdate)
-	r.Delete("/{key}", h.handleDelete)
+	r.Post("/", h.HandleCreate)
+	r.Put("/{key}", h.HandleUpdate)
+	r.Delete("/{key}", h.HandleDelete)
 	return r
 }
 
-func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
+// HandleCreate handles POST / — creates a new config entry.
+func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -47,7 +48,8 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": entry})
 }
 
-func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
+// HandleUpdate handles PUT /{key} — updates an existing config entry.
+func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	var req struct {
@@ -67,7 +69,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entry})
 }
 
-func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
+// HandleDelete handles DELETE /{key} — deletes a config entry.
+func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {
