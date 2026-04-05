@@ -152,12 +152,12 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("S3_ENDPOINT", "http://localhost:9000")
-	t.Setenv("S3_REGION", "eu-west-1")
-	t.Setenv("S3_BUCKET", "my-bucket")
-	t.Setenv("S3_ACCESS_KEY_ID", "key123")
-	t.Setenv("S3_SECRET_ACCESS_KEY", "secret456")
-	t.Setenv("S3_USE_PATH_STYLE", "true")
+	t.Setenv("GOCELL_S3_ENDPOINT", "http://localhost:9000")
+	t.Setenv("GOCELL_S3_REGION", "eu-west-1")
+	t.Setenv("GOCELL_S3_BUCKET", "my-bucket")
+	t.Setenv("GOCELL_S3_ACCESS_KEY", "key123")
+	t.Setenv("GOCELL_S3_SECRET_KEY", "secret456")
+	t.Setenv("GOCELL_S3_USE_PATH_STYLE", "true")
 
 	cfg := ConfigFromEnv()
 	assert.Equal(t, "http://localhost:9000", cfg.Endpoint)
@@ -166,6 +166,21 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "key123", cfg.AccessKeyID)
 	assert.Equal(t, "secret456", cfg.SecretAccessKey)
 	assert.True(t, cfg.UsePathStyle)
+}
+
+func TestConfigFromEnv_Fallback(t *testing.T) {
+	t.Setenv("S3_ENDPOINT", "http://legacy:9000")
+	t.Setenv("S3_REGION", "us-west-2")
+	t.Setenv("S3_BUCKET", "legacy-bucket")
+	t.Setenv("S3_ACCESS_KEY_ID", "legacykey")
+	t.Setenv("S3_SECRET_ACCESS_KEY", "legacysecret")
+
+	cfg := ConfigFromEnv()
+	assert.Equal(t, "http://legacy:9000", cfg.Endpoint)
+	assert.Equal(t, "us-west-2", cfg.Region)
+	assert.Equal(t, "legacy-bucket", cfg.Bucket)
+	assert.Equal(t, "legacykey", cfg.AccessKeyID)
+	assert.Equal(t, "legacysecret", cfg.SecretAccessKey)
 }
 
 func TestClient_Health(t *testing.T) {
