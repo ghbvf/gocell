@@ -5,10 +5,92 @@
 
 ---
 
+## Tier 0: Review 修复 + 依赖替换（进行中）
+
+> PR#37 (postgres) ✅ PR#38 (rabbitmq) ✅ PR#39 (redis) ✅ 已合并
+
+### 0-A: 依赖替换 Phase 0 — 安全风险（1d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| D-01 | `adapters/s3`: aws-sdk-go-v2 替换手写 SigV4 签名 | 0.5d | TODO |
+| D-02 | `adapters/oidc`: coreos/go-oidc v3 替换手写 JWKS | 0.5d | TODO |
+| D-03 | `adapters/redis/distlock`: 删除 FenceToken（零调用者） | 0.5h | TODO |
+
+### 0-B: Outbox Relay Plan A（0.5d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| R-01 | `pollOnce()` markQuery 失败 fail-fast | 2h | TODO |
+| R-02 | Start/Stop handshake (`startedCh`) | 2h | TODO |
+
+> 来源: `docs/reviews/202604061401-pr39-six-role/PR39-postgres-outbox-followup.md`
+
+### 0-C: 依赖替换 Phase 1 — 快速收益（1d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| D-04 | `pkg/uid`: google/uuid 替换手写 UUIDv4（18 调用点） | 0.5d | TODO |
+| D-05 | shutdown/bootstrap: errors.Join 替换 firstErr（2 文件 6 行） | 0.5h | TODO |
+| D-06 | middleware: chi/middleware 替换 recovery/requestID/realIP（删 ~200 行） | 0.5d | TODO |
+
+### 0-D: RabbitMQ Solution B（2-3d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| S-01 | `outbox.Subscriber` handler 返回 HandleResult{Disposition, Receipt} | 0.5d | TODO |
+| S-02 | `idempotency.Checker` 升级为 Claim/Commit/Release | 0.5d | TODO |
+| S-03 | `ConsumerBase` 去掉应用侧 DLQ，返回 Disposition | 0.5d | TODO |
+| S-04 | `Subscriber.processDelivery` 按 Disposition 做 Ack/Nack/Requeue | 0.5d | TODO |
+| S-05 | 重连策略完善 + backoff | 0.5d | TODO |
+| S-06 | 测试覆盖（幂等时序、setup 重连、集成） | 0.5d | TODO |
+
+> 来源: `docs/reviews/202604061449-pr38-solution-b-report.md`
+
+### 0-E: 依赖替换 Phase 2（2d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | TODO |
+| D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | TODO |
+
+### 执行顺序
+
+```
+0-A (安全替换) → 0-B (Outbox Relay) → 0-C (快速收益)
+  → 0-D (Solution B) → 0-E (migrator + OTel)
+  → 继续 Tier 1 Review (R1D-4/5/6 → R1E → R2)
+```
+
+> 完整分析: `docs/reviews/202604061630-dependency-replacement-plan.md`
+> 路线图: `docs/reviews/202604061530-post-pr38-roadmap.md`
+
+---
+
 ## Tier 1: 全量代码 Review（3-5 天）
 
 ### 目标
 对 200 文件 / 18,840 行代码做跨 Phase 集成 review，产出依赖图和模块级 findings。
+
+> 执行计划: `docs/reviews/202604060739-review-plan/202604060830-001-review-plan.md`
+
+### 进度
+
+| 层 | 状态 |
+|---|------|
+| R1A pkg | ✅ 已审 |
+| R1B kernel | ✅ 已审 |
+| R1C runtime | ✅ 已审 + 已修 |
+| R1D-1 postgres | ✅ 已审 + 已修 (PR#37) |
+| R1D-2 redis | ✅ 已审 + 已修 (PR#39) |
+| R1D-3 rabbitmq | ✅ 已审 + 已修 (PR#38) |
+| R1D-4 oidc | 待审（Tier 0 替换后审新代码） |
+| R1D-5 s3 | 待审（Tier 0 替换后审新代码） |
+| R1D-6 websocket | 待审 |
+| R1E cells | 待审 |
+| R1F+G delivery + YAML | 待审 |
+| R2 数据流合并 | 待审 |
+| R3-R5 PR追溯/集成/裁决 | 待审 |
 
 ### 任务
 
