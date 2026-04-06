@@ -195,6 +195,22 @@ func (s *Subscriber) processDelivery(
 	entry.Metadata["topic"] = topic
 
 	if err := handler(ctx, entry); err != nil {
+		// If the context is cancelled (shutdown), NACK without requeue to avoid
+		// requeue storm. The message will be picked up by another consumer or
+		// redelivered after the consumer reconnects.
+		if ctx.Err() != nil {
+			slog.Info("rabbitmq: context cancelled during handler, nacking without requeue",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", err.Error()))
+			if nackErr := ch.Nack(delivery.DeliveryTag, false, false); nackErr != nil {
+				slog.Error("rabbitmq: nack failed",
+					slog.String("topic", topic),
+					slog.String("error", nackErr.Error()))
+			}
+			return
+		}
+
 		// Handler error is a transient failure — NACK with requeue.
 		slog.Warn("rabbitmq: handler returned error, nacking with requeue",
 			slog.String("topic", topic),

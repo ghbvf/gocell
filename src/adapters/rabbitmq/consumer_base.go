@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -131,18 +132,27 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 			}
 
 			// Check if this is a permanent error.
-			if _, ok := lastErr.(*PermanentError); ok {
+			var permErr *PermanentError
+			if errors.As(lastErr, &permErr) {
 				slog.Warn("rabbitmq: permanent error, routing to DLQ",
 					slog.String("event_id", entry.ID),
 					slog.String("topic", topic),
 					slog.String("consumer_group", cb.config.ConsumerGroup),
 					slog.String("error", lastErr.Error()))
-				cb.deadLetter(ctx, topic, entry, lastErr, attempt+1)
+				if dlqErr := cb.deadLetter(ctx, topic, entry, lastErr, attempt+1); dlqErr != nil {
+					// DLQ publish failed — return error so Subscriber NACKs with requeue.
+					return fmt.Errorf("rabbitmq: DLQ publish failed for permanent error: %w", dlqErr)
+				}
 				return nil // Return nil to ACK the original message.
 			}
 
 			// Transient error — backoff before retry.
 			if attempt < cb.config.RetryCount-1 {
+				// Early exit on shutdown to avoid blocking during backoff.
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+
 				delay := cb.config.RetryBaseDelay * (1 << attempt)
 				slog.Warn("rabbitmq: transient error, retrying",
 					slog.String("event_id", entry.ID),
@@ -167,7 +177,10 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 			slog.String("consumer_group", cb.config.ConsumerGroup),
 			slog.Int("retry_count", cb.config.RetryCount),
 			slog.String("error", lastErr.Error()))
-		cb.deadLetter(ctx, topic, entry, lastErr, cb.config.RetryCount)
+		if dlqErr := cb.deadLetter(ctx, topic, entry, lastErr, cb.config.RetryCount); dlqErr != nil {
+			// DLQ publish failed — return error so Subscriber NACKs with requeue.
+			return fmt.Errorf("rabbitmq: DLQ publish failed after retry exhaustion: %w", dlqErr)
+		}
 
 		// Return nil to ACK the original message (it's been DLQ'd).
 		return nil
@@ -176,7 +189,9 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 
 // deadLetter routes a failed message to the dead-letter queue.
 // It publishes the original entry with x-death metadata to the DLQ topic.
-func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outbox.Entry, originalErr error, retryCount int) {
+// Returns an error if the DLQ publish fails, so the caller can NACK with requeue
+// instead of silently ACKing and losing the message.
+func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outbox.Entry, originalErr error, retryCount int) error {
 	dlqTopic := cb.config.DLQTopic
 	if dlqTopic == "" {
 		dlqTopic = topic + ".dlq"
@@ -199,7 +214,7 @@ func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outb
 			slog.String("event_id", entry.ID),
 			slog.String("topic", topic),
 			slog.String("error", err.Error()))
-		return
+		return fmt.Errorf("marshal DLQ entry: %w", err)
 	}
 
 	if err := cb.publisher.Publish(ctx, dlqTopic, payload); err != nil {
@@ -209,7 +224,7 @@ func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outb
 			slog.String("dlq_topic", dlqTopic),
 			slog.String("error", err.Error()),
 			slog.Int("retry_count", retryCount))
-		return
+		return fmt.Errorf("publish to DLQ topic %s: %w", dlqTopic, err)
 	}
 
 	// T25: DLQ observability — log every dead-letter routing.
@@ -220,4 +235,5 @@ func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outb
 		slog.String("consumer_group", cb.config.ConsumerGroup),
 		slog.String("error", originalErr.Error()),
 		slog.Int("retry_count", retryCount))
+	return nil
 }

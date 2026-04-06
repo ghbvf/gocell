@@ -54,17 +54,41 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 	require.Len(t, tx.execCalls, 1)
 	call := tx.execCalls[0]
 	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
-	assert.Equal(t, "e-2", call.args[0])
-	assert.Equal(t, "agg-2", call.args[1])
-	assert.Equal(t, "order", call.args[2])
-	assert.Equal(t, "order.shipped", call.args[3])
+	assert.Equal(t, "e-2", call.args[0])          // id
+	assert.Equal(t, "agg-2", call.args[1])         // aggregate_id
+	assert.Equal(t, "order", call.args[2])          // aggregate_type
+	assert.Equal(t, "order.shipped", call.args[3])  // event_type
+	assert.Equal(t, "", call.args[4])               // topic (empty string)
 
 	// Verify metadata was serialized as JSON.
-	metaJSON, ok := call.args[5].([]byte)
+	metaJSON, ok := call.args[6].([]byte)
 	require.True(t, ok)
 	var meta map[string]string
 	require.NoError(t, json.Unmarshal(metaJSON, &meta))
 	assert.Equal(t, "test", meta["source"])
+}
+
+func TestOutboxWriter_Write_WithTopic(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+
+	ctx := CtxWithTx(context.Background(), tx)
+	entry := outbox.Entry{
+		ID:            "e-topic",
+		AggregateID:   "agg-t",
+		AggregateType: "device",
+		EventType:     "device.enrolled",
+		Topic:         "custom.topic.v1",
+		Payload:       []byte(`{"enrolled":true}`),
+		CreatedAt:     time.Now(),
+	}
+
+	err := w.Write(ctx, entry)
+	require.NoError(t, err)
+
+	require.Len(t, tx.execCalls, 1)
+	call := tx.execCalls[0]
+	assert.Equal(t, "custom.topic.v1", call.args[4]) // topic column
 }
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
@@ -83,7 +107,7 @@ func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 	require.NoError(t, err)
 
 	call := tx.execCalls[0]
-	ts, ok := call.args[6].(time.Time)
+	ts, ok := call.args[7].(time.Time)
 	require.True(t, ok)
 	assert.False(t, ts.IsZero(), "should default to now when CreatedAt is zero")
 }
