@@ -14,9 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // setupPostgres starts a PostgreSQL container via testcontainers and returns a
@@ -31,10 +29,7 @@ func setupPostgres(t *testing.T) (*Pool, func()) {
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
-		),
+		tcpostgres.BasicWaitStrategies(),
 	)
 	require.NoError(t, err, "failed to start postgres container")
 
