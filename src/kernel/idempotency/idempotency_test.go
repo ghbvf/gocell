@@ -35,6 +35,11 @@ func (m *mockChecker) TryProcess(_ context.Context, key string, _ time.Duration)
 	return true, nil
 }
 
+func (m *mockChecker) Release(_ context.Context, key string) error {
+	delete(m.processed, key)
+	return nil
+}
+
 var _ Checker = (*mockChecker)(nil)
 
 func TestCheckerInterface(t *testing.T) {

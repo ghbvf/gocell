@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"net/url"
 	"sync"
 	"time"
 
@@ -368,12 +369,18 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 	}
 }
 
-// sanitizeURL redacts the password from the AMQP URL for logging.
-func sanitizeURL(url string) string {
-	// Simple approach: just indicate the host portion.
-	// In production, parse the URL and redact credentials.
-	if len(url) > 10 {
-		return url[:10] + "***"
+// sanitizeURL redacts credentials from the AMQP URL for safe logging.
+func sanitizeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "amqp://***"
 	}
-	return "***"
+	if u.User != nil {
+		u.User = nil
+		// Rebuild with redacted placeholder to avoid URL-encoding of special chars.
+		host := u.Host
+		u.Host = ""
+		return u.Scheme + "://***:***@" + host + u.RequestURI()
+	}
+	return u.String()
 }

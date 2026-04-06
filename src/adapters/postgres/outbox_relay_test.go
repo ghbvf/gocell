@@ -14,6 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func waitForRelayRunning(t *testing.T, relay *OutboxRelay) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		relay.mu.Lock()
+		defer relay.mu.Unlock()
+		return relay.running && relay.cancel != nil && relay.done != nil
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestOutboxRelay_StartStop(t *testing.T) {
 	db := &mockDBTX{}
 	pub := &mockPublisher{}
@@ -22,21 +32,78 @@ func TestOutboxRelay_StartStop(t *testing.T) {
 
 	relay := NewOutboxRelay(db, pub, cfg)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	startCtx, startCancel := context.WithCancel(context.Background())
+	defer startCancel()
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- relay.Start(ctx)
+		errCh <- relay.Start(startCtx)
 	}()
 
-	// Wait for context to expire, then stop.
-	<-ctx.Done()
-	err := relay.Stop(context.Background())
+	waitForRelayRunning(t, relay)
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+	defer stopCancel()
+
+	err := relay.Stop(stopCtx)
 	require.NoError(t, err)
 
 	startErr := <-errCh
 	assert.NoError(t, startErr, "Start should return nil on graceful stop per worker.Worker contract")
+}
+
+func TestOutboxRelay_StartStop_RaceRegression(t *testing.T) {
+	for i := 0; i < 25; i++ {
+		db := &mockDBTX{}
+		pub := &mockPublisher{}
+		cfg := DefaultRelayConfig()
+		cfg.PollInterval = 10 * time.Millisecond
+
+		relay := NewOutboxRelay(db, pub, cfg)
+
+		startCtx, startCancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- relay.Start(startCtx)
+		}()
+
+		waitForRelayRunning(t, relay)
+
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		err := relay.Stop(stopCtx)
+		stopCancel()
+		startCancel()
+
+		require.NoErrorf(t, err, "iteration %d", i)
+		require.NoErrorf(t, <-errCh, "iteration %d", i)
+	}
+}
+
+func TestOutboxRelay_CanRestartAfterStop(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	for i := 0; i < 2; i++ {
+		startCtx, startCancel := context.WithCancel(context.Background())
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- relay.Start(startCtx)
+		}()
+
+		waitForRelayRunning(t, relay)
+
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+		err := relay.Stop(stopCtx)
+		stopCancel()
+		startCancel()
+
+		require.NoErrorf(t, err, "iteration %d", i)
+		require.NoErrorf(t, <-errCh, "iteration %d", i)
+	}
 }
 
 func TestOutboxRelay_PollOnce_NoEntries(t *testing.T) {
@@ -251,8 +318,7 @@ func TestOutboxRelay_Stop_RespectsCallerTimeout(t *testing.T) {
 		errCh <- relay.Start(startCtx)
 	}()
 
-	// Give the relay time to start.
-	time.Sleep(100 * time.Millisecond)
+	waitForRelayRunning(t, relay)
 
 	// Cancel start context to trigger shutdown of loops.
 	startCancel()
@@ -286,7 +352,7 @@ func TestOutboxRelay_Stop_SucceedsWithAmpleTimeout(t *testing.T) {
 		errCh <- relay.Start(startCtx)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	waitForRelayRunning(t, relay)
 	startCancel()
 
 	// Give plenty of time to stop.
@@ -338,9 +404,9 @@ type mockRelayTx struct {
 	db *mockDBTX
 }
 
-func (t *mockRelayTx) Begin(_ context.Context) (pgx.Tx, error)   { return t, nil }
-func (t *mockRelayTx) Commit(_ context.Context) error             { return nil }
-func (t *mockRelayTx) Rollback(_ context.Context) error           { return nil }
+func (t *mockRelayTx) Begin(_ context.Context) (pgx.Tx, error) { return t, nil }
+func (t *mockRelayTx) Commit(_ context.Context) error          { return nil }
+func (t *mockRelayTx) Rollback(_ context.Context) error        { return nil }
 func (t *mockRelayTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
@@ -388,13 +454,13 @@ func (r *mockRows) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *mockRows) Close()                                         {}
-func (r *mockRows) Err() error                                     { return nil }
-func (r *mockRows) CommandTag() pgconn.CommandTag                   { return pgconn.NewCommandTag("") }
-func (r *mockRows) FieldDescriptions() []pgconn.FieldDescription    { return nil }
-func (r *mockRows) Values() ([]any, error)                         { return nil, nil }
-func (r *mockRows) RawValues() [][]byte                            { return nil }
-func (r *mockRows) Conn() *pgx.Conn                                { return nil }
+func (r *mockRows) Close()                                       {}
+func (r *mockRows) Err() error                                   { return nil }
+func (r *mockRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("") }
+func (r *mockRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *mockRows) Values() ([]any, error)                       { return nil, nil }
+func (r *mockRows) RawValues() [][]byte                          { return nil }
+func (r *mockRows) Conn() *pgx.Conn                              { return nil }
 
 type publishCall struct {
 	topic   string

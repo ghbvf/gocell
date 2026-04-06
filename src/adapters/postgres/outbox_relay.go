@@ -54,9 +54,12 @@ type OutboxRelay struct {
 	pub    outbox.Publisher
 	config RelayConfig
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	once   sync.Once
+	// mu protects lifecycle state shared by Start and Stop.
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	running bool
+	wg      sync.WaitGroup
 }
 
 // NewOutboxRelay creates an OutboxRelay that polls from db and publishes via pub.
@@ -84,9 +87,31 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 // Start begins the relay polling loop and cleanup goroutine. It blocks until
 // ctx is cancelled or Stop is called.
 func (r *OutboxRelay) Start(ctx context.Context) error {
-	ctx, r.cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 
+	r.mu.Lock()
+	if r.running {
+		r.mu.Unlock()
+		cancel()
+		return errcode.New(ErrAdapterPGConnect, "outbox relay already started")
+	}
+	r.running = true
+	r.cancel = cancel
+	r.done = done
 	r.wg.Add(2)
+	r.mu.Unlock()
+
+	defer func() {
+		r.wg.Wait()
+
+		r.mu.Lock()
+		r.cancel = nil
+		r.done = nil
+		r.running = false
+		close(done)
+		r.mu.Unlock()
+	}()
 
 	go func() {
 		defer r.wg.Done()
@@ -113,17 +138,18 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
 func (r *OutboxRelay) Stop(ctx context.Context) error {
-	r.once.Do(func() {
-		if r.cancel != nil {
-			r.cancel()
-		}
-	})
+	r.mu.Lock()
+	cancel := r.cancel
+	done := r.done
+	r.cancel = nil
+	r.mu.Unlock()
 
-	done := make(chan struct{})
-	go func() {
-		r.wg.Wait()
-		close(done)
-	}()
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return nil
+	}
 
 	select {
 	case <-done:

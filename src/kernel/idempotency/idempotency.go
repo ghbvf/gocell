@@ -24,4 +24,9 @@ type Checker interface {
 	// Returns false if already processed (another consumer got there first).
 	// This eliminates the TOCTOU race between separate IsProcessed + MarkProcessed calls.
 	TryProcess(ctx context.Context, key string, ttl time.Duration) (bool, error)
+
+	// Release removes the idempotency key so that a redelivered message can be
+	// processed again. Must be called on requeue/shutdown paths where TryProcess
+	// already claimed the key but business logic did not complete.
+	Release(ctx context.Context, key string) error
 }
