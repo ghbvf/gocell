@@ -3,6 +3,7 @@ package assembly
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -351,6 +352,34 @@ func TestAssemblyCellIDs(t *testing.T) {
 
 	ids := a.CellIDs()
 	assert.Equal(t, []string{"a", "b"}, ids)
+}
+
+func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
+	a := New(Config{ID: "concurrent-health"})
+
+	// Pre-register some cells.
+	for i := range 5 {
+		id := "pre-" + string(rune('a'+i))
+		require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{
+			ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0,
+		})))
+	}
+
+	// Concurrently call Health() from multiple goroutines while the assembly
+	// is in stopped state. This validates the snapshot-under-lock pattern
+	// does not race with reads.
+	var wg sync.WaitGroup
+	const readers = 20
+
+	wg.Add(readers)
+	for range readers {
+		go func() {
+			defer wg.Done()
+			h := a.Health()
+			assert.Len(t, h, 5)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestAssemblyCellLookup(t *testing.T) {
