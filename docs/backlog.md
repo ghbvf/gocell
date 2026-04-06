@@ -107,35 +107,91 @@
 
 ---
 
-## Tier 2: Review 产出的修复 + Tech-Debt 清理（3-5 天）
+## Tier 2: Review 产出的修复 + Tech-Debt 清理（5-7 天）
 
-### 活跃 Tech-Debt（16 条）
+### 全量 Review Findings（R1A-R1D，35 条未修）
 
-#### P1 — 高优先级（7 条）
+> Review 原则：P0 当层修，P1/P2 记录到此处留 Fix Pack。
+> 来源报告已归档至 `docs/reviews/archive/`。
+
+#### P1 — kernel（8 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| R1B1-01 | `kernel/cell/base.go:165-171` | Add*/collection accessor 无 mutex 保护，潜在 data race |
+| R1B1-02 | `kernel/cell/base.go:64-82` | OwnedSlices/ProducedContracts/ConsumedContracts 读可变字段无锁 |
+| F-OB-02 | `kernel/outbox/outbox.go:98-107` | Entry 无显式 Topic 字段，EventType 兼做路由 |
+| F-ID-01 | `kernel/idempotency/idempotency.go` | IsProcessed+MarkProcessed 两步有 TOCTOU（TryProcess 已加但旧接口未废弃） |
+| G-01 | `kernel/governance/rules_fmt.go` | cell.yaml owner.team/role, verify.smoke 必填校验缺失 |
+| G-02 | `kernel/governance/rules_verify.go` | slice.yaml verify.unit 未校验为必填 |
+| F-5 | `kernel/journey/catalog.go:18-35` | Journey catalog 不校验引用的 contract/cell 是否存在 |
+| F-2 | `kernel/assembly/assembly.go:83-132` | Start()/StartWithConfig() ~40 行重复代码 |
+
+#### P1 — pkg（3 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| R1A1-F02 | `pkg/httputil/response.go:86-107` | mapCodeToStatus 子串匹配漏掉 ERR_AUTH_TOKEN_EXPIRED，回退 500 |
+| R1A1-F03 | `pkg/httputil/response.go:86-107` | mapCodeToStatus 子串调度脆弱，顺序依赖 |
+| R1A1-F04 | `pkg/httputil/response.go:18,27,51` | json.NewEncoder 错误被静默丢弃 |
+
+#### P1 — runtime（6 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| F-01 | `runtime/auth/jwt.go:54` | ErrAuthUnauthorized 重复定义（local var + errcode import 冲突） |
+| F-02 | `runtime/auth/keys.go:26-36` | 无 RSA 最小 key size 校验，接受 512/1024-bit |
+| F-03 | `runtime/auth/keys.go:82,90,101,109` | LoadRSAKeyPairFromPEM 裸 fmt.Errorf，未用 errcode |
+| R1C2-F01 | `runtime/eventbus/eventbus.go:138-148` | Close()+Subscribe() 竞态，channel read after close |
+| R1C2-F02 | `runtime/eventbus/eventbus.go:118-149` | Subscribe 退出时 subs map 泄漏 stale channel |
+| R1C2-F03 | `runtime/worker/worker.go:47-72` | WorkerGroup.Start 首个失败不取消其余 worker |
+
+#### P2 — kernel（7 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| R1B1-03 | `kernel/cell/base.go:85-93` | Init 不重置 shutdownCtx/Cancel，Stop→Init→Start 复用过期 context |
+| R1B1-04 | `kernel/cell/base.go:39` | sync.Mutex 应改 sync.RWMutex（读多写少） |
+| F-OB-01 | `kernel/outbox/outbox.go:68` | 无批量写支持，Writer.Write 只接受单条 Entry |
+| F-OB-03 | `kernel/outbox/outbox.go:99-107` | Entry 必填字段（ID, AggregateID, EventType）无校验 |
+| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略，未启用 KnownFields(true) |
+| F-3 | `kernel/assembly/assembly.go:148-157` | Stop() 只返回首个错误，吞后续（同 shutdown firstErr 问题） |
+| F-4 | `kernel/scaffold/templates.go:1-9` | doc.go 和 templates.go 包注释冲突 |
+
+#### P2 — pkg + runtime（6 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| R1A1-F05 | `pkg/id/` | 已废弃包仍存在，无 // Deprecated 标注 |
+| R1A1-F06 | `pkg/ctxkeys/keys_test.go:118-140` | TestFromMissingKey 遗漏 RequestID/RealIP/Subject 覆盖 |
+| R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致（Acquire vs ACQUIRED） |
+| F-04 | `runtime/auth/middleware.go:133` | writeAuthError 忽略 JSON encode 错误 |
+| R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 |
+| R1C2-F05 | `runtime/worker/periodic.go:18-52` | PeriodicWorker.Stop 不防 double-Start，done channel 复用 |
+
+### 历史 Tech-Debt（合并保留）
+
+#### P1（5 条）
 
 | ID | 来源 | 问题 | 预估 |
 |----|------|------|------|
 | P4-TD-03 | S6 P1-8 | `IssueTestToken` HS256 死代码（测试陷阱） | 30min |
 | P4-TD-04 | S6 P2-1 | order-cell 声明 L2 但无 outboxWriter enforce | 1h |
 | P4-TD-05 | S6 INT-1 | 缺少 outbox 全链路 3-container 集成测试 | 2h |
-| P4-TD-06 | S6 P1-9 | CI validate 已修复（Tier 0） | RESOLVED |
-| P4-TD-07 | S6 P1-5 | example docker-compose start_period 已修复（Tier 0） | RESOLVED |
 | P3-TD-10 | Phase 2 #54 | Session refresh TOCTOU 竞态 | 4h（高风险） |
 | P2-T-02 | Phase 2 | J-audit-login-trail e2e 测试 | 2h |
 
-#### P2 — 中优先级（9 条）
+#### P2（7 条）
 
 | ID | 来源 | 问题 | 预估 |
 |----|------|------|------|
 | P4-TD-01 | S6 P2-5 | 缺少共享 NoopOutboxWriter | 30min |
 | P4-TD-02 | S6 P2-3 | chi.URLParam 耦合（10 个文件） | 2h |
-| P4-TD-09 | Tier0 F-06 | List 端点缺分页（page 字段 + 分页控制） | 2h |
-| P4-TD-10 | Tier0 F-07 | POST 201 响应未包装 `{"data":...}` 格式 | 2h |
+| P4-TD-09 | Tier0 F-06 | List 端点缺分页 | 2h |
+| P4-TD-10 | Tier0 F-07 | POST 201 响应未包装 `{"data":...}` | 2h |
 | P4-TD-11 | Tier0 F-14 | in-memory repository 缺并发测试 | 1h |
 | P3-TD-11 | Phase 2 #56-59 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | Phase 2 #62 | configpublish.Rollback version 校验 | 2h |
-| P3-TD-04 | Phase 3 | websocket/oidc/s3 sandbox httptest 问题 | 已用 skip guard 缓解 |
-| P3-TD-02 | Phase 3 | postgres adapter 覆盖率确认（testcontainers 已加，需重测） | 1h |
 
 ---
 
