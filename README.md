@@ -243,8 +243,8 @@ examples/  ← all layers
 |---------|-------------|-----------------|
 | `adapters/postgres` | Pool, TxManager, Migrator, OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.Relay` |
 | `adapters/redis` | Client, DistLock, IdempotencyChecker, Cache | `idempotency.Checker` |
-| `adapters/oidc` | OIDC Provider, Token Exchange, JWKS Verification | — |
-| `adapters/s3` | S3/MinIO Client, PresignedURL | — |
+| `adapters/oidc` | Thin go-oidc v3 wrapper (Config, Provider, Refresh, Verifier, OAuth2Config) | — |
+| `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
 

@@ -13,8 +13,8 @@
 
 | # | 任务 | 预估 | 状态 |
 |---|------|------|------|
-| D-01 | `adapters/s3`: 删除整个 adapter（零 import，aws-sdk-go-v2 由 wiring 层直接用） | 0.5d | ✅ PR#41 |
-| D-02 | `adapters/oidc`: 删除整个 adapter（零 import，消费方直接用 go-oidc + oauth2） | 0.5d | ✅ PR#41 |
+| D-01 | `adapters/s3`: aws-sdk-go-v2 薄 adapter（Config + Upload + Health + SDK 逃生口） | 0.5d | ✅ PR#41 |
+| D-02 | `adapters/oidc`: go-oidc v3 薄 adapter（Config + Provider/Refresh，暴露原生类型） | 0.5d | ✅ PR#41 |
 | D-03 | `adapters/redis/distlock`: 删除 FenceToken（零调用者） | 0.5h | ✅ PR#40 |
 
 ### 0-B: Outbox Relay Plan A（0.5d）
