@@ -9,16 +9,16 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Compile-time interface checks.
-var (
-	_ outbox.Relay  = (*OutboxRelay)(nil)
-	_ worker.Worker = (*OutboxRelay)(nil)
-)
+// Compile-time interface check.
+var _ outbox.Relay = (*OutboxRelay)(nil)
+
+// Note: OutboxRelay also satisfies runtime/worker.Worker via structural typing
+// (Start/Stop methods match), but we do not import runtime/worker here to
+// maintain the adapters → kernel dependency direction.
 
 // RelayConfig configures the outbox relay behaviour.
 type RelayConfig struct {
