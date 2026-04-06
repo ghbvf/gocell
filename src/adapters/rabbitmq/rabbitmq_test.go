@@ -221,11 +221,13 @@ func (m *mockConnection) Close() error {
 // --- Mock Idempotency Checker ---
 
 type mockIdempotencyChecker struct {
-	mu          sync.Mutex
-	processed   map[string]bool
-	checkErr    error
-	markErr     error
-	tryProcErr  error
+	mu           sync.Mutex
+	processed    map[string]bool
+	checkErr     error
+	markErr      error
+	tryProcErr   error
+	releaseErr   error
+	releaseCalls []string
 }
 
 func newMockIdempotencyChecker() *mockIdempotencyChecker {
@@ -264,6 +266,17 @@ func (m *mockIdempotencyChecker) TryProcess(_ context.Context, key string, _ tim
 	}
 	m.processed[key] = true
 	return true, nil
+}
+
+func (m *mockIdempotencyChecker) Release(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releaseCalls = append(m.releaseCalls, key)
+	if m.releaseErr != nil {
+		return m.releaseErr
+	}
+	delete(m.processed, key)
+	return nil
 }
 
 // Compile-time interface checks.

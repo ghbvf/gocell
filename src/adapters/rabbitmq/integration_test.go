@@ -264,3 +264,7 @@ func (n *noopChecker) MarkProcessed(_ context.Context, _ string, _ time.Duration
 func (n *noopChecker) TryProcess(_ context.Context, _ string, _ time.Duration) (bool, error) {
 	return true, nil
 }
+
+func (n *noopChecker) Release(_ context.Context, _ string) error {
+	return nil
+}

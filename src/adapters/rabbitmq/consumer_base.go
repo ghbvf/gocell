@@ -150,7 +150,14 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 					slog.String("consumer_group", cb.config.ConsumerGroup),
 					slog.String("error", lastErr.Error()))
 				if dlqErr := cb.deadLetter(ctx, topic, entry, lastErr, attempt+1); dlqErr != nil {
-					// DLQ publish failed — return error so Subscriber NACKs with requeue.
+					// DLQ publish failed — release idempotency key so redelivery
+					// can re-enter business logic, then return error for NACK+requeue.
+					if relErr := cb.checker.Release(context.WithoutCancel(ctx), idempotencyKey); relErr != nil {
+						slog.Error("rabbitmq: failed to release idempotency key",
+							slog.String("event_id", entry.ID),
+							slog.String("key", idempotencyKey),
+							slog.String("error", relErr.Error()))
+					}
 					return fmt.Errorf("rabbitmq: DLQ publish failed for permanent error: %w", dlqErr)
 				}
 				return nil // Return nil to ACK the original message.
@@ -159,7 +166,9 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 			// Transient error — backoff before retry.
 			if attempt < cb.config.RetryCount-1 {
 				// Early exit on shutdown to avoid blocking during backoff.
+				// Release idempotency key so redelivery can re-process.
 				if ctx.Err() != nil {
+					_ = cb.checker.Release(context.WithoutCancel(ctx), idempotencyKey)
 					return ctx.Err()
 				}
 
@@ -175,6 +184,7 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
+					_ = cb.checker.Release(context.WithoutCancel(ctx), idempotencyKey)
 					return ctx.Err()
 				}
 			}
@@ -188,7 +198,14 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 			slog.Int("retry_count", cb.config.RetryCount),
 			slog.String("error", lastErr.Error()))
 		if dlqErr := cb.deadLetter(ctx, topic, entry, lastErr, cb.config.RetryCount); dlqErr != nil {
-			// DLQ publish failed — return error so Subscriber NACKs with requeue.
+			// DLQ publish failed — release idempotency key so redelivery
+			// can re-enter business logic, then return error for NACK+requeue.
+			if relErr := cb.checker.Release(context.WithoutCancel(ctx), idempotencyKey); relErr != nil {
+				slog.Error("rabbitmq: failed to release idempotency key",
+					slog.String("event_id", entry.ID),
+					slog.String("key", idempotencyKey),
+					slog.String("error", relErr.Error()))
+			}
 			return fmt.Errorf("rabbitmq: DLQ publish failed after retry exhaustion: %w", dlqErr)
 		}
 

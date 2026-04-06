@@ -78,3 +78,15 @@ func (ic *IdempotencyChecker) TryProcess(ctx context.Context, key string, ttl ti
 	}
 	return set, nil
 }
+
+// Release removes the idempotency key so a redelivered message can be processed
+// again. This must be called when a message is requeued after TryProcess already
+// claimed the key (e.g., DLQ publish failure, shutdown).
+func (ic *IdempotencyChecker) Release(ctx context.Context, key string) error {
+	_, err := ic.rdb.Del(ctx, key).Result()
+	if err != nil {
+		return errcode.Wrap(ErrAdapterRedisDelete,
+			fmt.Sprintf("redis: idempotency release failed (key=%s)", key), err)
+	}
+	return nil
+}

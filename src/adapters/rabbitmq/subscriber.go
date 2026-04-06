@@ -22,6 +22,32 @@ import (
 // permissions) are returned to the caller immediately.
 var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 
+// isRecoverableAMQPError returns true if the error indicates a transient
+// connection/channel loss that can be recovered via reconnect. Permanent errors
+// (ACCESS_REFUSED, PRECONDITION_FAILED, channel_max exhausted) return false.
+func isRecoverableAMQPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// amqp.ErrClosed: connection or channel was closed.
+	if errors.Is(err, amqp.ErrClosed) {
+		return true
+	}
+	// ErrAdapterAMQPConnect from AcquireChannel means the connection is nil or
+	// IsClosed — this is transient and should trigger reconnect.
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Code == ErrAdapterAMQPConnect {
+		return true
+	}
+	// AMQP protocol errors: Recover=true means the broker will restart the
+	// channel; Recover=false (ACCESS_REFUSED, PRECONDITION_FAILED) is permanent.
+	var amqpErr *amqp.Error
+	if errors.As(err, &amqpErr) {
+		return amqpErr.Recover
+	}
+	return false
+}
+
 // Compile-time interface check.
 var _ outbox.Subscriber = (*Subscriber)(nil)
 
@@ -192,9 +218,10 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		// Channel acquisition failure is transient (connection down) — wrap as
-		// subscription lost so the outer loop reconnects.
-		return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
+		if isRecoverableAMQPError(err) {
+			return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
+		}
+		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
 	}
 
 	s.trackChannel(ch)
@@ -206,16 +233,26 @@ func (s *Subscriber) subscribeOnce(
 		_ = ch.Close()
 	}
 
+	// setupErr wraps a setup-stage error. If the underlying AMQP error is
+	// recoverable (connection/channel closed mid-setup), it wraps as
+	// errSubscriptionLost so the outer loop can reconnect and re-run the
+	// full setup. Otherwise it returns a permanent error to the caller.
+	setupErr := func(msg string, code errcode.Code, err error) error {
+		cleanupCh()
+		if isRecoverableAMQPError(err) {
+			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, msg, err)
+		}
+		return errcode.Wrap(code, msg, err)
+	}
+
 	// Set QoS.
 	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
-		cleanupCh()
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: set qos", err)
+		return setupErr("rabbitmq: set qos", ErrAdapterAMQPSubscribe, err)
 	}
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
-		cleanupCh()
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare exchange", err)
+		return setupErr("rabbitmq: declare exchange", ErrAdapterAMQPSubscribe, err)
 	}
 
 	// Build queue arguments for dead-letter routing.
@@ -231,22 +268,19 @@ func (s *Subscriber) subscribeOnce(
 
 	// Declare queue.
 	if _, err = ch.QueueDeclare(queueName, true, false, false, false, queueArgs); err != nil {
-		cleanupCh()
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare queue", err)
+		return setupErr("rabbitmq: declare queue", ErrAdapterAMQPSubscribe, err)
 	}
 
 	// Bind queue to exchange.
 	if err := ch.QueueBind(queueName, "", topic, false, nil); err != nil {
-		cleanupCh()
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: bind queue", err)
+		return setupErr("rabbitmq: bind queue", ErrAdapterAMQPSubscribe, err)
 	}
 
 	consumerTag := fmt.Sprintf("cg-%s-%s", queueName, topic)
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {
-		cleanupCh()
-		return errcode.Wrap(ErrAdapterAMQPConsume, "rabbitmq: start consuming", err)
+		return setupErr("rabbitmq: start consuming", ErrAdapterAMQPConsume, err)
 	}
 
 	slog.Info("rabbitmq: subscriber started",
