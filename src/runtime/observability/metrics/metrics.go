@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // Collector records HTTP request metrics.
@@ -129,43 +131,20 @@ func (c *InMemoryCollector) Handler() http.Handler {
 }
 
 // Middleware returns an HTTP middleware that records request count and duration
-// using the provided Collector.
+// using the provided Collector. It uses httputil.StatusRecorder to capture the
+// response status code, avoiding a duplicate recorder definition.
 func Middleware(collector Collector) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			rec := &metricsRecorder{ResponseWriter: w, status: http.StatusOK}
+			rec := httputil.NewStatusRecorder(w)
 
 			next.ServeHTTP(rec, r)
 
 			duration := time.Since(start).Seconds()
-			collector.RecordRequest(r.Method, r.URL.Path, rec.status, duration)
+			collector.RecordRequest(r.Method, r.URL.Path, rec.Status, duration)
 		})
 	}
-}
-
-// metricsRecorder captures the response status code.
-type metricsRecorder struct {
-	http.ResponseWriter
-	status      int
-	wroteHeader bool
-}
-
-func (r *metricsRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
-		r.status = code
-		r.wroteHeader = true
-	}
-	r.ResponseWriter.WriteHeader(code)
-}
-
-// Write captures the default 200 status if WriteHeader hasn't been called.
-func (r *metricsRecorder) Write(b []byte) (int, error) {
-	if !r.wroteHeader {
-		r.status = http.StatusOK
-		r.wroteHeader = true
-	}
-	return r.ResponseWriter.Write(b)
 }
 
 // metricsText formats the counter as a Prometheus-like text line for

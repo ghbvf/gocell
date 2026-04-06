@@ -127,6 +127,8 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT08()...)
 	results = append(results, v.validateFMT09()...)
 	results = append(results, v.validateFMT10()...)
+	results = append(results, v.validateFMT11()...)
+	results = append(results, v.validateFMT12()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)

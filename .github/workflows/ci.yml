@@ -13,11 +13,11 @@ jobs:
       run:
         working-directory: src
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache-dependency-path: src/go.sum
 
       - name: Build
@@ -48,14 +48,14 @@ jobs:
           echo "PASS: no internal import violations"
 
       - name: Cache SonarQube packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v7
+        uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
@@ -82,11 +82,11 @@ jobs:
     # No static services: testcontainers manages containers dynamically,
     # avoiding port conflicts with host-bound services.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
           cache-dependency-path: src/go.sum
 
       - name: Integration tests (testcontainers)

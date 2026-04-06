@@ -2229,3 +2229,137 @@ func TestFMT10(t *testing.T) {
 		})
 	}
 }
+
+// --- FMT-11: cell.yaml required owner and verify.smoke fields ---
+
+func TestFMT11(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+		wantField string // if non-empty, first result must match this field
+	}{
+		{
+			name:      "all cells have owner.team, owner.role, verify.smoke",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "cell missing owner.team",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Owner.Team = ""
+			},
+			wantCount: 1,
+			wantField: "owner.team",
+		},
+		{
+			name: "cell missing owner.role",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Owner.Role = ""
+			},
+			wantCount: 1,
+			wantField: "owner.role",
+		},
+		{
+			name: "cell missing verify.smoke",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = nil
+			},
+			wantCount: 1,
+			wantField: "verify.smoke",
+		},
+		{
+			name: "cell with empty verify.smoke slice",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{}
+			},
+			wantCount: 1,
+			wantField: "verify.smoke",
+		},
+		{
+			name: "cell missing all three fields",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Owner.Team = ""
+				pm.Cells["access-core"].Owner.Role = ""
+				pm.Cells["access-core"].Verify.Smoke = nil
+			},
+			wantCount: 3,
+		},
+		{
+			name: "multiple cells with missing fields",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Owner.Team = ""
+				pm.Cells["audit-core"].Owner.Role = ""
+			},
+			wantCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT11(), "FMT-11")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueRequired, r.IssueType)
+			}
+			if tt.wantField != "" && len(got) > 0 {
+				assert.Equal(t, tt.wantField, got[0].Field)
+			}
+		})
+	}
+}
+
+// --- FMT-12: slice.yaml required verify.unit field ---
+
+func TestFMT12(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "all slices have verify.unit",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "slice missing verify.unit (nil)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = nil
+			},
+			wantCount: 1,
+		},
+		{
+			name: "slice with empty verify.unit slice",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "multiple slices missing verify.unit",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = nil
+				pm.Slices["audit-core/audit-write"].Verify.Unit = nil
+			},
+			wantCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT12(), "FMT-12")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueRequired, r.IssueType)
+				assert.Equal(t, "verify.unit", r.Field)
+			}
+		})
+	}
+}

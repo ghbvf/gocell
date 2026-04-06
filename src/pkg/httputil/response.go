@@ -15,7 +15,9 @@ import (
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("httputil: encode response", slog.Any("error", err))
+	}
 }
 
 // WriteError writes a structured error response in the canonical format:
@@ -24,13 +26,15 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 func WriteError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"code":    code,
 			"message": message,
 			"details": map[string]any{},
 		},
-	})
+	}); err != nil {
+		slog.Error("httputil: encode error response", slog.Any("error", err))
+	}
 }
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
@@ -48,13 +52,15 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		if encErr := json.NewEncoder(w).Encode(map[string]any{
 			"error": map[string]any{
 				"code":    string(ecErr.Code),
 				"message": ecErr.Message,
 				"details": details,
 			},
-		})
+		}); encErr != nil {
+			slog.Error("httputil: encode domain error response", slog.Any("error", encErr))
+		}
 		return
 	}
 
@@ -90,7 +96,7 @@ func mapCodeToStatus(code errcode.Code) int {
 		return http.StatusNotFound
 	case strings.Contains(c, "VALIDATION") || strings.Contains(c, "INVALID_INPUT"):
 		return http.StatusBadRequest
-	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN"):
+	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN") || strings.Contains(c, "TOKEN_EXPIRED") || strings.Contains(c, "KEY_INVALID"):
 		return http.StatusUnauthorized
 	case strings.Contains(c, "FORBIDDEN"):
 		return http.StatusForbidden

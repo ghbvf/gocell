@@ -329,3 +329,62 @@ func (v *Validator) validateFMT08() []ValidationResult {
 	}
 	return results
 }
+
+// validateFMT11 checks that every cell has required owner and verify fields:
+// owner.team, owner.role, and verify.smoke must be non-empty.
+// CLAUDE.md mandates: cell.yaml must have owner{team,role} and verify.smoke.
+func (v *Validator) validateFMT11() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		if c.Owner.Team == "" {
+			results = append(results, ValidationResult{
+				Code:      "FMT-11",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "owner.team",
+				Message:   fmt.Sprintf("cell %q must have owner.team", c.ID),
+			})
+		}
+		if c.Owner.Role == "" {
+			results = append(results, ValidationResult{
+				Code:      "FMT-11",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "owner.role",
+				Message:   fmt.Sprintf("cell %q must have owner.role", c.ID),
+			})
+		}
+		if len(c.Verify.Smoke) == 0 {
+			results = append(results, ValidationResult{
+				Code:      "FMT-11",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "verify.smoke",
+				Message:   fmt.Sprintf("cell %q must have at least one verify.smoke entry", c.ID),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT12 checks that every slice has at least one verify.unit entry.
+// CLAUDE.md mandates: slice.yaml must have verify.unit.
+func (v *Validator) validateFMT12() []ValidationResult {
+	var results []ValidationResult
+	for key, s := range v.project.Slices {
+		if len(s.Verify.Unit) == 0 {
+			results = append(results, ValidationResult{
+				Code:      "FMT-12",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      sliceFile(key),
+				Field:     "verify.unit",
+				Message:   fmt.Sprintf("slice %q must have at least one verify.unit entry", s.ID),
+			})
+		}
+	}
+	return results
+}

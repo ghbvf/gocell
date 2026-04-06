@@ -20,9 +20,21 @@ import (
 
 var (
 	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
-	testIssuer              = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
-	testVerifier            = auth.NewJWTVerifier(testPubKey)
+	testIssuer              *auth.JWTIssuer
+	testVerifier            *auth.JWTVerifier
 )
+
+func init() {
+	var err error
+	testIssuer, err = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	testVerifier, err = auth.NewJWTVerifier(testPubKey)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+}
 
 // noopWriter is a no-op outbox.Writer for testing.
 type noopWriter struct{}

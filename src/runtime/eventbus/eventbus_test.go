@@ -218,6 +218,37 @@ func TestTopicConfigChangedConstant(t *testing.T) {
 	assert.Equal(t, "event.config.changed.v1", TopicConfigChanged)
 }
 
+func TestSubscribe_CleansUpOnExit(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "cleanup.topic", func(_ context.Context, e outbox.Entry) error {
+			return nil
+		})
+	}()
+
+	// Wait for subscriber to register.
+	time.Sleep(20 * time.Millisecond)
+
+	bus.mu.RLock()
+	subsBefore := len(bus.subs["cleanup.topic"])
+	bus.mu.RUnlock()
+	assert.Equal(t, 1, subsBefore, "subscriber should be registered")
+
+	// Cancel the subscriber.
+	cancel()
+	<-done
+
+	// After exit, the subscription should be removed.
+	bus.mu.RLock()
+	subsAfter := len(bus.subs["cleanup.topic"])
+	bus.mu.RUnlock()
+	assert.Equal(t, 0, subsAfter, "subscriber should be cleaned up after exit")
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)

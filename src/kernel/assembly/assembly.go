@@ -81,54 +81,7 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 //
 // ref: uber-go/fx app.go — Start 出错后自动 rollback 已启动的 Cell（LIFO Stop）。
 func (a *CoreAssembly) Start(ctx context.Context) error {
-	a.mu.Lock()
-	if a.state != stateStopped {
-		a.mu.Unlock()
-		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, a.state))
-	}
-	a.state = stateStarting
-	a.mu.Unlock()
-
-	deps := cell.Dependencies{
-		Cells:     a.cellMap,
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
-	}
-
-	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
-	for _, c := range a.cells {
-		if err := c.Init(ctx, deps); err != nil {
-			a.mu.Lock()
-			a.state = stateStopped
-			a.mu.Unlock()
-			return errcode.Wrap(errcode.ErrValidationFailed,
-				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
-		}
-	}
-
-	// Phase 2: Start cells in order. On failure, rollback already-started cells.
-	for i, c := range a.cells {
-		if err := c.Start(ctx); err != nil {
-			// Rollback: stop cells [0..i-1] in reverse order.
-			for j := i - 1; j >= 0; j-- {
-				if stopErr := a.cells[j].Stop(ctx); stopErr != nil {
-					slog.Warn("rollback: failed to stop cell",
-						"cell", a.cells[j].ID(), "error", stopErr)
-				}
-			}
-			a.mu.Lock()
-			a.state = stateStopped
-			a.mu.Unlock()
-			return errcode.Wrap(errcode.ErrLifecycleInvalid,
-				fmt.Sprintf("assembly: start cell %q", c.ID()), err)
-		}
-	}
-
-	a.mu.Lock()
-	a.state = stateStarted
-	a.mu.Unlock()
-	return nil
+	return a.startInternal(ctx, nil)
 }
 
 // Stop stops every registered Cell in reverse registration order. If multiple
@@ -179,6 +132,14 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 // StartWithConfig is like Start but injects the given config map into
 // Dependencies.Config before initialising cells.
 func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]any) error {
+	return a.startInternal(ctx, cfgMap)
+}
+
+// startInternal is the shared implementation for Start and StartWithConfig.
+// If cfgMap is nil an empty map is used for Dependencies.Config.
+//
+// ref: uber-go/fx app.go — Start 出错后自动 rollback 已启动的 Cell（LIFO Stop）。
+func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any) error {
 	a.mu.Lock()
 	if a.state != stateStopped {
 		a.mu.Unlock()
@@ -188,12 +149,17 @@ func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]an
 	a.state = stateStarting
 	a.mu.Unlock()
 
+	if cfgMap == nil {
+		cfgMap = make(map[string]any)
+	}
+
 	deps := cell.Dependencies{
 		Cells:     a.cellMap,
 		Contracts: make(map[string]cell.Contract),
 		Config:    cfgMap,
 	}
 
+	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
 	for _, c := range a.cells {
 		if err := c.Init(ctx, deps); err != nil {
 			a.mu.Lock()
@@ -204,8 +170,10 @@ func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]an
 		}
 	}
 
+	// Phase 2: Start cells in order. On failure, rollback already-started cells.
 	for i, c := range a.cells {
 		if err := c.Start(ctx); err != nil {
+			// Rollback: stop cells [0..i-1] in reverse order.
 			for j := i - 1; j >= 0; j-- {
 				if stopErr := a.cells[j].Stop(ctx); stopErr != nil {
 					slog.Warn("rollback: failed to stop cell",

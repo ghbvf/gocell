@@ -201,3 +201,72 @@ func TestPeriodicWorker_Stop(t *testing.T) {
 		t.Fatal("periodic worker did not stop in time")
 	}
 }
+
+func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
+	var count atomic.Int32
+	pw := NewPeriodicWorker(10*time.Millisecond, func(ctx context.Context) {
+		count.Add(1)
+	})
+
+	// First run.
+	done := make(chan error, 1)
+	go func() {
+		done <- pw.Start(context.Background())
+	}()
+
+	assert.Eventually(t, func() bool {
+		return count.Load() >= 2
+	}, time.Second, 5*time.Millisecond)
+
+	err := pw.Stop(context.Background())
+	require.NoError(t, err)
+	<-done
+
+	// Record count after first stop.
+	countAfterFirstStop := count.Load()
+
+	// Second run — should work without error.
+	done2 := make(chan error, 1)
+	go func() {
+		done2 <- pw.Start(context.Background())
+	}()
+
+	assert.Eventually(t, func() bool {
+		return count.Load() >= countAfterFirstStop+2
+	}, time.Second, 5*time.Millisecond)
+
+	err = pw.Stop(context.Background())
+	require.NoError(t, err)
+	<-done2
+}
+
+func TestWorkerGroup_CancelsSiblingsOnError(t *testing.T) {
+	g := NewWorkerGroup()
+
+	// failWorker returns an error immediately.
+	fail := newTestWorker()
+	fail.startErr = errors.New("boom")
+
+	// longWorker blocks until context is cancelled.
+	long := newTestWorker()
+
+	g.Add(long)
+	g.Add(fail)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- g.Start(context.Background())
+	}()
+
+	select {
+	case err := <-done:
+		// The group should have returned with the fail worker's error.
+		assert.Error(t, err)
+		assert.Equal(t, "boom", err.Error())
+	case <-time.After(3 * time.Second):
+		t.Fatal("WorkerGroup.Start did not return after sibling failure — sibling was not cancelled")
+	}
+}
+
+// Verify compile-time interface check (Fix #9).
+var _ Worker = (*PeriodicWorker)(nil)

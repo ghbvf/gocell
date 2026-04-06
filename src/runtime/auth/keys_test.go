@@ -69,6 +69,32 @@ func TestLoadKeysFromEnv_ValidKeys(t *testing.T) {
 	assert.NotNil(t, pub)
 }
 
+func TestLoadRSAKeyPairFromPEM_RejectsWeakKey(t *testing.T) {
+	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(weakKey),
+	})
+	pubBytes, err := x509.MarshalPKIXPublicKey(&weakKey.PublicKey)
+	require.NoError(t, err)
+	pubPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubBytes,
+	})
+
+	// Private key parse should fail due to weak key.
+	_, _, err = LoadRSAKeyPairFromPEM(privPEM, pubPEM)
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "1024")
+}
+
 func generateTestKeyPairPEM(t *testing.T) (privPEM, pubPEM []byte) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

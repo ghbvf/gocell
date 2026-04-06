@@ -21,8 +21,12 @@ type JWTVerifier struct {
 
 // NewJWTVerifier creates a JWTVerifier that validates tokens using the given
 // RSA public key with RS256 algorithm pinning.
-func NewJWTVerifier(publicKey *rsa.PublicKey) *JWTVerifier {
-	return &JWTVerifier{publicKey: publicKey}
+// It returns an error if the public key is smaller than MinRSAKeyBits (2048).
+func NewJWTVerifier(publicKey *rsa.PublicKey) (*JWTVerifier, error) {
+	if err := validateRSAKeySize(publicKey.N.BitLen(), "public"); err != nil {
+		return nil, err
+	}
+	return &JWTVerifier{publicKey: publicKey}, nil
 }
 
 // Verify validates the token string and returns Claims on success.
@@ -36,22 +40,19 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 		return v.publicKey, nil
 	})
 	if err != nil {
-		return Claims{}, errcode.Wrap(ErrAuthUnauthorized, "token verification failed", err)
+		return Claims{}, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
-		return Claims{}, errcode.New(ErrAuthUnauthorized, "invalid token")
+		return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "invalid token")
 	}
 
 	mapClaims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return Claims{}, errcode.New(ErrAuthUnauthorized, "invalid token claims")
+		return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
 	return mapClaimsToClaims(mapClaims), nil
 }
-
-// ErrAuthUnauthorized is the error code for authentication failures.
-var ErrAuthUnauthorized = errcode.Code("ERR_AUTH_UNAUTHORIZED")
 
 // JWTIssuer signs JWT tokens with RS256 using an RSA private key.
 type JWTIssuer struct {
@@ -61,12 +62,16 @@ type JWTIssuer struct {
 }
 
 // NewJWTIssuer creates a JWTIssuer.
-func NewJWTIssuer(privateKey *rsa.PrivateKey, issuer string, ttl time.Duration) *JWTIssuer {
+// It returns an error if the private key is smaller than MinRSAKeyBits (2048).
+func NewJWTIssuer(privateKey *rsa.PrivateKey, issuer string, ttl time.Duration) (*JWTIssuer, error) {
+	if err := validateRSAKeySize(privateKey.N.BitLen(), "private"); err != nil {
+		return nil, err
+	}
 	return &JWTIssuer{
 		privateKey: privateKey,
 		issuer:     issuer,
 		ttl:        ttl,
-	}
+	}, nil
 }
 
 // Issue creates a signed JWT token for the given subject and roles.

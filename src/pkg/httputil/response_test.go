@@ -25,6 +25,8 @@ func TestMapCodeToStatus(t *testing.T) {
 		{"ERR_AUTH_INVALID_TOKEN", http.StatusUnauthorized},
 		{"ERR_AUTH_LOGIN_FAILED", http.StatusUnauthorized},
 		{"ERR_AUTH_REFRESH_FAILED", http.StatusUnauthorized},
+		{"ERR_AUTH_TOKEN_EXPIRED", http.StatusUnauthorized},
+		{"ERR_AUTH_KEY_INVALID", http.StatusUnauthorized},
 		{"ERR_AUTH_FORBIDDEN", http.StatusForbidden},
 		{"ERR_USER_LOCKED", http.StatusForbidden},
 		{"ERR_DUPLICATE_USER", http.StatusConflict},

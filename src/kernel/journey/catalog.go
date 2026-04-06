@@ -2,9 +2,11 @@
 package journey
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Catalog provides query access to all journeys and their status.
@@ -32,6 +34,41 @@ func NewCatalog(project *metadata.ProjectMeta) *Catalog {
 		c.statusBoard[entry.JourneyID] = entry
 	}
 	return c
+}
+
+// Validate checks that every cell and contract referenced by journeys in this
+// catalog actually exists in the provided sets. It returns an error (with code
+// ErrReferenceBroken) listing all broken references, or nil if all references
+// are valid.
+//
+// cellIDs and contractIDs are the known-good identifiers from the project
+// registry. Passing nil sets is equivalent to passing empty sets.
+func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
+	var msgs []string
+	for _, j := range c.journeys {
+		for _, cellRef := range j.Cells {
+			if _, ok := cellIDs[cellRef]; !ok {
+				msgs = append(msgs, fmt.Sprintf(
+					"journey %q references unknown cell %q", j.ID, cellRef))
+			}
+		}
+		for _, ctrRef := range j.Contracts {
+			if _, ok := contractIDs[ctrRef]; !ok {
+				msgs = append(msgs, fmt.Sprintf(
+					"journey %q references unknown contract %q", j.ID, ctrRef))
+			}
+		}
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	// Sort for deterministic output.
+	sort.Strings(msgs)
+	combined := msgs[0]
+	for _, m := range msgs[1:] {
+		combined += "; " + m
+	}
+	return errcode.New(errcode.ErrReferenceBroken, combined)
 }
 
 // Get returns a journey by ID, or nil if not found.
