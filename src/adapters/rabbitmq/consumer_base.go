@@ -103,16 +103,18 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 	return func(ctx context.Context, entry outbox.Entry) error {
 		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
 
-		// Check idempotency.
-		processed, err := cb.checker.IsProcessed(ctx, idempotencyKey)
+		// Atomic idempotency check-and-mark via TryProcess (eliminates TOCTOU race).
+		shouldProcess, err := cb.checker.TryProcess(ctx, idempotencyKey, cb.config.IdempotencyTTL)
 		if err != nil {
 			slog.Warn("rabbitmq: idempotency check failed, proceeding with handler",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
 				slog.String("consumer_group", cb.config.ConsumerGroup),
 				slog.String("error", err.Error()))
+			// On error, default to processing (fail-open) to avoid dropping messages.
+			shouldProcess = true
 		}
-		if processed {
+		if !shouldProcess {
 			slog.Debug("rabbitmq: event already processed, skipping",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
@@ -125,14 +127,6 @@ func (cb *ConsumerBase) Wrap(topic string, handler func(context.Context, outbox.
 		for attempt := range cb.config.RetryCount {
 			lastErr = handler(ctx, entry)
 			if lastErr == nil {
-				// Handler succeeded — mark as processed.
-				if markErr := cb.checker.MarkProcessed(ctx, idempotencyKey, cb.config.IdempotencyTTL); markErr != nil {
-					slog.Error("rabbitmq: failed to mark event as processed",
-						slog.String("event_id", entry.ID),
-						slog.String("topic", topic),
-						slog.String("consumer_group", cb.config.ConsumerGroup),
-						slog.String("error", markErr.Error()))
-				}
 				return nil
 			}
 

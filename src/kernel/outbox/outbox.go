@@ -17,9 +17,19 @@ type Entry struct {
 	AggregateID   string
 	AggregateType string
 	EventType     string
+	Topic         string // broker routing key; falls back to EventType if empty
 	Payload       []byte
 	CreatedAt     time.Time
 	Metadata      map[string]string // optional metadata (ref: Watermill Message.Metadata)
+}
+
+// RoutingTopic returns the broker routing key for the entry.
+// If Topic is set, it is returned; otherwise EventType is used as fallback.
+func (e Entry) RoutingTopic() string {
+	if e.Topic != "" {
+		return e.Topic
+	}
+	return e.EventType
 }
 
 // Writer writes outbox entries within a transaction.

@@ -57,3 +57,16 @@ func (ic *IdempotencyChecker) MarkProcessed(ctx context.Context, key string, ttl
 	}
 	return nil
 }
+
+// TryProcess atomically checks whether key has been processed and marks it if not.
+// Returns true if the caller should process (key was not previously seen).
+// Returns false if already processed (another consumer got there first).
+// Uses Redis SetNX which is inherently atomic, eliminating the TOCTOU race.
+func (ic *IdempotencyChecker) TryProcess(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	set, err := ic.rdb.SetNX(ctx, key, "1", ttl).Result()
+	if err != nil {
+		return false, errcode.Wrap(ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency try-process failed (key=%s)", key), err)
+	}
+	return set, nil
+}

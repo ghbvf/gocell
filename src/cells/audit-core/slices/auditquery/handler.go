@@ -23,11 +23,11 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // HandleQuery handles GET /api/v1/audit/entries.
-// Query parameters: event_type, actor_id, from, to (RFC3339).
+// Query parameters: eventType, actorId, from, to (RFC3339).
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	filters := ports.AuditFilters{
-		EventType: r.URL.Query().Get("event_type"),
-		ActorID:   r.URL.Query().Get("actor_id"),
+		EventType: r.URL.Query().Get("eventType"),
+		ActorID:   r.URL.Query().Get("actorId"),
 	}
 
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
