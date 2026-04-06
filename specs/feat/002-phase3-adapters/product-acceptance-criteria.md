@@ -120,7 +120,7 @@
 - **验证方式**: [集成测试]
 - **验收条件**:
   - Given 锁未被持有; When `DistLock.Acquire(ctx, key, ttl)` 被调用; Then 返回 Lock，锁在 Redis 中设置 TTL
-  - Given 锁已被持有; When 另一个调用者 Acquire 同 key; Then 返回 error（`ERR_ADAPTER_REDIS_LOCK_ACQUIRED`）
+  - Given 锁已被持有; When 另一个调用者 Acquire 同 key; Then 返回 error（`ERR_ADAPTER_REDIS_LOCK_TIMEOUT`/`ERR_ADAPTER_REDIS_LOCK_ACQUIRED`）
   - Given 持有 Lock; When `Lock.Release(ctx)` 被调用; Then Redis 中锁被删除
   - Given TTL = 30s（默认）; When 锁到期; Then 锁自动释放
 

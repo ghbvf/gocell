@@ -32,26 +32,66 @@ else
 end
 `
 
+// fenceTokenScript atomically checks lock ownership (KEYS[1] == ARGV[1])
+// before incrementing the per-key fencing counter (KEYS[2]). Returns the
+// new counter value if owned, or 0 if the caller no longer holds the lock.
+// ref: Kleppmann "How to do distributed locking" — fencing tokens
+const fenceTokenScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("INCR", KEYS[2])
+else
+    return 0
+end
+`
+
 // Lock represents an acquired distributed lock. It must be released when the
-// critical section is complete.
+// critical section is complete. Use a fresh context for Release, not the
+// Acquire context, to avoid early cancellation:
+//
+//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	defer lock.Release(cleanupCtx)
+//
+// Safety: DistLock provides distributed mutual exclusion on a best-effort
+// basis. It is suitable for efficiency (avoiding duplicate work). For
+// correctness-critical paths that must prevent stale writes after lock
+// expiry, use FenceToken() and enforce monotonicity at the downstream store
+// (e.g., UPDATE ... WHERE fence_token < $1).
 type Lock struct {
 	rdb    cmdable
 	key    string
 	value  string
 	cancel context.CancelFunc
+	done   chan struct{} // closed when renewLoop exits
 }
 
-// Release releases the distributed lock. It is safe to call multiple times;
-// subsequent calls are no-ops (the Lua script checks ownership).
+// Release releases the distributed lock. It stops the background renewal
+// goroutine and waits for it to exit before issuing the release command.
+// It is safe to call multiple times; subsequent calls are no-ops.
+//
+// Use a fresh context for Release, not the Acquire context:
+//
+//	lock, err := dl.Acquire(requestCtx, key, ttl)
+//	if err != nil { return err }
+//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	defer lock.Release(cleanupCtx)
 func (l *Lock) Release(ctx context.Context) error {
-	// Stop renewal goroutine if running.
+	// Stop renewal goroutine and wait for it to exit.
 	if l.cancel != nil {
 		l.cancel()
+	}
+	if l.done != nil {
+		select {
+		case <-l.done:
+		case <-ctx.Done():
+			// Goroutine will exit eventually via renewCtx cancellation above.
+		}
 	}
 
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisLockAcquire,
+		return errcode.Wrap(ErrAdapterRedisLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
 	}
 	if result == 0 {
@@ -59,6 +99,29 @@ func (l *Lock) Release(ctx context.Context) error {
 			"key", l.key)
 	}
 	return nil
+}
+
+// FenceToken generates a monotonically increasing fencing token for this lock.
+// The token is only issued if the caller still owns the lock (atomic GET+INCR
+// via Lua script). A stale holder whose lease has expired will receive an error.
+//
+// Callers pass this token to downstream stores which reject writes bearing a
+// token older than the highest seen. Enforcement is the store's responsibility.
+//
+// ref: Kleppmann "How to do distributed locking" — fencing tokens
+func (l *Lock) FenceToken(ctx context.Context) (int64, error) {
+	fenceKey := "fence:" + l.key
+	token, err := l.rdb.Eval(ctx, fenceTokenScript,
+		[]string{l.key, fenceKey}, l.value).Int64()
+	if err != nil {
+		return 0, errcode.Wrap(ErrAdapterRedisLockAcquire,
+			fmt.Sprintf("redis: fence token generation failed (key=%s)", l.key), err)
+	}
+	if token == 0 {
+		return 0, errcode.New(ErrAdapterRedisLockAcquire,
+			fmt.Sprintf("redis: lock not owned, cannot generate fence token (key=%s)", l.key))
+	}
+	return token, nil
 }
 
 // DistLock provides distributed locking backed by Redis.
@@ -114,16 +177,25 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 			fmt.Sprintf("redis: lock already held (key=%s)", key))
 	}
 
+	// Renewal runs independently of the acquire context: caller ctx may
+	// carry a deadline that only limits the SetNX call, not the lock
+	// lifetime. Release() cancels this context and waits for the
+	// goroutine to exit via the done channel.
 	renewCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	lock := &Lock{
 		rdb:    d.rdb,
 		key:    key,
 		value:  value,
 		cancel: cancel,
+		done:   done,
 	}
 
 	// Start background renewal at half the TTL interval.
-	go d.renewLoop(renewCtx, lock, ttl)
+	go func() {
+		defer close(done)
+		d.renewLoop(renewCtx, lock, ttl)
+	}()
 
 	slog.Debug("redis: lock acquired",
 		"key", key,

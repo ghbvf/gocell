@@ -54,7 +54,7 @@ func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Dura
 // Deleting a non-existent key is a no-op and returns nil.
 func (c *Cache) Delete(ctx context.Context, key string) error {
 	if err := c.rdb.Del(ctx, key).Err(); err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet,
+		return errcode.Wrap(ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: cache delete failed (key=%s)", key), err)
 	}
 	return nil

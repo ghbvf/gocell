@@ -145,7 +145,7 @@ compile-time 接口断言覆盖：
 每个错误码有 godoc 注释。集成者可以按前缀过滤日志/监控告警。
 
 小问题：
-- `ErrAdapterRedisLockAcquire` 的常量名 `ErrAdapterRedisLockAcquire` 但值是 `"ERR_ADAPTER_REDIS_LOCK_ACQUIRED"` -- "ACQUIRE" vs "ACQUIRED" 命名不一致。[开发者体验]
+- `ErrAdapterRedisLockAcquire` 名值不一致（值为 `"ERR_ADAPTER_REDIS_LOCK_ACQUIRED"`）— 保留兼容，拼写修正待后续 breaking change 处理。[开发者体验]
 
 ### C.5 Cell 脚手架 (部分)
 

@@ -14,9 +14,11 @@ import (
 const (
 	ErrAdapterRedisConnect     errcode.Code = "ERR_ADAPTER_REDIS_CONNECT"
 	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRED"
+	ErrAdapterRedisLockRelease errcode.Code = "ERR_ADAPTER_REDIS_LOCK_RELEASE"
 	ErrAdapterRedisLockTimeout errcode.Code = "ERR_ADAPTER_REDIS_LOCK_TIMEOUT"
 	ErrAdapterRedisSet         errcode.Code = "ERR_ADAPTER_REDIS_SET"
 	ErrAdapterRedisGet         errcode.Code = "ERR_ADAPTER_REDIS_GET"
+	ErrAdapterRedisDelete      errcode.Code = "ERR_ADAPTER_REDIS_DELETE"
 )
 
 // Mode represents the Redis deployment topology.
@@ -62,6 +64,16 @@ type Config struct {
 	DistLockTTL time.Duration
 }
 
+// LogValue implements slog.LogValuer so that Config can be safely passed
+// to structured loggers without leaking the password.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("mode", string(c.Mode)),
+		slog.String("addr", c.Addr),
+		slog.Int("db", c.DB),
+	)
+}
+
 // defaults applies default values to zero-valued fields.
 func (c *Config) defaults() {
 	if c.Mode == "" {
@@ -78,9 +90,6 @@ func (c *Config) defaults() {
 	}
 	if c.DistLockTTL == 0 {
 		c.DistLockTTL = 30 * time.Second
-	}
-	if c.Addr == "" && c.Mode == ModeStandalone {
-		c.Addr = "localhost:6379"
 	}
 }
 
@@ -107,6 +116,19 @@ type Client struct {
 // It pings the server to verify connectivity on creation.
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	cfg.defaults()
+
+	if cfg.Mode == ModeStandalone && cfg.Addr == "" {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.Addr is required for standalone mode")
+	}
+	if cfg.Mode == ModeSentinel && len(cfg.SentinelAddrs) == 0 {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.SentinelAddrs is required for sentinel mode")
+	}
+	if cfg.Mode == ModeSentinel && cfg.SentinelMaster == "" {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.SentinelMaster is required for sentinel mode")
+	}
 
 	var rdb cmdable
 	switch cfg.Mode {
@@ -182,6 +204,8 @@ func (c *Client) cmdable() cmdable {
 }
 
 // Config returns a copy of the client configuration.
+// The returned Config is safe to pass to NewClient for round-trip use.
+// For logging, Config implements slog.LogValuer which redacts the password.
 func (c *Client) Config() Config {
 	return c.config
 }

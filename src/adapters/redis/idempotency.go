@@ -49,7 +49,11 @@ func (ic *IdempotencyChecker) IsProcessed(ctx context.Context, key string) (bool
 // MarkProcessed atomically marks the idempotency key as processed using
 // SET NX with the given TTL. If the key already exists (already processed),
 // the operation is a no-op and returns nil.
+// If ttl <= 0, idempotency.DefaultTTL (24h) is used to prevent permanent keys.
 func (ic *IdempotencyChecker) MarkProcessed(ctx context.Context, key string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = idempotency.DefaultTTL
+	}
 	_, err := ic.rdb.SetNX(ctx, key, "1", ttl).Result()
 	if err != nil {
 		return errcode.Wrap(ErrAdapterRedisSet,
@@ -62,7 +66,11 @@ func (ic *IdempotencyChecker) MarkProcessed(ctx context.Context, key string, ttl
 // Returns true if the caller should process (key was not previously seen).
 // Returns false if already processed (another consumer got there first).
 // Uses Redis SetNX which is inherently atomic, eliminating the TOCTOU race.
+// If ttl <= 0, idempotency.DefaultTTL (24h) is used to prevent permanent keys.
 func (ic *IdempotencyChecker) TryProcess(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = idempotency.DefaultTTL
+	}
 	set, err := ic.rdb.SetNX(ctx, key, "1", ttl).Result()
 	if err != nil {
 		return false, errcode.Wrap(ErrAdapterRedisSet,
