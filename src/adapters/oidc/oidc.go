@@ -80,18 +80,25 @@ func (a *Adapter) Provider(ctx context.Context) (*gooidc.Provider, error) {
 	}
 	a.mu.RUnlock()
 
-	return a.refresh(ctx)
+	return a.discover(ctx, false)
 }
 
 // Refresh forces re-discovery of the OIDC provider metadata. Use this
 // periodically in long-lived processes to pick up JWKS/metadata rotation.
 func (a *Adapter) Refresh(ctx context.Context) (*gooidc.Provider, error) {
-	return a.refresh(ctx)
+	return a.discover(ctx, true)
 }
 
-func (a *Adapter) refresh(ctx context.Context) (*gooidc.Provider, error) {
+// discover performs OIDC discovery. When force is false, it double-checks
+// whether another goroutine already completed initialization before making
+// a network call (cold-start thundering-herd protection).
+func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if !force && a.provider != nil {
+		return a.provider, nil
+	}
 
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
