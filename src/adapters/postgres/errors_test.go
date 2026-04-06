@@ -11,8 +11,10 @@ func TestErrorCodes_Prefix(t *testing.T) {
 	codes := []errcode.Code{
 		ErrAdapterPGConnect,
 		ErrAdapterPGQuery,
-		ErrAdapterPGTxTimeout,
 		ErrAdapterPGMigrate,
+		ErrAdapterPGNoTx,
+		ErrAdapterPGMarshal,
+		ErrAdapterPGPublish,
 	}
 
 	for _, c := range codes {
@@ -25,8 +27,10 @@ func TestErrorCodes_Unique(t *testing.T) {
 	codes := []errcode.Code{
 		ErrAdapterPGConnect,
 		ErrAdapterPGQuery,
-		ErrAdapterPGTxTimeout,
 		ErrAdapterPGMigrate,
+		ErrAdapterPGNoTx,
+		ErrAdapterPGMarshal,
+		ErrAdapterPGPublish,
 	}
 
 	seen := make(map[errcode.Code]bool, len(codes))

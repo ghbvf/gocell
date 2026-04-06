@@ -17,7 +17,7 @@ import (
 func TestOutboxWriter_Write_NoTx(t *testing.T) {
 	w := NewOutboxWriter()
 	entry := outbox.Entry{
-		ID:            "e-1",
+		ID:            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		AggregateID:   "agg-1",
 		AggregateType: "order",
 		EventType:     "order.created",
@@ -39,7 +39,7 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:            "e-2",
+		ID:            "b2c3d4e5-f6a7-8901-bcde-f12345678901",
 		AggregateID:   "agg-2",
 		AggregateType: "order",
 		EventType:     "order.shipped",
@@ -54,11 +54,11 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 	require.Len(t, tx.execCalls, 1)
 	call := tx.execCalls[0]
 	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
-	assert.Equal(t, "e-2", call.args[0])          // id
-	assert.Equal(t, "agg-2", call.args[1])         // aggregate_id
-	assert.Equal(t, "order", call.args[2])          // aggregate_type
-	assert.Equal(t, "order.shipped", call.args[3])  // event_type
-	assert.Equal(t, "", call.args[4])               // topic (empty string)
+	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[0]) // id
+	assert.Equal(t, "agg-2", call.args[1])                                 // aggregate_id
+	assert.Equal(t, "order", call.args[2])                                  // aggregate_type
+	assert.Equal(t, "order.shipped", call.args[3])                          // event_type
+	assert.Equal(t, "", call.args[4])                                       // topic (empty string)
 
 	// Verify metadata was serialized as JSON.
 	metaJSON, ok := call.args[6].([]byte)
@@ -74,7 +74,7 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:            "e-topic",
+		ID:            "c3d4e5f6-a7b8-9012-cdef-123456789012",
 		AggregateID:   "agg-t",
 		AggregateType: "device",
 		EventType:     "device.enrolled",
@@ -97,7 +97,7 @@ func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:        "e-3",
+		ID:        "d4e5f6a7-b8c9-0123-defa-234567890123",
 		EventType: "test.event",
 		Payload:   []byte("{}"),
 		// CreatedAt is zero
@@ -118,7 +118,7 @@ func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
-		ID:        "e-4",
+		ID:        "e5f6a7b8-c9d0-1234-efab-345678901234",
 		EventType: "test",
 		Payload:   []byte("{}"),
 		CreatedAt: time.Now(),
@@ -130,6 +130,98 @@ func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterPGQuery, ec.Code)
+}
+
+func TestOutboxWriter_Write_EmptyID(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+
+	ctx := CtxWithTx(context.Background(), tx)
+	entry := outbox.Entry{
+		ID:        "",
+		EventType: "test.event",
+		Payload:   []byte("{}"),
+		CreatedAt: time.Now(),
+	}
+
+	err := w.Write(ctx, entry)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, ec.Message, "must not be empty")
+}
+
+func TestOutboxWriter_Write_InvalidUUID(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"plain string", "not-a-uuid"},
+		{"too short", "a1b2c3d4"},
+		{"missing dashes", "a1b2c3d4e5f67890abcdef1234567890"},
+		{"invalid hex char", "g1b2c3d4-e5f6-7890-abcd-ef1234567890"},
+		{"extra segment", "a1b2c3d4-e5f6-7890-abcd-ef1234567890-extra"},
+		{"whitespace padded", " a1b2c3d4-e5f6-7890-abcd-ef1234567890 "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := outbox.Entry{
+				ID:        tt.id,
+				EventType: "test.event",
+				Payload:   []byte("{}"),
+				CreatedAt: time.Now(),
+			}
+
+			err := w.Write(ctx, entry)
+			require.Error(t, err)
+
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+			assert.Contains(t, ec.Message, "not a valid UUID")
+		})
+	}
+}
+
+func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"lowercase v4", "550e8400-e29b-41d4-a716-446655440000"},
+		{"uppercase", "550E8400-E29B-41D4-A716-446655440000"},
+		{"mixed case", "550e8400-E29B-41d4-A716-446655440000"},
+		{"all zeros", "00000000-0000-0000-0000-000000000000"},
+		{"all f", "ffffffff-ffff-ffff-ffff-ffffffffffff"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx.execCalls = nil // reset between sub-tests
+			entry := outbox.Entry{
+				ID:        tt.id,
+				EventType: "test.event",
+				Payload:   []byte("{}"),
+				CreatedAt: time.Now(),
+			}
+
+			err := w.Write(ctx, entry)
+			require.NoError(t, err)
+			require.Len(t, tx.execCalls, 1)
+			assert.Equal(t, tt.id, tx.execCalls[0].args[0])
+		})
+	}
 }
 
 // mockOutboxTx records exec calls for assertion.

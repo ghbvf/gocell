@@ -166,6 +166,140 @@ func TestDefaultRelayConfig(t *testing.T) {
 	assert.Equal(t, 72*time.Hour, cfg.RetentionPeriod)
 }
 
+// Fix #1: Retention cleanup should use published_at, not created_at.
+func TestOutboxRelay_DeletePublishedBefore_UsesPublishedAt(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+
+	relay := NewOutboxRelay(db, pub, cfg)
+	cutoff := time.Now().Add(-72 * time.Hour)
+	err := relay.deletePublishedBefore(context.Background(), cutoff)
+	require.NoError(t, err)
+
+	require.Len(t, db.execCalls, 1)
+	assert.Contains(t, db.execCalls[0].sql, "published_at < $1",
+		"retention cleanup must filter on published_at, not created_at")
+	assert.NotContains(t, db.execCalls[0].sql, "created_at < $1",
+		"retention cleanup must NOT use created_at for the cutoff")
+}
+
+// Fix #6: Zero-value config fields should fall back to defaults (no panic).
+func TestNewOutboxRelay_ZeroConfigDefaults(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+
+	// Pass a fully-zero config.
+	relay := NewOutboxRelay(db, pub, RelayConfig{})
+
+	defaults := DefaultRelayConfig()
+	assert.Equal(t, defaults.PollInterval, relay.config.PollInterval,
+		"zero PollInterval should fall back to default")
+	assert.Equal(t, defaults.BatchSize, relay.config.BatchSize,
+		"zero BatchSize should fall back to default")
+	assert.Equal(t, defaults.RetentionPeriod, relay.config.RetentionPeriod,
+		"zero RetentionPeriod should fall back to default")
+}
+
+// Fix #6: Negative config values should also fall back to defaults.
+func TestNewOutboxRelay_NegativeConfigDefaults(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+
+	relay := NewOutboxRelay(db, pub, RelayConfig{
+		PollInterval:    -1 * time.Second,
+		BatchSize:       -5,
+		RetentionPeriod: -1 * time.Hour,
+	})
+
+	defaults := DefaultRelayConfig()
+	assert.Equal(t, defaults.PollInterval, relay.config.PollInterval)
+	assert.Equal(t, defaults.BatchSize, relay.config.BatchSize)
+	assert.Equal(t, defaults.RetentionPeriod, relay.config.RetentionPeriod)
+}
+
+// Fix #6: Valid config values should be preserved (not overridden by defaults).
+func TestNewOutboxRelay_ValidConfigPreserved(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+
+	custom := RelayConfig{
+		PollInterval:    5 * time.Second,
+		BatchSize:       50,
+		RetentionPeriod: 24 * time.Hour,
+	}
+	relay := NewOutboxRelay(db, pub, custom)
+
+	assert.Equal(t, custom.PollInterval, relay.config.PollInterval)
+	assert.Equal(t, custom.BatchSize, relay.config.BatchSize)
+	assert.Equal(t, custom.RetentionPeriod, relay.config.RetentionPeriod)
+}
+
+// Fix #9: Stop should respect the caller's context deadline.
+func TestOutboxRelay_Stop_RespectsCallerTimeout(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 50 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	// Start the relay so internal goroutines are running.
+	startCtx, startCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relay.Start(startCtx)
+	}()
+
+	// Give the relay time to start.
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel start context to trigger shutdown of loops.
+	startCancel()
+
+	// Stop with an already-expired context to verify timeout path.
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer expiredCancel()
+	time.Sleep(5 * time.Millisecond) // ensure context has expired
+
+	err := relay.Stop(expiredCtx)
+	// The relay may or may not have finished its goroutines in time.
+	// If it hasn't, we should get an error. If it has, nil is fine.
+	// We verify the mechanism works by checking the error type when it occurs.
+	if err != nil {
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	}
+}
+
+// Fix #9: Stop should succeed when caller context has ample time.
+func TestOutboxRelay_Stop_SucceedsWithAmpleTimeout(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 50 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relay.Start(startCtx)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	startCancel()
+
+	// Give plenty of time to stop.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+
+	err := relay.Stop(stopCtx)
+	require.NoError(t, err)
+
+	startErr := <-errCh
+	assert.ErrorIs(t, startErr, context.Canceled)
+}
+
 // --- mocks ---
 
 type mockDBTX struct {

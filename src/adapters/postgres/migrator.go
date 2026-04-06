@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -102,13 +104,20 @@ func (m *Migrator) ensureTable(ctx context.Context) error {
 }
 
 // Up applies all unapplied migrations in order.
-// It acquires a PostgreSQL advisory lock to prevent concurrent migration
-// execution across multiple processes.
+// It acquires a PostgreSQL advisory lock on a dedicated connection to prevent
+// concurrent migration execution across multiple processes. The lock and unlock
+// are guaranteed to run on the same session (connection).
 func (m *Migrator) Up(ctx context.Context) error {
-	if _, err := m.pool.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire connection for migration lock", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire migration advisory lock", err)
 	}
-	defer m.pool.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
+	defer conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
 
 	if err := m.ensureTable(ctx); err != nil {
 		return err
@@ -136,13 +145,20 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 // Down rolls back the last applied migration.
-// It acquires a PostgreSQL advisory lock to prevent concurrent migration
-// execution across multiple processes.
+// It acquires a PostgreSQL advisory lock on a dedicated connection to prevent
+// concurrent migration execution across multiple processes. The lock and unlock
+// are guaranteed to run on the same session (connection).
 func (m *Migrator) Down(ctx context.Context) error {
-	if _, err := m.pool.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire connection for migration lock", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire migration advisory lock", err)
 	}
-	defer m.pool.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
+	defer conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
 
 	if err := m.ensureTable(ctx); err != nil {
 		return err
@@ -310,7 +326,7 @@ func (m *Migrator) latestApplied(ctx context.Context) (string, error) {
 	var v string
 	err := m.pool.QueryRow(ctx, query).Scan(&v)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 		return "", errcode.Wrap(ErrAdapterPGMigrate, "postgres: query latest migration", err)

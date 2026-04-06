@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// uuidPattern matches a canonical UUID string (8-4-4-4-12 hex digits).
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Compile-time interface check.
 var _ outbox.Writer = (*OutboxWriter)(nil)
@@ -34,6 +38,13 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	tx, ok := TxFromContext(ctx)
 	if !ok {
 		return errcode.New(ErrAdapterPGNoTx, "outbox write requires a transaction in context")
+	}
+
+	if entry.ID == "" {
+		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be empty")
+	}
+	if !uuidPattern.MatchString(entry.ID) {
+		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID is not a valid UUID: "+entry.ID)
 	}
 
 	metadata, err := json.Marshal(entry.Metadata)

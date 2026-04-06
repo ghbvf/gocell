@@ -61,7 +61,19 @@ type OutboxRelay struct {
 
 // NewOutboxRelay creates an OutboxRelay that polls from db and publishes via pub.
 // db is typically pool.DB() (*pgxpool.Pool satisfies relayDB).
+// Zero or negative config values are replaced with defaults to prevent panics
+// (e.g. time.NewTicker(0) panics).
 func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRelay {
+	defaults := DefaultRelayConfig()
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = defaults.PollInterval
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = defaults.BatchSize
+	}
+	if cfg.RetentionPeriod <= 0 {
+		cfg.RetentionPeriod = defaults.RetentionPeriod
+	}
 	return &OutboxRelay{
 		db:     db,
 		pub:    pub,
@@ -96,15 +108,28 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 }
 
 // Stop signals the relay to shut down gracefully and waits for goroutines.
-func (r *OutboxRelay) Stop(_ context.Context) error {
+// It respects the caller's context deadline: if ctx expires before goroutines
+// finish, Stop returns an error instead of blocking indefinitely.
+func (r *OutboxRelay) Stop(ctx context.Context) error {
 	r.once.Do(func() {
 		if r.cancel != nil {
 			r.cancel()
 		}
 	})
-	r.wg.Wait()
-	slog.Info("outbox relay: stopped")
-	return nil
+
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("outbox relay: stopped")
+		return nil
+	case <-ctx.Done():
+		return errcode.Wrap(ErrAdapterPGConnect, "relay stop timeout", ctx.Err())
+	}
 }
 
 // pollLoop fetches unpublished entries and publishes them.
@@ -250,7 +275,7 @@ func (r *OutboxRelay) cleanupLoop(ctx context.Context) {
 
 // deletePublishedBefore removes published entries older than the cutoff time.
 func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Time) error {
-	const query = `DELETE FROM outbox_entries WHERE published = true AND created_at < $1`
+	const query = `DELETE FROM outbox_entries WHERE published = true AND published_at < $1`
 	ct, err := r.db.Exec(ctx, query, before)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete old entries failed", err)
