@@ -193,10 +193,10 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 			continue
 		}
 
-		if err := r.pub.Publish(ctx, e.EventType, payload); err != nil {
+		if err := r.pub.Publish(ctx, e.RoutingTopic(), payload); err != nil {
 			slog.Error("outbox relay: publish failed",
 				slog.String("entry_id", e.ID),
-				slog.String("event_type", e.EventType),
+				slog.String("topic", e.RoutingTopic()),
 				slog.Any("error", err),
 			)
 			// Do NOT mark as published; will retry on next poll.

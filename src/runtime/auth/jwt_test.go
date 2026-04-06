@@ -23,8 +23,10 @@ func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 
 func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	issuer := NewJWTIssuer(priv, "gocell", time.Hour)
-	verifier := NewJWTVerifier(pub)
+	issuer, err := NewJWTIssuer(priv, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", []string{"admin", "user"}, []string{"api"})
 	require.NoError(t, err)
@@ -41,8 +43,10 @@ func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 
 func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	issuer := NewJWTIssuer(priv, "gocell", -time.Hour) // already expired
-	verifier := NewJWTVerifier(pub)
+	issuer, err := NewJWTIssuer(priv, "gocell", -time.Hour) // already expired
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", nil, nil)
 	require.NoError(t, err)
@@ -55,7 +59,8 @@ func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 func TestJWTVerifier_RejectsHS256(t *testing.T) {
 	// Create HS256 token and verify it is rejected by RS256 verifier.
 	_, pub := generateTestKeyPair(t)
-	verifier := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	hmacToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "attacker",
@@ -71,7 +76,8 @@ func TestJWTVerifier_RejectsHS256(t *testing.T) {
 
 func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 	_, pub := generateTestKeyPair(t)
-	verifier := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	// Create an unsigned token with alg=none.
 	noneToken := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
@@ -89,8 +95,10 @@ func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 func TestJWTVerifier_WrongKey(t *testing.T) {
 	priv1, _ := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t) // different key pair
-	issuer := NewJWTIssuer(priv1, "gocell", time.Hour)
-	verifier := NewJWTVerifier(pub2)
+	issuer, err := NewJWTIssuer(priv1, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(pub2)
+	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", nil, nil)
 	require.NoError(t, err)
@@ -101,16 +109,19 @@ func TestJWTVerifier_WrongKey(t *testing.T) {
 
 func TestJWTVerifier_MalformedToken(t *testing.T) {
 	_, pub := generateTestKeyPair(t)
-	verifier := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
-	_, err := verifier.Verify(context.Background(), "not.a.jwt")
+	_, err = verifier.Verify(context.Background(), "not.a.jwt")
 	require.Error(t, err)
 }
 
 func TestJWTIssuer_RoundTrip(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	issuer := NewJWTIssuer(priv, "test-issuer", 30*time.Minute)
-	verifier := NewJWTVerifier(pub)
+	issuer, err := NewJWTIssuer(priv, "test-issuer", 30*time.Minute)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("svc-audit", []string{"service"}, []string{"internal"})
 	require.NoError(t, err)
@@ -125,8 +136,10 @@ func TestJWTIssuer_RoundTrip(t *testing.T) {
 
 func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	issuer := NewJWTIssuer(priv, "gocell", time.Hour)
-	verifier := NewJWTVerifier(pub)
+	issuer, err := NewJWTIssuer(priv, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(pub)
+	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-2", nil, nil)
 	require.NoError(t, err)
@@ -136,6 +149,28 @@ func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
 	assert.Equal(t, "user-2", claims.Subject)
 	assert.Empty(t, claims.Roles)
 	assert.Empty(t, claims.Audience)
+}
+
+func TestNewJWTVerifier_RejectsWeakKey(t *testing.T) {
+	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+
+	_, err = NewJWTVerifier(&weakKey.PublicKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
+	assert.Contains(t, err.Error(), "1024")
+}
+
+func TestNewJWTIssuer_RejectsWeakKey(t *testing.T) {
+	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
+
+	_, err = NewJWTIssuer(weakKey, "gocell", time.Hour)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
+	assert.Contains(t, err.Error(), "1024")
 }
 
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {

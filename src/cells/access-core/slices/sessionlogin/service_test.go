@@ -18,8 +18,16 @@ import (
 
 var (
 	testPrivKey, _ = auth.MustGenerateTestKeyPair()
-	testIssuer     = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	testIssuer     *auth.JWTIssuer
 )
+
+func init() {
+	var err error
+	testIssuer, err = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+}
 
 func newTestService() (*Service, *mem.UserRepository) {
 	userRepo := mem.NewUserRepository()

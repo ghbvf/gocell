@@ -10,6 +10,7 @@ package eventbus
 import (
 	"context"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -134,7 +135,10 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler 
 	b.mu.Unlock()
 
 	// Process messages in the current goroutine (Subscribe blocks per interface contract).
-	defer close(sub.done)
+	defer func() {
+		close(sub.done)
+		b.removeSub(topic, sub)
+	}()
 	for {
 		select {
 		case <-subCtx.Done():
@@ -194,12 +198,26 @@ func (b *InMemoryEventBus) DrainDeadLetters() []DeadLetter {
 	return dl
 }
 
+// removeSub removes a specific subscription from the topic's subscriber list.
+func (b *InMemoryEventBus) removeSub(topic string, target *subscription) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	subs := b.subs[topic]
+	for i, s := range subs {
+		if s == target {
+			b.subs[topic] = append(subs[:i], subs[i+1:]...)
+			return
+		}
+	}
+}
+
 func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler func(context.Context, outbox.Entry) error) {
 	var lastErr error
 	for attempt := range maxRetries {
 		if err := handler(ctx, entry); err != nil {
 			lastErr = err
-			delay := baseRetryDelay * (1 << attempt) // 100ms, 200ms, 400ms
+			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
+			delay := baseRetryDelay*(1<<attempt) + jitter // e.g. 100-200ms, 200-300ms, 400-500ms
 			slog.Warn("eventbus: handler error, retrying",
 				slog.String("topic", topic),
 				slog.Int("attempt", attempt+1),

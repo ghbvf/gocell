@@ -42,17 +42,20 @@ func (g *WorkerGroup) Add(w Worker) {
 }
 
 // Start launches all workers concurrently. It blocks until all workers
-// return. If any worker returns an error, it is logged. The first error
-// encountered is returned.
+// return. If any worker returns a non-context error, all sibling workers are
+// cancelled via a shared context. The first error encountered is returned.
 func (g *WorkerGroup) Start(ctx context.Context) error {
 	g.mu.Lock()
 	workers := make([]Worker, len(g.workers))
 	copy(workers, g.workers)
 	g.mu.Unlock()
 
+	groupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	var (
-		wg      sync.WaitGroup
-		errOnce sync.Once
+		wg       sync.WaitGroup
+		errOnce  sync.Once
 		firstErr error
 	)
 
@@ -60,9 +63,10 @@ func (g *WorkerGroup) Start(ctx context.Context) error {
 		wg.Add(1)
 		go func(w Worker) {
 			defer wg.Done()
-			if err := w.Start(ctx); err != nil {
+			if err := w.Start(groupCtx); err != nil {
 				slog.Error("worker exited with error", slog.Any("error", err))
 				errOnce.Do(func() { firstErr = err })
+				cancel() // cancel sibling workers
 			}
 		}(w)
 	}

@@ -30,8 +30,12 @@ func TestWatcher_OnChange(t *testing.T) {
 
 	w.Start()
 
-	// Give the watcher time to start.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the event loop to be ready instead of sleeping.
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not become ready in time")
+	}
 
 	// Modify the file.
 	require.NoError(t, os.WriteFile(file, []byte("key: val2"), 0o644))

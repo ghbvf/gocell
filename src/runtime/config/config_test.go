@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -185,4 +186,60 @@ func TestConfig_SetNested_OverwriteNonMap(t *testing.T) {
 	cfg, err := Load(yamlFile, "SN")
 	require.NoError(t, err)
 	assert.Equal(t, "nested-val", cfg.Get("flat.deep"))
+}
+
+// TestConfig_ConcurrentGetAndReload verifies that concurrent Get() and Reload()
+// calls do not race. Run with -race to verify.
+func TestConfig_ConcurrentGetAndReload(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: initial\ncount: 1\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	c := cfg.(*config)
+
+	const readers = 10
+	const iterations = 100
+
+	var wg sync.WaitGroup
+
+	// Multiple goroutines reading concurrently.
+	for i := range readers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := range iterations {
+				_ = cfg.Get("key")
+				_ = cfg.Get("count")
+				_ = cfg.Keys()
+				if j%10 == 0 {
+					var dest map[string]any
+					_ = cfg.Scan(&dest)
+				}
+				_ = id // prevent unused variable warning
+			}
+		}(i)
+	}
+
+	// One goroutine reloading concurrently.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			// Alternate between two config versions to exercise the swap.
+			require.NoError(t, os.WriteFile(yamlFile, []byte("key: version_a\ncount: 2\n"), 0o644))
+			_ = c.Reload(yamlFile, "")
+
+			require.NoError(t, os.WriteFile(yamlFile, []byte("key: version_b\ncount: 3\n"), 0o644))
+			_ = c.Reload(yamlFile, "")
+		}
+	}()
+
+	wg.Wait()
+
+	// After all reloads, config should still be readable without error.
+	val := cfg.Get("key")
+	assert.NotNil(t, val, "key should be present after concurrent reloads")
 }

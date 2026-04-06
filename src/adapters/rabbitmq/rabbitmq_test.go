@@ -204,10 +204,11 @@ func (m *mockConnection) Close() error {
 // --- Mock Idempotency Checker ---
 
 type mockIdempotencyChecker struct {
-	mu        sync.Mutex
-	processed map[string]bool
-	checkErr  error
-	markErr   error
+	mu          sync.Mutex
+	processed   map[string]bool
+	checkErr    error
+	markErr     error
+	tryProcErr  error
 }
 
 func newMockIdempotencyChecker() *mockIdempotencyChecker {
@@ -233,6 +234,19 @@ func (m *mockIdempotencyChecker) MarkProcessed(_ context.Context, key string, _ 
 	}
 	m.processed[key] = true
 	return nil
+}
+
+func (m *mockIdempotencyChecker) TryProcess(_ context.Context, key string, _ time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tryProcErr != nil {
+		return false, m.tryProcErr
+	}
+	if m.processed[key] {
+		return false, nil
+	}
+	m.processed[key] = true
+	return true, nil
 }
 
 // Compile-time interface checks.
@@ -955,9 +969,11 @@ func TestConsumerBase_Wrap_RetryExhausted_DLQ(t *testing.T) {
 	assert.Equal(t, "2", dlqEntry.Metadata["x-death-retry-count"])
 	pub.mu.Unlock()
 
-	// Should NOT be marked as processed.
+	// With TryProcess, the key is claimed atomically before the handler runs.
+	// Even though the handler failed and exhausted retries, the key remains marked
+	// to prevent duplicate processing by other consumers (message goes to DLQ).
 	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-003"])
+	assert.True(t, checker.processed["test-group:evt-003"])
 	checker.mu.Unlock()
 }
 
@@ -1013,7 +1029,7 @@ func TestConsumerBase_Wrap_CustomDLQTopic(t *testing.T) {
 
 func TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	checker.checkErr = errors.New("redis down")
+	checker.tryProcErr = errors.New("redis down")
 	pub := newMockPublisher()
 
 	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{

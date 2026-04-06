@@ -1,9 +1,11 @@
 package journey
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -391,5 +393,105 @@ func TestEmptyProjectMeta_NoPanic(t *testing.T) {
 		assert.Empty(t, c.CellJourneys("any"), "case %d", i)
 		assert.Empty(t, c.ContractJourneys("any"), "case %d", i)
 		assert.Empty(t, c.CrossCellJourneys(), "case %d", i)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	allCells := map[string]struct{}{
+		"access-core": {},
+		"audit-core":  {},
+		"config-core": {},
+	}
+	allContracts := map[string]struct{}{
+		"event.user.created.v1":            {},
+		"http.auth.login.v1":               {},
+		"event.session.created.v1":         {},
+		"event.audit.integrity-verified.v1": {},
+	}
+
+	tests := []struct {
+		name        string
+		project     *metadata.ProjectMeta
+		cellIDs     map[string]struct{}
+		contractIDs map[string]struct{}
+		wantErr     bool
+		wantCode    ecErr.Code
+		wantContain []string // substrings expected in error message
+	}{
+		{
+			name:        "all references valid",
+			project:     buildTestProject(),
+			cellIDs:     allCells,
+			contractIDs: allContracts,
+			wantErr:     false,
+		},
+		{
+			name:    "missing cell reference",
+			project: buildTestProject(),
+			cellIDs: map[string]struct{}{
+				"access-core": {},
+				"audit-core":  {},
+				// config-core missing
+			},
+			contractIDs: allContracts,
+			wantErr:     true,
+			wantCode:    ecErr.ErrReferenceBroken,
+			wantContain: []string{"config-core", "unknown cell"},
+		},
+		{
+			name:    "missing contract reference",
+			project: buildTestProject(),
+			cellIDs: allCells,
+			contractIDs: map[string]struct{}{
+				"event.user.created.v1":    {},
+				"http.auth.login.v1":       {},
+				"event.session.created.v1": {},
+				// event.audit.integrity-verified.v1 missing
+			},
+			wantErr:     true,
+			wantCode:    ecErr.ErrReferenceBroken,
+			wantContain: []string{"event.audit.integrity-verified.v1", "unknown contract"},
+		},
+		{
+			name:        "empty catalog validates successfully",
+			project:     nil,
+			cellIDs:     nil,
+			contractIDs: nil,
+			wantErr:     false,
+		},
+		{
+			name:        "nil sets treat all references as broken",
+			project:     buildTestProject(),
+			cellIDs:     nil,
+			contractIDs: nil,
+			wantErr:     true,
+			wantCode:    ecErr.ErrReferenceBroken,
+		},
+		{
+			name:        "empty sets treat all references as broken",
+			project:     buildTestProject(),
+			cellIDs:     map[string]struct{}{},
+			contractIDs: map[string]struct{}{},
+			wantErr:     true,
+			wantCode:    ecErr.ErrReferenceBroken,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewCatalog(tt.project)
+			err := c.Validate(tt.cellIDs, tt.contractIDs)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ec *ecErr.Error
+			require.True(t, errors.As(err, &ec))
+			assert.Equal(t, tt.wantCode, ec.Code)
+			for _, sub := range tt.wantContain {
+				assert.Contains(t, err.Error(), sub)
+			}
+		})
 	}
 }

@@ -15,9 +15,21 @@ import (
 
 var (
 	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
-	testIssuer              = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
-	testVerifier            = auth.NewJWTVerifier(testPubKey)
+	testIssuer              *auth.JWTIssuer
+	testVerifier            *auth.JWTVerifier
 )
+
+func init() {
+	var err error
+	testIssuer, err = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	testVerifier, err = auth.NewJWTVerifier(testPubKey)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+}
 
 func newTestService() (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
@@ -125,9 +137,10 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 
 	// Tokens signed with a different key should be rejected by the verifier.
 	otherPriv, _ := auth.MustGenerateTestKeyPair()
-	otherIssuer := auth.NewJWTIssuer(otherPriv, "gocell-access-core", time.Hour)
+	otherIssuer, err := auth.NewJWTIssuer(otherPriv, "gocell-access-core", time.Hour)
+	require.NoError(t, err)
 	tokenStr, _ := otherIssuer.Issue("usr-1", nil, nil)
 
-	_, err := svc.Refresh(context.Background(), tokenStr)
+	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
 }

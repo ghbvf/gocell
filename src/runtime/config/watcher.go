@@ -21,6 +21,9 @@ type Watcher struct {
 	callbacks []func(WatchEvent)
 	mu        sync.Mutex
 	done      chan struct{}
+	ready     chan struct{} // closed when the event loop starts
+	closeOnce sync.Once
+	readyOnce sync.Once
 }
 
 // NewWatcher creates a Watcher for the given file path. The watcher does not
@@ -38,6 +41,7 @@ func NewWatcher(path string) (*Watcher, error) {
 		path:    path,
 		watcher: fw,
 		done:    make(chan struct{}),
+		ready:   make(chan struct{}),
 	}, nil
 }
 
@@ -65,7 +69,14 @@ func (w *Watcher) StartWithContext(ctx context.Context) {
 	go w.loop()
 }
 
+// Ready returns a channel that is closed when the event loop has started and is
+// ready to process file-system events. Useful in tests to avoid time.Sleep.
+func (w *Watcher) Ready() <-chan struct{} {
+	return w.ready
+}
+
 func (w *Watcher) loop() {
+	w.readyOnce.Do(func() { close(w.ready) })
 	for {
 		select {
 		case event, ok := <-w.watcher.Events:
@@ -101,13 +112,11 @@ func (w *Watcher) loop() {
 	}
 }
 
-// Close stops the watcher and releases resources.
+// Close stops the watcher and releases resources. It is safe to call
+// concurrently from multiple goroutines.
 func (w *Watcher) Close() error {
-	select {
-	case <-w.done:
-		// Already closed.
-	default:
+	w.closeOnce.Do(func() {
 		close(w.done)
-	}
+	})
 	return w.watcher.Close()
 }

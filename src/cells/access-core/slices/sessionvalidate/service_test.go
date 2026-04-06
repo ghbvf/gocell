@@ -15,8 +15,16 @@ import (
 
 var (
 	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
-	testVerifier            = auth.NewJWTVerifier(testPubKey)
+	testVerifier            *auth.JWTVerifier
 )
+
+func init() {
+	var err error
+	testVerifier, err = auth.NewJWTVerifier(testPubKey)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+}
 
 func TestService_Verify(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()

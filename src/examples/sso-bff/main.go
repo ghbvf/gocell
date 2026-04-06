@@ -44,8 +44,16 @@ func main() {
 
 	// RSA key pair for JWT signing/verification (development only).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	jwtIssuer := auth.NewJWTIssuer(privKey, "sso-bff-dev", 15*time.Minute)
-	jwtVerifier := auth.NewJWTVerifier(pubKey)
+	jwtIssuer, err := auth.NewJWTIssuer(privKey, "sso-bff-dev", 15*time.Minute)
+	if err != nil {
+		logger.Error("failed to create JWT issuer", slog.Any("error", err))
+		os.Exit(1)
+	}
+	jwtVerifier, err := auth.NewJWTVerifier(pubKey)
+	if err != nil {
+		logger.Error("failed to create JWT verifier", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = noopWriter{}

@@ -62,6 +62,8 @@ func (b *BaseCell) Metadata() CellMetadata { return b.meta }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	out := make([]Slice, len(b.slices))
 	copy(out, b.slices)
 	return out
@@ -69,6 +71,8 @@ func (b *BaseCell) OwnedSlices() []Slice {
 
 // ProducedContracts returns a copy of the produced contract list.
 func (b *BaseCell) ProducedContracts() []Contract {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	out := make([]Contract, len(b.produced))
 	copy(out, b.produced)
 	return out
@@ -76,6 +80,8 @@ func (b *BaseCell) ProducedContracts() []Contract {
 
 // ConsumedContracts returns a copy of the consumed contract list.
 func (b *BaseCell) ConsumedContracts() []Contract {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	out := make([]Contract, len(b.consumed))
 	copy(out, b.consumed)
 	return out
@@ -162,13 +168,25 @@ func (b *BaseCell) ShutdownCtx() context.Context {
 }
 
 // AddSlice appends a Slice to this cell's owned slice list.
-func (b *BaseCell) AddSlice(s Slice) { b.slices = append(b.slices, s) }
+func (b *BaseCell) AddSlice(s Slice) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.slices = append(b.slices, s)
+}
 
 // AddProducedContract appends a Contract this cell produces.
-func (b *BaseCell) AddProducedContract(c Contract) { b.produced = append(b.produced, c) }
+func (b *BaseCell) AddProducedContract(c Contract) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.produced = append(b.produced, c)
+}
 
 // AddConsumedContract appends a Contract this cell consumes.
-func (b *BaseCell) AddConsumedContract(c Contract) { b.consumed = append(b.consumed, c) }
+func (b *BaseCell) AddConsumedContract(c Contract) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.consumed = append(b.consumed, c)
+}
 
 // ---------------------------------------------------------------------------
 // BaseSlice

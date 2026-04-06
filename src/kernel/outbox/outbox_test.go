@@ -71,3 +71,45 @@ func TestEntryFields(t *testing.T) {
 	assert.NotEmpty(t, e.Payload)
 	assert.False(t, e.CreatedAt.IsZero())
 }
+
+func TestEntry_RoutingTopic(t *testing.T) {
+	tests := []struct {
+		name      string
+		entry     Entry
+		wantTopic string
+	}{
+		{
+			name: "Topic set — returns Topic",
+			entry: Entry{
+				EventType: "order.created",
+				Topic:     "orders.v2",
+			},
+			wantTopic: "orders.v2",
+		},
+		{
+			name: "Topic empty — falls back to EventType",
+			entry: Entry{
+				EventType: "order.created",
+				Topic:     "",
+			},
+			wantTopic: "order.created",
+		},
+		{
+			name: "Topic zero value (not set) — falls back to EventType",
+			entry: Entry{
+				EventType: "session.created",
+			},
+			wantTopic: "session.created",
+		},
+		{
+			name: "Both empty — returns empty string",
+			entry: Entry{},
+			wantTopic: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantTopic, tt.entry.RoutingTopic())
+		})
+	}
+}

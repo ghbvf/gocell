@@ -245,6 +245,35 @@ func TestBaseCellConcurrentHealthReady(t *testing.T) {
 	require.NoError(t, c.Stop(context.Background()))
 }
 
+func TestBaseCellConcurrentAddAndRead(t *testing.T) {
+	c := NewBaseCell(CellMetadata{ID: "race-add"})
+
+	const n = 100
+	done := make(chan struct{})
+
+	// Writer goroutine: adds slices, produced, and consumed contracts.
+	go func() {
+		defer close(done)
+		for i := 0; i < n; i++ {
+			c.AddSlice(NewBaseSlice("s", "race-add", L0))
+			c.AddProducedContract(NewBaseContract("pc", ContractHTTP, "race-add", L1))
+			c.AddConsumedContract(NewBaseContract("cc", ContractEvent, "other", L2))
+		}
+	}()
+
+	// Reader goroutine (main): reads all three lists concurrently.
+	for i := 0; i < n; i++ {
+		_ = c.OwnedSlices()
+		_ = c.ProducedContracts()
+		_ = c.ConsumedContracts()
+	}
+	<-done
+
+	assert.Len(t, c.OwnedSlices(), n)
+	assert.Len(t, c.ProducedContracts(), n)
+	assert.Len(t, c.ConsumedContracts(), n)
+}
+
 // ---------------------------------------------------------------------------
 // BaseSlice
 // ---------------------------------------------------------------------------
