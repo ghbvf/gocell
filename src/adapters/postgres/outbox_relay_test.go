@@ -36,7 +36,7 @@ func TestOutboxRelay_StartStop(t *testing.T) {
 	require.NoError(t, err)
 
 	startErr := <-errCh
-	assert.ErrorIs(t, startErr, context.DeadlineExceeded)
+	assert.NoError(t, startErr, "Start should return nil on graceful stop per worker.Worker contract")
 }
 
 func TestOutboxRelay_PollOnce_NoEntries(t *testing.T) {
@@ -297,7 +297,7 @@ func TestOutboxRelay_Stop_SucceedsWithAmpleTimeout(t *testing.T) {
 	require.NoError(t, err)
 
 	startErr := <-errCh
-	assert.ErrorIs(t, startErr, context.Canceled)
+	assert.NoError(t, startErr, "Start should return nil on graceful stop")
 }
 
 // --- mocks ---

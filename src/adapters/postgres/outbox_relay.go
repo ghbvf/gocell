@@ -104,7 +104,9 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 	)
 
 	<-ctx.Done()
-	return ctx.Err()
+	// Graceful stop via Stop() cancels the context. Return nil to signal
+	// clean exit per the worker.Worker contract (non-nil = abnormal).
+	return nil
 }
 
 // Stop signals the relay to shut down gracefully and waits for goroutines.
