@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -475,14 +476,47 @@ func TestSanitizeURL(t *testing.T) {
 		url      string
 		expected string
 	}{
-		{name: "long URL", url: "amqp://guest:guest@localhost:5672/", expected: "amqp://gue***"},
-		{name: "short URL", url: "amqp://x", expected: "***"},
+		{
+			name:     "full credentials redacted",
+			url:      "amqp://guest:guest@localhost:5672/",
+			expected: "amqp://***:***@localhost:5672/",
+		},
+		{
+			name:     "username only redacted",
+			url:      "amqp://admin@localhost:5672/",
+			expected: "amqp://***:***@localhost:5672/",
+		},
+		{
+			name:     "no credentials unchanged",
+			url:      "amqp://localhost:5672/",
+			expected: "amqp://localhost:5672/",
+		},
+		{
+			name:     "with vhost",
+			url:      "amqp://user:pass@rabbit.example.com:5672/production",
+			expected: "amqp://***:***@rabbit.example.com:5672/production",
+		},
+		{
+			name:     "empty string returns empty",
+			url:      "",
+			expected: "",
+		},
+		{
+			name:     "amqps scheme with credentials",
+			url:      "amqps://user:secret@secure.host:5671/",
+			expected: "amqps://***:***@secure.host:5671/",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := sanitizeURL(tt.url)
 			assert.Equal(t, tt.expected, result)
+			// Verify no real credentials appear in sanitized output.
+			assert.NotContains(t, result, "guest")
+			assert.NotContains(t, result, "admin")
+			assert.NotContains(t, result, "secret")
+			assert.NotContains(t, result, ":pass@")
 		})
 	}
 }
@@ -1077,4 +1111,134 @@ func TestPermanentError(t *testing.T) {
 	assert.Contains(t, pe.Error(), "permanent")
 	assert.Contains(t, pe.Error(), "bad data")
 	assert.Equal(t, inner, pe.Unwrap())
+}
+
+// --- P0 #5: DLQ publish failure must propagate error (not silently ACK) ---
+
+func TestConsumerBase_Wrap_DLQPublishFails_RetryExhausted_ReturnsError(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+	pub.err = errors.New("DLQ broker down")
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+		return errors.New("always fails")
+	})
+
+	entry := outbox.Entry{ID: "evt-dlq-fail-001", EventType: "test.fail"}
+	err := handler(context.Background(), entry)
+	// When DLQ publish fails, Wrap must return an error so subscriber NACKs with requeue.
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DLQ publish failed after retry exhaustion")
+	assert.Contains(t, err.Error(), "DLQ broker down")
+}
+
+func TestConsumerBase_Wrap_DLQPublishFails_PermanentError_ReturnsError(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+	pub.err = errors.New("DLQ broker down")
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+		return NewPermanentError(errors.New("bad payload"))
+	})
+
+	entry := outbox.Entry{ID: "evt-dlq-fail-002", EventType: "test.permanent"}
+	err := handler(context.Background(), entry)
+	// When DLQ publish fails for a permanent error, Wrap must return an error.
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DLQ publish failed for permanent error")
+	assert.Contains(t, err.Error(), "DLQ broker down")
+}
+
+// --- Extra fix: wrapped PermanentError detected via errors.As ---
+
+func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+		callCount++
+		// Wrap PermanentError inside fmt.Errorf — the old type assertion would miss this.
+		return fmt.Errorf("handler context: %w", NewPermanentError(errors.New("unmarshal failed")))
+	})
+
+	entry := outbox.Entry{ID: "evt-wrapped-perm", EventType: "test.wrapped"}
+	err := handler(context.Background(), entry)
+	assert.NoError(t, err) // Should return nil because message was DLQ'd.
+	assert.Equal(t, 1, callCount) // Should not retry — permanent error detected on first attempt.
+
+	// Verify DLQ message was published.
+	pub.mu.Lock()
+	require.Len(t, pub.messages, 1)
+	assert.Equal(t, "test.topic.dlq", pub.messages[0].topic)
+	pub.mu.Unlock()
+}
+
+// --- P0 #7: ctx cancel → NACK without requeue (no requeue storm) ---
+
+func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithoutRequeue(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	handler := func(_ context.Context, e outbox.Entry) error {
+		// Simulate ctx cancel happening before/during handler.
+		cancel()
+		return errors.New("transient error during shutdown")
+	}
+
+	go func() {
+		ch.consumeDeliveries <- amqp.Delivery{
+			DeliveryTag: 42,
+			Body:        entryBytes,
+		}
+		// Give time for processing then close deliveries to exit.
+		time.Sleep(100 * time.Millisecond)
+		close(ch.consumeDeliveries)
+	}()
+
+	_ = sub.Subscribe(ctx, "test.topic", handler)
+
+	// Wait briefly for async processing.
+	time.Sleep(50 * time.Millisecond)
+
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled, "should NACK the delivery")
+	assert.False(t, ch.nackRequeue, "should NACK without requeue when ctx is cancelled")
+	assert.Equal(t, uint64(42), ch.nackTag)
+	ch.mu.Unlock()
+
+	_ = sub.Close()
 }
