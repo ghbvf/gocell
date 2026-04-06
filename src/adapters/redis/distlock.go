@@ -45,7 +45,10 @@ end
 `
 
 // Lock represents an acquired distributed lock. It must be released when the
-// critical section is complete via defer lock.Release(ctx).
+// critical section is complete. Use a fresh context for Release, not the
+// Acquire context, to avoid early cancellation:
+//
+//	defer lock.Release(context.Background())
 //
 // Safety: DistLock provides distributed mutual exclusion on a best-effort
 // basis. It is suitable for efficiency (avoiding duplicate work). For
@@ -63,13 +66,23 @@ type Lock struct {
 // Release releases the distributed lock. It stops the background renewal
 // goroutine and waits for it to exit before issuing the release command.
 // It is safe to call multiple times; subsequent calls are no-ops.
+//
+// Use a fresh context for Release, not the Acquire context:
+//
+//	lock, err := dl.Acquire(requestCtx, key, ttl)
+//	if err != nil { return err }
+//	defer lock.Release(context.Background())
 func (l *Lock) Release(ctx context.Context) error {
 	// Stop renewal goroutine and wait for it to exit.
 	if l.cancel != nil {
 		l.cancel()
 	}
 	if l.done != nil {
-		<-l.done
+		select {
+		case <-l.done:
+		case <-ctx.Done():
+			// Goroutine will exit eventually via renewCtx cancellation above.
+		}
 	}
 
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()

@@ -13,7 +13,7 @@ import (
 // Error codes for the Redis adapter.
 const (
 	ErrAdapterRedisConnect     errcode.Code = "ERR_ADAPTER_REDIS_CONNECT"
-	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRE"
+	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRED"
 	ErrAdapterRedisLockRelease errcode.Code = "ERR_ADAPTER_REDIS_LOCK_RELEASE"
 	ErrAdapterRedisLockTimeout errcode.Code = "ERR_ADAPTER_REDIS_LOCK_TIMEOUT"
 	ErrAdapterRedisSet         errcode.Code = "ERR_ADAPTER_REDIS_SET"
@@ -124,6 +124,10 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Mode == ModeSentinel && len(cfg.SentinelAddrs) == 0 {
 		return nil, errcode.New(ErrAdapterRedisConnect,
 			"redis: Config.SentinelAddrs is required for sentinel mode")
+	}
+	if cfg.Mode == ModeSentinel && cfg.SentinelMaster == "" {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.SentinelMaster is required for sentinel mode")
 	}
 
 	var rdb cmdable

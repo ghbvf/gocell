@@ -246,3 +246,30 @@ func TestDistLock_ReleaseWaitsForRenewalGoroutine(t *testing.T) {
 		t.Fatal("done channel should be closed after Release")
 	}
 }
+
+func TestDistLock_AcquireTimeoutCtxDoesNotKillRenewal(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+
+	// Use a very short timeout ctx — only limits the SetNX call.
+	acquireCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	lock, err := dl.Acquire(acquireCtx, "test:lock:timeout-ctx", 10*time.Second)
+	require.NoError(t, err)
+
+	// Wait for the acquire ctx to expire.
+	<-acquireCtx.Done()
+
+	// Renewal goroutine must still be running (done channel open).
+	select {
+	case <-lock.done:
+		t.Fatal("renewal goroutine stopped after acquire ctx expired — should be independent")
+	default:
+		// OK — goroutine still alive.
+	}
+
+	// Release with a fresh context.
+	err = lock.Release(context.Background())
+	assert.NoError(t, err)
+}

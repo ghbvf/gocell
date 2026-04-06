@@ -116,3 +116,27 @@ func TestConfigLogValueRedactsPassword(t *testing.T) {
 	assert.Contains(t, resolved, "2")
 	assert.NotContains(t, resolved, "s3cret", "LogValue must not contain password")
 }
+
+func TestNewClient_StandaloneEmptyAddr(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{Mode: ModeStandalone})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Addr is required")
+}
+
+func TestNewClient_SentinelEmptyAddrs(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{
+		Mode:           ModeSentinel,
+		SentinelMaster: "mymaster",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SentinelAddrs is required")
+}
+
+func TestNewClient_SentinelEmptyMaster(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{
+		Mode:          ModeSentinel,
+		SentinelAddrs: []string{"sentinel:26379"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SentinelMaster is required")
+}
