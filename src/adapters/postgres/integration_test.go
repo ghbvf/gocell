@@ -184,7 +184,8 @@ func TestIntegration_Migrator(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	require.NoError(t, err, "NewMigrator should succeed")
 
 	t.Run("up", func(t *testing.T) {
 		err := migrator.Up(ctx)
@@ -250,7 +251,8 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply migrations so the outbox_entries table exists.
-	migrator := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, mErr := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := NewTxManager(pool)

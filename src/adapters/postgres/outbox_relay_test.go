@@ -71,7 +71,7 @@ func TestOutboxRelay_PollOnce_PublishesEntries(t *testing.T) {
 				{
 					values: []any{
 						entry.ID, entry.AggregateID, entry.AggregateType,
-						entry.EventType, entry.Payload, metaJSON, entry.CreatedAt,
+						entry.EventType, "", entry.Payload, metaJSON, entry.CreatedAt,
 					},
 				},
 			},
@@ -85,11 +85,45 @@ func TestOutboxRelay_PollOnce_PublishesEntries(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, pub.published, 1)
-	assert.Equal(t, "order.created", pub.published[0].topic)
+	assert.Equal(t, "order.created", pub.published[0].topic) // falls back to EventType when Topic is empty
 
 	// Verify the entry was marked as published.
 	require.Len(t, db.execCalls, 1)
 	assert.Contains(t, db.execCalls[0].sql, "UPDATE outbox_entries SET published = true")
+}
+
+func TestOutboxRelay_PollOnce_PublishesWithExplicitTopic(t *testing.T) {
+	entry := outbox.Entry{
+		ID:            "e-topic",
+		AggregateID:   "agg-t",
+		AggregateType: "device",
+		EventType:     "device.enrolled",
+		Topic:         "custom.topic.v2",
+		Payload:       []byte(`{"enrolled":true}`),
+		CreatedAt:     time.Now(),
+	}
+
+	db := &mockDBTX{
+		queryRows: &mockRows{
+			entries: []mockRowData{
+				{
+					values: []any{
+						entry.ID, entry.AggregateID, entry.AggregateType,
+						entry.EventType, entry.Topic, entry.Payload, []byte("null"), entry.CreatedAt,
+					},
+				},
+			},
+		},
+	}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+
+	relay := NewOutboxRelay(db, pub, cfg)
+	err := relay.pollOnce(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, pub.published, 1)
+	assert.Equal(t, "custom.topic.v2", pub.published[0].topic) // uses explicit Topic
 }
 
 func TestOutboxRelay_PollOnce_PublishError(t *testing.T) {
@@ -106,7 +140,7 @@ func TestOutboxRelay_PollOnce_PublishError(t *testing.T) {
 				{
 					values: []any{
 						entry.ID, "", "", entry.EventType,
-						entry.Payload, []byte("null"), entry.CreatedAt,
+						"", entry.Payload, []byte("null"), entry.CreatedAt,
 					},
 				},
 			},

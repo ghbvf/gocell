@@ -139,12 +139,14 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback(ctx)
+			// Use context.WithoutCancel so rollback succeeds even when
+			// the caller context has been cancelled.
+			_ = tx.Rollback(context.WithoutCancel(ctx))
 		}
 	}()
 
 	const fetchQuery = `SELECT id, aggregate_id, aggregate_type, event_type,
-		payload, metadata, created_at
+		topic, payload, metadata, created_at
 		FROM outbox_entries
 		WHERE published = false
 		ORDER BY created_at
@@ -165,7 +167,7 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 		)
 		if scanErr := rows.Scan(
 			&e.ID, &e.AggregateID, &e.AggregateType, &e.EventType,
-			&e.Payload, &metadataJSON, &e.CreatedAt,
+			&e.Topic, &e.Payload, &metadataJSON, &e.CreatedAt,
 		); scanErr != nil {
 			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: scan failed", scanErr)
 		}

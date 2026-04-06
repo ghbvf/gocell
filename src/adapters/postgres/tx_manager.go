@@ -76,9 +76,12 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	txCtx = withSavepointDepth(txCtx, 0)
 
 	// Panic recovery — rollback and re-panic.
+	// Use context.WithoutCancel so rollback succeeds even if ctx is already cancelled
+	// (e.g. HTTP timeout). Without this, a cancelled ctx causes rollback to fail,
+	// leaving the transaction open until connection pool idle timeout.
 	defer func() {
 		if r := recover(); r != nil {
-			rbErr := tx.Rollback(ctx)
+			rbErr := tx.Rollback(context.WithoutCancel(ctx))
 			if rbErr != nil {
 				slog.Error("postgres: rollback after panic failed",
 					slog.Any("panic", r),
@@ -91,7 +94,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 
 	retErr = fn(txCtx)
 	if retErr != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
+		if rbErr := tx.Rollback(context.WithoutCancel(ctx)); rbErr != nil {
 			slog.Error("postgres: rollback failed",
 				slog.String("original_error", retErr.Error()),
 				slog.String("rollback_error", rbErr.Error()),
@@ -118,9 +121,10 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
 
 	// Panic recovery — rollback savepoint and re-panic.
+	// Use context.WithoutCancel so savepoint rollback succeeds even if ctx is cancelled.
 	defer func() {
 		if r := recover(); r != nil {
-			_, rbErr := tx.Exec(ctx, fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName))
+			_, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName))
 			if rbErr != nil {
 				slog.Error("postgres: rollback savepoint after panic failed",
 					slog.String("savepoint", spName),
@@ -134,7 +138,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 
 	retErr = fn(nestedCtx)
 	if retErr != nil {
-		if _, rbErr := tx.Exec(ctx, fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName)); rbErr != nil {
+		if _, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName)); rbErr != nil {
 			slog.Error("postgres: rollback savepoint failed",
 				slog.String("savepoint", spName),
 				slog.String("original_error", retErr.Error()),

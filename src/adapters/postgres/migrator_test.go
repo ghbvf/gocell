@@ -1,9 +1,11 @@
 package postgres
 
 import (
+	"errors"
 	"testing"
 	"testing/fstest"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,14 +120,97 @@ func TestListMigrations_EmptyFS(t *testing.T) {
 
 func TestNewMigrator_DefaultTableName(t *testing.T) {
 	p := &Pool{inner: nil}
-	m := NewMigrator(p, fstest.MapFS{}, "")
+	m, err := NewMigrator(p, fstest.MapFS{}, "")
+	require.NoError(t, err)
 	assert.Equal(t, "schema_migrations", m.tableName)
 }
 
 func TestNewMigrator_CustomTableName(t *testing.T) {
 	p := &Pool{inner: nil}
-	m := NewMigrator(p, fstest.MapFS{}, "custom_migrations")
+	m, err := NewMigrator(p, fstest.MapFS{}, "custom_migrations")
+	require.NoError(t, err)
 	assert.Equal(t, "custom_migrations", m.tableName)
+}
+
+func TestNewMigrator_InvalidTableName(t *testing.T) {
+	tests := []struct {
+		name      string
+		tableName string
+	}{
+		{name: "SQL injection attempt", tableName: "schema_migrations; DROP TABLE users--"},
+		{name: "starts with digit", tableName: "1invalid"},
+		{name: "contains spaces", tableName: "my table"},
+		{name: "contains dash", tableName: "my-table"},
+		{name: "contains dot", tableName: "schema.table"},
+		{name: "contains semicolon", tableName: "table;"},
+		{name: "contains parentheses", tableName: "table()"},
+		{name: "unicode characters", tableName: "tbl\u00e9"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pool{inner: nil}
+			m, err := NewMigrator(p, fstest.MapFS{}, tt.tableName)
+			assert.Nil(t, m)
+			require.Error(t, err)
+
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+		})
+	}
+}
+
+func TestNewMigrator_ValidTableNames(t *testing.T) {
+	tests := []struct {
+		name      string
+		tableName string
+	}{
+		{name: "lowercase", tableName: "migrations"},
+		{name: "with underscore", tableName: "schema_migrations"},
+		{name: "starts with underscore", tableName: "_private"},
+		{name: "uppercase", tableName: "MIGRATIONS"},
+		{name: "mixed case", tableName: "SchemaMigrations"},
+		{name: "with digits", tableName: "migrations_v2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pool{inner: nil}
+			m, err := NewMigrator(p, fstest.MapFS{}, tt.tableName)
+			require.NoError(t, err)
+			assert.Equal(t, tt.tableName, m.tableName)
+		})
+	}
+}
+
+func TestValidateIdentifier(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{name: "simple", input: "users", wantErr: false},
+		{name: "underscore prefix", input: "_temp", wantErr: false},
+		{name: "with digits", input: "table2", wantErr: false},
+		{name: "all caps", input: "SCHEMA_MIGRATIONS", wantErr: false},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "starts with digit", input: "1foo", wantErr: true},
+		{name: "contains space", input: "foo bar", wantErr: true},
+		{name: "SQL injection", input: "t; DROP TABLE x", wantErr: true},
+		{name: "dot notation", input: "public.users", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentifier(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestMigrationsFS_SubDirectory(t *testing.T) {
@@ -137,12 +222,19 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 	m := &Migrator{migrations: mfs}
 	files, err := m.listMigrations(MigrationUp)
 	require.NoError(t, err)
-	require.Len(t, files, 1)
+	require.Len(t, files, 2)
 	assert.Equal(t, "001", files[0].version)
 	assert.Equal(t, "create_outbox_entries", files[0].name)
+	assert.Equal(t, "002", files[1].version)
+	assert.Equal(t, "add_topic_column", files[1].name)
 }
 
 func TestMigrationDirection_Values(t *testing.T) {
 	assert.Equal(t, MigrationDirection("up"), MigrationUp)
 	assert.Equal(t, MigrationDirection("down"), MigrationDown)
+}
+
+func TestMigrationLockID_IsConstant(t *testing.T) {
+	// Verify the advisory lock ID is the expected constant value.
+	assert.Equal(t, int64(1234567890), migrationLockID)
 }
