@@ -4,6 +4,7 @@ package shutdown
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -75,7 +76,7 @@ func (m *Manager) Shutdown() error {
 }
 
 func (m *Manager) runHooks(ctx context.Context) error {
-	var firstErr error
+	var errs []error
 	// Execute hooks in LIFO order: last registered, first executed.
 	for i := len(m.hooks) - 1; i >= 0; i-- {
 		if err := m.hooks[i](ctx); err != nil {
@@ -83,14 +84,12 @@ func (m *Manager) runHooks(ctx context.Context) error {
 				slog.Int("hook_index", i),
 				slog.Any("error", err),
 			)
-			if firstErr == nil {
-				firstErr = err
-			}
+			errs = append(errs, err)
 			// Continue executing remaining hooks even on failure.
 		}
 	}
-	if firstErr != nil {
-		return firstErr
+	if len(errs) > 0 {
+		return errors.Join(errs...)
 	}
 	return ctx.Err()
 }

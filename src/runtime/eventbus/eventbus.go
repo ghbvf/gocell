@@ -16,7 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 const (
@@ -91,7 +91,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	}
 
 	entry := outbox.Entry{
-		ID:        uid.NewWithPrefix("evt"),
+		ID:        "evt" + "-" + uuid.NewString(),
 		EventType: topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),

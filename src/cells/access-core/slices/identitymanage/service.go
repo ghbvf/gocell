@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 const (
@@ -86,7 +86,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	user.ID = uid.NewWithPrefix("usr")
+	user.ID = "usr" + "-" + uuid.NewString()
 
 	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
@@ -223,7 +223,7 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 	data, _ := json.Marshal(payload)
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
-			ID:        uid.NewWithPrefix("evt"),
+			ID:        "evt" + "-" + uuid.NewString(),
 			EventType: topic,
 			Payload:   data,
 		}

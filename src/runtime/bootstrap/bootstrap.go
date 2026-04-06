@@ -343,14 +343,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
 
-	var firstErr error
+	var errs []error
 	for i := len(teardowns) - 1; i >= 0; i-- {
 		if err := teardowns[i](shutCtx); err != nil {
 			slog.Error("bootstrap: shutdown step failed", slog.Any("error", err))
-			if firstErr == nil {
-				firstErr = err
-			}
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }

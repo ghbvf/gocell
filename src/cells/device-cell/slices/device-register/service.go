@@ -12,7 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 // TopicDeviceRegistered is the canonical event topic for device registration events.
@@ -41,7 +41,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 	}
 
 	device := &domain.Device{
-		ID:       uid.NewWithPrefix("dev"),
+		ID:       "dev" + "-" + uuid.NewString(),
 		Name:     name,
 		Status:   "online",
 		LastSeen: time.Now(),
