@@ -213,7 +213,7 @@ src/
 ├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)
 ├── journeys/     — Journey acceptance specs + status-board.yaml
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
-├── adapters/     — External system adapters (postgres / redis / oidc / s3 / rabbitmq / websocket)
+├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
 ├── pkg/          — Shared utilities (errcode / ctxkeys / httputil)
 ├── cmd/          — CLI (gocell validate / scaffold / generate / check / verify)
 ├── examples/     — Example projects (sso-bff / todo-order / iot-device)
@@ -243,8 +243,8 @@ examples/  ← all layers
 |---------|-------------|-----------------|
 | `adapters/postgres` | Pool, TxManager, Migrator, OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.Relay` |
 | `adapters/redis` | Client, DistLock, IdempotencyChecker, Cache | `idempotency.Checker` |
-| `adapters/oidc` | OIDC Provider, Token Exchange, JWKS Verification | — |
-| `adapters/s3` | S3/MinIO Client, PresignedURL | — |
+| `adapters/oidc` | Thin go-oidc v3 wrapper (Config, Provider, Refresh, Verifier, OAuth2Config) | — |
+| `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
 

@@ -1,15 +1,11 @@
-// Package oidc provides an OpenID Connect adapter for the GoCell framework.
-// It implements OIDC Discovery, token exchange, JWKS verification, and
-// UserInfo endpoint access without external OIDC libraries.
+// Package oidc provides a thin adapter over coreos/go-oidc v3 and
+// golang.org/x/oauth2 for OpenID Connect authentication.
 //
-// Key features:
-//   - Automatic discovery via .well-known/openid-configuration
-//   - JWKS key rotation with kid-based lookup
-//   - RS256 token signature verification
-//   - Authorization code exchange
-//   - UserInfo endpoint access
+// This package intentionally does NOT re-define SDK types. It exposes
+// go-oidc's Provider, IDToken, and oauth2's Token directly. The adapter
+// adds GoCell-specific concerns: Config, errcode wrapping, and HTTP
+// client lifecycle.
 //
-// ref: coreos/go-oidc — discovery, JWKS caching, token verification
-// Adopted: discovery metadata model, kid-based key selection.
-// Deviated: no external dependencies; stdlib crypto/rsa + encoding/json only.
+// ref: github.com/coreos/go-oidc/v3/oidc
+// ref: golang.org/x/oauth2
 package oidc

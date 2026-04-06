@@ -1,6 +1,6 @@
 // Package s3archive provides an S3-backed implementation of the audit-core
-// ArchiveStore port. It does NOT import adapters/s3 directly — instead it
-// accepts an ObjectUploader interface, keeping the cell decoupled.
+// ArchiveStore port. It accepts an ObjectUploader interface, so any
+// S3-compatible client (e.g., aws-sdk-go-v2) can be wired in at bootstrap.
 package s3archive
 
 import (

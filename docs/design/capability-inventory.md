@@ -169,18 +169,17 @@
 - `ConsumerBase` — idempotency.Checker + 3x retry + DLQ routing + slog 可观测
 - `PermanentError` — 标记不可重试错误直接进 DLQ
 
-### 4.4 oidc — OIDC Client
-- `Provider` — Discovery + metadata 缓存
-- `ExchangeCode` — Authorization Code → tokens
-- `Verifier` — JWKS + kid rotation + RS256 验证 + exp/iss/aud
-- `UserInfo` — Bearer token → 用户信息
-- 无外部 OIDC 库（stdlib + golang-jwt）
+### 4.4 oidc — thin go-oidc v3 wrapper
+- `Adapter` — 懒初始化 go-oidc Provider + Refresh（metadata/JWKS 轮转）
+- `Verifier()` — 返回 go-oidc `IDTokenVerifier`
+- `OAuth2Config()` — 返回 `oauth2.Config`（调用方直接用于 token exchange/userinfo）
+- 不复制 SDK 类型，暴露 go-oidc/oauth2 原生类型
 
-### 4.5 s3 — S3/MinIO
-- `Client` — AWS Signature V4 + Health
-- Upload/Download/Delete
-- `PresignedPut`/`PresignedGet` + TTL
-- 无 minio-go 库（stdlib crypto）
+### 4.5 s3 — thin aws-sdk-go-v2 wrapper
+- `Client` — aws-sdk-go-v2 S3 client + Health (HeadBucket)
+- `Upload` — 实现 ObjectUploader 接口
+- `SDK()` — 暴露底层 `*s3.Client` 用于 download/delete/presigned 等操作
+- 不包装 SDK 已有能力（Download/Delete/PresignedURL 通过 SDK() 直接使用）
 
 ### 4.6 websocket — WebSocket (nhooyr.io/websocket)
 - `Hub` — 连接管理 (register/unregister/broadcast/unicast)

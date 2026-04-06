@@ -39,8 +39,8 @@
 |---------|---------|-----------------|
 | `adapters/postgres` | Pool (pgx/v5)、TxManager、Migrator、OutboxWriter、OutboxRelay | `outbox.Writer`、`outbox.Relay`、`worker.Worker` |
 | `adapters/redis` | Client (go-redis/v9)、DistLock、IdempotencyChecker、Cache | `idempotency.Checker` |
-| `adapters/oidc` | Provider Client、Token Exchange、JWKS 验证 | — (runtime auth 扩展) |
-| `adapters/s3` | Client (MinIO/S3)、PresignedURL、ConfigFromEnv | — (通用 ObjectStore) |
+| `adapters/oidc` | Thin go-oidc v3 wrapper (Provider, Refresh, Verifier, OAuth2Config) | — (runtime auth 扩展) |
+| `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Upload, Health, SDK escape hatch) | — (ObjectUploader) |
 | `adapters/rabbitmq` | Connection、Publisher、Subscriber、ConsumerBase (DLQ + retry) | `outbox.Publisher`、`outbox.Subscriber` |
 | `adapters/websocket` | Hub、signal-first 推送、Origin 白名单 | — |
 
