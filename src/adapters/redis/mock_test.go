@@ -13,9 +13,10 @@ import (
 // It stores values in an in-memory map and simulates Redis behaviour
 // including SET NX, TTL expiry, GET, DEL, Eval, Ping, and Close.
 type mockCmdable struct {
-	mu     sync.Mutex
-	store  map[string]mockEntry
-	closed bool
+	mu            sync.Mutex
+	store         map[string]mockEntry
+	fenceCounters map[string]int64
+	closed        bool
 
 	// Override hooks for injecting errors in tests.
 	pingErr  error
@@ -34,7 +35,8 @@ type mockEntry struct {
 
 func newMockCmdable() *mockCmdable {
 	return &mockCmdable{
-		store: make(map[string]mockEntry),
+		store:         make(map[string]mockEntry),
+		fenceCounters: make(map[string]int64),
 	}
 }
 
@@ -149,6 +151,14 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Simulate fencing token script: INCR on the key (no args).
+	if len(keys) == 1 && len(args) == 0 {
+		key := keys[0]
+		m.fenceCounters[key]++
+		cmd.SetVal(m.fenceCounters[key])
+		return cmd
+	}
 
 	// Simulate the release lock script: GET key == value → DEL → 1, else → 0.
 	// Also simulate the renew lock script: GET key == value → PEXPIRE → 1, else → 0.

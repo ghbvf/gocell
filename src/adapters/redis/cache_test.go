@@ -89,7 +89,7 @@ func TestCache_DeleteError(t *testing.T) {
 
 	err := cache.Delete(ctx, "cache:err")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
 }
 
 func TestCache_ViaClientConstructor(t *testing.T) {

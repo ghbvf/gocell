@@ -13,10 +13,12 @@ import (
 // Error codes for the Redis adapter.
 const (
 	ErrAdapterRedisConnect     errcode.Code = "ERR_ADAPTER_REDIS_CONNECT"
-	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRED"
+	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRE"
+	ErrAdapterRedisLockRelease errcode.Code = "ERR_ADAPTER_REDIS_LOCK_RELEASE"
 	ErrAdapterRedisLockTimeout errcode.Code = "ERR_ADAPTER_REDIS_LOCK_TIMEOUT"
 	ErrAdapterRedisSet         errcode.Code = "ERR_ADAPTER_REDIS_SET"
 	ErrAdapterRedisGet         errcode.Code = "ERR_ADAPTER_REDIS_GET"
+	ErrAdapterRedisDelete      errcode.Code = "ERR_ADAPTER_REDIS_DELETE"
 )
 
 // Mode represents the Redis deployment topology.
@@ -79,9 +81,6 @@ func (c *Config) defaults() {
 	if c.DistLockTTL == 0 {
 		c.DistLockTTL = 30 * time.Second
 	}
-	if c.Addr == "" && c.Mode == ModeStandalone {
-		c.Addr = "localhost:6379"
-	}
 }
 
 // cmdable is an internal interface matching the subset of redis.Cmdable
@@ -107,6 +106,15 @@ type Client struct {
 // It pings the server to verify connectivity on creation.
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	cfg.defaults()
+
+	if cfg.Mode == ModeStandalone && cfg.Addr == "" {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.Addr is required for standalone mode")
+	}
+	if cfg.Mode == ModeSentinel && len(cfg.SentinelAddrs) == 0 {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: Config.SentinelAddrs is required for sentinel mode")
+	}
 
 	var rdb cmdable
 	switch cfg.Mode {
@@ -181,7 +189,11 @@ func (c *Client) cmdable() cmdable {
 	return c.rdb
 }
 
-// Config returns a copy of the client configuration.
+// Config returns a copy of the client configuration with the password redacted.
 func (c *Client) Config() Config {
-	return c.config
+	cfg := c.config
+	if cfg.Password != "" {
+		cfg.Password = "***"
+	}
+	return cfg
 }

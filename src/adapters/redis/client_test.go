@@ -14,7 +14,7 @@ func TestConfigDefaults(t *testing.T) {
 	cfg.defaults()
 
 	assert.Equal(t, ModeStandalone, cfg.Mode)
-	assert.Equal(t, "localhost:6379", cfg.Addr)
+	assert.Equal(t, "", cfg.Addr) // No unsafe localhost fallback.
 	assert.Equal(t, 5*time.Second, cfg.DialTimeout)
 	assert.Equal(t, 3*time.Second, cfg.ReadTimeout)
 	assert.Equal(t, 3*time.Second, cfg.WriteTimeout)
@@ -88,4 +88,24 @@ func TestClientConfigReturned(t *testing.T) {
 	got := client.Config()
 	assert.Equal(t, "custom:6379", got.Addr)
 	assert.Equal(t, 3, got.DB)
+}
+
+func TestClientConfigRedactsPassword(t *testing.T) {
+	mock := newMockCmdable()
+	cfg := Config{
+		Addr:     "redis:6379",
+		Password: "s3cret",
+	}
+	client := newClientFromCmdable(mock, cfg)
+
+	got := client.Config()
+	assert.Equal(t, "***", got.Password, "Config() should redact password")
+}
+
+func TestClientConfigNoPasswordNoRedaction(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{Addr: "redis:6379"})
+
+	got := client.Config()
+	assert.Equal(t, "", got.Password, "empty password should remain empty")
 }

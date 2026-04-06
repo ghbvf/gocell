@@ -32,26 +32,42 @@ else
 end
 `
 
+// fenceTokenScript is a Lua script that atomically increments a per-key
+// fencing counter. The returned value is monotonically increasing and can
+// be passed to downstream stores to reject stale writes.
+const fenceTokenScript = `return redis.call("INCR", KEYS[1])`
+
 // Lock represents an acquired distributed lock. It must be released when the
-// critical section is complete.
+// critical section is complete via defer lock.Release(ctx).
+//
+// Safety: DistLock provides distributed mutual exclusion on a best-effort
+// basis. It is suitable for efficiency (avoiding duplicate work). For
+// correctness-critical paths that must prevent stale writes after lock
+// expiry, use FenceToken() and enforce monotonicity at the downstream store
+// (e.g., UPDATE ... WHERE fence_token < $1).
 type Lock struct {
 	rdb    cmdable
 	key    string
 	value  string
 	cancel context.CancelFunc
+	done   chan struct{} // closed when renewLoop exits
 }
 
-// Release releases the distributed lock. It is safe to call multiple times;
-// subsequent calls are no-ops (the Lua script checks ownership).
+// Release releases the distributed lock. It stops the background renewal
+// goroutine and waits for it to exit before issuing the release command.
+// It is safe to call multiple times; subsequent calls are no-ops.
 func (l *Lock) Release(ctx context.Context) error {
-	// Stop renewal goroutine if running.
+	// Stop renewal goroutine and wait for it to exit.
 	if l.cancel != nil {
 		l.cancel()
+	}
+	if l.done != nil {
+		<-l.done
 	}
 
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisLockAcquire,
+		return errcode.Wrap(ErrAdapterRedisLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
 	}
 	if result == 0 {
@@ -59,6 +75,22 @@ func (l *Lock) Release(ctx context.Context) error {
 			"key", l.key)
 	}
 	return nil
+}
+
+// FenceToken generates a monotonically increasing fencing token for this lock.
+// Callers can pass this token to downstream stores and reject writes bearing
+// a token older than the highest seen, preventing stale writes after lock expiry.
+//
+// The token is generated via Redis INCR on "fence:{key}" and is unique per
+// acquisition. Enforcement is the downstream store's responsibility.
+func (l *Lock) FenceToken(ctx context.Context) (int64, error) {
+	fenceKey := "fence:" + l.key
+	token, err := l.rdb.Eval(ctx, fenceTokenScript, []string{fenceKey}).Int64()
+	if err != nil {
+		return 0, errcode.Wrap(ErrAdapterRedisLockAcquire,
+			fmt.Sprintf("redis: fence token generation failed (key=%s)", l.key), err)
+	}
+	return token, nil
 }
 
 // DistLock provides distributed locking backed by Redis.
@@ -115,15 +147,20 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 	}
 
 	renewCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	lock := &Lock{
 		rdb:    d.rdb,
 		key:    key,
 		value:  value,
 		cancel: cancel,
+		done:   done,
 	}
 
 	// Start background renewal at half the TTL interval.
-	go d.renewLoop(renewCtx, lock, ttl)
+	go func() {
+		defer close(done)
+		d.renewLoop(renewCtx, lock, ttl)
+	}()
 
 	slog.Debug("redis: lock acquired",
 		"key", key,

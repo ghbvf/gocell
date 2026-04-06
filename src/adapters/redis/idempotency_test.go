@@ -123,3 +123,51 @@ func TestIdempotencyChecker_ViaClientConstructor(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+func TestIdempotencyChecker_MarkProcessed_ZeroTTLUsesDefault(t *testing.T) {
+	mock := newMockCmdable()
+	ic := newIdempotencyCheckerFromCmdable(mock)
+	ctx := context.Background()
+
+	// TTL=0 should use DefaultTTL (24h), not create permanent keys.
+	err := ic.MarkProcessed(ctx, "idem:test:zero-ttl", 0)
+	require.NoError(t, err)
+
+	// Verify the key was stored with an expiry (non-zero).
+	mock.mu.Lock()
+	entry, ok := mock.store["idem:test:zero-ttl"]
+	mock.mu.Unlock()
+	require.True(t, ok)
+	assert.False(t, entry.expiry.IsZero(), "TTL=0 should use DefaultTTL, not permanent key")
+}
+
+func TestIdempotencyChecker_TryProcess_ZeroTTLUsesDefault(t *testing.T) {
+	mock := newMockCmdable()
+	ic := newIdempotencyCheckerFromCmdable(mock)
+	ctx := context.Background()
+
+	shouldProcess, err := ic.TryProcess(ctx, "idem:test:try-zero-ttl", 0)
+	require.NoError(t, err)
+	assert.True(t, shouldProcess)
+
+	mock.mu.Lock()
+	entry, ok := mock.store["idem:test:try-zero-ttl"]
+	mock.mu.Unlock()
+	require.True(t, ok)
+	assert.False(t, entry.expiry.IsZero(), "TTL=0 should use DefaultTTL, not permanent key")
+}
+
+func TestIdempotencyChecker_NegativeTTLUsesDefault(t *testing.T) {
+	mock := newMockCmdable()
+	ic := newIdempotencyCheckerFromCmdable(mock)
+	ctx := context.Background()
+
+	err := ic.MarkProcessed(ctx, "idem:test:neg-ttl", -5*time.Second)
+	require.NoError(t, err)
+
+	mock.mu.Lock()
+	entry, ok := mock.store["idem:test:neg-ttl"]
+	mock.mu.Unlock()
+	require.True(t, ok)
+	assert.False(t, entry.expiry.IsZero(), "negative TTL should use DefaultTTL")
+}
