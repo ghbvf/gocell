@@ -2,16 +2,38 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// migrationLockID is a fixed PostgreSQL advisory lock ID used to prevent
+// concurrent migration execution across multiple processes.
+const migrationLockID int64 = 1234567890
+
+// identifierRe matches valid SQL identifiers: start with letter or underscore,
+// followed by letters, digits, or underscores.
+var identifierRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validateIdentifier checks that name is a safe SQL identifier to prevent
+// SQL injection when used in table-name positions (which cannot be
+// parameterised).
+func validateIdentifier(name string) error {
+	if !identifierRe.MatchString(name) {
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("invalid SQL identifier: %q", name))
+	}
+	return nil
+}
 
 // MigrationDirection indicates whether a migration is applied or rolled back.
 type MigrationDirection string
@@ -51,16 +73,20 @@ type Migrator struct {
 //	{version}_{name}.down.sql
 //
 // The tableName parameter controls the tracking table name (default:
-// "schema_migrations").
-func NewMigrator(p *Pool, migrations fs.FS, tableName string) *Migrator {
+// "schema_migrations"). It must be a valid SQL identifier
+// ([a-zA-Z_][a-zA-Z0-9_]*) to prevent SQL injection.
+func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error) {
 	if tableName == "" {
 		tableName = "schema_migrations"
+	}
+	if err := validateIdentifier(tableName); err != nil {
+		return nil, err
 	}
 	return &Migrator{
 		pool:       p.inner,
 		migrations: migrations,
 		tableName:  tableName,
-	}
+	}, nil
 }
 
 // ensureTable creates the schema_migrations table if it does not exist.
@@ -78,7 +104,21 @@ func (m *Migrator) ensureTable(ctx context.Context) error {
 }
 
 // Up applies all unapplied migrations in order.
+// It acquires a PostgreSQL advisory lock on a dedicated connection to prevent
+// concurrent migration execution across multiple processes. The lock and unlock
+// are guaranteed to run on the same session (connection).
 func (m *Migrator) Up(ctx context.Context) error {
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire connection for migration lock", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire migration advisory lock", err)
+	}
+	defer conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
+
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -105,7 +145,21 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 // Down rolls back the last applied migration.
+// It acquires a PostgreSQL advisory lock on a dedicated connection to prevent
+// concurrent migration execution across multiple processes. The lock and unlock
+// are guaranteed to run on the same session (connection).
 func (m *Migrator) Down(ctx context.Context) error {
+	conn, err := m.pool.Acquire(ctx)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire connection for migration lock", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockID); err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: acquire migration advisory lock", err)
+	}
+	defer conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", migrationLockID) //nolint:errcheck
+
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -272,7 +326,7 @@ func (m *Migrator) latestApplied(ctx context.Context) (string, error) {
 	var v string
 	err := m.pool.QueryRow(ctx, query).Scan(&v)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return "", nil
 		}
 		return "", errcode.Wrap(ErrAdapterPGMigrate, "postgres: query latest migration", err)
@@ -294,7 +348,8 @@ func (m *Migrator) applyMigration(ctx context.Context, mf migrationFile) error {
 	}
 	defer func() {
 		// Rollback is a no-op if tx was already committed.
-		_ = tx.Rollback(ctx)
+		// Use WithoutCancel so rollback succeeds even if caller ctx is cancelled.
+		_ = tx.Rollback(context.WithoutCancel(ctx))
 	}()
 
 	if _, err := tx.Exec(ctx, string(sql)); err != nil {
@@ -334,7 +389,8 @@ func (m *Migrator) rollbackMigration(ctx context.Context, mf migrationFile) erro
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: begin rollback tx", err)
 	}
 	defer func() {
-		_ = tx.Rollback(ctx)
+		// Use WithoutCancel so rollback succeeds even if caller ctx is cancelled.
+		_ = tx.Rollback(context.WithoutCancel(ctx))
 	}()
 
 	if _, err := tx.Exec(ctx, string(sql)); err != nil {

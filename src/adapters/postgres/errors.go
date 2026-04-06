@@ -10,15 +10,11 @@ const (
 	// ErrAdapterPGQuery indicates a query execution failure.
 	ErrAdapterPGQuery errcode.Code = "ERR_ADAPTER_PG_QUERY"
 
-	// ErrAdapterPGTxTimeout indicates a transaction exceeded its deadline or was
-	// aborted due to context cancellation.
-	ErrAdapterPGTxTimeout errcode.Code = "ERR_ADAPTER_PG_TX_TIMEOUT"
-
 	// ErrAdapterPGMigrate indicates a migration execution or tracking failure.
 	ErrAdapterPGMigrate errcode.Code = "ERR_ADAPTER_PG_MIGRATE"
 
 	// ErrAdapterPGNoTx indicates outbox.Writer.Write was called outside a transaction.
-	ErrAdapterPGNoTx errcode.Code = "ERR_ADAPTER_NO_TX"
+	ErrAdapterPGNoTx errcode.Code = "ERR_ADAPTER_PG_NO_TX"
 
 	// ErrAdapterPGMarshal indicates a JSON marshal failure for outbox entry.
 	ErrAdapterPGMarshal errcode.Code = "ERR_ADAPTER_PG_MARSHAL"

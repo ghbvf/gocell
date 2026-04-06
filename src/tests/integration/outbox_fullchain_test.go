@@ -153,7 +153,8 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 2: Run migrations to create outbox_entries table.
 	// ---------------------------------------------------------------
-	migrator := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	// ---------------------------------------------------------------
@@ -353,7 +354,8 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	defer cleanup()
 
 	// Run migrations.
-	migrator := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := postgres.NewTxManager(pool)

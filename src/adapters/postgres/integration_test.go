@@ -184,7 +184,8 @@ func TestIntegration_Migrator(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	require.NoError(t, err, "NewMigrator should succeed")
 
 	t.Run("up", func(t *testing.T) {
 		err := migrator.Up(ctx)
@@ -218,22 +219,33 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
+		// First Down() rolls back 002 (drop topic column), table still exists.
 		err := migrator.Down(ctx)
-		require.NoError(t, err, "Down() should roll back the last migration")
+		require.NoError(t, err, "Down() should roll back migration 002")
 
-		// Verify the outbox_entries table was dropped.
+		// Table still exists after rolling back only 002.
 		var exists bool
 		err = pool.DB().QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
 			Scan(&exists)
 		require.NoError(t, err)
-		assert.False(t, exists, "outbox_entries table should not exist after Down()")
+		assert.True(t, exists, "outbox_entries table should still exist after rolling back 002")
 
-		// Status should show migration as unapplied.
+		// Second Down() rolls back 001 (drop table).
+		err = migrator.Down(ctx)
+		require.NoError(t, err, "Down() should roll back migration 001")
+
+		err = pool.DB().QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
+			Scan(&exists)
+		require.NoError(t, err)
+		assert.False(t, exists, "outbox_entries table should not exist after rolling back 001")
+
+		// Status should show all migrations as unapplied.
 		statuses, err := migrator.Status(ctx)
 		require.NoError(t, err)
 		require.NotEmpty(t, statuses)
-		assert.False(t, statuses[0].Applied, "migration 001 should be unapplied after Down()")
+		assert.False(t, statuses[0].Applied, "migration 001 should be unapplied")
 	})
 }
 
@@ -250,7 +262,8 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply migrations so the outbox_entries table exists.
-	migrator := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, mErr := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := NewTxManager(pool)

@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// uuidPattern matches a canonical UUID string (8-4-4-4-12 hex digits).
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Compile-time interface check.
 var _ outbox.Writer = (*OutboxWriter)(nil)
@@ -36,6 +40,13 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return errcode.New(ErrAdapterPGNoTx, "outbox write requires a transaction in context")
 	}
 
+	if entry.ID == "" {
+		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be empty")
+	}
+	if !uuidPattern.MatchString(entry.ID) {
+		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID is not a valid UUID: "+entry.ID)
+	}
+
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
@@ -47,14 +58,15 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	}
 
 	const query = `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, payload, metadata, created_at, published)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, false)`
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)`
 
 	_, err = tx.Exec(ctx, query,
 		entry.ID,
 		entry.AggregateID,
 		entry.AggregateType,
 		entry.EventType,
+		entry.Topic,
 		entry.Payload,
 		metadata,
 		createdAt,

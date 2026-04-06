@@ -33,7 +33,7 @@ const (
 	ErrOrderNotFound      Code = "ERR_ORDER_NOT_FOUND"
 	ErrDeviceNotFound     Code = "ERR_DEVICE_NOT_FOUND"
 	ErrCommandNotFound    Code = "ERR_COMMAND_NOT_FOUND"
-	ErrAdapterNoTx        Code = "ERR_ADAPTER_NO_TX"
+	ErrAdapterPGNoTx      Code = "ERR_ADAPTER_PG_NO_TX"
 	ErrAuthKeyInvalid     Code = "ERR_AUTH_KEY_INVALID"
 	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
 	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
