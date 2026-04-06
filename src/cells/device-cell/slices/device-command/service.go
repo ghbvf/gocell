@@ -12,7 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 // Service handles device command business logic.
@@ -43,7 +43,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, payload string) (*domai
 	}
 
 	cmd := &domain.Command{
-		ID:        uid.NewWithPrefix("cmd"),
+		ID:        "cmd" + "-" + uuid.NewString(),
 		DeviceID:  deviceID,
 		Payload:   payload,
 		Status:    "pending",

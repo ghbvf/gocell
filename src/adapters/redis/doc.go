@@ -17,10 +17,9 @@
 // network delays, or clock skew — consistent with redsync, rueidis, and
 // all major Redis lock libraries.
 //
-// For correctness-critical paths, use [Lock.FenceToken] to obtain a
-// monotonically increasing token and enforce it at the downstream store
-// (e.g., UPDATE ... WHERE fence_token < $1). The lock reduces contention;
-// the conditional write guarantees safety.
+// For correctness-critical paths, use application-level conditional writes
+// (e.g., Postgres optimistic locking with row versions). The lock reduces
+// contention; the conditional write guarantees safety.
 //
 // # Lock Lifecycle
 //

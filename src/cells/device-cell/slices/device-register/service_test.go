@@ -95,7 +95,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 }
 
 func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {
-	// Since uid.NewWithPrefix generates random IDs, duplicate is practically
+	// Since uuid.NewString generates random IDs, duplicate is practically
 	// impossible. We verify two sequential calls succeed without collision.
 	svc, _ := newTestService()
 	ctx := context.Background()

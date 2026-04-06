@@ -12,7 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 // TopicOrderCreated is the canonical event topic for order creation events.
@@ -41,7 +41,7 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 	}
 
 	order := &domain.Order{
-		ID:        uid.NewWithPrefix("ord"),
+		ID:        "ord" + "-" + uuid.NewString(),
 		Item:      item,
 		Status:    "pending",
 		CreatedAt: time.Now(),

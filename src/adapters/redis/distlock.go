@@ -32,18 +32,6 @@ else
 end
 `
 
-// fenceTokenScript atomically checks lock ownership (KEYS[1] == ARGV[1])
-// before incrementing the per-key fencing counter (KEYS[2]). Returns the
-// new counter value if owned, or 0 if the caller no longer holds the lock.
-// ref: Kleppmann "How to do distributed locking" — fencing tokens
-const fenceTokenScript = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("INCR", KEYS[2])
-else
-    return 0
-end
-`
-
 // Lock represents an acquired distributed lock. It must be released when the
 // critical section is complete. Use a fresh context for Release, not the
 // Acquire context, to avoid early cancellation:
@@ -53,10 +41,9 @@ end
 //	defer lock.Release(cleanupCtx)
 //
 // Safety: DistLock provides distributed mutual exclusion on a best-effort
-// basis. It is suitable for efficiency (avoiding duplicate work). For
-// correctness-critical paths that must prevent stale writes after lock
-// expiry, use FenceToken() and enforce monotonicity at the downstream store
-// (e.g., UPDATE ... WHERE fence_token < $1).
+// basis (efficiency lock). It is suitable for avoiding duplicate work. For
+// correctness-critical paths, use application-level conditional writes
+// (e.g., Postgres optimistic locking with row versions).
 type Lock struct {
 	rdb    cmdable
 	key    string
@@ -99,29 +86,6 @@ func (l *Lock) Release(ctx context.Context) error {
 			"key", l.key)
 	}
 	return nil
-}
-
-// FenceToken generates a monotonically increasing fencing token for this lock.
-// The token is only issued if the caller still owns the lock (atomic GET+INCR
-// via Lua script). A stale holder whose lease has expired will receive an error.
-//
-// Callers pass this token to downstream stores which reject writes bearing a
-// token older than the highest seen. Enforcement is the store's responsibility.
-//
-// ref: Kleppmann "How to do distributed locking" — fencing tokens
-func (l *Lock) FenceToken(ctx context.Context) (int64, error) {
-	fenceKey := "fence:" + l.key
-	token, err := l.rdb.Eval(ctx, fenceTokenScript,
-		[]string{l.key, fenceKey}, l.value).Int64()
-	if err != nil {
-		return 0, errcode.Wrap(ErrAdapterRedisLockAcquire,
-			fmt.Sprintf("redis: fence token generation failed (key=%s)", l.key), err)
-	}
-	if token == 0 {
-		return 0, errcode.New(ErrAdapterRedisLockAcquire,
-			fmt.Sprintf("redis: lock not owned, cannot generate fence token (key=%s)", l.key))
-	}
-	return token, nil
 }
 
 // DistLock provides distributed locking backed by Redis.

@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/uid"
+	"github.com/google/uuid"
 )
 
 const (
@@ -101,7 +101,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Append to hash chain.
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
-	auditEntry.ID = uid.NewWithPrefix("audit")
+	auditEntry.ID = "audit" + "-" + uuid.NewString()
 
 	// Publish audit.appended event.
 	appendedPayload, _ := json.Marshal(map[string]any{
@@ -116,7 +116,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 		}
 		if s.outboxWriter != nil {
 			outboxEntry := outbox.Entry{
-				ID:        uid.NewWithPrefix("evt"),
+				ID:        "evt" + "-" + uuid.NewString(),
 				EventType: TopicAuditAppended,
 				Payload:   appendedPayload,
 			}
