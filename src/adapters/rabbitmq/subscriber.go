@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -14,6 +15,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// errSubscriptionLost is a sentinel error returned by subscribeOnce when the
+// delivery channel is closed (broker restart, network partition). The outer
+// Subscribe loop only reconnects on this error; all other errors (topology,
+// permissions) are returned to the caller immediately.
+var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 
 // Compile-time interface check.
 var _ outbox.Subscriber = (*Subscriber)(nil)
@@ -138,6 +145,13 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(c
 			return nil
 		}
 
+		// Only reconnect on delivery channel lost. Topology/permission errors
+		// (ExchangeDeclare, QueueDeclare, QueueBind) are permanent — return
+		// immediately so the caller can handle them.
+		if !errors.Is(err, errSubscriptionLost) {
+			return err
+		}
+
 		// Check if we should stop retrying.
 		select {
 		case <-subCtx.Done():
@@ -178,20 +192,29 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
+		// Channel acquisition failure is transient (connection down) — wrap as
+		// subscription lost so the outer loop reconnects.
+		return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
 	}
 
 	s.trackChannel(ch)
 
+	// cleanupCh closes and untracks the channel. Used on early-return error
+	// paths to prevent channel leaks.
+	cleanupCh := func() {
+		s.untrackChannel(ch)
+		_ = ch.Close()
+	}
+
 	// Set QoS.
 	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
-		s.untrackChannel(ch)
+		cleanupCh()
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: set qos", err)
 	}
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
-		s.untrackChannel(ch)
+		cleanupCh()
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare exchange", err)
 	}
 
@@ -208,13 +231,13 @@ func (s *Subscriber) subscribeOnce(
 
 	// Declare queue.
 	if _, err = ch.QueueDeclare(queueName, true, false, false, false, queueArgs); err != nil {
-		s.untrackChannel(ch)
+		cleanupCh()
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare queue", err)
 	}
 
 	// Bind queue to exchange.
 	if err := ch.QueueBind(queueName, "", topic, false, nil); err != nil {
-		s.untrackChannel(ch)
+		cleanupCh()
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: bind queue", err)
 	}
 
@@ -222,7 +245,7 @@ func (s *Subscriber) subscribeOnce(
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {
-		s.untrackChannel(ch)
+		cleanupCh()
 		return errcode.Wrap(ErrAdapterAMQPConsume, "rabbitmq: start consuming", err)
 	}
 
@@ -283,7 +306,7 @@ func (s *Subscriber) consumeLoop(
 			if !ok {
 				slog.Warn("rabbitmq: delivery channel closed, subscriber exiting",
 					slog.String("topic", topic))
-				return errcode.New(ErrAdapterAMQPConsume, "rabbitmq: delivery channel closed")
+				return fmt.Errorf("%w: delivery channel closed", errSubscriptionLost)
 			}
 
 			s.wg.Add(1)
@@ -323,15 +346,15 @@ func (s *Subscriber) processDelivery(
 	entry.Metadata["topic"] = topic
 
 	if err := handler(ctx, entry); err != nil {
-		// If the context is cancelled (shutdown), NACK without requeue to avoid
-		// requeue storm. The message will be picked up by another consumer or
-		// redelivered after the consumer reconnects.
+		// If the context is cancelled (shutdown), NACK with requeue so the broker
+		// redelivers the message to another consumer. Without DLX configured,
+		// requeue=false would silently discard the message.
 		if ctx.Err() != nil {
-			slog.Info("rabbitmq: context cancelled during handler, nacking without requeue",
+			slog.Info("rabbitmq: context cancelled during handler, nacking with requeue",
 				slog.String("topic", topic),
 				slog.String("event_id", entry.ID),
 				slog.String("error", err.Error()))
-			if nackErr := ch.Nack(delivery.DeliveryTag, false, false); nackErr != nil {
+			if nackErr := ch.Nack(delivery.DeliveryTag, false, true); nackErr != nil {
 				slog.Error("rabbitmq: nack failed",
 					slog.String("topic", topic),
 					slog.String("error", nackErr.Error()))

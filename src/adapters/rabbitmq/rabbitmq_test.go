@@ -1628,9 +1628,9 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T
 	pub.mu.Unlock()
 }
 
-// --- P0 #7: ctx cancel → NACK without requeue (no requeue storm) ---
+// --- P0 #7: ctx cancel → NACK with requeue (conservative shutdown) ---
 
-func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithoutRequeue(t *testing.T) {
+func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	ch := newMockChannel()
@@ -1672,7 +1672,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithoutRequeue(t *testing.T
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled, "should NACK the delivery")
-	assert.False(t, ch.nackRequeue, "should NACK without requeue when ctx is cancelled")
+	assert.True(t, ch.nackRequeue, "should NACK with requeue when ctx is cancelled — without DLX, requeue=false would discard the message")
 	assert.Equal(t, uint64(42), ch.nackTag)
 	ch.mu.Unlock()
 
