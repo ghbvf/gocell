@@ -27,7 +27,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./... -count=1 -timeout 5m
+        run: go test -race -coverprofile=coverage.out ./... -count=1 -timeout 5m
 
       - name: Validate metadata
         run: go run ./cmd/gocell validate
@@ -46,6 +46,20 @@ jobs:
             exit 1
           fi
           echo "PASS: no internal import violations"
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: src
 
       - name: Kernel coverage gate
         run: |

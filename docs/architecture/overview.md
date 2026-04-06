@@ -9,6 +9,8 @@ GoCell 是以 Cell 为核心构建单元的 Go 工程底座。提供：
 3. **内置 Cell** — access-core（认证）、audit-core（审计追踪）、config-core（热更新 + 功能开关）
 4. **适配器** — PostgreSQL、Redis、OIDC、S3、VictoriaMetrics、RabbitMQ、WebSocket
 
+命名与字段大小写收敛请参见 [统一命名基线](./naming-baseline.md)。
+
 ---
 
 ## 核心概念

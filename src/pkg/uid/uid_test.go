@@ -57,6 +57,12 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// NOTE: uid.New() contains a panic guard for crypto/rand.Read failure.
+// In Go 1.24+, crypto/rand.Read itself calls runtime.fatal on failure
+// (see go.dev/issue/66821), making the guard a defense-in-depth measure.
+// The runtime fatal is unrecoverable and cannot be caught by assert.Panics,
+// so we verify the guard exists via code review rather than runtime test.
+
 func TestNewWithPrefix(t *testing.T) {
 	t.Run("prepends prefix", func(t *testing.T) {
 		id := NewWithPrefix("usr")

@@ -164,8 +164,13 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 
 // Health returns the HealthStatus of every registered Cell, keyed by Cell ID.
 func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
-	result := make(map[string]cell.HealthStatus, len(a.cells))
-	for _, c := range a.cells {
+	a.mu.Lock()
+	snapshot := make([]cell.Cell, len(a.cells))
+	copy(snapshot, a.cells)
+	a.mu.Unlock()
+
+	result := make(map[string]cell.HealthStatus, len(snapshot))
+	for _, c := range snapshot {
 		result[c.ID()] = c.Health()
 	}
 	return result
