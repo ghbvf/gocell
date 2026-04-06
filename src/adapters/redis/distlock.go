@@ -32,10 +32,17 @@ else
 end
 `
 
-// fenceTokenScript is a Lua script that atomically increments a per-key
-// fencing counter. The returned value is monotonically increasing and can
-// be passed to downstream stores to reject stale writes.
-const fenceTokenScript = `return redis.call("INCR", KEYS[1])`
+// fenceTokenScript atomically checks lock ownership (KEYS[1] == ARGV[1])
+// before incrementing the per-key fencing counter (KEYS[2]). Returns the
+// new counter value if owned, or 0 if the caller no longer holds the lock.
+// ref: Kleppmann "How to do distributed locking" — fencing tokens
+const fenceTokenScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("INCR", KEYS[2])
+else
+    return 0
+end
+`
 
 // Lock represents an acquired distributed lock. It must be released when the
 // critical section is complete via defer lock.Release(ctx).
@@ -78,17 +85,24 @@ func (l *Lock) Release(ctx context.Context) error {
 }
 
 // FenceToken generates a monotonically increasing fencing token for this lock.
-// Callers can pass this token to downstream stores and reject writes bearing
-// a token older than the highest seen, preventing stale writes after lock expiry.
+// The token is only issued if the caller still owns the lock (atomic GET+INCR
+// via Lua script). A stale holder whose lease has expired will receive an error.
 //
-// The token is generated via Redis INCR on "fence:{key}" and is unique per
-// acquisition. Enforcement is the downstream store's responsibility.
+// Callers pass this token to downstream stores which reject writes bearing a
+// token older than the highest seen. Enforcement is the store's responsibility.
+//
+// ref: Kleppmann "How to do distributed locking" — fencing tokens
 func (l *Lock) FenceToken(ctx context.Context) (int64, error) {
 	fenceKey := "fence:" + l.key
-	token, err := l.rdb.Eval(ctx, fenceTokenScript, []string{fenceKey}).Int64()
+	token, err := l.rdb.Eval(ctx, fenceTokenScript,
+		[]string{l.key, fenceKey}, l.value).Int64()
 	if err != nil {
 		return 0, errcode.Wrap(ErrAdapterRedisLockAcquire,
 			fmt.Sprintf("redis: fence token generation failed (key=%s)", l.key), err)
+	}
+	if token == 0 {
+		return 0, errcode.New(ErrAdapterRedisLockAcquire,
+			fmt.Sprintf("redis: lock not owned, cannot generate fence token (key=%s)", l.key))
 	}
 	return token, nil
 }
@@ -146,7 +160,10 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 			fmt.Sprintf("redis: lock already held (key=%s)", key))
 	}
 
-	renewCtx, cancel := context.WithCancel(context.Background())
+	// Derive renewal context from caller ctx: when the caller cancels,
+	// renewal stops and the lock will eventually expire.
+	// ref: rueidis lock — monitoring goroutine derives from caller context
+	renewCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	lock := &Lock{
 		rdb:    d.rdb,

@@ -192,6 +192,39 @@ func TestLock_FenceTokenEvalError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRE")
 }
 
+func TestLock_FenceToken_StaleHolderRejected(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+	ctx := context.Background()
+
+	// Lock A acquires.
+	lockA, err := dl.Acquire(ctx, "test:lock:fence:stale", 10*time.Second)
+	require.NoError(t, err)
+
+	// Lock A gets a valid fence token.
+	ftA, err := lockA.FenceToken(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ftA)
+
+	// Lock A releases → Lock B acquires.
+	err = lockA.Release(ctx)
+	require.NoError(t, err)
+	lockB, err := dl.Acquire(ctx, "test:lock:fence:stale", 10*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = lockB.Release(ctx) }()
+
+	// Lock B gets a valid fence token (must be > A's).
+	ftB, err := lockB.FenceToken(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, ftB, ftA)
+
+	// Stale Lock A tries to get a fence token — must fail.
+	ftStale, err := lockA.FenceToken(ctx)
+	require.Error(t, err, "stale holder must not get a fence token")
+	assert.Equal(t, int64(0), ftStale)
+	assert.Contains(t, err.Error(), "lock not owned")
+}
+
 func TestDistLock_ReleaseWaitsForRenewalGoroutine(t *testing.T) {
 	mock := newMockCmdable()
 	dl := newDistLockFromCmdable(mock, 30*time.Second)

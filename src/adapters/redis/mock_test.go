@@ -152,11 +152,19 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Simulate fencing token script: INCR on the key (no args).
-	if len(keys) == 1 && len(args) == 0 {
-		key := keys[0]
-		m.fenceCounters[key]++
-		cmd.SetVal(m.fenceCounters[key])
+	// Simulate fencing token script: 2 keys (lock + fence) + 1 arg (value).
+	// Checks ownership (GET KEYS[1] == ARGV[1]) then INCR KEYS[2].
+	if len(keys) == 2 && len(args) == 1 {
+		lockKey := keys[0]
+		fenceKey := keys[1]
+		expectedValue := toString(args[0])
+		entry, ok := m.store[lockKey]
+		if ok && entry.value == expectedValue {
+			m.fenceCounters[fenceKey]++
+			cmd.SetVal(m.fenceCounters[fenceKey])
+		} else {
+			cmd.SetVal(int64(0))
+		}
 		return cmd
 	}
 
