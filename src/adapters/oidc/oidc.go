@@ -65,8 +65,12 @@ func (a *Adapter) oidcCtx(ctx context.Context) context.Context {
 }
 
 // Provider returns the go-oidc Provider, performing discovery on first call.
-// Subsequent calls return the cached provider. Call Refresh() to force
-// re-discovery (e.g., on a timer for long-lived processes).
+// Subsequent calls return the cached provider without re-fetching.
+//
+// IMPORTANT: The cached provider never expires automatically. For long-lived
+// processes, the caller (typically bootstrap/runtime) MUST call Refresh()
+// periodically to pick up OIDC metadata and JWKS key rotation. A common
+// pattern is a background goroutine with a 24h ticker.
 func (a *Adapter) Provider(ctx context.Context) (*gooidc.Provider, error) {
 	a.mu.RLock()
 	if a.provider != nil {
