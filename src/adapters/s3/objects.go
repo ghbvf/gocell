@@ -3,12 +3,15 @@ package s3
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -63,15 +66,27 @@ func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-// Delete removes an object by key.
+// Delete removes an object by key. Deleting a non-existent key is a no-op
+// (idempotent), consistent with the previous implementation and standard
+// S3 semantics. Some S3-compatible backends return NoSuchKey/404 for
+// delete-not-found; these are silently ignored.
 func (c *Client) Delete(ctx context.Context, key string) error {
 	_, err := c.s3.DeleteObject(ctx, &awss3.DeleteObjectInput{
 		Bucket: aws.String(c.config.Bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return errcode.Wrap(ErrAdapterS3Delete,
-			fmt.Sprintf("s3: delete failed for key %s", key), err)
+		// Tolerate "not found" from S3-compatible backends (MinIO, etc.).
+		var nsk *types.NoSuchKey
+		var apiErr smithy.APIError
+		if errors.As(err, &nsk) {
+			// AWS-typed NoSuchKey — idempotent, ignore.
+		} else if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchKey" {
+			// Generic smithy error with NoSuchKey code.
+		} else {
+			return errcode.Wrap(ErrAdapterS3Delete,
+				fmt.Sprintf("s3: delete failed for key %s", key), err)
+		}
 	}
 
 	slog.Debug("s3: object deleted",

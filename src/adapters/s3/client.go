@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"time"
 
@@ -98,6 +99,11 @@ func New(cfg Config) (*Client, error) {
 		return nil, err
 	}
 
+	timeout := cfg.HTTPTimeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
 	awsCfg := aws.Config{
 		Region: cfg.Region,
 		Credentials: credentials.NewStaticCredentialsProvider(
@@ -105,6 +111,7 @@ func New(cfg Config) (*Client, error) {
 			cfg.SecretAccessKey,
 			"",
 		),
+		HTTPClient: &http.Client{Timeout: timeout},
 	}
 
 	s3Client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {

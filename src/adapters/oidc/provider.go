@@ -31,10 +31,11 @@ type Provider struct {
 	config Config
 	client *http.Client
 
-	mu          sync.RWMutex
-	doc         *DiscoveryDocument
-	docFetch    time.Time
-	oidcProvider *gooidc.Provider
+	mu            sync.RWMutex
+	doc           *DiscoveryDocument
+	docFetch      time.Time
+	oidcProvider  *gooidc.Provider
+	providerFetch time.Time
 }
 
 // NewProvider creates a Provider with the given configuration.
@@ -60,10 +61,12 @@ func (p *Provider) oidcContext(ctx context.Context) context.Context {
 	return gooidc.ClientContext(ctx, p.client)
 }
 
-// ensureProvider lazily initializes the go-oidc provider.
+// ensureProvider lazily initializes or refreshes the go-oidc provider.
+// The provider is re-created when DiscoveryCacheTTL expires, which also
+// refreshes the internal JWKS RemoteKeySet used for token verification.
 func (p *Provider) ensureProvider(ctx context.Context) (*gooidc.Provider, error) {
 	p.mu.RLock()
-	if p.oidcProvider != nil {
+	if p.oidcProvider != nil && time.Since(p.providerFetch) < p.config.DiscoveryCacheTTL {
 		provider := p.oidcProvider
 		p.mu.RUnlock()
 		return provider, nil
@@ -74,7 +77,7 @@ func (p *Provider) ensureProvider(ctx context.Context) (*gooidc.Provider, error)
 	defer p.mu.Unlock()
 
 	// Double-check after acquiring write lock.
-	if p.oidcProvider != nil {
+	if p.oidcProvider != nil && time.Since(p.providerFetch) < p.config.DiscoveryCacheTTL {
 		return p.oidcProvider, nil
 	}
 
@@ -85,6 +88,7 @@ func (p *Provider) ensureProvider(ctx context.Context) (*gooidc.Provider, error)
 	}
 
 	p.oidcProvider = provider
+	p.providerFetch = time.Now()
 	slog.Info("oidc: provider initialized via discovery",
 		slog.String("issuer", p.config.IssuerURL),
 	)
@@ -178,14 +182,24 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string) (*TokenRespons
 			"oidc: token exchange failed", err)
 	}
 
+	var expiresIn int
+	if !token.Expiry.IsZero() {
+		expiresIn = int(time.Until(token.Expiry).Seconds())
+	}
+
 	resp := &TokenResponse{
 		AccessToken: token.AccessToken,
 		TokenType:   token.TokenType,
-		ExpiresIn:   int(time.Until(token.Expiry).Seconds()),
+		ExpiresIn:   expiresIn,
 	}
 
 	if token.RefreshToken != "" {
 		resp.RefreshToken = token.RefreshToken
+	}
+
+	// Extract scope from extra fields (oauth2.Token does not expose scope directly).
+	if scope, ok := token.Extra("scope").(string); ok {
+		resp.Scope = scope
 	}
 
 	// Extract ID token from the extra fields.
