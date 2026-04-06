@@ -48,7 +48,9 @@ end
 // critical section is complete. Use a fresh context for Release, not the
 // Acquire context, to avoid early cancellation:
 //
-//	defer lock.Release(context.Background())
+//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	defer lock.Release(cleanupCtx)
 //
 // Safety: DistLock provides distributed mutual exclusion on a best-effort
 // basis. It is suitable for efficiency (avoiding duplicate work). For
@@ -71,7 +73,9 @@ type Lock struct {
 //
 //	lock, err := dl.Acquire(requestCtx, key, ttl)
 //	if err != nil { return err }
-//	defer lock.Release(context.Background())
+//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	defer lock.Release(cleanupCtx)
 func (l *Lock) Release(ctx context.Context) error {
 	// Stop renewal goroutine and wait for it to exit.
 	if l.cancel != nil {

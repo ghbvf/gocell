@@ -22,6 +22,18 @@
 // (e.g., UPDATE ... WHERE fence_token < $1). The lock reduces contention;
 // the conditional write guarantees safety.
 //
+// # Lock Lifecycle
+//
+// The Acquire context only governs the acquisition attempt (SetNX). The
+// renewal goroutine runs independently until [Lock.Release] is called.
+// Always release with a bounded cleanup context, not the request context:
+//
+//	lock, err := dl.Acquire(requestCtx, key, ttl)
+//	if err != nil { return err }
+//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	defer cancel()
+//	defer lock.Release(cleanupCtx)
+//
 // ref: Martin Kleppmann "How to do distributed locking" (2016)
 // ref: go-redsync/redsync — no fencing tokens, manual Extend
 // ref: redis/rueidis/rueidislock — context-as-lock, no fencing tokens

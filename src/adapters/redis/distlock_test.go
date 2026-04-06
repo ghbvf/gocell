@@ -66,7 +66,7 @@ func TestDistLock_AcquireSetNXError(t *testing.T) {
 	lock, err := dl.Acquire(ctx, "test:lock:err", 10*time.Second)
 	require.Error(t, err)
 	assert.Nil(t, lock)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRE")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRED")
 }
 
 func TestDistLock_ReleaseIdempotent(t *testing.T) {
@@ -189,7 +189,7 @@ func TestLock_FenceTokenEvalError(t *testing.T) {
 	ft, err := lock.FenceToken(ctx)
 	require.Error(t, err)
 	assert.Equal(t, int64(0), ft)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRE")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRED")
 }
 
 func TestLock_FenceToken_StaleHolderRejected(t *testing.T) {
