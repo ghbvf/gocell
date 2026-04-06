@@ -1,0 +1,136 @@
+package otel
+
+import (
+	"context"
+	"testing"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// newTestTracer creates a Tracer backed by an in-memory span exporter for testing.
+func newTestTracer(t *testing.T) (*Tracer, *tracetest.InMemoryExporter) {
+	t.Helper()
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+	})
+
+	return &Tracer{inner: tp.Tracer("test-service")}, exporter
+}
+
+func TestTracer_ImplementsInterface(t *testing.T) {
+	tracer, _ := newTestTracer(t)
+	var _ tracing.Tracer = tracer
+}
+
+func TestTracer_StartCreatesSpan(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	ctx, span := tracer.Start(ctx, "test-operation")
+	require.NotNil(t, span)
+
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "test-operation", spans[0].Name)
+
+	// Verify trace/span IDs are non-empty.
+	assert.NotEmpty(t, span.TraceID())
+	assert.NotEmpty(t, span.SpanID())
+
+	// Verify ctxkeys propagation.
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, span.TraceID(), traceID)
+
+	spanID, ok := ctxkeys.SpanIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, span.SpanID(), spanID)
+}
+
+func TestTracer_SetAttribute(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "attr-test")
+
+	span.SetAttribute("str_key", "value")
+	span.SetAttribute("int_key", 42)
+	span.SetAttribute("int64_key", int64(100))
+	span.SetAttribute("float_key", 3.14)
+	span.SetAttribute("bool_key", true)
+	span.SetAttribute("fallback_key", []byte("bytes"))
+
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+
+	// Verify attributes were set (at least one).
+	attrs := spans[0].Attributes
+	assert.NotEmpty(t, attrs, "span should have attributes")
+}
+
+func TestTracer_NestedSpansShareTraceID(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	ctx, parentSpan := tracer.Start(ctx, "parent")
+	_, childSpan := tracer.Start(ctx, "child")
+
+	childSpan.End()
+	parentSpan.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 2)
+
+	// Both spans should share the same trace ID.
+	assert.Equal(t, parentSpan.TraceID(), childSpan.TraceID())
+}
+
+func TestNewTracer_MissingServiceName(t *testing.T) {
+	_, _, err := NewTracer(context.Background(), TracerConfig{
+		ExporterEndpoint: "localhost:4317",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ServiceName")
+}
+
+func TestNewTracer_MissingEndpoint(t *testing.T) {
+	_, _, err := NewTracer(context.Background(), TracerConfig{
+		ServiceName: "test",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ExporterEndpoint")
+}
+
+func TestTracerConfig_Defaults(t *testing.T) {
+	cfg := TracerConfig{}
+	cfg.defaults()
+	assert.Equal(t, 1.0, cfg.SampleRate)
+
+	cfg2 := TracerConfig{SampleRate: -1}
+	cfg2.defaults()
+	assert.Equal(t, 1.0, cfg2.SampleRate)
+
+	cfg3 := TracerConfig{SampleRate: 2.0}
+	cfg3.defaults()
+	assert.Equal(t, 1.0, cfg3.SampleRate)
+}
+
+func TestSpan_ImplementsInterface(t *testing.T) {
+	var _ tracing.Span = (*otelSpan)(nil)
+}

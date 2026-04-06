@@ -32,10 +32,18 @@ func WithHealthHandler(h *health.Handler) Option {
 	}
 }
 
-// WithMetricsCollector registers /metrics and adds the metrics middleware.
-func WithMetricsCollector(c *metrics.InMemoryCollector) Option {
+// WithMetricsCollector adds the metrics middleware using the given Collector.
+// To also serve a /metrics endpoint, use WithMetricsHandler.
+func WithMetricsCollector(c metrics.Collector) Option {
 	return func(r *Router) {
 		r.metricsCollector = c
+	}
+}
+
+// WithMetricsHandler registers an http.Handler at /metrics (e.g. promhttp handler).
+func WithMetricsHandler(h http.Handler) Option {
+	return func(r *Router) {
+		r.metricsHandler = h
 	}
 }
 
@@ -50,7 +58,8 @@ func WithBodyLimit(maxBytes int64) Option {
 type Router struct {
 	mux              *chi.Mux
 	healthHandler    *health.Handler
-	metricsCollector *metrics.InMemoryCollector
+	metricsCollector metrics.Collector
+	metricsHandler   http.Handler
 	bodyLimit        int64
 }
 
@@ -88,8 +97,8 @@ func New(opts ...Option) *Router {
 		r.mux.Get("/healthz", r.healthHandler.LivezHandler())
 		r.mux.Get("/readyz", r.healthHandler.ReadyzHandler())
 	}
-	if r.metricsCollector != nil {
-		r.mux.Handle("/metrics", r.metricsCollector.Handler())
+	if r.metricsHandler != nil {
+		r.mux.Handle("/metrics", r.metricsHandler)
 	}
 
 	return r
