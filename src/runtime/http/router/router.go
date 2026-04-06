@@ -97,8 +97,18 @@ func New(opts ...Option) *Router {
 		r.mux.Get("/healthz", r.healthHandler.LivezHandler())
 		r.mux.Get("/readyz", r.healthHandler.ReadyzHandler())
 	}
-	if r.metricsHandler != nil {
+	// Auto-register /metrics: explicit handler takes precedence, otherwise
+	// check if the collector itself can serve metrics (e.g. InMemoryCollector,
+	// Prometheus Collector). This preserves backward compatibility — callers
+	// that only pass WithMetricsCollector still get /metrics automatically.
+	switch {
+	case r.metricsHandler != nil:
 		r.mux.Handle("/metrics", r.metricsHandler)
+	case r.metricsCollector != nil:
+		type handlerProvider interface{ Handler() http.Handler }
+		if hp, ok := r.metricsCollector.(handlerProvider); ok {
+			r.mux.Handle("/metrics", hp.Handler())
+		}
 	}
 
 	return r

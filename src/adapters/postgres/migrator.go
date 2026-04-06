@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -121,7 +122,7 @@ func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 	for _, r := range results {
 		ms := MigrationStatus{
 			Version: fmt.Sprintf("%03d", r.Source.Version),
-			Name:    r.Source.Path,
+			Name:    migrationName(r.Source.Path, r.Source.Version),
 			Applied: r.State == goose.StateApplied,
 		}
 		if ms.Applied && !r.AppliedAt.IsZero() {
@@ -130,6 +131,19 @@ func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 		statuses = append(statuses, ms)
 	}
 	return statuses, nil
+}
+
+// migrationName extracts the descriptive name from a goose migration path.
+// "001_create_outbox_entries.sql" → "create_outbox_entries"
+func migrationName(path string, version int64) string {
+	base := path
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		base = path[i+1:]
+	}
+	prefix := fmt.Sprintf("%03d_", version)
+	name := strings.TrimPrefix(base, prefix)
+	name = strings.TrimSuffix(name, ".sql")
+	return name
 }
 
 // Close releases the underlying *sql.DB created for goose.
