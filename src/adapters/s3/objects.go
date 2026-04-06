@@ -3,15 +3,11 @@ package s3
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	smithy "github.com/aws/smithy-go"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -35,62 +31,6 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	slog.Debug("s3: object uploaded",
 		slog.String("key", key),
 		slog.Int("size", len(data)),
-	)
-
-	return nil
-}
-
-// Download retrieves an object by key.
-func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
-	resp, err := c.s3.GetObject(ctx, &awss3.GetObjectInput{
-		Bucket: aws.String(c.config.Bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterS3Download,
-			fmt.Sprintf("s3: download failed for key %s", key), err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.Warn("s3: failed to close download response body",
-				slog.Any("error", closeErr))
-		}
-	}()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterS3Download,
-			fmt.Sprintf("s3: failed to read response for key %s", key), err)
-	}
-
-	return data, nil
-}
-
-// Delete removes an object by key. Deleting a non-existent key is a no-op
-// (idempotent), consistent with the previous implementation and standard
-// S3 semantics. Some S3-compatible backends return NoSuchKey/404 for
-// delete-not-found; these are silently ignored.
-func (c *Client) Delete(ctx context.Context, key string) error {
-	_, err := c.s3.DeleteObject(ctx, &awss3.DeleteObjectInput{
-		Bucket: aws.String(c.config.Bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		// Tolerate "not found" from S3-compatible backends (MinIO, etc.).
-		var nsk *types.NoSuchKey
-		var apiErr smithy.APIError
-		if errors.As(err, &nsk) {
-			// AWS-typed NoSuchKey — idempotent, ignore.
-		} else if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchKey" {
-			// Generic smithy error with NoSuchKey code.
-		} else {
-			return errcode.Wrap(ErrAdapterS3Delete,
-				fmt.Sprintf("s3: delete failed for key %s", key), err)
-		}
-	}
-
-	slog.Debug("s3: object deleted",
-		slog.String("key", key),
 	)
 
 	return nil

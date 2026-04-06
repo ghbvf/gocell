@@ -88,9 +88,8 @@ func (c Config) Validate() error {
 
 // Client is an S3-compatible object storage client backed by aws-sdk-go-v2.
 type Client struct {
-	config  Config
-	s3      *awss3.Client
-	presign *awss3.PresignClient
+	config Config
+	s3     *awss3.Client
 }
 
 // New creates a new S3 Client using aws-sdk-go-v2.
@@ -119,12 +118,9 @@ func New(cfg Config) (*Client, error) {
 		o.UsePathStyle = cfg.UsePathStyle
 	})
 
-	presignClient := awss3.NewPresignClient(s3Client)
-
 	return &Client{
-		config:  cfg,
-		s3:      s3Client,
-		presign: presignClient,
+		config: cfg,
+		s3:     s3Client,
 	}, nil
 }
 

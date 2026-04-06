@@ -2,7 +2,6 @@ package s3
 
 import (
 	"context"
-	"encoding/xml"
 	"io"
 	"net"
 	"net/http"
@@ -25,33 +24,13 @@ func skipIfNoListener(t *testing.T) {
 	ln.Close()
 }
 
-// s3ErrorResponse is the XML error response format expected by the AWS SDK.
-type s3ErrorResponse struct {
-	XMLName xml.Name `xml:"Error"`
-	Code    string   `xml:"Code"`
-	Message string   `xml:"Message"`
-}
-
-func writeS3Error(w http.ResponseWriter, statusCode int, code, message string) {
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(statusCode)
-	resp := s3ErrorResponse{Code: code, Message: message}
-	data, _ := xml.Marshal(resp)
-	_, _ = w.Write(data)
-}
-
 func testS3Server(t *testing.T) *httptest.Server {
 	t.Helper()
 	skipIfNoListener(t)
 
-	objects := make(map[string][]byte)
-
 	mux := http.NewServeMux()
 
-	// Handle all requests via a catch-all pattern.
-	// AWS SDK sends requests in path-style: /bucket/key
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Extract key from path: /bucket/key or /bucket (for HEAD bucket)
 		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
 		bucket := ""
 		key := ""
@@ -65,49 +44,24 @@ func testS3Server(t *testing.T) *httptest.Server {
 		switch r.Method {
 		case http.MethodHead:
 			if bucket == "" {
-				writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
+				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 
 		case http.MethodPut:
 			if key == "" {
-				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
+				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				writeS3Error(w, http.StatusInternalServerError, "InternalError", "read error")
-				return
-			}
-			objects[key] = body
-			w.WriteHeader(http.StatusOK)
-
-		case http.MethodGet:
-			if key == "" {
-				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
-				return
-			}
-			data, ok := objects[key]
-			if !ok {
-				writeS3Error(w, http.StatusNotFound, "NoSuchKey", "not found")
+			if _, err := io.ReadAll(r.Body); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
-			if _, writeErr := w.Write(data); writeErr != nil {
-				t.Errorf("failed to write response: %v", writeErr)
-			}
-
-		case http.MethodDelete:
-			if key == "" {
-				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
-				return
-			}
-			delete(objects, key)
-			w.WriteHeader(http.StatusNoContent)
 
 		default:
-			writeS3Error(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -222,32 +176,15 @@ func TestClient_Health(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClient_UploadDownloadDelete(t *testing.T) {
+func TestClient_Upload(t *testing.T) {
 	server := testS3Server(t)
 	defer server.Close()
 
 	client, err := New(testConfig(server.URL))
 	require.NoError(t, err)
 
-	ctx := context.Background()
-
-	// Upload.
-	data := []byte("hello world")
-	err = client.Upload(ctx, "test/file.txt", data, "text/plain")
+	err = client.Upload(context.Background(), "test/file.txt", []byte("hello world"), "text/plain")
 	require.NoError(t, err)
-
-	// Download.
-	downloaded, err := client.Download(ctx, "test/file.txt")
-	require.NoError(t, err)
-	assert.Equal(t, data, downloaded)
-
-	// Delete.
-	err = client.Delete(ctx, "test/file.txt")
-	require.NoError(t, err)
-
-	// Download after delete should fail.
-	_, err = client.Download(ctx, "test/file.txt")
-	require.Error(t, err)
 }
 
 func TestClient_Upload_DefaultContentType(t *testing.T) {
@@ -259,65 +196,4 @@ func TestClient_Upload_DefaultContentType(t *testing.T) {
 
 	err = client.Upload(context.Background(), "test/bin", []byte{0x00}, "")
 	require.NoError(t, err)
-}
-
-func TestClient_Delete_NotFound(t *testing.T) {
-	server := testS3Server(t)
-	defer server.Close()
-
-	client, err := New(testConfig(server.URL))
-	require.NoError(t, err)
-
-	// Deleting a non-existent key should succeed (idempotent).
-	err = client.Delete(context.Background(), "nonexistent")
-	require.NoError(t, err)
-}
-
-func TestClient_PresignedGet(t *testing.T) {
-	cfg := testConfig("http://localhost:9000")
-	client, err := New(cfg)
-	require.NoError(t, err)
-
-	presignedURL, err := client.PresignedGet("path/to/file.txt", 15*time.Minute)
-	require.NoError(t, err)
-	assert.Contains(t, presignedURL, "X-Amz-Signature=")
-	assert.Contains(t, presignedURL, "X-Amz-Expires=900")
-	assert.Contains(t, presignedURL, "path/to/file.txt")
-}
-
-func TestClient_PresignedPut(t *testing.T) {
-	cfg := testConfig("http://localhost:9000")
-	client, err := New(cfg)
-	require.NoError(t, err)
-
-	presignedURL, err := client.PresignedPut("uploads/data.bin", 1*time.Hour)
-	require.NoError(t, err)
-	assert.Contains(t, presignedURL, "X-Amz-Signature=")
-	assert.Contains(t, presignedURL, "X-Amz-Expires=3600")
-}
-
-func TestClient_PresignedGet_InvalidTTL(t *testing.T) {
-	cfg := testConfig("http://localhost:9000")
-	client, err := New(cfg)
-	require.NoError(t, err)
-
-	_, err = client.PresignedGet("key", -1*time.Second)
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrAdapterS3Presign, ec.Code)
-}
-
-func TestClient_PresignedGet_TTLTooLong(t *testing.T) {
-	cfg := testConfig("http://localhost:9000")
-	client, err := New(cfg)
-	require.NoError(t, err)
-
-	_, err = client.PresignedGet("key", 8*24*time.Hour)
-	require.Error(t, err)
-
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrAdapterS3Presign, ec.Code)
 }
