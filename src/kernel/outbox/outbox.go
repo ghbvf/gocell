@@ -72,3 +72,32 @@ type Subscriber interface {
 	// Close terminates all active subscriptions and releases resources.
 	Close() error
 }
+
+// TopicHandlerMiddleware transforms an entry handler, receiving the topic name.
+// It is the event-consumer analogue of HTTP middleware.
+type TopicHandlerMiddleware func(topic string, next func(context.Context, Entry) error) func(context.Context, Entry) error
+
+// SubscriberWithMiddleware wraps a Subscriber so that every handler passed
+// to Subscribe is first wrapped by the given middleware chain.
+// Middleware is applied in order: [0] is outermost, [len-1] is innermost.
+type SubscriberWithMiddleware struct {
+	Inner      Subscriber
+	Middleware []TopicHandlerMiddleware
+}
+
+// Compile-time interface check.
+var _ Subscriber = (*SubscriberWithMiddleware)(nil)
+
+// Subscribe wraps the handler with the middleware chain, then delegates to Inner.
+func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, handler func(context.Context, Entry) error) error {
+	wrapped := handler
+	for i := len(s.Middleware) - 1; i >= 0; i-- {
+		wrapped = s.Middleware[i](topic, wrapped)
+	}
+	return s.Inner.Subscribe(ctx, topic, wrapped)
+}
+
+// Close delegates to the inner subscriber.
+func (s *SubscriberWithMiddleware) Close() error {
+	return s.Inner.Close()
+}

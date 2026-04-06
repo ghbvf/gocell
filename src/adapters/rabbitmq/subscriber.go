@@ -20,8 +20,25 @@ var _ outbox.Subscriber = (*Subscriber)(nil)
 
 // SubscriberConfig configures how a Subscriber consumes messages.
 type SubscriberConfig struct {
-	// QueueName is the queue to consume from. If empty, defaults to the topic name.
+	// QueueName is the queue to consume from. If set, it takes precedence over
+	// ConsumerGroup-based naming. If both QueueName and ConsumerGroup are empty,
+	// the queue name defaults to the topic name (backward compatible).
 	QueueName string
+
+	// ConsumerGroup identifies the logical consumer group. When QueueName is empty
+	// and ConsumerGroup is set, the queue name is derived as "{ConsumerGroup}.{topic}".
+	// This ensures that multiple cells subscribing to the same fanout exchange each
+	// get their own queue (fanout semantics) instead of competing on a single queue.
+	ConsumerGroup string
+
+	// DLXExchange is the dead-letter exchange name. When set, the queue is declared
+	// with x-dead-letter-exchange so that NACK(requeue=false) messages are routed
+	// to the DLX instead of being silently discarded by the broker.
+	DLXExchange string
+
+	// DLXRoutingKey is an optional routing key for dead-lettered messages.
+	// Only effective when DLXExchange is set.
+	DLXRoutingKey string
 
 	// PrefetchCount limits the number of unacknowledged messages per consumer.
 	// Default: 10.
@@ -67,8 +84,25 @@ func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 	}
 }
 
+// resolveQueueName derives the queue name from config and topic.
+// Priority: QueueName > ConsumerGroup.topic > topic (backward compat).
+func (s *Subscriber) resolveQueueName(topic string) string {
+	if s.config.QueueName != "" {
+		return s.config.QueueName
+	}
+	if s.config.ConsumerGroup != "" {
+		return s.config.ConsumerGroup + "." + topic
+	}
+	return topic
+}
+
 // Subscribe registers a handler for the given topic and blocks until ctx is
-// cancelled, the subscriber is closed, or an unrecoverable error occurs.
+// cancelled or the subscriber is closed.
+//
+// Subscribe automatically reconnects when the underlying AMQP channel is lost
+// (e.g., due to a broker restart or network partition). It waits for the
+// Connection to re-establish via WaitConnected, then re-declares the exchange,
+// queue, and binding on a fresh channel.
 //
 // The topic is used as a fanout exchange name. A queue (from SubscriberConfig
 // or defaulting to the topic) is declared and bound to the exchange.
@@ -82,37 +116,105 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(c
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
 
-	queueName := s.config.QueueName
-	if queueName == "" {
-		queueName = topic
-	}
+	// Derive a context that is cancelled when either the parent ctx is done or
+	// the subscriber is closed. This ensures WaitConnected unblocks promptly on
+	// subscriber shutdown even if the parent ctx has no deadline.
+	subCtx, subCancel := context.WithCancelCause(ctx)
+	defer subCancel(nil)
+	go func() {
+		select {
+		case <-s.closeCh:
+			subCancel(fmt.Errorf("subscriber closed"))
+		case <-subCtx.Done():
+		}
+	}()
 
+	queueName := s.resolveQueueName(topic)
+
+	for {
+		err := s.subscribeOnce(subCtx, topic, queueName, handler)
+		if err == nil {
+			// Clean exit: ctx cancelled or subscriber closed.
+			return nil
+		}
+
+		// Check if we should stop retrying.
+		select {
+		case <-subCtx.Done():
+			return nil
+		default:
+		}
+		if s.closed.Load() {
+			return nil
+		}
+
+		slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
+			slog.String("topic", topic),
+			slog.String("queue", queueName),
+			slog.String("error", err.Error()))
+
+		// Wait for connection recovery before re-subscribing.
+		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
+			// ctx cancelled or subscriber closed during wait — clean exit.
+			return nil
+		}
+
+		slog.Info("rabbitmq: resubscribing after reconnect",
+			slog.String("topic", topic),
+			slog.String("queue", queueName))
+	}
+}
+
+// subscribeOnce performs a single subscription lifecycle: acquire channel,
+// declare topology, consume, and run the consume loop.
+//
+// Returns nil for a clean exit (ctx cancelled or subscriber closed).
+// Returns a non-nil error when the delivery channel is lost (triggers reconnect
+// in the outer Subscribe loop).
+func (s *Subscriber) subscribeOnce(
+	ctx context.Context,
+	topic, queueName string,
+	handler func(context.Context, outbox.Entry) error,
+) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
 	}
 
-	s.mu.Lock()
-	s.channels = append(s.channels, ch)
-	s.mu.Unlock()
+	s.trackChannel(ch)
 
 	// Set QoS.
 	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
+		s.untrackChannel(ch)
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: set qos", err)
 	}
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
+		s.untrackChannel(ch)
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare exchange", err)
 	}
 
+	// Build queue arguments for dead-letter routing.
+	var queueArgs amqp.Table
+	if s.config.DLXExchange != "" {
+		queueArgs = amqp.Table{
+			"x-dead-letter-exchange": s.config.DLXExchange,
+		}
+		if s.config.DLXRoutingKey != "" {
+			queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
+		}
+	}
+
 	// Declare queue.
-	if _, err = ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
+	if _, err = ch.QueueDeclare(queueName, true, false, false, false, queueArgs); err != nil {
+		s.untrackChannel(ch)
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: declare queue", err)
 	}
 
 	// Bind queue to exchange.
 	if err := ch.QueueBind(queueName, "", topic, false, nil); err != nil {
+		s.untrackChannel(ch)
 		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: bind queue", err)
 	}
 
@@ -120,6 +222,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(c
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {
+		s.untrackChannel(ch)
 		return errcode.Wrap(ErrAdapterAMQPConsume, "rabbitmq: start consuming", err)
 	}
 
@@ -129,7 +232,32 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(c
 		slog.String("consumer", consumerTag),
 		slog.Int("prefetch", s.config.PrefetchCount))
 
-	return s.consumeLoop(ctx, ch, deliveries, topic, handler)
+	loopErr := s.consumeLoop(ctx, ch, deliveries, topic, handler)
+
+	// Clean up the dead channel after consumeLoop exits.
+	s.untrackChannel(ch)
+	_ = ch.Close() // Best-effort close; channel is likely already dead.
+
+	return loopErr
+}
+
+// trackChannel adds a channel to the tracked list for cleanup on Close().
+func (s *Subscriber) trackChannel(ch AMQPChannel) {
+	s.mu.Lock()
+	s.channels = append(s.channels, ch)
+	s.mu.Unlock()
+}
+
+// untrackChannel removes a channel from the tracked list.
+func (s *Subscriber) untrackChannel(ch AMQPChannel) {
+	s.mu.Lock()
+	for i, tracked := range s.channels {
+		if tracked == ch {
+			s.channels = append(s.channels[:i], s.channels[i+1:]...)
+			break
+		}
+	}
+	s.mu.Unlock()
 }
 
 func (s *Subscriber) consumeLoop(

@@ -35,9 +35,11 @@ type mockChannel struct {
 	confirmCalled bool
 	confirmErr    error
 
-	exchangesDeclared []string
-	queuesDeclared    []string
-	queueBindings     []string
+	exchangesDeclared  []string
+	exchangeDeclareErr error
+	queuesDeclared     []string
+	queueDeclareArgs   []amqp.Table
+	queueBindings      []string
 
 	notifyPublishCh chan amqp.Confirmation
 
@@ -105,6 +107,9 @@ func (m *mockChannel) NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Co
 func (m *mockChannel) ExchangeDeclare(name, kind string, durable, autoDelete, internal, noWait bool, args amqp.Table) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.exchangeDeclareErr != nil {
+		return m.exchangeDeclareErr
+	}
 	m.exchangesDeclared = append(m.exchangesDeclared, name)
 	return nil
 }
@@ -113,6 +118,7 @@ func (m *mockChannel) QueueDeclare(name string, durable, autoDelete, exclusive, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.queuesDeclared = append(m.queuesDeclared, name)
+	m.queueDeclareArgs = append(m.queueDeclareArgs, args)
 	return amqp.Queue{Name: name}, nil
 }
 
@@ -155,6 +161,10 @@ type mockConnection struct {
 	nextCh   *mockChannel
 	chanErr  error
 
+	// channelQueue provides channels in FIFO order. When non-nil and non-empty,
+	// Channel() pops from the front. Falls back to nextCh / newMockChannel.
+	channelQueue []*mockChannel
+
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
 	closeErr      error
@@ -171,6 +181,12 @@ func (m *mockConnection) Channel() (AMQPChannel, error) {
 	defer m.mu.Unlock()
 	if m.chanErr != nil {
 		return nil, m.chanErr
+	}
+	if len(m.channelQueue) > 0 {
+		ch := m.channelQueue[0]
+		m.channelQueue = m.channelQueue[1:]
+		m.channels = append(m.channels, ch)
+		return ch, nil
 	}
 	if m.nextCh != nil {
 		ch := m.nextCh
@@ -858,7 +874,425 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
 
-func TestSubscriber_DeliveryChannelClosed(t *testing.T) {
+func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	// First channel — will be closed to simulate connection loss.
+	ch1 := newMockChannel()
+	// Second channel — will be used after reconnect.
+	ch2 := newMockChannel()
+
+	// Use channelQueue for deterministic FIFO ordering: ch1 first, then ch2.
+	mockConn.mu.Lock()
+	mockConn.channelQueue = []*mockChannel{ch1, ch2}
+	mockConn.nextCh = nil
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// The subscribe loop will:
+	// 1. subscribeOnce with ch1 -> delivery channel closes -> error
+	// 2. WaitConnected (already connected) -> subscribeOnce with ch2
+	// 3. Handler processes message, then we cancel ctx to exit cleanly.
+	go func() {
+		// Close ch1's delivery channel to simulate connection loss.
+		time.Sleep(20 * time.Millisecond)
+		close(ch1.consumeDeliveries)
+
+		// Let ch2 process one message, then cancel.
+		entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
+		entryBytes, _ := json.Marshal(entry)
+		time.Sleep(100 * time.Millisecond)
+		ch2.consumeDeliveries <- amqp.Delivery{
+			DeliveryTag: 1,
+			Body:        entryBytes,
+		}
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	handled := make(chan string, 1)
+	handler := func(_ context.Context, e outbox.Entry) error {
+		handled <- e.ID
+		return nil
+	}
+
+	err := sub.Subscribe(ctx, "test.topic", handler)
+	assert.NoError(t, err) // Clean exit via ctx cancel.
+
+	// Verify the handler was called after reconnect.
+	select {
+	case id := <-handled:
+		assert.Equal(t, "reconnect-001", id)
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler was not called after reconnect")
+	}
+
+	assert.NoError(t, sub.Close())
+}
+
+func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
+	// Test that cancelling ctx during reconnect wait exits cleanly.
+	mockConn := newMockConnection()
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return mockConn, nil
+	}
+
+	c := &Connection{
+		config:      Config{URL: "amqp://test@localhost/"},
+		dial:        dialFunc,
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   make(chan struct{}), // Never closed = never connected.
+	}
+
+	// Make AcquireChannel fail so subscribeOnce returns error, entering reconnect wait.
+	mockConn.mu.Lock()
+	mockConn.chanErr = errors.New("no connection")
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(c, SubscriberConfig{
+		QueueName:       "test-queue",
+		ShutdownTimeout: 1 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		// Cancel ctx after a short delay to unblock WaitConnected.
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
+}
+
+func TestSubscriber_ResolveQueueName(t *testing.T) {
+	tests := []struct {
+		name          string
+		queueName     string
+		consumerGroup string
+		topic         string
+		expected      string
+	}{
+		{
+			name:      "explicit queue name takes precedence",
+			queueName: "my-queue",
+			topic:     "my.topic",
+			expected:  "my-queue",
+		},
+		{
+			name:          "consumer group derives queue name",
+			consumerGroup: "audit-cell",
+			topic:         "session.created",
+			expected:      "audit-cell.session.created",
+		},
+		{
+			name:     "fallback to topic",
+			topic:    "my.topic",
+			expected: "my.topic",
+		},
+		{
+			name:          "queue name takes precedence over consumer group",
+			queueName:     "override-queue",
+			consumerGroup: "audit-cell",
+			topic:         "session.created",
+			expected:      "override-queue",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := &Subscriber{
+				config: SubscriberConfig{
+					QueueName:     tt.queueName,
+					ConsumerGroup: tt.consumerGroup,
+				},
+			}
+			assert.Equal(t, tt.expected, sub.resolveQueueName(tt.topic))
+		})
+	}
+}
+
+func TestSubscriber_TrackUntrackChannel(t *testing.T) {
+	sub := &Subscriber{
+		closeCh: make(chan struct{}),
+	}
+
+	ch1 := newMockChannel()
+	ch2 := newMockChannel()
+	ch3 := newMockChannel()
+
+	sub.trackChannel(ch1)
+	sub.trackChannel(ch2)
+	sub.trackChannel(ch3)
+
+	sub.mu.Lock()
+	assert.Len(t, sub.channels, 3)
+	sub.mu.Unlock()
+
+	sub.untrackChannel(ch2)
+
+	sub.mu.Lock()
+	assert.Len(t, sub.channels, 2)
+	// ch2 should be removed, ch1 and ch3 should remain.
+	assert.Contains(t, sub.channels, AMQPChannel(ch1))
+	assert.Contains(t, sub.channels, AMQPChannel(ch3))
+	sub.mu.Unlock()
+
+	// Untrack a channel that is not tracked — should be a no-op.
+	sub.untrackChannel(newMockChannel())
+
+	sub.mu.Lock()
+	assert.Len(t, sub.channels, 2)
+	sub.mu.Unlock()
+}
+
+func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
+	mockConn := newMockConnection()
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return mockConn, nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:             "amqp://test@localhost/",
+		ChannelPoolSize: 5,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	// Now make channel acquisition fail.
+	mockConn.mu.Lock()
+	mockConn.chanErr = errors.New("connection dead")
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		ShutdownTimeout: 1 * time.Second,
+	})
+
+	// subscribeOnce should return an error (channel acquisition failure).
+	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
+		func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
+
+	// Verify no channels are tracked (it was cleaned up).
+	sub.mu.Lock()
+	assert.Empty(t, sub.channels)
+	sub.mu.Unlock()
+}
+
+func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
+	// Use a connection whose "connected" channel is recreated after disconnect,
+	// so WaitConnected blocks until the subscriber is closed.
+	mockConn := newMockConnection()
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return mockConn, nil
+	}
+
+	// Build Connection manually so we can control the "connected" channel.
+	c := &Connection{
+		config:      Config{URL: "amqp://test@localhost/"},
+		dial:        dialFunc,
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   make(chan struct{}),
+	}
+	// Mark as initially connected.
+	close(c.connected)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(c, SubscriberConfig{
+		QueueName:       "test-queue",
+		ShutdownTimeout: 1 * time.Second,
+	})
+
+	subscribeDone := make(chan error, 1)
+
+	go func() {
+		// Close delivery channel to trigger reconnect.
+		time.Sleep(20 * time.Millisecond)
+		close(ch.consumeDeliveries)
+
+		// Simulate disconnection: re-create the connected channel so WaitConnected blocks.
+		time.Sleep(10 * time.Millisecond)
+		c.mu.Lock()
+		c.connected = make(chan struct{})
+		c.mu.Unlock()
+
+		// Close subscriber while WaitConnected is blocking.
+		// The derived context in Subscribe should be cancelled by closeCh, unblocking WaitConnected.
+		time.Sleep(30 * time.Millisecond)
+		_ = sub.Close()
+	}()
+
+	go func() {
+		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
+			func(_ context.Context, _ outbox.Entry) error { return nil })
+	}()
+
+	select {
+	case err := <-subscribeDone:
+		assert.NoError(t, err) // Clean exit via subscriber close.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not exit after subscriber close")
+	}
+}
+
+// --- P0-4: ConsumerGroup-based queue naming ---
+
+func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		// QueueName deliberately left empty; ConsumerGroup is set.
+		ConsumerGroup:   "audit-core",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately so Subscribe exits after setup.
+
+	err := sub.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	// Queue name should be "{ConsumerGroup}.{topic}".
+	assert.Contains(t, ch.queuesDeclared, "audit-core.session.created")
+	// Binding should reference the derived queue name.
+	assert.Contains(t, ch.queueBindings, "audit-core.session.created->session.created")
+	ch.mu.Unlock()
+}
+
+func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "my-explicit-queue",
+		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sub.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	// Explicit QueueName takes precedence over ConsumerGroup derivation.
+	assert.Contains(t, ch.queuesDeclared, "my-explicit-queue")
+	assert.NotContains(t, ch.queuesDeclared, "audit-core.session.created")
+	ch.mu.Unlock()
+}
+
+func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		// Both QueueName and ConsumerGroup empty — backward compat.
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sub.Subscribe(ctx, "my.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	assert.Contains(t, ch.queuesDeclared, "my.topic") // Falls back to topic name.
+	ch.mu.Unlock()
+}
+
+// --- P0-3: DLX configuration for broker-side dead letter ---
+
+func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		DLXExchange:     "my-dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	require.Len(t, ch.queueDeclareArgs, 1)
+	args := ch.queueDeclareArgs[0]
+	assert.Equal(t, "my-dlx", args["x-dead-letter-exchange"])
+	_, hasRoutingKey := args["x-dead-letter-routing-key"]
+	assert.False(t, hasRoutingKey, "routing key should not be set when DLXRoutingKey is empty")
+	ch.mu.Unlock()
+}
+
+func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		DLXExchange:     "my-dlx",
+		DLXRoutingKey:   "dead-letter-key",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	require.Len(t, ch.queueDeclareArgs, 1)
+	args := ch.queueDeclareArgs[0]
+	assert.Equal(t, "my-dlx", args["x-dead-letter-exchange"])
+	assert.Equal(t, "dead-letter-key", args["x-dead-letter-routing-key"])
+	ch.mu.Unlock()
+}
+
+func TestSubscriber_Subscribe_NoDLX_NilArgs(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	ch := newMockChannel()
@@ -871,14 +1305,16 @@ func TestSubscriber_DeliveryChannelClosed(t *testing.T) {
 		ShutdownTimeout: 2 * time.Second,
 	})
 
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		close(ch.consumeDeliveries)
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	err := sub.Subscribe(context.Background(), "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONSUME")
+	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	assert.NoError(t, err)
+
+	ch.mu.Lock()
+	require.Len(t, ch.queueDeclareArgs, 1)
+	assert.Nil(t, ch.queueDeclareArgs[0], "queue args should be nil when DLX is not configured")
+	ch.mu.Unlock()
 }
 
 // =============================================================================
@@ -1241,4 +1677,210 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithoutRequeue(t *testing.T
 	ch.mu.Unlock()
 
 	_ = sub.Close()
+}
+
+// =============================================================================
+// ConsumerBase.AsMiddleware Tests
+// =============================================================================
+
+func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup: "mw-group",
+	})
+
+	mw := cb.AsMiddleware()
+
+	// mw should be a valid TopicHandlerMiddleware.
+	var _ outbox.TopicHandlerMiddleware = mw
+
+	handlerCalled := false
+	wrapped := mw("test.topic", func(_ context.Context, e outbox.Entry) error {
+		handlerCalled = true
+		assert.Equal(t, "evt-mw-001", e.ID)
+		return nil
+	})
+
+	entry := outbox.Entry{ID: "evt-mw-001", EventType: "test.middleware"}
+	err := wrapped(context.Background(), entry)
+	assert.NoError(t, err)
+	assert.True(t, handlerCalled)
+
+	// Verify idempotency key was marked (ConsumerBase wrapping is active).
+	checker.mu.Lock()
+	assert.True(t, checker.processed["mw-group:evt-mw-001"])
+	checker.mu.Unlock()
+}
+
+func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	checker.processed["mw-group:evt-mw-dup"] = true
+	pub := newMockPublisher()
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup: "mw-group",
+	})
+
+	mw := cb.AsMiddleware()
+
+	handlerCalled := false
+	wrapped := mw("test.topic", func(_ context.Context, _ outbox.Entry) error {
+		handlerCalled = true
+		return nil
+	})
+
+	entry := outbox.Entry{ID: "evt-mw-dup"}
+	err := wrapped(context.Background(), entry)
+	assert.NoError(t, err)
+	assert.False(t, handlerCalled, "handler should be skipped for duplicate event")
+}
+
+func TestConsumerBase_AsMiddleware_RoutesToDLQ_OnPermanentError(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup:  "mw-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	mw := cb.AsMiddleware()
+
+	wrapped := mw("orders.created", func(_ context.Context, _ outbox.Entry) error {
+		return NewPermanentError(errors.New("corrupted payload"))
+	})
+
+	entry := outbox.Entry{ID: "evt-mw-perm", EventType: "orders.created"}
+	err := wrapped(context.Background(), entry)
+	assert.NoError(t, err) // DLQ'd, returns nil.
+
+	pub.mu.Lock()
+	require.Len(t, pub.messages, 1)
+	assert.Equal(t, "orders.created.dlq", pub.messages[0].topic)
+	pub.mu.Unlock()
+}
+
+func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
+	// Integration-style test: wire AsMiddleware into SubscriberWithMiddleware.
+	checker := newMockIdempotencyChecker()
+	pub := newMockPublisher()
+
+	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+		ConsumerGroup: "integration-group",
+	})
+
+	// Use a simple recording subscriber to verify the chain works end-to-end.
+	var capturedHandler func(context.Context, outbox.Entry) error
+	innerSub := &stubSubscriber{
+		onSubscribe: func(_ context.Context, _ string, h func(context.Context, outbox.Entry) error) error {
+			capturedHandler = h
+			return nil
+		},
+	}
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:      innerSub,
+		Middleware: []outbox.TopicHandlerMiddleware{cb.AsMiddleware()},
+	}
+
+	var receivedEntry outbox.Entry
+	handlerCalled := false
+	handler := func(_ context.Context, e outbox.Entry) error {
+		handlerCalled = true
+		receivedEntry = e
+		return nil
+	}
+
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedHandler)
+
+	// Simulate an incoming entry.
+	entry := outbox.Entry{ID: "evt-integration-001", EventType: "events.test"}
+	err = capturedHandler(context.Background(), entry)
+	assert.NoError(t, err)
+	assert.True(t, handlerCalled)
+	assert.Equal(t, "evt-integration-001", receivedEntry.ID)
+
+	// Verify idempotency was applied.
+	checker.mu.Lock()
+	assert.True(t, checker.processed["integration-group:evt-integration-001"])
+	checker.mu.Unlock()
+
+	// Calling again with the same event should be skipped.
+	handlerCalled = false
+	err = capturedHandler(context.Background(), entry)
+	assert.NoError(t, err)
+	assert.False(t, handlerCalled, "duplicate should be skipped by ConsumerBase middleware")
+}
+
+// stubSubscriber is a minimal Subscriber for integration tests.
+type stubSubscriber struct {
+	onSubscribe func(context.Context, string, func(context.Context, outbox.Entry) error) error
+}
+
+func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler func(context.Context, outbox.Entry) error) error {
+	if s.onSubscribe != nil {
+		return s.onSubscribe(ctx, topic, handler)
+	}
+	return nil
+}
+
+func (s *stubSubscriber) Close() error { return nil }
+
+var _ outbox.Subscriber = (*stubSubscriber)(nil)
+
+// =============================================================================
+// Publisher Error Branch Tests (P1-5)
+// =============================================================================
+
+func TestPublisher_Publish_ExchangeDeclareFails(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.exchangeDeclareErr = errors.New("exchange declare failed: access refused")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	pub := NewPublisher(conn)
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_PUBLISH")
+	assert.Contains(t, err.Error(), "declare exchange")
+
+	// Verify publish was never called since exchange declare failed first.
+	ch.mu.Lock()
+	assert.False(t, ch.publishCalled)
+	ch.mu.Unlock()
+}
+
+func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	pub := NewPublisher(conn)
+
+	// Close the notifyPublishCh without sending any value to simulate
+	// the confirm channel being closed (e.g., broker disconnected after publish).
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		ch.mu.Lock()
+		notifyCh := ch.notifyPublishCh
+		ch.mu.Unlock()
+		close(notifyCh)
+	}()
+
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT")
+	assert.Contains(t, err.Error(), "confirm channel closed")
 }

@@ -90,6 +90,16 @@ func NewConsumerBase(checker idempotency.Checker, publisher outbox.Publisher, co
 	}
 }
 
+// AsMiddleware returns a TopicHandlerMiddleware that applies this
+// ConsumerBase's idempotency/retry/DLQ wrapping to any handler.
+// It can be used with SubscriberWithMiddleware to transparently inject
+// ConsumerBase behavior into a raw Subscriber pipeline.
+func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
+	return func(topic string, next func(context.Context, outbox.Entry) error) func(context.Context, outbox.Entry) error {
+		return cb.Wrap(topic, next)
+	}
+}
+
 // Wrap returns a handler function that wraps the given business handler with
 // idempotency checking, retry with exponential backoff, and DLQ routing.
 //
@@ -228,7 +238,8 @@ func (cb *ConsumerBase) deadLetter(ctx context.Context, topic string, entry outb
 	}
 
 	// T25: DLQ observability — log every dead-letter routing.
-	slog.Error("rabbitmq: message routed to dead letter queue",
+	// Warn (not Error): successful DLQ routing is expected behavior for permanent/exhausted errors.
+	slog.Warn("rabbitmq: message routed to dead letter queue",
 		slog.String("event_id", entry.ID),
 		slog.String("topic", topic),
 		slog.String("dlq_topic", dlqTopic),
