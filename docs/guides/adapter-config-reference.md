@@ -77,29 +77,36 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `dlqExchange` | string | no | "" | Dead-letter exchange (empty = default DLX) |
 | `idempotencyStore` | idempotency.Store | no | nil | Idempotency checker (e.g., Redis store) |
 
-## OIDC (`adapters/oidc`)
+## OIDC (`adapters/oidc`) — thin go-oidc v3 wrapper
+
+Exposes `coreos/go-oidc` and `golang.org/x/oauth2` types directly. No GoCell wrapper types.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `issuerURL` | string | yes | - | OIDC provider issuer URL |
 | `clientID` | string | yes | - | OAuth2 client ID |
-| `clientSecret` | string | yes | - | OAuth2 client secret |
-| `redirectURL` | string | yes | - | OAuth2 callback URL |
+| `clientSecret` | string | no | - | OAuth2 client secret |
+| `redirectURL` | string | no | - | OAuth2 callback URL |
 | `scopes` | []string | no | ["openid","profile","email"] | Requested scopes |
-| `discoveryTimeout` | duration | no | 10s | Timeout for discovery document fetch |
-| `jwksRefreshInterval` | duration | no | 1h | JWKS key set refresh interval |
+| `httpTimeout` | duration | no | 10s | HTTP client timeout for discovery/token calls |
 
-## S3 (`adapters/s3`)
+Provides: `Provider()`, `Refresh()`, `Verifier()`, `OAuth2Config()`. For token exchange and userinfo, use the returned `oauth2.Config` and `go-oidc` provider directly.
+
+## S3 (`adapters/s3`) — thin aws-sdk-go-v2 wrapper
+
+Implements `ObjectUploader` interface (Upload only). For download, delete, presigned URLs, use `client.SDK()` to access the underlying `*s3.Client`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `endpoint` | string | yes | - | S3-compatible endpoint URL |
-| `region` | string | no | "us-east-1" | AWS region |
+| `region` | string | yes | - | AWS region |
 | `bucket` | string | yes | - | Default bucket name |
-| `accessKey` | string | yes | - | Access key ID |
-| `secretKey` | string | yes | - | Secret access key |
-| `usePathStyle` | bool | no | true | Use path-style addressing (required for MinIO) |
-| `presignExpiry` | duration | no | 15m | Default presigned URL expiry |
+| `accessKeyID` | string | yes | - | Access key ID |
+| `secretAccessKey` | string | yes | - | Secret access key |
+| `usePathStyle` | bool | no | false | Use path-style addressing (required for MinIO) |
+| `httpTimeout` | duration | no | 30s | HTTP client timeout |
+
+Provides: `Upload()`, `Health()`, `SDK()`.
 
 ## WebSocket (`adapters/websocket`)
 

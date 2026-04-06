@@ -41,29 +41,32 @@ Phase 3 实现 6 个外部系统适配器（postgres, redis, oidc, s3, rabbitmq,
 | FR-2.3 Idempotency Checker | 实现 `kernel/idempotency.Checker` 接口，使用 Redis `SET NX` + TTL 实现 `IsProcessed(ctx, key) (bool, error)` + `MarkProcessed(ctx, key, ttl) error` |
 | FR-2.4 Cache | `Cache` struct，提供 `Get/Set/Delete` + TTL，支持 JSON 序列化/反序列化泛型 helper |
 
-### FR-3: OIDC Adapter (`adapters/oidc/`)
+### FR-3: OIDC Adapter (`adapters/oidc/`) — thin go-oidc v3 wrapper
 
-系统必须提供 OIDC client 适配器，包含：
-
-| 子模块 | 说明 |
-|--------|------|
-| FR-3.1 Provider Client | `Provider` struct，支持 OIDC Discovery（`/.well-known/openid-configuration`），缓存 provider metadata |
-| FR-3.2 Token Exchange | `ExchangeCode(ctx, code, redirectURI) (*TokenResponse, error)` — Authorization Code 换 token |
-| FR-3.3 JWKS 验证 | `Verifier` struct，从 JWKS endpoint 拉取公钥（支持 kid rotation），验证 ID Token 签名（RS256）、exp、iss、aud |
-| FR-3.4 UserInfo | `UserInfo(ctx, accessToken) (*UserInfoResponse, error)` — 获取用户信息 |
-
-**对标参考**: `coreos/go-oidc` 接口设计。
-
-### FR-4: S3 Adapter (`adapters/s3/`)
-
-系统必须提供 S3/MinIO 兼容的对象存储适配器，包含：
+> **PR#41 重构**: 删除自建类型（DiscoveryDocument/IDTokenClaims/TokenResponse/UserInfo），
+> 改为暴露 `coreos/go-oidc` 和 `golang.org/x/oauth2` 原生类型。
+> ExchangeCode/GetUserInfo 由调用方通过 `OAuth2Config()` 和 go-oidc Provider 直接完成。
 
 | 子模块 | 说明 |
 |--------|------|
-| FR-4.1 Client | `Client` struct，支持 S3/MinIO endpoint + credentials 配置，提供 `Health() error` |
-| FR-4.2 对象操作 | `Upload(ctx, bucket, key, reader) error`、`Download(ctx, bucket, key) (io.ReadCloser, error)`、`Delete(ctx, bucket, key) error` |
-| FR-4.3 Presigned URL | `PresignedPut(ctx, bucket, key, ttl) (string, error)`、`PresignedGet(ctx, bucket, key, ttl) (string, error)` |
-| ~~FR-4.4~~ | **已移除**（决策 2）: S3 adapter 提供通用 ObjectStore，不 import cells/。ArchiveStore 实现由 `cells/audit-core/internal/adapters/s3archive/` 包装 S3 Client 完成 |
+| FR-3.1 Provider | `Adapter.Provider(ctx)` — 懒初始化 go-oidc Provider（含 OIDC Discovery） |
+| FR-3.2 Refresh | `Adapter.Refresh(ctx)` — 强制重新 discovery（JWKS/metadata 轮转） |
+| FR-3.3 Verifier | `Adapter.Verifier(ctx)` — 返回 go-oidc `IDTokenVerifier` |
+| FR-3.4 OAuth2Config | `Adapter.OAuth2Config(ctx)` — 返回 `oauth2.Config`，调用方直接用于 token exchange |
+| ~~FR-3.5~~ | **已移除**: ExchangeCode/UserInfo 不再由 adapter 包装，调用方直接用 go-oidc + oauth2 |
+
+### FR-4: S3 Adapter (`adapters/s3/`) — thin aws-sdk-go-v2 wrapper
+
+> **PR#41 重构**: 精简为 Upload + Health + SDK 逃生口。
+> Download/Delete/PresignedURL 由调用方通过 `client.SDK()` 直接使用 aws-sdk-go-v2 完成。
+
+| 子模块 | 说明 |
+|--------|------|
+| FR-4.1 Client | `New(cfg) (*Client, error)` — aws-sdk-go-v2 S3 client，支持 MinIO（UsePathStyle） |
+| FR-4.2 Upload | `Upload(ctx, key, data, contentType) error` — 实现 ObjectUploader 接口 |
+| FR-4.3 Health | `Health(ctx) error` — HeadBucket 检查 |
+| FR-4.4 SDK | `SDK() *s3.Client` — 暴露底层 SDK client 用于 download/delete/presigned 等高级操作 |
+| ~~FR-4.5~~ | **已移除**: Download/Delete/PresignedURL 不再由 adapter 包装 |
 
 ### FR-5: RabbitMQ Adapter (`adapters/rabbitmq/`)
 
