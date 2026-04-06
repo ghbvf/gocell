@@ -64,6 +64,16 @@ type Config struct {
 	DistLockTTL time.Duration
 }
 
+// LogValue implements slog.LogValuer so that Config can be safely passed
+// to structured loggers without leaking the password.
+func (c Config) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("mode", string(c.Mode)),
+		slog.String("addr", c.Addr),
+		slog.Int("db", c.DB),
+	)
+}
+
 // defaults applies default values to zero-valued fields.
 func (c *Config) defaults() {
 	if c.Mode == "" {
@@ -189,11 +199,9 @@ func (c *Client) cmdable() cmdable {
 	return c.rdb
 }
 
-// Config returns a copy of the client configuration with the password redacted.
+// Config returns a copy of the client configuration.
+// The returned Config is safe to pass to NewClient for round-trip use.
+// For logging, Config implements slog.LogValuer which redacts the password.
 func (c *Client) Config() Config {
-	cfg := c.config
-	if cfg.Password != "" {
-		cfg.Password = "***"
-	}
-	return cfg
+	return c.config
 }

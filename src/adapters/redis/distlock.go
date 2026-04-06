@@ -160,10 +160,11 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 			fmt.Sprintf("redis: lock already held (key=%s)", key))
 	}
 
-	// Derive renewal context from caller ctx: when the caller cancels,
-	// renewal stops and the lock will eventually expire.
-	// ref: rueidis lock — monitoring goroutine derives from caller context
-	renewCtx, cancel := context.WithCancel(ctx)
+	// Renewal runs independently of the acquire context: caller ctx may
+	// carry a deadline that only limits the SetNX call, not the lock
+	// lifetime. Release() cancels this context and waits for the
+	// goroutine to exit via the done channel.
+	renewCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	lock := &Lock{
 		rdb:    d.rdb,

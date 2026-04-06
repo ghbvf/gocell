@@ -90,7 +90,7 @@ func TestClientConfigReturned(t *testing.T) {
 	assert.Equal(t, 3, got.DB)
 }
 
-func TestClientConfigRedactsPassword(t *testing.T) {
+func TestClientConfigPreservesPassword(t *testing.T) {
 	mock := newMockCmdable()
 	cfg := Config{
 		Addr:     "redis:6379",
@@ -99,13 +99,20 @@ func TestClientConfigRedactsPassword(t *testing.T) {
 	client := newClientFromCmdable(mock, cfg)
 
 	got := client.Config()
-	assert.Equal(t, "***", got.Password, "Config() should redact password")
+	assert.Equal(t, "s3cret", got.Password, "Config() must preserve password for round-trip")
 }
 
-func TestClientConfigNoPasswordNoRedaction(t *testing.T) {
-	mock := newMockCmdable()
-	client := newClientFromCmdable(mock, Config{Addr: "redis:6379"})
-
-	got := client.Config()
-	assert.Equal(t, "", got.Password, "empty password should remain empty")
+func TestConfigLogValueRedactsPassword(t *testing.T) {
+	cfg := Config{
+		Addr:     "redis:6379",
+		Password: "s3cret",
+		Mode:     ModeStandalone,
+		DB:       2,
+	}
+	lv := cfg.LogValue()
+	// LogValue should contain addr and db but NOT password.
+	resolved := lv.Resolve().String()
+	assert.Contains(t, resolved, "redis:6379")
+	assert.Contains(t, resolved, "2")
+	assert.NotContains(t, resolved, "s3cret", "LogValue must not contain password")
 }
