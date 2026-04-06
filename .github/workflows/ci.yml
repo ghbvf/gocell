@@ -64,13 +64,22 @@ jobs:
       - name: Kernel coverage gate
         run: |
           go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
-          awk '/coverage:/ {
-            split($NF, a, "%");
-            if (a[1]+0 < 90) {
-              print "FAIL: " $1 " coverage " $NF " < 90%";
-              exit 1
+          awk '
+            /coverage: \[no statements\]/ { next }
+            /coverage:/ {
+              cov = $0
+              sub(/^.*coverage: /, "", cov)
+              sub(/% of statements.*$/, "", cov)
+              if (cov == $0) {
+                print "FAIL: could not parse coverage line: " $0;
+                exit 1
+              }
+              if (cov + 0 < 90) {
+                print "FAIL: " $2 " coverage " cov "% < 90%";
+                exit 1
+              }
             }
-          }' /tmp/kernel-cov.txt
+          ' /tmp/kernel-cov.txt
           echo "PASS: kernel coverage >= 90%"
 
   integration-test:
