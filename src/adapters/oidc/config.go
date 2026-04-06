@@ -21,6 +21,8 @@ type Config struct {
 	// JWKSCacheTTL is how long to cache the JWKS keys. Default: 1 hour.
 	JWKSCacheTTL time.Duration
 	// DiscoveryCacheTTL is how long to cache the discovery document. Default: 24 hours.
+	// Note: this is advisory for the GoCell caching layer; go-oidc manages its own
+	// internal caching for JWKS keys independently.
 	DiscoveryCacheTTL time.Duration
 	// HTTPTimeout is the timeout for HTTP requests to the OIDC provider. Default: 10 seconds.
 	HTTPTimeout time.Duration

@@ -2,6 +2,7 @@ package s3
 
 import (
 	"context"
+	"encoding/xml"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +25,21 @@ func skipIfNoListener(t *testing.T) {
 	ln.Close()
 }
 
+// s3ErrorResponse is the XML error response format expected by the AWS SDK.
+type s3ErrorResponse struct {
+	XMLName xml.Name `xml:"Error"`
+	Code    string   `xml:"Code"`
+	Message string   `xml:"Message"`
+}
+
+func writeS3Error(w http.ResponseWriter, statusCode int, code, message string) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(statusCode)
+	resp := s3ErrorResponse{Code: code, Message: message}
+	data, _ := xml.Marshal(resp)
+	_, _ = w.Write(data)
+}
+
 func testS3Server(t *testing.T) *httptest.Server {
 	t.Helper()
 	skipIfNoListener(t)
@@ -33,8 +49,9 @@ func testS3Server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 
 	// Handle all requests via a catch-all pattern.
+	// AWS SDK sends requests in path-style: /bucket/key
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Extract key from path: /bucket/key
+		// Extract key from path: /bucket/key or /bucket (for HEAD bucket)
 		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
 		bucket := ""
 		key := ""
@@ -48,19 +65,19 @@ func testS3Server(t *testing.T) *httptest.Server {
 		switch r.Method {
 		case http.MethodHead:
 			if bucket == "" {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "bucket not found")
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 
 		case http.MethodPut:
 			if key == "" {
-				http.Error(w, "key required", http.StatusBadRequest)
+				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
 				return
 			}
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				http.Error(w, "read error", http.StatusInternalServerError)
+				writeS3Error(w, http.StatusInternalServerError, "InternalError", "read error")
 				return
 			}
 			objects[key] = body
@@ -68,12 +85,12 @@ func testS3Server(t *testing.T) *httptest.Server {
 
 		case http.MethodGet:
 			if key == "" {
-				http.Error(w, "key required", http.StatusBadRequest)
+				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
 				return
 			}
 			data, ok := objects[key]
 			if !ok {
-				http.Error(w, "not found", http.StatusNotFound)
+				writeS3Error(w, http.StatusNotFound, "NoSuchKey", "not found")
 				return
 			}
 			w.WriteHeader(http.StatusOK)
@@ -83,14 +100,14 @@ func testS3Server(t *testing.T) *httptest.Server {
 
 		case http.MethodDelete:
 			if key == "" {
-				http.Error(w, "key required", http.StatusBadRequest)
+				writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "key required")
 				return
 			}
 			delete(objects, key)
 			w.WriteHeader(http.StatusNoContent)
 
 		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeS3Error(w, http.StatusMethodNotAllowed, "MethodNotAllowed", "method not allowed")
 		}
 	})
 
@@ -303,15 +320,4 @@ func TestClient_PresignedGet_TTLTooLong(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterS3Presign, ec.Code)
-}
-
-func TestDeriveSigningKey(t *testing.T) {
-	// Deterministic test: same inputs → same output.
-	key1 := deriveSigningKey("secret", "20260405", "us-east-1", "s3")
-	key2 := deriveSigningKey("secret", "20260405", "us-east-1", "s3")
-	assert.Equal(t, key1, key2)
-
-	// Different date → different key.
-	key3 := deriveSigningKey("secret", "20260406", "us-east-1", "s3")
-	assert.NotEqual(t, key1, key3)
 }

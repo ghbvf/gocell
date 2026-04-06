@@ -7,34 +7,26 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Upload stores an object with the given key and content.
 func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {
-	url := c.bucketURL(key)
-
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	resp, err := c.doRequest(ctx, "PUT", url, bytes.NewReader(data), data, contentType)
+	_, err := c.s3.PutObject(ctx, &awss3.PutObjectInput{
+		Bucket:      aws.String(c.config.Bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
 	if err != nil {
 		return errcode.Wrap(ErrAdapterS3Upload,
 			fmt.Sprintf("s3: upload failed for key %s", key), err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.Warn("s3: failed to close upload response body",
-				slog.Any("error", closeErr))
-		}
-	}()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return errcode.New(ErrAdapterS3Upload,
-			fmt.Sprintf("s3: upload returned status %d for key %s: %s",
-				resp.StatusCode, key, string(body)))
 	}
 
 	slog.Debug("s3: object uploaded",
@@ -47,9 +39,10 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 
 // Download retrieves an object by key.
 func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
-	url := c.bucketURL(key)
-
-	resp, err := c.doRequest(ctx, "GET", url, nil, nil, "")
+	resp, err := c.s3.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String(c.config.Bucket),
+		Key:    aws.String(key),
+	})
 	if err != nil {
 		return nil, errcode.Wrap(ErrAdapterS3Download,
 			fmt.Sprintf("s3: download failed for key %s", key), err)
@@ -60,12 +53,6 @@ func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
 				slog.Any("error", closeErr))
 		}
 	}()
-
-	if resp.StatusCode >= 400 {
-		return nil, errcode.New(ErrAdapterS3Download,
-			fmt.Sprintf("s3: download returned status %d for key %s",
-				resp.StatusCode, key))
-	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -78,25 +65,13 @@ func (c *Client) Download(ctx context.Context, key string) ([]byte, error) {
 
 // Delete removes an object by key.
 func (c *Client) Delete(ctx context.Context, key string) error {
-	url := c.bucketURL(key)
-
-	resp, err := c.doRequest(ctx, "DELETE", url, nil, nil, "")
+	_, err := c.s3.DeleteObject(ctx, &awss3.DeleteObjectInput{
+		Bucket: aws.String(c.config.Bucket),
+		Key:    aws.String(key),
+	})
 	if err != nil {
 		return errcode.Wrap(ErrAdapterS3Delete,
 			fmt.Sprintf("s3: delete failed for key %s", key), err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			slog.Warn("s3: failed to close delete response body",
-				slog.Any("error", closeErr))
-		}
-	}()
-
-	// S3 returns 204 for successful deletes; 404 is also acceptable (idempotent).
-	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
-		return errcode.New(ErrAdapterS3Delete,
-			fmt.Sprintf("s3: delete returned status %d for key %s",
-				resp.StatusCode, key))
 	}
 
 	slog.Debug("s3: object deleted",

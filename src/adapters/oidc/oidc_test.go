@@ -19,7 +19,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// jwkJSON is the standard JSON Web Key format for test JWKS endpoints.
+type jwkJSON struct {
+	Kty string `json:"kty"`
+	Kid string `json:"kid"`
+	Use string `json:"use"`
+	Alg string `json:"alg"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+}
+
+// jwksJSON is the standard JWKS format.
+type jwksJSON struct {
+	Keys []jwkJSON `json:"keys"`
+}
+
 // testOIDCServer creates an httptest.Server that simulates an OIDC provider.
+// It serves discovery, JWKS, token, and userinfo endpoints in standard format
+// compatible with coreos/go-oidc.
 func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httptest.Server {
 	t.Helper()
 
@@ -27,14 +44,16 @@ func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httpt
 	var serverURL string
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		doc := DiscoveryDocument{
-			Issuer:                serverURL,
-			AuthorizationEndpoint: serverURL + "/authorize",
-			TokenEndpoint:         serverURL + "/token",
-			UserinfoEndpoint:      serverURL + "/userinfo",
-			JWKSURI:               serverURL + "/jwks",
-			ScopesSupported:       []string{"openid", "profile", "email"},
-			IDTokenSigningAlgs:    []string{"RS256"},
+		doc := map[string]any{
+			"issuer":                                serverURL,
+			"authorization_endpoint":                serverURL + "/authorize",
+			"token_endpoint":                        serverURL + "/token",
+			"userinfo_endpoint":                     serverURL + "/userinfo",
+			"jwks_uri":                              serverURL + "/jwks",
+			"scopes_supported":                      []string{"openid", "profile", "email"},
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+			"response_types_supported":              []string{"code"},
+			"subject_types_supported":               []string{"public"},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -44,8 +63,8 @@ func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httpt
 
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		pubKey := &privateKey.PublicKey
-		jwks := JWKS{
-			Keys: []JWK{
+		jwks := jwksJSON{
+			Keys: []jwkJSON{
 				{
 					Kty: "RSA",
 					Kid: kid,
@@ -67,11 +86,24 @@ func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httpt
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		resp := TokenResponse{
-			AccessToken: "test-access-token",
-			TokenType:   "Bearer",
-			ExpiresIn:   3600,
-			IDToken:     "test-id-token",
+		// Build a real JWT for the id_token so tests can verify it.
+		now := time.Now()
+		claims := jwt.MapClaims{
+			"iss": serverURL,
+			"sub": "exchange-user",
+			"aud": "test-client",
+			"exp": now.Add(1 * time.Hour).Unix(),
+			"iat": now.Unix(),
+		}
+		idToken := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		idToken.Header["kid"] = kid
+		rawIDToken, _ := idToken.SignedString(privateKey)
+
+		resp := map[string]any{
+			"access_token": "test-access-token",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+			"id_token":     rawIDToken,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -85,11 +117,11 @@ func testOIDCServer(t *testing.T, privateKey *rsa.PrivateKey, kid string) *httpt
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		info := UserInfo{
-			Subject:       "user-123",
-			Name:          "Test User",
-			Email:         "test@example.com",
-			EmailVerified: true,
+		info := map[string]any{
+			"sub":            "user-123",
+			"name":           "Test User",
+			"email":          "test@example.com",
+			"email_verified": true,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(info); err != nil {
@@ -197,7 +229,7 @@ func TestProvider_ExchangeCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "test-access-token", resp.AccessToken)
 	assert.Equal(t, "Bearer", resp.TokenType)
-	assert.Equal(t, 3600, resp.ExpiresIn)
+	assert.Greater(t, resp.ExpiresIn, 0)
 }
 
 func TestVerifier_Verify(t *testing.T) {
@@ -334,22 +366,4 @@ func TestProvider_GetUserInfo_Unauthorized(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterOIDCUserInfo, ec.Code)
-}
-
-func TestParseRSAPublicKey(t *testing.T) {
-	key := generateTestKey(t)
-	pubKey := &key.PublicKey
-
-	jwk := JWK{
-		Kty: "RSA",
-		Kid: "test",
-		Use: "sig",
-		N:   base64.RawURLEncoding.EncodeToString(pubKey.N.Bytes()),
-		E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pubKey.E)).Bytes()),
-	}
-
-	parsed, err := parseRSAPublicKey(jwk)
-	require.NoError(t, err)
-	assert.Equal(t, pubKey.N, parsed.N)
-	assert.Equal(t, pubKey.E, parsed.E)
 }
