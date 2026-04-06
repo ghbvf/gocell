@@ -213,7 +213,7 @@ src/
 ├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)
 ├── journeys/     — Journey acceptance specs + status-board.yaml
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
-├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket)
+├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
 ├── pkg/          — Shared utilities (errcode / ctxkeys / httputil)
 ├── cmd/          — CLI (gocell validate / scaffold / generate / check / verify)
 ├── examples/     — Example projects (sso-bff / todo-order / iot-device)
