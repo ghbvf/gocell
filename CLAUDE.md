@@ -23,7 +23,7 @@ journeys/     — Journey 验收规格（J-*.yaml）+ status-board.yaml（动态
 assemblies/   — 物理打包配置（assembly.yaml）
 fixtures/     — 测试夹具（fixture-*.yaml，供 run-journey 使用）
 runtime/      — 通用运行时（http / auth / worker / observability）
-adapters/     — 外部系统适配（postgres / redis / oidc / s3 / rabbitmq / websocket）
+adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket）
 pkg/          — 共享工具包（errcode / ctxkeys）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
 examples/     — 示例项目（sso-bff / todo-order / iot-device）
