@@ -71,6 +71,18 @@ type connEntry struct {
 // Both Stop(ctx) and external cancellation of Start(ctx) converge on the
 // same internal shutdown path. There is exactly one code path that drains
 // connections and transitions to the terminal state.
+//
+// ref: centrifugal/centrifuge hub.go — sharded hub, semaphore-bounded
+//
+//	concurrent close, snapshot-then-release drain pattern.
+//
+// ref: olahol/melody hub.go — pointer-keyed session map, channel-based
+//
+//	exit signal (we use atomic CAS instead).
+//
+// ref: coder/websocket chat example — CloseNow + defer pattern for
+//
+//	connection teardown; CloseRead for context-based lifecycle.
 type Hub struct {
 	config  HubConfig
 	handler MessageHandler

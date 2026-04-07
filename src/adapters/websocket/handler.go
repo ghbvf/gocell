@@ -35,6 +35,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			opts.OriginPatterns = cfg.AllowedOrigins
 		} else {
 			opts.InsecureSkipVerify = true
+			slog.Warn("websocket: InsecureSkipVerify enabled, all origins accepted — not suitable for production")
 		}
 
 		wsConn, err := websocket.Accept(w, r, opts)

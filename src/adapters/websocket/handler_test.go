@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +17,14 @@ import (
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
+
+var _ = os.Exit // suppress unused import
 
 func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
@@ -26,19 +34,25 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 
 	hub := rtws.NewHub(cfg, handler)
 
-	// Start hub in background (Register requires running state).
-	startErr := make(chan error, 1)
-	go func() { startErr <- hub.Start(context.Background()) }()
-
-	mux := http.NewServeMux()
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{}))
-
+	// Check TCP availability before starting anything.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
 		return nil, nil
 	}
 	ln.Close()
+
+	// Start hub in background (Register requires running state).
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+
+	// Wait for hub to be running before creating server.
+	require.Eventually(t, func() bool {
+		return hub.IsRunning()
+	}, 2*time.Second, time.Millisecond)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{}))
 
 	server := httptest.NewServer(mux)
 
@@ -332,4 +346,19 @@ func TestHub_StopWithActiveConns_NoDeadlock(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Less(t, elapsed, 2*time.Second, "Stop should not deadlock with active connections")
+}
+
+func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
+	cfg := rtws.DefaultHubConfig()
+	hub := rtws.NewHub(cfg, nil)
+	// Hub intentionally NOT started.
+
+	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{})
+
+	// Use ResponseRecorder — no TCP needed, no sandbox issue.
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
