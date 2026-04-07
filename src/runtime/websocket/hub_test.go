@@ -240,6 +240,11 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 		return hub.state.Load() == stateRunning
 	}, time.Second, time.Millisecond)
 
+	// Register a conn before cancel.
+	conn := newFakeConn("pre-cancel")
+	require.NoError(t, hub.Register(conn))
+	<-conn.readyCh
+
 	cancel()
 
 	select {
@@ -249,8 +254,20 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 		t.Fatal("Start did not return after context cancel")
 	}
 
-	// Cleanup: Stop to reach terminal state.
-	_ = hub.Stop(context.Background())
+	// After external cancel, hub should be in stopping state.
+	// Register must be rejected.
+	assert.Equal(t, stateStopping, hub.state.Load())
+	lateConn := newFakeConn("post-cancel")
+	err := hub.Register(lateConn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stopping")
+
+	// Stop must still drain existing connections.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	require.NoError(t, hub.Stop(stopCtx))
+	assert.Equal(t, stateStopped, hub.state.Load())
+	assert.True(t, conn.isClosed())
 }
 
 // ---------------------------------------------------------------------------
@@ -650,6 +667,50 @@ func TestDefaultHubConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
 	assert.Equal(t, 2, cfg.PingMissMax)
+}
+
+func TestHub_IsRunning(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(), nil)
+	assert.False(t, hub.IsRunning(), "idle hub")
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool { return hub.IsRunning() }, time.Second, time.Millisecond)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = hub.Stop(stopCtx)
+	<-startErr
+	assert.False(t, hub.IsRunning(), "stopped hub")
+}
+
+func TestHub_StopDeadlineHonored(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, time.Second, time.Millisecond)
+
+	// Register a stuck conn that blocks Close.
+	stuck := &stuckConn{id: "blocker", closeCh: make(chan struct{})}
+	require.NoError(t, hub.Register(stuck))
+
+	// Stop with 100ms deadline — must return within ~200ms regardless of
+	// stuck conn.
+	start := time.Now()
+	stopCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := hub.Stop(stopCtx)
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 500*time.Millisecond, "Stop should honor deadline")
+	assert.Equal(t, stateStopped, hub.state.Load())
+
+	// Cleanup for goleak.
+	close(stuck.closeCh)
+	<-startErr
 }
 
 func TestNewHub_NilHandler(t *testing.T) {

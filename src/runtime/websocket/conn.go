@@ -18,6 +18,7 @@ type Conn interface {
 	Read(ctx context.Context) ([]byte, error)
 	// Write sends a text message.
 	Write(ctx context.Context, data []byte) error
-	// Close performs a graceful close handshake.
+	// Close closes the connection. Implementations may perform a graceful
+	// close handshake or an immediate transport close depending on context.
 	Close() error
 }

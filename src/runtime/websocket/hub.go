@@ -146,6 +146,11 @@ func (h *Hub) Start(ctx context.Context) error {
 	if h.state.Load() >= stateStopping {
 		return nil
 	}
+
+	// External cancellation: move to stopping so Register rejects new
+	// connections. The caller must still call Stop() to drain and reach
+	// the terminal state.
+	h.state.CompareAndSwap(stateRunning, stateStopping)
 	return ctx.Err()
 }
 
@@ -160,14 +165,21 @@ func (h *Hub) Stop(ctx context.Context) error {
 		if h.state.CompareAndSwap(stateIdle, stateStopped) {
 			return nil
 		}
-		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
+		// Allow Stop when Start already moved to stopping (external cancel).
+		if h.state.Load() != stateStopping {
+			return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
+		}
+		// Fall through: state is stopping, proceed with drain.
 	}
 
 	// Cancel run context: stops pingLoop, unblocks Start.
+	// May already be cancelled (external cancel), but cancel() is idempotent.
 	h.cancelMu.Lock()
 	cancel := h.runCancel
 	h.cancelMu.Unlock()
-	cancel()
+	if cancel != nil {
+		cancel()
+	}
 
 	// Drain all connections under connMu. After this, any Register call
 	// that acquires connMu will see state >= stateStopping and reject.
@@ -179,13 +191,13 @@ func (h *Hub) Stop(ctx context.Context) error {
 	clear(h.conns)
 	h.connMu.Unlock()
 
-	// Close all connections concurrently.
-	var closeWg sync.WaitGroup
+	// Close all connections concurrently. Cancel per-conn context first
+	// (unblocks Read), then close the transport.
 	for _, e := range entries {
-		closeWg.Add(1)
+		e.cancel()
+	}
+	for _, e := range entries {
 		go func(e *connEntry) {
-			defer closeWg.Done()
-			e.cancel()
 			if err := e.conn.Close(); err != nil {
 				slog.Warn("websocket hub: close connection failed",
 					slog.String("conn_id", e.conn.ID()),
@@ -194,9 +206,10 @@ func (h *Hub) Stop(ctx context.Context) error {
 			}
 		}(e)
 	}
-	closeWg.Wait()
 
-	// Wait for goroutines (readLoops + pingLoop) with deadline.
+	// Wait for all goroutines (readLoops + pingLoop) with deadline.
+	// conn.Close may block (adapter Write holds same mutex), so the entire
+	// wait is bounded by ctx to guarantee the caller's deadline.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
@@ -368,6 +381,10 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 
 // Config returns the Hub's configuration.
 func (h *Hub) Config() HubConfig { return h.config }
+
+// IsRunning reports whether the Hub is in the running state and can
+// accept new connections. Use this to guard HTTP upgrade handlers.
+func (h *Hub) IsRunning() bool { return h.state.Load() == stateRunning }
 
 // ConnCount returns the number of active connections.
 func (h *Hub) ConnCount() int {

@@ -19,9 +19,16 @@ type UpgradeConfig struct {
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub.
+// WebSocket and registers them with the Hub. If the Hub is not running,
+// the handler returns 503 Service Unavailable without performing the
+// WebSocket handshake.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hub.IsRunning() {
+			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
+			return
+		}
+
 		opts := &websocket.AcceptOptions{}
 
 		if len(cfg.AllowedOrigins) > 0 {
