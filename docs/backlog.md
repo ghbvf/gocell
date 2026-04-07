@@ -22,8 +22,8 @@
 
 | # | 任务 | 预估 | 状态 |
 |---|------|------|------|
-| R-01 | `pollOnce()` markQuery 失败 fail-fast | 2h | TODO |
-| R-02 | Start/Stop handshake (`startedCh`) | 2h | TODO |
+| R-01 | `pollOnce()` markQuery 失败 fail-fast | 2h | ✅ PR#46 |
+| R-02 | Start/Stop handshake (`startedCh`) | 2h | ✅ PR#46 |
 
 > 来源: `docs/reviews/202604061401-pr39-six-role/PR39-postgres-outbox-followup.md`
 
@@ -55,11 +55,58 @@
 | D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | ✅ PR#42 |
 | D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | ✅ PR#42 |
 
+### 0-B2: Outbox Relay 三阶段重写（1.5d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h | TODO |
+| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h | TODO |
+| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h | TODO |
+| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h | TODO |
+| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h | TODO |
+| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h | TODO |
+| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h | TODO |
+| RL-08 | 测试覆盖（8 个场景） | 2h | TODO |
+
+> 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
+
+### 0-F: Solution B 接口 + 基础设施 — PR-A3（1.5d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| A3-01 | `kernel/outbox`: +Disposition, +Receipt, +HandleResult, +EntryHandler, +WrapLegacyHandler；~Subscriber, ~TopicHandlerMiddleware 签名变更 | 2h | TODO |
+| A3-02 | `kernel/idempotency`: +ClaimState, +Claimer；删除 Checker | 1h | TODO |
+| A3-03 | `adapters/redis/idempotency.go`: IdempotencyClaimer 双 key Lua（lease:{k} + done:{k}） | 3h | TODO |
+| A3-04 | `runtime/eventbus/consumer.go`: ConsumerMiddleware 从 rabbitmq/consumer_base.go 迁入+重写 | 2h | TODO |
+| A3-05 | `runtime/eventbus/eventbus.go`: InMemoryEventBus 适配新 EntryHandler 签名 | 1h | TODO |
+| A3-06 | Cell handler 迁移（configsubscribe, auditappend 等返回 HandleResult） | 1h | TODO |
+| A3-07 | 测试更新（mock 适配 + 新接口覆盖） | 2h | TODO |
+
+> 设计来源: `docs/reviews/202604061449-pr38-solution-b-report.md`
+> 依赖: PR#44 ✅, PR#45 ✅
+
+### 0-G: RabbitMQ Subscriber 重写 — PR-B（1.5d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| B-01 | `subscriber.go`: processDelivery 读 HandleResult → Ack/Nack/Requeue + Receipt Commit/Release | 3h | TODO |
+| B-02 | 删除 `consumer_base.go`（已迁到 runtime/eventbus/consumer.go） | 0.5h | TODO |
+| B-03 | `connection.go`: setup 错误分类（recoverable vs permanent）+ anti-hot-loop backoff | 2h | TODO |
+| B-04 | 测试覆盖（processDelivery 重写 + receipt 行为 + 集成） | 3h | TODO |
+
+> 依赖: 0-F (PR-A3) 必须先合并
+
 ### 执行顺序
 
 ```
-0-A ✅ → 0-C (D-04/D-05 ✅, D-06 WONTFIX) → 0-E (D-07/D-08 ✅)
-剩余: 0-B (Outbox Relay) + 0-D (Solution B) → 继续 Tier 1 (R1E → R2)
+已完成:
+  0-A ✅ → 0-B ✅ (PR#46) → 0-C ✅ → 0-E ✅
+  PR#44 (QueryBuilder) ✅ → PR#45 (TxRunner) ✅
+
+剩余（可并行）:
+  0-F (PR-A3 Solution B 接口) → 0-G (PR-B RabbitMQ 重写)
+  0-B2 (Relay 三阶段重写)
+  → 继续 Tier 1 (R1E → R2)
 ```
 
 > 完整分析: `docs/reviews/202604061630-dependency-replacement-plan.md`
