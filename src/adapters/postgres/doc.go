@@ -6,8 +6,9 @@
 //     automatic panic rollback.
 //   - Migrator: embed.FS-driven SQL migrations with up/down/status and a
 //     schema_migrations tracking table.
-//   - RowScanner / QueryBuilder helpers for reducing boilerplate in repository
-//     implementations.
+//   - RowScanner helper for reducing boilerplate in repository implementations.
+//
+// For parameterized SQL query construction, see pkg/query.Builder.
 //
 // Error codes use the ERR_ADAPTER_PG_* prefix (see errcode.go in this package).
 //
