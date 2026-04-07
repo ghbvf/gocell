@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/google/uuid"
 )
 
@@ -25,12 +26,6 @@ type VerifyResult struct {
 	EntriesChecked    int  `json:"entriesChecked"`
 }
 
-// TxRunner executes a function within a database transaction.
-// When nil, the service falls back to sequential (non-transactional) execution.
-type TxRunner interface {
-	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
-}
-
 // Option configures an audit-verify Service.
 type Option func(*Service)
 
@@ -40,7 +35,7 @@ func WithOutboxWriter(w outbox.Writer) Option {
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx TxRunner) Option {
+func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
@@ -50,7 +45,7 @@ type Service struct {
 	chain        *domain.HashChain
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
-	txRunner     TxRunner
+	txRunner     persistence.TxRunner
 	logger       *slog.Logger
 }
 

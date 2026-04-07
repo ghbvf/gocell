@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Compile-time check: TxManager implements persistence.TxRunner.
+var _ persistence.TxRunner = (*TxManager)(nil)
 
 // txKey is the context key for an embedded pgx.Tx.
 type txKey struct{}

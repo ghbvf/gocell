@@ -169,6 +169,7 @@
 | R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 |
 | R1C2-F05 | `runtime/worker/periodic.go:18-52` | PeriodicWorker.Stop 不防 double-Start，done channel 复用 |
 | PROM-01 | `runtime/observability/metrics/metrics.go` + `adapters/prometheus/collector.go` | metrics Middleware 传入原始 URL path 作为 label，参数化路由（`/users/123`）会导致 Prometheus label 基数爆炸。需要在 middleware 层做路由模板归一化（`/users/{id}`），或由 collector 接受归一化后的 path |
+| TX-NIL-01 | 7 个 slice service (`cells/*/service.go`) | `txRunner` 字段 nil-safe 回退行为（`if s.txRunner != nil` → 顺序执行）未文档化。建议在各 service 的 `txRunner` 字段或 `runInTx` helper 上补注释 |
 
 ### 历史 Tech-Debt（合并保留）
 
