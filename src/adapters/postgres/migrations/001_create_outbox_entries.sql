@@ -1,3 +1,4 @@
+-- +goose Up
 CREATE TABLE IF NOT EXISTS outbox_entries (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     aggregate_id   TEXT NOT NULL,
@@ -11,3 +12,7 @@ CREATE TABLE IF NOT EXISTS outbox_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished ON outbox_entries (created_at) WHERE published = false;
+
+-- +goose Down
+DROP INDEX IF EXISTS idx_outbox_unpublished;
+DROP TABLE IF EXISTS outbox_entries;

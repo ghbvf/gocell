@@ -58,7 +58,10 @@ func TestHealthEndpoints(t *testing.T) {
 
 func TestMetricsEndpoint(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := New(WithMetricsCollector(mc))
+	r := New(
+		WithMetricsCollector(mc),
+		WithMetricsHandler(mc.Handler()),
+	)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

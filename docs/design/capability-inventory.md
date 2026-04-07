@@ -131,10 +131,14 @@
 - slog handler + trace_id/span_id 关联
 
 ### 3.9 observability/metrics — 指标
-- `InMemoryCollector` — 计数/直方图/快照
+- `Collector` 接口 — `RecordRequest(method, path, status, duration)`
+- `InMemoryCollector` — dev/test 用的计数/直方图/快照实现
+- 生产实现: `adapters/prometheus` (PR#42)
 
 ### 3.10 observability/tracing — 追踪
-- `simpleTracer` — 基础 span 追踪
+- `Tracer` / `Span` 接口 — `Start(ctx, name) (ctx, Span)`
+- `simpleTracer` — dev/test 用的随机 ID 实现
+- 生产实现: `adapters/otel` (PR#42, OTel SDK + OTLP gRPC exporter)
 
 ### 3.11 shutdown — 优雅关闭
 - `Manager` — signal→timeout→LIFO hook 执行（失败不中断后续）
@@ -150,7 +154,7 @@
 ### 4.1 postgres — PostgreSQL (pgx/v5)
 - `Pool` — 连接池 + DSN/env 配置 + Health()
 - `TxManager` — RunInTx + savepoint 嵌套 + panic 回滚 + context-embedded tx
-- `Migrator` — embed.FS migration + up/down/status
+- `Migrator` — pressly/goose v3 wrapper + embed.FS + up/down/status (PR#42)
 - `OutboxWriter` — 实现 outbox.Writer + fail-fast ERR_ADAPTER_NO_TX
 - `OutboxRelay` — 实现 outbox.Relay + worker.Worker + FOR UPDATE SKIP LOCKED + batch 100 + 72h cleanup
 - `RowScanner` / `QueryBuilder` — 辅助类型

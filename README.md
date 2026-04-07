@@ -241,12 +241,14 @@ examples/  ← all layers
 
 | Adapter | Capabilities | Kernel Interface |
 |---------|-------------|-----------------|
-| `adapters/postgres` | Pool, TxManager, Migrator, OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.Relay` |
+| `adapters/postgres` | Pool, TxManager, Migrator (goose v3), OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.Relay` |
 | `adapters/redis` | Client, DistLock, IdempotencyChecker, Cache | `idempotency.Checker` |
 | `adapters/oidc` | Thin go-oidc v3 wrapper (Config, Provider, Refresh, Verifier, OAuth2Config) | — |
 | `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
+| `adapters/otel` | OTel SDK tracer (OTLP gRPC exporter, ctxkeys propagation) | `tracing.Tracer` |
+| `adapters/prometheus` | Prometheus metrics (requests counter + duration histogram) | `metrics.Collector` |
 
 ## Using in Your Project
 
