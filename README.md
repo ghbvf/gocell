@@ -214,7 +214,7 @@ src/
 ├── journeys/     — Journey acceptance specs + status-board.yaml
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
 ├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
-├── pkg/          — Shared utilities (errcode / ctxkeys / httputil)
+├── pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
 ├── cmd/          — CLI (gocell validate / scaffold / generate / check / verify)
 ├── examples/     — Example projects (sso-bff / todo-order / iot-device)
 ├── templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)

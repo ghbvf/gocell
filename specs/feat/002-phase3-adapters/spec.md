@@ -26,7 +26,7 @@ Phase 3 实现 6 个外部系统适配器（postgres, redis, oidc, s3, rabbitmq,
 | FR-1.3 Migrator | `Migrator` struct，从 `embed.FS` 加载 SQL migration 文件，支持 up/down/status，维护 `schema_migrations` 表 |
 | FR-1.4 Outbox Writer | 实现 `kernel/outbox.Writer` 接口，使用 context-embedded transaction 模式：`TxManager.RunInTx` 将 `pgx.Tx` 存入 context，`OutboxWriter.Write` 从 context 提取 tx 在同一事务内写入 `outbox_entries` 表。若 context 无 tx 则 fail-fast 返回 `ERR_ADAPTER_NO_TX`。（决策 1） |
 | FR-1.5 Outbox Relay | 实现 `kernel/outbox.Relay` + `worker.Worker` 接口（决策 KS-07），轮询 `outbox_entries` 表中未发布条目，调用 `outbox.Publisher`（kernel 接口，非具体 adapter 类型）后标记已发布。Relay 将完整 `Entry`（含 ID, AggregateID, Metadata）序列化为 JSON 作为 payload（决策 9）。策略：`SELECT ... FOR UPDATE SKIP LOCKED` 支持多实例并发；默认 poll interval 1s，batch size 100（均可通过 `RelayConfig` 配置）；已发布条目保留 72h，由 `PeriodicWorker` 清理。Relay 通过 `bootstrap.WithWorkers()` 注册参与生命周期管理 |
-| FR-1.6 Repository 基础设施 | 提供 `RowScanner` / `QueryBuilder` 辅助类型，降低 Cell Repository 实现的样板代码。不实现具体 Cell Repository（由各 Cell 自行实现） |
+| FR-1.6 Repository 基础设施 | `adapters/postgres` 提供 `RowScanner`（pgx 专用）；`pkg/query` 提供通用 `Builder` 辅助类型，降低 Cell Repository 实现的样板代码。不实现具体 Cell Repository（由各 Cell 自行实现） |
 
 **对标参考**: Watermill `watermill-sql` outbox 模式 + pgx/v5 标准用法。
 

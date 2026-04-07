@@ -157,7 +157,7 @@
 - `Migrator` — pressly/goose v3 wrapper + embed.FS + up/down/status (PR#42)
 - `OutboxWriter` — 实现 outbox.Writer + fail-fast ERR_ADAPTER_NO_TX
 - `OutboxRelay` — 实现 outbox.Relay + worker.Worker + FOR UPDATE SKIP LOCKED + batch 100 + 72h cleanup
-- `RowScanner` / `QueryBuilder` — 辅助类型
+- `RowScanner` — pgx Row/Rows 抽象（QueryBuilder 已迁至 `pkg/query.Builder`）
 - migrations/001_create_outbox_entries.sql
 
 ### 4.2 redis — Redis (go-redis/v9)

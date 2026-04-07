@@ -96,8 +96,9 @@
 - **任务映射**: T14
 - **验证方式**: [单元测试]
 - **验收条件**:
-  - Given adapters/postgres 包; When Cell 开发者实现 Repository; Then 可使用 `RowScanner` / `QueryBuilder` 减少样板代码
-  - Given godoc 文档; When 开发者查看; Then RowScanner 和 QueryBuilder 用法有注释说明
+  - Given adapters/postgres 包; When Cell 开发者实现 Repository; Then 可使用 `RowScanner` 减少样板代码
+  - Given pkg/query 包; When Cell 开发者构建参数化 SQL; Then 可使用 `query.Builder` 减少样板代码
+  - Given godoc 文档; When 开发者查看; Then RowScanner 和 query.Builder 用法有注释说明
 
 ---
 
