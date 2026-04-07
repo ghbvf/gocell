@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/google/uuid"
 )
@@ -25,12 +26,6 @@ const (
 	ErrPublishInvalidInput errcode.Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"
 )
 
-// TxRunner executes a function within a database transaction.
-// When nil, the service falls back to sequential (non-transactional) execution.
-type TxRunner interface {
-	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
-}
-
 // Option configures a config-publish Service.
 type Option func(*Service)
 
@@ -40,7 +35,7 @@ func WithOutboxWriter(w outbox.Writer) Option {
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx TxRunner) Option {
+func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
@@ -49,7 +44,7 @@ type Service struct {
 	repo         ports.ConfigRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
-	txRunner     TxRunner
+	txRunner     persistence.TxRunner
 	logger       *slog.Logger
 }
 

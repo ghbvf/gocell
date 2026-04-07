@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/google/uuid"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -35,12 +36,6 @@ type TokenPair struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 }
 
-// TxRunner executes a function within a database transaction.
-// When nil, the service falls back to sequential (non-transactional) execution.
-type TxRunner interface {
-	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
-}
-
 // Option configures a session-login Service.
 type Option func(*Service)
 
@@ -50,7 +45,7 @@ func WithOutboxWriter(w outbox.Writer) Option {
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
-func WithTxManager(tx TxRunner) Option {
+func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
@@ -61,7 +56,7 @@ type Service struct {
 	roleRepo     ports.RoleRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
-	txRunner     TxRunner
+	txRunner     persistence.TxRunner
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
 }
