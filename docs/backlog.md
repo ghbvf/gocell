@@ -7,7 +7,8 @@
 
 ## Tier 0: Review 修复 + 依赖替换（进行中）
 
-> PR#37 (postgres) ✅ PR#38 (rabbitmq) ✅ PR#39 (redis) ✅ 已合并
+> PR#37 (postgres) ✅ PR#38 (rabbitmq) ✅ PR#39 (redis) ✅ PR#40 (dep-cleanup) ✅ PR#41 (dep-sdk-replace) ✅ PR#42 (dep-migrator-otel) ✅ 已合并
+> PR#43 (websocket-split) 待合并
 
 ### 0-A: 依赖替换 Phase 0 — 安全风险（1d）
 
@@ -30,9 +31,9 @@
 
 | # | 任务 | 预估 | 状态 |
 |---|------|------|------|
-| D-04 | `pkg/uid`: google/uuid 替换手写 UUIDv4（18 调用点） | 0.5d | TODO |
-| D-05 | shutdown/bootstrap: errors.Join 替换 firstErr（2 文件 6 行） | 0.5h | TODO |
-| D-06 | middleware: chi/middleware 替换 recovery/requestID/realIP（删 ~200 行） | 0.5d | TODO |
+| D-04 | `pkg/uid`: google/uuid 替换手写 UUIDv4（18 调用点） | 0.5d | ✅ PR#40 |
+| D-05 | shutdown/bootstrap: errors.Join 替换 firstErr（2 文件 6 行） | 0.5h | ✅ PR#40 |
+| D-06 | middleware: chi/middleware 替换 recovery/requestID/realIP（删 ~200 行） | 0.5d | WONTFIX — GoCell 需要结构化 JSON 错误体、自定义 UUID 注入、trusted proxy 校验，chi/middleware 不满足 |
 
 ### 0-D: RabbitMQ Solution B（2-3d）
 
@@ -51,15 +52,14 @@
 
 | # | 任务 | 预估 | 状态 |
 |---|------|------|------|
-| D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | TODO |
-| D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | TODO |
+| D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | ✅ PR#42 |
+| D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | ✅ PR#42 |
 
 ### 执行顺序
 
 ```
-0-A (安全替换) → 0-B (Outbox Relay) → 0-C (快速收益)
-  → 0-D (Solution B) → 0-E (migrator + OTel)
-  → 继续 Tier 1 Review (R1D-4/5/6 → R1E → R2)
+0-A ✅ → 0-C (D-04/D-05 ✅, D-06 WONTFIX) → 0-E (D-07/D-08 ✅)
+剩余: 0-B (Outbox Relay) + 0-D (Solution B) → 继续 Tier 1 (R1E → R2)
 ```
 
 > 完整分析: `docs/reviews/202604061630-dependency-replacement-plan.md`
@@ -84,9 +84,9 @@
 | R1D-1 postgres | ✅ 已审 + 已修 (PR#37) |
 | R1D-2 redis | ✅ 已审 + 已修 (PR#39) |
 | R1D-3 rabbitmq | ✅ 已审 + 已修 (PR#38) |
-| R1D-4 oidc | 待审（Tier 0 替换后审新代码） |
-| R1D-5 s3 | 待审（Tier 0 替换后审新代码） |
-| R1D-6 websocket | 待审 |
+| R1D-4 oidc | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
+| R1D-5 s3 | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
+| R1D-6 websocket | ✅ 已审（独立 review，含 4 P1 + 2 P2，见 `docs/reviews/202604060830-R0/`） |
 | R1E cells | 待审 |
 | R1F+G delivery + YAML | 待审 |
 | R2 数据流合并 | 待审 |
@@ -162,7 +162,7 @@
 
 | ID | 文件 | 问题 |
 |----|------|------|
-| R1A1-F05 | `pkg/id/` | 已废弃包仍存在，无 // Deprecated 标注 |
+| R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ ✅ 已删除（PR#40, commit 1a80ec6） |
 | R1A1-F06 | `pkg/ctxkeys/keys_test.go:118-140` | TestFromMissingKey 遗漏 RequestID/RealIP/Subject 覆盖 |
 | R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致（Acquire vs ACQUIRED） |
 | F-04 | `runtime/auth/middleware.go:133` | writeAuthError 忽略 JSON encode 错误 |
