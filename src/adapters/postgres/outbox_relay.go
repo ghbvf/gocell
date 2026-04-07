@@ -79,10 +79,11 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 		cfg.RetentionPeriod = defaults.RetentionPeriod
 	}
 	return &OutboxRelay{
-		db:        db,
-		pub:       pub,
-		config:    cfg,
-		startedCh: make(chan struct{}),
+		db:     db,
+		pub:    pub,
+		config: cfg,
+		// startedCh intentionally nil — Start() creates and closes it.
+		// Stop() treats nil as "never started" and returns immediately.
 	}
 }
 
@@ -101,10 +102,14 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 	r.running = true
 	r.cancel = cancel
 	r.done = done
-	r.startedCh = make(chan struct{}) // reset for re-start
+	started := make(chan struct{})
+	r.startedCh = started
 	r.wg.Add(2)
-	close(r.startedCh) // signal that lifecycle fields are published
 	r.mu.Unlock()
+
+	// Signal after unlock: any Stop() that acquired the lock after us will
+	// read the same channel we are about to close.
+	close(started)
 
 	defer func() {
 		r.wg.Wait()
@@ -144,9 +149,15 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 func (r *OutboxRelay) Stop(ctx context.Context) error {
 	// Wait for Start() to finish publishing lifecycle fields. This prevents
 	// a race where Stop() reads nil cancel/done before Start() writes them.
+	// If Start() was never called, startedCh is nil and we return immediately
+	// (no-op, consistent with worker.Worker contract).
 	r.mu.Lock()
 	started := r.startedCh
 	r.mu.Unlock()
+
+	if started == nil {
+		return nil
+	}
 
 	select {
 	case <-started:
