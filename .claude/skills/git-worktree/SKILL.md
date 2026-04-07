@@ -8,11 +8,10 @@ description: Git Worktree 项目约定（编号、基准分支、权限兼容、
 ## 约束
 
 - 目录：`worktrees/<NNN-short-name>`
-- 基准：创建前 `git fetch origin`，基于 `origin/main`
+- 基准：创建前 `git fetch origin`，基于 `origin/develop`
 - 禁止 `cd worktrees/xxx && ...`，替代方案：
   - git: `git -C worktrees/xxx ...`
   - go: `go -C worktrees/xxx build/test ...`（Go 1.21+）
-  - grep/ls/find: 直接用绝对路径，或用 Grep/Glob 工具
 - 用完即删 `git worktree remove`
 
 ## 删除安全

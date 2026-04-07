@@ -140,6 +140,12 @@ func TestWithDetails(t *testing.T) {
 	}
 }
 
+func TestWithDetails_NilError(t *testing.T) {
+	assert.PanicsWithValue(t, "errcode: WithDetails called with nil *Error", func() {
+		WithDetails(nil, map[string]any{"key": "val"})
+	})
+}
+
 func TestWithDetailsDDoesNotMutateOriginal(t *testing.T) {
 	original := WithDetails(New(ErrAssemblyNotFound, "not found"), map[string]any{"key": "val"})
 	_ = WithDetails(original, map[string]any{"extra": "data"})
