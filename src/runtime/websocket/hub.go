@@ -12,6 +12,7 @@ import (
 const (
 	defaultPingInterval = 30 * time.Second
 	defaultPingTimeout  = 5 * time.Second
+	defaultReadLimit    = 64 * 1024 // 64KB
 )
 
 // HubConfig configures the Hub.
@@ -24,8 +25,6 @@ type HubConfig struct {
 	// The adapter applies this when creating a connection.
 	ReadLimit int64
 }
-
-const defaultReadLimit = 64 * 1024 // 64KB
 
 // DefaultHubConfig returns a HubConfig with sensible defaults.
 func DefaultHubConfig() HubConfig {
@@ -47,6 +46,7 @@ type Hub struct {
 	mu    sync.RWMutex
 	conns map[string]Conn
 
+	runCtx context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	once   sync.Once
@@ -63,17 +63,20 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	if cfg.ReadLimit == 0 {
 		cfg.ReadLimit = defaultReadLimit
 	}
+
+	runCtx, cancel := context.WithCancel(context.Background())
+
 	return &Hub{
 		config:  cfg,
 		handler: handler,
 		conns:   make(map[string]Conn),
+		runCtx:  runCtx,
+		cancel:  cancel,
 	}
 }
 
 // Start begins the Hub's ping loop. It blocks until ctx is cancelled.
 func (h *Hub) Start(ctx context.Context) error {
-	ctx, h.cancel = context.WithCancel(ctx)
-
 	slog.Info("websocket hub: started",
 		slog.Duration("ping_interval", h.config.PingInterval),
 	)
@@ -81,42 +84,58 @@ func (h *Hub) Start(ctx context.Context) error {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.pingLoop(ctx)
+		h.pingLoop(h.runCtx)
 	}()
 
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-// Stop gracefully shuts down the Hub, closing all connections.
-func (h *Hub) Stop(_ context.Context) error {
-	h.once.Do(func() {
-		if h.cancel != nil {
-			h.cancel()
-		}
-	})
+// Stop gracefully shuts down the Hub. It cancels all connection goroutines,
+// closes all connections, then waits for goroutines to exit. The provided
+// ctx bounds the wait time — if it expires, Stop returns ctx.Err().
+func (h *Hub) Stop(ctx context.Context) error {
+	h.once.Do(func() { h.cancel() })
 
-	h.wg.Wait()
-
+	// Close all connections first so readLoop goroutines unblock.
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	conns := make([]Conn, 0, len(h.conns))
+	for id, c := range h.conns {
+		conns = append(conns, c)
+		delete(h.conns, id)
+	}
+	h.mu.Unlock()
 
-	for connID, c := range h.conns {
+	for _, c := range conns {
 		if err := c.Close(); err != nil {
 			slog.Warn("websocket hub: close connection failed",
-				slog.String("conn_id", connID),
+				slog.String("conn_id", c.ID()),
 				slog.Any("error", err),
 			)
 		}
-		delete(h.conns, connID)
 	}
 
-	slog.Info("websocket hub: stopped")
-	return nil
+	// Wait for goroutines with a deadline.
+	done := make(chan struct{})
+	go func() {
+		h.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("websocket hub: stopped")
+		return nil
+	case <-ctx.Done():
+		slog.Warn("websocket hub: stop timed out")
+		return ctx.Err()
+	}
 }
 
 // Register adds a connection to the Hub and starts reading from it.
-func (h *Hub) Register(ctx context.Context, conn Conn) {
+// The read loop runs under the Hub's internal context, not the caller's,
+// so the connection outlives the HTTP handler that created it.
+func (h *Hub) Register(conn Conn) {
 	h.mu.Lock()
 	h.conns[conn.ID()] = conn
 	h.mu.Unlock()
@@ -128,7 +147,7 @@ func (h *Hub) Register(ctx context.Context, conn Conn) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.readLoop(ctx, conn)
+		h.readLoop(h.runCtx, conn)
 		h.Unregister(conn.ID())
 	}()
 }

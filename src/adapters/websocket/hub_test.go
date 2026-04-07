@@ -167,19 +167,56 @@ func TestHub_MessageHandler(t *testing.T) {
 }
 
 func TestHub_Send(t *testing.T) {
-	hub, server := setupTestHub(t, nil)
+	var (
+		mu     sync.Mutex
+		connID string
+	)
+
+	handler := func(_ context.Context, id string, _ []byte) {
+		mu.Lock()
+		connID = id
+		mu.Unlock()
+	}
+
+	hub, server := setupTestHub(t, handler)
 	defer server.Close()
 
 	conn := dialWS(t, server.URL)
-	defer func() {
-		if err := conn.Close(websocket.StatusNormalClosure, "done"); err != nil {
-			t.Logf("close error: %v", err)
-		}
-	}()
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 
-	time.Sleep(100 * time.Millisecond)
+	// Send a message from client so handler captures connID.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	// Send to nonexistent connection should error.
+	err := conn.Write(ctx, websocket.MessageText, []byte("hello"))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return connID != ""
+	}, time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	id := connID
+	mu.Unlock()
+
+	// Send a targeted message from hub to client.
+	err = hub.Send(context.Background(), id, []byte("direct msg"))
+	require.NoError(t, err)
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer readCancel()
+
+	_, data, err := conn.Read(readCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "direct msg", string(data))
+}
+
+func TestHub_Send_NotFound(t *testing.T) {
+	hub, server := setupTestHub(t, nil)
+	defer server.Close()
+
 	err := hub.Send(context.Background(), "nonexistent", []byte("test"))
 	require.Error(t, err)
 }
@@ -199,17 +236,45 @@ func TestHub_StartStop(t *testing.T) {
 	}()
 
 	<-ctx.Done()
-	err := hub.Stop(context.Background())
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	err := hub.Stop(stopCtx)
 	require.NoError(t, err)
 
 	startErr := <-errCh
 	assert.ErrorIs(t, startErr, context.DeadlineExceeded)
 }
 
+func TestHub_StopClosesConnections(t *testing.T) {
+	hub, server := setupTestHub(t, nil)
+	defer server.Close()
+
+	conn := dialWS(t, server.URL)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 1, hub.ConnCount())
+
+	// Stop should close the connection and return before timeout.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	err := hub.Stop(stopCtx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, hub.ConnCount())
+
+	// Client should get a read error (connection closed).
+	readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+	defer readCancel()
+	_, _, readErr := conn.Read(readCtx)
+	assert.Error(t, readErr)
+}
+
 func TestDefaultHubConfig(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 	assert.Equal(t, 30*time.Second, cfg.PingInterval)
 	assert.Equal(t, 5*time.Second, cfg.PingTimeout)
+	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
 }
 
 func TestUpgradeHandler_AllowedOrigins(t *testing.T) {

@@ -1,7 +1,6 @@
 package websocket
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 
@@ -47,7 +46,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 		connID := "ws-" + uuid.NewString()
 		conn := NewConn(connID, wsConn)
 
-		hub.Register(context.Background(), conn)
+		hub.Register(conn)
 		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", r.RemoteAddr),
