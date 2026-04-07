@@ -39,6 +39,10 @@ func DefaultHubConfig() HubConfig {
 type MessageHandler func(ctx context.Context, connID string, data []byte)
 
 // Hub manages WebSocket connections and provides signal-first broadcasting.
+//
+// Lifecycle: NewHub → Start (blocks) → Stop. Start creates the internal
+// run context; Stop cancels it and drains connections. A stopped Hub
+// cannot be restarted — create a new one.
 type Hub struct {
 	config  HubConfig
 	handler MessageHandler
@@ -46,10 +50,16 @@ type Hub struct {
 	mu    sync.RWMutex
 	conns map[string]Conn
 
+	// runCtx/cancel are created in Start, not NewHub, so that
+	// Stop-before-Start doesn't poison the instance.
 	runCtx context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	once   sync.Once
+
+	// stopCh is closed by Stop to unblock Start.
+	stopCh chan struct{}
+
+	wg   sync.WaitGroup
+	once sync.Once
 }
 
 // NewHub creates a Hub with the given configuration and message handler.
@@ -64,19 +74,19 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 		cfg.ReadLimit = defaultReadLimit
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
-
 	return &Hub{
 		config:  cfg,
 		handler: handler,
 		conns:   make(map[string]Conn),
-		runCtx:  runCtx,
-		cancel:  cancel,
+		stopCh:  make(chan struct{}),
 	}
 }
 
-// Start begins the Hub's ping loop. It blocks until ctx is cancelled.
+// Start begins the Hub's ping loop. It blocks until Stop is called or
+// ctx is cancelled, whichever comes first.
 func (h *Hub) Start(ctx context.Context) error {
+	h.runCtx, h.cancel = context.WithCancel(context.Background())
+
 	slog.Info("websocket hub: started",
 		slog.Duration("ping_interval", h.config.PingInterval),
 	)
@@ -87,17 +97,31 @@ func (h *Hub) Start(ctx context.Context) error {
 		h.pingLoop(h.runCtx)
 	}()
 
-	<-ctx.Done()
-	return ctx.Err()
+	// Block until either the caller cancels ctx or Stop closes stopCh.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.stopCh:
+		return nil
+	}
 }
 
 // Stop gracefully shuts down the Hub. It cancels all connection goroutines,
 // closes all connections, then waits for goroutines to exit. The provided
 // ctx bounds the wait time — if it expires, Stop returns ctx.Err().
+//
+// Stop also unblocks Start. A stopped Hub cannot be restarted.
 func (h *Hub) Stop(ctx context.Context) error {
-	h.once.Do(func() { h.cancel() })
+	h.once.Do(func() {
+		// Cancel runCtx (if Start was called).
+		if h.cancel != nil {
+			h.cancel()
+		}
+		// Unblock Start.
+		close(h.stopCh)
+	})
 
-	// Close all connections first so readLoop goroutines unblock.
+	// Close all connections so readLoop goroutines unblock.
 	h.mu.Lock()
 	conns := make([]Conn, 0, len(h.conns))
 	for id, c := range h.conns {
@@ -133,7 +157,7 @@ func (h *Hub) Stop(ctx context.Context) error {
 }
 
 // Register adds a connection to the Hub and starts reading from it.
-// The read loop runs under the Hub's internal context, not the caller's,
+// The read loop runs under the Hub's internal context (created in Start),
 // so the connection outlives the HTTP handler that created it.
 func (h *Hub) Register(conn Conn) {
 	h.mu.Lock()
