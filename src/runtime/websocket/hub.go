@@ -238,19 +238,23 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	clear(h.conns)
 	h.connMu.Unlock()
 
-	// Cancel per-conn contexts (unblocks Read) then close transports.
+	// Close all connections synchronously. cancel() unblocks Read via
+	// context; Close() tears down the transport (nhooyr CloseNow is
+	// lock-free, so this never blocks behind Write). Both are belt-and-
+	// suspenders: cancel works for fakeConn, Close works for nhooyr.
+	//
+	// Synchronous close ensures Stop returns only after all transport
+	// resources (including nhooyr's internal timeoutLoop) are cleaned up.
+	// If connection counts reach thousands, replace with concurrent close
+	// + closeWg (see WS-OPS-02 in tech-debt-registry).
 	for _, e := range entries {
 		e.cancel()
-	}
-	for _, e := range entries {
-		go func(e *connEntry) {
-			if err := e.conn.Close(); err != nil {
-				slog.Warn("websocket hub: close connection failed",
-					slog.String("conn_id", e.conn.ID()),
-					slog.Any("error", err),
-				)
-			}
-		}(e)
+		if err := e.conn.Close(); err != nil {
+			slog.Warn("websocket hub: close connection failed",
+				slog.String("conn_id", e.conn.ID()),
+				slog.Any("error", err),
+			)
+		}
 	}
 
 	// Wait for all goroutines (readLoops + pingLoop), bounded by ctx.
@@ -327,21 +331,24 @@ func (h *Hub) Register(conn Conn) error {
 
 	go func() {
 		defer h.wg.Done()
-		h.readLoop(connCtx, conn)
-		h.unregisterConn(conn)
+		h.readLoop(connCtx, entry.conn)
+		h.unregisterEntry(entry)
 	}()
 
 	return nil
 }
 
-// unregisterConn is called by the readLoop goroutine. It only removes the
-// entry if the conn pointer matches, preventing an evicted readLoop from
-// deleting a replacement entry with the same ID.
-func (h *Hub) unregisterConn(conn Conn) {
+// unregisterEntry is called by the readLoop goroutine. It only removes the
+// map entry if the current value is the same *connEntry pointer, preventing
+// an evicted readLoop from deleting a replacement entry with the same ID.
+// Using *connEntry pointer comparison (always safe) instead of Conn interface
+// comparison (panics if concrete type is not comparable).
+func (h *Hub) unregisterEntry(entry *connEntry) {
+	connID := entry.conn.ID()
 	h.connMu.Lock()
-	entry, ok := h.conns[conn.ID()]
-	if ok && entry.conn == conn {
-		delete(h.conns, conn.ID())
+	current, ok := h.conns[connID]
+	if ok && current == entry {
+		delete(h.conns, connID)
 	} else {
 		ok = false
 	}
@@ -351,12 +358,12 @@ func (h *Hub) unregisterConn(conn Conn) {
 		entry.cancel()
 		if err := entry.conn.Close(); err != nil {
 			slog.Debug("websocket hub: close on unregister",
-				slog.String("conn_id", conn.ID()),
+				slog.String("conn_id", connID),
 				slog.Any("error", err),
 			)
 		}
 		slog.Info("websocket hub: connection unregistered",
-			slog.String("conn_id", conn.ID()),
+			slog.String("conn_id", connID),
 		)
 	}
 }

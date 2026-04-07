@@ -181,7 +181,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| WS-ARCH-01 | [TECH] | OPEN | `unregisterConn` 用 `entry.conn == conn` 指针比较做身份判断；Conn 接口未约束 concrete type 可比较，不可比较类型会 panic | 当前所有 adapter 是指针接收者（安全），但 runtime 边界不应依赖 adapter 假设 | v1.1 |
+| WS-ARCH-01 | [TECH] | RESOLVED | `unregisterConn` 用 `entry.conn == conn` 接口比较做身份判断；改为 `*connEntry` 指针比较（`unregisterEntry`） | 消除 runtime 对 adapter concrete type 可比较性的隐含假设 | PR#43 ✓ |
 
 ### 测试/回归
 
@@ -195,6 +195,7 @@
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
 | WS-OPS-01 | [TECH] | OPEN | Start external cancel 的 shutdownTimeout 硬编码 10s，不可通过 HubConfig 配置 | 生产环境可能需要调优 | v1.1 |
+| WS-OPS-02 | [TECH] | OPEN | shutdown Close 当前同步逐个调用；连接数到千级时可改为并发 Close + closeWg | 当前连接规模下不影响，千级连接时 Stop 延迟线性增长 | v1.1 |
 
 ### DX/可观测性
 
@@ -212,10 +213,10 @@
 | Phase 2 | 23 | 3 | 26 | 1 | 24 | 1 |
 | Phase 3 新增 | 9 | 3 | 12 | 5 | 5 | 2 |
 | Phase 4 新增 | 10 | 0 | 10 | 9 | 1 | 0 |
-| PR #43 WS | 6 | 0 | 6 | 6 | 0 | 0 |
-| **总计** | **48** | **6** | **54** | **21** | **30** | **3** |
+| PR #43 WS | 7 | 0 | 7 | 5 | 2 | 0 |
+| **总计** | **49** | **6** | **55** | **20** | **32** | **3** |
 
-**活跃债务（OPEN + PARTIAL）**: 24 条（v1.1 处理目标）
+**活跃债务（OPEN + PARTIAL）**: 23 条（v1.1 处理目标）
 
 **Phase 4 关闭**: P3-TD-01、P3-TD-03、P3-TD-06、P3-TD-07、P3-TD-08、P3-TD-09、P4-TD-05（共 7 条）
 **Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-11（共 10 条）
