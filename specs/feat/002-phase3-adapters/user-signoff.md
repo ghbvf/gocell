@@ -75,7 +75,7 @@ GoCell 是纯后端 Go 框架，无 UI 组件。前端开发者角色在 role-ro
 
 ### B.3 Godoc 质量 (良好)
 
-- 6 个 adapter 全部有 `doc.go`，且内容充实 -- postgres doc.go 列出了子模块（Pool, TxManager, Migrator, RowScanner/QueryBuilder），rabbitmq doc.go 说明了实现的接口和核心特性。
+- 6 个 adapter 全部有 `doc.go`，且内容充实 -- postgres doc.go 列出了子模块（Pool, TxManager, Migrator, RowScanner；QueryBuilder 已迁至 `pkg/query.Builder`），rabbitmq doc.go 说明了实现的接口和核心特性。
 - 导出类型和关键函数均有注释 (如 `TxManager.RunInTx` 的注释详细说明了 nesting 行为、panic safety、context-embedded tx)。
 - kernel 接口增强: `outbox.Writer.Write` godoc 明确说明了 context-embedded transaction 约定, `outbox.Entry.ID` 标注为 "canonical idempotency identifier"。
 - 对标参考: doc.go 中注明了 ref 来源 (Watermill, coreos/go-oidc) 和 adopt/deviate 决策。

@@ -42,14 +42,16 @@ func (b *Builder) AppendIf(condition bool, sqlPrefix string, value any) *Builder
 	return b
 }
 
-// Build returns the assembled SQL string and the ordered argument slice.
+// Build returns the assembled SQL string and a copy of the argument slice.
+// The returned args are safe to hold across Reset() calls.
 func (b *Builder) Build() (string, []any) {
-	return strings.Join(b.parts, " "), b.args
+	return strings.Join(b.parts, " "), append([]any(nil), b.args...)
 }
 
-// Args returns the current argument slice.
+// Args returns a copy of the current argument slice.
+// The returned slice is safe to hold across Reset() calls.
 func (b *Builder) Args() []any {
-	return b.args
+	return append([]any(nil), b.args...)
 }
 
 // SQL returns the current query string without arguments.

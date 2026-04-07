@@ -117,3 +117,31 @@ func TestBuilder_ComplexQuery(t *testing.T) {
 	assert.Equal(t, expected, sql)
 	assert.Equal(t, []any{"2024-01-01T00:00:00Z", "uuid-123"}, args)
 }
+
+func TestBuilder_ResetDoesNotMutatePreviouslyBuiltArgs(t *testing.T) {
+	b := NewBuilder()
+	b.AppendParam("id = ", 1)
+	_, args1 := b.Build()
+
+	b.Reset()
+	b.AppendParam("name = ", 2)
+	_, args2 := b.Build()
+
+	// args1 must still hold the original value, not be overwritten by the
+	// second build after Reset(). This is a regression test for slice aliasing
+	// when Reset() reuses the underlying array via [:0].
+	assert.Equal(t, []any{1}, args1, "args1 must not be mutated by subsequent Reset+Build")
+	assert.Equal(t, []any{2}, args2)
+}
+
+func TestBuilder_ArgsReturnsCopy(t *testing.T) {
+	b := NewBuilder()
+	b.AppendParam("x = ", 42)
+
+	args := b.Args()
+	args[0] = 99 // mutate the returned slice
+
+	// The builder's internal state must be unaffected.
+	_, builtArgs := b.Build()
+	assert.Equal(t, []any{42}, builtArgs, "mutating Args() return must not affect builder")
+}
