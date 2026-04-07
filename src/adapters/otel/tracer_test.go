@@ -118,17 +118,32 @@ func TestNewTracer_MissingEndpoint(t *testing.T) {
 }
 
 func TestTracerConfig_Defaults(t *testing.T) {
+	// Zero value → default 1.0.
 	cfg := TracerConfig{}
 	cfg.defaults()
 	assert.Equal(t, 1.0, cfg.SampleRate)
 
-	cfg2 := TracerConfig{SampleRate: -1}
+	// Explicit value preserved.
+	cfg2 := TracerConfig{SampleRate: 0.5}
 	cfg2.defaults()
-	assert.Equal(t, 1.0, cfg2.SampleRate)
+	assert.Equal(t, 0.5, cfg2.SampleRate)
 
-	cfg3 := TracerConfig{SampleRate: 2.0}
+	// DisableSampling forces 0.
+	cfg3 := TracerConfig{SampleRate: 0.8, DisableSampling: true}
 	cfg3.defaults()
-	assert.Equal(t, 1.0, cfg3.SampleRate)
+	assert.Equal(t, 0.0, cfg3.SampleRate)
+}
+
+func TestTracerConfig_Validate(t *testing.T) {
+	// Valid cases.
+	assert.NoError(t, (&TracerConfig{}).validate())                           // zero = default
+	assert.NoError(t, (&TracerConfig{SampleRate: 0.5}).validate())            // in range
+	assert.NoError(t, (&TracerConfig{SampleRate: 1.0}).validate())            // boundary
+	assert.NoError(t, (&TracerConfig{DisableSampling: true}).validate())      // disable
+
+	// Invalid cases: out of range → error.
+	assert.Error(t, (&TracerConfig{SampleRate: -0.5}).validate())
+	assert.Error(t, (&TracerConfig{SampleRate: 2.0}).validate())
 }
 
 func TestSpan_ImplementsInterface(t *testing.T) {

@@ -25,6 +25,9 @@ type Tracer struct {
 // It returns the tracer, a shutdown function, and any initialization error.
 // The shutdown function flushes pending spans and releases resources.
 func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Context) error, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, nil, errcode.Wrap(ErrAdapterOTelConfig, err.Error(), err)
+	}
 	cfg.defaults()
 
 	if cfg.ServiceName == "" {
