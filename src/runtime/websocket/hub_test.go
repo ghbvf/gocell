@@ -250,24 +250,23 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 	select {
 	case err := <-startErr:
 		assert.ErrorIs(t, err, context.Canceled)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("Start did not return after context cancel")
 	}
 
-	// After external cancel, hub should be in stopping state.
+	// Start runs full shutdown on external cancel, so hub is now stopped.
+	assert.Equal(t, stateStopped, hub.state.Load())
+	assert.True(t, conn.isClosed(), "shutdown should have closed connections")
+
 	// Register must be rejected.
-	assert.Equal(t, stateStopping, hub.state.Load())
 	lateConn := newFakeConn("post-cancel")
 	err := hub.Register(lateConn)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "stopping")
+	assert.Contains(t, err.Error(), "not running")
 
-	// Stop must still drain existing connections.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stopCancel()
-	require.NoError(t, hub.Stop(stopCtx))
-	assert.Equal(t, stateStopped, hub.state.Load())
-	assert.True(t, conn.isClosed())
+	// Stop is a no-op (already stopped) — returns "already stopped".
+	err = hub.Stop(context.Background())
+	assert.Contains(t, err.Error(), "already stopped")
 }
 
 // ---------------------------------------------------------------------------
@@ -753,6 +752,196 @@ func (s *stuckConn) Close() error {
 	}
 	// Intentionally do NOT close closeCh — simulates a conn that won't unblock.
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Contract Test Suite 1: Hub State Machine (table-driven)
+// ---------------------------------------------------------------------------
+
+func TestHub_StateMachine(t *testing.T) {
+	type action struct {
+		name    string
+		fn      func(*Hub) error
+		wantErr string // "" = no error
+	}
+
+	stopAction := action{"Stop", func(h *Hub) error {
+		return h.Stop(context.Background())
+	}, ""}
+	registerAction := action{"Register", func(h *Hub) error {
+		return h.Register(newFakeConn("sm"))
+	}, ""}
+
+	tests := []struct {
+		name    string
+		setup   func() *Hub // put hub in desired state
+		action  action
+		wantErr string
+	}{
+		{
+			"idle+Stop",
+			func() *Hub { return NewHub(DefaultHubConfig(), nil) },
+			stopAction, "",
+		},
+		{
+			"idle+Register",
+			func() *Hub { return NewHub(DefaultHubConfig(), nil) },
+			registerAction, "not running",
+		},
+		{
+			"running+Start",
+			func() *Hub { return startHubBackground(t) },
+			action{"Start", func(h *Hub) error { return h.Start(context.Background()) }, ""},
+			"already started",
+		},
+		{
+			"running+Stop",
+			func() *Hub { return startHubBackground(t) },
+			stopAction, "",
+		},
+		{
+			"running+Register",
+			func() *Hub { return startHubBackground(t) },
+			registerAction, "",
+		},
+		{
+			"stopped+Start",
+			func() *Hub {
+				h := NewHub(DefaultHubConfig(), nil)
+				_ = h.Stop(context.Background())
+				return h
+			},
+			action{"Start", func(h *Hub) error { return h.Start(context.Background()) }, ""},
+			"already stopped",
+		},
+		{
+			"stopped+Stop",
+			func() *Hub {
+				h := NewHub(DefaultHubConfig(), nil)
+				_ = h.Stop(context.Background())
+				return h
+			},
+			stopAction, "already stopped",
+		},
+		{
+			"stopped+Register",
+			func() *Hub {
+				h := NewHub(DefaultHubConfig(), nil)
+				_ = h.Stop(context.Background())
+				return h
+			},
+			registerAction, "not running",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hub := tt.setup()
+			err := tt.action.fn(hub)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// startHubBackground starts a Hub and registers cleanup.
+func startHubBackground(t *testing.T) *Hub {
+	t.Helper()
+	hub := NewHub(DefaultHubConfig(), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, time.Second, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+	return hub
+}
+
+// ---------------------------------------------------------------------------
+// Contract Test Suite 2: Conn Conformance (tests fakeConn as reference)
+// ---------------------------------------------------------------------------
+
+func TestConnConformance_CloseInterruptsRead(t *testing.T) {
+	conn := newFakeConn("cir")
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(context.Background())
+		readDone <- err
+	}()
+	<-conn.readyCh // ensure Read is blocking
+
+	require.NoError(t, conn.Close())
+
+	select {
+	case err := <-readDone:
+		assert.Error(t, err, "Close must cause Read to return an error")
+	case <-time.After(time.Second):
+		t.Fatal("Read did not return after Close")
+	}
+}
+
+func TestConnConformance_CloseIdempotent(t *testing.T) {
+	conn := newFakeConn("ci")
+	require.NoError(t, conn.Close())
+	require.NoError(t, conn.Close()) // second call must not panic
+	assert.True(t, conn.isClosed())
+}
+
+func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
+	conn := newFakeConn("cwc")
+	conn.writeDelay = 100 * time.Millisecond
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Writer goroutine.
+	go func() {
+		defer wg.Done()
+		_ = conn.Write(context.Background(), []byte("data"))
+	}()
+
+	// Close goroutine — fires while Write is in progress.
+	go func() {
+		defer wg.Done()
+		time.Sleep(10 * time.Millisecond) // let Write start
+		_ = conn.Close()
+	}()
+
+	wg.Wait() // must not deadlock or panic
+}
+
+// ---------------------------------------------------------------------------
+// Contract Test Suite 3: UpgradeHandler (see handler_test.go for real WS)
+// ---------------------------------------------------------------------------
+// UpgradeHandler contract tests that don't need a network are here.
+// Real WebSocket upgrade tests are in adapters/websocket/handler_test.go.
+
+func TestHub_IsRunning_Contract(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(), nil)
+
+	// idle → not running
+	assert.False(t, hub.IsRunning())
+
+	// running
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool { return hub.IsRunning() }, time.Second, time.Millisecond)
+
+	// stop → not running
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = hub.Stop(ctx)
+	<-startErr
+	assert.False(t, hub.IsRunning())
 }
 
 // Compile-time interface checks.

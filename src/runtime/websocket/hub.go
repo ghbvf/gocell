@@ -14,15 +14,16 @@ import (
 const (
 	stateIdle     int32 = 0 // NewHub: no goroutines, ready to Start.
 	stateRunning  int32 = 1 // Start called: ping loop active, Register allowed.
-	stateStopping int32 = 2 // Stop in progress: draining connections.
+	stateStopping int32 = 2 // shutdown in progress: draining connections.
 	stateStopped  int32 = 3 // Terminal: hub cannot be restarted.
 )
 
 const (
-	defaultPingInterval = 30 * time.Second
-	defaultPingTimeout  = 5 * time.Second
-	defaultReadLimit    = 64 * 1024 // 64KB
-	defaultPingMissMax  = 2
+	defaultPingInterval    = 30 * time.Second
+	defaultPingTimeout     = 5 * time.Second
+	defaultReadLimit       = 64 * 1024 // 64KB
+	defaultPingMissMax     = 2
+	defaultShutdownTimeout = 10 * time.Second
 )
 
 // HubConfig configures the Hub.
@@ -66,14 +67,18 @@ type connEntry struct {
 //
 // Lifecycle: NewHub → Start (blocks) → Stop (terminal, single-use).
 // A stopped Hub cannot be restarted; create a new one instead.
+//
+// Both Stop(ctx) and external cancellation of Start(ctx) converge on the
+// same internal shutdown path. There is exactly one code path that drains
+// connections and transitions to the terminal state.
 type Hub struct {
 	config  HubConfig
 	handler MessageHandler
 
 	state atomic.Int32 // stateIdle → stateRunning → stateStopping → stateStopped
 
-	// connMu guards conns map and serializes Register vs Stop's drain.
-	// wg.Add MUST happen under connMu to prevent a race with Stop's wg.Wait.
+	// connMu guards conns map and serializes Register vs shutdown's drain.
+	// wg.Add MUST happen under connMu to prevent a race with wg.Wait.
 	connMu sync.Mutex
 	conns  map[string]*connEntry
 	wg     sync.WaitGroup // tracks readLoop + pingLoop goroutines
@@ -81,6 +86,11 @@ type Hub struct {
 	// cancelMu protects runCancel from concurrent Start/Stop access.
 	cancelMu  sync.Mutex
 	runCancel context.CancelFunc
+
+	// shutdownDone is closed when shutdown completes. Lets concurrent
+	// Stop callers wait for an in-progress shutdown (started by Start's
+	// cancel path or an earlier Stop call).
+	shutdownDone chan struct{}
 }
 
 // NewHub creates a Hub. No background goroutines are started until Start.
@@ -102,19 +112,23 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	}
 
 	return &Hub{
-		config:  cfg,
-		handler: handler,
-		conns:   make(map[string]*connEntry),
+		config:       cfg,
+		handler:      handler,
+		conns:        make(map[string]*connEntry),
+		shutdownDone: make(chan struct{}),
 	}
 }
 
 // Start begins the Hub's ping loop. It blocks until Stop is called or ctx
-// is cancelled. Returns nil when stopped normally, ctx.Err() when the
-// caller's context expires.
+// is cancelled.
+//
+// If the caller's context is cancelled, Start runs a full shutdown
+// (drain + close) automatically. Stop may still be called afterwards but
+// will return immediately since the Hub is already stopped.
 func (h *Hub) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 
-	// CAS + runCancel + wg.Add under cancelMu so that Stop (which reads
+	// CAS + runCancel + wg.Add under cancelMu so that shutdown (which reads
 	// runCancel under cancelMu) is guaranteed to see them all.
 	h.cancelMu.Lock()
 	if !h.state.CompareAndSwap(stateIdle, stateRunning) {
@@ -139,41 +153,62 @@ func (h *Hub) Start(ctx context.Context) error {
 		h.pingLoop(runCtx)
 	}()
 
-	// Block until Stop cancels runCtx or the caller's ctx expires.
+	// Block until Stop's shutdown cancels runCtx, or the caller's ctx expires.
 	<-runCtx.Done()
 
-	// Distinguish Stop (normal) from external cancellation.
 	if h.state.Load() >= stateStopping {
+		// shutdown was triggered by Stop (or a concurrent Start-cancel).
+		// Wait for it to finish before returning.
+		<-h.shutdownDone
 		return nil
 	}
 
-	// External cancellation: move to stopping so Register rejects new
-	// connections. The caller must still call Stop() to drain and reach
-	// the terminal state.
-	h.state.CompareAndSwap(stateRunning, stateStopping)
+	// External cancellation: run the single shutdown path ourselves.
+	shutdownCtx, shutdownCancel := context.WithTimeout(
+		context.Background(), defaultShutdownTimeout,
+	)
+	defer shutdownCancel()
+	_ = h.shutdown(shutdownCtx)
 	return ctx.Err()
 }
 
 // Stop gracefully shuts down the Hub. It rejects new connections, cancels
 // the ping loop, closes all connections (breaking readLoops), and waits
-// for goroutines to exit. The provided ctx bounds the wait time.
+// for goroutines to exit. The provided ctx bounds the entire operation.
 //
 // After Stop the Hub is in a terminal state and cannot be restarted.
 func (h *Hub) Stop(ctx context.Context) error {
+	// Fast path: stop an idle hub that was never started.
+	if h.state.CompareAndSwap(stateIdle, stateStopped) {
+		close(h.shutdownDone)
+		return nil
+	}
+	return h.shutdown(ctx)
+}
+
+// shutdown is the single shutdown path. Both Stop and Start's external-cancel
+// converge here. The CAS(running→stopping) inside ensures exactly one caller
+// executes the drain; others wait on shutdownDone.
+func (h *Hub) shutdown(ctx context.Context) error {
 	if !h.state.CompareAndSwap(stateRunning, stateStopping) {
-		// Allow Stop on idle hub (stop-before-start): transition to terminal.
-		if h.state.CompareAndSwap(stateIdle, stateStopped) {
-			return nil
+		s := h.state.Load()
+		if s == stateStopping {
+			// Another goroutine is shutting down. Wait for it.
+			select {
+			case <-h.shutdownDone:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-		// Allow Stop when Start already moved to stopping (external cancel).
-		if h.state.Load() != stateStopping {
-			return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
-		}
-		// Fall through: state is stopping, proceed with drain.
+		// Already stopped.
+		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 
-	// Cancel run context: stops pingLoop, unblocks Start.
-	// May already be cancelled (external cancel), but cancel() is idempotent.
+	// We won the CAS — we own the shutdown.
+	defer close(h.shutdownDone)
+
+	// Cancel run context: stops pingLoop, unblocks Start if still blocking.
 	h.cancelMu.Lock()
 	cancel := h.runCancel
 	h.cancelMu.Unlock()
@@ -191,8 +226,7 @@ func (h *Hub) Stop(ctx context.Context) error {
 	clear(h.conns)
 	h.connMu.Unlock()
 
-	// Close all connections concurrently. Cancel per-conn context first
-	// (unblocks Read), then close the transport.
+	// Cancel per-conn contexts (unblocks Read) then close transports.
 	for _, e := range entries {
 		e.cancel()
 	}
@@ -207,9 +241,7 @@ func (h *Hub) Stop(ctx context.Context) error {
 		}(e)
 	}
 
-	// Wait for all goroutines (readLoops + pingLoop) with deadline.
-	// conn.Close may block (adapter Write holds same mutex), so the entire
-	// wait is bounded by ctx to guarantee the caller's deadline.
+	// Wait for all goroutines (readLoops + pingLoop), bounded by ctx.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
@@ -231,7 +263,10 @@ func (h *Hub) Stop(ctx context.Context) error {
 
 // Register adds a connection to the Hub and starts reading from it.
 // The read loop uses a per-connection context that is cancelled when the
-// connection is unregistered or the Hub stops.
+// connection is unregistered or the Hub shuts down.
+//
+// The Hub must be in the running state (Start called). Register on an
+// idle, stopping, or stopped Hub returns an error and closes the conn.
 func (h *Hub) Register(conn Conn) error {
 	h.connMu.Lock()
 	s := h.state.Load()

@@ -18,7 +18,11 @@ type Conn interface {
 	Read(ctx context.Context) ([]byte, error)
 	// Write sends a text message.
 	Write(ctx context.Context, data []byte) error
-	// Close closes the connection. Implementations may perform a graceful
-	// close handshake or an immediate transport close depending on context.
+	// Close closes the connection. The contract:
+	//   - Idempotent: multiple calls return nil.
+	//   - Does NOT require a graceful WebSocket close handshake.
+	//   - Must cause any in-progress Read to return promptly.
+	//   - Must not block longer than necessary (no long mutex waits).
+	// If a graceful close is needed in the future, add CloseGracefully(ctx).
 	Close() error
 }
