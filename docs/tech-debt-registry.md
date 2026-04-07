@@ -173,6 +173,38 @@
 
 ---
 
+## 来自 PR #43: WebSocket Hub Runtime/Adapter Split
+
+来源: PR #43 `feat/websocket-split` 四轮 review
+
+### 架构
+
+| # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
+|---|------|------|------|------|-------------|
+| WS-ARCH-01 | [TECH] | OPEN | `unregisterConn` 用 `entry.conn == conn` 指针比较做身份判断；Conn 接口未约束 concrete type 可比较，不可比较类型会 panic | 当前所有 adapter 是指针接收者（安全），但 runtime 边界不应依赖 adapter 假设 | v1.1 |
+
+### 测试/回归
+
+| # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
+|---|------|------|------|------|-------------|
+| WS-T-01 | [TECH] | OPEN | 缺 Stop + external cancel 并发测试（两条路径同时竞争 shutdown CAS） | shutdown 单路径设计理论正确，但未被测试锁住 | v1.1 |
+| WS-T-02 | [TECH] | OPEN | 缺 Broadcast/Send on stopped hub 测试 | 停止后调用不 panic 但行为未被测试验证 | v1.1 |
+
+### 运维/配置
+
+| # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
+|---|------|------|------|------|-------------|
+| WS-OPS-01 | [TECH] | OPEN | Start external cancel 的 shutdownTimeout 硬编码 10s，不可通过 HubConfig 配置 | 生产环境可能需要调优 | v1.1 |
+
+### DX/可观测性
+
+| # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
+|---|------|------|------|------|-------------|
+| WS-DX-01 | [TECH] | OPEN | per-conn context 基于 context.Background()，无 tracing/correlation 信息传递到 MessageHandler | handler 无法追踪消息来源，后续接入 observability 时需改造 | v1.1 |
+| WS-DX-02 | [TECH] | OPEN | Conn 接口缺 RemoteAddr() 方法，诊断日志只能靠 opaque UUID | 连接问题排查困难 | v1.1 |
+
+---
+
 ## 统计
 
 | Phase | [TECH] | [PRODUCT] | 合计 | OPEN | RESOLVED | PARTIAL |
@@ -180,9 +212,10 @@
 | Phase 2 | 23 | 3 | 26 | 1 | 24 | 1 |
 | Phase 3 新增 | 9 | 3 | 12 | 5 | 5 | 2 |
 | Phase 4 新增 | 10 | 0 | 10 | 9 | 1 | 0 |
-| **总计** | **42** | **6** | **48** | **15** | **30** | **3** |
+| PR #43 WS | 6 | 0 | 6 | 6 | 0 | 0 |
+| **总计** | **48** | **6** | **54** | **21** | **30** | **3** |
 
-**活跃债务（OPEN + PARTIAL）**: 18 条（v1.1 处理目标）
+**活跃债务（OPEN + PARTIAL）**: 24 条（v1.1 处理目标）
 
 **Phase 4 关闭**: P3-TD-01、P3-TD-03、P3-TD-06、P3-TD-07、P3-TD-08、P3-TD-09、P4-TD-05（共 7 条）
 **Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-11（共 10 条）
