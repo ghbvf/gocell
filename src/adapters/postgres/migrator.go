@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
@@ -103,9 +104,13 @@ func (m *Migrator) Up(ctx context.Context) error {
 	return nil
 }
 
-// Down rolls back the last applied migration.
+// Down rolls back the last applied migration. If no migrations have been
+// applied (version 0), Down is a no-op and returns nil.
 func (m *Migrator) Down(ctx context.Context) error {
 	if _, err := m.provider.Down(ctx); err != nil {
+		if errors.Is(err, goose.ErrNoCurrentVersion) || errors.Is(err, goose.ErrNoNextVersion) {
+			return nil // already at version 0, idempotent no-op
+		}
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
 	return nil
