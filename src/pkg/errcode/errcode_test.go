@@ -141,8 +141,9 @@ func TestWithDetails(t *testing.T) {
 }
 
 func TestWithDetails_NilError(t *testing.T) {
-	result := WithDetails(nil, map[string]any{"key": "val"})
-	assert.Nil(t, result)
+	assert.PanicsWithValue(t, "errcode: WithDetails called with nil *Error", func() {
+		WithDetails(nil, map[string]any{"key": "val"})
+	})
 }
 
 func TestWithDetailsDDoesNotMutateOriginal(t *testing.T) {
