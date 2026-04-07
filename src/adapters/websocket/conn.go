@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -17,12 +18,16 @@ const defaultWriteTimeout = 10 * time.Second
 var _ rtws.Conn = (*Conn)(nil)
 
 // Conn wraps an nhooyr.io/websocket.Conn and implements runtime/websocket.Conn.
+//
+// Close is lock-free (nhooyr.CloseNow is internally synchronized) so it can
+// interrupt an in-flight Write immediately by closing the underlying TCP
+// connection. Write uses mu only to serialize concurrent writes.
 type Conn struct {
 	id   string
 	conn *websocket.Conn
 
-	mu     sync.Mutex
-	closed bool
+	closed atomic.Bool // set once by Close; checked by Write
+	mu     sync.Mutex  // serializes Write calls only
 }
 
 // NewConn creates a Conn wrapping an nhooyr.io/websocket connection.
@@ -42,10 +47,16 @@ func (c *Conn) Read(ctx context.Context) ([]byte, error) {
 }
 
 func (c *Conn) Write(ctx context.Context, data []byte) error {
+	if c.closed.Load() {
+		return errcode.New(ErrAdapterWSClosed, "websocket: connection is closed")
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.closed {
+	// Double-check after acquiring mu (Close may have fired between the
+	// fast-path check and the lock acquisition).
+	if c.closed.Load() {
 		return errcode.New(ErrAdapterWSClosed, "websocket: connection is closed")
 	}
 
@@ -58,13 +69,12 @@ func (c *Conn) Write(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// Close performs an immediate transport close (CloseNow). It does NOT acquire
+// mu, so it never blocks behind an in-flight Write. The underlying TCP close
+// causes any concurrent Write to fail immediately.
 func (c *Conn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
+	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	c.closed = true
 	return c.conn.CloseNow()
 }
