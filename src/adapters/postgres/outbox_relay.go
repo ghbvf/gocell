@@ -55,11 +55,12 @@ type OutboxRelay struct {
 	config RelayConfig
 
 	// mu protects lifecycle state shared by Start and Stop.
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	done    chan struct{}
-	running bool
-	wg      sync.WaitGroup
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	done      chan struct{}
+	startedCh chan struct{} // closed once Start() has published lifecycle fields
+	running   bool
+	wg        sync.WaitGroup
 }
 
 // NewOutboxRelay creates an OutboxRelay that polls from db and publishes via pub.
@@ -81,6 +82,8 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 		db:     db,
 		pub:    pub,
 		config: cfg,
+		// startedCh intentionally nil — Start() creates and closes it.
+		// Stop() treats nil as "never started" and returns immediately.
 	}
 }
 
@@ -99,8 +102,14 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 	r.running = true
 	r.cancel = cancel
 	r.done = done
+	started := make(chan struct{})
+	r.startedCh = started
 	r.wg.Add(2)
 	r.mu.Unlock()
+
+	// Signal after unlock: any Stop() that acquired the lock after us will
+	// read the same channel we are about to close.
+	close(started)
 
 	defer func() {
 		r.wg.Wait()
@@ -138,6 +147,24 @@ func (r *OutboxRelay) Start(ctx context.Context) error {
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
 func (r *OutboxRelay) Stop(ctx context.Context) error {
+	// Wait for Start() to finish publishing lifecycle fields. This prevents
+	// a race where Stop() reads nil cancel/done before Start() writes them.
+	// If Start() was never called, startedCh is nil and we return immediately
+	// (no-op, consistent with worker.Worker contract).
+	r.mu.Lock()
+	started := r.startedCh
+	r.mu.Unlock()
+
+	if started == nil {
+		return nil
+	}
+
+	select {
+	case <-started:
+	case <-ctx.Done():
+		return errcode.Wrap(ErrAdapterPGConnect, "relay stop: timed out waiting for start", ctx.Err())
+	}
+
 	r.mu.Lock()
 	cancel := r.cancel
 	done := r.done
@@ -260,10 +287,10 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 
 		const markQuery = `UPDATE outbox_entries SET published = true, published_at = now() WHERE id = $1`
 		if _, err := tx.Exec(ctx, markQuery, e.ID); err != nil {
-			slog.Error("outbox relay: mark published failed",
-				slog.String("entry_id", e.ID),
-				slog.Any("error", err),
-			)
+			// Fail-fast: abort the entire batch so the deferred rollback
+			// undoes all marks. Already-published entries will be re-delivered
+			// on next poll (at-least-once is the expected semantic).
+			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: mark published failed, aborting batch", err)
 		}
 	}
 

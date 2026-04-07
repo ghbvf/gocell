@@ -366,6 +366,51 @@ func TestOutboxRelay_Stop_SucceedsWithAmpleTimeout(t *testing.T) {
 	assert.NoError(t, startErr, "Start should return nil on graceful stop")
 }
 
+func TestOutboxRelay_StopBeforeStart_IsNoop(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	relay := NewOutboxRelay(db, pub, DefaultRelayConfig())
+
+	// Stop on a never-started relay must return nil immediately,
+	// consistent with the worker.Worker contract.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := relay.Stop(ctx)
+	assert.NoError(t, err, "Stop on never-started relay must be a no-op")
+}
+
+func TestOutboxRelay_ConcurrentStartStop_NoStaleChannel(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 10 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	// Launch Start and Stop concurrently to exercise the race window
+	// where Stop() could snapshot a stale startedCh.
+	startCtx, startCancel := context.WithCancel(context.Background())
+	defer startCancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relay.Start(startCtx)
+	}()
+
+	// Don't wait for running — call Stop immediately to hit the race window.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+
+	err := relay.Stop(stopCtx)
+	// Either Stop returns nil (completed) or nil because start hasn't run yet.
+	// It must NOT timeout — that would indicate the stale channel bug.
+	assert.NoError(t, err, "Stop must not timeout due to stale startedCh")
+
+	startCancel() // ensure Start exits
+	<-errCh
+}
+
 // --- mocks ---
 
 type mockDBTX struct {
