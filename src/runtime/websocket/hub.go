@@ -40,29 +40,27 @@ type MessageHandler func(ctx context.Context, connID string, data []byte)
 
 // Hub manages WebSocket connections and provides signal-first broadcasting.
 //
-// Lifecycle: NewHub → Start (blocks) → Stop. Start creates the internal
-// run context; Stop cancels it and drains connections. A stopped Hub
-// cannot be restarted — create a new one.
+// Lifecycle: NewHub → Start (blocks) → Stop → (optionally Start again).
+// Start and Stop may be called multiple times in sequence. Double-Start
+// without an intervening Stop returns ErrWSLifecycle.
 type Hub struct {
 	config  HubConfig
 	handler MessageHandler
 
-	mu    sync.RWMutex
-	conns map[string]Conn
+	// connMu guards conns map. wg.Add must happen under connMu to prevent
+	// a race between Register and Stop's wg.Wait.
+	connMu sync.RWMutex
+	conns  map[string]Conn
+	wg     sync.WaitGroup
 
-	// runCtx/cancel are created in Start, not NewHub, so that
-	// Stop-before-Start doesn't poison the instance.
-	runCtx context.Context
-	cancel context.CancelFunc
-
-	// stopCh is closed by Stop to unblock Start.
-	stopCh chan struct{}
-
-	wg   sync.WaitGroup
-	once sync.Once
+	// stateMu guards started, stopping, startCancel.
+	stateMu     sync.Mutex
+	started     bool
+	stopping    bool
+	startCancel context.CancelFunc
 }
 
-// NewHub creates a Hub with the given configuration and message handler.
+// NewHub creates a Hub. No background goroutines are started until Start.
 func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	if cfg.PingInterval == 0 {
 		cfg.PingInterval = defaultPingInterval
@@ -78,14 +76,23 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 		config:  cfg,
 		handler: handler,
 		conns:   make(map[string]Conn),
-		stopCh:  make(chan struct{}),
 	}
 }
 
-// Start begins the Hub's ping loop. It blocks until Stop is called or
-// ctx is cancelled, whichever comes first.
+// Start begins the Hub's ping loop. It blocks until Stop is called or ctx
+// is cancelled. Returns nil when stopped normally, ctx.Err() when the
+// caller's context expires, or ErrWSLifecycle if already started.
 func (h *Hub) Start(ctx context.Context) error {
-	h.runCtx, h.cancel = context.WithCancel(context.Background())
+	h.stateMu.Lock()
+	if h.started {
+		h.stateMu.Unlock()
+		return errcode.New(ErrWSLifecycle, "websocket: hub already started")
+	}
+	h.started = true
+	h.stopping = false
+	runCtx, cancel := context.WithCancel(ctx)
+	h.startCancel = cancel
+	h.stateMu.Unlock()
 
 	slog.Info("websocket hub: started",
 		slog.Duration("ping_interval", h.config.PingInterval),
@@ -94,41 +101,48 @@ func (h *Hub) Start(ctx context.Context) error {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.pingLoop(h.runCtx)
+		h.pingLoop(runCtx)
 	}()
 
-	// Block until either the caller cancels ctx or Stop closes stopCh.
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-h.stopCh:
+	// Block until Stop cancels runCtx or the caller's ctx expires.
+	<-runCtx.Done()
+
+	// Distinguish Stop (normal) from external cancellation.
+	h.stateMu.Lock()
+	stopped := h.stopping
+	h.stateMu.Unlock()
+
+	if stopped {
 		return nil
 	}
+	return ctx.Err()
 }
 
-// Stop gracefully shuts down the Hub. It cancels all connection goroutines,
-// closes all connections, then waits for goroutines to exit. The provided
-// ctx bounds the wait time — if it expires, Stop returns ctx.Err().
+// Stop gracefully shuts down the Hub. It rejects new connections, cancels
+// the ping loop, closes all connections (breaking readLoops), and waits
+// for goroutines to exit. The provided ctx bounds the wait time.
 //
-// Stop also unblocks Start. A stopped Hub cannot be restarted.
+// After Stop returns, the Hub may be Start-ed again.
 func (h *Hub) Stop(ctx context.Context) error {
-	h.once.Do(func() {
-		// Cancel runCtx (if Start was called).
-		if h.cancel != nil {
-			h.cancel()
-		}
-		// Unblock Start.
-		close(h.stopCh)
-	})
+	h.stateMu.Lock()
+	h.stopping = true
+	cancel := h.startCancel
+	h.startCancel = nil
+	h.stateMu.Unlock()
 
-	// Close all connections so readLoop goroutines unblock.
-	h.mu.Lock()
+	// Cancel the run context (stops ping loop, unblocks Start).
+	if cancel != nil {
+		cancel()
+	}
+
+	// Drain and close all connections under lock.
+	h.connMu.Lock()
 	conns := make([]Conn, 0, len(h.conns))
 	for id, c := range h.conns {
 		conns = append(conns, c)
 		delete(h.conns, id)
 	}
-	h.mu.Unlock()
+	h.connMu.Unlock()
 
 	for _, c := range conns {
 		if err := c.Close(); err != nil {
@@ -139,51 +153,73 @@ func (h *Hub) Stop(ctx context.Context) error {
 		}
 	}
 
-	// Wait for goroutines with a deadline.
+	// Wait for goroutines (readLoops + pingLoop) with deadline.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
 		close(done)
 	}()
 
+	var err error
 	select {
 	case <-done:
 		slog.Info("websocket hub: stopped")
-		return nil
 	case <-ctx.Done():
 		slog.Warn("websocket hub: stop timed out")
-		return ctx.Err()
+		err = ctx.Err()
 	}
+
+	// Reset state so Hub can be restarted.
+	h.stateMu.Lock()
+	h.started = false
+	h.stopping = false
+	h.stateMu.Unlock()
+
+	return err
 }
 
 // Register adds a connection to the Hub and starts reading from it.
-// The read loop runs under the Hub's internal context (created in Start),
-// so the connection outlives the HTTP handler that created it.
-func (h *Hub) Register(conn Conn) {
-	h.mu.Lock()
+// The read loop does not depend on any context — it exits only when
+// conn.Close() causes Read to return an error (triggered by Stop or
+// Unregister). Returns ErrWSLifecycle if the Hub is shutting down.
+func (h *Hub) Register(conn Conn) error {
+	h.stateMu.Lock()
+	stopping := h.stopping
+	h.stateMu.Unlock()
+
+	if stopping {
+		_ = conn.Close()
+		return errcode.New(ErrWSLifecycle, "websocket: hub is stopping, connection rejected")
+	}
+
+	// wg.Add and map write under the same lock to prevent a race with
+	// Stop's drain-then-wg.Wait sequence.
+	h.connMu.Lock()
+	h.wg.Add(1)
 	h.conns[conn.ID()] = conn
-	h.mu.Unlock()
+	h.connMu.Unlock()
 
 	slog.Info("websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
 	)
 
-	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		h.readLoop(h.runCtx, conn)
+		h.readLoop(conn)
 		h.Unregister(conn.ID())
 	}()
+
+	return nil
 }
 
-// Unregister removes a connection from the Hub.
+// Unregister removes a connection from the Hub and closes it.
 func (h *Hub) Unregister(connID string) {
-	h.mu.Lock()
+	h.connMu.Lock()
 	conn, ok := h.conns[connID]
 	if ok {
 		delete(h.conns, connID)
 	}
-	h.mu.Unlock()
+	h.connMu.Unlock()
 
 	if ok {
 		if err := conn.Close(); err != nil {
@@ -198,14 +234,14 @@ func (h *Hub) Unregister(connID string) {
 	}
 }
 
-// Broadcast sends a text message to all connected clients (signal-first mode).
+// Broadcast sends a text message to all connected clients.
 func (h *Hub) Broadcast(ctx context.Context, data []byte) {
-	h.mu.RLock()
+	h.connMu.RLock()
 	conns := make([]Conn, 0, len(h.conns))
 	for _, c := range h.conns {
 		conns = append(conns, c)
 	}
-	h.mu.RUnlock()
+	h.connMu.RUnlock()
 
 	for _, c := range conns {
 		if err := c.Write(ctx, data); err != nil {
@@ -219,9 +255,9 @@ func (h *Hub) Broadcast(ctx context.Context, data []byte) {
 
 // Send sends a text message to a specific connection.
 func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
-	h.mu.RLock()
+	h.connMu.RLock()
 	conn, ok := h.conns[connID]
-	h.mu.RUnlock()
+	h.connMu.RUnlock()
 
 	if !ok {
 		return errcode.New(ErrWSConnNotFound,
@@ -231,20 +267,21 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	return conn.Write(ctx, data)
 }
 
-// Config returns the Hub's configuration. Adapters use this to read
-// settings like ReadLimit when creating connections.
+// Config returns the Hub's configuration.
 func (h *Hub) Config() HubConfig { return h.config }
 
 // ConnCount returns the number of active connections.
 func (h *Hub) ConnCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.connMu.RLock()
+	defer h.connMu.RUnlock()
 	return len(h.conns)
 }
 
-func (h *Hub) readLoop(ctx context.Context, conn Conn) {
+// readLoop reads messages until conn.Close() breaks the Read call.
+// No context is used — the loop exits solely on I/O error from Close.
+func (h *Hub) readLoop(conn Conn) {
 	for {
-		data, err := conn.Read(ctx)
+		data, err := conn.Read(context.Background())
 		if err != nil {
 			slog.Debug("websocket hub: read loop ended",
 				slog.String("conn_id", conn.ID()),
@@ -253,7 +290,7 @@ func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 			return
 		}
 		if h.handler != nil {
-			h.handler(ctx, conn.ID(), data)
+			h.handler(context.Background(), conn.ID(), data)
 		}
 	}
 }
@@ -273,12 +310,12 @@ func (h *Hub) pingLoop(ctx context.Context) {
 }
 
 func (h *Hub) pingAll(ctx context.Context) {
-	h.mu.RLock()
+	h.connMu.RLock()
 	conns := make(map[string]Conn, len(h.conns))
 	for k, v := range h.conns {
 		conns[k] = v
 	}
-	h.mu.RUnlock()
+	h.connMu.RUnlock()
 
 	for connID, c := range conns {
 		pingCtx, cancel := context.WithTimeout(ctx, h.config.PingTimeout)
