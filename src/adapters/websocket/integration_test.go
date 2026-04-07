@@ -54,6 +54,7 @@ func dialIntegrationWS(t *testing.T, serverURL string) *websocket.Conn {
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.CloseNow() })
 	return conn
 }
 
@@ -75,7 +76,7 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 	hub, server := setupIntegrationHub(t, handler)
 
 	conn := dialIntegrationWS(t, server.URL)
-	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+	// cleanup via dialIntegrationWS t.Cleanup
 
 	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, 2*time.Second, 10*time.Millisecond)
 
@@ -118,7 +119,7 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 	conns := make([]*websocket.Conn, numClients)
 	for i := range conns {
 		conns[i] = dialIntegrationWS(t, server.URL)
-		defer func(c *websocket.Conn) { _ = c.Close(websocket.StatusNormalClosure, "done") }(conns[i])
+		// cleanup via dialIntegrationWS t.Cleanup
 	}
 
 	require.Eventually(t, func() bool {

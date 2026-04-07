@@ -77,6 +77,12 @@ func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	require.NoError(t, err)
+
+	// Always CloseNow on cleanup. Graceful Close may fail if server
+	// already closed the connection, leaving nhooyr's timeoutLoop alive.
+	// CloseNow tears down the transport unconditionally.
+	t.Cleanup(func() { _ = conn.CloseNow() })
+
 	return conn
 }
 
@@ -85,11 +91,7 @@ func TestHub_RegisterUnregister(t *testing.T) {
 	defer server.Close()
 
 	conn := dialWS(t, server.URL)
-	defer func() {
-		if err := conn.Close(websocket.StatusNormalClosure, "done"); err != nil {
-			t.Logf("close error: %v", err)
-		}
-	}()
+	_ = conn // cleanup via dialWS t.Cleanup
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 1
@@ -106,18 +108,7 @@ func TestHub_Broadcast(t *testing.T) {
 	defer server.Close()
 
 	conn1 := dialWS(t, server.URL)
-	defer func() {
-		if err := conn1.Close(websocket.StatusNormalClosure, "done"); err != nil {
-			t.Logf("close error: %v", err)
-		}
-	}()
-
 	conn2 := dialWS(t, server.URL)
-	defer func() {
-		if err := conn2.Close(websocket.StatusNormalClosure, "done"); err != nil {
-			t.Logf("close error: %v", err)
-		}
-	}()
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 2
@@ -173,11 +164,6 @@ func TestHub_MessageHandler(t *testing.T) {
 	defer server.Close()
 
 	conn := dialWS(t, server.URL)
-	defer func() {
-		if err := conn.Close(websocket.StatusNormalClosure, "done"); err != nil {
-			t.Logf("close error: %v", err)
-		}
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -213,7 +199,6 @@ func TestHub_Send(t *testing.T) {
 	defer server.Close()
 
 	conn := dialWS(t, server.URL)
-	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 
 	// Send a message from client so handler captures connID.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
