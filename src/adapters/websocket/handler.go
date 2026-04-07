@@ -1,13 +1,14 @@
 package websocket
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 
 	"nhooyr.io/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/google/uuid"
+	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
 
 // UpgradeConfig configures the WebSocket upgrade handler.
@@ -18,19 +19,26 @@ type UpgradeConfig struct {
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub.
-func UpgradeHandler(hub *Hub, cfg UpgradeConfig) http.Handler {
+// WebSocket and registers them with the Hub. If the Hub is not running,
+// the handler returns 503 Service Unavailable without performing the
+// WebSocket handshake.
+func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hub.IsRunning() {
+			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
+			return
+		}
+
 		opts := &websocket.AcceptOptions{}
 
 		if len(cfg.AllowedOrigins) > 0 {
 			opts.OriginPatterns = cfg.AllowedOrigins
 		} else {
-			// Development mode: skip origin verification.
 			opts.InsecureSkipVerify = true
+			slog.Warn("websocket: InsecureSkipVerify enabled, all origins accepted — not suitable for production")
 		}
 
-		conn, err := websocket.Accept(w, r, opts)
+		wsConn, err := websocket.Accept(w, r, opts)
 		if err != nil {
 			slog.Error("websocket: upgrade failed",
 				slog.Any("error", err),
@@ -41,10 +49,18 @@ func UpgradeHandler(hub *Hub, cfg UpgradeConfig) http.Handler {
 			return
 		}
 
-		// Use a detached context for the WebSocket lifecycle. The HTTP
-		// request context is cancelled when this handler returns, but the
-		// WebSocket connection outlives the HTTP handler.
-		connID := hub.Register(context.Background(), conn)
+		wsConn.SetReadLimit(hub.Config().ReadLimit)
+
+		connID := "ws-" + uuid.NewString()
+		conn := NewConn(connID, wsConn)
+
+		if regErr := hub.Register(conn); regErr != nil {
+			slog.Warn("websocket: register rejected",
+				slog.Any("error", regErr),
+				slog.String("remote_addr", r.RemoteAddr),
+			)
+			return
+		}
 		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", r.RemoteAddr),

@@ -27,6 +27,21 @@
 
 > 来源: `docs/reviews/202604061401-pr39-six-role/PR39-postgres-outbox-followup.md`
 
+### 0-B2: Outbox Relay 三阶段重写（1.5d）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h | TODO |
+| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h | TODO |
+| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h | TODO |
+| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h | TODO |
+| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h | TODO |
+| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h | TODO |
+| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h | TODO |
+| RL-08 | 测试覆盖（8 个场景） | 2h | TODO |
+
+> 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
+
 ### 0-C: 依赖替换 Phase 1 — 快速收益（1d）
 
 | # | 任务 | 预估 | 状态 |
@@ -133,7 +148,7 @@
 | R1D-3 rabbitmq | ✅ 已审 + 已修 (PR#38) |
 | R1D-4 oidc | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
 | R1D-5 s3 | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
-| R1D-6 websocket | ✅ 已审（独立 review，含 4 P1 + 2 P2，见 `docs/reviews/202604060830-R0/`） |
+| R1D-6 websocket | ✅ 已审 + 已修 (PR#43) — 6 条 tech debt 记入 WS-* |
 | R1E cells | 待审 |
 | R1F+G delivery + YAML | 待审 |
 | R2 数据流合并 | 待审 |
@@ -277,6 +292,22 @@
 | runtime/retry | retry/backoff | 已在 ConsumerBase 中实现 | P3 |
 | runtime/tls | TLS/mTLS | 无实际需求验证 | P3 |
 | runtime/keymanager | 密钥管理 | 已在 auth/keys.go 中部分实现 | P3 |
+
+### adapters/ 与 runtime/ 分层重整
+
+> 来源: 2026-04-07 依赖替换期间分析。删除 adapters/s3 + adapters/oidc（零 import）后，
+> 发现剩余 adapter 混合了两类职责：纯 SDK 胶水 vs 领域/框架逻辑。
+
+| # | 当前位置 | 问题 | 方向 |
+|---|---------|------|------|
+| AL-01 | `adapters/postgres/outbox_relay.go` | 轮询调度逻辑属于 runtime，只有 SQL 执行属于 adapter | 拆出 `runtime/outbox/relay.go`，adapter 只提供 store 接口实现 |
+| AL-02 | `adapters/redis/distlock.go` | 续期 goroutine + TTL 策略属于 runtime | 拆出通用 distlock 接口到 runtime，adapter 只做 Redis SET NX/Eval |
+| AL-03a | `adapters/websocket/hub.go` | Hub（广播/连接管理/Start/Stop）是框架调度逻辑，不是 SDK 胶水 | ✅ PR#43: Hub 上提到 `runtime/websocket/`，定义 `Conn` 接口；adapter 只实现 nhooyr 绑定 |
+| AL-03b | `adapters/websocket/hub.go` readLoop/pingLoop/pingAll | 循环调度与 nhooyr API 调用混在一起 | ✅ PR#43: 调度逻辑随 Hub 搬到 runtime/；adapter 的 nhooyrConn 实现 Conn 接口 |
+| AL-04 | `runtime/auth` | 直接 import golang-jwt，按规则应通过接口解耦 | 评估是否值得拆（jwt 是事实标准，拆可能过度设计） |
+| AL-05 | `runtime/http` | 直接 import chi | 已通过 RouteMux 接口解耦，可接受 |
+
+**优先级:** AL-03 正在 PR#43 实施，其余 P3（等 0-B/0-D 完成后评估）
 
 ### Cell 接口审计
 
