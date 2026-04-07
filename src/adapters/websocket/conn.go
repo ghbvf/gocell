@@ -66,5 +66,5 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	c.closed = true
-	return c.conn.Close(websocket.StatusNormalClosure, "closing")
+	return c.conn.CloseNow()
 }
