@@ -140,6 +140,11 @@ func TestWithDetails(t *testing.T) {
 	}
 }
 
+func TestWithDetails_NilError(t *testing.T) {
+	result := WithDetails(nil, map[string]any{"key": "val"})
+	assert.Nil(t, result)
+}
+
 func TestWithDetailsDDoesNotMutateOriginal(t *testing.T) {
 	original := WithDetails(New(ErrAssemblyNotFound, "not found"), map[string]any{"key": "val"})
 	_ = WithDetails(original, map[string]any{"extra": "data"})
