@@ -4,6 +4,11 @@ import "context"
 
 // Conn abstracts a WebSocket connection. Implementations live in
 // adapters/ (e.g., adapters/websocket for nhooyr.io/websocket).
+//
+// Implementations must be safe for concurrent use:
+//   - Read is called from a single goroutine per connection.
+//   - Write, Ping, and Close may be called concurrently with Read.
+//   - Close must cause any in-progress Read to return an error.
 type Conn interface {
 	// ID returns the unique connection identifier.
 	ID() string

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -76,18 +75,21 @@ func (f *fakeConn) Read(ctx context.Context) ([]byte, error) {
 
 func (f *fakeConn) Write(_ context.Context, data []byte) error {
 	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return errors.New("closed")
+	}
+	delay := f.writeDelay
+	f.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
 		return errors.New("closed")
-	}
-	if f.writeDelay > 0 {
-		delay := f.writeDelay
-		f.mu.Unlock()
-		time.Sleep(delay)
-		f.mu.Lock()
-		if f.closed {
-			return errors.New("closed")
-		}
 	}
 	f.writes = append(f.writes, append([]byte(nil), data...))
 	return nil
@@ -355,6 +357,50 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestHub_RegisterDuplicateID(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(), nil)
+
+	connA := newFakeConn("dup")
+	require.NoError(t, hub.Register(connA))
+	<-connA.readyCh
+	assert.Equal(t, 1, hub.ConnCount())
+
+	// Register with same ID — old conn should be evicted.
+	connB := newFakeConn("dup")
+	require.NoError(t, hub.Register(connB))
+	<-connB.readyCh
+
+	assert.Equal(t, 1, hub.ConnCount(), "map should have exactly 1 entry")
+	assert.True(t, connA.isClosed(), "old conn should be closed")
+
+	// Send to "dup" should reach connB, not connA.
+	require.NoError(t, hub.Send(context.Background(), "dup", []byte("hello")))
+	assert.Equal(t, [][]byte{[]byte("hello")}, connB.getWrites())
+	assert.Empty(t, connA.getWrites())
+}
+
+func TestHub_MaxConnections(t *testing.T) {
+	cfg := DefaultHubConfig()
+	cfg.MaxConnections = 2
+	hub := startHub(t, cfg, nil)
+
+	c1 := newFakeConn("c1")
+	c2 := newFakeConn("c2")
+	require.NoError(t, hub.Register(c1))
+	require.NoError(t, hub.Register(c2))
+	<-c1.readyCh
+	<-c2.readyCh
+	assert.Equal(t, 2, hub.ConnCount())
+
+	// Third connection should be rejected.
+	c3 := newFakeConn("c3")
+	err := hub.Register(c3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max connections")
+	assert.True(t, c3.isClosed(), "rejected conn should be closed")
+	assert.Equal(t, 2, hub.ConnCount())
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency Tests
 // ---------------------------------------------------------------------------
@@ -529,9 +575,8 @@ func TestHub_PingMissThreshold(t *testing.T) {
 	<-conn.readyCh
 
 	require.Eventually(t, func() bool {
-		return hub.ConnCount() == 0
+		return hub.ConnCount() == 0 && conn.isClosed()
 	}, 2*time.Second, 10*time.Millisecond)
-	assert.True(t, conn.isClosed())
 }
 
 func TestHub_PingMissReset(t *testing.T) {
@@ -652,6 +697,3 @@ func (s *stuckConn) Close() error {
 // Compile-time interface checks.
 var _ Conn = (*fakeConn)(nil)
 var _ Conn = (*stuckConn)(nil)
-
-// Suppress unused import warnings.
-var _ atomic.Int32

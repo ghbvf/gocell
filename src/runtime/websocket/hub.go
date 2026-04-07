@@ -37,6 +37,9 @@ type HubConfig struct {
 	// PingMissMax is the number of consecutive ping failures before a
 	// connection is evicted. Default: 2.
 	PingMissMax int
+	// MaxConnections is the maximum number of concurrent connections.
+	// 0 means unlimited. Default: 0.
+	MaxConnections int
 }
 
 // DefaultHubConfig returns a HubConfig with sensible defaults.
@@ -230,11 +233,33 @@ func (h *Hub) Register(conn Conn) error {
 		return errcode.New(ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
 	}
 
+	if h.config.MaxConnections > 0 && len(h.conns) >= h.config.MaxConnections {
+		h.connMu.Unlock()
+		_ = conn.Close()
+		return errcode.New(ErrWSMaxConns, "websocket: max connections reached")
+	}
+
+	// Evict existing entry with same ID to prevent context leak.
+	var evicted *connEntry
+	if old, ok := h.conns[conn.ID()]; ok {
+		delete(h.conns, conn.ID())
+		evicted = old
+	}
+
 	connCtx, cancel := context.WithCancel(context.Background())
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry
 	h.wg.Add(1)
 	h.connMu.Unlock()
+
+	// Close evicted conn outside lock.
+	if evicted != nil {
+		evicted.cancel()
+		_ = evicted.conn.Close()
+		slog.Warn("websocket hub: evicted duplicate conn",
+			slog.String("conn_id", conn.ID()),
+		)
+	}
 
 	slog.Info("websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
@@ -243,13 +268,42 @@ func (h *Hub) Register(conn Conn) error {
 	go func() {
 		defer h.wg.Done()
 		h.readLoop(connCtx, conn)
-		h.Unregister(conn.ID())
+		h.unregisterConn(conn)
 	}()
 
 	return nil
 }
 
-// Unregister removes a connection from the Hub and closes it.
+// unregisterConn is called by the readLoop goroutine. It only removes the
+// entry if the conn pointer matches, preventing an evicted readLoop from
+// deleting a replacement entry with the same ID.
+func (h *Hub) unregisterConn(conn Conn) {
+	h.connMu.Lock()
+	entry, ok := h.conns[conn.ID()]
+	if ok && entry.conn == conn {
+		delete(h.conns, conn.ID())
+	} else {
+		ok = false
+	}
+	h.connMu.Unlock()
+
+	if ok {
+		entry.cancel()
+		if err := entry.conn.Close(); err != nil {
+			slog.Debug("websocket hub: close on unregister",
+				slog.String("conn_id", conn.ID()),
+				slog.Any("error", err),
+			)
+		}
+		slog.Info("websocket hub: connection unregistered",
+			slog.String("conn_id", conn.ID()),
+		)
+	}
+}
+
+// Unregister removes a connection from the Hub by ID and closes it.
+// This is a force-remove: it always deletes the entry regardless of which
+// conn object is registered.
 func (h *Hub) Unregister(connID string) {
 	h.connMu.Lock()
 	entry, ok := h.conns[connID]

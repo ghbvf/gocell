@@ -19,4 +19,8 @@ const (
 	// ErrWSHubNotRunning indicates Register was called on a non-running Hub
 	// (idle or stopped).
 	ErrWSHubNotRunning errcode.Code = "ERR_WS_HUB_NOT_RUNNING"
+
+	// ErrWSMaxConns indicates Register was rejected because the Hub has
+	// reached its MaxConnections limit.
+	ErrWSMaxConns errcode.Code = "ERR_WS_MAX_CONNS"
 )
