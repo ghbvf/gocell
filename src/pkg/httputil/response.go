@@ -96,7 +96,7 @@ func mapCodeToStatus(code errcode.Code) int {
 		return http.StatusNotFound
 	case strings.Contains(c, "VALIDATION") || strings.Contains(c, "INVALID_INPUT"):
 		return http.StatusBadRequest
-	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN") || strings.Contains(c, "TOKEN_EXPIRED") || strings.Contains(c, "KEY_INVALID"):
+	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN") || strings.Contains(c, "TOKEN_INVALID") || strings.Contains(c, "TOKEN_EXPIRED") || strings.Contains(c, "KEY_INVALID"):
 		return http.StatusUnauthorized
 	case strings.Contains(c, "FORBIDDEN"):
 		return http.StatusForbidden

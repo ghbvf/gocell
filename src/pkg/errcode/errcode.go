@@ -82,7 +82,11 @@ func Wrap(code Code, message string, cause error) *Error {
 // WithDetails returns a shallow copy of err with the provided details merged in.
 // If err.Details is nil a new map is allocated; existing keys are preserved
 // unless overwritten by the supplied details.
+// If err is nil, nil is returned.
 func WithDetails(err *Error, details map[string]any) *Error {
+	if err == nil {
+		return nil
+	}
 	merged := make(map[string]any, len(err.Details)+len(details))
 	for k, v := range err.Details {
 		merged[k] = v
