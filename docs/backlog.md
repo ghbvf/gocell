@@ -278,6 +278,22 @@
 | runtime/tls | TLS/mTLS | 无实际需求验证 | P3 |
 | runtime/keymanager | 密钥管理 | 已在 auth/keys.go 中部分实现 | P3 |
 
+### adapters/ 与 runtime/ 分层重整
+
+> 来源: 2026-04-07 依赖替换期间分析。删除 adapters/s3 + adapters/oidc（零 import）后，
+> 发现剩余 adapter 混合了两类职责：纯 SDK 胶水 vs 领域/框架逻辑。
+
+| # | 当前位置 | 问题 | 方向 |
+|---|---------|------|------|
+| AL-01 | `adapters/postgres/outbox_relay.go` | 轮询调度逻辑属于 runtime，只有 SQL 执行属于 adapter | 拆出 `runtime/outbox/relay.go`，adapter 只提供 store 接口实现 |
+| AL-02 | `adapters/redis/distlock.go` | 续期 goroutine + TTL 策略属于 runtime | 拆出通用 distlock 接口到 runtime，adapter 只做 Redis SET NX/Eval |
+| AL-03a | `adapters/websocket/hub.go` | Hub（广播/连接管理/Start/Stop）是框架调度逻辑，不是 SDK 胶水 | ✅ PR#43: Hub 上提到 `runtime/websocket/`，定义 `Conn` 接口；adapter 只实现 nhooyr 绑定 |
+| AL-03b | `adapters/websocket/hub.go` readLoop/pingLoop/pingAll | 循环调度与 nhooyr API 调用混在一起 | ✅ PR#43: 调度逻辑随 Hub 搬到 runtime/；adapter 的 nhooyrConn 实现 Conn 接口 |
+| AL-04 | `runtime/auth` | 直接 import golang-jwt，按规则应通过接口解耦 | 评估是否值得拆（jwt 是事实标准，拆可能过度设计） |
+| AL-05 | `runtime/http` | 直接 import chi | 已通过 RouteMux 接口解耦，可接受 |
+
+**优先级:** AL-03 正在 PR#43 实施，其余 P3（等 0-B/0-D 完成后评估）
+
 ### Cell 接口审计
 
 | 问题 | 说明 |

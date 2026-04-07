@@ -6,73 +6,27 @@ import (
 	"sync"
 	"time"
 
-	"nhooyr.io/websocket"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 )
 
 const (
-	// defaultPingInterval is the default interval between ping frames.
 	defaultPingInterval = 30 * time.Second
-	// defaultWriteTimeout is the default timeout for write operations.
-	defaultWriteTimeout = 10 * time.Second
-	// defaultReadLimit is the default maximum message size in bytes.
-	defaultReadLimit = 64 * 1024 // 64 KB
+	defaultPingTimeout  = 5 * time.Second
 )
-
-// Conn wraps a WebSocket connection with metadata.
-type Conn struct {
-	ID   string
-	conn *websocket.Conn
-
-	mu     sync.Mutex
-	closed bool
-}
-
-// Write sends a text message to the connection.
-func (c *Conn) Write(ctx context.Context, data []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
-		return errcode.New(ErrAdapterWSClosed, "websocket: connection is closed")
-	}
-
-	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
-	defer cancel()
-
-	if err := c.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
-		return errcode.Wrap(ErrAdapterWSWrite, "websocket: write failed", err)
-	}
-	return nil
-}
-
-// Close closes the WebSocket connection gracefully.
-func (c *Conn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.closed {
-		return nil
-	}
-	c.closed = true
-	return c.conn.Close(websocket.StatusNormalClosure, "closing")
-}
 
 // HubConfig configures the Hub.
 type HubConfig struct {
-	// PingInterval is the interval between ping frames. Default: 30s.
+	// PingInterval is the interval between ping sweeps. Default: 30s.
 	PingInterval time.Duration
-	// ReadLimit is the maximum message size in bytes. Default: 64KB.
-	ReadLimit int64
+	// PingTimeout is the deadline for a single ping. Default: 5s.
+	PingTimeout time.Duration
 }
 
 // DefaultHubConfig returns a HubConfig with sensible defaults.
 func DefaultHubConfig() HubConfig {
 	return HubConfig{
 		PingInterval: defaultPingInterval,
-		ReadLimit:    defaultReadLimit,
+		PingTimeout:  defaultPingTimeout,
 	}
 }
 
@@ -80,14 +34,12 @@ func DefaultHubConfig() HubConfig {
 type MessageHandler func(ctx context.Context, connID string, data []byte)
 
 // Hub manages WebSocket connections and provides signal-first broadcasting.
-// In signal-first mode, the Hub pushes messages to all connected clients
-// rather than waiting for clients to pull.
 type Hub struct {
 	config  HubConfig
 	handler MessageHandler
 
 	mu    sync.RWMutex
-	conns map[string]*Conn
+	conns map[string]Conn
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -99,14 +51,13 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	if cfg.PingInterval == 0 {
 		cfg.PingInterval = defaultPingInterval
 	}
-	if cfg.ReadLimit == 0 {
-		cfg.ReadLimit = defaultReadLimit
+	if cfg.PingTimeout == 0 {
+		cfg.PingTimeout = defaultPingTimeout
 	}
-
 	return &Hub{
 		config:  cfg,
 		handler: handler,
-		conns:   make(map[string]*Conn),
+		conns:   make(map[string]Conn),
 	}
 }
 
@@ -155,33 +106,22 @@ func (h *Hub) Stop(_ context.Context) error {
 	return nil
 }
 
-// Register adds a WebSocket connection to the Hub and starts reading from it.
-func (h *Hub) Register(ctx context.Context, wsConn *websocket.Conn) string {
-	connID := "ws" + "-" + uuid.NewString()
-	conn := &Conn{
-		ID:   connID,
-		conn: wsConn,
-	}
-
-	wsConn.SetReadLimit(h.config.ReadLimit)
-
+// Register adds a connection to the Hub and starts reading from it.
+func (h *Hub) Register(ctx context.Context, conn Conn) {
 	h.mu.Lock()
-	h.conns[connID] = conn
+	h.conns[conn.ID()] = conn
 	h.mu.Unlock()
 
 	slog.Info("websocket hub: connection registered",
-		slog.String("conn_id", connID),
+		slog.String("conn_id", conn.ID()),
 	)
 
-	// Start reading in a goroutine.
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
 		h.readLoop(ctx, conn)
-		h.Unregister(connID)
+		h.Unregister(conn.ID())
 	}()
-
-	return connID
 }
 
 // Unregister removes a connection from the Hub.
@@ -209,7 +149,7 @@ func (h *Hub) Unregister(connID string) {
 // Broadcast sends a text message to all connected clients (signal-first mode).
 func (h *Hub) Broadcast(ctx context.Context, data []byte) {
 	h.mu.RLock()
-	conns := make([]*Conn, 0, len(h.conns))
+	conns := make([]Conn, 0, len(h.conns))
 	for _, c := range h.conns {
 		conns = append(conns, c)
 	}
@@ -218,7 +158,7 @@ func (h *Hub) Broadcast(ctx context.Context, data []byte) {
 	for _, c := range conns {
 		if err := c.Write(ctx, data); err != nil {
 			slog.Warn("websocket hub: broadcast write failed",
-				slog.String("conn_id", c.ID),
+				slog.String("conn_id", c.ID()),
 				slog.Any("error", err),
 			)
 		}
@@ -232,7 +172,7 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	h.mu.RUnlock()
 
 	if !ok {
-		return errcode.New(ErrAdapterWSClosed,
+		return errcode.New(ErrWSConnNotFound,
 			"websocket: connection not found: "+connID)
 	}
 
@@ -246,26 +186,22 @@ func (h *Hub) ConnCount() int {
 	return len(h.conns)
 }
 
-// readLoop reads messages from a connection and dispatches to the handler.
-func (h *Hub) readLoop(ctx context.Context, conn *Conn) {
+func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 	for {
-		_, data, err := conn.conn.Read(ctx)
+		data, err := conn.Read(ctx)
 		if err != nil {
-			// Normal closure or context cancel are expected.
 			slog.Debug("websocket hub: read loop ended",
-				slog.String("conn_id", conn.ID),
+				slog.String("conn_id", conn.ID()),
 				slog.Any("error", err),
 			)
 			return
 		}
-
 		if h.handler != nil {
-			h.handler(ctx, conn.ID, data)
+			h.handler(ctx, conn.ID(), data)
 		}
 	}
 }
 
-// pingLoop periodically pings all connections to detect stale ones.
 func (h *Hub) pingLoop(ctx context.Context) {
 	ticker := time.NewTicker(h.config.PingInterval)
 	defer ticker.Stop()
@@ -280,18 +216,17 @@ func (h *Hub) pingLoop(ctx context.Context) {
 	}
 }
 
-// pingAll pings every connection and removes unresponsive ones.
 func (h *Hub) pingAll(ctx context.Context) {
 	h.mu.RLock()
-	conns := make(map[string]*Conn, len(h.conns))
+	conns := make(map[string]Conn, len(h.conns))
 	for k, v := range h.conns {
 		conns[k] = v
 	}
 	h.mu.RUnlock()
 
 	for connID, c := range conns {
-		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		if err := c.conn.Ping(pingCtx); err != nil {
+		pingCtx, cancel := context.WithTimeout(ctx, h.config.PingTimeout)
+		if err := c.Ping(pingCtx); err != nil {
 			slog.Warn("websocket hub: ping failed, removing connection",
 				slog.String("conn_id", connID),
 				slog.Any("error", err),

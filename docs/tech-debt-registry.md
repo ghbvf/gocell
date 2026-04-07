@@ -153,6 +153,7 @@
 |---|------|------|------|------|-------------|
 | P4-TD-06 | [TECH] | OPEN | CI 的 example validation 步骤使用 `\|\| true`，验证错误被静默吞咽 | example 元数据 CI gate 形式化，无实际阻断效果 | v1.1 |
 | P4-TD-07 | [TECH] | OPEN | 3 个示例 docker-compose.yml 缺少 start_period（rabbitmq healthcheck）；使用已废弃的 version: "3.9" 键 | 冷启动时 rabbitmq healthcheck 可能超时；docker compose v2 警告 | v1.1 |
+| P4-TD-10 | [TECH] | OPEN | `runtime/observability/metrics.Middleware` 直接将 `r.URL.Path` 作为 `path` label 传给 Collector，Prometheus adapter 会把参数化路由展开成高基数时间序列 | `/users/123`、`/orders/42` 等不同资源 ID 会持续扩张 metrics cardinality，增加 scrape / storage 压力，极端情况下可能导致 Prometheus 内存问题 | v1.1 |
 
 ### DX/可维护性
 
@@ -177,12 +178,12 @@
 |-------|--------|-----------|------|------|----------|---------|
 | Phase 2 | 23 | 3 | 26 | 1 | 24 | 1 |
 | Phase 3 新增 | 9 | 3 | 12 | 5 | 5 | 2 |
-| Phase 4 新增 | 8 | 0 | 8 | 7 | 1 | 0 |
-| **总计** | **40** | **6** | **46** | **13** | **30** | **3** |
+| Phase 4 新增 | 9 | 0 | 9 | 8 | 1 | 0 |
+| **总计** | **41** | **6** | **47** | **14** | **30** | **3** |
 
-**活跃债务（OPEN + PARTIAL）**: 16 条（v1.1 处理目标）
+**活跃债务（OPEN + PARTIAL）**: 17 条（v1.1 处理目标）
 
 **Phase 4 关闭**: P3-TD-01、P3-TD-03、P3-TD-06、P3-TD-07、P3-TD-08、P3-TD-09、P4-TD-05（共 7 条）
-**Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-09（共 8 条）
+**Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-10（共 9 条）
 
 **注**: 全局 registry 仅追踪跨 Phase 持续影响的条目（架构/安全/测试层面）。编码规范/DX 细节项在 Phase 执行中修复时不重复录入。Phase 3 PARTIAL 项（P3-TD-02、P3-TD-05）在 Phase 4 仍为 PARTIAL，目标 v1.1 完全关闭。

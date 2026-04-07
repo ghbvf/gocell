@@ -1,6 +1,6 @@
 //go:build integration
 
-package websocket
+package websocket_test
 
 import (
 	"testing"
