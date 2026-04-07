@@ -17,8 +17,6 @@ type UpgradeConfig struct {
 	// AllowedOrigins is a list of allowed origin patterns for the upgrade.
 	// An empty list allows all origins (insecure, for development only).
 	AllowedOrigins []string
-	// ReadLimit is the maximum message size in bytes. Default: 64KB.
-	ReadLimit int64
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
@@ -44,11 +42,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			return
 		}
 
-		if cfg.ReadLimit > 0 {
-			wsConn.SetReadLimit(cfg.ReadLimit)
-		} else {
-			wsConn.SetReadLimit(64 * 1024) // 64KB default
-		}
+		wsConn.SetReadLimit(hub.Config().ReadLimit)
 
 		connID := "ws-" + uuid.NewString()
 		conn := NewConn(connID, wsConn)

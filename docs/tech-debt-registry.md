@@ -146,6 +146,7 @@
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
 | P4-TD-05 | [TECH] | RESOLVED | 无 outbox 全链路集成测试（FR-6.5） | Phase 4 实现 TestIntegration_OutboxFullChain（postgres→relay→rabbitmq→idempotency）| Phase 4 ✓ |
+| P4-TD-11 | [TECH] | OPEN | `adapters/postgres` 缺少 `Migrator.Down()` 在 version 0 下重复调用仍返回 nil 的回归测试覆盖 | 当前实现已恢复 idempotent no-op 语义，但没有第三次 `Down()` 的测试锁定；后续重构或依赖升级可能再次引入兼容性回归 | v1.1 |
 
 ### CI/运维
 
@@ -178,12 +179,12 @@
 |-------|--------|-----------|------|------|----------|---------|
 | Phase 2 | 23 | 3 | 26 | 1 | 24 | 1 |
 | Phase 3 新增 | 9 | 3 | 12 | 5 | 5 | 2 |
-| Phase 4 新增 | 9 | 0 | 9 | 8 | 1 | 0 |
-| **总计** | **41** | **6** | **47** | **14** | **30** | **3** |
+| Phase 4 新增 | 10 | 0 | 10 | 9 | 1 | 0 |
+| **总计** | **42** | **6** | **48** | **15** | **30** | **3** |
 
-**活跃债务（OPEN + PARTIAL）**: 17 条（v1.1 处理目标）
+**活跃债务（OPEN + PARTIAL）**: 18 条（v1.1 处理目标）
 
 **Phase 4 关闭**: P3-TD-01、P3-TD-03、P3-TD-06、P3-TD-07、P3-TD-08、P3-TD-09、P4-TD-05（共 7 条）
-**Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-10（共 9 条）
+**Phase 4 新增 OPEN**: P4-TD-01 through P4-TD-04、P4-TD-06 through P4-TD-11（共 10 条）
 
 **注**: 全局 registry 仅追踪跨 Phase 持续影响的条目（架构/安全/测试层面）。编码规范/DX 细节项在 Phase 执行中修复时不重复录入。Phase 3 PARTIAL 项（P3-TD-02、P3-TD-05）在 Phase 4 仍为 PARTIAL，目标 v1.1 完全关闭。

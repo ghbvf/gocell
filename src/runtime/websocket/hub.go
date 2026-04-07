@@ -20,13 +20,19 @@ type HubConfig struct {
 	PingInterval time.Duration
 	// PingTimeout is the deadline for a single ping. Default: 5s.
 	PingTimeout time.Duration
+	// ReadLimit is the maximum message size in bytes. Default: 64KB.
+	// The adapter applies this when creating a connection.
+	ReadLimit int64
 }
+
+const defaultReadLimit = 64 * 1024 // 64KB
 
 // DefaultHubConfig returns a HubConfig with sensible defaults.
 func DefaultHubConfig() HubConfig {
 	return HubConfig{
 		PingInterval: defaultPingInterval,
 		PingTimeout:  defaultPingTimeout,
+		ReadLimit:    defaultReadLimit,
 	}
 }
 
@@ -53,6 +59,9 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	}
 	if cfg.PingTimeout == 0 {
 		cfg.PingTimeout = defaultPingTimeout
+	}
+	if cfg.ReadLimit == 0 {
+		cfg.ReadLimit = defaultReadLimit
 	}
 	return &Hub{
 		config:  cfg,
@@ -178,6 +187,10 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 
 	return conn.Write(ctx, data)
 }
+
+// Config returns the Hub's configuration. Adapters use this to read
+// settings like ReadLimit when creating connections.
+func (h *Hub) Config() HubConfig { return h.config }
 
 // ConnCount returns the number of active connections.
 func (h *Hub) ConnCount() int {
