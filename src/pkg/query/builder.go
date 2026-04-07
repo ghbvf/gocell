@@ -59,8 +59,9 @@ func (b *Builder) SQL() string {
 	return strings.Join(b.parts, " ")
 }
 
-// NextParam returns the next positional placeholder string (e.g. "$3")
-// without adding any arguments. Useful when building complex clauses manually.
+// NextParam registers value as the next positional argument and returns
+// its placeholder string (e.g. "$3"). Useful when building complex clauses
+// where AppendParam's single-prefix pattern is insufficient.
 func (b *Builder) NextParam(value any) string {
 	b.args = append(b.args, value)
 	return fmt.Sprintf("$%d", len(b.args))
