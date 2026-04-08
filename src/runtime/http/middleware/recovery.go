@@ -19,14 +19,13 @@ import (
 // If the response has already been committed (WriteHeader called), Recovery
 // only logs the panic and does not attempt to write an error response.
 //
-// Recovery creates the shared RecorderState and stores it in the context so
-// downstream middleware (AccessLog, Tracing, Metrics) can reuse it without
-// additional httpsnoop wrapping.
+// Recovery expects a RecorderState to already exist in the request context,
+// created by the Recorder middleware earlier in the chain. This allows
+// upstream middleware (AccessLog, Metrics) to observe the 500 status that
+// Recovery writes after catching a panic.
 func Recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		state, w := NewRecorder(w)
-		ctx := WithRecorderState(r.Context(), state)
-		r = r.WithContext(ctx)
+		state := RecorderStateFrom(r.Context())
 
 		defer func() {
 			if v := recover(); v != nil {
@@ -41,7 +40,7 @@ func Recovery(next http.Handler) http.Handler {
 					attrs = append(attrs, slog.String("request_id", reqID))
 				}
 
-				if state.Committed() {
+				if state != nil && state.Committed() {
 					attrs = append(attrs, slog.Bool("response_committed", true))
 					slog.Error("panic after response committed", attrs...)
 					return

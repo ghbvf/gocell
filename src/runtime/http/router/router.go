@@ -67,7 +67,12 @@ type Router struct {
 //
 // Default middleware chain (applied in order):
 //
-//	RequestID -> RealIP -> Recovery -> AccessLog -> SecurityHeaders -> BodyLimit
+//	RequestID → RealIP → Recorder → AccessLog → [Metrics] → Recovery → SecurityHeaders → BodyLimit
+//
+// Recorder creates the shared RecorderState at the chain head. AccessLog and
+// Metrics sit outside Recovery so their post-ServeHTTP code always executes —
+// even when Recovery catches a panic and writes a 500 response. This ensures
+// panic requests are visible in both logs and metrics.
 func New(opts ...Option) *Router {
 	r := &Router{
 		mux:       chi.NewRouter(),
@@ -77,20 +82,26 @@ func New(opts ...Option) *Router {
 		o(r)
 	}
 
-	// Default middleware chain.
+	// Default middleware chain — Recorder before AccessLog/Metrics,
+	// Recovery after them so panic-recovered 500s are observable.
 	r.mux.Use(
 		middleware.RequestID,
 		middleware.RealIP(nil),
-		middleware.Recovery,
+		middleware.Recorder,
 		middleware.AccessLog,
-		middleware.SecurityHeaders,
-		middleware.BodyLimit(r.bodyLimit),
 	)
 
-	// Add metrics middleware if collector provided.
+	// Metrics (if configured) — must be before Recovery so panic
+	// requests are recorded as status 500.
 	if r.metricsCollector != nil {
 		r.mux.Use(middleware.Metrics(r.metricsCollector))
 	}
+
+	r.mux.Use(
+		middleware.Recovery,
+		middleware.SecurityHeaders,
+		middleware.BodyLimit(r.bodyLimit),
+	)
 
 	// Auto-register infrastructure endpoints.
 	if r.healthHandler != nil {

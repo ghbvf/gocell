@@ -22,7 +22,8 @@ func TestAccessLog_LogsFields(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})
-	handler := AccessLog(inner)
+	// Recorder creates the shared RecorderState that AccessLog reads.
+	handler := Recorder(AccessLog(inner))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", nil)
 	// Simulate request_id already in context
@@ -55,7 +56,8 @@ func TestAccessLog_DefaultStatus200(t *testing.T) {
 		// No explicit WriteHeader → default 200
 		_, _ = w.Write([]byte("ok"))
 	})
-	handler := AccessLog(inner)
+	// Recorder creates the shared RecorderState that AccessLog reads.
+	handler := Recorder(AccessLog(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()

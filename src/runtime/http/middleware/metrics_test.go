@@ -11,9 +11,10 @@ import (
 
 func TestMetrics_RecordsMetrics(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Recorder creates the shared RecorderState that Metrics reads.
+	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", nil)
 	rec := httptest.NewRecorder()
@@ -28,9 +29,10 @@ func TestMetrics_RecordsMetrics(t *testing.T) {
 
 func TestMetrics_DefaultStatus200(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Recorder creates the shared RecorderState that Metrics reads.
+	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -41,12 +43,14 @@ func TestMetrics_DefaultStatus200(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
-func TestMetrics_PanicSkipsRecord(t *testing.T) {
+func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	// Recovery wraps Metrics — same as default router chain.
-	handler := Recovery(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// New chain order: Recorder → Metrics → Recovery → handler.
+	// Recovery catches panic and writes 500; Metrics sees the 500 status
+	// because it shares the RecorderState created by Recorder.
+	handler := Recorder(Metrics(c)(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
-	})))
+	}))))
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
 	rec := httptest.NewRecorder()
@@ -54,17 +58,17 @@ func TestMetrics_PanicSkipsRecord(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
-	// Panic request must NOT be recorded in metrics.
-	// Before this fix, defer caused it to record as 200.
 	snap := c.Snapshot()
-	assert.Empty(t, snap.RequestCounts, "panic request must not appear in metrics")
+	key := "GET /panic 500"
+	assert.Equal(t, int64(1), snap.RequestCounts[key], "panic request must be recorded as status 500 in metrics")
 }
 
 func TestMetrics_MultipleRequests(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Recorder creates the shared RecorderState that Metrics reads.
+	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 
 	for range 5 {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)

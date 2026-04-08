@@ -11,10 +11,11 @@ import (
 )
 
 func TestRecovery_NoPanic(t *testing.T) {
-	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Recorder creates the shared RecorderState that Recovery reads.
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -25,9 +26,9 @@ func TestRecovery_NoPanic(t *testing.T) {
 }
 
 func TestRecovery_PanicString(t *testing.T) {
-	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
@@ -48,9 +49,9 @@ func TestRecovery_PanicString(t *testing.T) {
 }
 
 func TestRecovery_PanicError(t *testing.T) {
-	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(42)
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -60,11 +61,11 @@ func TestRecovery_PanicError(t *testing.T) {
 }
 
 func TestRecovery_PanicAfterPartialWrite(t *testing.T) {
-	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("partial"))
 		panic("late panic")
-	}))
+	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
