@@ -41,6 +41,25 @@ func TestMetrics_DefaultStatus200(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
+func TestMetrics_PanicSkipsRecord(t *testing.T) {
+	c := metrics.NewInMemoryCollector()
+	// Recovery wraps Metrics — same as default router chain.
+	handler := Recovery(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	// Panic request must NOT be recorded in metrics.
+	// Before this fix, defer caused it to record as 200.
+	snap := c.Snapshot()
+	assert.Empty(t, snap.RequestCounts, "panic request must not appear in metrics")
+}
+
 func TestMetrics_MultipleRequests(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

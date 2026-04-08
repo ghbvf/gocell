@@ -66,9 +66,11 @@ func NewRecorder(w http.ResponseWriter) (*RecorderState, http.ResponseWriter) {
 		},
 		Flush: func(next httpsnoop.FlushFunc) httpsnoop.FlushFunc {
 			return func() {
-				if !state.committed {
-					state.committed = true
-				}
+				// Flush is a control operation — it does not commit the
+				// response on its own. WriteHeader(>=200) and Write()
+				// already handle committed tracking. This avoids
+				// prematurely marking committed after flushing a 1xx
+				// informational response.
 				next()
 			}
 		},

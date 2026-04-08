@@ -12,8 +12,10 @@ import (
 //
 // If a RecorderState already exists in the context (set by Recovery),
 // Tracing reuses it to avoid additional httpsnoop wrapping.
-// SetAttribute is called in a defer so that status is recorded even when
-// a panic is caught by an outer Recovery middleware.
+//
+// On panic, the span is ended (via defer) but status is not recorded because
+// the inner defer runs before Recovery catches the panic. Recovery logs the
+// full panic context separately.
 func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -28,11 +30,9 @@ func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 				w = wrapped
 			}
 
-			defer func() {
-				span.SetAttribute("http.status_code", state.Status())
-			}()
-
 			next.ServeHTTP(w, r.WithContext(ctx))
+
+			span.SetAttribute("http.status_code", state.Status())
 		})
 	}
 }

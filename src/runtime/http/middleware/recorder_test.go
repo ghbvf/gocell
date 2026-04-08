@@ -110,7 +110,20 @@ func TestRecorder_PreservesFlusher(t *testing.T) {
 
 	flusher.Flush()
 	assert.True(t, fw.flushed, "Flush must reach underlying writer")
-	assert.True(t, state.Committed(), "Flush must mark committed")
+	assert.False(t, state.Committed(), "Flush alone must not mark committed")
+}
+
+func TestRecorder_FlushAfter1xxDoesNotCommit(t *testing.T) {
+	fw := &flusherWriter{ResponseWriter: httptest.NewRecorder()}
+	state, w := NewRecorder(fw)
+
+	w.WriteHeader(http.StatusEarlyHints) // 103
+	w.(http.Flusher).Flush()
+
+	assert.False(t, state.Committed(), "Flush after 1xx must not mark committed")
+
+	w.WriteHeader(http.StatusOK) // final response
+	assert.True(t, state.Committed())
 }
 
 // readerFromWriter implements http.ResponseWriter + io.ReaderFrom for testing.
