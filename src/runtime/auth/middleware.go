@@ -1,12 +1,12 @@
 package auth
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // DefaultPublicEndpoints is the default set of paths that do not require
@@ -44,7 +44,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 
 			token := extractBearerToken(r)
 			if token == "" {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 				return
 			}
 
@@ -54,7 +54,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 					slog.Any("error", err),
 					slog.String("path", r.URL.Path),
 				)
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 				return
 			}
 
@@ -78,7 +78,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFrom(r.Context())
 			if !ok {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
 				return
 			}
 
@@ -100,7 +100,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 							slog.Any("error", err),
 							slog.String("subject", sub),
 						)
-						writeAuthError(w, http.StatusInternalServerError, "ERR_INTERNAL", "authorization check failed")
+						httputil.WriteError(w, http.StatusInternalServerError, "ERR_INTERNAL", "authorization check failed")
 						return
 					}
 					if allowed {
@@ -110,7 +110,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 				}
 			}
 
-			writeAuthError(w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+			httputil.WriteError(w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
 		})
 	}
 }
@@ -127,13 +127,3 @@ func extractBearerToken(r *http.Request) string {
 	return strings.TrimSpace(parts[1])
 }
 
-func writeAuthError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": message,
-		},
-	})
-}

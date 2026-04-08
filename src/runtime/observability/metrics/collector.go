@@ -11,9 +11,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // Collector records HTTP request metrics.
@@ -128,23 +125,6 @@ func (c *InMemoryCollector) Handler() http.Handler {
 			"metrics": entries,
 		})
 	})
-}
-
-// Middleware returns an HTTP middleware that records request count and duration
-// using the provided Collector. It uses httputil.StatusRecorder to capture the
-// response status code, avoiding a duplicate recorder definition.
-func Middleware(collector Collector) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
-			rec := httputil.NewStatusRecorder(w)
-
-			next.ServeHTTP(rec, r)
-
-			duration := time.Since(start).Seconds()
-			collector.RecordRequest(r.Method, r.URL.Path, rec.Status, duration)
-		})
-	}
 }
 
 // metricsText formats the counter as a Prometheus-like text line for

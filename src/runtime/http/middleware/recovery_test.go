@@ -58,3 +58,20 @@ func TestRecovery_PanicError(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
+
+func TestRecovery_PanicAfterPartialWrite(t *testing.T) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		panic("late panic")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Response was already committed (200 + partial body written).
+	// Recovery must NOT append JSON error to the already-committed response.
+	assert.Equal(t, http.StatusOK, rec.Code, "status must remain 200 — already committed")
+	assert.Equal(t, "partial", rec.Body.String(), "body must not have JSON error appended")
+}

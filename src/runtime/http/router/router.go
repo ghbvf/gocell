@@ -89,7 +89,7 @@ func New(opts ...Option) *Router {
 
 	// Add metrics middleware if collector provided.
 	if r.metricsCollector != nil {
-		r.mux.Use(metrics.Middleware(r.metricsCollector))
+		r.mux.Use(middleware.Metrics(r.metricsCollector))
 	}
 
 	// Auto-register infrastructure endpoints.

@@ -72,25 +72,6 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 	WriteError(w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
 }
 
-// StatusRecorder wraps http.ResponseWriter to capture the HTTP status code.
-// This is shared across middleware and observability packages to avoid
-// duplicate definitions.
-type StatusRecorder struct {
-	http.ResponseWriter
-	Status int
-}
-
-// NewStatusRecorder creates a StatusRecorder with a default status of 200.
-func NewStatusRecorder(w http.ResponseWriter) *StatusRecorder {
-	return &StatusRecorder{ResponseWriter: w, Status: http.StatusOK}
-}
-
-// WriteHeader captures the status code and delegates to the underlying writer.
-func (sr *StatusRecorder) WriteHeader(code int) {
-	sr.Status = code
-	sr.ResponseWriter.WriteHeader(code)
-}
-
 // mapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
 func mapCodeToStatus(code errcode.Code) int {
 	c := string(code)
