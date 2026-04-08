@@ -3,8 +3,6 @@ package configread
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -18,17 +16,9 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Routes returns a chi.Router with config-read routes.
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Get("/", h.HandleList)
-	r.Get("/{key}", h.HandleGet)
-	return r
-}
-
 // HandleGet handles GET /{key} — returns a single config entry.
 func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
+	key := r.PathValue("key")
 
 	entry, err := h.svc.GetByKey(r.Context(), key)
 	if err != nil {

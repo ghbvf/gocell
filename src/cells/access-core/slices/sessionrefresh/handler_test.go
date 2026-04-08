@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,7 +24,7 @@ func issueRefreshToken(userID string) string {
 	return tok
 }
 
-func setup() (http.Handler, string) {
+func setup() (*Handler, string) {
 	sessionRepo := mem.NewSessionRepository()
 	refreshTok := issueRefreshToken("usr-1")
 
@@ -34,13 +33,11 @@ func setup() (http.Handler, string) {
 	_ = sessionRepo.Create(context.Background(), sess)
 
 	svc := NewService(sessionRepo, mem.NewRoleRepository(), testIssuer, testVerifier, slog.Default())
-	r := chi.NewRouter()
-	r.Post("/refresh", NewHandler(svc).HandleRefresh)
-	return r, refreshTok
+	return NewHandler(svc), refreshTok
 }
 
 func TestHandleRefresh(t *testing.T) {
-	router, validToken := setup()
+	h, validToken := setup()
 
 	tests := []struct {
 		name       string
@@ -81,7 +78,7 @@ func TestHandleRefresh(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(w, req)
+			h.HandleRefresh(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())

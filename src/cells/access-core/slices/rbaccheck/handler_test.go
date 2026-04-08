@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 )
 
 func setup() http.Handler {
@@ -21,7 +22,9 @@ func setup() http.Handler {
 	_ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
 
 	svc := NewService(roleRepo, slog.Default())
-	return NewHandler(svc).Routes()
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux
 }
 
 func TestHandler(t *testing.T) {

@@ -3,8 +3,6 @@ package sessionlogout
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -20,7 +18,7 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleLogout handles DELETE /api/v1/access/sessions/{id}.
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "id")
+	sessionID := r.PathValue("id")
 
 	if err := h.svc.Logout(r.Context(), sessionID); err != nil {
 		httputil.WriteDomainError(w, err)

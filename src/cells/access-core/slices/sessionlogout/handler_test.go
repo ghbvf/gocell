@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
@@ -16,16 +16,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-func setup() http.Handler {
+func setup() *Handler {
 	sessionRepo := mem.NewSessionRepository()
 	sess, _ := domain.NewSession("usr-1", "access-tok", "refresh-tok", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 
 	svc := NewService(sessionRepo, eventbus.New(), slog.Default())
-	r := chi.NewRouter()
-	r.Delete("/{id}", NewHandler(svc).HandleLogout)
-	return r
+	return NewHandler(svc)
 }
 
 func TestHandleLogout(t *testing.T) {
@@ -48,9 +46,12 @@ func TestHandleLogout(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := setup()
+			h := setup()
 			w := httptest.NewRecorder()
-			r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, tc.path, nil))
+			sessionID := strings.TrimPrefix(tc.path, "/")
+			req := httptest.NewRequest(http.MethodDelete, tc.path, nil)
+			req.SetPathValue("id", sessionID)
+			h.HandleLogout(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}

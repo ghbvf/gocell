@@ -3,8 +3,6 @@ package devicestatus
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -20,7 +18,7 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleGetStatus handles GET /api/v1/devices/{id}/status.
 func (h *Handler) HandleGetStatus(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 
 	device, err := h.svc.GetStatus(r.Context(), id)
 	if err != nil {

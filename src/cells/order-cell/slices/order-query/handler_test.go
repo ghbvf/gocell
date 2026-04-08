@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,13 +21,6 @@ func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 	}
 	svc := NewService(repo, slog.Default())
 	return NewHandler(svc), repo
-}
-
-// withChiURLParam creates a request with chi URL parameters set.
-func withChiURLParam(r *http.Request, key, val string) *http.Request {
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add(key, val)
-	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
 func TestHandleGet(t *testing.T) {
@@ -57,7 +49,7 @@ func TestHandleGet(t *testing.T) {
 			h, _ := newTestHandler(tt.seed...)
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+tt.id, nil)
-			req = withChiURLParam(req, "id", tt.id)
+			req.SetPathValue("id", tt.id)
 
 			h.HandleGet(rec, req)
 
@@ -71,7 +63,7 @@ func TestHandleGet_ResponseBody(t *testing.T) {
 	h, _ := newTestHandler(&domain.Order{ID: "ord-detail", Item: "laptop", Status: "confirmed"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/ord-detail", nil)
-	req = withChiURLParam(req, "id", "ord-detail")
+	req.SetPathValue("id", "ord-detail")
 
 	h.HandleGet(rec, req)
 

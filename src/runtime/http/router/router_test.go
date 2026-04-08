@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"nhooyr.io/websocket"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	rtws "github.com/ghbvf/gocell/runtime/websocket"
+	ws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +129,29 @@ func TestMount(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/sub/hello", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRouterChain_WebSocketUpgrade(t *testing.T) {
+	hub := rtws.NewHub(rtws.HubConfig{ReadLimit: 4096}, func(_ context.Context, _ string, _ []byte) {})
+
+	go func() { _ = hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool { return hub.IsRunning() }, 2*time.Second, time.Millisecond)
+	t.Cleanup(func() { _ = hub.Stop(context.Background()) })
+
+	r := New()
+	r.Mount("/ws", ws.UpgradeHandler(hub, ws.UpgradeConfig{}))
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) + "/ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
+	conn.CloseNow()
 }
 
 func TestDefaultMiddlewareApplied(t *testing.T) {

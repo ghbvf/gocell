@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -21,7 +20,7 @@ import (
 
 // testIssuer is declared in service_test.go
 
-func setup() http.Handler {
+func setup() *Handler {
 	userRepo := mem.NewUserRepository()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
 	user := &domain.User{
@@ -31,9 +30,7 @@ func setup() http.Handler {
 	_ = userRepo.Create(context.Background(), user)
 
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), eventbus.New(), testIssuer, slog.Default())
-	r := chi.NewRouter()
-	r.Post("/login", NewHandler(svc).HandleLogin)
-	return r
+	return NewHandler(svc)
 }
 
 func TestHandleLogin(t *testing.T) {
@@ -73,11 +70,11 @@ func TestHandleLogin(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := setup()
+			h := setup()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			r.ServeHTTP(w, req)
+			h.HandleLogin(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())

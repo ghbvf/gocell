@@ -229,7 +229,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
 		// Identity management: /api/v1/access/users
-		sub.Mount("/users", c.identityHandler.Routes())
+		sub.Route("/users", c.identityHandler.RegisterRoutes)
 
 		// Session endpoints: /api/v1/access/sessions
 		sub.Route("/sessions", func(s cell.RouteMux) {
@@ -239,7 +239,7 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 		})
 
 		// RBAC queries: /api/v1/access/roles
-		sub.Mount("/roles", c.rbacHandler.Routes())
+		sub.Route("/roles", c.rbacHandler.RegisterRoutes)
 	})
 }
 

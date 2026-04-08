@@ -12,12 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 func setup() http.Handler {
 	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
-	return NewHandler(svc).Routes()
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux
 }
 
 func TestHandler(t *testing.T) {

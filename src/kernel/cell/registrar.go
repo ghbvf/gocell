@@ -22,11 +22,34 @@ import (
 // RouteMux is a minimal route registration interface.
 // kernel/ does not import any specific router (chi, gorilla, etc.);
 // concrete implementations are provided by runtime/ or adapters/.
+//
+// For testing, use kernel/cell/celltest.TestMux.
 type RouteMux interface {
+	// Handle registers handler for the given pattern.
+	// Pattern follows Go 1.22+ enhanced ServeMux syntax: "METHOD /path/{param}".
+	// Path parameters are extracted by the underlying router implementation and
+	// accessible via r.PathValue("param") in the handler.
+	//
+	// Examples:
+	//   mux.Handle("GET /users/{id}", handler)
+	//   mux.Handle("POST /", handler)
+	//   mux.Handle("DELETE /sessions/{id}", handler)
 	Handle(pattern string, handler http.Handler)
-	Route(pattern string, fn func(sub RouteMux)) // sub-router with prefix stripping
-	Mount(pattern string, handler http.Handler)   // mount handler with prefix stripping
-	Group(fn func(RouteMux))                      // same-level grouping (no prefix change)
+
+	// Route creates a sub-router under pattern with prefix stripping.
+	// Use for GoCell native route registration — the sub-router participates
+	// in the framework's pattern matching, PathValue binding, and test model.
+	Route(pattern string, fn func(sub RouteMux))
+
+	// Mount attaches an opaque http.Handler sub-tree under pattern with prefix
+	// stripping. The mounted handler is a "black box" that does not need to
+	// follow GoCell routing conventions. Use Route + RegisterRoutes instead
+	// when the sub-tree is a GoCell cell/slice.
+	Mount(pattern string, handler http.Handler)
+
+	// Group creates a same-level scope sharing the parent prefix.
+	// Useful for applying middleware to a subset of routes.
+	Group(fn func(RouteMux))
 }
 
 // HTTPRegistrar is optionally implemented by Cells that expose HTTP endpoints.
