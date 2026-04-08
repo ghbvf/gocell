@@ -3,7 +3,6 @@ package orderquery
 import (
 	"net/http"
 
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 

@@ -3,7 +3,6 @@ package sessionlogout
 import (
 	"net/http"
 
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 

@@ -12,27 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// testMux adapts http.ServeMux to cell.RouteMux for testing.
-type testMux struct{ *http.ServeMux }
-
-func (m *testMux) Handle(pattern string, handler http.Handler) { m.ServeMux.Handle(pattern, handler) }
-func (m *testMux) Route(pattern string, fn func(cell.RouteMux)) {
-	sub := &testMux{http.NewServeMux()}
-	fn(sub)
-	m.ServeMux.Handle(pattern+"/", http.StripPrefix(pattern, sub.ServeMux))
-}
-func (m *testMux) Mount(pattern string, handler http.Handler) {
-	m.ServeMux.Handle(pattern+"/", http.StripPrefix(pattern, handler))
-}
-func (m *testMux) Group(fn func(cell.RouteMux)) { fn(m) }
-
 func setup() http.Handler {
 	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
-	mux := &testMux{http.NewServeMux()}
+	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
 }

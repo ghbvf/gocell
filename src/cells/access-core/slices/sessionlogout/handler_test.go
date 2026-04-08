@@ -16,14 +16,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-func setup() (*Handler, func()) {
+func setup() *Handler {
 	sessionRepo := mem.NewSessionRepository()
 	sess, _ := domain.NewSession("usr-1", "access-tok", "refresh-tok", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 
 	svc := NewService(sessionRepo, eventbus.New(), slog.Default())
-	return NewHandler(svc), func() {}
+	return NewHandler(svc)
 }
 
 func TestHandleLogout(t *testing.T) {
@@ -46,7 +46,7 @@ func TestHandleLogout(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := setup()
+			h := setup()
 			w := httptest.NewRecorder()
 			sessionID := strings.TrimPrefix(tc.path, "/")
 			req := httptest.NewRequest(http.MethodDelete, tc.path, nil)

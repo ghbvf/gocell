@@ -182,6 +182,34 @@ func TestAccessCore_RouteUserCreate(t *testing.T) {
 		"POST /api/v1/access/users/ should not return 404 (got %d)", rec.Code)
 }
 
+func TestAccessCore_RouteSessionLogout(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-nonexistent", nil)
+	r.ServeHTTP(rec, req)
+
+	// 404 means handler was reached and session not found (correct routing).
+	// 405 or chi-level 404 (without JSON body) means routing is broken.
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"DELETE /api/v1/access/sessions/{id} should reach handler (got %d)", rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not chi 404)")
+}
+
+func TestAccessCore_RouteUserGet(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/usr-nonexistent", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"GET /api/v1/access/users/{id} should reach handler (got %d)", rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not chi 404)")
+}
+
 func TestAccessCore_RouteRolesList(t *testing.T) {
 	r := initCellWithRouter(t)
 
