@@ -18,9 +18,16 @@ import (
 // stack trace via slog.Error, and returns a 500 JSON error response.
 // If the response has already been committed (WriteHeader called), Recovery
 // only logs the panic and does not attempt to write an error response.
+//
+// Recovery creates the shared RecorderState and stores it in the context so
+// downstream middleware (AccessLog, Tracing, Metrics) can reuse it without
+// additional httpsnoop wrapping.
 func Recovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rec := NewRecorder(w)
+		state, w := NewRecorder(w)
+		ctx := WithRecorderState(r.Context(), state)
+		r = r.WithContext(ctx)
+
 		defer func() {
 			if v := recover(); v != nil {
 				stack := string(debug.Stack())
@@ -34,16 +41,16 @@ func Recovery(next http.Handler) http.Handler {
 					attrs = append(attrs, slog.String("request_id", reqID))
 				}
 
-				if rec.Committed() {
+				if state.Committed() {
 					attrs = append(attrs, slog.Bool("response_committed", true))
 					slog.Error("panic after response committed", attrs...)
 					return
 				}
 
 				slog.Error("panic recovered", attrs...)
-				httputil.WriteError(rec, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+				httputil.WriteError(w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			}
 		}()
-		next.ServeHTTP(rec, r)
+		next.ServeHTTP(w, r)
 	})
 }

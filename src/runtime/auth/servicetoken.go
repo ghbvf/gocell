@@ -32,7 +32,7 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 		// Fail-fast: refuse to create middleware with empty secret.
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				httputil.WriteError(w, http.StatusInternalServerError, "ERR_AUTH_UNAUTHORIZED", "service token not configured")
+				httputil.WriteError(w, http.StatusInternalServerError, "ERR_INTERNAL", "service token not configured")
 			})
 		}
 	}
