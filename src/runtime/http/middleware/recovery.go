@@ -1,12 +1,12 @@
 package middleware
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // ref: zeromicro/go-zero rest/handler/recoverhandler.go — RecoverHandler pattern
@@ -32,14 +32,7 @@ func Recovery(next http.Handler) http.Handler {
 				}
 				slog.Error("panic recovered", attrs...)
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"error": map[string]any{
-						"code":    "ERR_INTERNAL",
-						"message": "internal server error",
-					},
-				})
+				httputil.WriteError(w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

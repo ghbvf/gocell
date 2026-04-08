@@ -1,13 +1,13 @@
 package middleware
 
 import (
-	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // RateLimiter decides whether a request identified by key should be allowed.
@@ -37,15 +37,8 @@ func RateLimit(limiter RateLimiter) func(http.Handler) http.Handler {
 			ip := clientIP(r)
 			if !limiter.Allow(ip) {
 				retryAfter := computeRetryAfter(limiter)
-				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				w.WriteHeader(http.StatusTooManyRequests)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"error": map[string]any{
-						"code":    "ERR_RATE_LIMITED",
-						"message": "too many requests",
-					},
-				})
+				httputil.WriteError(w, http.StatusTooManyRequests, "ERR_RATE_LIMITED", "too many requests")
 				return
 			}
 			next.ServeHTTP(w, r)

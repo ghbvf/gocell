@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // DefaultBodyLimit is the default maximum request body size (1 MB).
@@ -28,12 +29,5 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 }
 
 func writeBodyTooLarge(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusRequestEntityTooLarge)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"code":    "ERR_BODY_TOO_LARGE",
-			"message": "request body too large",
-		},
-	})
+	httputil.WriteError(w, http.StatusRequestEntityTooLarge, "ERR_BODY_TOO_LARGE", "request body too large")
 }
