@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // ServiceTokenMaxAge is the maximum age of a service token before it is
@@ -30,7 +32,7 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 		// Fail-fast: refuse to create middleware with empty secret.
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				writeAuthError(w, http.StatusInternalServerError, "ERR_AUTH_UNAUTHORIZED", "service token not configured")
+				httputil.WriteError(w, http.StatusInternalServerError, "ERR_AUTH_UNAUTHORIZED", "service token not configured")
 			})
 		}
 	}
@@ -38,21 +40,21 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractServiceToken(r)
 			if token == "" {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
 				return
 			}
 
 			// Parse "{timestamp}:{signature}".
 			parts := strings.SplitN(token, ":", 2)
 			if len(parts) != 2 {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
 				return
 			}
 
 			tsStr, sigHex := parts[0], parts[1]
 			ts, err := strconv.ParseInt(tsStr, 10, 64)
 			if err != nil {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token timestamp")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token timestamp")
 				return
 			}
 
@@ -65,13 +67,13 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 				age = -age
 			}
 			if age >= ServiceTokenMaxAge {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token expired")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token expired")
 				return
 			}
 
 			providedMAC, err := hex.DecodeString(sigHex)
 			if err != nil {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
 				return
 			}
 
@@ -81,7 +83,7 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 			expectedMAC := mac.Sum(nil)
 
 			if !hmac.Equal(providedMAC, expectedMAC) {
-				writeAuthError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
+				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
 				return
 			}
 

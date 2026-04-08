@@ -226,4 +226,5 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, code, errObj["code"])
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }

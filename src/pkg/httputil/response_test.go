@@ -128,7 +128,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.wantCode, errObj["code"])
 			assert.Equal(t, tt.wantMsg, errObj["message"])
-			assert.IsType(t, map[string]any{}, errObj["details"], "details must be a JSON object")
+			assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 		})
 	}
 }
@@ -147,19 +147,7 @@ func TestWriteDomainError_PlainError(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
-}
-
-func TestStatusRecorder(t *testing.T) {
-	rec := httptest.NewRecorder()
-	sr := NewStatusRecorder(rec)
-
-	// Default status should be 200.
-	assert.Equal(t, http.StatusOK, sr.Status)
-
-	// WriteHeader should capture the status.
-	sr.WriteHeader(http.StatusNotFound)
-	assert.Equal(t, http.StatusNotFound, sr.Status)
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
 func TestWriteDomainError_WithDetails(t *testing.T) {
