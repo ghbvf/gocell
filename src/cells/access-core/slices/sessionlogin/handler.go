@@ -1,7 +1,6 @@
 package sessionlogin
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -23,8 +22,8 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDomainError(w, err)
 		return
 	}
 

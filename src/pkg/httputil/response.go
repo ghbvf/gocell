@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -72,27 +71,79 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 	WriteError(w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
 }
 
+// codeToStatus maps known error codes to HTTP status codes.
+// Codes from pkg/errcode use sentinel constants; cell-local codes that surface
+// through HTTP handlers are registered as literal Code values.
+var codeToStatus = map[errcode.Code]int{
+	// --- 404 Not Found ---
+	errcode.ErrMetadataNotFound:             http.StatusNotFound,
+	errcode.ErrCellNotFound:                 http.StatusNotFound,
+	errcode.ErrSliceNotFound:                http.StatusNotFound,
+	errcode.ErrContractNotFound:             http.StatusNotFound,
+	errcode.ErrAssemblyNotFound:             http.StatusNotFound,
+	errcode.ErrJourneyNotFound:              http.StatusNotFound,
+	errcode.ErrSessionNotFound:              http.StatusNotFound,
+	errcode.ErrOrderNotFound:                http.StatusNotFound,
+	errcode.ErrDeviceNotFound:               http.StatusNotFound,
+	errcode.ErrCommandNotFound:              http.StatusNotFound,
+	"ERR_AUTH_USER_NOT_FOUND":               http.StatusNotFound,
+	"ERR_AUTH_ROLE_NOT_FOUND":               http.StatusNotFound,
+	"ERR_CONFIG_NOT_FOUND":                  http.StatusNotFound,
+	"ERR_CONFIG_REPO_NOT_FOUND":             http.StatusNotFound,
+	"ERR_FLAG_NOT_FOUND":                    http.StatusNotFound,
+	"ERR_WS_CONN_NOT_FOUND":                http.StatusNotFound,
+	"ERR_AUDIT_REPO_NOT_FOUND":             http.StatusNotFound,
+
+	// --- 400 Bad Request ---
+	errcode.ErrValidationFailed:             http.StatusBadRequest,
+	errcode.ErrMetadataInvalid:              http.StatusBadRequest,
+	errcode.ErrLifecycleInvalid:             http.StatusBadRequest,
+	errcode.ErrReferenceBroken:              http.StatusBadRequest,
+	"ERR_AUTH_INVALID_INPUT":                http.StatusBadRequest,
+	"ERR_AUTH_IDENTITY_INVALID_INPUT":       http.StatusBadRequest,
+	"ERR_AUTH_LOGIN_INVALID_INPUT":          http.StatusBadRequest,
+	"ERR_AUTH_REFRESH_INVALID_INPUT":        http.StatusBadRequest,
+	"ERR_AUTH_SESSION_INVALID_INPUT":        http.StatusBadRequest,
+	"ERR_AUTH_LOGOUT_INVALID_INPUT":         http.StatusBadRequest,
+	"ERR_AUTH_RBAC_INVALID_INPUT":           http.StatusBadRequest,
+	"ERR_CONFIG_INVALID_INPUT":              http.StatusBadRequest,
+	"ERR_CONFIG_PUBLISH_INVALID_INPUT":      http.StatusBadRequest,
+	"ERR_FLAG_INVALID_INPUT":                http.StatusBadRequest,
+
+	// --- 401 Unauthorized ---
+	errcode.ErrAuthUnauthorized:             http.StatusUnauthorized,
+	errcode.ErrAuthKeyInvalid:               http.StatusUnauthorized,
+	errcode.ErrAuthTokenInvalid:             http.StatusUnauthorized,
+	errcode.ErrAuthTokenExpired:             http.StatusUnauthorized,
+	"ERR_AUTH_LOGIN_FAILED":                 http.StatusUnauthorized,
+	"ERR_AUTH_REFRESH_FAILED":               http.StatusUnauthorized,
+	"ERR_AUTH_REFRESH_TOKEN_REUSE":          http.StatusUnauthorized,
+	"ERR_AUTH_INVALID_TOKEN":                http.StatusUnauthorized,
+
+	// --- 403 Forbidden ---
+	errcode.ErrAuthForbidden:                http.StatusForbidden,
+	"ERR_AUTH_USER_LOCKED":                  http.StatusForbidden,
+
+	// --- 409 Conflict ---
+	"ERR_AUTH_USER_DUPLICATE":               http.StatusConflict,
+	"ERR_CONFIG_DUPLICATE":                  http.StatusConflict,
+	"ERR_CONFIG_REPO_DUPLICATE":             http.StatusConflict,
+	"ERR_FLAG_DUPLICATE":                    http.StatusConflict,
+
+	// --- 429 Too Many Requests ---
+	errcode.ErrRateLimited:                  http.StatusTooManyRequests,
+
+	// --- 413 Request Entity Too Large ---
+	errcode.ErrBodyTooLarge:                 http.StatusRequestEntityTooLarge,
+}
+
 // mapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
+// Known codes use an explicit lookup table. Unknown codes default to 500
+// and emit a warning log to prompt registration.
 func mapCodeToStatus(code errcode.Code) int {
-	c := string(code)
-	switch {
-	case strings.Contains(c, "NOT_FOUND"):
-		return http.StatusNotFound
-	case strings.Contains(c, "VALIDATION") || strings.Contains(c, "INVALID_INPUT"):
-		return http.StatusBadRequest
-	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN") || strings.Contains(c, "TOKEN_INVALID") || strings.Contains(c, "TOKEN_EXPIRED") || strings.Contains(c, "KEY_INVALID"):
-		return http.StatusUnauthorized
-	case strings.Contains(c, "FORBIDDEN"):
-		return http.StatusForbidden
-	case strings.Contains(c, "DUPLICATE") || strings.Contains(c, "CONFLICT"):
-		return http.StatusConflict
-	case strings.Contains(c, "LOCKED"):
-		return http.StatusForbidden
-	case strings.Contains(c, "RATE_LIMITED"):
-		return http.StatusTooManyRequests
-	case strings.Contains(c, "TOO_LARGE"):
-		return http.StatusRequestEntityTooLarge
-	default:
-		return http.StatusInternalServerError
+	if status, ok := codeToStatus[code]; ok {
+		return status
 	}
+	slog.Warn("unmapped error code, defaulting to 500", slog.String("code", string(code)))
+	return http.StatusInternalServerError
 }

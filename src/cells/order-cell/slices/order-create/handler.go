@@ -1,10 +1,8 @@
 package ordercreate
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -26,9 +24,8 @@ type createRequest struct {
 // HandleCreate handles POST /api/v1/orders.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDomainError(w, err)
 		return
 	}
 

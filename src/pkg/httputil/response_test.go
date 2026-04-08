@@ -12,37 +12,83 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMapCodeToStatus(t *testing.T) {
+func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 	tests := []struct {
-		code   errcode.Code
-		want   int
+		code       errcode.Code
+		wantStatus int
 	}{
-		{"ERR_NOT_FOUND", http.StatusNotFound},
-		{"ERR_USER_NOT_FOUND", http.StatusNotFound},
-		{"ERR_VALIDATION_REQUIRED_FIELD", http.StatusBadRequest},
-		{"ERR_AUTH_LOGIN_INVALID_INPUT", http.StatusBadRequest},
+		// NOT_FOUND group -> 404
+		{errcode.ErrMetadataNotFound, http.StatusNotFound},
+		{errcode.ErrCellNotFound, http.StatusNotFound},
+		{errcode.ErrSliceNotFound, http.StatusNotFound},
+		{errcode.ErrContractNotFound, http.StatusNotFound},
+		{errcode.ErrAssemblyNotFound, http.StatusNotFound},
+		{errcode.ErrJourneyNotFound, http.StatusNotFound},
+		{errcode.ErrSessionNotFound, http.StatusNotFound},
+		{errcode.ErrOrderNotFound, http.StatusNotFound},
+		{errcode.ErrDeviceNotFound, http.StatusNotFound},
+		{errcode.ErrCommandNotFound, http.StatusNotFound},
+
+		// Validation group -> 400
+		{errcode.ErrValidationFailed, http.StatusBadRequest},
+		{errcode.ErrMetadataInvalid, http.StatusBadRequest},
+		{errcode.ErrLifecycleInvalid, http.StatusBadRequest},
+		{errcode.ErrReferenceBroken, http.StatusBadRequest},
+
+		// Auth group -> 401
 		{errcode.ErrAuthUnauthorized, http.StatusUnauthorized},
+		{errcode.ErrAuthKeyInvalid, http.StatusUnauthorized},
 		{errcode.ErrAuthTokenInvalid, http.StatusUnauthorized},
 		{errcode.ErrAuthTokenExpired, http.StatusUnauthorized},
-		{errcode.ErrAuthKeyInvalid, http.StatusUnauthorized},
+
+		// Forbidden -> 403
+		{errcode.ErrAuthForbidden, http.StatusForbidden},
+
+		// Rate limited -> 429
+		{errcode.ErrRateLimited, http.StatusTooManyRequests},
+
+		// Body too large -> 413
+		{errcode.ErrBodyTooLarge, http.StatusRequestEntityTooLarge},
+
+		// Cell-local NOT_FOUND codes -> 404
+		{"ERR_AUTH_USER_NOT_FOUND", http.StatusNotFound},
+		{"ERR_CONFIG_NOT_FOUND", http.StatusNotFound},
+		{"ERR_FLAG_NOT_FOUND", http.StatusNotFound},
+
+		// Cell-local validation codes -> 400
+		{"ERR_AUTH_LOGIN_INVALID_INPUT", http.StatusBadRequest},
+		{"ERR_CONFIG_INVALID_INPUT", http.StatusBadRequest},
+
+		// Cell-local auth failure codes -> 401
 		{"ERR_AUTH_LOGIN_FAILED", http.StatusUnauthorized},
 		{"ERR_AUTH_REFRESH_FAILED", http.StatusUnauthorized},
-		{"ERR_AUTH_FORBIDDEN", http.StatusForbidden},
-		{"ERR_USER_LOCKED", http.StatusForbidden},
-		{"ERR_DUPLICATE_USER", http.StatusConflict},
-		{"ERR_CONFLICT", http.StatusConflict},
-		{"ERR_RATE_LIMITED", http.StatusTooManyRequests},
-		{"ERR_TOO_LARGE", http.StatusRequestEntityTooLarge},
-		{"ERR_INTERNAL", http.StatusInternalServerError},
-		{"ERR_UNKNOWN_CODE", http.StatusInternalServerError},
+
+		// Cell-local locked -> 403
+		{"ERR_AUTH_USER_LOCKED", http.StatusForbidden},
+
+		// Cell-local duplicate -> 409
+		{"ERR_AUTH_USER_DUPLICATE", http.StatusConflict},
+		{"ERR_CONFIG_DUPLICATE", http.StatusConflict},
+
+		// Codes that should fallback to 500
+		{errcode.ErrInternal, http.StatusInternalServerError},
+		{errcode.ErrDependencyCycle, http.StatusInternalServerError},
+		{errcode.ErrBusClosed, http.StatusInternalServerError},
+		{errcode.ErrAdapterPGNoTx, http.StatusInternalServerError},
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.code), func(t *testing.T) {
 			got := mapCodeToStatus(tt.code)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantStatus, got)
 		})
 	}
+}
+
+func TestMapCodeToStatus_UnknownCode(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteDomainError(rec, errcode.New("ERR_TOTALLY_NEW", "test"))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
 func TestWriteError(t *testing.T) {
@@ -85,30 +131,30 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 	}{
 		{
 			name:       "not found",
-			err:        errcode.New("ERR_USER_NOT_FOUND", "user not found"),
+			err:        errcode.New(errcode.ErrCellNotFound, "cell not found"),
 			wantStatus: http.StatusNotFound,
-			wantCode:   "ERR_USER_NOT_FOUND",
-			wantMsg:    "user not found",
+			wantCode:   string(errcode.ErrCellNotFound),
+			wantMsg:    "cell not found",
 		},
 		{
 			name:       "validation",
-			err:        errcode.New("ERR_VALIDATION_REQUIRED_FIELD", "field missing"),
+			err:        errcode.New(errcode.ErrValidationFailed, "field missing"),
 			wantStatus: http.StatusBadRequest,
-			wantCode:   "ERR_VALIDATION_REQUIRED_FIELD",
+			wantCode:   string(errcode.ErrValidationFailed),
 			wantMsg:    "field missing",
 		},
 		{
 			name:       "unauthorized",
-			err:        errcode.New("ERR_AUTH_UNAUTHORIZED", "bad creds"),
+			err:        errcode.New(errcode.ErrAuthUnauthorized, "bad creds"),
 			wantStatus: http.StatusUnauthorized,
-			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+			wantCode:   string(errcode.ErrAuthUnauthorized),
 			wantMsg:    "bad creds",
 		},
 		{
 			name:       "forbidden",
-			err:        errcode.New("ERR_AUTH_FORBIDDEN", "no access"),
+			err:        errcode.New(errcode.ErrAuthForbidden, "no access"),
 			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
+			wantCode:   string(errcode.ErrAuthForbidden),
 			wantMsg:    "no access",
 		},
 	}
@@ -152,7 +198,7 @@ func TestWriteDomainError_PlainError(t *testing.T) {
 
 func TestWriteDomainError_WithDetails(t *testing.T) {
 	ecErr := errcode.WithDetails(
-		errcode.New("ERR_VALIDATION_REQUIRED_FIELD", "field missing"),
+		errcode.New(errcode.ErrValidationFailed, "field missing"),
 		map[string]any{"field": "email"},
 	)
 
