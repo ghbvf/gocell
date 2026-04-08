@@ -59,7 +59,7 @@ func TestWriteError(t *testing.T) {
 	require.True(t, ok, "response must contain 'error' key")
 	assert.Equal(t, "ERR_VALIDATION_REQUIRED_FIELD", errObj["code"])
 	assert.Equal(t, "field is required", errObj["message"])
-	assert.NotNil(t, errObj["details"], "details must be present")
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
 func TestWriteJSON(t *testing.T) {
@@ -128,7 +128,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.wantCode, errObj["code"])
 			assert.Equal(t, tt.wantMsg, errObj["message"])
-			assert.NotNil(t, errObj["details"])
+			assert.IsType(t, map[string]any{}, errObj["details"], "details must be a JSON object")
 		})
 	}
 }
