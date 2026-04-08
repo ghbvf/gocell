@@ -47,7 +47,7 @@ func TestBodyLimit_ExactContentLengthOverLimit(t *testing.T) {
 	require.NoError(t, err)
 	errObj := respBody["error"].(map[string]any)
 	assert.Equal(t, "ERR_BODY_TOO_LARGE", errObj["code"])
-	assert.NotNil(t, errObj["details"], "canonical envelope must include details")
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
 func TestBodyLimit_MaxBytesReaderTriggered(t *testing.T) {

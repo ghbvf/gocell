@@ -44,7 +44,7 @@ func TestRecovery_PanicString(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
-	assert.NotNil(t, errObj["details"], "canonical envelope must include details")
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
 func TestRecovery_PanicError(t *testing.T) {
