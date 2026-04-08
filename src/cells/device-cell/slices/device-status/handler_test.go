@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,14 +15,10 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 )
 
-func setupStatusRouter() (http.Handler, *mem.DeviceRepository) {
+func setupStatusHandler() (*Handler, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
 	svc := NewService(repo, slog.Default())
-	h := NewHandler(svc)
-
-	r := chi.NewRouter()
-	r.Get("/devices/{id}/status", h.HandleGetStatus)
-	return r, repo
+	return NewHandler(svc), repo
 }
 
 func TestHandleGetStatus(t *testing.T) {
@@ -63,12 +58,13 @@ func TestHandleGetStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, repo := setupStatusRouter()
+			h, repo := setupStatusHandler()
 			tc.setup(repo)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/status", nil)
-			r.ServeHTTP(w, req)
+			req.SetPathValue("id", tc.deviceID)
+			h.HandleGetStatus(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {

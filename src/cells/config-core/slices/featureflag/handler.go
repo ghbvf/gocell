@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -17,15 +15,6 @@ type Handler struct {
 // NewHandler creates a feature-flag Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
-}
-
-// Routes returns a chi.Router with feature-flag routes.
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Get("/", h.HandleList)
-	r.Get("/{key}", h.HandleGet)
-	r.Post("/{key}/evaluate", h.HandleEvaluate)
-	return r
 }
 
 // HandleList handles GET / — returns all feature flags.
@@ -41,7 +30,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 // HandleGet handles GET /{key} — returns a single feature flag.
 func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
+	key := r.PathValue("key")
 
 	flag, err := h.svc.GetByKey(r.Context(), key)
 	if err != nil {
@@ -54,7 +43,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandleEvaluate handles POST /{key}/evaluate — evaluates a feature flag.
 func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
+	key := r.PathValue("key")
 
 	var req struct {
 		Subject string `json:"subject"`

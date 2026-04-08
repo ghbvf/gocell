@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -19,17 +17,9 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Routes returns a chi.Router with config-publish routes.
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Post("/{key}/publish", h.HandlePublish)
-	r.Post("/{key}/rollback", h.HandleRollback)
-	return r
-}
-
 // HandlePublish handles POST /{key}/publish — publishes a config entry.
 func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
+	key := r.PathValue("key")
 
 	version, err := h.svc.Publish(r.Context(), key)
 	if err != nil {
@@ -42,7 +32,7 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 
 // HandleRollback handles POST /{key}/rollback — rolls back a config entry.
 func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
-	key := chi.URLParam(r, "key")
+	key := r.PathValue("key")
 
 	var req struct {
 		Version int `json:"version"`

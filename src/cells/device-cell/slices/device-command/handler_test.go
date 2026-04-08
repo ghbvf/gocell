@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,23 +16,17 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 )
 
-// setupCommandRouter creates a chi router with all device-command endpoints.
-// It seeds a device so that command operations succeed.
-func setupCommandRouter() (http.Handler, *mem.DeviceRepository, *mem.CommandRepository) {
+// setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
+func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
 	svc := NewService(cmdRepo, devRepo, slog.Default())
-	h := NewHandler(svc)
 
 	_ = devRepo.Create(context.Background(), &domain.Device{
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
 
-	r := chi.NewRouter()
-	r.Post("/devices/{id}/commands", h.HandleEnqueue)
-	r.Get("/devices/{id}/commands", h.HandleListPending)
-	r.Post("/devices/{id}/commands/{cmdId}/ack", h.HandleAck)
-	return r, devRepo, cmdRepo
+	return NewHandler(svc), devRepo, cmdRepo
 }
 
 func TestHandleEnqueue(t *testing.T) {
@@ -80,11 +73,12 @@ func TestHandleEnqueue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, _, _ := setupCommandRouter()
+			h, _, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			r.ServeHTTP(w, req)
+			req.SetPathValue("id", tc.deviceID)
+			h.HandleEnqueue(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
@@ -126,7 +120,7 @@ func TestHandleListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, _, cmdRepo := setupCommandRouter()
+			h, _, cmdRepo := setupCommandHandler()
 			ctx := context.Background()
 			for i := range tc.seedCmds {
 				_ = cmdRepo.Create(ctx, &domain.Command{
@@ -137,7 +131,8 @@ func TestHandleListPending(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
-			r.ServeHTTP(w, req)
+			req.SetPathValue("id", tc.deviceID)
+			h.HandleListPending(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {
@@ -175,7 +170,7 @@ func TestHandleAck(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r, _, cmdRepo := setupCommandRouter()
+			h, _, cmdRepo := setupCommandHandler()
 			if tc.seedCmd {
 				_ = cmdRepo.Create(context.Background(), &domain.Command{
 					ID: tc.cmdID, DeviceID: tc.deviceID, Payload: "reboot", Status: "pending",
@@ -184,7 +179,9 @@ func TestHandleAck(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands/"+tc.cmdID+"/ack", nil)
-			r.ServeHTTP(w, req)
+			req.SetPathValue("id", tc.deviceID)
+			req.SetPathValue("cmdId", tc.cmdID)
+			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {

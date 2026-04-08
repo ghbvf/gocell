@@ -3,7 +3,6 @@ package orderquery
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -20,7 +19,7 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleGet handles GET /api/v1/orders/{id}.
 func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 
 	order, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {

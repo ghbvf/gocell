@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -44,17 +44,15 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Routes returns a chi.Router with identity-manage routes.
-func (h *Handler) Routes() chi.Router {
-	r := chi.NewRouter()
-	r.Post("/", h.handleCreate)
-	r.Get("/{id}", h.handleGet)
-	r.Put("/{id}", h.handleUpdate)
-	r.Patch("/{id}", h.handlePatch)
-	r.Delete("/{id}", h.handleDelete)
-	r.Post("/{id}/lock", h.handleLock)
-	r.Post("/{id}/unlock", h.handleUnlock)
-	return r
+// RegisterRoutes registers identity-manage routes on the given mux.
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
+	mux.Handle("POST /", http.HandlerFunc(h.handleCreate))
+	mux.Handle("GET /{id}", http.HandlerFunc(h.handleGet))
+	mux.Handle("PUT /{id}", http.HandlerFunc(h.handleUpdate))
+	mux.Handle("PATCH /{id}", http.HandlerFunc(h.handlePatch))
+	mux.Handle("DELETE /{id}", http.HandlerFunc(h.handleDelete))
+	mux.Handle("POST /{id}/lock", http.HandlerFunc(h.handleLock))
+	mux.Handle("POST /{id}/unlock", http.HandlerFunc(h.handleUnlock))
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +78,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
 		httputil.WriteDomainError(w, err)
@@ -90,7 +88,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -112,7 +110,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 
 	// JSON merge patch: only fields present in the JSON body are updated.
 	var raw map[string]json.RawMessage
@@ -150,7 +148,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		httputil.WriteDomainError(w, err)
 		return
@@ -159,7 +157,7 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 	if err := h.svc.Lock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(w, err)
 		return
@@ -168,7 +166,7 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := r.PathValue("id")
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(w, err)
 		return

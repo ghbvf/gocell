@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -27,7 +26,7 @@ type enqueueRequest struct {
 
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
-	deviceID := chi.URLParam(r, "id")
+	deviceID := r.PathValue("id")
 
 	var req enqueueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -53,7 +52,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 // HandleListPending handles GET /api/v1/devices/{id}/commands.
 // Devices poll this endpoint to retrieve pending commands (L4 latent model).
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
-	deviceID := chi.URLParam(r, "id")
+	deviceID := r.PathValue("id")
 
 	cmds, err := h.svc.ListPending(r.Context(), deviceID)
 	if err != nil {
@@ -69,8 +68,8 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
-	deviceID := chi.URLParam(r, "id")
-	cmdID := chi.URLParam(r, "cmdId")
+	deviceID := r.PathValue("id")
+	cmdID := r.PathValue("cmdId")
 
 	if err := h.svc.Ack(r.Context(), deviceID, cmdID); err != nil {
 		httputil.WriteDomainError(w, err)
