@@ -23,6 +23,9 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // WriteError writes a structured error response in the canonical format:
 //
 //	{"error": {"code": "ERR_*", "message": "...", "details": {}}}
+//
+// Callers that need additional response headers (e.g. Retry-After) must set
+// them before calling WriteError, as it calls w.WriteHeader internally.
 func WriteError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

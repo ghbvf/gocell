@@ -77,6 +77,7 @@ func TestRateLimit_Rejected_DefaultRetryAfter(t *testing.T) {
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_RATE_LIMITED", errObj["code"])
+	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
 func TestRateLimit_Rejected_DynamicRetryAfter(t *testing.T) {
