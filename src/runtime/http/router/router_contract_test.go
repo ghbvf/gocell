@@ -264,13 +264,14 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 	}))
 
 	tests := []struct {
-		name   string
-		method string
-		want   int
+		name      string
+		method    string
+		want      int
+		wantAllow string // expected Allow header (empty means don't check)
 	}{
-		{"correct method returns 200", http.MethodPost, http.StatusOK},
-		{"wrong method returns 405", http.MethodGet, http.StatusMethodNotAllowed},
-		{"wrong method PUT returns 405", http.MethodPut, http.StatusMethodNotAllowed},
+		{"correct method returns 200", http.MethodPost, http.StatusOK, ""},
+		{"wrong method returns 405", http.MethodGet, http.StatusMethodNotAllowed, "POST"},
+		{"wrong method PUT returns 405", http.MethodPut, http.StatusMethodNotAllowed, "POST"},
 	}
 
 	for _, tt := range tests {
@@ -279,6 +280,10 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 			req := httptest.NewRequest(tt.method, "/submit", nil)
 			r.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
+			if tt.wantAllow != "" {
+				assert.Contains(t, rec.Header().Get("Allow"), tt.wantAllow,
+					"405 response must include Allow header listing valid methods")
+			}
 		})
 	}
 }
@@ -294,15 +299,16 @@ func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
 	})
 
 	tests := []struct {
-		name   string
-		method string
-		path   string
-		want   int
+		name      string
+		method    string
+		path      string
+		want      int
+		wantAllow string
 	}{
-		{"registered path returns 200", http.MethodGet, "/api/users", http.StatusOK},
-		{"unregistered sub-path returns 404", http.MethodGet, "/api/orders", http.StatusNotFound},
-		{"wrong method returns 405", http.MethodPost, "/api/users", http.StatusMethodNotAllowed},
-		{"outside subtree returns 404", http.MethodGet, "/other", http.StatusNotFound},
+		{"registered path returns 200", http.MethodGet, "/api/users", http.StatusOK, ""},
+		{"unregistered sub-path returns 404", http.MethodGet, "/api/orders", http.StatusNotFound, ""},
+		{"wrong method returns 405", http.MethodPost, "/api/users", http.StatusMethodNotAllowed, "GET"},
+		{"outside subtree returns 404", http.MethodGet, "/other", http.StatusNotFound, ""},
 	}
 
 	for _, tt := range tests {
@@ -311,6 +317,10 @@ func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			r.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
+			if tt.wantAllow != "" {
+				assert.Contains(t, rec.Header().Get("Allow"), tt.wantAllow,
+					"405 response must include Allow header listing valid methods")
+			}
 		})
 	}
 }
@@ -324,15 +334,16 @@ func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
 	r.Mount("/store", sub)
 
 	tests := []struct {
-		name   string
-		method string
-		path   string
-		want   int
+		name      string
+		method    string
+		path      string
+		want      int
+		wantAllow string
 	}{
-		{"registered path returns 200", http.MethodGet, "/store/items", http.StatusOK},
-		{"unregistered sub-path returns 404", http.MethodGet, "/store/nope", http.StatusNotFound},
-		{"wrong method returns 405", http.MethodPost, "/store/items", http.StatusMethodNotAllowed},
-		{"outside mount returns 404", http.MethodGet, "/other", http.StatusNotFound},
+		{"registered path returns 200", http.MethodGet, "/store/items", http.StatusOK, ""},
+		{"unregistered sub-path returns 404", http.MethodGet, "/store/nope", http.StatusNotFound, ""},
+		{"wrong method returns 405", http.MethodPost, "/store/items", http.StatusMethodNotAllowed, "GET"},
+		{"outside mount returns 404", http.MethodGet, "/other", http.StatusNotFound, ""},
 	}
 
 	for _, tt := range tests {
@@ -341,6 +352,10 @@ func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			r.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
+			if tt.wantAllow != "" {
+				assert.Contains(t, rec.Header().Get("Allow"), tt.wantAllow,
+					"405 response must include Allow header listing valid methods")
+			}
 		})
 	}
 }
