@@ -27,7 +27,9 @@ func Metrics(collector metrics.Collector) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(w, r)
 
-			collector.RecordRequest(r.Method, r.URL.Path, state.Status(), time.Since(start).Seconds())
+			safeObserve(func() {
+				collector.RecordRequest(r.Method, r.URL.Path, state.Status(), time.Since(start).Seconds())
+			})
 		})
 	}
 }
