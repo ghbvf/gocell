@@ -55,11 +55,10 @@ func TestDecodeJSON(t *testing.T) {
 			wantReason: "type mismatch",
 		},
 		{
-			name:       "unknown field on struct",
-			body:       `{"name":"test","unknown":"value"}`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
-			wantCode:   errcode.ErrValidationFailed,
-			wantReason: "unknown field",
+			name:     "unknown fields accepted",
+			body:     `{"name":"test","unknown":"value"}`,
+			dst:      func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode: "", // backward compatible: unknown fields are silently ignored
 		},
 		{
 			name:       "truncated JSON",
@@ -78,6 +77,27 @@ func TestDecodeJSON(t *testing.T) {
 		{
 			name:       "multiple JSON objects",
 			body:       `{"name":"test"}{"role":"admin"}`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
+		{
+			name:       "trailing close brace",
+			body:       `{"name":"ok"}}`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
+		{
+			name:       "trailing close bracket",
+			body:       `{"name":"ok"}]`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
+		{
+			name:       "trailing close bracket with space",
+			body:       `{"name":"ok"} ]`,
 			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",

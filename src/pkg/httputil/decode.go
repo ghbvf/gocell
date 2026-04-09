@@ -5,32 +5,31 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // DecodeJSON reads the request body as JSON into dst.
-// It enables DisallowUnknownFields by default (only affects struct targets;
-// map targets accept any key regardless).
+// The body must contain exactly one JSON value; trailing content is rejected.
+// Unknown fields are silently ignored to maintain backward compatibility.
 //
 // Errors are returned as *errcode.Error:
 //   - empty body           -> ErrValidationFailed, details: {"reason": "empty body"}
 //   - truncated JSON       -> ErrValidationFailed, details: {"reason": "malformed JSON"}
 //   - syntax error         -> ErrValidationFailed, details: {"reason": "malformed JSON", ...}
 //   - type mismatch        -> ErrValidationFailed, details: {"reason": "type mismatch", "field": ...}
-//   - unknown field        -> ErrValidationFailed, details: {"reason": "unknown field", "field": ...}
 //   - trailing content     -> ErrValidationFailed, details: {"reason": "trailing content after JSON value"}
 //   - body too large       -> ErrBodyTooLarge
 //   - other                -> ErrInternal (details not exposed)
 func DecodeJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return classifyDecodeError(err)
 	}
-	// Reject trailing content: body must contain exactly one JSON value.
-	if dec.More() {
+	// Reject trailing content: a second Decode must return io.EOF.
+	// dec.More() is insufficient — it returns false for stray '}' and ']',
+	// letting invalid input like `{"name":"ok"}}` pass silently.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return errcode.WithDetails(
 			errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 			map[string]any{"reason": "trailing content after JSON value"},
@@ -66,17 +65,6 @@ func classifyDecodeError(err error) *errcode.Error {
 			return errcode.WithDetails(
 				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 				map[string]any{"reason": "type mismatch", "field": typeErr.Field},
-			)
-		}
-		// DisallowUnknownFields produces a plain error whose message starts with
-		// "json: unknown field". This is not a public API guarantee — verify on
-		// Go version upgrades. See https://github.com/golang/go/issues/29035.
-		if strings.HasPrefix(err.Error(), "json: unknown field") {
-			field := strings.TrimPrefix(err.Error(), "json: unknown field ")
-			field = strings.Trim(field, "\"")
-			return errcode.WithDetails(
-				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
-				map[string]any{"reason": "unknown field", "field": field},
 			)
 		}
 		return errcode.Wrap(errcode.ErrInternal, "internal server error", err)
