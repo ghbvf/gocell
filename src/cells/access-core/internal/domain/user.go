@@ -7,11 +7,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Error codes for access-core domain.
-const (
-	ErrUserInvalidInput errcode.Code = "ERR_AUTH_INVALID_INPUT"
-	ErrUserLocked       errcode.Code = "ERR_AUTH_USER_LOCKED"
-)
 
 // UserStatus represents the account state of a user.
 type UserStatus string
@@ -50,13 +45,13 @@ type User struct {
 // Returns an errcode.Error if any required field is empty.
 func NewUser(username, email, passwordHash string) (*User, error) {
 	if username == "" {
-		return nil, errcode.New(ErrUserInvalidInput, "username is required")
+		return nil, errcode.New(errcode.ErrAuthInvalidInput, "username is required")
 	}
 	if email == "" {
-		return nil, errcode.New(ErrUserInvalidInput, "email is required")
+		return nil, errcode.New(errcode.ErrAuthInvalidInput, "email is required")
 	}
 	if passwordHash == "" {
-		return nil, errcode.New(ErrUserInvalidInput, "passwordHash is required")
+		return nil, errcode.New(errcode.ErrAuthInvalidInput, "passwordHash is required")
 	}
 
 	now := time.Now()

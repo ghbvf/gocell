@@ -12,10 +12,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	// ErrFlagInvalidInput indicates invalid input for flag operations.
-	ErrFlagInvalidInput errcode.Code = "ERR_FLAG_INVALID_INPUT"
-)
 
 // EvaluateResult holds the result of a flag evaluation.
 type EvaluateResult struct {
@@ -58,10 +54,10 @@ func (s *Service) List(ctx context.Context) ([]*domain.FeatureFlag, error) {
 // Evaluate checks if a flag is enabled for the given subject.
 func (s *Service) Evaluate(ctx context.Context, key, subject string) (*EvaluateResult, error) {
 	if key == "" {
-		return nil, errcode.New(ErrFlagInvalidInput, "key is required")
+		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
 	}
 	if subject == "" {
-		return nil, errcode.New(ErrFlagInvalidInput, "subject is required")
+		return nil, errcode.New(errcode.ErrFlagInvalidInput, "subject is required")
 	}
 
 	flag, err := s.repo.GetByKey(ctx, key)

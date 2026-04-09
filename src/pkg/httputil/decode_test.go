@@ -61,6 +61,27 @@ func TestDecodeJSON(t *testing.T) {
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "unknown field",
 		},
+		{
+			name:       "truncated JSON",
+			body:       `{"username":`,
+			dst:        func() any { return &struct{ Username string `json:"username"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "malformed JSON",
+		},
+		{
+			name:       "trailing content",
+			body:       `{"name":"test"}garbage`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
+		{
+			name:       "multiple JSON objects",
+			body:       `{"name":"test"}{"role":"admin"}`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
 	}
 
 	for _, tt := range tests {

@@ -72,69 +72,91 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 }
 
 // codeToStatus maps known error codes to HTTP status codes.
-// Codes from pkg/errcode use sentinel constants; cell-local codes that surface
-// through HTTP handlers are registered as literal Code values.
+// All codes use errcode constants for compile-time checking.
 var codeToStatus = map[errcode.Code]int{
 	// --- 404 Not Found ---
-	errcode.ErrMetadataNotFound:             http.StatusNotFound,
-	errcode.ErrCellNotFound:                 http.StatusNotFound,
-	errcode.ErrSliceNotFound:                http.StatusNotFound,
-	errcode.ErrContractNotFound:             http.StatusNotFound,
-	errcode.ErrAssemblyNotFound:             http.StatusNotFound,
-	errcode.ErrJourneyNotFound:              http.StatusNotFound,
-	errcode.ErrSessionNotFound:              http.StatusNotFound,
-	errcode.ErrOrderNotFound:                http.StatusNotFound,
-	errcode.ErrDeviceNotFound:               http.StatusNotFound,
-	errcode.ErrCommandNotFound:              http.StatusNotFound,
-	"ERR_AUTH_USER_NOT_FOUND":               http.StatusNotFound,
-	"ERR_AUTH_ROLE_NOT_FOUND":               http.StatusNotFound,
-	"ERR_CONFIG_NOT_FOUND":                  http.StatusNotFound,
-	"ERR_CONFIG_REPO_NOT_FOUND":             http.StatusNotFound,
-	"ERR_FLAG_NOT_FOUND":                    http.StatusNotFound,
-	"ERR_WS_CONN_NOT_FOUND":                http.StatusNotFound,
-	"ERR_AUDIT_REPO_NOT_FOUND":             http.StatusNotFound,
+	errcode.ErrMetadataNotFound:   http.StatusNotFound,
+	errcode.ErrCellNotFound:       http.StatusNotFound,
+	errcode.ErrSliceNotFound:      http.StatusNotFound,
+	errcode.ErrContractNotFound:   http.StatusNotFound,
+	errcode.ErrAssemblyNotFound:   http.StatusNotFound,
+	errcode.ErrJourneyNotFound:    http.StatusNotFound,
+	errcode.ErrSessionNotFound:    http.StatusNotFound,
+	errcode.ErrOrderNotFound:      http.StatusNotFound,
+	errcode.ErrDeviceNotFound:     http.StatusNotFound,
+	errcode.ErrCommandNotFound:    http.StatusNotFound,
+	errcode.ErrAuthUserNotFound:   http.StatusNotFound,
+	errcode.ErrAuthRoleNotFound:   http.StatusNotFound,
+	errcode.ErrConfigNotFound:     http.StatusNotFound,
+	errcode.ErrConfigRepoNotFound: http.StatusNotFound,
+	errcode.ErrFlagNotFound:       http.StatusNotFound,
+	errcode.ErrWSConnNotFound:     http.StatusNotFound,
+	errcode.ErrAuditRepoNotFound:  http.StatusNotFound,
 
 	// --- 400 Bad Request ---
-	errcode.ErrValidationFailed:             http.StatusBadRequest,
-	errcode.ErrMetadataInvalid:              http.StatusBadRequest,
-	errcode.ErrLifecycleInvalid:             http.StatusBadRequest,
-	errcode.ErrReferenceBroken:              http.StatusBadRequest,
-	"ERR_AUTH_INVALID_INPUT":                http.StatusBadRequest,
-	"ERR_AUTH_IDENTITY_INVALID_INPUT":       http.StatusBadRequest,
-	"ERR_AUTH_LOGIN_INVALID_INPUT":          http.StatusBadRequest,
-	"ERR_AUTH_REFRESH_INVALID_INPUT":        http.StatusBadRequest,
-	"ERR_AUTH_SESSION_INVALID_INPUT":        http.StatusBadRequest,
-	"ERR_AUTH_LOGOUT_INVALID_INPUT":         http.StatusBadRequest,
-	"ERR_AUTH_RBAC_INVALID_INPUT":           http.StatusBadRequest,
-	"ERR_CONFIG_INVALID_INPUT":              http.StatusBadRequest,
-	"ERR_CONFIG_PUBLISH_INVALID_INPUT":      http.StatusBadRequest,
-	"ERR_FLAG_INVALID_INPUT":                http.StatusBadRequest,
+	errcode.ErrValidationFailed:          http.StatusBadRequest,
+	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
+	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
+	errcode.ErrReferenceBroken:           http.StatusBadRequest,
+	errcode.ErrAuthInvalidInput:          http.StatusBadRequest,
+	errcode.ErrAuthIdentityInvalidInput:  http.StatusBadRequest,
+	errcode.ErrAuthLoginInvalidInput:     http.StatusBadRequest,
+	errcode.ErrAuthRefreshInvalidInput:   http.StatusBadRequest,
+	errcode.ErrAuthSessionInvalidInput:   http.StatusBadRequest,
+	errcode.ErrAuthLogoutInvalidInput:    http.StatusBadRequest,
+	errcode.ErrAuthRBACInvalidInput:      http.StatusBadRequest,
+	errcode.ErrConfigInvalidInput:        http.StatusBadRequest,
+	errcode.ErrConfigPublishInvalidInput: http.StatusBadRequest,
+	errcode.ErrFlagInvalidInput:          http.StatusBadRequest,
 
 	// --- 401 Unauthorized ---
-	errcode.ErrAuthUnauthorized:             http.StatusUnauthorized,
-	errcode.ErrAuthKeyInvalid:               http.StatusUnauthorized,
-	errcode.ErrAuthTokenInvalid:             http.StatusUnauthorized,
-	errcode.ErrAuthTokenExpired:             http.StatusUnauthorized,
-	"ERR_AUTH_LOGIN_FAILED":                 http.StatusUnauthorized,
-	"ERR_AUTH_REFRESH_FAILED":               http.StatusUnauthorized,
-	"ERR_AUTH_REFRESH_TOKEN_REUSE":          http.StatusUnauthorized,
-	"ERR_AUTH_INVALID_TOKEN":                http.StatusUnauthorized,
+	errcode.ErrAuthUnauthorized:      http.StatusUnauthorized,
+	errcode.ErrAuthKeyInvalid:        http.StatusUnauthorized,
+	errcode.ErrAuthTokenInvalid:      http.StatusUnauthorized,
+	errcode.ErrAuthTokenExpired:      http.StatusUnauthorized,
+	errcode.ErrAuthLoginFailed:       http.StatusUnauthorized,
+	errcode.ErrAuthRefreshFailed:     http.StatusUnauthorized,
+	errcode.ErrAuthRefreshTokenReuse: http.StatusUnauthorized,
+	errcode.ErrAuthInvalidToken:      http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
-	errcode.ErrAuthForbidden:                http.StatusForbidden,
-	"ERR_AUTH_USER_LOCKED":                  http.StatusForbidden,
+	errcode.ErrAuthForbidden:  http.StatusForbidden,
+	errcode.ErrAuthUserLocked: http.StatusForbidden,
 
 	// --- 409 Conflict ---
-	"ERR_AUTH_USER_DUPLICATE":               http.StatusConflict,
-	"ERR_CONFIG_DUPLICATE":                  http.StatusConflict,
-	"ERR_CONFIG_REPO_DUPLICATE":             http.StatusConflict,
-	"ERR_FLAG_DUPLICATE":                    http.StatusConflict,
+	errcode.ErrAuthUserDuplicate:  http.StatusConflict,
+	errcode.ErrConfigDuplicate:    http.StatusConflict,
+	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
+	errcode.ErrFlagDuplicate:      http.StatusConflict,
 
 	// --- 429 Too Many Requests ---
-	errcode.ErrRateLimited:                  http.StatusTooManyRequests,
+	errcode.ErrRateLimited: http.StatusTooManyRequests,
 
 	// --- 413 Request Entity Too Large ---
-	errcode.ErrBodyTooLarge:                 http.StatusRequestEntityTooLarge,
+	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
+
+	// --- 503 Service Unavailable ---
+	errcode.ErrWSHubStopping:  http.StatusServiceUnavailable,
+	errcode.ErrWSHubNotRunning: http.StatusServiceUnavailable,
+	errcode.ErrWSMaxConns:     http.StatusServiceUnavailable,
+
+	// --- 500 Internal Server Error ---
+	errcode.ErrInternal:          http.StatusInternalServerError,
+	errcode.ErrDependencyCycle:   http.StatusInternalServerError,
+	errcode.ErrBusClosed:         http.StatusInternalServerError,
+	errcode.ErrAdapterPGNoTx:     http.StatusInternalServerError,
+	errcode.ErrTestExecution:     http.StatusInternalServerError,
+	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
+	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
+	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
+	errcode.ErrAuditRepoQuery:   http.StatusInternalServerError,
+	errcode.ErrConfigRepoQuery:  http.StatusInternalServerError,
+	errcode.ErrAuthKeyMissing:   http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStarted: http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStopped: http.StatusInternalServerError,
+
+	// --- 501 Not Implemented ---
+	errcode.ErrNotImplemented: http.StatusNotImplemented,
 }
 
 // mapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.

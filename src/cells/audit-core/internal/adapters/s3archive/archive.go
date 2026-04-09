@@ -14,12 +14,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	// ErrArchiveUpload indicates a failure uploading the archive.
-	ErrArchiveUpload errcode.Code = "ERR_ARCHIVE_UPLOAD"
-	// ErrArchiveMarshal indicates a failure serializing entries.
-	ErrArchiveMarshal errcode.Code = "ERR_ARCHIVE_MARSHAL"
-)
 
 // ObjectUploader abstracts the upload operation for S3-compatible storage.
 // This interface decouples the ArchiveStore from the concrete s3.Client.
@@ -54,7 +48,7 @@ func (s *ArchiveStore) Archive(ctx context.Context, entries []*domain.AuditEntry
 
 	data, err := json.Marshal(entries)
 	if err != nil {
-		return errcode.Wrap(ErrArchiveMarshal, "s3archive: failed to marshal entries", err)
+		return errcode.Wrap(errcode.ErrArchiveMarshal, "s3archive: failed to marshal entries", err)
 	}
 
 	key := fmt.Sprintf("%s%s-%d.json",
@@ -64,7 +58,7 @@ func (s *ArchiveStore) Archive(ctx context.Context, entries []*domain.AuditEntry
 	)
 
 	if err := s.uploader.Upload(ctx, key, data, "application/json"); err != nil {
-		return errcode.Wrap(ErrArchiveUpload,
+		return errcode.Wrap(errcode.ErrArchiveUpload,
 			fmt.Sprintf("s3archive: upload failed for key %s", key), err)
 	}
 

@@ -11,12 +11,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	// ErrConfigNotFound indicates the requested config key does not exist.
-	ErrConfigNotFound errcode.Code = "ERR_CONFIG_NOT_FOUND"
-	// ErrConfigDuplicate indicates a config key already exists.
-	ErrConfigDuplicate errcode.Code = "ERR_CONFIG_DUPLICATE"
-)
 
 // Compile-time check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
@@ -41,7 +35,7 @@ func (r *ConfigRepository) Create(_ context.Context, entry *domain.ConfigEntry) 
 	defer r.mu.Unlock()
 
 	if _, exists := r.entries[entry.Key]; exists {
-		return errcode.New(ErrConfigDuplicate, "config key already exists: "+entry.Key)
+		return errcode.New(errcode.ErrConfigDuplicate, "config key already exists: "+entry.Key)
 	}
 	clone := *entry
 	r.entries[entry.Key] = &clone
@@ -54,7 +48,7 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 
 	entry, ok := r.entries[key]
 	if !ok {
-		return nil, errcode.New(ErrConfigNotFound, "config not found: "+key)
+		return nil, errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
 	}
 	clone := *entry
 	return &clone, nil
@@ -65,7 +59,7 @@ func (r *ConfigRepository) Update(_ context.Context, entry *domain.ConfigEntry) 
 	defer r.mu.Unlock()
 
 	if _, exists := r.entries[entry.Key]; !exists {
-		return errcode.New(ErrConfigNotFound, "config not found: "+entry.Key)
+		return errcode.New(errcode.ErrConfigNotFound, "config not found: "+entry.Key)
 	}
 	clone := *entry
 	r.entries[entry.Key] = &clone
@@ -77,7 +71,7 @@ func (r *ConfigRepository) Delete(_ context.Context, key string) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.entries[key]; !exists {
-		return errcode.New(ErrConfigNotFound, "config not found: "+key)
+		return errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
 	}
 	delete(r.entries, key)
 	return nil
@@ -115,5 +109,5 @@ func (r *ConfigRepository) GetVersion(_ context.Context, configID string, versio
 			return &clone, nil
 		}
 	}
-	return nil, errcode.New(ErrConfigNotFound, "version not found")
+	return nil, errcode.New(errcode.ErrConfigNotFound, "version not found")
 }

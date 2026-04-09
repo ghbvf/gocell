@@ -15,9 +15,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const (
-	ErrValidateInvalidToken errcode.Code = "ERR_AUTH_INVALID_TOKEN"
-)
 
 // Compile-time check: Service implements auth.TokenVerifier.
 var _ auth.TokenVerifier = (*Service)(nil)
@@ -41,17 +38,17 @@ func NewService(verifier auth.TokenVerifier, sessionRepo ports.SessionRepository
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	claims, err := s.verifier.Verify(ctx, tokenStr)
 	if err != nil {
-		return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "invalid token")
+		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid token")
 	}
 
 	// Check session revocation if sid claim is present in Extra.
 	if sid, ok := claims.Extra["sid"].(string); ok && sid != "" && s.sessionRepo != nil {
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
-			return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "session not found")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session not found")
 		}
 		if session.IsRevoked() {
-			return auth.Claims{}, errcode.New(ErrValidateInvalidToken, "session has been revoked")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session has been revoked")
 		}
 	}
 
