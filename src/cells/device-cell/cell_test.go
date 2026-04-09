@@ -109,8 +109,9 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
 	fn(m)
 }
-func (m *stubMux) Mount(_ string, _ http.Handler) { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))    { m.handleCount++ }
+func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
+func (m *stubMux) Use(_ ...func(http.Handler) http.Handler)         {}
 
 // initCellWithRouter creates an initialized DeviceCell with routes registered
 // on a real chi-based router, ready for HTTP testing.

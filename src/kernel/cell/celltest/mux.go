@@ -43,3 +43,6 @@ func (m *TestMux) Mount(pattern string, handler http.Handler) {
 func (m *TestMux) Group(fn func(cell.RouteMux)) {
 	fn(m)
 }
+
+// Use is a no-op in TestMux; stdlib ServeMux has no middleware chain.
+func (m *TestMux) Use(_ ...func(http.Handler) http.Handler) {}
