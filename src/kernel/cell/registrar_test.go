@@ -39,7 +39,7 @@ func (m *mockRouteMux) Group(fn func(RouteMux)) {
 	fn(m)
 }
 
-func (m *mockRouteMux) Use(_ ...func(http.Handler) http.Handler) {}
+func (m *mockRouteMux) With(_ ...func(http.Handler) http.Handler) RouteMux { return m }
 
 // Compile-time check: mockRouteMux satisfies RouteMux.
 var _ RouteMux = (*mockRouteMux)(nil)
