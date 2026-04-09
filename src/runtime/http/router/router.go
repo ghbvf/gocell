@@ -181,3 +181,7 @@ func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 		fn(sub)
 	})
 }
+
+func (a *chiRouterAdapter) Use(mw ...func(http.Handler) http.Handler) {
+	a.cr.Use(mw...)
+}

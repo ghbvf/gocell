@@ -50,6 +50,10 @@ type RouteMux interface {
 	// Group creates a same-level scope sharing the parent prefix.
 	// Useful for applying middleware to a subset of routes.
 	Group(fn func(RouteMux))
+
+	// Use appends middleware to this scope's chain.
+	// Middleware added inside a Group applies only to that group's routes.
+	Use(mw ...func(http.Handler) http.Handler)
 }
 
 // HTTPRegistrar is optionally implemented by Cells that expose HTTP endpoints.

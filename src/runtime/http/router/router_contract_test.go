@@ -98,6 +98,15 @@ func TestMount_PrefixStripping(t *testing.T) {
 func TestMount_MiddlewareInheritance(t *testing.T) {
 	r := New() // New() applies default middleware (RequestID, SecurityHeaders, etc.)
 
+	// Add a custom middleware via Use() AFTER construction to verify it also
+	// propagates to mounted handlers (not just the built-in middleware).
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("X-Custom-MW", "applied")
+			next.ServeHTTP(w, req)
+		})
+	})
+
 	sub := chi.NewRouter()
 	sub.Get("/resource", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -109,13 +118,16 @@ func TestMount_MiddlewareInheritance(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	// Parent middleware should have set these headers.
+	// Built-in middleware from New().
 	assert.NotEmpty(t, rec.Header().Get("X-Request-Id"),
 		"RequestID middleware must run for mounted handlers")
 	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"),
 		"SecurityHeaders middleware must run for mounted handlers")
 	assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"),
 		"SecurityHeaders middleware must run for mounted handlers")
+	// Middleware added via Use() after construction.
+	assert.Equal(t, "applied", rec.Header().Get("X-Custom-MW"),
+		"middleware added via Use() must propagate to mounted handlers")
 }
 
 // --- Route Prefix Stripping ------------------------------------------------
@@ -178,7 +190,8 @@ func TestGroup_NoPrefixChange(t *testing.T) {
 // --- Group Middleware Isolation ---------------------------------------------
 
 func TestGroup_MiddlewareIsolation(t *testing.T) {
-	// Middleware added inside a Group must not leak to handlers outside the group.
+	// Middleware added inside a Group via Use() must not leak to handlers
+	// outside the group.
 	r := New()
 
 	marker := func(next http.Handler) http.Handler {
@@ -189,7 +202,7 @@ func TestGroup_MiddlewareIsolation(t *testing.T) {
 	}
 
 	r.Group(func(mux cell.RouteMux) {
-		mux.(*chiRouterAdapter).cr.Use(marker)
+		mux.Use(marker)
 		mux.Handle("GET /inside", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -264,6 +277,68 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(tt.method, "/submit", nil)
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tt.want, rec.Code)
+		})
+	}
+}
+
+// --- Subtree 404 / 405 ----------------------------------------------------
+
+func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
+	r := New()
+	r.Route("/api", func(mux cell.RouteMux) {
+		mux.Handle("GET /users", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+	})
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"registered path returns 200", http.MethodGet, "/api/users", http.StatusOK},
+		{"unregistered sub-path returns 404", http.MethodGet, "/api/orders", http.StatusNotFound},
+		{"wrong method returns 405", http.MethodPost, "/api/users", http.StatusMethodNotAllowed},
+		{"outside subtree returns 404", http.MethodGet, "/other", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tt.want, rec.Code)
+		})
+	}
+}
+
+func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
+	r := New()
+	sub := chi.NewRouter()
+	sub.Get("/items", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Mount("/store", sub)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   int
+	}{
+		{"registered path returns 200", http.MethodGet, "/store/items", http.StatusOK},
+		{"unregistered sub-path returns 404", http.MethodGet, "/store/nope", http.StatusNotFound},
+		{"wrong method returns 405", http.MethodPost, "/store/items", http.StatusMethodNotAllowed},
+		{"outside mount returns 404", http.MethodGet, "/other", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tt.method, tt.path, nil)
 			r.ServeHTTP(rec, req)
 			assert.Equal(t, tt.want, rec.Code)
 		})
