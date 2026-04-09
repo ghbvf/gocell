@@ -151,6 +151,10 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 	if m.BelongsToCell == "" {
 		m.BelongsToCell = cellID
+	} else if m.BelongsToCell != cellID {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("slice %q: belongsToCell %q does not match directory cell %q in %s",
+				m.ID, m.BelongsToCell, cellID, path))
 	}
 
 	key := cellID + "/" + m.ID

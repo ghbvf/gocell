@@ -10,6 +10,7 @@ package assembly
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -63,6 +64,10 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 			fmt.Sprintf("assembly %q: cannot register in state %d", a.id, a.state))
 	}
 
+	if c == nil {
+		return errcode.New(errcode.ErrValidationFailed, "cell must not be nil")
+	}
+
 	id := c.ID()
 	if id == "" {
 		return errcode.New(errcode.ErrValidationFailed, "cell ID must not be empty")
@@ -99,20 +104,18 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 	a.state = stateStopping
 	a.mu.Unlock()
 
-	var firstErr error
+	var errs []error
 	for i := len(a.cells) - 1; i >= 0; i-- {
 		if err := a.cells[i].Stop(ctx); err != nil {
-			if firstErr == nil {
-				firstErr = errcode.Wrap(errcode.ErrLifecycleInvalid,
-					fmt.Sprintf("assembly: stop cell %q", a.cells[i].ID()), err)
-			}
+			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+				fmt.Sprintf("assembly: stop cell %q", a.cells[i].ID()), err))
 		}
 	}
 
 	a.mu.Lock()
 	a.state = stateStopped
 	a.mu.Unlock()
-	return firstErr
+	return errors.Join(errs...)
 }
 
 // Health returns the HealthStatus of every registered Cell, keyed by Cell ID.

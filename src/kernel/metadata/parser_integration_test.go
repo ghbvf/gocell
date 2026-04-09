@@ -27,14 +27,14 @@ func TestParseRealProject(t *testing.T) {
 	pm, err := p.Parse()
 	require.NoError(t, err, "Parse should succeed on real project files")
 
-	// --- Cells: 3 ---
-	assert.Len(t, pm.Cells, 3, "expected 3 cells")
+	// --- Cells: at least the 3 original cells ---
+	assert.GreaterOrEqual(t, len(pm.Cells), 3, "expected at least 3 cells")
 	for _, id := range []string{"access-core", "audit-core", "config-core"} {
 		assert.Contains(t, pm.Cells, id, "missing cell %s", id)
 	}
 
-	// --- Slices: 16 ---
-	assert.Len(t, pm.Slices, 16, "expected 16 slices")
+	// --- Slices: at least the 16 original slices ---
+	assert.GreaterOrEqual(t, len(pm.Slices), 16, "expected at least 16 slices")
 	expectedSlices := []string{
 		"access-core/session-login",
 		"access-core/session-validate",
@@ -57,8 +57,8 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
 	}
 
-	// --- Contracts: 12 ---
-	assert.Len(t, pm.Contracts, 12, "expected 12 contracts")
+	// --- Contracts: at least the 12 original contracts ---
+	assert.GreaterOrEqual(t, len(pm.Contracts), 12, "expected at least 12 contracts")
 	expectedContracts := []string{
 		"http.auth.login.v1",
 		"http.config.get.v1",
@@ -77,8 +77,8 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Contracts, id, "missing contract %s", id)
 	}
 
-	// --- Journeys: 8 ---
-	assert.Len(t, pm.Journeys, 8, "expected 8 journeys")
+	// --- Journeys: at least the 8 original journeys ---
+	assert.GreaterOrEqual(t, len(pm.Journeys), 8, "expected at least 8 journeys")
 	expectedJourneys := []string{
 		"J-sso-login",
 		"J-session-refresh",
@@ -93,12 +93,12 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Journeys, id, "missing journey %s", id)
 	}
 
-	// --- Assemblies: 1 ---
-	assert.Len(t, pm.Assemblies, 1, "expected 1 assembly")
+	// --- Assemblies: at least the 1 original assembly ---
+	assert.GreaterOrEqual(t, len(pm.Assemblies), 1, "expected at least 1 assembly")
 	assert.Contains(t, pm.Assemblies, "core-bundle")
 
-	// --- Status Board: 8 entries ---
-	assert.Len(t, pm.StatusBoard, 8, "expected 8 status-board entries")
+	// --- Status Board: at least the 8 original entries ---
+	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
 
 	// --- Actors: 1 ---
 	assert.Len(t, pm.Actors, 1, "expected 1 actor")

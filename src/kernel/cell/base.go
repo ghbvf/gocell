@@ -36,7 +36,7 @@ const (
 // Embed or compose it to get a working Cell with minimal boilerplate.
 // All state-accessing methods are protected by a mutex for safe concurrent use.
 type BaseCell struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	meta     CellMetadata
 	slices   []Slice
 	produced []Contract
@@ -62,8 +62,8 @@ func (b *BaseCell) Metadata() CellMetadata { return b.meta }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	out := make([]Slice, len(b.slices))
 	copy(out, b.slices)
 	return out
@@ -71,8 +71,8 @@ func (b *BaseCell) OwnedSlices() []Slice {
 
 // ProducedContracts returns a copy of the produced contract list.
 func (b *BaseCell) ProducedContracts() []Contract {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	out := make([]Contract, len(b.produced))
 	copy(out, b.produced)
 	return out
@@ -80,8 +80,8 @@ func (b *BaseCell) ProducedContracts() []Contract {
 
 // ConsumedContracts returns a copy of the consumed contract list.
 func (b *BaseCell) ConsumedContracts() []Contract {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	out := make([]Contract, len(b.consumed))
 	copy(out, b.consumed)
 	return out
@@ -95,6 +95,11 @@ func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
 		return errcode.New(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Init requires state new or stopped, current state: %d", b.meta.ID, b.state))
 	}
+	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
+	if b.shutdownCancel != nil {
+		b.shutdownCancel()
+	}
+	b.shutdownCtx, b.shutdownCancel = nil, nil
 	b.state = cellStateInitialized
 	return nil
 }
@@ -103,14 +108,14 @@ func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
 // the initialized state. A shutdownCtx is created that will be cancelled
 // when Stop is called — goroutines should use ShutdownCtx() instead of
 // context.Background().
-func (b *BaseCell) Start(_ context.Context) error {
+func (b *BaseCell) Start(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateInitialized {
 		return errcode.New(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
 	}
-	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.Background())
+	b.shutdownCtx, b.shutdownCancel = context.WithCancel(ctx)
 	b.state = cellStateStarted
 	return nil
 }
@@ -221,17 +226,23 @@ func (s *BaseSlice) Init(_ context.Context) error { return nil }
 // Verify returns the verification spec for this slice.
 func (s *BaseSlice) Verify() VerifySpec { return s.verify }
 
-// AllowedFiles returns the file ownership paths. If none have been set
-// explicitly, it returns the default convention path.
+// AllowedFiles returns a copy of the file ownership paths. If none have been
+// set explicitly, it returns the default convention path.
 func (s *BaseSlice) AllowedFiles() []string {
 	if len(s.allowed) > 0 {
-		return s.allowed
+		out := make([]string, len(s.allowed))
+		copy(out, s.allowed)
+		return out
 	}
 	return []string{fmt.Sprintf("cells/%s/slices/%s/**", s.cellID, s.id)}
 }
 
-// AffectedJourneys returns the journey IDs this slice participates in.
-func (s *BaseSlice) AffectedJourneys() []string { return s.journeys }
+// AffectedJourneys returns a copy of the journey IDs this slice participates in.
+func (s *BaseSlice) AffectedJourneys() []string {
+	out := make([]string, len(s.journeys))
+	copy(out, s.journeys)
+	return out
+}
 
 // SetVerify sets the verification spec.
 func (s *BaseSlice) SetVerify(v VerifySpec) { s.verify = v }
