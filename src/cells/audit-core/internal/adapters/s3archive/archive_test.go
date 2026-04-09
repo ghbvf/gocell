@@ -77,7 +77,7 @@ func TestArchiveStore_Archive_UploadError(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrArchiveUpload, ec.Code)
+	assert.Equal(t, errcode.ErrArchiveUpload, ec.Code)
 }
 
 // --- mock ---

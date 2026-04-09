@@ -43,3 +43,8 @@ func (m *TestMux) Mount(pattern string, handler http.Handler) {
 func (m *TestMux) Group(fn func(cell.RouteMux)) {
 	fn(m)
 }
+
+// With returns the same TestMux; stdlib ServeMux has no middleware chain.
+func (m *TestMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux {
+	return m
+}

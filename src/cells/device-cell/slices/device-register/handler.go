@@ -1,10 +1,8 @@
 package deviceregister
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -26,9 +24,8 @@ type registerRequest struct {
 // HandleRegister handles POST /api/v1/devices.
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

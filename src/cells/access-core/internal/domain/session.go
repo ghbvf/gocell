@@ -6,10 +6,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Error codes for session domain.
-const (
-	ErrSessionInvalidInput errcode.Code = "ERR_AUTH_SESSION_INVALID_INPUT"
-)
 
 // Session represents an authenticated user session with tokens and expiry.
 type Session struct {
@@ -27,13 +23,13 @@ type Session struct {
 // Returns an errcode.Error if any required field is empty.
 func NewSession(userID, accessToken, refreshToken string, expiresAt time.Time) (*Session, error) {
 	if userID == "" {
-		return nil, errcode.New(ErrSessionInvalidInput, "userID is required")
+		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "userID is required")
 	}
 	if accessToken == "" {
-		return nil, errcode.New(ErrSessionInvalidInput, "accessToken is required")
+		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "accessToken is required")
 	}
 	if refreshToken == "" {
-		return nil, errcode.New(ErrSessionInvalidInput, "refreshToken is required")
+		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "refreshToken is required")
 	}
 
 	return &Session{

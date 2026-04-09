@@ -50,6 +50,14 @@ type RouteMux interface {
 	// Group creates a same-level scope sharing the parent prefix.
 	// Useful for applying middleware to a subset of routes.
 	Group(fn func(RouteMux))
+
+	// With returns a new RouteMux that inherits all routes and middleware
+	// from this scope, plus the additional middleware provided.
+	// Unlike a mutable Use(), With is safe to call after routes are registered
+	// and does not modify the receiver.
+	//
+	// ref: go-chi/chi Mux.With — returns an inline router sharing the parent tree.
+	With(mw ...func(http.Handler) http.Handler) RouteMux
 }
 
 // HTTPRegistrar is optionally implemented by Cells that expose HTTP endpoints.

@@ -3,8 +3,14 @@ package httputil
 import (
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -12,37 +18,109 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMapCodeToStatus(t *testing.T) {
+func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 	tests := []struct {
-		code   errcode.Code
-		want   int
+		code       errcode.Code
+		wantStatus int
 	}{
-		{"ERR_NOT_FOUND", http.StatusNotFound},
-		{"ERR_USER_NOT_FOUND", http.StatusNotFound},
-		{"ERR_VALIDATION_REQUIRED_FIELD", http.StatusBadRequest},
-		{"ERR_AUTH_LOGIN_INVALID_INPUT", http.StatusBadRequest},
+		// NOT_FOUND group -> 404
+		{errcode.ErrMetadataNotFound, http.StatusNotFound},
+		{errcode.ErrCellNotFound, http.StatusNotFound},
+		{errcode.ErrSliceNotFound, http.StatusNotFound},
+		{errcode.ErrContractNotFound, http.StatusNotFound},
+		{errcode.ErrAssemblyNotFound, http.StatusNotFound},
+		{errcode.ErrJourneyNotFound, http.StatusNotFound},
+		{errcode.ErrSessionNotFound, http.StatusNotFound},
+		{errcode.ErrOrderNotFound, http.StatusNotFound},
+		{errcode.ErrDeviceNotFound, http.StatusNotFound},
+		{errcode.ErrCommandNotFound, http.StatusNotFound},
+
+		// Validation group -> 400
+		{errcode.ErrValidationFailed, http.StatusBadRequest},
+		{errcode.ErrMetadataInvalid, http.StatusBadRequest},
+		{errcode.ErrLifecycleInvalid, http.StatusBadRequest},
+		{errcode.ErrReferenceBroken, http.StatusBadRequest},
+
+		// Auth group -> 401
 		{errcode.ErrAuthUnauthorized, http.StatusUnauthorized},
+		{errcode.ErrAuthKeyInvalid, http.StatusUnauthorized},
 		{errcode.ErrAuthTokenInvalid, http.StatusUnauthorized},
 		{errcode.ErrAuthTokenExpired, http.StatusUnauthorized},
-		{errcode.ErrAuthKeyInvalid, http.StatusUnauthorized},
-		{"ERR_AUTH_LOGIN_FAILED", http.StatusUnauthorized},
-		{"ERR_AUTH_REFRESH_FAILED", http.StatusUnauthorized},
-		{"ERR_AUTH_FORBIDDEN", http.StatusForbidden},
-		{"ERR_USER_LOCKED", http.StatusForbidden},
-		{"ERR_DUPLICATE_USER", http.StatusConflict},
-		{"ERR_CONFLICT", http.StatusConflict},
-		{"ERR_RATE_LIMITED", http.StatusTooManyRequests},
-		{"ERR_TOO_LARGE", http.StatusRequestEntityTooLarge},
-		{"ERR_INTERNAL", http.StatusInternalServerError},
-		{"ERR_UNKNOWN_CODE", http.StatusInternalServerError},
+
+		// Forbidden -> 403
+		{errcode.ErrAuthForbidden, http.StatusForbidden},
+
+		// Rate limited -> 429
+		{errcode.ErrRateLimited, http.StatusTooManyRequests},
+
+		// Body too large -> 413
+		{errcode.ErrBodyTooLarge, http.StatusRequestEntityTooLarge},
+
+		// Cell-local NOT_FOUND codes -> 404
+		{errcode.ErrAuthUserNotFound, http.StatusNotFound},
+		{errcode.ErrConfigNotFound, http.StatusNotFound},
+		{errcode.ErrFlagNotFound, http.StatusNotFound},
+		{errcode.ErrAuthRoleNotFound, http.StatusNotFound},
+		{errcode.ErrConfigRepoNotFound, http.StatusNotFound},
+		{errcode.ErrWSConnNotFound, http.StatusNotFound},
+		{errcode.ErrAuditRepoNotFound, http.StatusNotFound},
+
+		// Cell-local validation codes -> 400
+		{errcode.ErrAuthLoginInvalidInput, http.StatusBadRequest},
+		{errcode.ErrConfigInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthIdentityInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthRefreshInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthSessionInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthLogoutInvalidInput, http.StatusBadRequest},
+		{errcode.ErrAuthRBACInvalidInput, http.StatusBadRequest},
+		{errcode.ErrConfigPublishInvalidInput, http.StatusBadRequest},
+		{errcode.ErrFlagInvalidInput, http.StatusBadRequest},
+
+		// Cell-local auth failure codes -> 401
+		{errcode.ErrAuthLoginFailed, http.StatusUnauthorized},
+		{errcode.ErrAuthRefreshFailed, http.StatusUnauthorized},
+		{errcode.ErrAuthRefreshTokenReuse, http.StatusUnauthorized},
+		{errcode.ErrAuthInvalidToken, http.StatusUnauthorized},
+
+		// Cell-local locked -> 403
+		{errcode.ErrAuthUserLocked, http.StatusForbidden},
+
+		// Cell-local duplicate -> 409
+		{errcode.ErrAuthUserDuplicate, http.StatusConflict},
+		{errcode.ErrConfigDuplicate, http.StatusConflict},
+		{errcode.ErrConfigRepoDuplicate, http.StatusConflict},
+		{errcode.ErrFlagDuplicate, http.StatusConflict},
+
+		// 500 Internal Server Error (explicit, not fallback)
+		{errcode.ErrInternal, http.StatusInternalServerError},
+		{errcode.ErrDependencyCycle, http.StatusInternalServerError},
+		{errcode.ErrBusClosed, http.StatusInternalServerError},
+		{errcode.ErrAdapterPGNoTx, http.StatusInternalServerError},
+		{errcode.ErrTestExecution, http.StatusInternalServerError},
+		{errcode.ErrCellMissingOutbox, http.StatusInternalServerError},
+
+		// 503 Service Unavailable
+		{errcode.ErrWSHubStopping, http.StatusServiceUnavailable},
+		{errcode.ErrWSHubNotRunning, http.StatusServiceUnavailable},
+		{errcode.ErrWSMaxConns, http.StatusServiceUnavailable},
+
+		// 501 Not Implemented
+		{errcode.ErrNotImplemented, http.StatusNotImplemented},
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.code), func(t *testing.T) {
 			got := mapCodeToStatus(tt.code)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantStatus, got)
 		})
 	}
+}
+
+func TestMapCodeToStatus_UnknownCode(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteDomainError(rec, errcode.New("ERR_TOTALLY_NEW", "test"))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
 func TestWriteError(t *testing.T) {
@@ -85,30 +163,30 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 	}{
 		{
 			name:       "not found",
-			err:        errcode.New("ERR_USER_NOT_FOUND", "user not found"),
+			err:        errcode.New(errcode.ErrCellNotFound, "cell not found"),
 			wantStatus: http.StatusNotFound,
-			wantCode:   "ERR_USER_NOT_FOUND",
-			wantMsg:    "user not found",
+			wantCode:   string(errcode.ErrCellNotFound),
+			wantMsg:    "cell not found",
 		},
 		{
 			name:       "validation",
-			err:        errcode.New("ERR_VALIDATION_REQUIRED_FIELD", "field missing"),
+			err:        errcode.New(errcode.ErrValidationFailed, "field missing"),
 			wantStatus: http.StatusBadRequest,
-			wantCode:   "ERR_VALIDATION_REQUIRED_FIELD",
+			wantCode:   string(errcode.ErrValidationFailed),
 			wantMsg:    "field missing",
 		},
 		{
 			name:       "unauthorized",
-			err:        errcode.New("ERR_AUTH_UNAUTHORIZED", "bad creds"),
+			err:        errcode.New(errcode.ErrAuthUnauthorized, "bad creds"),
 			wantStatus: http.StatusUnauthorized,
-			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+			wantCode:   string(errcode.ErrAuthUnauthorized),
 			wantMsg:    "bad creds",
 		},
 		{
 			name:       "forbidden",
-			err:        errcode.New("ERR_AUTH_FORBIDDEN", "no access"),
+			err:        errcode.New(errcode.ErrAuthForbidden, "no access"),
 			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
+			wantCode:   string(errcode.ErrAuthForbidden),
 			wantMsg:    "no access",
 		},
 	}
@@ -152,7 +230,7 @@ func TestWriteDomainError_PlainError(t *testing.T) {
 
 func TestWriteDomainError_WithDetails(t *testing.T) {
 	ecErr := errcode.WithDetails(
-		errcode.New("ERR_VALIDATION_REQUIRED_FIELD", "field missing"),
+		errcode.New(errcode.ErrValidationFailed, "field missing"),
 		map[string]any{"field": "email"},
 	)
 
@@ -167,4 +245,58 @@ func TestWriteDomainError_WithDetails(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	details := errObj["details"].(map[string]any)
 	assert.Equal(t, "email", details["field"])
+}
+
+// TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
+// extracts every Code constant, and verifies it has an entry in codeToStatus.
+// This fails loudly when a new errcode.Code is added without registering an
+// HTTP status mapping, forcing the developer to make a conscious choice.
+func TestCodeToStatus_Exhaustive(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	errcodeFile := filepath.Join(filepath.Dir(thisFile), "..", "errcode", "errcode.go")
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, errcodeFile, nil, 0)
+	require.NoError(t, err, "failed to parse errcode.go")
+
+	// Collect string values of all `const ... Code = "..."` declarations.
+	var codes []string
+	for _, decl := range f.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || vs.Type == nil {
+				continue
+			}
+			ident, ok := vs.Type.(*ast.Ident)
+			if !ok || ident.Name != "Code" {
+				continue
+			}
+			for _, val := range vs.Values {
+				lit, ok := val.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				s, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					continue
+				}
+				codes = append(codes, s)
+			}
+		}
+	}
+
+	require.NotEmpty(t, codes, "should find Code constants in errcode.go")
+
+	for _, code := range codes {
+		t.Run(code, func(t *testing.T) {
+			_, registered := codeToStatus[errcode.Code(code)]
+			assert.True(t, registered,
+				"errcode.Code %q has no entry in codeToStatus — add it to the map in response.go", code)
+		})
+	}
 }

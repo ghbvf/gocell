@@ -22,7 +22,6 @@ import (
 const (
 	TopicUserCreated = "event.user.created.v1"
 	TopicUserLocked  = "event.user.locked.v1"
-	ErrIdentityInput errcode.Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
 )
 
 // Option configures an identity-manage Service.
@@ -68,7 +67,7 @@ type CreateInput struct {
 // The plain-text password is bcrypt-hashed before storage.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
 	if input.Password == "" {
-		return nil, errcode.New(ErrIdentityInput, "password is required")
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "password is required")
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
@@ -120,7 +119,7 @@ type UpdateInput struct {
 // only non-nil fields are applied; missing fields are left unchanged.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
 	if input.ID == "" {
-		return nil, errcode.New(ErrIdentityInput, "id is required")
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
 	}
 
 	user, err := s.repo.GetByID(ctx, input.ID)
@@ -137,7 +136,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	if input.Status != nil {
 		status := domain.UserStatus(*input.Status)
 		if *input.Status != string(domain.StatusActive) && *input.Status != string(domain.StatusSuspended) {
-			return nil, errcode.New(ErrIdentityInput, "status must be 'active' or 'suspended'")
+			return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 		}
 		user.Status = status
 	}
@@ -154,7 +153,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // Delete removes a user.
 func (s *Service) Delete(ctx context.Context, id string) error {
 	if id == "" {
-		return errcode.New(ErrIdentityInput, "id is required")
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
 	}
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("identity-manage: delete: %w", err)
@@ -166,7 +165,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 // Lock locks a user account and publishes an event.
 func (s *Service) Lock(ctx context.Context, id string) error {
 	if id == "" {
-		return errcode.New(ErrIdentityInput, "id is required")
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
 	}
 
 	user, err := s.repo.GetByID(ctx, id)
@@ -197,7 +196,7 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 // Unlock unlocks a user account.
 func (s *Service) Unlock(ctx context.Context, id string) error {
 	if id == "" {
-		return errcode.New(ErrIdentityInput, "id is required")
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
 	}
 
 	user, err := s.repo.GetByID(ctx, id)

@@ -22,8 +22,6 @@ const (
 	TopicConfigChanged = "event.config.changed.v1"
 	// TopicConfigRollback is the event topic for config rollbacks.
 	TopicConfigRollback = "event.config.rollback.v1"
-	// ErrPublishInvalidInput indicates invalid input for a publish operation.
-	ErrPublishInvalidInput errcode.Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"
 )
 
 // Option configures a config-publish Service.
@@ -64,7 +62,7 @@ func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.
 // Publish creates a versioned snapshot of a config entry.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
 	if key == "" {
-		return nil, errcode.New(ErrPublishInvalidInput, "key is required")
+		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
 	}
 
 	entry, err := s.repo.GetByKey(ctx, key)
@@ -106,7 +104,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 // Rollback reverts a config entry to a specific version.
 func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (*domain.ConfigEntry, error) {
 	if key == "" {
-		return nil, errcode.New(ErrPublishInvalidInput, "key is required")
+		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
 	}
 
 	entry, err := s.repo.GetByKey(ctx, key)

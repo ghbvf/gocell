@@ -12,9 +12,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	ErrRBACInvalidInput errcode.Code = "ERR_AUTH_RBAC_INVALID_INPUT"
-)
 
 // Service implements RBAC query operations.
 type Service struct {
@@ -30,7 +27,7 @@ func NewService(roleRepo ports.RoleRepository, logger *slog.Logger) *Service {
 // HasRole checks if a user has the specified role.
 func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
 	if userID == "" || roleName == "" {
-		return false, errcode.New(ErrRBACInvalidInput, "userID and roleName are required")
+		return false, errcode.New(errcode.ErrAuthRBACInvalidInput, "userID and roleName are required")
 	}
 
 	roles, err := s.roleRepo.GetByUserID(ctx, userID)
@@ -49,7 +46,7 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 // ListRoles returns all roles assigned to a user.
 func (s *Service) ListRoles(ctx context.Context, userID string) ([]*domain.Role, error) {
 	if userID == "" {
-		return nil, errcode.New(ErrRBACInvalidInput, "userID is required")
+		return nil, errcode.New(errcode.ErrAuthRBACInvalidInput, "userID is required")
 	}
 
 	roles, err := s.roleRepo.GetByUserID(ctx, userID)

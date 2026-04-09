@@ -13,11 +13,6 @@ import (
 )
 
 const (
-	// ErrAuditRepoQuery indicates a query execution failure.
-	ErrAuditRepoQuery errcode.Code = "ERR_AUDIT_REPO_QUERY"
-	// ErrAuditRepoNotFound indicates no records found.
-	ErrAuditRepoNotFound errcode.Code = "ERR_AUDIT_REPO_NOT_FOUND"
-
 	// listLimit is the safety-net row limit for unbounded queries.
 	listLimit = 1000
 )
@@ -78,7 +73,7 @@ func (r *AuditRepository) Append(ctx context.Context, entry *domain.AuditEntry) 
 		entry.Hash,
 	)
 	if err != nil {
-		return errcode.Wrap(ErrAuditRepoQuery, "audit repo: append failed", err)
+		return errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: append failed", err)
 	}
 
 	return nil
@@ -105,7 +100,7 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 
 	rows, err := r.db.Query(ctx, query, limit, from)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAuditRepoQuery, "audit repo: get range failed", err)
+		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: get range failed", err)
 	}
 	defer rows.Close()
 
@@ -146,7 +141,7 @@ func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters)
 
 	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAuditRepoQuery, "audit repo: query failed", err)
+		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: query failed", err)
 	}
 	defer rows.Close()
 
@@ -162,12 +157,12 @@ func scanAuditEntries(rows Rows) ([]*domain.AuditEntry, error) {
 			&e.ID, &e.EventID, &e.EventType, &e.ActorID,
 			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); err != nil {
-			return nil, errcode.Wrap(ErrAuditRepoQuery, "audit repo: scan failed", err)
+			return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: scan failed", err)
 		}
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errcode.Wrap(ErrAuditRepoQuery, "audit repo: rows error", err)
+		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: rows error", err)
 	}
 	return entries, nil
 }

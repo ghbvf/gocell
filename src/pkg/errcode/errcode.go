@@ -37,6 +37,51 @@ const (
 	ErrAuthKeyInvalid     Code = "ERR_AUTH_KEY_INVALID"
 	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
 	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
+
+	// Access-core cell error codes.
+	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
+	ErrAuthUserDuplicate        Code = "ERR_AUTH_USER_DUPLICATE"
+	ErrAuthRoleNotFound         Code = "ERR_AUTH_ROLE_NOT_FOUND"
+	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
+	ErrAuthUserLocked           Code = "ERR_AUTH_USER_LOCKED"
+	ErrAuthSessionInvalidInput  Code = "ERR_AUTH_SESSION_INVALID_INPUT"
+	ErrAuthIdentityInvalidInput Code = "ERR_AUTH_IDENTITY_INVALID_INPUT"
+	ErrAuthLoginInvalidInput    Code = "ERR_AUTH_LOGIN_INVALID_INPUT"
+	ErrAuthLoginFailed          Code = "ERR_AUTH_LOGIN_FAILED"
+	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
+	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
+	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
+	ErrAuthRefreshTokenReuse    Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
+	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
+	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
+
+	// Config-core cell error codes.
+	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"
+	ErrConfigDuplicate           Code = "ERR_CONFIG_DUPLICATE"
+	ErrConfigInvalidInput        Code = "ERR_CONFIG_INVALID_INPUT"
+	ErrConfigPublishInvalidInput Code = "ERR_CONFIG_PUBLISH_INVALID_INPUT"
+	ErrConfigRepoNotFound        Code = "ERR_CONFIG_REPO_NOT_FOUND"
+	ErrConfigRepoDuplicate       Code = "ERR_CONFIG_REPO_DUPLICATE"
+	ErrConfigRepoQuery           Code = "ERR_CONFIG_REPO_QUERY"
+	ErrFlagNotFound              Code = "ERR_FLAG_NOT_FOUND"
+	ErrFlagDuplicate             Code = "ERR_FLAG_DUPLICATE"
+	ErrFlagInvalidInput          Code = "ERR_FLAG_INVALID_INPUT"
+
+	// Audit-core cell error codes.
+	ErrAuditRepoNotFound Code = "ERR_AUDIT_REPO_NOT_FOUND"
+	ErrAuditRepoQuery    Code = "ERR_AUDIT_REPO_QUERY"
+	ErrArchiveUpload     Code = "ERR_ARCHIVE_UPLOAD"
+	ErrArchiveMarshal    Code = "ERR_ARCHIVE_MARSHAL"
+	ErrNotImplemented    Code = "ERR_NOT_IMPLEMENTED"
+
+	// WebSocket runtime error codes.
+	ErrWSConnNotFound   Code = "ERR_WS_CONN_NOT_FOUND"
+	ErrWSAlreadyStarted Code = "ERR_WS_ALREADY_STARTED"
+	ErrWSAlreadyStopped Code = "ERR_WS_ALREADY_STOPPED"
+	ErrWSHubStopping    Code = "ERR_WS_HUB_STOPPING"
+	ErrWSHubNotRunning  Code = "ERR_WS_HUB_NOT_RUNNING"
+	ErrWSMaxConns       Code = "ERR_WS_MAX_CONNS"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

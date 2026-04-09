@@ -14,13 +14,6 @@ import (
 )
 
 const (
-	// ErrConfigRepoQuery indicates a query execution failure.
-	ErrConfigRepoQuery errcode.Code = "ERR_CONFIG_REPO_QUERY"
-	// ErrConfigRepoNotFound indicates a record was not found.
-	ErrConfigRepoNotFound errcode.Code = "ERR_CONFIG_REPO_NOT_FOUND"
-	// ErrConfigRepoDuplicate indicates a duplicate key.
-	ErrConfigRepoDuplicate errcode.Code = "ERR_CONFIG_REPO_DUPLICATE"
-
 	// listLimit is the safety-net row limit for unbounded queries.
 	listLimit = 1000
 )
@@ -78,7 +71,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		entry.CreatedAt, entry.UpdatedAt,
 	)
 	if err != nil {
-		return errcode.Wrap(ErrConfigRepoQuery,
+		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: create failed for key %s", entry.Key), err)
 	}
 
@@ -94,7 +87,7 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 
 	var e domain.ConfigEntry
 	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
-		return nil, errcode.Wrap(ErrConfigRepoNotFound,
+		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: key not found: %s", key), err)
 	}
 
@@ -115,11 +108,11 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 		entry.Value, entry.Version, entry.UpdatedAt, entry.Key,
 	)
 	if err != nil {
-		return errcode.Wrap(ErrConfigRepoQuery,
+		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: update failed for key %s", entry.Key), err)
 	}
 	if affected == 0 {
-		return errcode.New(ErrConfigRepoNotFound,
+		return errcode.New(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: key not found: %s", entry.Key))
 	}
 
@@ -132,11 +125,11 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 
 	affected, err := r.db.Exec(ctx, query, key)
 	if err != nil {
-		return errcode.Wrap(ErrConfigRepoQuery,
+		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: delete failed for key %s", key), err)
 	}
 	if affected == 0 {
-		return errcode.New(ErrConfigRepoNotFound,
+		return errcode.New(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: key not found: %s", key))
 	}
 
@@ -150,7 +143,7 @@ func (r *ConfigRepository) List(ctx context.Context) ([]*domain.ConfigEntry, err
 
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
-		return nil, errcode.Wrap(ErrConfigRepoQuery, "config repo: list failed", err)
+		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: list failed", err)
 	}
 	defer rows.Close()
 
@@ -158,12 +151,12 @@ func (r *ConfigRepository) List(ctx context.Context) ([]*domain.ConfigEntry, err
 	for rows.Next() {
 		var e domain.ConfigEntry
 		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
-			return nil, errcode.Wrap(ErrConfigRepoQuery, "config repo: scan failed", err)
+			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
 		}
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errcode.Wrap(ErrConfigRepoQuery, "config repo: rows error", err)
+		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: rows error", err)
 	}
 
 	return entries, nil
@@ -180,7 +173,7 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		version.Value, version.PublishedAt,
 	)
 	if err != nil {
-		return errcode.Wrap(ErrConfigRepoQuery,
+		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: publish version failed for config %s v%d",
 				version.ConfigID, version.Version), err)
 	}
@@ -197,7 +190,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 
 	var v domain.ConfigVersion
 	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.PublishedAt); err != nil {
-		return nil, errcode.Wrap(ErrConfigRepoNotFound,
+		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: version not found: %s v%d", configID, version), err)
 	}
 

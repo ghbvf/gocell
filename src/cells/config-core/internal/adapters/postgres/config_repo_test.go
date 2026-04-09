@@ -39,7 +39,7 @@ func TestConfigRepository_Create_Error(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrConfigRepoQuery, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
 func TestConfigRepository_GetByKey(t *testing.T) {
@@ -70,7 +70,7 @@ func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 }
 
 func TestConfigRepository_Update(t *testing.T) {
@@ -99,7 +99,7 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
@@ -122,7 +122,7 @@ func TestConfigRepository_Delete_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 }
 
 func TestConfigRepository_List(t *testing.T) {
@@ -196,7 +196,7 @@ func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
 }
 
 // --- mocks ---

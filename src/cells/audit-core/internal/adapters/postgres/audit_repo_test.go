@@ -62,7 +62,7 @@ func TestAuditRepository_Append_Error(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrAuditRepoQuery, ec.Code)
+	assert.Equal(t, errcode.ErrAuditRepoQuery, ec.Code)
 }
 
 func TestAuditRepository_GetRange(t *testing.T) {
