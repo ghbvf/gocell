@@ -23,7 +23,7 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

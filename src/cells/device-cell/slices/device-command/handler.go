@@ -27,7 +27,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 	var req enqueueRequest
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

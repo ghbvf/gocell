@@ -23,7 +23,7 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Value string `json:"value"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 
@@ -44,7 +44,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		Value string `json:"value"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

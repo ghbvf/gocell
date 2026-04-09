@@ -25,7 +25,7 @@ type registerRequest struct {
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

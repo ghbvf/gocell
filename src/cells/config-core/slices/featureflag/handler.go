@@ -48,7 +48,7 @@ func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
 		Subject string `json:"subject"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

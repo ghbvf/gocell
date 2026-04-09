@@ -39,6 +39,19 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 	}
 }
 
+// WriteDecodeError writes the HTTP error response for a DecodeJSON failure.
+// It preserves the legacy API contract: body-too-large returns 413 with
+// ERR_BODY_TOO_LARGE; all other decode errors return 400 with
+// ERR_VALIDATION_REQUIRED_FIELD and message "invalid request body".
+func WriteDecodeError(w http.ResponseWriter, err error) {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrBodyTooLarge {
+		WriteError(w, http.StatusRequestEntityTooLarge, string(errcode.ErrBodyTooLarge), ecErr.Message)
+		return
+	}
+	WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+}
+
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
 //   - If err is an *errcode.Error the error code is mapped to an HTTP status and
 //     the errcode Message is used as the response message.

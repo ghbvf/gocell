@@ -25,7 +25,7 @@ type createRequest struct {
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

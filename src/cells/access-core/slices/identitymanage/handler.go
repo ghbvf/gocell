@@ -62,7 +62,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 
@@ -93,7 +93,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 
@@ -115,7 +115,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	// JSON merge patch: only fields present in the JSON body are updated.
 	var raw map[string]json.RawMessage
 	if err := httputil.DecodeJSON(r, &raw); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 
