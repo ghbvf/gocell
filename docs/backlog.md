@@ -233,6 +233,19 @@
 | PROM-01 | `runtime/observability/metrics/metrics.go` + `adapters/prometheus/collector.go` | metrics Middleware 传入原始 URL path 作为 label，参数化路由（`/users/123`）会导致 Prometheus label 基数爆炸。需要在 middleware 层做路由模板归一化（`/users/{id}`），或由 collector 接受归一化后的 path |
 | TX-NIL-01 | 7 个 slice service (`cells/*/service.go`) | `txRunner` 字段 nil-safe 回退行为（`if s.txRunner != nil` → 顺序执行）未文档化。建议在各 service 的 `txRunner` 字段或 `runInTx` helper 上补注释 |
 
+### 0-H: DecodeJSON 严格模式 — DisallowUnknownFields opt-in（0.5d）
+
+> 来源: PR#54 review 讨论（2026-04-09）
+> 架构师意见: 校验策略属于 handler 层决策，不应在 pkg/ 基础设施强制；需独立 PR + migration guide
+> 产品意见: 内部项目 Fail Fast 收益大于成本；保留严格模式但需明确列出未知字段名
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| SF-01 | `DecodeJSONStrict` 启用 DisallowUnknownFields，复用 classifyDecodeError（含 unknown field 分支） | 1h | TODO |
+| SF-02 | handler 逐个从 `DecodeJSON` 切到 `DecodeJSONStrict`（10 个 struct 目标） | 1h | TODO |
+| SF-03 | `WriteDecodeError` 适配：严格模式返回 ERR_VALIDATION_FAILED + unknown field details，宽松模式保持 ERR_VALIDATION_REQUIRED_FIELD | 0.5h | TODO |
+| SF-04 | CHANGELOG / API 文档标注 breaking change | 0.5h | TODO |
+
 ### 历史 Tech-Debt（合并保留）
 
 #### P1（5 条）

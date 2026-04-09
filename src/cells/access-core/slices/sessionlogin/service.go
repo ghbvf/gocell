@@ -23,9 +23,6 @@ import (
 const (
 	TopicSessionCreated = "event.session.created.v1"
 
-	ErrLoginInvalidInput errcode.Code = "ERR_AUTH_LOGIN_INVALID_INPUT"
-	ErrLoginFailed       errcode.Code = "ERR_AUTH_LOGIN_FAILED"
-
 	accessTokenTTL = 15 * time.Minute
 )
 
@@ -94,20 +91,20 @@ type LoginInput struct {
 // Login authenticates a user and returns a JWT token pair.
 func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, error) {
 	if input.Username == "" || input.Password == "" {
-		return nil, errcode.New(ErrLoginInvalidInput, "username and password are required")
+		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "username and password are required")
 	}
 
 	user, err := s.userRepo.GetByUsername(ctx, input.Username)
 	if err != nil {
-		return nil, errcode.New(ErrLoginFailed, "invalid credentials")
+		return nil, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	if user.IsLocked() {
-		return nil, errcode.New(domain.ErrUserLocked, "account is locked")
+		return nil, errcode.New(errcode.ErrAuthUserLocked, "account is locked")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
-		return nil, errcode.New(ErrLoginFailed, "invalid credentials")
+		return nil, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	// Fetch roles for JWT claims.

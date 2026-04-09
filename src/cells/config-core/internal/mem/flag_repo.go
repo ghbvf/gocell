@@ -9,12 +9,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	// ErrFlagNotFound indicates the requested flag key does not exist.
-	ErrFlagNotFound errcode.Code = "ERR_FLAG_NOT_FOUND"
-	// ErrFlagDuplicate indicates a flag key already exists.
-	ErrFlagDuplicate errcode.Code = "ERR_FLAG_DUPLICATE"
-)
 
 // Compile-time check.
 var _ ports.FlagRepository = (*FlagRepository)(nil)
@@ -37,7 +31,7 @@ func (r *FlagRepository) Create(_ context.Context, flag *domain.FeatureFlag) err
 	defer r.mu.Unlock()
 
 	if _, exists := r.flags[flag.Key]; exists {
-		return errcode.New(ErrFlagDuplicate, "flag key already exists: "+flag.Key)
+		return errcode.New(errcode.ErrFlagDuplicate, "flag key already exists: "+flag.Key)
 	}
 	clone := *flag
 	r.flags[flag.Key] = &clone
@@ -50,7 +44,7 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 
 	flag, ok := r.flags[key]
 	if !ok {
-		return nil, errcode.New(ErrFlagNotFound, "flag not found: "+key)
+		return nil, errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
 	}
 	clone := *flag
 	return &clone, nil
@@ -61,7 +55,7 @@ func (r *FlagRepository) Update(_ context.Context, flag *domain.FeatureFlag) err
 	defer r.mu.Unlock()
 
 	if _, exists := r.flags[flag.Key]; !exists {
-		return errcode.New(ErrFlagNotFound, "flag not found: "+flag.Key)
+		return errcode.New(errcode.ErrFlagNotFound, "flag not found: "+flag.Key)
 	}
 	clone := *flag
 	r.flags[flag.Key] = &clone

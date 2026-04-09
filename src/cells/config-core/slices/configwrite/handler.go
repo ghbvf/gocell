@@ -1,7 +1,6 @@
 package configwrite
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -23,8 +22,8 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 
@@ -44,8 +43,8 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Value string `json:"value"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

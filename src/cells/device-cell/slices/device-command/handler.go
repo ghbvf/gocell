@@ -1,10 +1,8 @@
 package devicecommand
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -28,9 +26,8 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
 	var req enqueueRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

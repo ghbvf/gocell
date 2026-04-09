@@ -17,8 +17,6 @@ import (
 
 const (
 	TopicSessionRevoked = "event.session.revoked.v1"
-
-	ErrLogoutInvalidInput errcode.Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 )
 
 // Option configures a session-logout Service.
@@ -64,7 +62,7 @@ func NewService(
 // Logout revokes a session by its ID.
 func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
-		return errcode.New(ErrLogoutInvalidInput, "session ID is required")
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "session ID is required")
 	}
 
 	session, err := s.sessionRepo.GetByID(ctx, sessionID)
@@ -127,7 +125,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 // LogoutUser revokes all sessions for a user.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	if userID == "" {
-		return errcode.New(ErrLogoutInvalidInput, "user ID is required")
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "user ID is required")
 	}
 
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {

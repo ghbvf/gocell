@@ -57,7 +57,7 @@ const (
 )
 
 // ErrKeyMissing indicates a required JWT key environment variable is not set.
-var ErrKeyMissing = errcode.Code("ERR_AUTH_KEY_MISSING")
+var ErrKeyMissing = errcode.ErrAuthKeyMissing
 
 // LoadKeysFromEnv reads PEM-encoded RSA keys from environment variables
 // GOCELL_JWT_PRIVATE_KEY and GOCELL_JWT_PUBLIC_KEY. It returns an errcode

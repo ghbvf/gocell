@@ -1,7 +1,6 @@
 package sessionrefresh
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -22,8 +21,8 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
+	if err := httputil.DecodeJSON(r, &req); err != nil {
+		httputil.WriteDecodeError(w, err)
 		return
 	}
 

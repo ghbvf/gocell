@@ -14,10 +14,6 @@ import (
 )
 
 const (
-	ErrRefreshInvalidInput errcode.Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
-	ErrRefreshFailed       errcode.Code = "ERR_AUTH_REFRESH_FAILED"
-	ErrRefreshTokenReuse   errcode.Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
-
 	accessTokenTTL = 15 * time.Minute
 )
 
@@ -68,13 +64,13 @@ func NewService(
 // the entire session is revoked (reuse detection).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	if refreshToken == "" {
-		return nil, errcode.New(ErrRefreshInvalidInput, "refresh token is required")
+		return nil, errcode.New(errcode.ErrAuthRefreshInvalidInput, "refresh token is required")
 	}
 
 	// Verify the refresh token JWT signature via RS256 verifier.
 	_, err := s.verifier.Verify(ctx, refreshToken)
 	if err != nil {
-		return nil, errcode.New(ErrRefreshFailed, "invalid refresh token")
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
 	}
 
 	// Look up the session by current refresh token.
@@ -93,13 +89,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 			s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
 				slog.String("session_id", reuseSession.ID),
 				slog.String("user_id", reuseSession.UserID))
-			return nil, errcode.New(ErrRefreshTokenReuse, "refresh token reuse detected, session revoked")
+			return nil, errcode.New(errcode.ErrAuthRefreshTokenReuse, "refresh token reuse detected, session revoked")
 		}
-		return nil, errcode.New(ErrRefreshFailed, "session not found")
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
 	}
 
 	if session.IsRevoked() {
-		return nil, errcode.New(ErrRefreshFailed, "session has been revoked")
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session has been revoked")
 	}
 
 	// Fetch roles for new access token.

@@ -9,9 +9,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	ErrRoleNotFound errcode.Code = "ERR_AUTH_ROLE_NOT_FOUND"
-)
 
 var _ ports.RoleRepository = (*RoleRepository)(nil)
 
@@ -46,7 +43,7 @@ func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, er
 
 	role, ok := r.roles[id]
 	if !ok {
-		return nil, errcode.New(ErrRoleNotFound, "role not found: "+id)
+		return nil, errcode.New(errcode.ErrAuthRoleNotFound, "role not found: "+id)
 	}
 	clone := *role
 	return &clone, nil
@@ -76,7 +73,7 @@ func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) 
 	defer r.mu.Unlock()
 
 	if _, ok := r.roles[roleID]; !ok {
-		return errcode.New(ErrRoleNotFound, "role not found: "+roleID)
+		return errcode.New(errcode.ErrAuthRoleNotFound, "role not found: "+roleID)
 	}
 
 	if r.userRoles[userID] == nil {

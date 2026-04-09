@@ -20,8 +20,6 @@ import (
 const (
 	// TopicConfigChanged is the event topic for config changes.
 	TopicConfigChanged = "event.config.changed.v1"
-	// ErrConfigInvalidInput indicates invalid input for a config operation.
-	ErrConfigInvalidInput errcode.Code = "ERR_CONFIG_INVALID_INPUT"
 )
 
 // Option configures a config-write Service.
@@ -68,7 +66,7 @@ type CreateInput struct {
 // Create creates a new config entry and publishes a change event.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.ConfigEntry, error) {
 	if input.Key == "" {
-		return nil, errcode.New(ErrConfigInvalidInput, "key is required")
+		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
 	now := time.Now()
@@ -104,7 +102,7 @@ type UpdateInput struct {
 // Update modifies an existing config entry and publishes a change event.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
 	if input.Key == "" {
-		return nil, errcode.New(ErrConfigInvalidInput, "key is required")
+		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
 	entry, err := s.repo.GetByKey(ctx, input.Key)
@@ -133,7 +131,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 // Delete removes a config entry by key and publishes a change event.
 func (s *Service) Delete(ctx context.Context, key string) error {
 	if key == "" {
-		return errcode.New(ErrConfigInvalidInput, "key is required")
+		return errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
 	entry, err := s.repo.GetByKey(ctx, key)

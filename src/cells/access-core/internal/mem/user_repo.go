@@ -10,10 +10,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const (
-	ErrUserNotFound  errcode.Code = "ERR_AUTH_USER_NOT_FOUND"
-	ErrUserDuplicate errcode.Code = "ERR_AUTH_USER_DUPLICATE"
-)
 
 var _ ports.UserRepository = (*UserRepository)(nil)
 
@@ -37,7 +33,7 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byName[user.Username]; exists {
-		return errcode.New(ErrUserDuplicate, "username already exists: "+user.Username)
+		return errcode.New(errcode.ErrAuthUserDuplicate, "username already exists: "+user.Username)
 	}
 
 	c := cloneUser(user)
@@ -52,7 +48,7 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 
 	u, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.New(ErrUserNotFound, "user not found: "+id)
+		return nil, errcode.New(errcode.ErrAuthUserNotFound, "user not found: "+id)
 	}
 	return cloneUser(u), nil
 }
@@ -63,7 +59,7 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 
 	u, ok := r.byName[username]
 	if !ok {
-		return nil, errcode.New(ErrUserNotFound, "user not found: "+username)
+		return nil, errcode.New(errcode.ErrAuthUserNotFound, "user not found: "+username)
 	}
 	return cloneUser(u), nil
 }
@@ -73,7 +69,7 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byID[user.ID]; !exists {
-		return errcode.New(ErrUserNotFound, "user not found: "+user.ID)
+		return errcode.New(errcode.ErrAuthUserNotFound, "user not found: "+user.ID)
 	}
 
 	c := cloneUser(user)
@@ -101,7 +97,7 @@ func (r *UserRepository) Delete(_ context.Context, id string) error {
 
 	u, ok := r.byID[id]
 	if !ok {
-		return errcode.New(ErrUserNotFound, "user not found: "+id)
+		return errcode.New(errcode.ErrAuthUserNotFound, "user not found: "+id)
 	}
 	delete(r.byName, u.Username)
 	delete(r.byID, id)

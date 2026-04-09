@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -38,6 +37,19 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 	}); err != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", err))
 	}
+}
+
+// WriteDecodeError writes the HTTP error response for a DecodeJSON failure.
+// It preserves the legacy API contract: body-too-large returns 413 with
+// ERR_BODY_TOO_LARGE; all other decode errors return 400 with
+// ERR_VALIDATION_REQUIRED_FIELD and message "invalid request body".
+func WriteDecodeError(w http.ResponseWriter, err error) {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrBodyTooLarge {
+		WriteError(w, http.StatusRequestEntityTooLarge, string(errcode.ErrBodyTooLarge), ecErr.Message)
+		return
+	}
+	WriteError(w, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "invalid request body")
 }
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
@@ -72,27 +84,101 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 	WriteError(w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
 }
 
+// codeToStatus maps known error codes to HTTP status codes.
+// All codes use errcode constants for compile-time checking.
+var codeToStatus = map[errcode.Code]int{
+	// --- 404 Not Found ---
+	errcode.ErrMetadataNotFound:   http.StatusNotFound,
+	errcode.ErrCellNotFound:       http.StatusNotFound,
+	errcode.ErrSliceNotFound:      http.StatusNotFound,
+	errcode.ErrContractNotFound:   http.StatusNotFound,
+	errcode.ErrAssemblyNotFound:   http.StatusNotFound,
+	errcode.ErrJourneyNotFound:    http.StatusNotFound,
+	errcode.ErrSessionNotFound:    http.StatusNotFound,
+	errcode.ErrOrderNotFound:      http.StatusNotFound,
+	errcode.ErrDeviceNotFound:     http.StatusNotFound,
+	errcode.ErrCommandNotFound:    http.StatusNotFound,
+	errcode.ErrAuthUserNotFound:   http.StatusNotFound,
+	errcode.ErrAuthRoleNotFound:   http.StatusNotFound,
+	errcode.ErrConfigNotFound:     http.StatusNotFound,
+	errcode.ErrConfigRepoNotFound: http.StatusNotFound,
+	errcode.ErrFlagNotFound:       http.StatusNotFound,
+	errcode.ErrWSConnNotFound:     http.StatusNotFound,
+	errcode.ErrAuditRepoNotFound:  http.StatusNotFound,
+
+	// --- 400 Bad Request ---
+	errcode.ErrValidationFailed:          http.StatusBadRequest,
+	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
+	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
+	errcode.ErrReferenceBroken:           http.StatusBadRequest,
+	errcode.ErrAuthInvalidInput:          http.StatusBadRequest,
+	errcode.ErrAuthIdentityInvalidInput:  http.StatusBadRequest,
+	errcode.ErrAuthLoginInvalidInput:     http.StatusBadRequest,
+	errcode.ErrAuthRefreshInvalidInput:   http.StatusBadRequest,
+	errcode.ErrAuthSessionInvalidInput:   http.StatusBadRequest,
+	errcode.ErrAuthLogoutInvalidInput:    http.StatusBadRequest,
+	errcode.ErrAuthRBACInvalidInput:      http.StatusBadRequest,
+	errcode.ErrConfigInvalidInput:        http.StatusBadRequest,
+	errcode.ErrConfigPublishInvalidInput: http.StatusBadRequest,
+	errcode.ErrFlagInvalidInput:          http.StatusBadRequest,
+
+	// --- 401 Unauthorized ---
+	errcode.ErrAuthUnauthorized:      http.StatusUnauthorized,
+	errcode.ErrAuthKeyInvalid:        http.StatusUnauthorized,
+	errcode.ErrAuthTokenInvalid:      http.StatusUnauthorized,
+	errcode.ErrAuthTokenExpired:      http.StatusUnauthorized,
+	errcode.ErrAuthLoginFailed:       http.StatusUnauthorized,
+	errcode.ErrAuthRefreshFailed:     http.StatusUnauthorized,
+	errcode.ErrAuthRefreshTokenReuse: http.StatusUnauthorized,
+	errcode.ErrAuthInvalidToken:      http.StatusUnauthorized,
+
+	// --- 403 Forbidden ---
+	errcode.ErrAuthForbidden:  http.StatusForbidden,
+	errcode.ErrAuthUserLocked: http.StatusForbidden,
+
+	// --- 409 Conflict ---
+	errcode.ErrAuthUserDuplicate:  http.StatusConflict,
+	errcode.ErrConfigDuplicate:    http.StatusConflict,
+	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
+	errcode.ErrFlagDuplicate:      http.StatusConflict,
+
+	// --- 429 Too Many Requests ---
+	errcode.ErrRateLimited: http.StatusTooManyRequests,
+
+	// --- 413 Request Entity Too Large ---
+	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
+
+	// --- 503 Service Unavailable ---
+	errcode.ErrWSHubStopping:  http.StatusServiceUnavailable,
+	errcode.ErrWSHubNotRunning: http.StatusServiceUnavailable,
+	errcode.ErrWSMaxConns:     http.StatusServiceUnavailable,
+
+	// --- 500 Internal Server Error ---
+	errcode.ErrInternal:          http.StatusInternalServerError,
+	errcode.ErrDependencyCycle:   http.StatusInternalServerError,
+	errcode.ErrBusClosed:         http.StatusInternalServerError,
+	errcode.ErrAdapterPGNoTx:     http.StatusInternalServerError,
+	errcode.ErrTestExecution:     http.StatusInternalServerError,
+	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
+	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
+	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
+	errcode.ErrAuditRepoQuery:   http.StatusInternalServerError,
+	errcode.ErrConfigRepoQuery:  http.StatusInternalServerError,
+	errcode.ErrAuthKeyMissing:   http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStarted: http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStopped: http.StatusInternalServerError,
+
+	// --- 501 Not Implemented ---
+	errcode.ErrNotImplemented: http.StatusNotImplemented,
+}
+
 // mapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
+// Known codes use an explicit lookup table. Unknown codes default to 500
+// and emit a warning log to prompt registration.
 func mapCodeToStatus(code errcode.Code) int {
-	c := string(code)
-	switch {
-	case strings.Contains(c, "NOT_FOUND"):
-		return http.StatusNotFound
-	case strings.Contains(c, "VALIDATION") || strings.Contains(c, "INVALID_INPUT"):
-		return http.StatusBadRequest
-	case strings.Contains(c, "UNAUTHORIZED") || strings.Contains(c, "LOGIN_FAILED") || strings.Contains(c, "REFRESH_FAILED") || strings.Contains(c, "INVALID_TOKEN") || strings.Contains(c, "TOKEN_INVALID") || strings.Contains(c, "TOKEN_EXPIRED") || strings.Contains(c, "KEY_INVALID"):
-		return http.StatusUnauthorized
-	case strings.Contains(c, "FORBIDDEN"):
-		return http.StatusForbidden
-	case strings.Contains(c, "DUPLICATE") || strings.Contains(c, "CONFLICT"):
-		return http.StatusConflict
-	case strings.Contains(c, "LOCKED"):
-		return http.StatusForbidden
-	case strings.Contains(c, "RATE_LIMITED"):
-		return http.StatusTooManyRequests
-	case strings.Contains(c, "TOO_LARGE"):
-		return http.StatusRequestEntityTooLarge
-	default:
-		return http.StatusInternalServerError
+	if status, ok := codeToStatus[code]; ok {
+		return status
 	}
+	slog.Warn("unmapped error code, defaulting to 500", slog.String("code", string(code)))
+	return http.StatusInternalServerError
 }
