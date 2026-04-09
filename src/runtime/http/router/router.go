@@ -140,9 +140,11 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 	r.mux.Mount(prefix, handler)
 }
 
-// Use appends middleware to the router's chain.
-func (r *Router) Use(mw ...func(http.Handler) http.Handler) {
-	r.mux.Use(mw...)
+// With returns a new RouteMux that applies the given middleware to routes
+// registered through it, without modifying the receiver. Safe to call
+// after routes are registered (unlike chi.Mux.Use which panics).
+func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
+	return &chiRouterAdapter{r.mux.With(mw...)}
 }
 
 // ServeHTTP delegates to the underlying chi.Mux.
@@ -182,6 +184,6 @@ func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	})
 }
 
-func (a *chiRouterAdapter) Use(mw ...func(http.Handler) http.Handler) {
-	a.cr.Use(mw...)
+func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
+	return &chiRouterAdapter{a.cr.With(mw...)}
 }

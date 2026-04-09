@@ -98,15 +98,6 @@ func TestMount_PrefixStripping(t *testing.T) {
 func TestMount_MiddlewareInheritance(t *testing.T) {
 	r := New() // New() applies default middleware (RequestID, SecurityHeaders, etc.)
 
-	// Add a custom middleware via Use() AFTER construction to verify it also
-	// propagates to mounted handlers (not just the built-in middleware).
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("X-Custom-MW", "applied")
-			next.ServeHTTP(w, req)
-		})
-	})
-
 	sub := chi.NewRouter()
 	sub.Get("/resource", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -118,16 +109,50 @@ func TestMount_MiddlewareInheritance(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	// Built-in middleware from New().
+	// Built-in middleware from New() must propagate to mounted handlers.
 	assert.NotEmpty(t, rec.Header().Get("X-Request-Id"),
 		"RequestID middleware must run for mounted handlers")
 	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"),
 		"SecurityHeaders middleware must run for mounted handlers")
 	assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"),
 		"SecurityHeaders middleware must run for mounted handlers")
-	// Middleware added via Use() after construction.
+}
+
+func TestWith_ScopedMiddleware(t *testing.T) {
+	// With() returns a new RouteMux that applies additional middleware only
+	// to routes registered through it, without affecting the parent.
+	r := New()
+
+	marker := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("X-Custom-MW", "applied")
+			next.ServeHTTP(w, req)
+		})
+	}
+
+	scoped := r.With(marker)
+	scoped.Handle("GET /scoped", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("GET /plain", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Scoped route: custom middleware applied.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/scoped", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "applied", rec.Header().Get("X-Custom-MW"),
-		"middleware added via Use() must propagate to mounted handlers")
+		"middleware from With() must apply to routes on the scoped mux")
+
+	// Plain route: custom middleware NOT applied.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/plain", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, rec.Header().Get("X-Custom-MW"),
+		"middleware from With() must not leak to routes on the parent mux")
 }
 
 // --- Route Prefix Stripping ------------------------------------------------
@@ -190,7 +215,7 @@ func TestGroup_NoPrefixChange(t *testing.T) {
 // --- Group Middleware Isolation ---------------------------------------------
 
 func TestGroup_MiddlewareIsolation(t *testing.T) {
-	// Middleware added inside a Group via Use() must not leak to handlers
+	// Middleware applied via With() inside a Group must not leak to handlers
 	// outside the group.
 	r := New()
 
@@ -202,8 +227,8 @@ func TestGroup_MiddlewareIsolation(t *testing.T) {
 	}
 
 	r.Group(func(mux cell.RouteMux) {
-		mux.Use(marker)
-		mux.Handle("GET /inside", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		scoped := mux.With(marker)
+		scoped.Handle("GET /inside", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 	})
