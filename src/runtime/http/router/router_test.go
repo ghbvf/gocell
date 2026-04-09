@@ -1,8 +1,10 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,6 +154,106 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
 	conn.CloseNow()
+}
+
+func TestPanicRequestRecordedInAccessLog(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	r := New()
+	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("access log panic test")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	// Parse all JSON log entries and find the access log (level=INFO, msg="http request").
+	var found bool
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "http request" {
+			found = true
+			assert.Equal(t, float64(500), entry["status"], "access log must capture status 500 for panic requests")
+			break
+		}
+	}
+	assert.True(t, found, "access log entry must exist for panic request")
+}
+
+func TestPanicRequestRecordedInMetrics(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := New(WithMetricsCollector(mc))
+	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("metrics panic test")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	snap := mc.Snapshot()
+	key := "GET /boom 500"
+	assert.Equal(t, int64(1), snap.RequestCounts[key], "metrics must record panic request as status 500")
+}
+
+func TestNormalRequestUnchanged(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	r := New(WithMetricsCollector(mc))
+	r.Handle("/ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, `{"data":"ok"}`, rec.Body.String())
+
+	// Verify access log has status 200.
+	var found bool
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "http request" {
+			found = true
+			assert.Equal(t, float64(200), entry["status"])
+			break
+		}
+	}
+	assert.True(t, found, "access log entry must exist")
+
+	// Verify metrics recorded status 200.
+	snap := mc.Snapshot()
+	key := "GET /ok 200"
+	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
 func TestDefaultMiddlewareApplied(t *testing.T) {

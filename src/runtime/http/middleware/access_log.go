@@ -11,8 +11,9 @@ import (
 // AccessLog logs structured request/response information via slog.Info.
 // Fields: method, path, status, duration_ms, request_id.
 //
-// If a RecorderState already exists in the context (set by Recovery),
-// AccessLog reuses it to avoid additional httpsnoop wrapping.
+// When a RecorderState exists in the context (created by the Recorder
+// middleware), AccessLog reuses it. Otherwise it creates its own to
+// remain usable as a standalone middleware.
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
