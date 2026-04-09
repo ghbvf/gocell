@@ -27,16 +27,18 @@ func AccessLog(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 
-		duration := time.Since(start)
-		attrs := []any{
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Int("status", state.Status()),
-			slog.Int64("duration_ms", duration.Milliseconds()),
-		}
-		if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
-			attrs = append(attrs, slog.String("request_id", reqID))
-		}
-		slog.Info("http request", attrs...)
+		safeObserve(func() {
+			duration := time.Since(start)
+			attrs := []any{
+				slog.String("method", r.Method),
+				slog.String("path", r.URL.Path),
+				slog.Int("status", state.Status()),
+				slog.Int64("duration_ms", duration.Milliseconds()),
+			}
+			if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
+				attrs = append(attrs, slog.String("request_id", reqID))
+			}
+			slog.Info("http request", attrs...)
+		})
 	})
 }

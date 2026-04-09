@@ -30,6 +30,11 @@ func DecodeJSON(r *http.Request, dst any) error {
 	// dec.More() is insufficient — it returns false for stray '}' and ']',
 	// letting invalid input like `{"name":"ok"}}` pass silently.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		// The second decode may hit the body size limit instead of trailing
+		// content — surface that as 413, not 400.
+		if isMaxBytesError(err) {
+			return errcode.New(errcode.ErrBodyTooLarge, "request body too large")
+		}
 		return errcode.WithDetails(
 			errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 			map[string]any{"reason": "trailing content after JSON value"},
