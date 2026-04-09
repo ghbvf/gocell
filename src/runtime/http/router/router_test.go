@@ -159,8 +159,9 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(original)
 
 	r := New()
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -214,8 +215,9 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(original)
 
 	r := New(WithMetricsCollector(mc))
 	r.Handle("/ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

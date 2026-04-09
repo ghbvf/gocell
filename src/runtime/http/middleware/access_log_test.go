@@ -16,8 +16,9 @@ import (
 func TestAccessLog_LogsFields(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(original)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -46,11 +47,37 @@ func TestAccessLog_LogsFields(t *testing.T) {
 	assert.Equal(t, "req-123", logEntry["request_id"])
 }
 
+// TestAccessLog_Standalone verifies AccessLog works without Recorder middleware,
+// creating its own RecorderState.
+func TestAccessLog_Standalone(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	// No Recorder — AccessLog creates its own RecorderState.
+	handler := AccessLog(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	err := json.Unmarshal(buf.Bytes(), &logEntry)
+	require.NoError(t, err)
+	assert.Equal(t, float64(404), logEntry["status"])
+}
+
 func TestAccessLog_DefaultStatus200(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(original)
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No explicit WriteHeader → default 200

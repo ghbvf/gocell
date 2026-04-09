@@ -10,8 +10,9 @@ import (
 // The span name is "{method} {path}". Trace and span IDs are stored in the
 // request context via ctxkeys for logging correlation.
 //
-// Tracing expects a RecorderState to already exist in the request context,
-// created by the Recorder middleware earlier in the chain.
+// When a RecorderState exists in the context (created by the Recorder
+// middleware), Tracing reuses it. Otherwise it creates its own to
+// capture http.status_code as a standalone middleware.
 func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,12 +21,15 @@ func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 			defer span.End()
 
 			state := RecorderStateFrom(ctx)
+			if state == nil {
+				var wrapped http.ResponseWriter
+				state, wrapped = NewRecorder(w)
+				w = wrapped
+			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 
-			if state != nil {
-				span.SetAttribute("http.status_code", state.Status())
-			}
+			span.SetAttribute("http.status_code", state.Status())
 		})
 	}
 }

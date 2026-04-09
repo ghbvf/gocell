@@ -63,6 +63,26 @@ func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key], "panic request must be recorded as status 500 in metrics")
 }
 
+// TestMetrics_Standalone verifies Metrics works without Recorder middleware,
+// creating its own RecorderState.
+func TestMetrics_Standalone(t *testing.T) {
+	c := metrics.NewInMemoryCollector()
+	// No Recorder — Metrics creates its own RecorderState.
+	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/jobs", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+
+	snap := c.Snapshot()
+	key := "POST /jobs 202"
+	assert.Equal(t, int64(1), snap.RequestCounts[key])
+}
+
 func TestMetrics_MultipleRequests(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 	// Recorder creates the shared RecorderState that Metrics reads.

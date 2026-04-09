@@ -60,6 +60,44 @@ func TestRecovery_PanicError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// TestRecovery_Standalone verifies Recovery works without Recorder middleware,
+// creating its own RecorderState for committed-response detection.
+func TestRecovery_Standalone(t *testing.T) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("standalone panic")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
+}
+
+// TestRecovery_StandaloneCommitted verifies Recovery detects committed
+// responses even without Recorder middleware in the chain.
+func TestRecovery_StandaloneCommitted(t *testing.T) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial"))
+		panic("late standalone panic")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "status must remain 200 — already committed")
+	assert.Equal(t, "partial", rec.Body.String(), "body must not have JSON error appended")
+}
+
 func TestRecovery_PanicAfterPartialWrite(t *testing.T) {
 	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
