@@ -60,7 +60,7 @@ func TestAuditCore_Metadata(t *testing.T) {
 	c := newTestCell()
 	assert.Equal(t, "audit-core", c.ID())
 	assert.Equal(t, cell.CellTypeCore, c.Type())
-	assert.Equal(t, cell.L3, c.ConsistencyLevel())
+	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
 func TestAuditCore_Startup(t *testing.T) {

@@ -90,7 +90,9 @@ func NewAuditCore(opts ...Option) *AuditCore {
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
 			ID:               "audit-core",
 			Type:             cell.CellTypeCore,
-			ConsistencyLevel: cell.L3,
+			// L2: 对外 contract (audit.appended, integrity-verified) 都是本地事务 + outbox 发布。
+			// 订阅跨 cell 事件是 slice 级行为 (audit-append L3)，不升 cell 级别 — 同 config-core 模式。
+			ConsistencyLevel: cell.L2,
 			Owner:            cell.Owner{Team: "platform", Role: "audit-owner"},
 			Schema:           cell.SchemaConfig{Primary: "audit_entries"},
 			Verify:           cell.CellVerify{Smoke: []string{"audit-core/smoke"}},
@@ -124,8 +126,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
 	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		slog.Warn("audit-core: outboxWriter not injected, L3 consistency not guaranteed")
-		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L3) requires outboxWriter injection")
+		slog.Warn("audit-core: outboxWriter not injected, L2 consistency not guaranteed")
+		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L2) requires outboxWriter injection")
 	}
 
 	// audit-append
@@ -134,6 +136,7 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		appendOpts = append(appendOpts, auditappend.WithOutboxWriter(c.outboxWriter))
 	}
 	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, appendOpts...)
+	// L3: 订阅 access-core/config-core 跨 cell 事件，slice 级别可高于 cell 级别。
 	c.AddSlice(cell.NewBaseSlice("audit-append", "audit-core", cell.L3))
 
 	// audit-verify
@@ -146,7 +149,7 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// audit-archive (stub)
 	c.archiveSvc = auditarchive.NewService()
-	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L3))
+	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L1))
 
 	// audit-query
 	querySvc := auditquery.NewService(c.auditRepo, c.logger)
