@@ -8,4 +8,4 @@ schema:
   primary: orders
 verify:
   smoke:
-    - order-cell/smoke
+    - smoke.order-cell.startup

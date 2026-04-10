@@ -8,4 +8,4 @@ schema:
   primary: devices
 verify:
   smoke:
-    - device-cell/smoke
+    - smoke.device-cell.startup
