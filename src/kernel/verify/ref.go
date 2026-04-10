@@ -19,7 +19,7 @@ type resolvedRef struct {
 //
 // Supported formats:
 //
-//	journey.{journeyID}.{suffix} → pkg="./journeys/...", pattern=CamelCase(suffix)
+//	journey.{journeyID}.{suffix} → pkg="./journeys/...", pattern=CamelCase(journeyID)+CamelCase(suffix)
 //	smoke.{cellID}.{suffix}     → pkg="./cells/{cellID}/...", pattern=CamelCase(suffix)
 //	unit.{scope}.{suffix}       → pkg="" (caller provides), pattern=CamelCase(suffix)
 //	contract.{id...}.{role}     → pkg="" (caller provides), pattern=CamelCase(role)
@@ -41,10 +41,12 @@ func resolveRef(ref string) (resolvedRef, error) {
 	case PrefixJourney:
 		// Journey tests may live in ./journeys/... or ./tests/integration/...
 		// The Runner resolves the actual path at execution time.
+		// Include journeyID in pattern to disambiguate refs with identical suffixes
+		// (e.g., event-publish appears across multiple journeys).
 		return resolvedRef{
 			Kind:       PrefixJourney,
 			Pkg:        "", // resolved by Runner based on project layout
-			RunPattern: kebabToCamelCase(suffix),
+			RunPattern: kebabToCamelCase(parts[1]) + kebabToCamelCase(suffix),
 		}, nil
 
 	case PrefixSmoke:

@@ -113,21 +113,9 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 	for _, ref := range smokeRefs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
-			// Only degrade to raw pattern for known legacy formats (containing "/").
-			// Other malformed refs are reported as errors.
-			if !strings.Contains(ref, "/") {
-				result.Errors = append(result.Errors, err)
-				result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
-				result.Passed = false
-				continue
-			}
-			// Legacy format (e.g., "device-cell/smoke") — treat as raw -run pattern.
-			raw := strings.ReplaceAll(ref, "/", "-")
-			pattern := kebabToCamelCase(raw)
-			slog.Warn("smoke ref uses legacy slash format, degrading to raw pattern",
-				slog.String("ref", ref), slog.String("pattern", pattern))
-			res := runGoTest(ctx, r.root, []string{cellPkg, "-v", "-run", pattern})
-			recordResult(result, ref, res, cellPkg, pattern)
+			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+			result.Passed = false
 			continue
 		}
 		pkg := resolved.Pkg

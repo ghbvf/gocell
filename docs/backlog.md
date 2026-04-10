@@ -217,6 +217,7 @@
 | F-OB-01 | `kernel/outbox/outbox.go:68` | 无批量写支持，Writer.Write 只接受单条 Entry |
 | F-OB-03 | `kernel/outbox/outbox.go:99-107` | Entry 必填字段（ID, AggregateID, EventType）无校验 |
 | F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略，未启用 KnownFields(true) |
+| F-META-02 | `cells/audit-core/cell.yaml` vs `cell.go:93` | cell.yaml 声明 `consistencyLevel: L2`，cell.go 硬编码 `cell.L3`（及 slices L3），二者不一致 (discovered via /fix PR#62 review) |
 | F-3 | `kernel/assembly/assembly.go:148-157` | Stop() 只返回首个错误，吞后续（同 shutdown firstErr 问题） |
 | F-4 | `kernel/scaffold/templates.go:1-9` | doc.go 和 templates.go 包注释冲突 |
 
@@ -224,6 +225,7 @@
 
 | ID | 文件 | 问题 |
 |----|------|------|
+| F-HTTP-MAP-01 | `pkg/httputil/response.go` mapCodeToStatus | `ERR_CHECKREF_INVALID` 和 `ERR_ZERO_TEST_MATCH`（PR#61 新增）缺少 HTTP status 映射，穷举测试会报 fallback 500 (discovered via /fix PR#62 review) |
 | R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ ✅ 已删除（PR#40, commit 1a80ec6） |
 | R1A1-F06 | `pkg/ctxkeys/keys_test.go:118-140` | TestFromMissingKey 遗漏 RequestID/RealIP/Subject 覆盖 |
 | R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致（Acquire vs ACQUIRED） |
@@ -269,6 +271,7 @@
 | P4-TD-11 | Tier0 F-14 | in-memory repository 缺并发测试 | 1h |
 | P3-TD-11 | Phase 2 #56-59 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | Phase 2 #62 | configpublish.Rollback version 校验 | 2h |
+| P4-TD-12 | PR#62 | demo cell `TestDemo_Startup` 是 `t.Skip` 占位，不验证 Init/Start 行为；待 demo cell 实现后补真实 smoke 测试 | 30min |
 
 ---
 
