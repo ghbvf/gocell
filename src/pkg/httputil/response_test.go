@@ -92,6 +92,10 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrConfigRepoDuplicate, http.StatusConflict},
 		{errcode.ErrFlagDuplicate, http.StatusConflict},
 
+		// Verify/kernel codes
+		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},
+		{errcode.ErrZeroTestMatch, http.StatusNotFound},
+
 		// 500 Internal Server Error (explicit, not fallback)
 		{errcode.ErrInternal, http.StatusInternalServerError},
 		{errcode.ErrDependencyCycle, http.StatusInternalServerError},

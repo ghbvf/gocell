@@ -107,12 +107,14 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrFlagNotFound:       http.StatusNotFound,
 	errcode.ErrWSConnNotFound:     http.StatusNotFound,
 	errcode.ErrAuditRepoNotFound:  http.StatusNotFound,
+	errcode.ErrZeroTestMatch:      http.StatusNotFound,
 
 	// --- 400 Bad Request ---
 	errcode.ErrValidationFailed:          http.StatusBadRequest,
 	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
 	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
 	errcode.ErrReferenceBroken:           http.StatusBadRequest,
+	errcode.ErrCheckRefInvalid:           http.StatusBadRequest,
 	errcode.ErrAuthInvalidInput:          http.StatusBadRequest,
 	errcode.ErrAuthIdentityInvalidInput:  http.StatusBadRequest,
 	errcode.ErrAuthLoginInvalidInput:     http.StatusBadRequest,
