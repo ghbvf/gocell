@@ -8,7 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/slice"
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 // runVerify implements:
@@ -55,7 +55,7 @@ func verifySlice(args []string) error {
 		return err
 	}
 
-	runner := slice.NewRunner(project, root)
+	runner := verify.NewRunner(project, root)
 	result, err := runner.VerifySlice(context.Background(), *id)
 	if err != nil {
 		return fmt.Errorf("verify slice: %w", err)
@@ -84,7 +84,7 @@ func verifyCell(args []string) error {
 		return err
 	}
 
-	runner := slice.NewRunner(project, root)
+	runner := verify.NewRunner(project, root)
 	result, err := runner.VerifyCell(context.Background(), *id)
 	if err != nil {
 		return fmt.Errorf("verify cell: %w", err)
@@ -113,7 +113,7 @@ func verifyJourney(args []string) error {
 		return err
 	}
 
-	runner := slice.NewRunner(project, root)
+	runner := verify.NewRunner(project, root)
 	result, err := runner.RunJourney(context.Background(), *id)
 	if err != nil {
 		return fmt.Errorf("verify journey: %w", err)
@@ -180,7 +180,7 @@ func parseProjectMeta() (root string, project *metadata.ProjectMeta, err error) 
 }
 
 // printVerifyResult prints a VerifyResult to stdout.
-func printVerifyResult(r *slice.VerifyResult) {
+func printVerifyResult(r *verify.VerifyResult) {
 	status := "PASSED"
 	if !r.Passed {
 		status = "FAILED"
@@ -200,6 +200,9 @@ func printVerifyResult(r *slice.VerifyResult) {
 	}
 	for _, e := range r.Errors {
 		fmt.Printf("  error: %v\n", e)
+	}
+	for _, m := range r.ManualPending {
+		fmt.Printf("  [PENDING] %s (manual)\n", m)
 	}
 }
 
