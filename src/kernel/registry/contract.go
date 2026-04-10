@@ -36,19 +36,36 @@ func NewContractRegistry(project *metadata.ProjectMeta) *ContractRegistry {
 	return r
 }
 
-// Get returns a contract by ID, or nil if not found.
+// Get returns a shallow copy of a contract by ID, or nil if not found.
 func (r *ContractRegistry) Get(id string) *metadata.ContractMeta {
-	return r.contracts[id]
+	c := r.contracts[id]
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
 }
 
-// ByKind returns all contracts of the given kind (http/event/command/projection).
+// ByKind returns copies of all contracts of the given kind.
 func (r *ContractRegistry) ByKind(kind string) []*metadata.ContractMeta {
-	return r.byKind[kind]
+	return copyContractSlice(r.byKind[kind])
 }
 
-// ByOwner returns all contracts owned by the given cell.
+// ByOwner returns copies of all contracts owned by the given cell.
 func (r *ContractRegistry) ByOwner(cellID string) []*metadata.ContractMeta {
-	return r.byOwner[cellID]
+	return copyContractSlice(r.byOwner[cellID])
+}
+
+func copyContractSlice(src []*metadata.ContractMeta) []*metadata.ContractMeta {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*metadata.ContractMeta, len(src))
+	for i, c := range src {
+		cp := *c
+		out[i] = &cp
+	}
+	return out
 }
 
 // Provider returns the provider actor ID for a contract.
@@ -83,13 +100,13 @@ func (r *ContractRegistry) Consumers(contractID string) []string {
 	}
 	switch c.Kind {
 	case "http":
-		return c.Endpoints.Clients
+		return append([]string(nil), c.Endpoints.Clients...)
 	case "event":
-		return c.Endpoints.Subscribers
+		return append([]string(nil), c.Endpoints.Subscribers...)
 	case "command":
-		return c.Endpoints.Invokers
+		return append([]string(nil), c.Endpoints.Invokers...)
 	case "projection":
-		return c.Endpoints.Readers
+		return append([]string(nil), c.Endpoints.Readers...)
 	default:
 		return nil
 	}

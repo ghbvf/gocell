@@ -94,35 +94,69 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 	return results
 }
 
-// validateTOPO04 checks that contract.consistencyLevel does not exceed ownerCell's consistencyLevel.
+// validateTOPO04 checks that contract.consistencyLevel does not exceed the
+// actual provider's consistencyLevel. The provider is determined from
+// endpoints (not ownerCell, which is a governance field that may differ).
 func (v *Validator) validateTOPO04() []ValidationResult {
+	// Build actor lookup for external providers.
+	actorMaxLevel := make(map[string]cell.Level)
+	for _, a := range v.project.Actors {
+		if lvl, err := cell.ParseLevel(a.MaxConsistencyLevel); err == nil {
+			actorMaxLevel[a.ID] = lvl
+		}
+	}
+
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		ownerCell, ok := v.project.Cells[c.OwnerCell]
-		if !ok {
-			continue // REF-03 covers missing ownerCell
-		}
 		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
-		cellLevel, err := cell.ParseLevel(ownerCell.ConsistencyLevel)
-		if err != nil {
+
+		providerID := contractProvider(c)
+		if providerID == "" {
+			continue // REF covers missing provider
+		}
+
+		// Check if provider is a Cell.
+		if providerCell, ok := v.project.Cells[providerID]; ok {
+			providerLevel, err := cell.ParseLevel(providerCell.ConsistencyLevel)
+			if err != nil {
+				continue
+			}
+			if contractLevel > providerLevel {
+				results = append(results, ValidationResult{
+					Code:      "TOPO-04",
+					Severity:  SeverityError,
+					IssueType: IssueMismatch,
+					File:      contractFile(c.ID),
+					Field:     "consistencyLevel",
+					Message: fmt.Sprintf(
+						"contract %q consistencyLevel %s exceeds provider cell %q level %s",
+						c.ID, c.ConsistencyLevel, providerID, providerCell.ConsistencyLevel,
+					),
+				})
+			}
 			continue
 		}
-		if contractLevel > cellLevel {
-			results = append(results, ValidationResult{
-				Code:      "TOPO-04",
-				Severity:  SeverityError,
-				IssueType: IssueMismatch,
-				File:      contractFile(c.ID),
-				Field:     "consistencyLevel",
-				Message: fmt.Sprintf(
-					"contract %q consistencyLevel %s exceeds ownerCell %q level %s",
-					c.ID, c.ConsistencyLevel, c.OwnerCell, ownerCell.ConsistencyLevel,
-				),
-			})
+
+		// Check if provider is an external Actor.
+		if maxLvl, ok := actorMaxLevel[providerID]; ok {
+			if contractLevel > maxLvl {
+				results = append(results, ValidationResult{
+					Code:      "TOPO-04",
+					Severity:  SeverityError,
+					IssueType: IssueMismatch,
+					File:      contractFile(c.ID),
+					Field:     "consistencyLevel",
+					Message: fmt.Sprintf(
+						"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s",
+						c.ID, c.ConsistencyLevel, providerID, maxLvl,
+					),
+				})
+			}
 		}
+		// If provider is neither a Cell nor an Actor, REF rules cover that.
 	}
 	return results
 }

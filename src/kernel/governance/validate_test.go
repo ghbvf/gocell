@@ -51,12 +51,14 @@ func validProject() *metadata.ProjectMeta {
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
+					{Contract: "projection.session.active.v1", Role: "provide"},
 				},
 				Verify: metadata.SliceVerifyMeta{
 					Unit: []string{"unit.session-login.service"},
 					Contract: []string{
 						"contract.http.auth.login.v1.serve",
 						"contract.event.session.created.v1.publish",
+						"contract.projection.session.active.v1.provide",
 					},
 				},
 			},
@@ -760,6 +762,7 @@ func TestVERIFY01(t *testing.T) {
 				pm.Slices["access-core/session-login"].Verify.Contract = []string{
 					// removed "contract.http.auth.login.v1.serve"
 					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
 				}
 			},
 			wantCount: 1,
@@ -770,6 +773,7 @@ func TestVERIFY01(t *testing.T) {
 				pm.Slices["access-core/session-login"].Verify.Contract = []string{
 					// removed "contract.http.auth.login.v1.serve"
 					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
 				}
 				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
@@ -787,6 +791,7 @@ func TestVERIFY01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["access-core/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
 				}
 				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
@@ -804,6 +809,7 @@ func TestVERIFY01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["access-core/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
 				}
 				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
@@ -821,6 +827,7 @@ func TestVERIFY01(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Slices["access-core/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
 				}
 				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{

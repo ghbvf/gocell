@@ -45,14 +45,28 @@ func NewCellRegistry(project *metadata.ProjectMeta) *CellRegistry {
 	return r
 }
 
-// Get returns a cell by ID, or nil if not found.
+// Get returns a shallow copy of a cell by ID, or nil if not found.
 func (r *CellRegistry) Get(id string) *metadata.CellMeta {
-	return r.cells[id]
+	c := r.cells[id]
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
 }
 
-// SlicesFor returns all slices belonging to the given cell.
+// SlicesFor returns copies of all slices belonging to the given cell.
 func (r *CellRegistry) SlicesFor(cellID string) []*metadata.SliceMeta {
-	return r.slices[cellID]
+	src := r.slices[cellID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*metadata.SliceMeta, len(src))
+	for i, s := range src {
+		cp := *s
+		out[i] = &cp
+	}
+	return out
 }
 
 // AllIDs returns all cell IDs sorted alphabetically.
