@@ -1,14 +1,15 @@
 # GoCell Backlog
 
 > Phase 0-4 已完成并合并到 develop。本文档汇总全部待办事项。
-> 更新日期: 2026-04-06
+> 更新日期: 2026-04-10
 
 ---
 
 ## Tier 0: Review 修复 + 依赖替换（进行中）
 
 > PR#37 (postgres) ✅ PR#38 (rabbitmq) ✅ PR#39 (redis) ✅ PR#40 (dep-cleanup) ✅ PR#41 (dep-sdk-replace) ✅ PR#42 (dep-migrator-otel) ✅ 已合并
-> PR#43 (websocket-split) 待合并
+> PR#43 (websocket-split) ✅ PR#49 (mapCodeToStatus fix) ✅ PR#50 (http-1-envelope) ✅ PR#51 (http-2-observability) ✅ PR#52 (http-3-cells-dechi) ✅ 已合并
+> PR#56 (http-3 集成: middleware reorder + DecodeJSON + RouteMux.Use) 待合并
 
 ### 0-A: 依赖替换 Phase 0 — 安全风险（1d）
 
@@ -70,21 +71,6 @@
 | D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | ✅ PR#42 |
 | D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | ✅ PR#42 |
 
-### 0-B2: Outbox Relay 三阶段重写（1.5d）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h | TODO |
-| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h | TODO |
-| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h | TODO |
-| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h | TODO |
-| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h | TODO |
-| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h | TODO |
-| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h | TODO |
-| RL-08 | 测试覆盖（8 个场景） | 2h | TODO |
-
-> 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
-
 ### 0-F: Solution B 接口 + 基础设施 — PR-A3（1.5d）
 
 | # | 任务 | 预估 | 状态 |
@@ -111,16 +97,31 @@
 
 > 依赖: 0-F (PR-A3) 必须先合并
 
+### 0-I: HTTP decode 兼容回归测试补强（0.5d）
+
+> 来源: PR#56 复审 low-priority reminder（2026-04-09）
+
+| # | 任务 | 预估 | 状态 |
+|---|------|------|------|
+| HT-01 | `cells/order-cell/slices/order-create`, `cells/device-cell/slices/device-register`, `cells/device-cell/slices/device-command`: handler 级显式回归测试，锁定 malformed JSON / empty body / type mismatch 的错误 code 兼容性 | 2h | TODO |
+| HT-02 | `pkg/httputil/response_test.go`: 补 `WriteDecodeError` 显式测试，覆盖 `ErrValidationFailed` → 400 / `ERR_VALIDATION_FAILED` 与 `ErrBodyTooLarge` → 413 / `ERR_BODY_TOO_LARGE` | 1h | TODO |
+
 ### 执行顺序
 
 ```
 已完成:
   0-A ✅ → 0-B ✅ (PR#46) → 0-C ✅ → 0-E ✅
   PR#44 (QueryBuilder) ✅ → PR#45 (TxRunner) ✅
+  PR#49 (mapCodeToStatus fix) ✅ → PR#50 (http-1-envelope) ✅
+  PR#51 (http-2-observability) ✅ → PR#52 (http-3-cells-dechi) ✅
+  PR#53 (panic-observability) ✅ → PR#54 (DecodeJSON) ✅ → PR#55 (RouteMux.Use) ✅
+  PR#56 (http-3 集成) 待合并
 
 剩余（可并行）:
   0-F (PR-A3 Solution B 接口) → 0-G (PR-B RabbitMQ 重写)
   0-B2 (Relay 三阶段重写)
+  0-H (DecodeJSONStrict)
+  0-I (HTTP decode 兼容回归测试)
   → 继续 Tier 1 (R1E → R2)
 ```
 
@@ -141,7 +142,7 @@
 | 层 | 状态 |
 |---|------|
 | R1A pkg | ✅ 已审 |
-| R1B kernel | ✅ 已审 |
+| R1B kernel | ✅ 已审 + 六角色深审完成（40+ findings，见 `tools/docs/reviews/2026-04-09-*`） |
 | R1C runtime | ✅ 已审 + 已修 |
 | R1D-1 postgres | ✅ 已审 + 已修 (PR#37) |
 | R1D-2 redis | ✅ 已审 + 已修 (PR#39) |
@@ -169,71 +170,131 @@
 
 ---
 
-## Tier 2: Review 产出的修复 + Tech-Debt 清理（5-7 天）
+## Tier 2: Review 产出的修复 + Tech-Debt 清理
 
-### 全量 Review Findings（R1A-R1D，35 条未修）
+> 规模：R1A-R1D 旧有 35 条（10 已修） + Kernel 六角色深审新增 19 条 = **44 条未修**
+
+### Review Findings 汇总
 
 > Review 原则：P0 当层修，P1/P2 记录到此处留 Fix Pack。
-> 来源报告已归档至 `docs/reviews/archive/`。
+> R1A-R1D 来源报告已归档至 `docs/reviews/archive/`。
+> Kernel 六角色深审报告：`tools/docs/reviews/2026-04-09-*`（4 组，覆盖全部 kernel 子模块）。
 
-#### P1 — kernel（8 条）
+#### P1 — kernel 旧有（~~8~~ 2 条未修，6 条已修）
 
-| ID | 文件 | 问题 |
-|----|------|------|
-| R1B1-01 | `kernel/cell/base.go:165-171` | Add*/collection accessor 无 mutex 保护，潜在 data race |
-| R1B1-02 | `kernel/cell/base.go:64-82` | OwnedSlices/ProducedContracts/ConsumedContracts 读可变字段无锁 |
-| F-OB-02 | `kernel/outbox/outbox.go:98-107` | Entry 无显式 Topic 字段，EventType 兼做路由 |
-| F-ID-01 | `kernel/idempotency/idempotency.go` | IsProcessed+MarkProcessed 两步有 TOCTOU（TryProcess 已加但旧接口未废弃） |
-| G-01 | `kernel/governance/rules_fmt.go` | cell.yaml owner.team/role, verify.smoke 必填校验缺失 |
-| G-02 | `kernel/governance/rules_verify.go` | slice.yaml verify.unit 未校验为必填 |
-| F-5 | `kernel/journey/catalog.go:18-35` | Journey catalog 不校验引用的 contract/cell 是否存在 |
-| F-2 | `kernel/assembly/assembly.go:83-132` | Start()/StartWithConfig() ~40 行重复代码 |
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| R1B1-01 | `kernel/cell/base.go` | Add*/collection accessor 无 mutex | ✅ 已修（Add 方法已有 Lock/Unlock） |
+| R1B1-02 | `kernel/cell/base.go` | 读可变字段无锁 | ✅ 已修（读 accessor 已有 Lock，RWMutex 降级为 P2） |
+| F-OB-02 | `kernel/outbox/outbox.go` | Entry 无显式 Topic 字段 | ✅ 已修（Topic + RoutingTopic 回退） |
+| F-ID-01 | `kernel/idempotency/idempotency.go` | IsProcessed+MarkProcessed 旧接口未废弃 | TODO（随 0-F 一并处理） |
+| G-01 | `kernel/governance/rules_fmt.go` | owner.team/role, verify.smoke 必填校验 | ✅ validateFMT11 已实现 |
+| G-02 | `kernel/governance/rules_verify.go` | verify.unit 未校验为必填 | ✅ validateFMT12 已实现 |
+| F-5 | `kernel/journey/catalog.go` | Journey catalog 不校验引用 | TODO |
+| F-2 | `kernel/assembly/assembly.go` | Start()/StartWithConfig() 重复代码 | ✅ 已重构为 startInternal |
 
-#### P1 — pkg（3 条）
+#### P1 — kernel 六角色深审新发现（12 条）
 
-| ID | 文件 | 问题 |
-|----|------|------|
-| R1A1-F02 | `pkg/httputil/response.go:86-107` | mapCodeToStatus 子串匹配漏掉 ERR_AUTH_TOKEN_EXPIRED，回退 500 |
-| R1A1-F03 | `pkg/httputil/response.go:86-107` | mapCodeToStatus 子串调度脆弱，顺序依赖 |
-| R1A1-F04 | `pkg/httputil/response.go:18,27,51` | json.NewEncoder 错误被静默丢弃 |
+> 来源：`tools/docs/reviews/2026-04-09-*`（4 组六角色审查）
+> 跨模块共性：① 数据所有权不隔离 ② Metadata 声明 ≠ 运行时行为 ③ 输入校验缺失 ④ 假绿测试
 
-#### P1 — runtime（6 条）
+**安全（1 条）：**
 
 | ID | 文件 | 问题 |
 |----|------|------|
-| F-01 | `runtime/auth/jwt.go:54` | ErrAuthUnauthorized 重复定义（local var + errcode import 冲突） |
-| F-02 | `runtime/auth/keys.go:26-36` | 无 RSA 最小 key size 校验，接受 512/1024-bit |
-| F-03 | `runtime/auth/keys.go:82,90,101,109` | LoadRSAKeyPairFromPEM 裸 fmt.Errorf，未用 errcode |
-| R1C2-F01 | `runtime/eventbus/eventbus.go:138-148` | Close()+Subscribe() 竞态，channel read after close |
-| R1C2-F02 | `runtime/eventbus/eventbus.go:118-149` | Subscribe 退出时 subs map 泄漏 stale channel |
-| R1C2-F03 | `runtime/worker/worker.go:47-72` | WorkerGroup.Start 首个失败不取消其余 worker |
+| ASJ-2 | `kernel/scaffold/scaffold.go:64-223` | scaffold 多入口路径穿越：ID/CellID/OwnerCell 含 `..` 可写任意文件 |
 
-#### P2 — kernel（7 条）
+**假绿 / verify 系统失效（4 条）：**
 
 | ID | 文件 | 问题 |
 |----|------|------|
-| R1B1-03 | `kernel/cell/base.go:85-93` | Init 不重置 shutdownCtx/Cancel，Stop→Init→Start 复用过期 context |
-| R1B1-04 | `kernel/cell/base.go:39` | sync.Mutex 应改 sync.RWMutex（读多写少） |
-| F-OB-01 | `kernel/outbox/outbox.go:68` | 无批量写支持，Writer.Write 只接受单条 Entry |
-| F-OB-03 | `kernel/outbox/outbox.go:99-107` | Entry 必填字段（ID, AggregateID, EventType）无校验 |
-| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略，未启用 KnownFields(true) |
-| F-META-02 | `cells/audit-core/cell.yaml` vs `cell.go:93` | cell.yaml 声明 `consistencyLevel: L2`，cell.go 硬编码 `cell.L3`（及 slices L3），二者不一致 (discovered via /fix PR#62 review) |
-| F-3 | `kernel/assembly/assembly.go:148-157` | Stop() 只返回首个错误，吞后续（同 shutdown firstErr 问题） |
-| F-4 | `kernel/scaffold/templates.go:1-9` | doc.go 和 templates.go 包注释冲突 |
+| CS-F1 | `kernel/slice/verify.go:61` | VerifySlice 完全不消费 metadata 声明的 verify.unit / verify.contract | ✅ PR#61 + PR#62 |
+| CS-F2 | `kernel/slice/verify.go:89` | VerifyCell 完全不消费 verify.smoke，硬编码 `-run Smoke` | ✅ PR#61 + PR#62 |
+| CS-F3 | `kernel/slice/verify.go:181,205` | RunJourney + runGoTest 零匹配测试当成功（checkRef 退化为 `./...`） | ✅ PR#61 ZeroMatch 检测 |
+| CS-F4 | `kernel/slice/verify.go:117,123` | RunJourney manual criteria 不参与判定，自动检查没失败 = "已通过" | ✅ PR#61 ManualPending |
 
-#### P2 — pkg + runtime（6 条）
+**治理语义错误（3 条）：**
 
 | ID | 文件 | 问题 |
 |----|------|------|
-| F-HTTP-MAP-01 | `pkg/httputil/response.go` mapCodeToStatus | `ERR_CHECKREF_INVALID` 和 `ERR_ZERO_TEST_MATCH`（PR#61 新增）缺少 HTTP status 映射，穷举测试会报 fallback 500 (discovered via /fix PR#62 review) |
-| R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ ✅ 已删除（PR#40, commit 1a80ec6） |
-| R1A1-F06 | `pkg/ctxkeys/keys_test.go:118-140` | TestFromMissingKey 遗漏 RequestID/RealIP/Subject 覆盖 |
-| R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致（Acquire vs ACQUIRED） |
-| F-04 | `runtime/auth/middleware.go:133` | writeAuthError 忽略 JSON encode 错误 |
-| R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 |
-| R1C2-F05 | `runtime/worker/periodic.go:18-52` | PeriodicWorker.Stop 不防 double-Start，done channel 复用 |
-| PROM-01 | `runtime/observability/metrics/metrics.go` + `adapters/prometheus/collector.go` | metrics Middleware 传入原始 URL path 作为 label，参数化路由（`/users/123`）会导致 Prometheus label 基数爆炸。需要在 middleware 层做路由模板归一化（`/users/{id}`），或由 collector 接受归一化后的 path |
-| TX-NIL-01 | 7 个 slice service (`cells/*/service.go`) | `txRunner` 字段 nil-safe 回退行为（`if s.txRunner != nil` → 顺序执行）未文档化。建议在各 service 的 `txRunner` 字段或 `runInTx` helper 上补注释 |
+| GOV-1 | `kernel/governance/rules_topo.go:97-127` | TOPO-04 拿 ownerCell 当 provider 做一致性约束（误报+漏报） |
+| GOV-2 | `kernel/governance/depcheck.go:177-205` | DEP-03 空 assembly 绕过同域约束（零值 `""` 当合法 ID） |
+| GOV-3 | `kernel/governance/validate.go:106-137` | active contract 可零 provider 实现通过校验（幽灵能力） |
+
+**数据完整性（4 条）：**
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| MR-R01 | `kernel/metadata/parser.go:148-156` + `kernel/registry/cell.go:31-36` | parser 与 registry slice 归属可产出矛盾视图（目录路径 vs belongsToCell） |
+| MR-R02 | `kernel/metadata/parser.go:165` + `kernel/registry/contract.go:28` | schema 声称 ownerCell 可省略并默认到 provider，实现未回填 |
+| MR-R03 | `kernel/metadata/parser_integration_test.go:30-80` | integration test 硬编码数字已过期（Cells 3→6, Slices 16→21），启用即红 |
+| ASJ-1 | `kernel/scaffold/scaffold.go:151-173` + `templates/journey.yaml.tpl` | CreateJourney 生成文件违反 J-* schema（id 缺 J- 前缀，passCriteria 为空） |
+
+#### P2 — kernel 六角色深审新发现（7 条）
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| CS-F5 | `kernel/cell/base.go:222-243` | BaseSlice getter/setter 暴露可变内部切片（与 BaseCell defensive copy 不一致） |
+| MR-R05 | `kernel/registry/cell.go:48-53` + `contract.go:39-76` | registry 声称 read-only 但返回内部可变指针，调用方可篡改 |
+| ASJ-3 | `kernel/assembly/assembly.go:57-76` | CoreAssembly.Register(nil) 直接 panic，非可处理错误 |
+| ASJ-4 | `kernel/journey/catalog.go:20-35,74-129` | journey.Catalog 返回原始可变指针，外部可污染内部状态 |
+| ASJ-5 | `kernel/assembly/generator.go:170-204` | sourceFingerprint 不含 contract metadata，boundary 变更检测假阴性 |
+| GOV-5 | `kernel/governance/rules_verify.go:10-57` | verify/checkRef 标识符格式无静态校验，坏格式延迟到运行期才炸 |
+| GOV-6 | `kernel/governance/targets.go:34-180` | select-targets 不追踪 l0Dependencies，L0 变更不选入依赖方 |
+
+#### P1 — pkg（~~3~~ 0 条，全部已修）
+
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| R1A1-F02 | `pkg/httputil/response.go` | mapCodeToStatus 子串匹配漏掉 ERR_AUTH_TOKEN_EXPIRED | ✅ PR#49 + PR#54 |
+| R1A1-F03 | `pkg/httputil/response.go` | mapCodeToStatus 子串调度脆弱，顺序依赖 | ✅ PR#54 explicit mapping |
+| R1A1-F04 | `pkg/httputil/response.go` | json.NewEncoder 错误被静默丢弃 | ✅ PR#50 slog.Error |
+
+#### P1 — runtime（~~6~~ 3 条未修）
+
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| F-01 | `runtime/auth/jwt.go` | ErrAuthUnauthorized 重复定义 | ✅ PR#50 errcode 统一 |
+| F-02 | `runtime/auth/keys.go` | 无 RSA 最小 key size 校验 | ✅ MinRSAKeyBits=2048 已实现 |
+| F-03 | `runtime/auth/keys.go` | LoadRSAKeyPairFromPEM 裸 fmt.Errorf | ✅ 已改用 errcode |
+| R1C2-F01 | `runtime/eventbus/eventbus.go` | Close()+Subscribe() 竞态，channel read after close | TODO |
+| R1C2-F02 | `runtime/eventbus/eventbus.go` | Subscribe 退出时 subs map 泄漏 stale channel | TODO |
+| R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | TODO |
+
+#### P2 — kernel 旧有（~~7~~ 6 条未修）
+
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| R1B1-03 | `kernel/cell/base.go:85-93` | Init 不重置 shutdownCtx/Cancel，Stop→Init→Start 复用过期 context | TODO |
+| R1B1-04 | `kernel/cell/base.go:39` | sync.Mutex 应改 sync.RWMutex（读多写少） | TODO |
+| F-OB-01 | `kernel/outbox/outbox.go:68` | 无批量写支持，Writer.Write 只接受单条 Entry | TODO |
+| F-OB-03 | `kernel/outbox/outbox.go:99-107` | Entry 必填字段（ID, AggregateID, EventType）无校验 | TODO |
+| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略（= MR-R04 / GOV-4 同源） | TODO |
+| F-META-02 | `cells/audit-core/cell.yaml` vs `cell.go:93` | cell.yaml 声明 `consistencyLevel: L2`，cell.go 硬编码 `cell.L3`（及 slices L3），二者不一致 (discovered via /fix PR#62 review) | TODO |
+| F-3 | `kernel/assembly/assembly.go:93-116` | Stop() 只返回首个错误，吞后续 | TODO |
+| F-4 | `kernel/scaffold/templates.go:1-9` | doc.go 和 templates.go 包注释冲突 | ✅ 已修（两文件注释已统一） |
+
+**附加架构风险（来自六角色深审）：**
+
+| ID | 文件 | 问题 |
+|----|------|------|
+| CS-AR-1 | `kernel/cell/base.go:106-115` | BaseCell.Start(ctx) 忽略传入 ctx，从 context.Background() 派生 |
+| CS-AR-2 | `kernel/cell/interfaces.go:6-10` | Dependencies 把完整 Cell 图注入 Init，暴露过多信息 |
+| CS-AR-3 | `kernel/cell/registrar.go:3-39` | kernel/cell 直接依赖 net/http + outbox，违反分层约束 |
+
+#### P2 — pkg + runtime（~~6~~ 4 条未修）
+
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| F-HTTP-MAP-01 | `pkg/httputil/response.go` mapCodeToStatus | `ERR_CHECKREF_INVALID` 和 `ERR_ZERO_TEST_MATCH`（PR#61 新增）缺少 HTTP status 映射，穷举测试会报 fallback 500 (discovered via /fix PR#62 review) | TODO |
+| R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ | ✅ 已删除（PR#40） |
+| R1A1-F06 | `pkg/ctxkeys/keys_test.go` | TestFromMissingKey 遗漏覆盖 | ✅ PR#50 补全 9 个 key |
+| R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致 | TODO |
+| F-04 | `runtime/auth/middleware.go` | writeAuthError 忽略 JSON encode 错误 | ✅ PR#50 重构为 httputil.WriteError |
+| R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 | TODO |
+| R1C2-F05 | `runtime/worker/periodic.go` | PeriodicWorker.Stop 不防 double-Start，done channel 复用 | TODO |
+| PROM-01 | `runtime/http/middleware/metrics.go` | metrics path label 基数爆炸，需路由模板归一化 | TODO |
+| TX-NIL-01 | 7 个 slice service (`cells/*/service.go`) | txRunner nil-safe 回退行为未文档化 | TODO |
 
 ### 0-H: DecodeJSON 严格模式 — DisallowUnknownFields opt-in（0.5d）
 
@@ -265,7 +326,7 @@
 | ID | 来源 | 问题 | 预估 |
 |----|------|------|------|
 | P4-TD-01 | S6 P2-5 | 缺少共享 NoopOutboxWriter | 30min |
-| P4-TD-02 | S6 P2-3 | chi.URLParam 耦合（10 个文件） | 2h |
+| P4-TD-02 | S6 P2-3 | ~~chi.URLParam 耦合（10 个文件）~~ | ✅ PR#52 PathValue 迁移 |
 | P4-TD-09 | Tier0 F-06 | List 端点缺分页 | 2h |
 | P4-TD-10 | Tier0 F-07 | POST 201 响应未包装 `{"data":...}` | 2h |
 | P4-TD-11 | Tier0 F-14 | in-memory repository 缺并发测试 | 1h |
@@ -279,17 +340,17 @@
 
 ### metadata-model-v3 校验规则补全
 
-来源: KG 分析，对照 `docs/architecture/metadata-model-v3.md`。
+来源: KG 分析 + 六角色深审，对照 `docs/architecture/metadata-model-v3.md`。
 
-| # | 缺失规则 | 优先级 | 说明 |
-|---|---------|--------|------|
-| G-1 | FMT-11: 动态状态字段禁入非 status-board 文件 | HIGH | V3 核心约束，完全未实现 |
-| G-2 | TOPO-07: actor.maxConsistencyLevel 约束 | MEDIUM | 解析了但无校验 |
-| G-3 | FMT: owner.team/owner.role 非空校验 | MEDIUM | 必填字段无验证 |
-| G-4 | FMT: deprecated contract 引用阻断（非仅 warning） | MEDIUM | 当前仅警告不阻断 |
-| G-5 | VERIFY: verify 标识符前缀格式严格校验 | LOW | 隐式匹配可接受 |
-| G-6 | Assembly boundary.yaml 存在性校验 | LOW | 派生文件，非真相源 |
-| G-7 | slice.belongsToCell / contract.ownerCell 自动推导 | LOW | DX 改善 |
+| # | 缺失规则 | 优先级 | 说明 | 状态 |
+|---|---------|--------|------|------|
+| G-1 | FMT-11: 动态状态字段禁入非 status-board 文件 | HIGH | V3 核心约束，完全未实现 | TODO |
+| G-2 | TOPO-07: actor.maxConsistencyLevel 约束 | MEDIUM | 解析了但无校验 | TODO |
+| G-3 | FMT: owner.team/owner.role 非空校验 | MEDIUM | 必填字段无验证 | ✅ validateFMT11 |
+| G-4 | FMT: deprecated contract 引用阻断（非仅 warning） | MEDIUM | 当前仅警告不阻断 | TODO |
+| G-5 | VERIFY: verify 标识符前缀格式严格校验 | ~~LOW~~ → P2 | 六角色深审确认（= GOV-5），坏格式延迟到运行期 | TODO |
+| G-6 | Assembly boundary.yaml 存在性校验 | LOW | 派生文件，非真相源 | TODO |
+| G-7 | slice.belongsToCell / contract.ownerCell 自动推导 | ~~LOW~~ → P1 | 六角色深审确认缺失造成矛盾视图（= MR-R01/R02） | TODO |
 
 ### 未实现的 Kernel 子模块
 
@@ -297,7 +358,7 @@
 
 | 子模块 | master-plan 描述 | 实践评估 | v1.1 优先级 |
 |--------|-----------------|---------|------------|
-| **kernel/wrapper** | traced sync/event/command wrapper | 解决 chi.URLParam 耦合 + 契约级可观测 | P1 |
+| **kernel/wrapper** | traced sync/event/command wrapper | ~~chi.URLParam 耦合~~ 已解（PR#52）；剩余价值：契约级可观测 | P1 |
 | **kernel/command** | 命令队列接口 | iot-device 暴露 L4 无框架支持 | P1 |
 | kernel/webhook | receiver + dispatcher | 无实际需求验证 | P2 |
 | kernel/reconcile | 最终状态收敛 | 无实际需求验证 | P2 |
@@ -321,7 +382,7 @@
 | AL-03a | `adapters/websocket/hub.go` | Hub（广播/连接管理/Start/Stop）是框架调度逻辑，不是 SDK 胶水 | ✅ PR#43: Hub 上提到 `runtime/websocket/`，定义 `Conn` 接口；adapter 只实现 nhooyr 绑定 |
 | AL-03b | `adapters/websocket/hub.go` readLoop/pingLoop/pingAll | 循环调度与 nhooyr API 调用混在一起 | ✅ PR#43: 调度逻辑随 Hub 搬到 runtime/；adapter 的 nhooyrConn 实现 Conn 接口 |
 | AL-04 | `runtime/auth` | 直接 import golang-jwt，按规则应通过接口解耦 | 评估是否值得拆（jwt 是事实标准，拆可能过度设计） |
-| AL-05 | `runtime/http` | 直接 import chi | 已通过 RouteMux 接口解耦，可接受 |
+| AL-05 | `runtime/http` | 直接 import chi | ✅ RouteMux 接口解耦 + Use() (PR#55)，可接受 |
 
 **优先级:** AL-03 正在 PR#43 实施，其余 P3（等 0-B/0-D 完成后评估）
 
@@ -350,8 +411,12 @@
 ## 执行建议
 
 ```
-Tier 1（全量 Review）→ Tier 2（修复）→ Tier 4（发布）
-                                      ↘ Tier 3（v1.1 持续）
+Kernel 止血（安全+假绿+语义）→ Kernel 接口 (0-F) + Runtime 安全 → 0-B2/0-G → Review 剩余 → Tech-Debt → 发布
+                                                                    ↘ Tier 3（v1.1 持续）
 ```
 
-Tier 1 产出的 findings 决定 Tier 2 的实际范围。Tier 3 和 Tier 4 可并行。
+**优先级重排依据（2026-04-09 六角色深审后）：**
+- Kernel 层发现 12 个 P1（安全漏洞、假绿测试、治理语义 bug、数据完整性）
+- verify 系统本质失效，metadata-driven verification 是空壳
+- 0-F 是关键路径瓶颈，应尽早启动
+- 修复计划详见 `tools/docs/20260408-fix-order-plan.md`
