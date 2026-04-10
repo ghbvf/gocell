@@ -126,8 +126,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
 	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		slog.Warn("audit-core: outboxWriter not injected, L3 consistency not guaranteed")
-		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L3) requires outboxWriter injection")
+		slog.Warn("audit-core: outboxWriter not injected, L2 consistency not guaranteed")
+		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L2) requires outboxWriter injection")
 	}
 
 	// audit-append
