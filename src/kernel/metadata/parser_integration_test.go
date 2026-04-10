@@ -27,14 +27,16 @@ func TestParseRealProject(t *testing.T) {
 	pm, err := p.Parse()
 	require.NoError(t, err, "Parse should succeed on real project files")
 
-	// --- Cells: at least the 3 original cells ---
+	// --- Cells: at least the 3 original cells (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Cells), 3, "expected at least 3 cells")
+	assert.LessOrEqual(t, len(pm.Cells), 6, "unexpected extra cells parsed — update this bound if new cells were added intentionally")
 	for _, id := range []string{"access-core", "audit-core", "config-core"} {
 		assert.Contains(t, pm.Cells, id, "missing cell %s", id)
 	}
 
-	// --- Slices: at least the 16 original slices ---
+	// --- Slices: at least the 16 original slices (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Slices), 16, "expected at least 16 slices")
+	assert.LessOrEqual(t, len(pm.Slices), 24, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
 	expectedSlices := []string{
 		"access-core/session-login",
 		"access-core/session-validate",
@@ -57,8 +59,9 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
 	}
 
-	// --- Contracts: at least the 12 original contracts ---
+	// --- Contracts: at least the 12 original contracts (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Contracts), 12, "expected at least 12 contracts")
+	assert.LessOrEqual(t, len(pm.Contracts), 18, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
 		"http.config.get.v1",
@@ -77,8 +80,9 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Contracts, id, "missing contract %s", id)
 	}
 
-	// --- Journeys: at least the 8 original journeys ---
+	// --- Journeys: at least the 8 original journeys (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Journeys), 8, "expected at least 8 journeys")
+	assert.LessOrEqual(t, len(pm.Journeys), 12, "unexpected extra journeys parsed — update this bound if new journeys were added intentionally")
 	expectedJourneys := []string{
 		"J-sso-login",
 		"J-session-refresh",
@@ -93,12 +97,14 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Journeys, id, "missing journey %s", id)
 	}
 
-	// --- Assemblies: at least the 1 original assembly ---
+	// --- Assemblies: at least the 1 original assembly (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Assemblies), 1, "expected at least 1 assembly")
+	assert.LessOrEqual(t, len(pm.Assemblies), 3, "unexpected extra assemblies parsed — update this bound if new assemblies were added intentionally")
 	assert.Contains(t, pm.Assemblies, "core-bundle")
 
-	// --- Status Board: at least the 8 original entries ---
+	// --- Status Board: at least the 8 original entries (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
+	assert.LessOrEqual(t, len(pm.StatusBoard), 12, "unexpected extra status-board entries parsed — update this bound if new entries were added intentionally")
 
 	// --- Actors: 1 ---
 	assert.Len(t, pm.Actors, 1, "expected 1 actor")

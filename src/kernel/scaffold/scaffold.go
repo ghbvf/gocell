@@ -26,7 +26,7 @@ func validatePathComponent(value, field string) error {
 	if value == "" {
 		return errcode.New(ErrScaffoldInvalidOpts, field+" is required")
 	}
-	if strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
+	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
 		return errcode.New(ErrScaffoldInvalidOpts, field+" contains path traversal or separator")
 	}
 	return nil

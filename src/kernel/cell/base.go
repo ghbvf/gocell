@@ -115,7 +115,7 @@ func (b *BaseCell) Start(ctx context.Context) error {
 		return errcode.New(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
 	}
-	b.shutdownCtx, b.shutdownCancel = context.WithCancel(ctx)
+	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.WithoutCancel(ctx))
 	b.state = cellStateStarted
 	return nil
 }

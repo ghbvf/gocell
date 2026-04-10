@@ -543,6 +543,12 @@ func TestPathTraversal(t *testing.T) {
 		{"journey ../admin", func() error {
 			return s.CreateJourney(JourneyOpts{ID: "../admin", Goal: "g", OwnerTeam: "t", Cells: []string{"c"}})
 		}},
+		{"cell dot", func() error {
+			return s.CreateCell(CellOpts{ID: ".", OwnerTeam: "t"})
+		}},
+		{"slice cellID dot", func() error {
+			return s.CreateSlice(SliceOpts{ID: "s", CellID: "."})
+		}},
 	}
 
 	for _, tc := range cases {
