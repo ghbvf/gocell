@@ -45,14 +45,15 @@ func NewTargetSelector(project *metadata.ProjectMeta) *TargetSelector {
 // ref: K8s kubectl diff — impact analysis across all resource types
 func (ts *TargetSelector) SelectFromFiles(files []string) *AffectedTargets {
 	sliceSet := make(map[string]struct{})
-	cellSet := make(map[string]struct{})
+	fileCellSet := make(map[string]struct{}) // cells directly hit by file paths (cells/**)
+	cellSet := make(map[string]struct{})     // cells from journey/assembly expansion
 	contractSet := make(map[string]struct{})
 
 	for _, f := range files {
 		// Normalize path separators and clean.
 		f = path.Clean(strings.ReplaceAll(f, "\\", "/"))
 
-		if ts.matchSliceFromCellsPath(f, sliceSet) {
+		if ts.matchSliceFromCellsPath(f, sliceSet, fileCellSet) {
 			continue
 		}
 		if ts.matchSlicesFromContractPath(f, sliceSet) {
@@ -64,16 +65,17 @@ func (ts *TargetSelector) SelectFromFiles(files []string) *AffectedTargets {
 		ts.matchFromAssemblyPath(f, cellSet)
 	}
 
+	// Expand L0 dependencies BEFORE journey/assembly expansion.
+	// Only file-path-derived cells trigger L0 propagation, not
+	// journey/assembly references (which would cause over-selection).
+	ts.expandL0Dependents(sliceSet, fileCellSet)
+
 	// Expand cells collected from journey/assembly paths into slices.
 	for key, s := range ts.project.Slices {
 		if _, ok := cellSet[s.BelongsToCell]; ok {
 			sliceSet[key] = struct{}{}
 		}
 	}
-
-	// Expand L0 dependencies: when an L0 cell's file is changed,
-	// all cells that declare it in l0Dependencies are also affected.
-	ts.expandL0Dependents(sliceSet)
 
 	result := ts.expandFromSlices(sliceSet)
 
@@ -105,7 +107,9 @@ func (ts *TargetSelector) SelectFromSlice(sliceKey string) *AffectedTargets {
 
 // matchSliceFromCellsPath handles paths under cells/.
 // Returns true if the path was consumed (matched cells/ prefix).
-func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet map[string]struct{}) bool {
+// fileCellSet tracks which cells are directly hit by file paths
+// (used for L0 dependency propagation).
+func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet, fileCellSet map[string]struct{}) bool {
 	// Expect: cells/{cellID}/...
 	if !strings.HasPrefix(f, "cells/") {
 		return false
@@ -122,6 +126,9 @@ func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet map[string]
 	if _, ok := ts.project.Cells[cellID]; !ok {
 		return true
 	}
+
+	// Track this cell as directly affected by a file change.
+	fileCellSet[cellID] = struct{}{}
 
 	// cells/{cellID}/slices/{sliceID}/**
 	if len(parts) >= 4 && parts[2] == "slices" {
@@ -263,12 +270,15 @@ func (ts *TargetSelector) contractIDFromPath(f string) string {
 	return strings.ReplaceAll(dir, "/", ".")
 }
 
-// expandL0Dependents checks whether any already-selected slice belongs to
-// an L0 cell, and if so, adds all slices of cells that declare that L0 cell
-// in their l0Dependencies. This propagates change impact through L0 edges.
-func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}) {
-	// Collect L0 cell IDs that are already affected.
+// expandL0Dependents checks whether any file-change-affected cell is L0,
+// and if so, adds all slices of cells that declare that L0 cell in their
+// l0Dependencies. fileCellSet covers L0 cells that may have no slices
+// (and thus no entries in sliceSet).
+func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileCellSet map[string]struct{}) {
+	// Collect L0 cell IDs from file-path-derived sources.
 	l0Cells := make(map[string]struct{})
+
+	// From sliceSet: slice-level file changes.
 	for key := range sliceSet {
 		s, ok := ts.project.Slices[key]
 		if !ok {
@@ -282,6 +292,18 @@ func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}) {
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
+
+	// From fileCellSet: cell-level file changes (covers L0 cells with no slices).
+	for cellID := range fileCellSet {
+		c, ok := ts.project.Cells[cellID]
+		if !ok {
+			continue
+		}
+		if c.ConsistencyLevel == "L0" {
+			l0Cells[c.ID] = struct{}{}
+		}
+	}
+
 	if len(l0Cells) == 0 {
 		return
 	}

@@ -60,6 +60,11 @@ func TestResolveRef(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "empty scope segment",
+			ref:     "unit..service",
+			wantErr: true,
+		},
+		{
 			name:    "empty string",
 			ref:     "",
 			wantErr: true,

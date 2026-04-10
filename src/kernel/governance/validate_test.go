@@ -1240,6 +1240,13 @@ func TestVERIFY05(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name: "empty scope segment rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit..service"}
+			},
+			wantCount: 1,
+		},
+		{
 			name: "empty checkRef is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{

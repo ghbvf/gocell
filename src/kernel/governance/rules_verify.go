@@ -197,7 +197,7 @@ var validRefPrefixes = map[string]bool{
 func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResult {
 	var results []ValidationResult
 	parts := strings.SplitN(ref, ".", 3)
-	if len(parts) < 3 || parts[2] == "" {
+	if len(parts) < 3 || parts[1] == "" || parts[2] == "" {
 		results = append(results, ValidationResult{
 			Code:      "VERIFY-05",
 			Severity:  SeverityError,
@@ -205,7 +205,7 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 			File:      file,
 			Field:     field,
 			Message: fmt.Sprintf(
-				"ref %q must have at least 3 dot-separated segments", ref,
+				"ref %q must have at least 3 non-empty dot-separated segments", ref,
 			),
 		})
 		return results

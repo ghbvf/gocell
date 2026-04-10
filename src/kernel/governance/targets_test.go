@@ -328,7 +328,8 @@ func TestSelectFromFiles_NonexistentJourney(t *testing.T) {
 
 // --- L0 dependency tracking (GOV-6) ---
 
-// l0Project returns a ProjectMeta with an L0 cell and a dependent cell.
+// l0Project returns a ProjectMeta with L0 cells (with and without slices)
+// and dependent cells, plus a journey referencing the L0 cell.
 func l0Project() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
@@ -337,12 +338,19 @@ func l0Project() *metadata.ProjectMeta {
 				Type:             "support",
 				ConsistencyLevel: "L0",
 			},
+			"shared-validate": {
+				ID:               "shared-validate",
+				Type:             "support",
+				ConsistencyLevel: "L0",
+				// L0 cell with NO slices — tests propagation for slice-less cells.
+			},
 			"access-core": {
 				ID:               "access-core",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				L0Dependencies: []metadata.L0DepMeta{
 					{Cell: "shared-crypto", Reason: "hashing"},
+					{Cell: "shared-validate", Reason: "input validation"},
 				},
 			},
 			"audit-core": {
@@ -357,6 +365,7 @@ func l0Project() *metadata.ProjectMeta {
 				ID:            "hasher",
 				BelongsToCell: "shared-crypto",
 			},
+			// shared-validate has NO slices (intentional).
 			"access-core/session-login": {
 				ID:            "session-login",
 				BelongsToCell: "access-core",
@@ -375,7 +384,12 @@ func l0Project() *metadata.ProjectMeta {
 				Kind: "http",
 			},
 		},
-		Journeys:   map[string]*metadata.JourneyMeta{},
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-l0-test": {
+				ID:    "J-l0-test",
+				Cells: []string{"shared-crypto", "access-core"},
+			},
+		},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 }
@@ -407,11 +421,22 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 			wantContracts: []string{"http.auth.login.v1"},
 		},
 		{
-			name:  "cell without l0Dependencies not affected by L0 change",
-			files: []string{"cells/shared-crypto/slices/hasher/hash.go"},
-			// audit-core has no l0Dependencies, so it is NOT selected.
+			name:  "journey referencing L0 cell does NOT trigger L0 propagation",
+			files: []string{"journeys/J-l0-test.yaml"},
+			// Journey references shared-crypto (L0) and access-core.
+			// But journey changes should NOT trigger L0 dependency propagation —
+			// only file-path changes to cells/** should.
 			wantSlices:    []string{"access-core/session-login", "shared-crypto/hasher"},
 			wantCells:     []string{"access-core", "shared-crypto"},
+			wantContracts: []string{"http.auth.login.v1"},
+		},
+		{
+			name:  "L0 cell without slices propagates to dependents",
+			files: []string{"cells/shared-validate/cell.yaml"},
+			// shared-validate is L0 with no slices. Changing its cell.yaml
+			// should still propagate to access-core (which depends on it).
+			wantSlices:    []string{"access-core/session-login"},
+			wantCells:     []string{"access-core"},
 			wantContracts: []string{"http.auth.login.v1"},
 		},
 	}
