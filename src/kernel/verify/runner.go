@@ -113,11 +113,18 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 	for _, ref := range smokeRefs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
-			// Legacy format (e.g., "device-cell/smoke") — treat as raw pattern
-			// scoped to the cell package. Convert to CamelCase for -run.
+			// Only degrade to raw pattern for known legacy formats (containing "/").
+			// Other malformed refs are reported as errors.
+			if !strings.Contains(ref, "/") {
+				result.Errors = append(result.Errors, err)
+				result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+				result.Passed = false
+				continue
+			}
+			// Legacy format (e.g., "device-cell/smoke") — treat as raw -run pattern.
 			raw := strings.ReplaceAll(ref, "/", "-")
 			pattern := kebabToCamelCase(raw)
-			slog.Warn("smoke ref does not match structured format, using as raw pattern",
+			slog.Warn("smoke ref uses legacy slash format, degrading to raw pattern",
 				slog.String("ref", ref), slog.String("pattern", pattern))
 			res := runGoTest(ctx, r.root, []string{cellPkg, "-v", "-run", pattern})
 			recordResult(result, ref, res, cellPkg, pattern)
@@ -144,16 +151,15 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 
 	result := &VerifyResult{TargetID: journeyID, Passed: true}
 
-	// Collect manual criteria.
+	// Single pass: classify criteria into manual / auto-runnable / auto-incomplete.
+	var autoRefs []string
 	for _, pc := range j.PassCriteria {
-		if pc.Mode == ModeManual {
+		switch {
+		case pc.Mode == ModeManual:
 			result.ManualPending = append(result.ManualPending, pc.Text)
-		}
-	}
-
-	// Count auto criteria without checkRef — these are incomplete declarations.
-	for _, pc := range j.PassCriteria {
-		if pc.Mode == ModeAuto && pc.CheckRef == "" {
+		case pc.Mode == ModeAuto && pc.CheckRef != "":
+			autoRefs = append(autoRefs, pc.CheckRef)
+		case pc.Mode == ModeAuto && pc.CheckRef == "":
 			result.Results = append(result.Results, TestResult{
 				Name:   pc.Text,
 				Passed: false,
@@ -163,18 +169,14 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 		}
 	}
 
-	// Run auto criteria.
-	autoRefs := collectAutoCheckRefs(j)
-	if len(autoRefs) == 0 && len(result.ManualPending) > 0 && result.Passed {
-		// Only manual criteria exist and no auto failures — flag as inconclusive.
-		result.Results = append(result.Results, TestResult{
-			Name:   journeyID,
-			Passed: true,
-			Output: "warning: only manual criteria — automated verification not possible",
-		})
-		return result, nil
-	}
 	if len(autoRefs) == 0 {
+		if len(result.ManualPending) > 0 && result.Passed {
+			result.Results = append(result.Results, TestResult{
+				Name:   journeyID,
+				Passed: true,
+				Output: "warning: only manual criteria — automated verification not possible",
+			})
+		}
 		return result, nil
 	}
 
@@ -258,26 +260,45 @@ func (r *Runner) resolveJourneyPkg(ref resolvedRef) (pkg string, extraArgs []str
 }
 
 // resolveSlicePkg determines the Go test package path for a slice.
-// Metadata uses kebab-case dirs (session-login/) while Go packages strip
-// hyphens (sessionlogin/). We check the filesystem and prefer the existing dir.
+// In this repo, metadata dirs (session-login/) contain only slice.yaml,
+// while the Go package lives in a hyphen-stripped sibling (sessionlogin/).
+// We check for Go source files, not just directory existence.
+//
+// Precondition: cellID and sliceID must have passed parseSliceKey validation.
 func resolveSlicePkg(root, cellID, sliceID string) string {
 	base := filepath.Join("cells", cellID, "slices")
-	// Try metadata-style dir first.
-	if dirExists(filepath.Join(root, base, sliceID)) {
+	// Prefer the dir that actually contains Go files.
+	stripped := strings.ReplaceAll(sliceID, "-", "")
+	if hasGoFiles(filepath.Join(root, base, stripped)) {
+		return fmt.Sprintf("./%s/%s/...", base, stripped)
+	}
+	if hasGoFiles(filepath.Join(root, base, sliceID)) {
 		return fmt.Sprintf("./%s/%s/...", base, sliceID)
 	}
-	// Try hyphen-stripped variant.
-	stripped := strings.ReplaceAll(sliceID, "-", "")
+	// Fallback: try stripped dir existence (may have Go files in subdirs).
 	if dirExists(filepath.Join(root, base, stripped)) {
 		return fmt.Sprintf("./%s/%s/...", base, stripped)
 	}
-	// Fallback to metadata path (will fail at go test with clear error).
+	// Last resort: metadata-style path (go test will give clear error).
 	return fmt.Sprintf("./%s/%s/...", base, sliceID)
 }
 
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+func hasGoFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".go") {
+			return true
+		}
+	}
+	return false
 }
 
 // parseSliceKey splits "cellID/sliceID" into its parts.

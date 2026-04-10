@@ -2,6 +2,8 @@ package verify
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,11 +106,33 @@ func TestRunJourney_ManualPending(t *testing.T) {
 
 	result, err := r.RunJourney(context.Background(), "J-test")
 	require.NoError(t, err)
-	assert.True(t, result.Passed, "auto-only should pass with no auto criteria")
+	assert.True(t, result.Passed, "manual-only should pass with no auto criteria")
 	assert.Equal(t, []string{
 		"Check the UI renders correctly",
 		"Verify email was sent",
 	}, result.ManualPending)
+	// R3-6: assert warning TestResult exists
+	require.Len(t, result.Results, 1)
+	assert.Contains(t, result.Results[0].Output, "warning")
+}
+
+func TestRunJourney_AutoNoCheckRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID: "J-test",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: "auto", Text: "Unverifiable criterion", CheckRef: ""},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunJourney(context.Background(), "J-test")
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "auto without checkRef should fail")
+	require.Len(t, result.Results, 1)
+	assert.Contains(t, result.Results[0].Output, "no checkRef")
 }
 
 func TestRunJourney_InvalidRef(t *testing.T) {
@@ -128,6 +152,53 @@ func TestRunJourney_InvalidRef(t *testing.T) {
 	assert.False(t, result.Passed, "invalid ref should fail")
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0].Error(), "ERR_CHECKREF_INVALID")
+}
+
+func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./tests/integration/...", pkg)
+	assert.Contains(t, extra, "-tags=integration")
+}
+
+func TestResolveJourneyPkg_JourneysDir(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./journeys/...", pkg)
+	assert.Nil(t, extra)
+}
+
+func TestResolveJourneyPkg_Fallback(t *testing.T) {
+	r := NewRunner(nil, t.TempDir())
+	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	assert.Equal(t, "./...", pkg)
+	assert.Nil(t, extra)
+}
+
+func TestResolveSlicePkg_PrefersGoFiles(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "cells", "c", "slices")
+	// Create metadata dir with only YAML
+	yamlDir := filepath.Join(base, "my-slice")
+	require.NoError(t, os.MkdirAll(yamlDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(yamlDir, "slice.yaml"), []byte("id: my-slice"), 0o644))
+	// Create Go package dir
+	goDir := filepath.Join(base, "myslice")
+	require.NoError(t, os.MkdirAll(goDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(goDir, "service.go"), []byte("package myslice"), 0o644))
+
+	pkg := resolveSlicePkg(dir, "c", "my-slice")
+	assert.Contains(t, pkg, "myslice", "should prefer dir with Go files")
+	assert.NotContains(t, pkg, "my-slice")
+}
+
+func TestResolveSlicePkg_FallbackToMetadata(t *testing.T) {
+	pkg := resolveSlicePkg(t.TempDir(), "c", "nonexistent")
+	assert.Contains(t, pkg, "nonexistent")
 }
 
 func TestIsZeroMatch(t *testing.T) {

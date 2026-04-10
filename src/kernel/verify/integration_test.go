@@ -165,6 +165,51 @@ func TestWrite(t *testing.T) {}
 	assert.Contains(t, res.Results[0].Output, "PASS")
 }
 
+func TestVerifyCell_LegacySmoke(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+
+	cellDir := filepath.Join(dir, "cells", "device-cell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "smoke_test.go"), []byte(`package devicecell
+import "testing"
+func TestDeviceCellSmoke(t *testing.T) {}
+`), 0o644))
+
+	proj := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"device-cell": {
+				ID:    "device-cell",
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"device-cell/smoke"}},
+			},
+		},
+		Slices:   map[string]*metadata.SliceMeta{},
+		Journeys: map[string]*metadata.JourneyMeta{},
+	}
+
+	r := NewRunner(proj, dir)
+	res, err := r.VerifyCell(context.Background(), "device-cell")
+	require.NoError(t, err)
+	// Legacy ref degrades to raw pattern; test should be found.
+	assert.True(t, res.Passed)
+	require.Len(t, res.Results, 1)
+	assert.Contains(t, res.Results[0].Output, "PASS")
+}
+
+func TestVerifyCell_InvalidSmokeRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"c": {ID: "c", Verify: metadata.CellVerifyMeta{Smoke: []string{"totally-invalid"}}},
+		},
+	}, t.TempDir())
+
+	res, err := r.VerifyCell(context.Background(), "c")
+	require.NoError(t, err)
+	assert.False(t, res.Passed, "non-legacy invalid ref should fail")
+	require.Len(t, res.Errors, 1)
+	assert.Contains(t, res.Errors[0].Error(), "ERR_CHECKREF_INVALID")
+}
+
 // ---------------------------------------------------------------------------
 // RunJourney — integration with real go test
 // ---------------------------------------------------------------------------
