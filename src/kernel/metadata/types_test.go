@@ -285,6 +285,26 @@ func TestStatusBoardSliceRoundTrip(t *testing.T) {
 	assert.Equal(t, orig, got)
 }
 
+func TestContractMeta_ProviderEndpoint(t *testing.T) {
+	tests := []struct {
+		name string
+		meta ContractMeta
+		want string
+	}{
+		{"http returns server", ContractMeta{Kind: "http", Endpoints: EndpointsMeta{Server: "cell-a"}}, "cell-a"},
+		{"event returns publisher", ContractMeta{Kind: "event", Endpoints: EndpointsMeta{Publisher: "cell-b"}}, "cell-b"},
+		{"command returns handler", ContractMeta{Kind: "command", Endpoints: EndpointsMeta{Handler: "cell-c"}}, "cell-c"},
+		{"projection returns provider", ContractMeta{Kind: "projection", Endpoints: EndpointsMeta{Provider: "cell-d"}}, "cell-d"},
+		{"unknown kind returns empty", ContractMeta{Kind: "grpc"}, ""},
+		{"empty kind returns empty", ContractMeta{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.meta.ProviderEndpoint())
+		})
+	}
+}
+
 func TestActorSliceRoundTrip(t *testing.T) {
 	orig := []ActorMeta{
 		{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},

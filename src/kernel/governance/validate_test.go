@@ -642,6 +642,7 @@ func TestTOPO04(t *testing.T) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L3"},
 				}
+				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",
@@ -662,6 +663,7 @@ func TestTOPO04(t *testing.T) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L1"},
 				}
+				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",
@@ -682,6 +684,7 @@ func TestTOPO04(t *testing.T) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "INVALID"},
 				}
+				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gw.v1",
 					Kind:             "http",

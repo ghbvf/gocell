@@ -89,18 +89,7 @@ func (r *ContractRegistry) Provider(contractID string) string {
 	if c == nil {
 		return ""
 	}
-	switch c.Kind {
-	case "http":
-		return c.Endpoints.Server
-	case "event":
-		return c.Endpoints.Publisher
-	case "command":
-		return c.Endpoints.Handler
-	case "projection":
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
+	return c.ProviderEndpoint()
 }
 
 // Consumers returns the consumer actor IDs for a contract.

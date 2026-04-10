@@ -90,7 +90,7 @@ func (a *CoreAssembly) Start(ctx context.Context) error {
 }
 
 // Stop stops every registered Cell in reverse registration order. If multiple
-// Cells fail, Stop continues and returns the first error encountered.
+// Cells fail, Stop continues and returns all errors joined via errors.Join.
 // Stop is only allowed from the Started state; calling Stop in any other state
 // is a no-op.
 //

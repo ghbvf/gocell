@@ -248,10 +248,14 @@ func (s *BaseSlice) AffectedJourneys() []string {
 func (s *BaseSlice) SetVerify(v VerifySpec) { s.verify = v }
 
 // SetAllowedFiles overrides the default file ownership paths.
-func (s *BaseSlice) SetAllowedFiles(files []string) { s.allowed = files }
+func (s *BaseSlice) SetAllowedFiles(files []string) {
+	s.allowed = append([]string(nil), files...)
+}
 
 // SetAffectedJourneys sets the journey IDs.
-func (s *BaseSlice) SetAffectedJourneys(ids []string) { s.journeys = ids }
+func (s *BaseSlice) SetAffectedJourneys(ids []string) {
+	s.journeys = append([]string(nil), ids...)
+}
 
 // ---------------------------------------------------------------------------
 // BaseContract
