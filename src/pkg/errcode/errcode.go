@@ -27,6 +27,8 @@ const (
 	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
 	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
 	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
+	ErrCheckRefInvalid  Code = "ERR_CHECKREF_INVALID"
+	ErrZeroTestMatch    Code = "ERR_ZERO_TEST_MATCH"
 	ErrBusClosed          Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
 	ErrSessionNotFound    Code = "ERR_SESSION_NOT_FOUND"
