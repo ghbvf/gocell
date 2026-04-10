@@ -191,8 +191,8 @@ func TestRunJourney_Integration(t *testing.T) {
 	require.NoError(t, os.MkdirAll(journeyDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(journeyDir, "sso_test.go"), []byte(`package journeys
 import "testing"
-func TestOidcRedirect(t *testing.T) {}
-func TestSessionPersist(t *testing.T) {}
+func TestJSsoLoginOidcRedirect(t *testing.T) {}
+func TestJSsoLoginSessionPersist(t *testing.T) {}
 `), 0o644))
 
 	proj := &metadata.ProjectMeta{

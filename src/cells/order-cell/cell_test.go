@@ -68,6 +68,15 @@ func TestOrderCell_Metadata(t *testing.T) {
 	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
+func TestOrderCell_Startup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	require.NoError(t, c.Init(ctx, newTestDeps()))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestOrderCell_InitDefaults(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -180,15 +189,6 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code,
 		"GET /api/v1/orders/{id} should return 200 for existing order")
-}
-
-func TestStartup(t *testing.T) {
-	c := newTestCell()
-	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, newTestDeps()))
-	require.NoError(t, c.Start(ctx))
-	assert.True(t, c.Ready())
-	require.NoError(t, c.Stop(ctx))
 }
 
 func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {

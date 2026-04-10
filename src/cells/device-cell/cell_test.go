@@ -55,6 +55,19 @@ func TestDeviceCell_Metadata(t *testing.T) {
 	assert.Equal(t, cell.L4, c.ConsistencyLevel())
 }
 
+func TestDeviceCell_Startup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 	// No repos injected; Init should use in-memory defaults.
 	c := NewDeviceCell(WithPublisher(eventbus.New()))
@@ -214,19 +227,6 @@ func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestStartup(t *testing.T) {
-	c := newTestCell()
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
-		Config: make(map[string]any),
-	}
-	require.NoError(t, c.Init(ctx, deps))
-	require.NoError(t, c.Start(ctx))
-	assert.True(t, c.Ready())
-	require.NoError(t, c.Stop(ctx))
 }
 
 func TestDeviceCell_RouteAckCommand(t *testing.T) {

@@ -63,6 +63,19 @@ func TestAuditCore_Metadata(t *testing.T) {
 	assert.Equal(t, cell.L3, c.ConsistencyLevel())
 }
 
+func TestAuditCore_Startup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestAuditCore_MissingHMACKey(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
@@ -137,19 +150,6 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
 func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
-
-func TestStartup(t *testing.T) {
-	c := newTestCell()
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
-		Config: make(map[string]any),
-	}
-	require.NoError(t, c.Init(ctx, deps))
-	require.NoError(t, c.Start(ctx))
-	assert.True(t, c.Ready())
-	require.NoError(t, c.Stop(ctx))
-}
 
 func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	c := newTestCell()

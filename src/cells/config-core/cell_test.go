@@ -63,6 +63,19 @@ func TestConfigCore_Metadata(t *testing.T) {
 	assert.Equal(t, "platform", c.Metadata().Owner.Team)
 }
 
+func TestConfigCore_Startup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestConfigCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
@@ -159,19 +172,6 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 	// the response is JSON (meaning our handler ran, not the router's default 404).
 	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json",
 		"GET /api/v1/config/{key} should return JSON (route matched), got plain text (routing 404)")
-}
-
-func TestStartup(t *testing.T) {
-	c := newTestCell()
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
-		Config: make(map[string]any),
-	}
-	require.NoError(t, c.Init(ctx, deps))
-	require.NoError(t, c.Start(ctx))
-	assert.True(t, c.Ready())
-	require.NoError(t, c.Stop(ctx))
 }
 
 func TestConfigCore_RouteFlagsList(t *testing.T) {

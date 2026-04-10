@@ -84,6 +84,19 @@ func TestAccessCore_Metadata(t *testing.T) {
 	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
+func TestAccessCore_Startup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
@@ -209,19 +222,6 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 		"GET /api/v1/access/users/{id} should reach handler (got %d)", rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
 		"response should be JSON (handler reached, not chi 404)")
-}
-
-func TestStartup(t *testing.T) {
-	c := newTestCell()
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
-		Config: make(map[string]any),
-	}
-	require.NoError(t, c.Init(ctx, deps))
-	require.NoError(t, c.Start(ctx))
-	assert.True(t, c.Ready())
-	require.NoError(t, c.Stop(ctx))
 }
 
 func TestAccessCore_RouteRolesList(t *testing.T) {
