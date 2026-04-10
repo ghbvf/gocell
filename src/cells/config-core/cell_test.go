@@ -161,6 +161,19 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 		"GET /api/v1/config/{key} should return JSON (route matched), got plain text (routing 404)")
 }
 
+func TestStartup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestConfigCore_RouteFlagsList(t *testing.T) {
 	r := initCellWithRouter(t)
 

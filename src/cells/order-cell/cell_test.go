@@ -182,6 +182,15 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 		"GET /api/v1/orders/{id} should return 200 for existing order")
 }
 
+func TestStartup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	require.NoError(t, c.Init(ctx, newTestDeps()))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {
 	r := initCellWithRouter(t)
 

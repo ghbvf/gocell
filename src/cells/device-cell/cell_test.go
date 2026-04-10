@@ -216,6 +216,19 @@ func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestStartup(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
+		Config: make(map[string]any),
+	}
+	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Start(ctx))
+	assert.True(t, c.Ready())
+	require.NoError(t, c.Stop(ctx))
+}
+
 func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	r := initCellWithRouter(t)
 
