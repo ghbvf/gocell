@@ -1,6 +1,6 @@
 id: audit-core
 type: core
-consistencyLevel: L3
+consistencyLevel: L2
 owner:
   team: platform
   role: cell-owner
