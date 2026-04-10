@@ -175,6 +175,11 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("contract id is empty in %s", path))
 	}
+	// Infer ownerCell from provider endpoint if omitted (per contract.schema.json).
+	if m.OwnerCell == "" {
+		m.OwnerCell = m.ProviderEndpoint()
+	}
+
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate contract ID %q: %s and previous", m.ID, path))

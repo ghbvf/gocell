@@ -14,18 +14,7 @@ import (
 
 // contractProvider returns the provider cell/actor for a contract based on its kind.
 func contractProvider(c *metadata.ContractMeta) string {
-	switch cell.ContractKind(c.Kind) {
-	case cell.ContractHTTP:
-		return c.Endpoints.Server
-	case cell.ContractEvent:
-		return c.Endpoints.Publisher
-	case cell.ContractCommand:
-		return c.Endpoints.Handler
-	case cell.ContractProjection:
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
+	return c.ProviderEndpoint()
 }
 
 // contractConsumers returns the consumer cell/actor list for a contract based on its kind.

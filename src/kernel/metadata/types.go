@@ -78,6 +78,23 @@ type ContractMeta struct {
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
 }
 
+// ProviderEndpoint returns the provider cell/actor ID for this contract
+// based on its Kind. Returns "" if Kind is unknown or provider is unset.
+func (c *ContractMeta) ProviderEndpoint() string {
+	switch c.Kind {
+	case "http":
+		return c.Endpoints.Server
+	case "event":
+		return c.Endpoints.Publisher
+	case "command":
+		return c.Endpoints.Handler
+	case "projection":
+		return c.Endpoints.Provider
+	default:
+		return ""
+	}
+}
+
 // EndpointsMeta holds the kind-specific endpoint fields for a Contract.
 // Only the fields relevant to the contract's Kind are populated.
 type EndpointsMeta struct {

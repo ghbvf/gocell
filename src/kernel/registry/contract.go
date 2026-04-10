@@ -36,19 +36,49 @@ func NewContractRegistry(project *metadata.ProjectMeta) *ContractRegistry {
 	return r
 }
 
-// Get returns a contract by ID, or nil if not found.
+// Get returns a deep copy of a contract by ID, or nil if not found.
 func (r *ContractRegistry) Get(id string) *metadata.ContractMeta {
-	return r.contracts[id]
+	c := r.contracts[id]
+	if c == nil {
+		return nil
+	}
+	return deepCopyContract(c)
 }
 
-// ByKind returns all contracts of the given kind (http/event/command/projection).
+// ByKind returns deep copies of all contracts of the given kind.
 func (r *ContractRegistry) ByKind(kind string) []*metadata.ContractMeta {
-	return r.byKind[kind]
+	return copyContractSlice(r.byKind[kind])
 }
 
-// ByOwner returns all contracts owned by the given cell.
+// ByOwner returns deep copies of all contracts owned by the given cell.
 func (r *ContractRegistry) ByOwner(cellID string) []*metadata.ContractMeta {
-	return r.byOwner[cellID]
+	return copyContractSlice(r.byOwner[cellID])
+}
+
+func copyContractSlice(src []*metadata.ContractMeta) []*metadata.ContractMeta {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*metadata.ContractMeta, len(src))
+	for i, c := range src {
+		out[i] = deepCopyContract(c)
+	}
+	return out
+}
+
+func deepCopyContract(c *metadata.ContractMeta) *metadata.ContractMeta {
+	cp := *c
+	// Deep copy mutable Endpoints slices.
+	cp.Endpoints.Clients = append([]string(nil), c.Endpoints.Clients...)
+	cp.Endpoints.Subscribers = append([]string(nil), c.Endpoints.Subscribers...)
+	cp.Endpoints.Invokers = append([]string(nil), c.Endpoints.Invokers...)
+	cp.Endpoints.Readers = append([]string(nil), c.Endpoints.Readers...)
+	// Deep copy Replayable pointer.
+	if c.Replayable != nil {
+		v := *c.Replayable
+		cp.Replayable = &v
+	}
+	return &cp
 }
 
 // Provider returns the provider actor ID for a contract.
@@ -59,18 +89,7 @@ func (r *ContractRegistry) Provider(contractID string) string {
 	if c == nil {
 		return ""
 	}
-	switch c.Kind {
-	case "http":
-		return c.Endpoints.Server
-	case "event":
-		return c.Endpoints.Publisher
-	case "command":
-		return c.Endpoints.Handler
-	case "projection":
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
+	return c.ProviderEndpoint()
 }
 
 // Consumers returns the consumer actor IDs for a contract.
@@ -83,13 +102,13 @@ func (r *ContractRegistry) Consumers(contractID string) []string {
 	}
 	switch c.Kind {
 	case "http":
-		return c.Endpoints.Clients
+		return append([]string(nil), c.Endpoints.Clients...)
 	case "event":
-		return c.Endpoints.Subscribers
+		return append([]string(nil), c.Endpoints.Subscribers...)
 	case "command":
-		return c.Endpoints.Invokers
+		return append([]string(nil), c.Endpoints.Invokers...)
 	case "projection":
-		return c.Endpoints.Readers
+		return append([]string(nil), c.Endpoints.Readers...)
 	default:
 		return nil
 	}

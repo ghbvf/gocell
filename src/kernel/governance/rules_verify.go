@@ -130,6 +130,58 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	return results
 }
 
+// validateVERIFY04 checks that every active contract whose provider is a
+// Cell has at least one provider-role slice. Without this, a contract is
+// "published but nobody provides it" — a ghost capability.
+// Contracts served by external actors are skipped (actors have no slices).
+func (v *Validator) validateVERIFY04() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Lifecycle != "active" {
+			continue
+		}
+		providerID := contractProvider(c)
+		if providerID == "" {
+			continue // REF rules cover missing provider
+		}
+		// Only check cell-backed contracts; external actors have no slices.
+		if _, isCell := v.project.Cells[providerID]; !isCell {
+			continue
+		}
+
+		found := false
+		for _, s := range v.project.Slices {
+			if s.BelongsToCell != providerID {
+				continue
+			}
+			for _, cu := range s.ContractUsages {
+				if cu.Contract == c.ID && cell.IsProviderRole(cell.ContractRole(cu.Role)) {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+
+		if !found {
+			results = append(results, ValidationResult{
+				Code:      "VERIFY-04",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      contractFile(c.ID),
+				Field:     "lifecycle",
+				Message: fmt.Sprintf(
+					"active contract %q has no provider-role slice in cell %q",
+					c.ID, providerID,
+				),
+			})
+		}
+	}
+	return results
+}
+
 // validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
 func (v *Validator) validateVERIFY03() []ValidationResult {
 	var results []ValidationResult

@@ -770,3 +770,87 @@ build:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "assembly id is empty")
 }
+
+func TestParseFS_ContractOwnerCellInferred(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantOwner string
+	}{
+		{
+			name: "http infers ownerCell from server",
+			yaml: `id: http.test.v1
+kind: http
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: cell-a
+  clients: [cell-b]
+`,
+			wantOwner: "cell-a",
+		},
+		{
+			name: "event infers ownerCell from publisher",
+			yaml: `id: event.test.v1
+kind: event
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: cell-b
+  subscribers: [cell-a]
+`,
+			wantOwner: "cell-b",
+		},
+		{
+			name: "command infers ownerCell from handler",
+			yaml: `id: command.test.v1
+kind: command
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  handler: cell-c
+  invokers: [cell-a]
+`,
+			wantOwner: "cell-c",
+		},
+		{
+			name: "projection infers ownerCell from provider",
+			yaml: `id: projection.test.v1
+kind: projection
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  provider: cell-d
+  readers: [cell-a]
+`,
+			wantOwner: "cell-d",
+		},
+		{
+			name: "explicit ownerCell is preserved",
+			yaml: `id: http.explicit.v1
+kind: http
+ownerCell: explicit-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: different-cell
+  clients: [cell-b]
+`,
+			wantOwner: "explicit-cell",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := fstest.MapFS{
+				"contracts/test/domain/v1/contract.yaml": &fstest.MapFile{Data: []byte(tt.yaml)},
+			}
+			p := NewParser("")
+			pm, err := p.ParseFS(fs)
+			require.NoError(t, err)
+			require.Len(t, pm.Contracts, 1)
+			for _, c := range pm.Contracts {
+				assert.Equal(t, tt.wantOwner, c.OwnerCell)
+			}
+		})
+	}
+}

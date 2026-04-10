@@ -45,14 +45,42 @@ func NewCellRegistry(project *metadata.ProjectMeta) *CellRegistry {
 	return r
 }
 
-// Get returns a cell by ID, or nil if not found.
+// Get returns a deep copy of a cell by ID, or nil if not found.
 func (r *CellRegistry) Get(id string) *metadata.CellMeta {
-	return r.cells[id]
+	c := r.cells[id]
+	if c == nil {
+		return nil
+	}
+	return deepCopyCell(c)
 }
 
-// SlicesFor returns all slices belonging to the given cell.
+// SlicesFor returns deep copies of all slices belonging to the given cell.
 func (r *CellRegistry) SlicesFor(cellID string) []*metadata.SliceMeta {
-	return r.slices[cellID]
+	src := r.slices[cellID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*metadata.SliceMeta, len(src))
+	for i, s := range src {
+		out[i] = deepCopySlice(s)
+	}
+	return out
+}
+
+func deepCopyCell(c *metadata.CellMeta) *metadata.CellMeta {
+	cp := *c
+	cp.Verify.Smoke = append([]string(nil), c.Verify.Smoke...)
+	cp.L0Dependencies = append([]metadata.L0DepMeta(nil), c.L0Dependencies...)
+	return &cp
+}
+
+func deepCopySlice(s *metadata.SliceMeta) *metadata.SliceMeta {
+	cp := *s
+	cp.ContractUsages = append([]metadata.ContractUsage(nil), s.ContractUsages...)
+	cp.Verify.Unit = append([]string(nil), s.Verify.Unit...)
+	cp.Verify.Contract = append([]string(nil), s.Verify.Contract...)
+	cp.Verify.Waivers = append([]metadata.WaiverMeta(nil), s.Verify.Waivers...)
+	return &cp
 }
 
 // AllIDs returns all cell IDs sorted alphabetically.
