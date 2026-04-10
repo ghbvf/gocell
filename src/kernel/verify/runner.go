@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -64,7 +66,9 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 			fmt.Sprintf("slice %q not found in project metadata", sliceKey))
 	}
 
-	pkg := fmt.Sprintf("./cells/%s/slices/%s/...", cellID, sliceID)
+	// Try metadata-style dir first; if it doesn't exist as a Go package,
+	// fall back to the hyphen-stripped variant (e.g., session-login → sessionlogin).
+	pkg := resolveSlicePkg(r.root, cellID, sliceID)
 	result := &VerifyResult{TargetID: sliceKey, Passed: true}
 
 	unitRefs := sm.Verify.Unit
@@ -105,17 +109,23 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		return result, nil
 	}
 
+	cellPkg := fmt.Sprintf("./cells/%s/...", cellID)
 	for _, ref := range smokeRefs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
-			result.Errors = append(result.Errors, err)
-			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
-			result.Passed = false
+			// Legacy format (e.g., "device-cell/smoke") — treat as raw pattern
+			// scoped to the cell package. Convert to CamelCase for -run.
+			raw := strings.ReplaceAll(ref, "/", "-")
+			pattern := kebabToCamelCase(raw)
+			slog.Warn("smoke ref does not match structured format, using as raw pattern",
+				slog.String("ref", ref), slog.String("pattern", pattern))
+			res := runGoTest(ctx, r.root, []string{cellPkg, "-v", "-run", pattern})
+			recordResult(result, ref, res, cellPkg, pattern)
 			continue
 		}
 		pkg := resolved.Pkg
 		if pkg == "" {
-			pkg = fmt.Sprintf("./cells/%s/...", cellID)
+			pkg = cellPkg
 		}
 		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
 		recordResult(result, ref, res, pkg, resolved.RunPattern)
@@ -141,8 +151,29 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 		}
 	}
 
+	// Count auto criteria without checkRef — these are incomplete declarations.
+	for _, pc := range j.PassCriteria {
+		if pc.Mode == ModeAuto && pc.CheckRef == "" {
+			result.Results = append(result.Results, TestResult{
+				Name:   pc.Text,
+				Passed: false,
+				Output: "auto criterion has no checkRef — cannot verify automatically",
+			})
+			result.Passed = false
+		}
+	}
+
 	// Run auto criteria.
 	autoRefs := collectAutoCheckRefs(j)
+	if len(autoRefs) == 0 && len(result.ManualPending) > 0 && result.Passed {
+		// Only manual criteria exist and no auto failures — flag as inconclusive.
+		result.Results = append(result.Results, TestResult{
+			Name:   journeyID,
+			Passed: true,
+			Output: "warning: only manual criteria — automated verification not possible",
+		})
+		return result, nil
+	}
 	if len(autoRefs) == 0 {
 		return result, nil
 	}
@@ -155,24 +186,18 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 			result.Passed = false
 			continue
 		}
-		pkg := resolved.Pkg
-		if pkg == "" {
-			pkg = "./..."
-		}
-		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		pkg, extraArgs := r.resolveJourneyPkg(resolved)
+		args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
+		res := runGoTest(ctx, r.root, args)
 		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
 	return result, nil
 }
 
-// runRefs resolves each ref and runs go test with the CamelCase pattern.
+// runRefs resolves each ref independently and runs go test per-ref.
+// Individual execution ensures a stale or misspelled ref cannot hide
+// behind a passing sibling pattern.
 func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg string, refs []string) {
-	if len(refs) == 0 {
-		return
-	}
-	// Collect all patterns and run as a single invocation with | alternation.
-	var patterns []string
-	var names []string
 	for _, ref := range refs {
 		resolved, err := resolveRef(ref)
 		if err != nil {
@@ -181,18 +206,13 @@ func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg 
 			result.Passed = false
 			continue
 		}
-		patterns = append(patterns, resolved.RunPattern)
-		names = append(names, ref)
+		pkg := fallbackPkg
+		if resolved.Pkg != "" {
+			pkg = resolved.Pkg
+		}
+		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
-
-	if len(patterns) == 0 {
-		return
-	}
-
-	pkg := fallbackPkg
-	combined := strings.Join(patterns, "|")
-	res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", combined})
-	recordResult(result, strings.Join(names, " + "), res, pkg, combined)
 }
 
 // recordResult appends a goTestResult to the VerifyResult, handling ZeroMatch
@@ -219,6 +239,45 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 	if res.Err != nil {
 		result.Errors = append(result.Errors, res.Err)
 	}
+}
+
+// resolveJourneyPkg determines the Go test package and extra args for a journey ref.
+// Prefers ./tests/integration/... (with -tags=integration) if present,
+// falls back to ./journeys/..., then ./... as last resort.
+func (r *Runner) resolveJourneyPkg(ref resolvedRef) (pkg string, extraArgs []string) {
+	if ref.Pkg != "" {
+		return ref.Pkg, nil
+	}
+	if dirExists(filepath.Join(r.root, "tests", "integration")) {
+		return "./tests/integration/...", []string{"-tags=integration"}
+	}
+	if dirExists(filepath.Join(r.root, "journeys")) {
+		return "./journeys/...", nil
+	}
+	return "./...", nil
+}
+
+// resolveSlicePkg determines the Go test package path for a slice.
+// Metadata uses kebab-case dirs (session-login/) while Go packages strip
+// hyphens (sessionlogin/). We check the filesystem and prefer the existing dir.
+func resolveSlicePkg(root, cellID, sliceID string) string {
+	base := filepath.Join("cells", cellID, "slices")
+	// Try metadata-style dir first.
+	if dirExists(filepath.Join(root, base, sliceID)) {
+		return fmt.Sprintf("./%s/%s/...", base, sliceID)
+	}
+	// Try hyphen-stripped variant.
+	stripped := strings.ReplaceAll(sliceID, "-", "")
+	if dirExists(filepath.Join(root, base, stripped)) {
+		return fmt.Sprintf("./%s/%s/...", base, stripped)
+	}
+	// Fallback to metadata path (will fail at go test with clear error).
+	return fmt.Sprintf("./%s/%s/...", base, sliceID)
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // parseSliceKey splits "cellID/sliceID" into its parts.

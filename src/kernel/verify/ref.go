@@ -39,9 +39,11 @@ func resolveRef(ref string) (resolvedRef, error) {
 
 	switch prefix {
 	case PrefixJourney:
+		// Journey tests may live in ./journeys/... or ./tests/integration/...
+		// The Runner resolves the actual path at execution time.
 		return resolvedRef{
 			Kind:       PrefixJourney,
-			Pkg:        "./journeys/...",
+			Pkg:        "", // resolved by Runner based on project layout
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 

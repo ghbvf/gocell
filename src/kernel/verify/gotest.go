@@ -50,9 +50,16 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 	}
 }
 
-// isZeroMatch returns true when the go test output indicates that
-// the -run pattern matched no tests or the package has no test files.
+// isZeroMatch returns true only when NO tests actually ran across all packages.
+// Wildcard runs (./...) naturally emit "[no test files]" for empty packages;
+// we only flag zero-match if there's no evidence of any test execution.
 func isZeroMatch(output string) bool {
-	return strings.Contains(output, "no tests to run") ||
+	hasNoTests := strings.Contains(output, "no tests to run") ||
 		strings.Contains(output, "[no test files]")
+	if !hasNoTests {
+		return false
+	}
+	// If any test actually ran, it's not a zero match.
+	return !strings.Contains(output, "--- PASS") &&
+		!strings.Contains(output, "--- FAIL")
 }

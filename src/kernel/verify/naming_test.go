@@ -18,6 +18,8 @@ func TestKebabToCamelCase(t *testing.T) {
 		{"a", "A"},
 		{"multi-word-string", "MultiWordString"},
 		{"already-Capitalized", "AlreadyCapitalized"},
+		{"--double-dash", "DoubleDash"},
+		{"-leading", "Leading"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
