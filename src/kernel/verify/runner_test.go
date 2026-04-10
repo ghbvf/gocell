@@ -147,5 +147,34 @@ func TestVerifyCell_NoSmoke(t *testing.T) {
 	result, err := r.VerifyCell(context.Background(), "demo")
 	require.NoError(t, err)
 	assert.True(t, result.Passed, "no smoke refs = warning but pass")
-	assert.Empty(t, result.Results)
+	require.Len(t, result.Results, 1, "should have a warning TestResult")
+	assert.Contains(t, result.Results[0].Output, "warning")
+}
+
+func TestRunRefs_AllInvalid(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Slices: map[string]*metadata.SliceMeta{
+			"c/s": {
+				ID:            "s",
+				BelongsToCell: "c",
+				Verify: metadata.SliceVerifyMeta{
+					Unit: []string{"bad-ref", "also-bad"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.VerifySlice(context.Background(), "c/s")
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "all invalid refs should fail")
+	assert.Len(t, result.Errors, 2, "two invalid refs = two errors")
+}
+
+func TestRecordResult_ZeroMatchMessage(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "testing: warning: no tests to run\nPASS", Passed: true, ZeroMatch: true}
+	recordResult(result, "ref", res, "./pkg/...", "SomePattern")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Error(), "check your YAML ref")
 }

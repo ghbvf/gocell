@@ -32,12 +32,17 @@ func TestResolveRef(t *testing.T) {
 		{
 			name: "contract ref with dotted ID",
 			ref:  "contract.http.auth.login.v1.serve",
-			want: resolvedRef{Kind: "contract", RunPattern: "Serve"},
+			want: resolvedRef{Kind: "contract", RunPattern: "HttpAuthLoginV1Serve"},
 		},
 		{
 			name: "contract ref simple",
 			ref:  "contract.event-bus.publish",
-			want: resolvedRef{Kind: "contract", RunPattern: "Publish"},
+			want: resolvedRef{Kind: "contract", RunPattern: "EventBusPublish"},
+		},
+		{
+			name:    "smoke with path traversal cellID",
+			ref:     "smoke.../../etc.x",
+			wantErr: true,
 		},
 		{
 			name:    "too few segments",

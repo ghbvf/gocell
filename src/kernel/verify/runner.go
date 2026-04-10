@@ -27,6 +27,17 @@ type VerifyResult struct {
 	ManualPending []string // text of manual criteria not yet verified
 }
 
+// Ref prefix and criteria mode constants.
+const (
+	PrefixJourney  = "journey"
+	PrefixSmoke    = "smoke"
+	PrefixUnit     = "unit"
+	PrefixContract = "contract"
+
+	ModeAuto   = "auto"
+	ModeManual = "manual"
+)
+
 // Runner executes metadata-driven verification tests.
 type Runner struct {
 	project *metadata.ProjectMeta
@@ -68,17 +79,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 
 	// Fallback: no metadata refs, run all tests in the slice package.
 	res := runGoTest(ctx, r.root, []string{pkg, "-v"})
-	tr := TestResult{Name: sliceKey, Passed: res.Passed, Output: res.Output, ZeroMatch: res.ZeroMatch}
-	if res.ZeroMatch {
-		tr.Passed = false
-	}
-	result.Results = append(result.Results, tr)
-	if !tr.Passed {
-		result.Passed = false
-	}
-	if res.Err != nil {
-		result.Errors = append(result.Errors, res.Err)
-	}
+	recordResult(result, sliceKey, res, pkg, "")
 	return result, nil
 }
 
@@ -96,6 +97,11 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 	smokeRefs := cm.Verify.Smoke
 	if len(smokeRefs) == 0 {
 		slog.Warn("cell has no verify.smoke declarations", slog.String("cell", cellID))
+		result.Results = append(result.Results, TestResult{
+			Name:   cellID,
+			Passed: true,
+			Output: "warning: no verify.smoke declarations — zero verification performed",
+		})
 		return result, nil
 	}
 
@@ -103,6 +109,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		resolved, err := resolveRef(ref)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
+			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
 			result.Passed = false
 			continue
 		}
@@ -110,7 +117,8 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		if pkg == "" {
 			pkg = fmt.Sprintf("./cells/%s/...", cellID)
 		}
-		r.runSingle(ctx, result, ref, pkg, resolved.RunPattern)
+		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
 	return result, nil
 }
@@ -128,7 +136,7 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 
 	// Collect manual criteria.
 	for _, pc := range j.PassCriteria {
-		if pc.Mode == "manual" {
+		if pc.Mode == ModeManual {
 			result.ManualPending = append(result.ManualPending, pc.Text)
 		}
 	}
@@ -151,7 +159,8 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 		if pkg == "" {
 			pkg = "./..."
 		}
-		r.runSingle(ctx, result, ref, pkg, resolved.RunPattern)
+		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
 	return result, nil
 }
@@ -183,31 +192,12 @@ func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg 
 	pkg := fallbackPkg
 	combined := strings.Join(patterns, "|")
 	res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", combined})
-
-	tr := TestResult{
-		Name:      strings.Join(names, " + "),
-		Passed:    res.Passed,
-		Output:    res.Output,
-		ZeroMatch: res.ZeroMatch,
-	}
-	if res.ZeroMatch {
-		tr.Passed = false
-		result.Errors = append(result.Errors,
-			errcode.New(errcode.ErrZeroTestMatch,
-				fmt.Sprintf("pattern %q matched no tests in %s", combined, pkg)))
-	}
-	result.Results = append(result.Results, tr)
-	if !tr.Passed {
-		result.Passed = false
-	}
-	if res.Err != nil {
-		result.Errors = append(result.Errors, res.Err)
-	}
+	recordResult(result, strings.Join(names, " + "), res, pkg, combined)
 }
 
-// runSingle runs a single ref as go test with -run pattern.
-func (r *Runner) runSingle(ctx context.Context, result *VerifyResult, name, pkg, pattern string) {
-	res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", pattern})
+// recordResult appends a goTestResult to the VerifyResult, handling ZeroMatch
+// and error propagation in a single place.
+func recordResult(result *VerifyResult, name string, res goTestResult, pkg, pattern string) {
 	tr := TestResult{
 		Name:      name,
 		Passed:    res.Passed,
@@ -216,9 +206,11 @@ func (r *Runner) runSingle(ctx context.Context, result *VerifyResult, name, pkg,
 	}
 	if res.ZeroMatch {
 		tr.Passed = false
-		result.Errors = append(result.Errors,
-			errcode.New(errcode.ErrZeroTestMatch,
-				fmt.Sprintf("pattern %q matched no tests in %s", pattern, pkg)))
+		msg := fmt.Sprintf("matched no tests in %s", pkg)
+		if pattern != "" {
+			msg = fmt.Sprintf("pattern %q %s — check your YAML ref", pattern, msg)
+		}
+		result.Errors = append(result.Errors, errcode.New(errcode.ErrZeroTestMatch, msg))
 	}
 	result.Results = append(result.Results, tr)
 	if !tr.Passed {
@@ -249,7 +241,7 @@ func parseSliceKey(key string) (cellID, sliceID string, err error) {
 func collectAutoCheckRefs(j *metadata.JourneyMeta) []string {
 	var refs []string
 	for _, pc := range j.PassCriteria {
-		if pc.Mode == "auto" && pc.CheckRef != "" {
+		if pc.Mode == ModeAuto && pc.CheckRef != "" {
 			refs = append(refs, pc.CheckRef)
 		}
 	}

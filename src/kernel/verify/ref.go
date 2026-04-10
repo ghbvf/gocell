@@ -25,6 +25,8 @@ type resolvedRef struct {
 //	contract.{id...}.{role}     → pkg="" (caller provides), pattern=CamelCase(role)
 //
 // Returns ErrCheckRefInvalid for unrecognized or malformed refs.
+//
+// ref: kubernetes pkg/apis validation — segment-level input validation.
 func resolveRef(ref string) (resolvedRef, error) {
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[2] == "" {
@@ -36,48 +38,56 @@ func resolveRef(ref string) (resolvedRef, error) {
 	suffix := parts[2] // everything after second dot
 
 	switch prefix {
-	case "journey":
-		// journey.{journeyID}.{suffix}
+	case PrefixJourney:
 		return resolvedRef{
-			Kind:       "journey",
+			Kind:       PrefixJourney,
 			Pkg:        "./journeys/...",
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 
-	case "smoke":
-		// smoke.{cellID}.{suffix}
+	case PrefixSmoke:
 		cellID := parts[1]
+		if err := validateSegment(cellID, "smoke cellID"); err != nil {
+			return resolvedRef{}, err
+		}
 		return resolvedRef{
-			Kind:       "smoke",
+			Kind:       PrefixSmoke,
 			Pkg:        fmt.Sprintf("./cells/%s/...", cellID),
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 
-	case "unit":
-		// unit.{scope}.{suffix} — caller provides package
+	case PrefixUnit:
 		return resolvedRef{
-			Kind:       "unit",
+			Kind:       PrefixUnit,
 			RunPattern: kebabToCamelCase(suffix),
 		}, nil
 
-	case "contract":
-		// contract.{contractID}.{role} — last dot-segment is the role
-		// The suffix may contain dots (e.g., "http.auth.login.v1.serve"),
-		// so extract the final segment as the role.
-		lastDot := strings.LastIndexByte(suffix, '.')
-		var role string
-		if lastDot >= 0 {
-			role = suffix[lastDot+1:]
-		} else {
-			role = suffix
+	case PrefixContract:
+		// contract.{contractID}.{role} — encode parts[1] + suffix into RunPattern
+		// to avoid matching unrelated tests. SplitN(ref,3) puts the second segment
+		// in parts[1], so we must include it. Each dot-segment is independently
+		// converted: "contract.http.auth.login.v1.serve" → "HttpAuthLoginV1Serve".
+		fullPath := parts[1] + "." + suffix // rejoin: "http" + "auth.login.v1.serve"
+		var b strings.Builder
+		for _, seg := range strings.Split(fullPath, ".") {
+			b.WriteString(kebabToCamelCase(seg))
 		}
 		return resolvedRef{
-			Kind:       "contract",
-			RunPattern: kebabToCamelCase(role),
+			Kind:       PrefixContract,
+			RunPattern: b.String(),
 		}, nil
 
 	default:
 		return resolvedRef{}, errcode.New(errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("ref %q has unknown prefix %q (expected journey, smoke, unit, or contract)", ref, prefix))
 	}
+}
+
+// validateSegment rejects path segments that could cause directory traversal.
+func validateSegment(s, field string) error {
+	if s == "" || s == "." || strings.Contains(s, "..") || strings.ContainsAny(s, `/\`) {
+		return errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("%s %q contains path traversal or separator", field, s))
+	}
+	return nil
 }
