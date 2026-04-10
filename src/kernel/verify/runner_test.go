@@ -41,29 +41,6 @@ func TestParseSliceKey(t *testing.T) {
 	}
 }
 
-func TestCollectAutoCheckRefs(t *testing.T) {
-	j := &metadata.JourneyMeta{
-		PassCriteria: []metadata.PassCriterion{
-			{Mode: "auto", CheckRef: "journey.J-a.test-one"},
-			{Mode: "manual", CheckRef: ""},
-			{Mode: "auto", CheckRef: ""},
-			{Mode: "auto", CheckRef: "journey.J-b.test-two"},
-		},
-	}
-	got := collectAutoCheckRefs(j)
-	assert.Equal(t, []string{"journey.J-a.test-one", "journey.J-b.test-two"}, got)
-}
-
-func TestCollectAutoCheckRefs_Empty(t *testing.T) {
-	j := &metadata.JourneyMeta{
-		PassCriteria: []metadata.PassCriterion{
-			{Mode: "manual", Text: "manual only"},
-		},
-	}
-	got := collectAutoCheckRefs(j)
-	assert.Nil(t, got)
-}
-
 func TestVerifySlice_NotFound(t *testing.T) {
 	r := NewRunner(&metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{},

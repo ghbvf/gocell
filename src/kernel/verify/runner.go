@@ -317,13 +317,3 @@ func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// collectAutoCheckRefs returns all CheckRef values from auto-mode pass criteria.
-func collectAutoCheckRefs(j *metadata.JourneyMeta) []string {
-	var refs []string
-	for _, pc := range j.PassCriteria {
-		if pc.Mode == ModeAuto && pc.CheckRef != "" {
-			refs = append(refs, pc.CheckRef)
-		}
-	}
-	return refs
-}
