@@ -636,6 +636,66 @@ func TestTOPO04(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name: "contract level within external actor max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L3"},
+				}
+				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
+					ID:               "http.ext.gw.v1",
+					Kind:             "http",
+					OwnerCell:        "ext-gateway",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server:  "ext-gateway",
+						Clients: []string{"access-core"},
+					},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "contract level exceeds external actor max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L1"},
+				}
+				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
+					ID:               "http.ext.gw.v1",
+					Kind:             "http",
+					OwnerCell:        "ext-gateway",
+					ConsistencyLevel: "L3",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server:  "ext-gateway",
+						Clients: []string{"access-core"},
+					},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "external actor with malformed maxConsistencyLevel reports error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "INVALID"},
+				}
+				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
+					ID:               "http.ext.gw.v1",
+					Kind:             "http",
+					OwnerCell:        "ext-gateway",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server:  "ext-gateway",
+						Clients: []string{"access-core"},
+					},
+				}
+			},
+			wantCount: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1007,6 +1067,82 @@ func TestVERIFY03(t *testing.T) {
 			tt.setup(pm)
 			val := NewValidator(pm, ".")
 			got := findByCode(val.validateVERIFY03(), "VERIFY-03")
+			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}
+
+func TestVERIFY04(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "active contract with provider-role slice passes",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "active contract without provider-role slice fails",
+			setup: func(pm *metadata.ProjectMeta) {
+				// Remove the provide usage from the only slice that provides this contract.
+				s := pm.Slices["access-core/session-login"]
+				s.ContractUsages = []metadata.ContractUsage{
+					{Contract: "http.auth.login.v1", Role: "serve"},
+					{Contract: "event.session.created.v1", Role: "publish"},
+					// removed: projection.session.active.v1 provide
+				}
+				s.Verify.Contract = []string{
+					"contract.http.auth.login.v1.serve",
+					"contract.event.session.created.v1.publish",
+				}
+			},
+			wantCount: 1, // projection.session.active.v1 has no provider slice
+		},
+		{
+			name: "draft contract without provider-role slice is OK",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["projection.session.active.v1"].Lifecycle = "draft"
+				s := pm.Slices["access-core/session-login"]
+				s.ContractUsages = []metadata.ContractUsage{
+					{Contract: "http.auth.login.v1", Role: "serve"},
+					{Contract: "event.session.created.v1", Role: "publish"},
+				}
+				s.Verify.Contract = []string{
+					"contract.http.auth.login.v1.serve",
+					"contract.event.session.created.v1.publish",
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "active contract with external actor provider is skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L3"},
+				}
+				pm.Contracts["http.ext.gateway.v1"] = &metadata.ContractMeta{
+					ID:               "http.ext.gateway.v1",
+					Kind:             "http",
+					OwnerCell:        "ext-gateway",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server:  "ext-gateway", // actor, not a cell
+						Clients: []string{"access-core"},
+					},
+				}
+			},
+			wantCount: 0, // actor-backed contracts are not checked
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			got := findByCode(val.validateVERIFY04(), "VERIFY-04")
 			assert.Len(t, got, tt.wantCount)
 		})
 	}

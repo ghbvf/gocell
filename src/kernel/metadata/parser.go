@@ -177,7 +177,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 	// Infer ownerCell from provider endpoint if omitted (per contract.schema.json).
 	if m.OwnerCell == "" {
-		m.OwnerCell = inferContractOwner(&m)
+		m.OwnerCell = m.ProviderEndpoint()
 	}
 
 	if _, exists := pm.Contracts[m.ID]; exists {
@@ -186,22 +186,6 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 	pm.Contracts[m.ID] = &m
 	return nil
-}
-
-// inferContractOwner returns the provider cell for a contract based on its kind.
-func inferContractOwner(c *ContractMeta) string {
-	switch c.Kind {
-	case "http":
-		return c.Endpoints.Server
-	case "event":
-		return c.Endpoints.Publisher
-	case "command":
-		return c.Endpoints.Handler
-	case "projection":
-		return c.Endpoints.Provider
-	default:
-		return ""
-	}
 }
 
 func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {

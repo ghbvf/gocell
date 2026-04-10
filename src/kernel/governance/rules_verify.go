@@ -130,23 +130,28 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	return results
 }
 
-// validateVERIFY04 checks that every active contract has at least one
-// provider-role slice in the provider cell. Without this, a contract is
+// validateVERIFY04 checks that every active contract whose provider is a
+// Cell has at least one provider-role slice. Without this, a contract is
 // "published but nobody provides it" — a ghost capability.
+// Contracts served by external actors are skipped (actors have no slices).
 func (v *Validator) validateVERIFY04() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Lifecycle != "active" {
 			continue
 		}
-		providerCellID := contractProvider(c)
-		if providerCellID == "" {
+		providerID := contractProvider(c)
+		if providerID == "" {
 			continue // REF rules cover missing provider
+		}
+		// Only check cell-backed contracts; external actors have no slices.
+		if _, isCell := v.project.Cells[providerID]; !isCell {
+			continue
 		}
 
 		found := false
 		for _, s := range v.project.Slices {
-			if s.BelongsToCell != providerCellID {
+			if s.BelongsToCell != providerID {
 				continue
 			}
 			for _, cu := range s.ContractUsages {
@@ -169,7 +174,7 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 				Field:     "lifecycle",
 				Message: fmt.Sprintf(
 					"active contract %q has no provider-role slice in cell %q",
-					c.ID, providerCellID,
+					c.ID, providerID,
 				),
 			})
 		}

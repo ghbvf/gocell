@@ -387,3 +387,86 @@ func TestCellRegistry_SliceFallbackCellID(t *testing.T) {
 	reg := registry.NewCellRegistry(proj)
 	assert.Len(t, reg.SlicesFor("fallback-cell"), 1)
 }
+
+// --- Deep-copy mutation tests ---
+
+func TestContractRegistry_Get_DeepCopy(t *testing.T) {
+	reg := registry.NewContractRegistry(testProject())
+	got := reg.Get("http-auth-login-v1")
+	require.NotNil(t, got)
+
+	// Mutate the returned copy.
+	got.Endpoints.Clients[0] = "MUTATED"
+	got.ID = "MUTATED"
+
+	// Original must be unchanged.
+	original := reg.Get("http-auth-login-v1")
+	assert.Equal(t, "http-auth-login-v1", original.ID)
+	assert.NotEqual(t, "MUTATED", original.Endpoints.Clients[0])
+}
+
+func TestContractRegistry_ByKind_DeepCopy(t *testing.T) {
+	reg := registry.NewContractRegistry(testProject())
+	got := reg.ByKind("http")
+	require.Len(t, got, 1)
+
+	got[0].Endpoints.Clients[0] = "MUTATED"
+
+	fresh := reg.ByKind("http")
+	assert.NotEqual(t, "MUTATED", fresh[0].Endpoints.Clients[0])
+}
+
+func TestContractRegistry_Consumers_DeepCopy(t *testing.T) {
+	reg := registry.NewContractRegistry(testProject())
+	got := reg.Consumers("http-auth-login-v1")
+	require.NotEmpty(t, got)
+
+	got[0] = "MUTATED"
+
+	fresh := reg.Consumers("http-auth-login-v1")
+	assert.NotEqual(t, "MUTATED", fresh[0])
+}
+
+func TestCellRegistry_Get_DeepCopy(t *testing.T) {
+	proj := testProject()
+	proj.Cells["access-core"].Verify.Smoke = []string{"smoke.startup"}
+	reg := registry.NewCellRegistry(proj)
+	got := reg.Get("access-core")
+	require.NotNil(t, got)
+
+	got.Verify.Smoke[0] = "MUTATED"
+	got.ID = "MUTATED"
+
+	original := reg.Get("access-core")
+	assert.Equal(t, "access-core", original.ID)
+	assert.NotEqual(t, "MUTATED", original.Verify.Smoke[0])
+}
+
+func TestCellRegistry_SlicesFor_DeepCopy(t *testing.T) {
+	proj := testProject()
+	proj.Slices["access-core/session-create"].ContractUsages = []metadata.ContractUsage{
+		{Contract: "http-auth-login-v1", Role: "serve"},
+	}
+	reg := registry.NewCellRegistry(proj)
+	got := reg.SlicesFor("access-core")
+	require.NotEmpty(t, got)
+
+	// Find the slice with contract usages.
+	var target *metadata.SliceMeta
+	for _, s := range got {
+		if len(s.ContractUsages) > 0 {
+			target = s
+			break
+		}
+	}
+	require.NotNil(t, target)
+
+	target.ContractUsages[0].Role = "MUTATED"
+
+	fresh := reg.SlicesFor("access-core")
+	for _, s := range fresh {
+		for _, cu := range s.ContractUsages {
+			assert.NotEqual(t, "MUTATED", cu.Role)
+		}
+	}
+}

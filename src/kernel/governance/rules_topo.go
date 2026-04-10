@@ -100,10 +100,14 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 func (v *Validator) validateTOPO04() []ValidationResult {
 	// Build actor lookup for external providers.
 	actorMaxLevel := make(map[string]cell.Level)
+	actorMalformed := make(map[string]bool)
 	for _, a := range v.project.Actors {
-		if lvl, err := cell.ParseLevel(a.MaxConsistencyLevel); err == nil {
-			actorMaxLevel[a.ID] = lvl
+		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
+		if err != nil {
+			actorMalformed[a.ID] = true
+			continue
 		}
+		actorMaxLevel[a.ID] = lvl
 	}
 
 	var results []ValidationResult
@@ -140,7 +144,23 @@ func (v *Validator) validateTOPO04() []ValidationResult {
 			continue
 		}
 
-		// Check if provider is an external Actor.
+		// Check if provider is an external Actor with malformed level.
+		if actorMalformed[providerID] {
+			results = append(results, ValidationResult{
+				Code:      "TOPO-04",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      "actors.yaml",
+				Field:     "maxConsistencyLevel",
+				Message: fmt.Sprintf(
+					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel",
+					c.ID, providerID,
+				),
+			})
+			continue
+		}
+
+		// Check if provider is an external Actor with valid level.
 		if maxLvl, ok := actorMaxLevel[providerID]; ok {
 			if contractLevel > maxLvl {
 				results = append(results, ValidationResult{
