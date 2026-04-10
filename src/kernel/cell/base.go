@@ -144,8 +144,8 @@ func (b *BaseCell) Stop(_ context.Context) error {
 
 // Health returns the current HealthStatus.
 func (b *BaseCell) Health() HealthStatus {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.state == cellStateStarted {
 		return HealthStatus{Status: "healthy"}
 	}
@@ -154,8 +154,8 @@ func (b *BaseCell) Health() HealthStatus {
 
 // Ready returns true when the cell is in the started state.
 func (b *BaseCell) Ready() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.state == cellStateStarted
 }
 
@@ -164,8 +164,8 @@ func (b *BaseCell) Ready() bool {
 // context.Background(). Returns context.Background() if the cell has
 // not been started.
 func (b *BaseCell) ShutdownCtx() context.Context {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.shutdownCtx != nil {
 		return b.shutdownCtx
 	}
