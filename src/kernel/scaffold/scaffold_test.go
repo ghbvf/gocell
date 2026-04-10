@@ -437,7 +437,7 @@ func TestCreateJourney(t *testing.T) {
 
 	outPath := filepath.Join(root, "journeys", "J-sso-login.yaml")
 	content := readGenerated(t, outPath)
-	assert.Contains(t, content, "id: sso-login")
+	assert.Contains(t, content, "id: J-sso-login")
 	assert.Contains(t, content, `goal: "User completes SSO login and obtains a valid session"`)
 	assert.Contains(t, content, "team: platform")
 	assert.Contains(t, content, "role: journey-owner")
@@ -505,6 +505,58 @@ func TestCreateJourney_NoCells(t *testing.T) {
 	s := New(root)
 	err := s.CreateJourney(JourneyOpts{ID: "j", Goal: "g", OwnerTeam: "t"})
 	requireErrCode(t, err, ErrScaffoldInvalidOpts)
+}
+
+// ---------------------------------------------------------------------------
+// Path traversal prevention
+// ---------------------------------------------------------------------------
+
+func TestPathTraversal(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+
+	cases := []struct {
+		name string
+		fn   func() error
+	}{
+		{"cell ../etc", func() error {
+			return s.CreateCell(CellOpts{ID: "../etc", OwnerTeam: "t"})
+		}},
+		{"cell foo/bar", func() error {
+			return s.CreateCell(CellOpts{ID: "foo/bar", OwnerTeam: "t"})
+		}},
+		{`cell foo\bar`, func() error {
+			return s.CreateCell(CellOpts{ID: `foo\bar`, OwnerTeam: "t"})
+		}},
+		{"slice ../x", func() error {
+			return s.CreateSlice(SliceOpts{ID: "../x", CellID: "c"})
+		}},
+		{"slice cellID ../c", func() error {
+			return s.CreateSlice(SliceOpts{ID: "s", CellID: "../c"})
+		}},
+		{"contract ownerCell ../c", func() error {
+			return s.CreateContract(ContractOpts{ID: "http.a.v1", Kind: "http", OwnerCell: "../c"})
+		}},
+		{"contract ID segment ..", func() error {
+			return s.CreateContract(ContractOpts{ID: "http..exploit.v1", Kind: "http", OwnerCell: "c"})
+		}},
+		{"journey ../admin", func() error {
+			return s.CreateJourney(JourneyOpts{ID: "../admin", Goal: "g", OwnerTeam: "t", Cells: []string{"c"}})
+		}},
+		{"cell dot", func() error {
+			return s.CreateCell(CellOpts{ID: ".", OwnerTeam: "t"})
+		}},
+		{"slice cellID dot", func() error {
+			return s.CreateSlice(SliceOpts{ID: "s", CellID: "."})
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			requireErrCode(t, err, ErrScaffoldInvalidOpts)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

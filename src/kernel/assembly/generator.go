@@ -177,16 +177,20 @@ func (g *Generator) sourceFingerprint(assemblyID string) string {
 	}
 
 	h := sha256.New()
+	cells := sortedCopy(asm.Cells)
 
 	// Hash assembly identity.
 	fmt.Fprintf(h, "assembly:%s\n", asm.ID)
-	fmt.Fprintf(h, "cells:%v\n", asm.Cells)
+	for _, c := range cells {
+		fmt.Fprintf(h, "cells:%s\n", c)
+	}
 	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint)
 	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)
 
 	// Hash cell metadata in sorted order for determinism.
-	cells := sortedCopy(asm.Cells)
+	cellSet := make(map[string]bool, len(asm.Cells))
 	for _, cellID := range cells {
+		cellSet[cellID] = true
 		cellMeta := g.cells.Get(cellID)
 		if cellMeta == nil {
 			fmt.Fprintf(h, "cell:%s:missing\n", cellID)
@@ -199,6 +203,15 @@ func (g *Generator) sourceFingerprint(assemblyID string) string {
 		for _, s := range cellMeta.Verify.Smoke {
 			fmt.Fprintf(h, "cell:%s:smoke:%s\n", cellID, s)
 		}
+	}
+
+	// Hash boundary contracts so that endpoint changes invalidate the fingerprint.
+	exported, imported := g.computeBoundaryContracts(cellSet)
+	for _, cID := range exported {
+		fmt.Fprintf(h, "export:%s\n", cID)
+	}
+	for _, cID := range imported {
+		fmt.Fprintf(h, "import:%s\n", cID)
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil))

@@ -189,10 +189,40 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 
 	var results []ValidationResult
 	for _, c := range dc.project.Cells {
+		if len(c.L0Dependencies) == 0 {
+			continue
+		}
 		assemblyID := cellToAssembly[c.ID]
+		if assemblyID == "" {
+			// Cell with L0 dependencies must be assigned to an assembly.
+			results = append(results, ValidationResult{
+				Code:      "DEP-03",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "l0Dependencies",
+				Message: fmt.Sprintf(
+					"cell %q has L0 dependencies but is not assigned to any assembly",
+					c.ID,
+				),
+			})
+			continue
+		}
 		for i, dep := range c.L0Dependencies {
 			depAssembly := cellToAssembly[dep.Cell]
-			if assemblyID != depAssembly {
+			if depAssembly == "" {
+				results = append(results, ValidationResult{
+					Code:      "DEP-03",
+					Severity:  SeverityError,
+					IssueType: IssueRequired,
+					File:      cellFile(c.ID),
+					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
+					Message: fmt.Sprintf(
+						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly",
+						c.ID, assemblyID, dep.Cell,
+					),
+				})
+			} else if assemblyID != depAssembly {
 				results = append(results, ValidationResult{
 					Code:      "DEP-03",
 					Severity:  SeverityError,

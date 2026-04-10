@@ -20,6 +20,18 @@ const (
 	ErrScaffoldIO          errcode.Code = "ERR_SCAFFOLD_IO"
 )
 
+// validatePathComponent rejects identifiers that contain path traversal
+// sequences or separators, preventing writes outside the project root.
+func validatePathComponent(value, field string) error {
+	if value == "" {
+		return errcode.New(ErrScaffoldInvalidOpts, field+" is required")
+	}
+	if value == "." || strings.Contains(value, "..") || strings.ContainsAny(value, `/\`) {
+		return errcode.New(ErrScaffoldInvalidOpts, field+" contains path traversal or separator")
+	}
+	return nil
+}
+
 // CellOpts defines options for scaffolding a new cell.
 type CellOpts struct {
 	ID               string
@@ -62,8 +74,8 @@ func New(root string) *Scaffolder {
 // CreateCell creates cells/{id}/cell.yaml with directory.
 // Returns an error if the cell directory already exists (skip-on-conflict).
 func (s *Scaffolder) CreateCell(opts CellOpts) error {
-	if opts.ID == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "cell ID is required")
+	if err := validatePathComponent(opts.ID, "cell ID"); err != nil {
+		return err
 	}
 	if opts.OwnerTeam == "" {
 		return errcode.New(ErrScaffoldInvalidOpts, "cell owner team is required")
@@ -86,11 +98,11 @@ func (s *Scaffolder) CreateCell(opts CellOpts) error {
 // CreateSlice creates cells/{cellID}/slices/{id}/slice.yaml.
 // Returns an error if the cell doesn't exist or the slice directory already exists.
 func (s *Scaffolder) CreateSlice(opts SliceOpts) error {
-	if opts.ID == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "slice ID is required")
+	if err := validatePathComponent(opts.ID, "slice ID"); err != nil {
+		return err
 	}
-	if opts.CellID == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "slice cell ID is required")
+	if err := validatePathComponent(opts.CellID, "slice cell ID"); err != nil {
+		return err
 	}
 
 	// Verify the parent cell exists.
@@ -113,11 +125,17 @@ func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 	if opts.ID == "" {
 		return errcode.New(ErrScaffoldInvalidOpts, "contract ID is required")
 	}
-	if opts.Kind == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "contract kind is required")
+	if err := validatePathComponent(opts.Kind, "contract kind"); err != nil {
+		return err
 	}
-	if opts.OwnerCell == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "contract owner cell is required")
+	if err := validatePathComponent(opts.OwnerCell, "contract owner cell"); err != nil {
+		return err
+	}
+	// Validate each dot-segment of the ID for path traversal.
+	for _, seg := range strings.Split(opts.ID, ".") {
+		if err := validatePathComponent(seg, "contract ID segment"); err != nil {
+			return err
+		}
 	}
 
 	validKinds := map[string]bool{"http": true, "event": true, "command": true, "projection": true}
@@ -149,8 +167,8 @@ func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 
 // CreateJourney creates journeys/J-{name}.yaml (or journeys/{id}.yaml if id starts with "J-").
 func (s *Scaffolder) CreateJourney(opts JourneyOpts) error {
-	if opts.ID == "" {
-		return errcode.New(ErrScaffoldInvalidOpts, "journey ID is required")
+	if err := validatePathComponent(opts.ID, "journey ID"); err != nil {
+		return err
 	}
 	if opts.Goal == "" {
 		return errcode.New(ErrScaffoldInvalidOpts, "journey goal is required")
@@ -162,10 +180,11 @@ func (s *Scaffolder) CreateJourney(opts JourneyOpts) error {
 		return errcode.New(ErrScaffoldInvalidOpts, "journey must reference at least one cell")
 	}
 
-	filename := opts.ID + ".yaml"
+	// Normalize: ensure ID carries the J- prefix for both filename and template.
 	if !strings.HasPrefix(opts.ID, "J-") {
-		filename = "J-" + opts.ID + ".yaml"
+		opts.ID = "J-" + opts.ID
 	}
+	filename := opts.ID + ".yaml"
 
 	dir := filepath.Join(s.root, "journeys")
 	outPath := filepath.Join(dir, filename)

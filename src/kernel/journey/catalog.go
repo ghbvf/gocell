@@ -71,16 +71,20 @@ func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
 	return errcode.New(errcode.ErrReferenceBroken, combined)
 }
 
-// Get returns a journey by ID, or nil if not found.
+// Get returns a deep copy of a journey by ID, or nil if not found.
 func (c *Catalog) Get(id string) *metadata.JourneyMeta {
-	return c.journeys[id]
+	j := c.journeys[id]
+	if j == nil {
+		return nil
+	}
+	return copyJourneyMeta(j)
 }
 
-// List returns all journeys sorted by ID.
+// List returns deep copies of all journeys sorted by ID.
 func (c *Catalog) List() []*metadata.JourneyMeta {
 	result := make([]*metadata.JourneyMeta, 0, len(c.journeys))
 	for _, j := range c.journeys {
-		result = append(result, j)
+		result = append(result, copyJourneyMeta(j))
 	}
 	sort.Slice(result, func(i, k int) bool {
 		return result[i].ID < result[k].ID
@@ -95,7 +99,7 @@ func (c *Catalog) CellJourneys(cellID string) []*metadata.JourneyMeta {
 	for _, j := range c.journeys {
 		for _, cell := range j.Cells {
 			if cell == cellID {
-				result = append(result, j)
+				result = append(result, copyJourneyMeta(j))
 				break
 			}
 		}
@@ -113,7 +117,7 @@ func (c *Catalog) ContractJourneys(contractID string) []*metadata.JourneyMeta {
 	for _, j := range c.journeys {
 		for _, ctr := range j.Contracts {
 			if ctr == contractID {
-				result = append(result, j)
+				result = append(result, copyJourneyMeta(j))
 				break
 			}
 		}
@@ -124,9 +128,14 @@ func (c *Catalog) ContractJourneys(contractID string) []*metadata.JourneyMeta {
 	return result
 }
 
-// Status returns the status-board entry for a journey, or nil if not found.
+// Status returns a copy of the status-board entry, or nil if not found.
 func (c *Catalog) Status(journeyID string) *metadata.StatusBoardEntry {
-	return c.statusBoard[journeyID]
+	s := c.statusBoard[journeyID]
+	if s == nil {
+		return nil
+	}
+	cp := *s
+	return &cp
 }
 
 // CrossCellJourneys returns journeys that involve more than one cell,
@@ -135,13 +144,22 @@ func (c *Catalog) CrossCellJourneys() []*metadata.JourneyMeta {
 	var result []*metadata.JourneyMeta
 	for _, j := range c.journeys {
 		if len(j.Cells) > 1 {
-			result = append(result, j)
+			result = append(result, copyJourneyMeta(j))
 		}
 	}
 	sort.Slice(result, func(i, k int) bool {
 		return result[i].ID < result[k].ID
 	})
 	return result
+}
+
+// copyJourneyMeta returns a deep copy of a JourneyMeta, including its slice fields.
+func copyJourneyMeta(j *metadata.JourneyMeta) *metadata.JourneyMeta {
+	cp := *j
+	cp.Cells = append([]string(nil), j.Cells...)
+	cp.Contracts = append([]string(nil), j.Contracts...)
+	cp.PassCriteria = append([]metadata.PassCriterion(nil), j.PassCriteria...)
+	return &cp
 }
 
 // Count returns the total number of journeys.
