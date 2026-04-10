@@ -325,3 +325,105 @@ func TestSelectFromFiles_NonexistentJourney(t *testing.T) {
 	assert.Nil(t, result.Journeys)
 	assert.Nil(t, result.Contracts)
 }
+
+// --- L0 dependency tracking (GOV-6) ---
+
+// l0Project returns a ProjectMeta with an L0 cell and a dependent cell.
+func l0Project() *metadata.ProjectMeta {
+	return &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"shared-crypto": {
+				ID:               "shared-crypto",
+				Type:             "support",
+				ConsistencyLevel: "L0",
+			},
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				L0Dependencies: []metadata.L0DepMeta{
+					{Cell: "shared-crypto", Reason: "hashing"},
+				},
+			},
+			"audit-core": {
+				ID:               "audit-core",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				// no L0 dependencies
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"shared-crypto/hasher": {
+				ID:            "hasher",
+				BelongsToCell: "shared-crypto",
+			},
+			"access-core/session-login": {
+				ID:            "session-login",
+				BelongsToCell: "access-core",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.auth.login.v1", Role: "serve"},
+				},
+			},
+			"audit-core/audit-write": {
+				ID:            "audit-write",
+				BelongsToCell: "audit-core",
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.login.v1": {
+				ID:   "http.auth.login.v1",
+				Kind: "http",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
+func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
+	tests := []struct {
+		name          string
+		files         []string
+		wantSlices    []string
+		wantCells     []string
+		wantContracts []string
+	}{
+		{
+			name:  "L0 cell change propagates to dependent cell",
+			files: []string{"cells/shared-crypto/slices/hasher/hash.go"},
+			// shared-crypto/hasher is directly affected;
+			// access-core depends on shared-crypto via l0Dependencies,
+			// so access-core/session-login is also selected.
+			wantSlices:    []string{"access-core/session-login", "shared-crypto/hasher"},
+			wantCells:     []string{"access-core", "shared-crypto"},
+			wantContracts: []string{"http.auth.login.v1"},
+		},
+		{
+			name:  "non-L0 cell change does not trigger L0 tracking",
+			files: []string{"cells/access-core/slices/session-login/handler.go"},
+			// access-core is L2, so no L0 propagation happens.
+			wantSlices:    []string{"access-core/session-login"},
+			wantCells:     []string{"access-core"},
+			wantContracts: []string{"http.auth.login.v1"},
+		},
+		{
+			name:  "cell without l0Dependencies not affected by L0 change",
+			files: []string{"cells/shared-crypto/slices/hasher/hash.go"},
+			// audit-core has no l0Dependencies, so it is NOT selected.
+			wantSlices:    []string{"access-core/session-login", "shared-crypto/hasher"},
+			wantCells:     []string{"access-core", "shared-crypto"},
+			wantContracts: []string{"http.auth.login.v1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := NewTargetSelector(l0Project())
+			result := ts.SelectFromFiles(tt.files)
+			assert.Equal(t, tt.wantSlices, result.Slices)
+			assert.Equal(t, tt.wantCells, result.Cells)
+			if tt.wantContracts != nil {
+				assert.Equal(t, tt.wantContracts, result.Contracts)
+			}
+		})
+	}
+}

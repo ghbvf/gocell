@@ -71,6 +71,10 @@ func (ts *TargetSelector) SelectFromFiles(files []string) *AffectedTargets {
 		}
 	}
 
+	// Expand L0 dependencies: when an L0 cell's file is changed,
+	// all cells that declare it in l0Dependencies are also affected.
+	ts.expandL0Dependents(sliceSet)
+
 	result := ts.expandFromSlices(sliceSet)
 
 	// Merge extra contracts from journey paths that may not be referenced
@@ -257,6 +261,45 @@ func (ts *TargetSelector) contractIDFromPath(f string) string {
 
 	// Replace slashes with dots to form the contract ID.
 	return strings.ReplaceAll(dir, "/", ".")
+}
+
+// expandL0Dependents checks whether any already-selected slice belongs to
+// an L0 cell, and if so, adds all slices of cells that declare that L0 cell
+// in their l0Dependencies. This propagates change impact through L0 edges.
+func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}) {
+	// Collect L0 cell IDs that are already affected.
+	l0Cells := make(map[string]struct{})
+	for key := range sliceSet {
+		s, ok := ts.project.Slices[key]
+		if !ok {
+			continue
+		}
+		c, ok := ts.project.Cells[s.BelongsToCell]
+		if !ok {
+			continue
+		}
+		if c.ConsistencyLevel == "L0" {
+			l0Cells[c.ID] = struct{}{}
+		}
+	}
+	if len(l0Cells) == 0 {
+		return
+	}
+
+	// Find all cells that depend on any affected L0 cell.
+	for _, c := range ts.project.Cells {
+		for _, dep := range c.L0Dependencies {
+			if _, ok := l0Cells[dep.Cell]; ok {
+				// Add all slices of the dependent cell.
+				for key, s := range ts.project.Slices {
+					if s.BelongsToCell == c.ID {
+						sliceSet[key] = struct{}{}
+					}
+				}
+				break // no need to check more deps for this cell
+			}
+		}
+	}
 }
 
 // expandFromSlices takes a set of slice keys and expands to the full

@@ -2,6 +2,7 @@ package governance
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -179,6 +180,114 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 			})
 		}
 	}
+	return results
+}
+
+// validRefPrefixes is the set of allowed first segments in a verify ref.
+var validRefPrefixes = map[string]bool{
+	"journey":  true,
+	"smoke":    true,
+	"unit":     true,
+	"contract": true,
+}
+
+// validateVerifyRef checks a single ref string for format compliance.
+// Rules: at least 3 dot-separated segments; first segment must be a known prefix.
+// For smoke refs, second segment must be a cellID present in the project.
+func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResult {
+	var results []ValidationResult
+	parts := strings.SplitN(ref, ".", 3)
+	if len(parts) < 3 || parts[2] == "" {
+		results = append(results, ValidationResult{
+			Code:      "VERIFY-05",
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      file,
+			Field:     field,
+			Message: fmt.Sprintf(
+				"ref %q must have at least 3 dot-separated segments", ref,
+			),
+		})
+		return results
+	}
+
+	prefix := parts[0]
+	if !validRefPrefixes[prefix] {
+		results = append(results, ValidationResult{
+			Code:      "VERIFY-05",
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      file,
+			Field:     field,
+			Message: fmt.Sprintf(
+				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
+			),
+		})
+		return results
+	}
+
+	// For smoke refs, the second segment must be an existing cellID.
+	if prefix == "smoke" {
+		cellID := parts[1]
+		if _, ok := v.project.Cells[cellID]; !ok {
+			results = append(results, ValidationResult{
+				Code:      "VERIFY-05",
+				Severity:  SeverityError,
+				IssueType: IssueRefNotFound,
+				File:      file,
+				Field:     field,
+				Message: fmt.Sprintf(
+					"smoke ref %q references non-existent cell %q", ref, cellID,
+				),
+			})
+		}
+	}
+
+	return results
+}
+
+// validateVERIFY05 checks that all verify refs (cell.verify.smoke,
+// slice.verify.unit, slice.verify.contract, journey.passCriteria[].checkRef)
+// use the structured ref format: {prefix}.{scope}.{suffix}, where prefix is
+// one of journey/smoke/unit/contract. For smoke refs the scope must be an
+// existing cellID.
+func (v *Validator) validateVERIFY05() []ValidationResult {
+	var results []ValidationResult
+
+	// cell.yaml verify.smoke refs
+	for _, c := range v.project.Cells {
+		file := cellFile(c.ID)
+		for i, ref := range c.Verify.Smoke {
+			field := fmt.Sprintf("verify.smoke[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// slice.yaml verify.unit + verify.contract refs
+	for key, s := range v.project.Slices {
+		file := sliceFile(key)
+		for i, ref := range s.Verify.Unit {
+			field := fmt.Sprintf("verify.unit[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+		for i, ref := range s.Verify.Contract {
+			field := fmt.Sprintf("verify.contract[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// journey passCriteria[].checkRef
+	for _, j := range v.project.Journeys {
+		file := journeyFile(j.ID)
+		for i, pc := range j.PassCriteria {
+			if pc.CheckRef == "" {
+				continue
+			}
+			field := fmt.Sprintf("passCriteria[%d].checkRef", i)
+			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
+		}
+	}
+
 	return results
 }
 
