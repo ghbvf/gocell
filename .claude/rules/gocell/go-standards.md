@@ -15,7 +15,7 @@ paths:
 
 | 层 | 允许依赖 | 禁止依赖 |
 |----|---------|---------|
-| kernel/ | 标准库 + pkg/ | runtime/ adapters/ cells/ |
+| kernel/ | 标准库 + pkg/ + gopkg.in/yaml.v3（metadata 解析） | runtime/ adapters/ cells/ |
 | cells/ | kernel/ + runtime/ | adapters/(通过接口解耦) |
 | runtime/ | kernel/ + pkg/ | cells/ adapters/ |
 | adapters/ | kernel/ + runtime/(实现其接口) | cells/ |
@@ -137,8 +137,11 @@ paths:
 ### CLI 工具
 
 - `gocell validate` - 验证 cell.yaml/slice.yaml 元数据合规
-- `gocell scaffold cell` - 生成新 Cell 骨架
-- `gocell scaffold slice` - 生成新 Slice 骨架
-- `gocell generate assembly` - 从元数据生成 assembly
-- `gocell check deps` - 检查分层依赖方向
-- `gocell check contracts` - 检查契约兼容性
+- `gocell scaffold {cell|slice|contract|journey}` - 生成骨架
+- `gocell generate {assembly|indexes|boundaries}` - 从元数据生成产物
+- `gocell check contract-health` - 检查契约健康度
+- `gocell check slice-coverage --cell=<cellID>` - 检查 slice 覆盖
+- `gocell check assembly-completeness --id=<assemblyID>` - 检查 assembly 完整性
+- `gocell check journey-readiness --journey=<journeyID>` - 检查 journey 就绪
+- `gocell check l0-imports --cell=<cellID>` - 检查 L0 依赖方向
+- `gocell verify {slice|cell|journey|targets}` - 运行验证命令

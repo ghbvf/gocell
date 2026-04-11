@@ -151,7 +151,7 @@
 | SOL-B-02 | `idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包，outbox 反向依赖 idempotency | 3h（C3，10+ 文件） | K-4 |
 | SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | Phase 3 附近 |
 | P4-TD-03 | `IssueTestToken` HS256 死代码（测试陷阱） | 30min | — |
-| P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce | 1h | — |
+| P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce — order-create/service.go:50-71 + device-register/service.go:50-71 直接 Publish 违反 outbox 规则 | 2h | — |
 | P4-TD-05 | 缺少 outbox 全链路 3-container 集成测试 | 2h | — |
 | P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
 | P2-T-02 | J-audit-login-trail e2e 测试 | 2h | — |
@@ -171,9 +171,11 @@
 | ID | 问题 | 预估 |
 |----|------|------|
 | P4-TD-01 | 缺少共享 NoopOutboxWriter | 30min |
-| P4-TD-09 | List 端点缺分页（WM-6 游标分页可解决） | 2h |
-| P4-TD-10 | POST 201 响应未包装 `{"data":...}` | 2h |
+| P4-TD-09 | List 端点缺分页且无 pageSize≤500 强制（order-query / configread / featureflag / device-command / auditquery）— WM-6 游标分页可解决 | 3h |
+| ~~P4-TD-10~~ | ~~POST 201 响应未包装 `{"data":...}`~~ | ~~2h~~ | ✅ 已修复（device-register + device-command） |
 | P4-TD-11 | in-memory repository 缺并发测试 | 1h |
+| P4-TD-13 | Entity 直接作为 API 响应（order-query / configread / configwrite / featureflag / configpublish / device-status / device-register / device-command），需 DTO 转换 | 4h |
+| P4-TD-14 | audit-core/auditappend/service.go:90 `_ = json.Unmarshal` 静默忽略错误，需显式处理或记录日志 | 30min |
 | P3-TD-11 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | configpublish.Rollback version 校验 | 2h |
 | P4-TD-12 | demo cell `TestDemo_Startup` t.Skip 占位 | 30min |

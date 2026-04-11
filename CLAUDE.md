@@ -10,6 +10,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 - 提交信息遵循 Conventional Commits
 - 涉及功能或行为变更时，同步更新对应文档
 - 被 `.gitignore` 忽略的文件禁止 `git add -f`
+- Review 和重构时不考虑向后兼容——当前只有 gocell 自身，没有外部调用方
 
 ## 核心架构约束
 
@@ -33,7 +34,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ### 依赖规则
 
-- kernel/ 不依赖 runtime/、adapters/、cells/（只依赖标准库 + pkg/）
+- kernel/ 不依赖 runtime/、adapters/、cells/（只依赖标准库 + pkg/ + gopkg.in/yaml.v3）
 - cells/ 依赖 kernel/ 和 runtime/，不依赖 adapters/（通过接口解耦）
 - runtime/ 可依赖 kernel/ 和 pkg/，不依赖 cells/、adapters/
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口

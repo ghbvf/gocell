@@ -38,10 +38,12 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"id":       cmd.ID,
-		"deviceId": cmd.DeviceID,
-		"payload":  cmd.Payload,
-		"status":   cmd.Status,
+		"data": map[string]any{
+			"id":       cmd.ID,
+			"deviceId": cmd.DeviceID,
+			"payload":  cmd.Payload,
+			"status":   cmd.Status,
+		},
 	})
 }
 
@@ -73,6 +75,8 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"status": "acked",
+		"data": map[string]any{
+			"status": "acked",
+		},
 	})
 }

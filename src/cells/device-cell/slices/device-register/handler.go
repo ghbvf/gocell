@@ -36,8 +36,10 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"id":     device.ID,
-		"name":   device.Name,
-		"status": device.Status,
+		"data": map[string]any{
+			"id":     device.ID,
+			"name":   device.Name,
+			"status": device.Status,
+		},
 	})
 }
