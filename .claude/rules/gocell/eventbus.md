@@ -1,6 +1,6 @@
 # EventBus 规范
 
-所有 consumer 使用 `ConsumerBase`，它已内置幂等检查、DLQ、自动重试。以下规则补充开发者职责。
+所有 consumer 使用 `ConsumerBase`，它已内置幂等 Claim/Commit/Release、退避重试、DLX 路由。以下规则补充开发者职责。
 
 ## Consumer 声明要求
 
@@ -8,28 +8,72 @@
 
 ```go
 // Consumer: cg-{service}-{event-type}
-// Idempotency key: {prefix}:{group}:{event-id}, TTL 24h
-// ACK timing: after business logic + idempotency key written
-// Retry: transient errors → NACK+backoff / permanent errors → dead letter
+// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
+// Disposition: Ack on success / Requeue on transient / Reject on permanent
+// DLX: broker-native via DispositionReject → Nack(requeue=false)
 ```
 
-## HandlerFunc 实现规则
+## Handler 实现规则（Solution B）
 
-- `return error` → ConsumerBase 触发 NACK + 退避重试（瞬态错误）
-- `return nil` → ConsumerBase ACK（业务完成）
-- unmarshal 失败 → 调用 `deadLetter(ctx, msg, err)` 路由到死信队列
+Handler 签名为 `outbox.EntryHandler`，返回 `outbox.HandleResult`：
 
 ```go
-event, err := unmarshal(msg)
-if err != nil {
-    return deadLetter(ctx, msg, err) // 永久错误，不重试
+func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+    event, err := unmarshal(entry.Payload)
+    if err != nil {
+        // 永久错误 — Reject 路由到 DLX，不重试
+        return outbox.HandleResult{
+            Disposition: outbox.DispositionReject,
+            Err:         &rabbitmq.PermanentError{Err: err},
+        }
+    }
+
+    if err := processEvent(ctx, event); err != nil {
+        // 瞬态错误 — ConsumerBase 退避重试
+        return outbox.HandleResult{
+            Disposition: outbox.DispositionRequeue,
+            Err:         err,
+        }
+    }
+
+    return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 ```
 
+### Disposition 语义
+
+| Disposition | 含义 | ConsumerBase 行为 |
+|-------------|------|-------------------|
+| `DispositionAck` | 成功处理 | broker Ack → Receipt.Commit |
+| `DispositionRequeue` | 瞬态失败 | 退避重试，耗尽后 Reject |
+| `DispositionReject` | 永久失败 | broker Nack(requeue=false) → DLX |
+
+- **零值 HandleResult{} 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
+- `PermanentError` 包装的错误即使返回 Requeue 也会被 ConsumerBase 升级为 Reject
+
+### 旧 handler 迁移
+
+使用 `outbox.WrapLegacyHandler` 适配旧签名：
+
+```go
+legacy := func(ctx context.Context, entry outbox.Entry) error { ... }
+handler := outbox.WrapLegacyHandler(legacy)
+// nil error → Ack, non-nil → Requeue
+```
+
+注意：WrapLegacyHandler 不检测 PermanentError，需要通过 ConsumerBase 包装才能路由到 DLX。
+
 ## 死信路由
 
-- L2 consumer 必须有死信队列
+- DLX 由 broker 原生处理（`DispositionReject` → `Nack(requeue=false)` → DLX exchange）
+- L2 consumer 必须配置 DLX exchange（`SubscriberConfig.DLXExchange`）
 - 死信消息必须可观测（计数指标或日志）
+
+## 幂等模型
+
+- 使用 `Claimer`（两阶段 Claim/Commit/Release），不再使用旧 `Checker`
+- Claim 获取处理租约 → handler 执行 → broker Ack 后 Commit / 失败时 Release
+- 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护
 
 ## Stream 命名
 
