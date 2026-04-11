@@ -457,6 +457,75 @@ func TestWriteDomainError_PassesCtx(t *testing.T) {
 	assert.Equal(t, "req-domain-789", errObj["request_id"])
 }
 
+func TestWriteDomainError_5xx_LogsCorrelation(t *testing.T) {
+	// Exercise all ctx correlation branches in the 5xx log path.
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-5xx-001")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-5xx-001")
+	ctx = ctxkeys.WithSpanID(ctx, "span-5xx-001")
+
+	rec := httptest.NewRecorder()
+	err := errcode.Safe(errcode.ErrInternal, "something broke", "pool exhausted on host db-3")
+	WriteDomainError(ctx, rec, err)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "internal server error", errObj["message"])
+	assert.Equal(t, "req-5xx-001", errObj["request_id"])
+}
+
+func TestWriteDomainError_5xx_WithCause(t *testing.T) {
+	// Cover the ecErr.Cause branch in 5xx logging.
+	inner := errors.New("connection refused")
+	err := errcode.Wrap(errcode.ErrInternal, "db failed", inner)
+
+	rec := httptest.NewRecorder()
+	WriteDomainError(context.Background(), rec, err)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "internal server error", errObj["message"])
+}
+
+func TestWriteDomainError_PlainError_WithCorrelation(t *testing.T) {
+	// Cover the non-errcode 500 path with ctx correlation.
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-plain-500")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-plain-500")
+
+	rec := httptest.NewRecorder()
+	WriteDomainError(ctx, rec, errors.New("unexpected nil pointer"))
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "internal server error", errObj["message"])
+	assert.Equal(t, "req-plain-500", errObj["request_id"])
+}
+
+func TestWriteError_5xx_AlreadyMasked(t *testing.T) {
+	// When message is already "internal server error", WriteError should not
+	// double-log — just pass through.
+	rec := httptest.NewRecorder()
+	WriteError(context.Background(), rec, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "internal server error", errObj["message"])
+}
+
 func TestIsClientError(t *testing.T) {
 	tests := []struct {
 		code errcode.Code
