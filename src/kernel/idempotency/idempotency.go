@@ -5,13 +5,70 @@ package idempotency
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // DefaultTTL is the standard idempotency key TTL per the EventBus specification.
 const DefaultTTL = 24 * time.Hour
 
-// Checker provides idempotency checking for event consumers.
-// The standard TTL is 24 hours per the EventBus specification.
+// DefaultLeaseTTL is the default processing-lease TTL.
+// If a consumer crashes mid-processing, the lease expires after this duration,
+// allowing another consumer to re-claim the message.
+const DefaultLeaseTTL = 5 * time.Minute
+
+// ---------------------------------------------------------------------------
+// ClaimState — two-phase idempotency model (Solution B)
+// ---------------------------------------------------------------------------
+
+// ClaimState is the result of a Claim attempt.
+type ClaimState uint8
+
+const (
+	// ClaimAcquired means the caller obtained the processing lease and should
+	// execute business logic. The returned Receipt MUST be Committed on success
+	// or Released on failure/requeue.
+	ClaimAcquired ClaimState = iota
+
+	// ClaimDone means a previous consumer already completed processing.
+	// The caller should Ack without running business logic.
+	ClaimDone
+
+	// ClaimBusy means another consumer currently holds the processing lease.
+	// The caller should Requeue so the broker redelivers later.
+	ClaimBusy
+)
+
+// Claimer provides two-phase idempotency for event consumers (Solution B).
+//
+// Flow:
+//  1. Claim(key) → ClaimAcquired + Receipt
+//  2. Execute business logic
+//  3a. Success → broker Ack → receipt.Commit()
+//  3b. Failure → broker Nack(requeue) → receipt.Release()
+//
+// This eliminates the race condition where TryProcess marks a key as done
+// before the broker has acknowledged the message.
+type Claimer interface {
+	// Claim attempts to acquire a processing lease for the given key.
+	//
+	// Returns:
+	//   - (ClaimAcquired, receipt, nil) — caller should process, then Commit or Release.
+	//   - (ClaimDone, nil, nil) — already processed; caller should Ack.
+	//   - (ClaimBusy, nil, nil) — another consumer is processing; caller should Requeue.
+	//   - (_, nil, err) — infrastructure error.
+	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, outbox.Receipt, error)
+}
+
+// ---------------------------------------------------------------------------
+// Checker — legacy interface (deprecated)
+// ---------------------------------------------------------------------------
+
+// Deprecated: Checker is the pre-Solution-B idempotency interface. New code
+// should use Claimer which provides two-phase Claim/Commit/Release semantics
+// that correctly align idempotency state with broker acknowledgement. (F-ID-01)
+//
+// Checker will be removed in a future release.
 type Checker interface {
 	// IsProcessed returns true if the given key has already been processed.
 	IsProcessed(ctx context.Context, key string) (bool, error)

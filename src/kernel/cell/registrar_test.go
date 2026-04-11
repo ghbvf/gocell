@@ -63,7 +63,7 @@ type mockSubscriber struct {
 	topics []string
 }
 
-func (m *mockSubscriber) Subscribe(_ context.Context, topic string, _ func(context.Context, outbox.Entry) error) error {
+func (m *mockSubscriber) Subscribe(_ context.Context, topic string, _ outbox.EntryHandler) error {
 	m.topics = append(m.topics, topic)
 	return nil
 }
@@ -81,8 +81,8 @@ type eventCell struct {
 
 func (e *eventCell) RegisterSubscriptions(sub outbox.Subscriber) {
 	e.registered = true
-	_ = sub.Subscribe(context.Background(), "session.created", func(_ context.Context, _ outbox.Entry) error {
-		return nil
+	_ = sub.Subscribe(context.Background(), "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 }
 
@@ -103,8 +103,8 @@ func (d *dualCell) RegisterRoutes(mux RouteMux) {
 
 func (d *dualCell) RegisterSubscriptions(sub outbox.Subscriber) {
 	d.eventRegistered = true
-	_ = sub.Subscribe(context.Background(), "device.enrolled", func(_ context.Context, _ outbox.Entry) error {
-		return nil
+	_ = sub.Subscribe(context.Background(), "device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 }
 
