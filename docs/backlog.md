@@ -23,7 +23,9 @@
 
 ## 进行中
 
-无
+| 任务 | PR | 说明 |
+|------|-----|------|
+| WM-2 密钥轮换 — JWT kid + HMAC key ring | PR#81 | 待合并，4 commits，所有 P0/P1 已修 |
 
 ### PR 队列（跨框架分析后修订，PR#70-77 已全部合并）
 
@@ -59,13 +61,13 @@
 
 | 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
 |------|-----|------|------|------|------|
-| K-1 | CS-AR-2 | Dependencies 精简 + 冻结注释 | `kernel/cell/interfaces.go`, `kernel/assembly/assembly.go`, ~20 test files | 1h | ~~Phase 2~~ ✅ 无阻塞 |
-| K-2 | CS-AR-3 | net/http ADR 注释 | `kernel/cell/registrar.go` | 15min | 无 |
-| K-3 | F-OB-01 | BatchWriter 接口 + WriteBatchFallback | `kernel/outbox/outbox.go`, `adapters/postgres/outbox_writer.go` | 3h | 无 |
+| ~~K-1~~ | CS-AR-2 | ~~Dependencies 精简 + 冻结注释~~ | — | — | ✅ PR#79 |
+| ~~K-2~~ | CS-AR-3 | ~~net/http ADR 注释~~ | — | — | ✅ PR#79 |
+| ~~K-3~~ | F-OB-01 | ~~BatchWriter 接口 + WriteBatchFallback~~ | — | — | ✅ PR#79 |
 | K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
-| K-5 | — | 三角色审查 mandatory actions | Dependencies 冻结 + registrar ADR + WriteBatchFallback godoc | 含在 K-1/K-2/K-3 |
+| ~~K-5~~ | — | ~~三角色审查 mandatory actions~~ | — | — | ✅ 含在 PR#79 |
 
-> K-1/K-2/K-3 全程无阻塞可并行（Phase 2 已合并）；K-4 依赖 Phase 3
+> ~~K-1/K-2/K-3~~ ✅ 已合并（PR#79）；K-4 依赖 Phase 3
 
 ---
 
@@ -119,7 +121,7 @@
 | F-5 | `kernel/journey/catalog.go` | Journey catalog 不校验引用 | 2h |
 | R1C2-F01 | `runtime/eventbus/eventbus.go` | Close()+Subscribe() 竞态 | 2h |
 | R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | 2h |
-| F-OB-01 | `kernel/outbox/outbox.go` | 无批量写支持 | 2h |
+| ~~F-OB-01~~ | `kernel/outbox/outbox.go` | ~~无批量写支持~~ PR#79 ✅ | ~~2h~~ |
 | TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | 1h |
 | OTEL-COV-01 | `adapters/otel/` | 覆盖率 67.3%（PR#72 删除了依赖内部 API 的旧测试后回升，但仍 < 80%；成功路径需 gRPC OTLP endpoint，需 testcontainers 集成测试） | 2h |
 | SUB-SETUP-01 | `kernel/outbox`, `cells/*/cell.go` | RegisterSubscriptions 用 100ms 启发式区分 setup 失败与正常阻塞消费。**已被 Phase 2 EventRouter 解决**——Router.Run() 同步返回 setup error，消除启发式 | ~~4h~~ → Phase 2 |
@@ -136,6 +138,11 @@
 | RMQ-75-03 | `adapters/rabbitmq/connection.go` | 命名改善：`failed→terminalCh`, `safeExp→maxSafeShift`, `permanentDialKeywords→permanentDialSubstrings` | 15min |
 | RMQ-75-04 | `adapters/rabbitmq/connection.go` | `WaitConnected` godoc 缺调用方指引（permanent vs transient 区分） | 15min |
 | RMQ-75-05 | `runtime/bootstrap/bootstrap.go` | `RegisterChecker("rabbitmq", conn.Health)` 未接入 readiness — permanent error 后 Pod 继续接流量 | 30min |
+| P3-DEFER-01 | `adapters/rabbitmq/consumer_base.go`, `connection.go` | safeDelay 与 backoffDelay 核心逻辑重复（bits.Len64 overflow guard），应提取到 pkg/backoff | 2h |
+| P3-DEFER-02 | `adapters/rabbitmq/consumer_base.go` | ClaimFailOpen `*bool` 不符合 Go 习惯，应改为 enum (`ClaimFailMode`) | 1h |
+| P3-DEFER-03 | `examples/` | 新 API（WithHealthChecker、NewConsumerBase(Claimer)、MaxReconnectAttempts）无示例项目演示 | 2h |
+| P3-DEFER-04 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go` | Receipt 定义在 outbox 包造成 idempotency→outbox 耦合，考虑移到 idempotency 包 | 3h（C3 kernel 接口） |
+| P3-DEFER-05 | `adapters/rabbitmq/connection.go` | Health() 在 reconnecting 和 terminal 状态下返回相同 error code，运维无法区分 | 3h（C3 状态机设计） |
 
 ### winmdm Accept P1
 
@@ -145,8 +152,9 @@
 | WM-35 | BFF handler 接入 — login/refresh/logout 接 SessionCookieWriter + BFF 模式不返回 token body | `cells/access-core/slices/session*` | 2d | WM-1 |
 | WM-36 | SecureCookie key rotation — active+previous 双 key ring，灰度轮换 | `pkg/securecookie` | 1.5d | WM-1 |
 | WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
-| WM-2 | 密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go） | `runtime/auth` | 2d | 无 |
+| ~~WM-2~~ | ~~密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go）~~ | `runtime/auth` | ~~2d~~ | PR#81 🔄 |
 | WM-34 | 配置热更新回调 — Cell 级 OnConfigReload | `runtime/config` | 1d | 无 |
+| WM-2-F1 | KeyProvider 接口抽象 — JWTIssuer/JWTVerifier 解耦 *KeySet，为 auto-rotation/JWKS 预留接缝 | `runtime/auth` | 1d | WM-34 (discovered via PR#81 review P1-4) |
 | WM-20 | TestPubSub 测试套件 — TestPublisher/TestSubscriber 标准套件 | `kernel/outbox/outboxtest/` | 1.5d | PR#68 |
 | WM-17 | 生命周期钩子 — BeforeStart/AfterStart/BeforeStop/AfterStop 可选接口 | `kernel/cell` | 1d | 无 |
 | WM-15 | L4 队列状态机 — 合入 0-B2 | `kernel/outbox` | 1.5d | 0-B2 |
@@ -169,7 +177,7 @@
 | SOL-B-01 | Claimer lease 续租 — handler/retryLoop 超 LeaseTTL 后 Commit stale，需 Receipt.Renew 或后台续租（参考 distlock.go renewLoop） | 4h（C3，改 kernel 接口） | R-4 |
 | SOL-B-02 | `idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包，outbox 反向依赖 idempotency | 3h（C3，10+ 文件） | K-4 |
 | SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | Phase 3 附近 |
-| P4-TD-03 | `IssueTestToken` HS256 死代码（测试陷阱） | 30min | — |
+| ~~P4-TD-03~~ | ~~`IssueTestToken` HS256 死代码（测试陷阱）~~ | ~~30min~~ | PR#81 ✅ (移到 helpers_test.go，删除 HS256 分支) |
 | P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce — order-create/service.go:50-71 + device-register/service.go:50-71 直接 Publish 违反 outbox 规则 | 2h | — |
 | P4-TD-05 | 缺少 outbox 全链路 3-container 集成测试 | 2h | — |
 | P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
@@ -195,6 +203,8 @@
 | P4-TD-11 | in-memory repository 缺并发测试 | 1h |
 | P4-TD-13 | Entity 直接作为 API 响应（order-query / configread / configwrite / featureflag / configpublish / device-status / device-register / device-command），需 DTO 转换 | 4h |
 | P4-TD-14 | audit-core/auditappend/service.go:90 `_ = json.Unmarshal` 静默忽略错误，需显式处理或记录日志 | 30min |
+| WM-2-F2 | ServiceToken HMAC message 不含 query string，可跨参数 replay | 2h (discovered via PR#81 review P2-1) |
+| WM-2-F3 | runtime/auth 无 Prometheus metrics（key lifecycle counters/gauges），需通过接口注入避免 runtime→adapters 依赖 | 2h (discovered via PR#81 review P2-11，前置 WM-34) |
 | P3-TD-11 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | configpublish.Rollback version 校验 | 2h |
 | P4-TD-12 | demo cell `TestDemo_Startup` t.Skip 占位 | 30min |
@@ -273,9 +283,9 @@
 
 | ID | 问题 | 归属 PR | 状态 |
 |----|------|---------|------|
-| CS-AR-2 | Dependencies 精简 — 移除 `Cells`/`Contracts` 字段（零 caller），加冻结注释 | PR-Cleanup | 设计完成，三角色 PASS |
-| CS-AR-3 | kernel/cell net/http 决策 — 确认 net/http 为 stdlib 允许依赖，registrar.go 加 ADR 注释 | PR-Cleanup | 设计完成，文档化即可 |
-| F-OB-01 | BatchWriter 接口 + WriteBatchFallback helper — 独立接口，向后兼容 | PR-Cleanup | 设计完成，三角色 PASS |
+| ~~CS-AR-2~~ | ~~Dependencies 精简~~ — 移除 `Cells`/`Contracts` 字段（零 caller），加冻结注释 | PR#79 | ✅ |
+| ~~CS-AR-3~~ | ~~kernel/cell net/http 决策~~ — ADR 注释已存在于 registrar.go | PR#79 | ✅ |
+| ~~F-OB-01~~ | ~~BatchWriter 接口 + WriteBatchFallback helper~~ — 独立接口，向后兼容 | PR#79 | ✅ |
 | Cell 接口 | 12 个方法，考虑拆分为 Cell + CellLifecycle + CellMetadata | — | 暂缓（assembly 需全部 facet） |
 | adapter 测试 | 15 个 t.Skip 集成测试待补全 | — | TODO |
 
@@ -355,7 +365,8 @@
 | A | Phase 1: PermanentError → kernel | PR#74 | ✅ |
 | A | Phase 2: EventRouter 引入 | PR#76 | ✅ |
 | B | 0-G B-03 RabbitMQ 重连 backoff | PR#75 | ✅ |
-| B | K-2 net/http ADR 注释 | — | 待做 |
+| B | K-1/K-2/K-3/K-5 Kernel 架构整理 | PR#79 | ✅ |
+| — | device-cell 测试对齐 data 信封 + celltest 覆盖率 | PR#78 | ✅ |
 
 ### Batch 3: Tier 0 收尾 + 基础稳定（2d，Batch 2 后）
 
@@ -420,8 +431,12 @@
 | F-5 Journey catalog 校验 | 2h | kernel/journey |
 | R1C2-F01 eventbus Close+Subscribe 竞态 | 2h | runtime/eventbus（需 -race 验证） |
 | R1C2-F03 WorkerGroup 首个失败 | 2h | runtime/worker |
-| F-OB-01 outbox 批量写 | 2h | kernel/outbox |
+| ~~F-OB-01 outbox 批量写~~ | ~~2h~~ | ~~kernel/outbox~~ PR#79 ✅ |
 | TX-NIL-01 txRunner nil-safe 文档 | 1h | cells/ |
+| F-OB-02 outbox UUID nil guard | 30min | adapters/postgres — 拒绝全零 UUID 防幂等碰撞 (discovered via PR#79 review) |
+| P4-TD-01 noopWriter 去重 | 1h | cells/*/cell_test.go → 提取到 kernel/outbox/outboxtest (discovered via PR#79 review) |
+| CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml 只跑 ./adapters/...，漏掉 tests/integration/ (discovered via PR#79 review) |
+| OB-UUID-01 cells evt-\<uuid\> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID (discovered via PR#79 review) |
 | P3-TD-10 Session refresh TOCTOU | 4h | 高风险，乐观锁方案 |
 | P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
 | OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
