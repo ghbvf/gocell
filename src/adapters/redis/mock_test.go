@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,3 +206,92 @@ func toInt64(v any) (int64, bool) {
 
 // errMock is a sentinel error used in tests.
 var errMock = errors.New("mock error")
+
+// claimerMockCmdable extends mockCmdable with Eval behavior that simulates
+// the IdempotencyClaimer's Lua scripts (claim, commit, release).
+type claimerMockCmdable struct {
+	mockCmdable
+}
+
+func newClaimerMock() *claimerMockCmdable {
+	return &claimerMockCmdable{
+		mockCmdable: mockCmdable{
+			store: make(map[string]mockEntry),
+		},
+	}
+}
+
+// Eval overrides the base mock to simulate the claimer Lua scripts.
+// Distinguishes claim vs commit by key order:
+//   - Claim:   keys=[done:{k}, lease:{k}]  (keys[0] starts with "done:")
+//   - Commit:  keys=[lease:{k}, done:{k}]  (keys[0] starts with "lease:")
+//   - Release: keys=[lease:{k}]            (single key)
+func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, args ...any) *goredis.Cmd {
+	cmd := goredis.NewCmd(context.Background())
+	if m.evalErr != nil {
+		cmd.SetErr(m.evalErr)
+		return cmd
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch {
+	// Release script: 1 key (leaseKey), 1 arg (token)
+	case len(keys) == 1 && len(args) == 1:
+		leaseKey := keys[0]
+		token := toString(args[0])
+		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+			delete(m.store, leaseKey)
+			cmd.SetVal(int64(1))
+		} else {
+			cmd.SetVal(int64(0))
+		}
+		return cmd
+
+	// Claim script: 2 keys, keys[0] starts with "done:"
+	case len(keys) == 2 && len(args) >= 2 && strings.HasPrefix(keys[0], "done:"):
+		doneKey, leaseKey := keys[0], keys[1]
+		token := toString(args[0])
+		leaseSec, _ := toInt64(args[1])
+
+		if _, ok := m.store[doneKey]; ok {
+			cmd.SetVal(int64(0)) // ClaimDone
+			return cmd
+		}
+		if entry, ok := m.store[leaseKey]; ok {
+			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
+				cmd.SetVal(int64(2)) // ClaimBusy
+				return cmd
+			}
+			delete(m.store, leaseKey) // expired
+		}
+		m.store[leaseKey] = mockEntry{
+			value:  token,
+			expiry: time.Now().Add(time.Duration(leaseSec) * time.Second),
+		}
+		cmd.SetVal(int64(1)) // ClaimAcquired
+		return cmd
+
+	// Commit script: 2 keys, keys[0] starts with "lease:"
+	case len(keys) == 2 && len(args) == 2 && strings.HasPrefix(keys[0], "lease:"):
+		leaseKey, doneKey := keys[0], keys[1]
+		token := toString(args[0])
+		doneSec, _ := toInt64(args[1])
+
+		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+			delete(m.store, leaseKey)
+			m.store[doneKey] = mockEntry{
+				value:  "1",
+				expiry: time.Now().Add(time.Duration(doneSec) * time.Second),
+			}
+			cmd.SetVal(int64(1))
+		} else {
+			cmd.SetVal(int64(0))
+		}
+		return cmd
+
+	default:
+		cmd.SetVal(int64(0))
+		return cmd
+	}
+}
