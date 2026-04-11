@@ -484,29 +484,92 @@ verify:
 	assert.Equal(t, "2026-06-01", sl.Verify.Waivers[0].ExpiresAt)
 }
 
-func TestParseFS_SliceOmitsBelongsToCell(t *testing.T) {
-	fs := fstest.MapFS{
+// TestParseFS_SliceBelongsToCellDerive is a table-driven test for G-7 auto-derivation
+// of slice.belongsToCell from the file path cells/{cellID}/slices/{sliceID}/slice.yaml.
+func TestParseFS_SliceBelongsToCellDerive(t *testing.T) {
+	tests := []struct {
+		name          string
+		yaml          string
+		path          string
+		wantCell      string
+		wantSliceKey  string
+	}{
+		{
+			name: "omitted belongsToCell is derived from path",
+			path: "cells/access-core/slices/session-login/slice.yaml",
+			yaml: `id: session-login
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`,
+			wantCell:     "access-core",
+			wantSliceKey: "access-core/session-login",
+		},
+		{
+			name: "explicit belongsToCell matching path is preserved",
+			path: "cells/audit-core/slices/write-log/slice.yaml",
+			yaml: `id: write-log
+belongsToCell: audit-core
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`,
+			wantCell:     "audit-core",
+			wantSliceKey: "audit-core/write-log",
+		},
+		{
+			name: "derived from path with hyphenated cell name",
+			path: "cells/config-core/slices/hot-reload/slice.yaml",
+			yaml: `id: hot-reload
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`,
+			wantCell:     "config-core",
+			wantSliceKey: "config-core/hot-reload",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				tt.path: &fstest.MapFile{Data: []byte(tt.yaml)},
+			}
+			p := NewParser("")
+			pm, err := p.ParseFS(fsys)
+			require.NoError(t, err)
+			require.Len(t, pm.Slices, 1)
+			assert.Contains(t, pm.Slices, tt.wantSliceKey)
+			sl := pm.Slices[tt.wantSliceKey]
+			require.NotNil(t, sl)
+			assert.Equal(t, tt.wantCell, sl.BelongsToCell)
+		})
+	}
+}
+
+// TestParseFS_SliceBelongsToCellMismatch verifies that an explicit belongsToCell
+// that contradicts the directory path is rejected with an error.
+func TestParseFS_SliceBelongsToCellMismatch(t *testing.T) {
+	fsys := fstest.MapFS{
 		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+belongsToCell: wrong-cell
 contractUsages: []
 verify:
   unit: []
   contract: []
 `)},
 	}
-
 	p := NewParser("")
-	pm, err := p.ParseFS(fs)
-	require.NoError(t, err)
-
-	// Map key should be cellID/sliceID, not "/session-login"
-	assert.Len(t, pm.Slices, 1)
-	assert.Contains(t, pm.Slices, "access-core/session-login")
-	assert.NotContains(t, pm.Slices, "/session-login")
-
-	// BelongsToCell should be backfilled from path
-	sl := pm.Slices["access-core/session-login"]
-	require.NotNil(t, sl)
-	assert.Equal(t, "access-core", sl.BelongsToCell)
+	_, err := p.ParseFS(fsys)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+	assert.Contains(t, err.Error(), "does not match directory")
+	assert.Contains(t, err.Error(), "wrong-cell")
+	assert.Contains(t, err.Error(), "access-core")
 }
 
 func TestParseFS_DuplicateCellID(t *testing.T) {
@@ -839,6 +902,17 @@ endpoints:
   clients: [cell-b]
 `,
 			wantOwner: "explicit-cell",
+		},
+		{
+			name: "empty provider endpoint leaves ownerCell empty",
+			yaml: `id: http.noprovider.v1
+kind: http
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  clients: [cell-b]
+`,
+			wantOwner: "",
 		},
 	}
 	for _, tt := range tests {

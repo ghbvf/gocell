@@ -137,6 +137,10 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	return nil
 }
 
+// parseSlice parses a slice.yaml and applies G-7 auto-derivation:
+// if belongsToCell is omitted, it is inferred from the file path
+// (cells/{cellID}/slices/{sliceID}/slice.yaml → belongsToCell = cellID).
+// If an explicit value is provided but mismatches the path, an error is returned.
 func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m SliceMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
@@ -147,9 +151,10 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 			fmt.Sprintf("slice id is empty in %s", path))
 	}
 
-	// Extract cellID from path: cells/{cellID}/slices/{sliceID}/slice.yaml
+	// G-7: auto-derive belongsToCell from path.
+	// Path is guaranteed to be cells/{cellID}/slices/{sliceID}/slice.yaml by matchSliceYAML.
 	parts := splitPath(path)
-	cellID := parts[1] // guaranteed by matchSliceYAML: len == 5, parts[0]=="cells"
+	cellID := parts[1]
 
 	if m.BelongsToCell == "" {
 		m.BelongsToCell = cellID
@@ -168,6 +173,11 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	return nil
 }
 
+// parseContract parses a contract.yaml and applies G-7 auto-derivation:
+// if ownerCell is omitted, it is inferred from the provider endpoint based on
+// the contract kind (http→server, event→publisher, command→handler,
+// projection→provider). If the provider endpoint is also empty, ownerCell
+// remains empty and governance rules will flag the issue.
 func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m ContractMeta
 	if err := unmarshalFile(fsys, path, &m); err != nil {
@@ -177,7 +187,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("contract id is empty in %s", path))
 	}
-	// Infer ownerCell from provider endpoint if omitted (per contract.schema.json).
+	// G-7: auto-derive ownerCell from provider endpoint if omitted.
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
