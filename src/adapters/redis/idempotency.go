@@ -159,57 +159,72 @@ type redisReceipt struct {
 	token    string
 	doneTTL  time.Duration
 
-	commitOnce  sync.Once
-	commitErr   error
-	releaseOnce sync.Once
-	releaseErr  error
+	mu        sync.Mutex
+	committed bool
+	commitErr error
+	released  bool
+	releaseErr error
 }
 
 // Compile-time interface check.
 var _ outbox.Receipt = (*redisReceipt)(nil)
 
 // Commit marks the key as permanently done and removes the lease.
-// Repeat calls are no-ops returning the first call's result.
+// Repeat calls after a successful Commit are no-ops (return nil).
+// Stale-lease errors are cached (permanent). Redis timeouts are NOT cached,
+// allowing retry with a fresh ctx.
 func (r *redisReceipt) Commit(ctx context.Context) error {
-	r.commitOnce.Do(func() {
-		doneSec := int64(r.doneTTL.Seconds())
-		if doneSec < 1 {
-			doneSec = 1
-		}
-		res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
-		if err != nil {
-			r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
-				fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
-			return
-		}
-		code, ok := res.(int64)
-		if !ok || code == 0 {
-			r.commitErr = errcode.New(ErrAdapterRedisSet,
-				fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
-			return
-		}
-	})
-	return r.commitErr
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.committed {
+		return r.commitErr
+	}
+	doneSec := int64(r.doneTTL.Seconds())
+	if doneSec < 1 {
+		doneSec = 1
+	}
+	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
+	if err != nil {
+		r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
+		return r.commitErr
+	}
+	code, ok := res.(int64)
+	if !ok || code == 0 {
+		r.commitErr = errcode.New(ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
+		r.committed = true // stale lease is permanent, don't retry
+		return r.commitErr
+	}
+	r.committed = true
+	return nil
 }
 
 // Release removes the processing lease so a redelivered message can re-enter.
-// Repeat calls are no-ops returning the first call's result.
+// Repeat calls after a successful Release are no-ops (return nil).
+// Stale-lease errors are cached (permanent). Redis timeouts are NOT cached,
+// allowing retry with a fresh ctx.
 func (r *redisReceipt) Release(ctx context.Context) error {
-	r.releaseOnce.Do(func() {
-		res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
-		if err != nil {
-			r.releaseErr = errcode.Wrap(ErrAdapterRedisDelete,
-				fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
-			return
-		}
-		code, ok := res.(int64)
-		if !ok || code == 0 {
-			r.releaseErr = errcode.New(ErrAdapterRedisDelete,
-				fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
-			return
-		}
-	})
-	return r.releaseErr
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released {
+		return r.releaseErr
+	}
+	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
+	if err != nil {
+		r.releaseErr = errcode.Wrap(ErrAdapterRedisDelete,
+			fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
+		return r.releaseErr
+	}
+	code, ok := res.(int64)
+	if !ok || code == 0 {
+		r.releaseErr = errcode.New(ErrAdapterRedisDelete,
+			fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
+		r.released = true // stale lease is permanent, don't retry
+		return r.releaseErr
+	}
+	r.released = true
+	return nil
 }
 
 // claimToken generates a 16-byte hex-encoded token for lease ownership.
