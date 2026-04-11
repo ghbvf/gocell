@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -365,6 +367,62 @@ func TestWrapLegacyHandler_Error(t *testing.T) {
 	res := handler(context.Background(), Entry{ID: "1"})
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 	assert.Equal(t, assert.AnError, res.Err)
+}
+
+func TestWrapLegacyHandler_PermanentError(t *testing.T) {
+	legacy := func(_ context.Context, _ Entry) error {
+		return NewPermanentError(errors.New("unmarshal failed"))
+	}
+	handler := WrapLegacyHandler(legacy)
+
+	res := handler(context.Background(), Entry{ID: "1"})
+	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Error(t, res.Err)
+
+	var permErr *PermanentError
+	assert.True(t, errors.As(res.Err, &permErr))
+}
+
+func TestWrapLegacyHandler_WrappedPermanentError(t *testing.T) {
+	legacy := func(_ context.Context, _ Entry) error {
+		return fmt.Errorf("handler context: %w", NewPermanentError(errors.New("bad payload")))
+	}
+	handler := WrapLegacyHandler(legacy)
+
+	res := handler(context.Background(), Entry{ID: "1"})
+	assert.Equal(t, DispositionReject, res.Disposition,
+		"wrapped PermanentError must be detected via errors.As")
+}
+
+// --- PermanentError Tests ---
+
+func TestPermanentError(t *testing.T) {
+	inner := errors.New("bad payload")
+	pe := NewPermanentError(inner)
+
+	assert.Equal(t, "permanent: bad payload", pe.Error())
+	assert.Equal(t, inner, pe.Unwrap())
+	assert.ErrorIs(t, pe, inner)
+}
+
+func TestPermanentError_NilErr(t *testing.T) {
+	pe := NewPermanentError(nil)
+	assert.Equal(t, "permanent: <nil>", pe.Error())
+	assert.Nil(t, pe.Unwrap())
+
+	// Zero-value struct — same nil Err path.
+	var zero PermanentError
+	assert.Equal(t, "permanent: <nil>", zero.Error())
+}
+
+func TestPermanentError_ErrorsAs_ThroughWrapping(t *testing.T) {
+	inner := errors.New("decode error")
+	pe := NewPermanentError(inner)
+	wrapped := fmt.Errorf("handler: %w", pe)
+
+	var target *PermanentError
+	assert.True(t, errors.As(wrapped, &target))
+	assert.Equal(t, inner, target.Err)
 }
 
 // --- Entry.Validate Tests (F-OB-03) ---

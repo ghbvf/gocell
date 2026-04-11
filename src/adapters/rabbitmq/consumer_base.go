@@ -94,25 +94,6 @@ func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
 	return delay
 }
 
-// PermanentError wraps an error to indicate it should not be retried
-// and should be routed to the dead-letter queue.
-type PermanentError struct {
-	Err error
-}
-
-func (e *PermanentError) Error() string {
-	return fmt.Sprintf("permanent: %s", e.Err.Error())
-}
-
-func (e *PermanentError) Unwrap() error {
-	return e.Err
-}
-
-// NewPermanentError wraps an error as a PermanentError.
-func NewPermanentError(err error) *PermanentError {
-	return &PermanentError{Err: err}
-}
-
 // ConsumerBase wraps an outbox.EntryHandler with idempotency checking and
 // exponential backoff retry. DLQ routing is now handled by the broker via
 // DLX (DispositionReject triggers Nack requeue=false).
@@ -386,7 +367,7 @@ func (cb *ConsumerBase) retryLoop(
 		// the PermanentError takes precedence and upgrades to Reject (no retry).
 		// This allows WrapLegacyHandler (which always returns Requeue) to still
 		// have PermanentError detected and routed to DLX by ConsumerBase.
-		var permErr *PermanentError
+		var permErr *outbox.PermanentError
 		if lastResult.Disposition == outbox.DispositionReject ||
 			(lastResult.Err != nil && errors.As(lastResult.Err, &permErr)) {
 			slog.Warn("rabbitmq: permanent error, rejecting to DLX",

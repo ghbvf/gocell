@@ -9,6 +9,7 @@ package eventbus
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"sync"
@@ -242,6 +243,26 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		case outbox.DispositionRequeue:
 			if res.Receipt != nil {
 				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+			}
+			// PermanentError in Requeue → upgrade to dead letter (no retry).
+			// Mirrors ConsumerBase behavior: PermanentError takes precedence
+			// over the Disposition, ensuring consistent routing regardless of
+			// whether the handler or WrapLegacyHandler set the Disposition.
+			var permErr *outbox.PermanentError
+			if res.Err != nil && errors.As(res.Err, &permErr) {
+				slog.Warn("eventbus: permanent error in requeue, routing to dead letter",
+					slog.String("topic", topic),
+					slog.String("entry_id", entry.ID),
+					slog.Any("error", res.Err),
+				)
+				b.deadLettersMu.Lock()
+				b.deadLetters = append(b.deadLetters, DeadLetter{
+					Topic:   topic,
+					Entry:   entry,
+					LastErr: res.Err,
+				})
+				b.deadLettersMu.Unlock()
+				return
 			}
 			lastErr = res.Err
 			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))

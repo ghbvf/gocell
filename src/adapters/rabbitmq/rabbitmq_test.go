@@ -1441,7 +1441,7 @@ func TestConsumerBase_Wrap_PermanentError_Reject(t *testing.T) {
 		callCount++
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
-			Err:         NewPermanentError(errors.New("bad payload")),
+			Err:         outbox.NewPermanentError(errors.New("bad payload")),
 		}
 	})
 
@@ -1514,15 +1514,6 @@ func TestConsumerBase_Wrap_ContextCancelled_DuringRetry(t *testing.T) {
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition) // Should requeue on shutdown.
 }
 
-func TestPermanentError(t *testing.T) {
-	inner := errors.New("bad data")
-	pe := NewPermanentError(inner)
-
-	assert.Contains(t, pe.Error(), "permanent")
-	assert.Contains(t, pe.Error(), "bad data")
-	assert.Equal(t, inner, pe.Unwrap())
-}
-
 // --- Solution B: Reject goes to broker DLX, not application-side DLQ ---
 
 func TestConsumerBase_Wrap_RetryExhausted_ReleasesIdempotencyKey(t *testing.T) {
@@ -1567,7 +1558,7 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T
 		// Wrap PermanentError inside fmt.Errorf — errors.As should still detect it.
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
-			Err:         fmt.Errorf("handler context: %w", NewPermanentError(errors.New("unmarshal failed"))),
+			Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
 		}
 	})
 
@@ -1699,7 +1690,7 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	wrapped := mw("orders.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
-			Err:         NewPermanentError(errors.New("corrupted payload")),
+			Err:         outbox.NewPermanentError(errors.New("corrupted payload")),
 		}
 	})
 
