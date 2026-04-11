@@ -375,6 +375,10 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 				slog.String("error", err.Error()))
 			attempt++
 			if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
+				slog.Error("rabbitmq: max reconnect attempts exceeded, entering terminal state",
+					slog.Int("max_attempts", c.config.MaxReconnectAttempts),
+					slog.Int("attempt", attempt),
+					slog.String("error", err.Error()))
 				return false, errcode.Wrap(ErrAdapterAMQPConnectPermanent,
 					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), err)
 			}

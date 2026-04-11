@@ -278,9 +278,9 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	checks, ok := body["checks"].(map[string]any)
-	require.True(t, ok, "response must contain checks map")
-	assert.Equal(t, "healthy", checks["rabbitmq"])
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "healthy", deps["rabbitmq"])
 
 	cancel()
 	select {
@@ -331,9 +331,9 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	checks, ok := body["checks"].(map[string]any)
-	require.True(t, ok, "response must contain checks map")
-	assert.Equal(t, "unhealthy", checks["rabbitmq"])
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "unhealthy", deps["rabbitmq"])
 
 	cancel()
 	select {

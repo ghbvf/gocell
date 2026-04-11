@@ -5,6 +5,7 @@ package health
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -31,11 +32,15 @@ func New(asm *assembly.CoreAssembly) *Handler {
 	}
 }
 
-// RegisterChecker adds a named readiness checker. It is safe for concurrent
-// use, but should normally be called during setup before serving.
+// RegisterChecker adds a named readiness checker. It panics if a checker with
+// the same name is already registered (fail-fast at startup, matching Go
+// convention for registration functions like http.HandleFunc).
 func (h *Handler) RegisterChecker(name string, fn Checker) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if _, exists := h.checkers[name]; exists {
+		panic(fmt.Sprintf("health: duplicate checker name %q", name))
+	}
 	h.checkers[name] = fn
 }
 
@@ -70,14 +75,16 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
 // It runs all registered readiness checkers in addition to the Cell health.
+// Cell health and dependency checkers are placed in separate JSON namespaces
+// ("cells" and "dependencies") to prevent name collisions.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cellHealth := h.assembly.Health()
 
-		checks := make(map[string]string)
+		cells := make(map[string]string, len(cellHealth))
 		allHealthy := true
 		for id, hs := range cellHealth {
-			checks[id] = hs.Status
+			cells[id] = hs.Status
 			if hs.Status != "healthy" {
 				allHealthy = false
 			}
@@ -90,12 +97,13 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		}
 		h.mu.RUnlock()
 
+		dependencies := make(map[string]string, len(checkersCopy))
 		for name, fn := range checkersCopy {
 			if err := fn(); err != nil {
-				checks[name] = "unhealthy"
+				dependencies[name] = "unhealthy"
 				allHealthy = false
 			} else {
-				checks[name] = "healthy"
+				dependencies[name] = "healthy"
 			}
 		}
 
@@ -107,8 +115,9 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		}
 
 		writeJSON(w, httpStatus, map[string]any{
-			"status": status,
-			"checks": checks,
+			"status":       status,
+			"cells":        cells,
+			"dependencies": dependencies,
 		})
 	}
 }

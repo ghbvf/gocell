@@ -55,7 +55,7 @@ This document lists every adapter shipped with GoCell and its configuration surf
 |-------|------|----------|---------|-------------|
 | `url` | string | yes | - | AMQP connection URL (`amqp://user:pass@host:5672/`) |
 | `reconnectDelay` | duration | no | 5s | Delay before reconnection attempt |
-| `maxReconnect` | int | no | 10 | Maximum reconnection attempts (0 = unlimited) |
+| `MaxReconnectAttempts` | int | no | 0 | Maximum reconnection attempts (0 = unlimited) |
 
 ### Publisher
 
