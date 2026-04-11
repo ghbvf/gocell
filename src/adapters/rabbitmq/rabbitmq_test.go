@@ -744,14 +744,14 @@ func TestConnection_MaxReconnectAttempts_Exceeded(t *testing.T) {
 
 	var ecErr *errcode.Error
 	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
-		"WaitConnected should return permanent error code")
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"WaitConnected should return reconnect-exhausted error code")
 
 	// Health should also reflect terminal state.
 	healthErr := conn.Health()
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code)
 }
 
 func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
@@ -3309,8 +3309,8 @@ func TestConnection_MaxReconnectAttempts_One(t *testing.T) {
 
 	var ecErr *errcode.Error
 	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
-		"WaitConnected should return permanent error code")
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"WaitConnected should return reconnect-exhausted error code")
 }
 
 // =============================================================================

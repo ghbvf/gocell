@@ -24,8 +24,9 @@ const (
 	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
 	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
 	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe        errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume          errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPSubscribe           errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume             errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPReconnectExhausted  errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
 )
 
 // isPermanentDialError returns true if the error from Dial indicates a
@@ -113,6 +114,9 @@ type Config struct {
 	// MaxReconnectAttempts limits the number of reconnection attempts after
 	// a connection is lost. 0 (default) means unlimited reconnection.
 	// When the limit is reached, the connection enters terminal state.
+	//
+	// Production recommendation: 30-60 with the default 30s max backoff
+	// gives ~15-30 minutes of retry before entering terminal state.
 	MaxReconnectAttempts int
 }
 
@@ -379,7 +383,7 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 					slog.Int("max_attempts", c.config.MaxReconnectAttempts),
 					slog.Int("attempt", attempt),
 					slog.String("error", err.Error()))
-				return false, errcode.Wrap(ErrAdapterAMQPConnectPermanent,
+				return false, errcode.Wrap(ErrAdapterAMQPReconnectExhausted,
 					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), err)
 			}
 			continue
@@ -558,10 +562,13 @@ func (c *Connection) Close() error {
 // occurs, or ctx is cancelled.
 //
 // Returns nil on successful connection, or an error:
-//   - ErrAdapterAMQPConnectPermanent: terminal state (bad credentials, TLS
-//     failure, etc). Do NOT retry — close the dependent component.
-//   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel fired.
-//     May retry with a fresh context if the cause was transient.
+//   - ErrAdapterAMQPConnectPermanent: terminal state due to unrecoverable
+//     condition (bad credentials, TLS failure). Do NOT retry.
+//   - ErrAdapterAMQPReconnectExhausted: terminal state because
+//     MaxReconnectAttempts was exceeded. May recover after Pod restart
+//     with fresh config/network.
+//   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel.
+//     May retry with a fresh context.
 func (c *Connection) WaitConnected(ctx context.Context) error {
 	c.mu.RLock()
 	connected := c.connected
@@ -579,6 +586,12 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 	case <-ctx.Done():
 		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
 	}
+}
+
+// sanitizeErrorURL replaces any occurrence of rawURL in errStr with
+// the redacted form, preventing credential leaks in log messages.
+func sanitizeErrorURL(errStr, rawURL string) string {
+	return strings.ReplaceAll(errStr, rawURL, sanitizeURL(rawURL))
 }
 
 // sanitizeURL redacts credentials from the AMQP URL for safe logging.
