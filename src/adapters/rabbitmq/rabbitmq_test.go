@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -458,20 +459,116 @@ func TestConnection_BackoffDelay(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	tests := []struct {
-		name     string
-		attempt  int
-		expected time.Duration
+		name    string
+		attempt int
+		// baseDelay is the expected delay before jitter (+-25%).
+		baseDelay time.Duration
 	}{
-		{name: "attempt 0", attempt: 0, expected: 1 * time.Second},
-		{name: "attempt 1", attempt: 1, expected: 2 * time.Second},
-		{name: "attempt 2", attempt: 2, expected: 4 * time.Second},
-		{name: "attempt 10 (capped)", attempt: 10, expected: 30 * time.Second},
+		{name: "attempt 0", attempt: 0, baseDelay: 1 * time.Second},
+		{name: "attempt 1", attempt: 1, baseDelay: 2 * time.Second},
+		{name: "attempt 2", attempt: 2, baseDelay: 4 * time.Second},
+		{name: "attempt 10 (capped)", attempt: 10, baseDelay: 30 * time.Second},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			delay := conn.backoffDelay(tt.attempt)
-			assert.Equal(t, tt.expected, delay)
+			minDelay := time.Duration(float64(tt.baseDelay) * 0.75)
+			maxDelay := time.Duration(float64(tt.baseDelay) * 1.25)
+			assert.GreaterOrEqual(t, delay, minDelay,
+				"delay %v should be >= 75%% of base %v", delay, tt.baseDelay)
+			assert.LessOrEqual(t, delay, maxDelay,
+				"delay %v should be <= 125%% of base %v", delay, tt.baseDelay)
+		})
+	}
+}
+
+func TestAddJitter(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+	}{
+		{name: "zero", d: 0},
+		{name: "1s", d: 1 * time.Second},
+		{name: "30s", d: 30 * time.Second},
+		{name: "100ms", d: 100 * time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.d == 0 {
+				assert.Equal(t, time.Duration(0), addJitter(tt.d))
+				return
+			}
+			// Run multiple times to check range.
+			for range 100 {
+				got := addJitter(tt.d)
+				minD := time.Duration(float64(tt.d) * 0.75)
+				maxD := time.Duration(float64(tt.d) * 1.25)
+				assert.GreaterOrEqual(t, got, minD)
+				assert.LessOrEqual(t, got, maxD)
+			}
+		})
+	}
+}
+
+func TestIsPermanentDialError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "AMQP ACCESS_REFUSED (403) — auth failure",
+			err:  &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP NOT_FOUND (404) — vhost does not exist",
+			err:  &amqp.Error{Code: 404, Reason: "NOT_FOUND", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP NOT_ALLOWED (530) — connection not allowed",
+			err:  &amqp.Error{Code: 530, Reason: "NOT_ALLOWED", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP connection.forced (320) — recoverable",
+			err:  &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Server: true, Recover: true},
+			want: false,
+		},
+		{
+			name: "AMQP frame error (501) — recoverable",
+			err:  &amqp.Error{Code: 501, Reason: "FRAME_ERROR", Server: true, Recover: true},
+			want: false,
+		},
+		{
+			name: "net.OpError (connection refused) — recoverable",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			want: false,
+		},
+		{
+			name: "generic error — defaults to recoverable",
+			err:  errors.New("some unknown error"),
+			want: false,
+		},
+		{
+			name: "wrapped AMQP permanent error",
+			err:  fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPermanentDialError(tt.err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

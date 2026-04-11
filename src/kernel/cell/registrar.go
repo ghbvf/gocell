@@ -1,5 +1,29 @@
 package cell
 
+// ADR: kernel/cell depends on net/http (standard library)
+//
+// Status: Accepted
+//
+// Decision: kernel/cell uses net/http types (http.Handler, http.ResponseWriter,
+// http.Request) in the RouteMux and HTTPRegistrar interfaces.
+//
+// Rationale: net/http is part of the Go standard library. The project's
+// layering rules (CLAUDE.md) state "kernel/ only depends on stdlib + pkg/",
+// so net/http is an allowed dependency. The Go 1.22+ enhanced ServeMux
+// pattern syntax ("METHOD /path/{param}") gives kernel a powerful routing
+// abstraction without importing any third-party router.
+//
+// Alternatives considered:
+//   - Define custom Handler/ResponseWriter/Request interfaces to abstract
+//     away net/http entirely. Rejected: this would add complexity (type
+//     conversions, adapter layers) for no practical benefit, since net/http
+//     is guaranteed stable by the Go compatibility promise.
+//
+// Consequences: Any Cell implementing HTTPRegistrar receives an http.Handler-
+// compatible interface. Concrete routers (chi, gorilla) are provided by
+// runtime/ or adapters/ and implement RouteMux, keeping kernel free of
+// third-party dependencies.
+
 import (
 	"net/http"
 

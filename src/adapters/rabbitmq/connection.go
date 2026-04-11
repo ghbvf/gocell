@@ -2,8 +2,11 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
+	"math/rand/v2"
+	"net"
 	"net/url"
 	"sync"
 	"time"
@@ -15,12 +18,46 @@ import (
 
 // Error codes for the RabbitMQ adapter.
 const (
-	ErrAdapterAMQPConnect        errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
-	ErrAdapterAMQPPublish        errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
-	ErrAdapterAMQPConfirmTimeout errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe      errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume        errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPConnect          errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
+	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
+	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
+	ErrAdapterAMQPSubscribe        errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume          errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
 )
+
+// isPermanentDialError returns true if the error from Dial indicates a
+// permanent condition that will not resolve by retrying (e.g., authentication
+// failure, vhost not found). Network-level errors (timeout, connection refused,
+// DNS resolution) are considered recoverable and return false.
+//
+// ref: rabbitmq/amqp091-go README — reconnection is delegated to the caller;
+// the library surfaces amqp.Error with Recover=false for auth/vhost/protocol
+// issues during the AMQP handshake.
+func isPermanentDialError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// AMQP protocol errors from the broker handshake.
+	// Recover=false means the broker will not recover the connection:
+	//   403 ACCESS_REFUSED  — bad credentials or no permission
+	//   404 NOT_FOUND       — vhost does not exist
+	//   530 NOT_ALLOWED     — connection not allowed (policy)
+	var amqpErr *amqp.Error
+	if errors.As(err, &amqpErr) {
+		return !amqpErr.Recover
+	}
+
+	// Network-level errors are recoverable (timeout, refused, DNS).
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return false
+	}
+
+	// Unknown errors default to recoverable to avoid false-positive abort.
+	return false
+}
 
 // Config holds configuration for the RabbitMQ connection.
 type Config struct {
@@ -247,7 +284,21 @@ func (c *Connection) reconnectWithBackoff() {
 		}
 
 		if err := c.connect(); err != nil {
-			slog.Warn("rabbitmq: reconnect failed",
+			// Unwrap the errcode wrapper to inspect the underlying dial error.
+			var ecErr *errcode.Error
+			dialErr := err
+			if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
+				dialErr = ecErr.Unwrap()
+			}
+
+			if isPermanentDialError(dialErr) {
+				slog.Error("rabbitmq: permanent connection error, giving up",
+					slog.Int("attempt", attempt+1),
+					slog.String("error", err.Error()))
+				return
+			}
+
+			slog.Warn("rabbitmq: reconnect failed (recoverable), will retry",
 				slog.Int("attempt", attempt+1),
 				slog.String("error", err.Error()))
 			attempt++
@@ -260,12 +311,29 @@ func (c *Connection) reconnectWithBackoff() {
 	}
 }
 
+// backoffDelay calculates the reconnect delay for the given attempt using
+// exponential backoff (base * 2^attempt) capped at ReconnectMaxBackoff,
+// with +-25% jitter to prevent thundering-herd reconnects.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	delay := c.config.ReconnectBaseDelay * time.Duration(math.Pow(2, float64(attempt)))
-	if delay > c.config.ReconnectMaxBackoff {
-		delay = c.config.ReconnectMaxBackoff
+	base := c.config.ReconnectBaseDelay * time.Duration(math.Pow(2, float64(attempt)))
+	if base > c.config.ReconnectMaxBackoff {
+		base = c.config.ReconnectMaxBackoff
 	}
-	return delay
+	return addJitter(base)
+}
+
+// addJitter applies +-25% random jitter to a duration.
+// The result is in the range [0.75*d, 1.25*d].
+func addJitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	// jitter range: 50% of d (from -25% to +25%)
+	jitterRange := int64(d) / 2
+	// offset: random value in [0, jitterRange]
+	offset := rand.Int64N(jitterRange + 1)
+	// shift to [-25%, +25%]: subtract 25% of d
+	return time.Duration(int64(d) - jitterRange/2 + offset)
 }
 
 func (c *Connection) drainChannelPool() {
