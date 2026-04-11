@@ -371,17 +371,18 @@ func (v *Validator) validateREF15() []ValidationResult {
 
 // validateREF16 checks that each assembly has a generated boundary.yaml file.
 // The boundary.yaml is produced by `gocell generate` and lives at
-// assemblies/{id}/generated/boundary.yaml relative to the repository root.
+// assemblies/{id}/generated/boundary.yaml relative to the metadata root (v.root,
+// typically src/). Note: unlike REF-11 which uses repositoryRoot for entrypoint
+// paths, boundary.yaml lives under the metadata root alongside other metadata dirs.
 // Skipped when root is empty (no filesystem checks).
 func (v *Validator) validateREF16() []ValidationResult {
 	if v.root == "" {
 		return nil
 	}
 	var results []ValidationResult
-	repoRoot := repositoryRoot(v.root)
 	for _, a := range v.project.Assemblies {
-		boundaryPath := filepath.Join(repoRoot, "assemblies", a.ID, "generated", "boundary.yaml")
-		if !isWithinRoot(repoRoot, boundaryPath) {
+		boundaryPath := filepath.Join(v.root, "assemblies", a.ID, "generated", "boundary.yaml")
+		if !isWithinRoot(v.root, boundaryPath) {
 			results = append(results, ValidationResult{
 				Code:      "REF-16",
 				Severity:  SeverityError,
