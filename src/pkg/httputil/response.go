@@ -199,8 +199,9 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthInvalidToken:      http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
-	errcode.ErrAuthForbidden:  http.StatusForbidden,
-	errcode.ErrAuthUserLocked: http.StatusForbidden,
+	errcode.ErrAuthForbidden:    http.StatusForbidden,
+	errcode.ErrAuthUserLocked:   http.StatusForbidden,
+	errcode.ErrCSRFOriginDenied: http.StatusForbidden,
 
 	// --- 409 Conflict ---
 	errcode.ErrAuthUserDuplicate:  http.StatusConflict,
