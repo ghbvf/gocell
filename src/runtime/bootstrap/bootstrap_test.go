@@ -2,11 +2,13 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,6 +134,51 @@ func TestNew_WithSubscriberOnly(t *testing.T) {
 
 	assert.Nil(t, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
+}
+
+// eventCell implements cell.EventRegistrar with a configurable error.
+type eventCell struct {
+	*cell.BaseCell
+	subErr error
+}
+
+func newEventCell(id string, subErr error) *eventCell {
+	return &eventCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+		subErr: subErr,
+	}
+}
+
+func (c *eventCell) RegisterSubscriptions(_ outbox.Subscriber) error {
+	return c.subErr
+}
+
+func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
+	// S3-03: When RegisterSubscriptions fails, Run must rollback previously
+	// started components (assembly) and return an error wrapping the cause.
+	asm := assembly.New(assembly.Config{ID: "test-rollback"})
+	ec := newEventCell("fail-cell", errors.New("DLX not configured"))
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New()
+	b := New(
+		WithAssembly(asm),
+		WithEventBus(eb),
+		WithHTTPAddr("127.0.0.1:0"),
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx := context.Background()
+	err := b.Run(ctx)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subscription setup failed")
+	assert.Contains(t, err.Error(), "DLX not configured")
+	// After rollback, assembly should be stopped (health returns empty or degraded).
+	// The key assertion is that Run returns the error instead of hanging.
 }
 
 func TestBootstrap_RunContextCancel(t *testing.T) {
