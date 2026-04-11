@@ -571,6 +571,42 @@ func TestMapCodeToStatus_Exported(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus("ERR_UNKNOWN"))
 }
 
+// brokenWriter is an http.ResponseWriter whose Write always fails,
+// used to exercise json.Encode error branches.
+type brokenWriter struct {
+	header http.Header
+	code   int
+}
+
+func newBrokenWriter() *brokenWriter { return &brokenWriter{header: http.Header{}} }
+func (w *brokenWriter) Header() http.Header { return w.header }
+func (w *brokenWriter) WriteHeader(code int) { w.code = code }
+func (w *brokenWriter) Write([]byte) (int, error) {
+	return 0, errors.New("broken pipe")
+}
+
+func TestWriteJSON_EncodeFail(t *testing.T) {
+	w := newBrokenWriter()
+	// Should not panic — error is logged via slog.
+	assert.NotPanics(t, func() {
+		WriteJSON(w, http.StatusOK, map[string]string{"k": "v"})
+	})
+}
+
+func TestWriteError_EncodeFail(t *testing.T) {
+	w := newBrokenWriter()
+	assert.NotPanics(t, func() {
+		WriteError(context.Background(), w, http.StatusBadRequest, "ERR_TEST", "test")
+	})
+}
+
+func TestWriteDomainError_EncodeFail(t *testing.T) {
+	w := newBrokenWriter()
+	assert.NotPanics(t, func() {
+		WriteDomainError(context.Background(), w, errcode.New(errcode.ErrCellNotFound, "not found"))
+	})
+}
+
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
 // extracts every Code constant, and verifies it has an entry in codeToStatus.
 // This fails loudly when a new errcode.Code is added without registering an

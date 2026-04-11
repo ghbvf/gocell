@@ -128,6 +128,19 @@ func TestDecodeJSON(t *testing.T) {
 	}
 }
 
+func TestClassifyDecodeError_UnknownError(t *testing.T) {
+	// Exercise the default branch in classifyDecodeError: an error that is
+	// not io.EOF, io.ErrUnexpectedEOF, MaxBytesError, SyntaxError, or
+	// UnmarshalTypeError.
+	err := classifyDecodeError(errors.New("some obscure decoder error"))
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Equal(t, "internal server error", ecErr.Message)
+	assert.NotNil(t, ecErr.Cause, "should wrap the original error")
+}
+
 func TestDecodeJSON_MaxBytesExceeded(t *testing.T) {
 	// Create a request with a large body
 	bigBody := `{"data":"` + strings.Repeat("x", 1024) + `"}`
