@@ -3,10 +3,25 @@ package cell
 import "context"
 
 // Dependencies is the set of collaborators injected into a Cell during Init.
+//
+// ADR: Frozen — fields intentionally minimal.
+//
+// Status: Accepted (2026-04-11, CS-AR-2)
+//
+// Decision: Dependencies carries only Config. Cross-cell access MUST go
+// through contracts, not through a shared cell graph. All concrete
+// dependencies (repos, outbox writers, publishers) are injected via
+// functional options at cell construction time, not via Dependencies.
+//
+// Previously this struct also carried Cells map[string]Cell and
+// Contracts map[string]Contract. Analysis showed zero callers read
+// either field — exposing the full cell graph violated least-privilege.
+//
+// The struct wrapper is retained (rather than passing map[string]any
+// directly) for forward compatibility: future fields (e.g. Secrets,
+// ServiceLocator) can be added without changing the Cell.Init signature.
 type Dependencies struct {
-	Cells     map[string]Cell
-	Contracts map[string]Contract
-	Config    map[string]any
+	Config map[string]any
 }
 
 // VerifySpec describes the verification requirements for a Slice.

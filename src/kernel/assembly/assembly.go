@@ -157,9 +157,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	}
 
 	deps := cell.Dependencies{
-		Cells:     a.cellMap,
-		Contracts: make(map[string]cell.Contract),
-		Config:    cfgMap,
+		Config: cfgMap,
 	}
 
 	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
