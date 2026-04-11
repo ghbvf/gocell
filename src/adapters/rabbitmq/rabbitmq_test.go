@@ -1413,9 +1413,17 @@ func TestConsumerBase_Wrap_RetryExhausted_Reject(t *testing.T) {
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
 
-	// Idempotency key should be released so DLQ replay can re-process.
+	// Receipt should be a checkerReceipt — Release is deferred to processDelivery.
+	require.NotNil(t, res.Receipt, "legacy Checker path should return a checkerReceipt")
+	// Key is still marked (TryProcess set it); Release happens in processDelivery.
 	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-003"])
+	assert.True(t, checker.processed["test-group:evt-003"], "key still marked before processDelivery Release")
+	checker.mu.Unlock()
+
+	// Simulate processDelivery calling Release after broker Nack.
+	require.NoError(t, res.Receipt.Release(context.Background()))
+	checker.mu.Lock()
+	assert.False(t, checker.processed["test-group:evt-003"], "key released after Receipt.Release")
 	checker.mu.Unlock()
 }
 
@@ -1534,7 +1542,9 @@ func TestConsumerBase_Wrap_RetryExhausted_ReleasesIdempotencyKey(t *testing.T) {
 	res := handler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 
-	// Idempotency key should be released so DLQ replay can re-enter.
+	// Receipt is deferred to processDelivery; simulate Release.
+	require.NotNil(t, res.Receipt)
+	require.NoError(t, res.Receipt.Release(context.Background()))
 	checker.mu.Lock()
 	assert.False(t, checker.processed["test-group:evt-dlq-001"])
 	checker.mu.Unlock()
@@ -2457,7 +2467,12 @@ func TestConsumerBase_Wrap_ReleaseCheckerError_Logged(t *testing.T) {
 	// Retry exhausted (RetryCount=1) → DispositionReject.
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 
-	// Release was attempted even though it returned an error.
+	// Receipt defers Release to processDelivery. Simulate it.
+	require.NotNil(t, res.Receipt)
+	err := res.Receipt.Release(context.Background())
+	assert.Error(t, err, "Release should propagate checker error")
+	assert.Contains(t, err.Error(), "redis timeout")
+
 	checker.mu.Lock()
 	assert.Contains(t, checker.releaseCalls, "test-group:evt-release-err",
 		"Release should have been called with the idempotency key")

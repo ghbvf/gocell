@@ -174,7 +174,7 @@ func (c *AuditCore) RegisterSubscriptions(sub outbox.Subscriber) {
 		go func() {
 			ctx := context.Background()
 			if err := sub.Subscribe(ctx, topic, handler); err != nil {
-				c.logger.Error("audit-core: subscription ended",
+				c.logger.Error("audit-core: subscription failed — consumer NOT running for this topic",
 					slog.Any("error", err), slog.String("topic", topic))
 			}
 		}()

@@ -179,7 +179,11 @@ func (cb *ConsumerBase) wrapWithChecker(topic string, handler outbox.EntryHandle
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}
 
-		return cb.retryLoop(ctx, topic, entry, handler, idempotencyKey, nil)
+		// Wrap legacy Checker as a Receipt so processDelivery can Release
+		// after broker Ack/Nack, not before. This prevents the race where
+		// releaseChecker runs before Nack, opening a duplicate-processing window.
+		receipt := &checkerReceipt{checker: cb.checker, key: idempotencyKey}
+		return cb.retryLoop(ctx, topic, entry, handler, receipt)
 	}
 }
 
@@ -198,7 +202,7 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 					slog.String("topic", topic),
 					slog.String("consumer_group", cb.config.ConsumerGroup),
 					slog.String("error", err.Error()))
-				return cb.retryLoop(ctx, topic, entry, handler, idempotencyKey, nil)
+				return cb.retryLoop(ctx, topic, entry, handler, nil)
 			}
 			slog.Error("rabbitmq: idempotency claim failed, requeuing (fail-closed)",
 				slog.String("event_id", entry.ID),
@@ -231,21 +235,19 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
 		default:
 			// ClaimAcquired — proceed with handler, thread Receipt through.
-			return cb.retryLoop(ctx, topic, entry, handler, idempotencyKey, receipt)
+			return cb.retryLoop(ctx, topic, entry, handler, receipt)
 		}
 	}
 }
 
 // retryLoop executes the handler with exponential backoff retries.
-// When using the legacy Checker path, receipt is nil and idempotency cleanup
-// is done via checker.Release. When using Claimer, receipt is non-nil and
-// threaded through HandleResult for processDelivery to manage.
+// Receipt (from Claimer or checkerReceipt) is threaded through HandleResult
+// for processDelivery to Commit/Release after broker Ack/Nack.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
 	topic string,
 	entry outbox.Entry,
 	handler outbox.EntryHandler,
-	idempotencyKey string,
 	receipt outbox.Receipt,
 ) outbox.HandleResult {
 	var lastResult outbox.HandleResult
@@ -271,7 +273,6 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String("topic", topic),
 				slog.String("consumer_group", cb.config.ConsumerGroup),
 				slog.Any("error", lastResult.Err))
-			cb.releaseChecker(ctx, idempotencyKey, entry.ID)
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         lastResult.Err,
@@ -282,7 +283,7 @@ func (cb *ConsumerBase) retryLoop(
 		// Transient error — backoff before retry.
 		if attempt < cb.config.RetryCount-1 {
 			if ctx.Err() != nil {
-				cb.releaseChecker(ctx, idempotencyKey, entry.ID)
+				// Receipt.Release is deferred to processDelivery after broker Ack/Nack.
 				return outbox.HandleResult{
 					Disposition: outbox.DispositionRequeue,
 					Err:         ctx.Err(),
@@ -302,7 +303,7 @@ func (cb *ConsumerBase) retryLoop(
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				cb.releaseChecker(ctx, idempotencyKey, entry.ID)
+				// Receipt.Release is deferred to processDelivery after broker Ack/Nack.
 				return outbox.HandleResult{
 					Disposition: outbox.DispositionRequeue,
 					Err:         ctx.Err(),
@@ -319,7 +320,6 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String("consumer_group", cb.config.ConsumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.Any("error", lastResult.Err))
-	cb.releaseChecker(ctx, idempotencyKey, entry.ID)
 	return outbox.HandleResult{
 		Disposition: outbox.DispositionReject,
 		Err:         lastResult.Err,
@@ -327,18 +327,24 @@ func (cb *ConsumerBase) retryLoop(
 	}
 }
 
-// releaseChecker releases the idempotency key via the legacy Checker.
-// No-op when using Claimer (Receipt lifecycle is managed by processDelivery).
-func (cb *ConsumerBase) releaseChecker(ctx context.Context, key, eventID string) {
-	if cb.checker == nil {
-		return
-	}
-	releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer releaseCancel()
-	if relErr := cb.checker.Release(releaseCtx, key); relErr != nil {
-		slog.Error("rabbitmq: failed to release idempotency key",
-			slog.String("event_id", eventID),
-			slog.String("key", key),
-			slog.String("error", relErr.Error()))
-	}
+// checkerReceipt adapts the legacy Checker to the Receipt interface so that
+// processDelivery can manage idempotency state uniformly after broker Ack/Nack.
+//
+//   - Commit: no-op — TryProcess already marked the key as done.
+//   - Release: calls checker.Release to allow redelivery.
+type checkerReceipt struct {
+	checker idempotency.Checker
+	key     string
+}
+
+// Compile-time interface check.
+var _ outbox.Receipt = (*checkerReceipt)(nil)
+
+func (r *checkerReceipt) Commit(_ context.Context) error {
+	// TryProcess already marked the key; nothing more to do.
+	return nil
+}
+
+func (r *checkerReceipt) Release(ctx context.Context) error {
+	return r.checker.Release(ctx, r.key)
 }

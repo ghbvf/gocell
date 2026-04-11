@@ -218,24 +218,12 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		switch res.Disposition {
 		case outbox.DispositionAck:
 			if res.Receipt != nil {
-				if err := res.Receipt.Commit(context.WithoutCancel(ctx)); err != nil {
-					slog.Error("eventbus: receipt commit failed",
-						slog.String("topic", topic),
-						slog.String("entry_id", entry.ID),
-						slog.String("error", err.Error()),
-					)
-				}
+				commitReceipt(ctx, res.Receipt, topic, entry.ID)
 			}
 			return // success or safe duplicate
 		case outbox.DispositionReject:
 			if res.Receipt != nil {
-				if err := res.Receipt.Release(context.WithoutCancel(ctx)); err != nil {
-					slog.Error("eventbus: receipt release failed",
-						slog.String("topic", topic),
-						slog.String("entry_id", entry.ID),
-						slog.String("error", err.Error()),
-					)
-				}
+				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 			}
 			// Permanent failure — route directly to dead letter.
 			slog.Warn("eventbus: handler rejected message, routing to dead letter",
@@ -253,13 +241,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			return
 		case outbox.DispositionRequeue:
 			if res.Receipt != nil {
-				if err := res.Receipt.Release(context.WithoutCancel(ctx)); err != nil {
-					slog.Error("eventbus: receipt release failed",
-						slog.String("topic", topic),
-						slog.String("entry_id", entry.ID),
-						slog.String("error", err.Error()),
-					)
-				}
+				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 			}
 			lastErr = res.Err
 			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
@@ -292,4 +274,29 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		LastErr: lastErr,
 	})
 	b.deadLettersMu.Unlock()
+}
+
+// commitReceipt calls Receipt.Commit with a detached 5s-timeout context,
+// consistent with the RabbitMQ subscriber path.
+func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.Commit(rctx); err != nil {
+		slog.Error("eventbus: receipt commit failed",
+			slog.String("topic", topic),
+			slog.String("entry_id", entryID),
+			slog.String("error", err.Error()))
+	}
+}
+
+// releaseReceipt calls Receipt.Release with a detached 5s-timeout context.
+func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.Release(rctx); err != nil {
+		slog.Error("eventbus: receipt release failed",
+			slog.String("topic", topic),
+			slog.String("entry_id", entryID),
+			slog.String("error", err.Error()))
+	}
 }

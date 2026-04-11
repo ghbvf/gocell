@@ -178,7 +178,7 @@ func (c *ConfigCore) RegisterSubscriptions(sub outbox.Subscriber) {
 		ctx := context.Background()
 		handler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEvent)
 		if err := sub.Subscribe(ctx, configsubscribe.TopicConfigChanged, handler); err != nil {
-			c.logger.Error("config-subscribe: subscription ended",
+			c.logger.Error("config-subscribe: subscription failed — consumer NOT running",
 				slog.Any("error", err))
 		}
 	}()
