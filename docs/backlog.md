@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。历史完成记录已归档至 `docs/reviews/archive/202604111438-backlog-full-history.md`。
-> 更新日期: 2026-04-11（跨框架分析后修订）
+> 更新日期: 2026-04-11（PR#74-77 合并后更新）
 
 ---
 
@@ -16,12 +16,16 @@
 | governance rules: G-2/G-4/G-6 + review fixes | PR#71 ✅ | TOPO-07 + deprecated 阻断 + assembly boundary 校验 |
 | HandleResult 零值改 invalid (SOL-B-04/R-1) | PR#72 ✅ | DispositionAck = iota+1, Disposition.Valid() |
 | WM-12 archtest 边界守护 | PR#73 ✅ | 5 条 LAYER 规则 + 49 tests，go list -json -e，零新依赖 |
+| Phase 1: PermanentError → kernel/outbox | PR#74 ✅ | PermanentError 提升到 kernel + WrapLegacyHandler 直接检测 + InMemoryEventBus 对齐 |
+| 0-G B-03 RabbitMQ 重连 backoff | PR#75 ✅ | 三态连接 (connected/reconnecting/terminal) + permanent error 传播 + 结构化错误分类 + 指数退避+jitter |
+| Phase 2: EventRouter 引入 | PR#76 ✅ | cell.EventRouter 接口 + runtime/eventrouter 实现 + 3 Cell 迁移 + bootstrap 集成 + celltest.StubEventRouter |
+| WM-1 CSRF + BFF cookie session | PR#77 ✅ | SecureCookie(→pkg/) + CSRF Origin/Referer校验 + CookieSession JWT bridge，65 tests 97.5% |
 
 ## 进行中
 
 无
 
-### PR 队列（跨框架分析后修订，PR#70-73 已全部合并）
+### PR 队列（跨框架分析后修订，PR#70-77 已全部合并）
 
 > 2026-04-11 跨框架分析结论: 对比 7 个主流框架后，识别出 2 个架构根因。
 > 修订: R-3 废弃（被 Phase 2 EventRouter 取代）、R-5 废弃（合入 Phase 2 Cell 迁移）。
@@ -31,8 +35,8 @@
 
 | 阶段 | 任务 | 文件 | 预估 | 依赖 |
 |------|------|------|------|------|
-| Phase 1 | PermanentError 提升到 kernel/outbox — WrapLegacyHandler 直接检测 + InMemoryEventBus 对齐 | `kernel/outbox/outbox.go`, `adapters/rabbitmq/consumer_base.go`, `runtime/eventbus/eventbus.go` | 1h | 无（PR#70 ✅） |
-| Phase 2 | EventRouter 引入 — cell.EventRouter 接口 + runtime/eventrouter 实现 + 3 Cell 迁移 | `kernel/cell/registrar.go`, `runtime/eventrouter/`(新), `cells/*/cell.go`, `runtime/bootstrap/` | 4h | Phase 1 |
+| Phase 1 | ~~PermanentError 提升到 kernel/outbox~~ | — | — | PR#74 ✅ |
+| Phase 2 | ~~EventRouter 引入~~ | — | — | PR#76 ✅ |
 | Phase 3 | Checker 清理 + Receipt 加固 — 删 legacy Checker + sync.Once + LeaseTTL 校验 | `adapters/rabbitmq/consumer_base.go`, `kernel/idempotency/`, `adapters/redis/` | 3h | Phase 2 |
 
 > 执行顺序: Phase 1 → Phase 2 → Phase 3（串行）
@@ -55,13 +59,13 @@
 
 | 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
 |------|-----|------|------|------|------|
-| K-1 | CS-AR-2 | Dependencies 精简 + 冻结注释 | `kernel/cell/interfaces.go`, `kernel/assembly/assembly.go`, ~20 test files | 1h | Phase 2 |
+| K-1 | CS-AR-2 | Dependencies 精简 + 冻结注释 | `kernel/cell/interfaces.go`, `kernel/assembly/assembly.go`, ~20 test files | 1h | ~~Phase 2~~ ✅ 无阻塞 |
 | K-2 | CS-AR-3 | net/http ADR 注释 | `kernel/cell/registrar.go` | 15min | 无 |
 | K-3 | F-OB-01 | BatchWriter 接口 + WriteBatchFallback | `kernel/outbox/outbox.go`, `adapters/postgres/outbox_writer.go` | 3h | 无 |
 | K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
 | K-5 | — | 三角色审查 mandatory actions | Dependencies 冻结 + registrar ADR + WriteBatchFallback godoc | 含在 K-1/K-2/K-3 |
 
-> K-2/K-3 全程无阻塞可并行；K-1 依赖 Phase 2（EventRegistrar 接口变更）；K-4 依赖 Phase 3
+> K-1/K-2/K-3 全程无阻塞可并行（Phase 2 已合并）；K-4 依赖 Phase 3
 
 ---
 
@@ -82,11 +86,11 @@
 
 > 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
 
-### 0-G 剩余: RabbitMQ 重连 backoff（2h，无阻塞）
+### ~~0-G 剩余: RabbitMQ 重连 backoff~~ PR#75 ✅
 
 | # | 任务 | 预估 |
 |---|------|------|
-| B-03 | `connection.go`: setup 错误分类（recoverable vs permanent）+ anti-hot-loop backoff | 2h |
+| ~~B-03~~ | ~~`connection.go`: setup 错误分类（recoverable vs permanent）+ anti-hot-loop backoff~~ | ~~2h~~ PR#75 ✅ |
 
 ---
 
@@ -127,12 +131,17 @@
 | CLEANUP-02 | `cells/access-core/cell.go` | 删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier` | 1h |
 | ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
 | ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
+| RMQ-75-01 | `adapters/rabbitmq/rabbitmq_test.go:717` | Flaky test: `time.Sleep(20ms)` 等待 terminal state，CI 高负载下不稳定 → 改 `require.Eventually` | 15min |
+| RMQ-75-02 | `adapters/rabbitmq/connection.go` | `MaxReconnectAttempts` 配置缺失，无限重连无上界（运维保底） | 1h |
+| RMQ-75-03 | `adapters/rabbitmq/connection.go` | 命名改善：`failed→terminalCh`, `safeExp→maxSafeShift`, `permanentDialKeywords→permanentDialSubstrings` | 15min |
+| RMQ-75-04 | `adapters/rabbitmq/connection.go` | `WaitConnected` godoc 缺调用方指引（permanent vs transient 区分） | 15min |
+| RMQ-75-05 | `runtime/bootstrap/bootstrap.go` | `RegisterChecker("rabbitmq", conn.Health)` 未接入 readiness — permanent error 后 Pod 继续接流量 | 30min |
 
 ### winmdm Accept P1
 
 | # | 任务 | 包位置 | 预估 | 前置依赖 |
 |---|------|--------|------|---------|
-| WM-1 | ✅ CSRF 中间件 — Origin/Referer 校验 + BFF cookie session | `runtime/http/middleware` + `pkg/securecookie` | 0.5d | 无 | PR#77 |
+| ~~WM-1~~ | ~~CSRF 中间件 — Origin/Referer 校验 + BFF cookie session~~ | `runtime/http/middleware` + `pkg/securecookie` | ~~0.5d~~ | PR#77 ✅ |
 | WM-35 | BFF handler 接入 — login/refresh/logout 接 SessionCookieWriter + BFF 模式不返回 token body | `cells/access-core/slices/session*` | 2d | WM-1 |
 | WM-36 | SecureCookie key rotation — active+previous 双 key ring，灰度轮换 | `pkg/securecookie` | 1.5d | WM-1 |
 | WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
@@ -148,7 +157,7 @@
 | # | 问题 | 建议 |
 |---|------|------|
 | OPS-2 | 日志缺 trace_id 关联 — AccessLog/ConsumerBase 无 trace_id | 随 WM-10 一并补充 |
-| OPS-3 | readiness 探针未接 adapter — postgres/redis/rabbitmq 不报告健康状态 | 各 adapter 注册 HealthChecker |
+| OPS-3 | readiness 探针未接 adapter — postgres/redis/rabbitmq 不报告健康状态 | rabbitmq 提前至 Batch 3（RMQ-75-05）；postgres/redis 在 Batch 6 补 Health() + 注册 |
 
 ### Tech Debt P1
 
@@ -339,23 +348,14 @@
 | A | WM-9/10/11 errcode 三合一 | PR#69 | ✅ |
 | B | WM-12 archtest 边界守护（5 条 LAYER 规则，49 tests） | PR#73 | ✅ |
 
-### Batch 2: 架构修复（1d，PR#70-73 已合并，可立即开始）
+### Batch 2: 架构修复 ✅ 已完成
 
-> **新增**: 跨框架分析产出的架构修复（Phase 1-2）插入此阶段，消除 6 个反复 review finding 的根因。
-> PR#70/71/72/73 已全部合并，无阻塞依赖。
-
-| 轨道 | 任务 | 预估 | 交付物 |
-|------|------|------|--------|
-| A | PR#70/71/72 合并 | — | ✅ 已完成 |
-| A | **Phase 1: PermanentError → kernel** | 1h | 修复 P2(PermanentError语义陷阱) + P5(EventBus偏离) |
-| A | **Phase 2: EventRouter 引入** | 4h | 修复 P1(100ms竞态) + P5(偏离) + P6(goroutine无监管) |
-| B | 0-G B-03 RabbitMQ 重连 backoff | 2h | 错误分类 + 指数退避 |
-| B | K-2 net/http ADR 注释 | 15min | 无阻塞，顺手做 |
-
-**安全底线**: PermanentError 在所有层正确路由到 DLX；Subscribe setup 失败同步检测
-**测试策略**: Phase 1 WrapLegacyHandler+PermanentError 测试；Phase 2 Router setup-error + graceful-shutdown 测试
-**运维增益**: 消除 100ms 启发式；goroutine 有监管和 drain
-**DX 增益**: Cell 开发者只需 `r.AddHandler(topic, handler)`，无需手写 goroutine
+| 轨道 | 任务 | PR | 状态 |
+|------|------|-----|------|
+| A | Phase 1: PermanentError → kernel | PR#74 | ✅ |
+| A | Phase 2: EventRouter 引入 | PR#76 | ✅ |
+| B | 0-G B-03 RabbitMQ 重连 backoff | PR#75 | ✅ |
+| B | K-2 net/http ADR 注释 | — | 待做 |
 
 ### Batch 3: Tier 0 收尾 + 基础稳定（2d，Batch 2 后）
 
@@ -365,6 +365,8 @@
 |------|------|------|--------|
 | A | 0-B2 RL-01~08 Outbox Relay 三阶段重写 | 1.5d | claim→publish→writeBack + 8 场景测试 |
 | A | **Phase 3: Checker 清理 + Receipt 加固** | 3h | 删 legacy + sync.Once + LeaseTTL 校验 |
+| A | RMQ-75-01~04 PR#75 review 收尾 | 1.5h | flaky test + MaxReconnectAttempts + 命名 + godoc（搭 Phase 3 同包改动） |
+| A | RMQ-75-05 readiness 接 rabbitmq Health() | 30min | `RegisterChecker("rabbitmq", conn.Health)` — 提前自 Batch 6 |
 | B | HR-02 metrics 基数爆炸修复 (PROM-01) | 2h | route pattern 元数据替代 r.URL.Path |
 | B | HR-01/03/04 HTTP 产品化收尾 | 4h | RealIP 决策 + RequestID bridge + tracing 决策 |
 | B | 0-H SF-01~04 DecodeJSONStrict | 3h | 严格模式 + handler 迁移 |
@@ -374,17 +376,17 @@
 
 **安全底线**: outbox 消息不丢失；decode 恶意 payload 有防护
 **测试策略**: Relay 8 场景覆盖 ≥ 90%；handler decode 路径 ≥ 80%
-**运维增益**: metrics 基数可控（< 100 series）；outbox 状态可观测
+**运维增益**: metrics 基数可控（< 100 series）；outbox 状态可观测；rabbitmq permanent error 可被 readiness 探针感知
 **DX 增益**: 所有 handler 统一错误响应格式
 
 ### Batch 4: P1 功能 — 安全 + 查询（2d，Batch 3 后或并行后期）
 
 > 安全席位要求 CSRF + 密钥轮换尽早；DX 要求游标分页尽早。
-> 可与 Batch 3 后期部分并行。
+> 可与 Batch 3 后期部分并行。WM-1 已提前完成。
 
 | 轨道 | 任务 | 预估 | 交付物 |
 |------|------|------|--------|
-| A | WM-1 CSRF 中间件 | 0.5d | `runtime/http/middleware/csrf.go` Origin/Referer 校验 |
+| A | ~~WM-1 CSRF 中间件~~ | — | PR#77 ✅ |
 | A | WM-2 密钥轮换（JWT kid + HMAC，范围限定） | 2d | `runtime/auth` KeyRotator + kid 支持 |
 | B | WM-6 游标分页 | 1.5d | `pkg/query` KeysetPagination + HMAC cursor |
 | B | WM-34 配置热更新回调 | 1d | `runtime/config` Cell 级 OnConfigReload |
@@ -422,7 +424,7 @@
 | TX-NIL-01 txRunner nil-safe 文档 | 1h | cells/ |
 | P3-TD-10 Session refresh TOCTOU | 4h | 高风险，乐观锁方案 |
 | P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
-| OPS-3 readiness 探针接 adapter | 2h | adapters/ 注册 HealthChecker |
+| OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
 | OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
 
 ### 总时间线（修订后，+6 个 Batch）
@@ -432,7 +434,7 @@ Week 1:
   Day 1-2: Batch 1 (pkg: errcode 三合一 + archtest) ✅ 已完成
 
 Week 2:
-  Day 1:   Batch 2 (架构修复: PR合并 + Phase 1 + Phase 2 + B-03)
+  Day 1:   Batch 2 (架构修复: Phase 1 + Phase 2 + B-03) ✅ 已完成
   Day 2-3: Batch 3 (Tier 0 收尾: Phase 3 + Relay + HTTP + handler)
   Day 4-5: Batch 4 (CSRF + 密钥轮换 + 游标分页 + 配置热更新)
            ┊ Batch 5 部分并行启动 (WM-17 lifecycle hooks 无前置依赖)
@@ -451,7 +453,7 @@ Week 3:
 | 阶段 | winmdm 可感知价值 | 运维成熟度 |
 |------|-----------------|-----------|
 | Batch 1 后 | 框架有"安全带"：错误链路清晰，分层守护自动化 | L1: 可追踪 |
-| **Batch 2 后** | **事件消费架构对齐行业标准**: 100ms 竞态消除、PermanentError 全栈生效、goroutine 有监管 | **L2: 可监控** |
+| **Batch 2 后** ✅ | **事件消费架构对齐行业标准**: 100ms 竞态消除、PermanentError 全栈生效、goroutine 有监管 | **L2: 可监控** |
 | Batch 3 后 | 依赖可预测：outbox 不丢消息，metrics 有意义，legacy 清理完成 | L2.5: 可运维 |
 | Batch 4 后 | 开发效率提升：分页 O(1)，配置热更新，密钥可轮换 | L3: 可自愈 |
 | Batch 5 后 | 事件系统有标准测试，生命周期清晰，熔断防护 | L3.5: 可保证 |
