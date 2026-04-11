@@ -107,3 +107,10 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 格式：`yyyyMMddHHmm-编号-实际功能或问题.md`（ date "+%Y%m%d%H%M" 后缀按内容选择，不限 `.md`）
 示例：`202603281443-022-compliance-api-review.md`
 
+
+## Active Technologies
+- Go (latest stable) + `github.com/golang-jwt/jwt/v5` (existing), `crypto/*` stdlib (201-wm2-key-rotation)
+- N/A (in-memory key set, loaded from static config) (201-wm2-key-rotation)
+
+## Recent Changes
+- 201-wm2-key-rotation: Added Go (latest stable) + `github.com/golang-jwt/jwt/v5` (existing), `crypto/*` stdlib

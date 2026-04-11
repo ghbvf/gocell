@@ -14,13 +14,13 @@ import (
 )
 
 var (
-	testPrivKey, testPubKey = auth.MustGenerateTestKeyPair()
-	testVerifier            *auth.JWTVerifier
+	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
+	testVerifier               *auth.JWTVerifier
 )
 
 func init() {
 	var err error
-	testVerifier, err = auth.NewJWTVerifier(testPubKey)
+	testVerifier, err = auth.NewJWTVerifier(testKeySet)
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

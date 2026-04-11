@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/rsa"
 	"fmt"
 	"time"
 
@@ -15,29 +14,44 @@ import (
 // ref: go-kratos/kratos middleware/auth/jwt/jwt.go -- JWT middleware pattern
 // Adopted: KeyFunc-based verification, Claims extraction from context.
 // Deviated: RS256 pinned (no configurable signing method), refuses HS256/none.
+// Extended: kid-based key lookup from KeySet (RFC 7638 thumbprint).
 type JWTVerifier struct {
-	publicKey *rsa.PublicKey
+	keySet *KeySet
 }
 
-// NewJWTVerifier creates a JWTVerifier that validates tokens using the given
-// RSA public key with RS256 algorithm pinning.
-// It returns an error if the public key is smaller than MinRSAKeyBits (2048).
-func NewJWTVerifier(publicKey *rsa.PublicKey) (*JWTVerifier, error) {
-	if err := validateRSAKeySize(publicKey.N.BitLen(), "public"); err != nil {
-		return nil, err
+// NewJWTVerifier creates a JWTVerifier that validates tokens by looking up the
+// signing key from the KeySet using the token's kid header.
+func NewJWTVerifier(keySet *KeySet) (*JWTVerifier, error) {
+	if keySet == nil {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "key set must not be nil")
 	}
-	return &JWTVerifier{publicKey: publicKey}, nil
+	return &JWTVerifier{keySet: keySet}, nil
 }
 
 // Verify validates the token string and returns Claims on success.
-// It rejects tokens that are not signed with RS256.
+// It rejects tokens that are not signed with RS256 or do not carry a valid kid.
 func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		// Pin to RS256 only -- reject HS256, none, and all other algorithms.
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return v.publicKey, nil
+
+		// Extract kid from token header.
+		kidRaw, ok := token.Header["kid"]
+		if !ok {
+			return nil, fmt.Errorf("missing kid header")
+		}
+		kid, ok := kidRaw.(string)
+		if !ok || kid == "" {
+			return nil, fmt.Errorf("invalid kid header")
+		}
+
+		pub, err := v.keySet.PublicKeyByKID(kid)
+		if err != nil {
+			return nil, fmt.Errorf("unknown kid: %s", kid)
+		}
+		return pub, nil
 	})
 	if err != nil {
 		return Claims{}, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
@@ -54,27 +68,28 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 	return mapClaimsToClaims(mapClaims), nil
 }
 
-// JWTIssuer signs JWT tokens with RS256 using an RSA private key.
+// JWTIssuer signs JWT tokens with RS256 using the active key from a KeySet.
+// Each issued token carries a kid header derived from the signing key.
 type JWTIssuer struct {
-	privateKey *rsa.PrivateKey
-	issuer     string
-	ttl        time.Duration
+	keySet *KeySet
+	issuer string
+	ttl    time.Duration
 }
 
-// NewJWTIssuer creates a JWTIssuer.
-// It returns an error if the private key is smaller than MinRSAKeyBits (2048).
-func NewJWTIssuer(privateKey *rsa.PrivateKey, issuer string, ttl time.Duration) (*JWTIssuer, error) {
-	if err := validateRSAKeySize(privateKey.N.BitLen(), "private"); err != nil {
-		return nil, err
+// NewJWTIssuer creates a JWTIssuer using the active signing key from the KeySet.
+func NewJWTIssuer(keySet *KeySet, issuer string, ttl time.Duration) (*JWTIssuer, error) {
+	if keySet == nil {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "key set must not be nil")
 	}
 	return &JWTIssuer{
-		privateKey: privateKey,
-		issuer:     issuer,
-		ttl:        ttl,
+		keySet: keySet,
+		issuer: issuer,
+		ttl:    ttl,
 	}, nil
 }
 
 // Issue creates a signed JWT token for the given subject and roles.
+// The token header includes the kid of the active signing key.
 func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -91,7 +106,8 @@ func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (st
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	return token.SignedString(i.privateKey)
+	token.Header["kid"] = i.keySet.SigningKeyID()
+	return token.SignedString(i.keySet.SigningKey())
 }
 
 func mapClaimsToClaims(mc jwt.MapClaims) Claims {

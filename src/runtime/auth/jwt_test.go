@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,11 +23,119 @@ func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 	return key, &key.PublicKey
 }
 
-func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
+func mustTestKeySet(t *testing.T) *KeySet {
+	t.Helper()
 	priv, pub := generateTestKeyPair(t)
-	issuer, err := NewJWTIssuer(priv, "gocell", time.Hour)
+	ks, err := NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(pub)
+	return ks
+}
+
+// --- Phase 2: User Story 1 (T005-T010) ---
+
+func TestJWTIssuer_TokenHasKID(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+
+	// Decode the token header to check kid.
+	parts := strings.SplitN(tokenStr, ".", 3)
+	require.Len(t, parts, 3)
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(headerJSON), `"kid"`)
+	assert.Contains(t, string(headerJSON), ks.SigningKeyID())
+}
+
+func TestJWTIssuer_KIDMatchesThumbprint(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+
+	// Parse without verification to inspect header.
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	token, _, err := parser.ParseUnverified(tokenStr, jwt.MapClaims{})
+	require.NoError(t, err)
+
+	kid, ok := token.Header["kid"].(string)
+	require.True(t, ok)
+	assert.Equal(t, Thumbprint(pub), kid)
+}
+
+func TestJWTVerifier_VerifiesByKID(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, []string{"api"})
+	require.NoError(t, err)
+
+	claims, err := verifier.Verify(context.Background(), tokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", claims.Subject)
+	assert.Equal(t, "gocell", claims.Issuer)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+	assert.Equal(t, []string{"api"}, claims.Audience)
+}
+
+func TestJWTVerifier_RejectsUnknownKID(t *testing.T) {
+	ks1 := mustTestKeySet(t)
+	ks2 := mustTestKeySet(t)
+
+	issuer, err := NewJWTIssuer(ks1, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks2) // different key set
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestJWTVerifier_RejectsMissingKID(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	// Create a token WITHOUT kid header (legacy-style).
+	claims := jwt.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	// Deliberately do NOT set token.Header["kid"]
+	tokenStr, err := token.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+// --- Updated existing tests ---
+
+func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", []string{"admin", "user"}, []string{"api"})
@@ -42,10 +152,10 @@ func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 }
 
 func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
-	priv, pub := generateTestKeyPair(t)
-	issuer, err := NewJWTIssuer(priv, "gocell", -time.Hour) // already expired
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", -time.Hour) // already expired
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", nil, nil)
@@ -57,9 +167,8 @@ func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 }
 
 func TestJWTVerifier_RejectsHS256(t *testing.T) {
-	// Create HS256 token and verify it is rejected by RS256 verifier.
-	_, pub := generateTestKeyPair(t)
-	verifier, err := NewJWTVerifier(pub)
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	hmacToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -75,11 +184,10 @@ func TestJWTVerifier_RejectsHS256(t *testing.T) {
 }
 
 func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
-	_, pub := generateTestKeyPair(t)
-	verifier, err := NewJWTVerifier(pub)
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	// Create an unsigned token with alg=none.
 	noneToken := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
 		"sub": "attacker",
 		"exp": time.Now().Add(time.Hour).Unix(),
@@ -93,11 +201,12 @@ func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 }
 
 func TestJWTVerifier_WrongKey(t *testing.T) {
-	priv1, _ := generateTestKeyPair(t)
-	_, pub2 := generateTestKeyPair(t) // different key pair
-	issuer, err := NewJWTIssuer(priv1, "gocell", time.Hour)
+	ks1 := mustTestKeySet(t)
+	ks2 := mustTestKeySet(t)
+
+	issuer, err := NewJWTIssuer(ks1, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(pub2)
+	verifier, err := NewJWTVerifier(ks2)
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-1", nil, nil)
@@ -108,8 +217,8 @@ func TestJWTVerifier_WrongKey(t *testing.T) {
 }
 
 func TestJWTVerifier_MalformedToken(t *testing.T) {
-	_, pub := generateTestKeyPair(t)
-	verifier, err := NewJWTVerifier(pub)
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	_, err = verifier.Verify(context.Background(), "not.a.jwt")
@@ -117,10 +226,10 @@ func TestJWTVerifier_MalformedToken(t *testing.T) {
 }
 
 func TestJWTIssuer_RoundTrip(t *testing.T) {
-	priv, pub := generateTestKeyPair(t)
-	issuer, err := NewJWTIssuer(priv, "test-issuer", 30*time.Minute)
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "test-issuer", 30*time.Minute)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("svc-audit", []string{"service"}, []string{"internal"})
@@ -135,10 +244,10 @@ func TestJWTIssuer_RoundTrip(t *testing.T) {
 }
 
 func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
-	priv, pub := generateTestKeyPair(t)
-	issuer, err := NewJWTIssuer(priv, "gocell", time.Hour)
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(pub)
+	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue("user-2", nil, nil)
@@ -151,26 +260,65 @@ func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
 	assert.Empty(t, claims.Audience)
 }
 
-func TestNewJWTVerifier_RejectsWeakKey(t *testing.T) {
-	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	require.NoError(t, err)
-
-	_, err = NewJWTVerifier(&weakKey.PublicKey)
+func TestNewJWTVerifier_NilKeySetReturnsError(t *testing.T) {
+	_, err := NewJWTVerifier(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
-	assert.Contains(t, err.Error(), "1024")
 }
 
-func TestNewJWTIssuer_RejectsWeakKey(t *testing.T) {
-	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	require.NoError(t, err)
-
-	_, err = NewJWTIssuer(weakKey, "gocell", time.Hour)
+func TestNewJWTIssuer_NilKeySetReturnsError(t *testing.T) {
+	_, err := NewJWTIssuer(nil, "gocell", time.Hour)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
-	assert.Contains(t, err.Error(), "1024")
+}
+
+// --- Multi-key verification (US2 via JWT) ---
+
+func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
+	// Key pair 1: the OLD key (will become verification-only).
+	priv1, pub1 := generateTestKeyPair(t)
+	// Key pair 2: the NEW active key.
+	priv2, pub2 := generateTestKeyPair(t)
+
+	// Build a KeySet with key2 as active, key1 as verification-only.
+	vk := VerificationKey{
+		PublicKey: pub1,
+		KeyID:     Thumbprint(pub1),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	ks, err := NewKeySetWithVerificationKeys(priv2, pub2, []VerificationKey{vk})
+	require.NoError(t, err)
+
+	// Issue a token signed with the OLD key (key1), adding kid manually.
+	oldClaims := jwt.MapClaims{
+		"sub": "user-old",
+		"iss": "gocell",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}
+	oldToken := jwt.NewWithClaims(jwt.SigningMethodRS256, oldClaims)
+	oldToken.Header["kid"] = Thumbprint(pub1)
+	oldTokenStr, err := oldToken.SignedString(priv1)
+	require.NoError(t, err)
+
+	// Verifier using the new KeySet should still accept the old token.
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	claims, err := verifier.Verify(context.Background(), oldTokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, "user-old", claims.Subject)
+
+	// New tokens use the new key.
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+
+	newTokenStr, err := issuer.Issue("user-new", nil, nil)
+	require.NoError(t, err)
+
+	claims, err = verifier.Verify(context.Background(), newTokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, "user-new", claims.Subject)
 }
 
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {

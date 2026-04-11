@@ -1,26 +1,239 @@
 package auth
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+// test secrets — each exactly 32 bytes (>= MinHMACKeyBytes).
+const (
+	testSecret    = "test-secret-padding-to-32bytes!!" // len=32
+	testSecretOld = "old--secret-padding-to-32bytes!!" // len=32
+	testSecretNew = "new--secret-padding-to-32bytes!!" // len=32
+	testSecretUnk = "unkn-secret-padding-to-32bytes!!" // len=32
+	testSecretOne = "only-secret-padding-to-32bytes!!" // len=32
+	testSecretSam = "same-secret-padding-to-32bytes!!" // len=32
+)
+
+func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
+	t.Helper()
+	var prev []byte
+	if previous != "" {
+		prev = []byte(previous)
+	}
+	ring, err := NewHMACKeyRing([]byte(current), prev)
+	require.NoError(t, err)
+	return ring
+}
+
+// --- Phase 4: User Story 3 (T017-T025) ---
+
+func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
+	ring := mustTestRing(t, testSecretNew, testSecretOld)
+
+	now := time.Now()
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+
+	// Should be verifiable with current secret only.
+	singleRing := mustTestRing(t, testSecretNew, "")
+	handler := ServiceTokenMiddleware(singleRing)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	origNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	defer func() { nowFunc = origNow }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHMACKeyRing_VerifyWithPrevious(t *testing.T) {
+	now := time.Now()
+	origNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	defer func() { nowFunc = origNow }()
+
+	// Sign token with old secret.
+	oldRing := mustTestRing(t, testSecretOld, "")
+	token := GenerateServiceToken(oldRing, http.MethodGet, "/api", now)
+
+	// Create ring with new+old. Old token should still verify.
+	newRing := mustTestRing(t, testSecretNew, testSecretOld)
+	handler := ServiceTokenMiddleware(newRing)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHMACKeyRing_RejectUnknownSecret(t *testing.T) {
+	now := time.Now()
+	origNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	defer func() { nowFunc = origNow }()
+
+	// Sign with a secret that is NOT in the ring.
+	unknownRing := mustTestRing(t, testSecretUnk, "")
+	token := GenerateServiceToken(unknownRing, http.MethodGet, "/api", now)
+
+	ring := mustTestRing(t, testSecretNew, testSecretOld)
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestHMACKeyRing_SingleSecretMode(t *testing.T) {
+	now := time.Now()
+	origNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	defer func() { nowFunc = origNow }()
+
+	ring := mustTestRing(t, testSecretOne, "")
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestHMACKeyRing_SameSecretBothPositions(t *testing.T) {
+	now := time.Now()
+	origNow := nowFunc
+	nowFunc = func() time.Time { return now }
+	defer func() { nowFunc = origNow }()
+
+	ring := mustTestRing(t, testSecretSam, testSecretSam)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestNewHMACKeyRing_EmptyCurrentFails(t *testing.T) {
+	_, err := NewHMACKeyRing(nil, nil)
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthKeyMissing, ecErr.Code)
+}
+
+func TestNewHMACKeyRing_ShortCurrentFails(t *testing.T) {
+	_, err := NewHMACKeyRing([]byte("too-short"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "minimum is 32")
+}
+
+func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
+	_, err := NewHMACKeyRing([]byte(testSecret), []byte("too-short"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "previous HMAC secret")
+}
+
+func TestGenerateServiceToken_NilRing(t *testing.T) {
+	token := GenerateServiceToken(nil, "GET", "/api", time.Now())
+	assert.Empty(t, token)
+}
+
+func TestHMACKeyRing_Secrets_SingleKey(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	secrets := ring.Secrets()
+	assert.Len(t, secrets, 1)
+	assert.Equal(t, []byte(testSecret), secrets[0])
+}
+
+func TestHMACKeyRing_Secrets_DualKey(t *testing.T) {
+	ring := mustTestRing(t, testSecretNew, testSecretOld)
+	secrets := ring.Secrets()
+	assert.Len(t, secrets, 2)
+	assert.Equal(t, []byte(testSecretNew), secrets[0])
+	assert.Equal(t, []byte(testSecretOld), secrets[1])
+}
+
+func TestLoadHMACKeyRingFromEnv_CurrentOnly(t *testing.T) {
+	t.Setenv(EnvServiceSecret, testSecret)
+	t.Setenv(EnvServiceSecretPrevious, "")
+
+	ring, err := LoadHMACKeyRingFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, []byte(testSecret), ring.Current())
+	assert.Len(t, ring.Secrets(), 1)
+}
+
+func TestLoadHMACKeyRingFromEnv_CurrentAndPrevious(t *testing.T) {
+	t.Setenv(EnvServiceSecret, testSecretNew)
+	t.Setenv(EnvServiceSecretPrevious, testSecretOld)
+
+	ring, err := LoadHMACKeyRingFromEnv()
+	require.NoError(t, err)
+	assert.Equal(t, []byte(testSecretNew), ring.Current())
+	assert.Len(t, ring.Secrets(), 2)
+}
+
+func TestLoadHMACKeyRingFromEnv_MissingCurrentFails(t *testing.T) {
+	t.Setenv(EnvServiceSecret, "")
+	t.Setenv(EnvServiceSecretPrevious, "")
+
+	_, err := LoadHMACKeyRingFromEnv()
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthKeyMissing, ecErr.Code)
+}
+
+// --- Updated existing tests ---
+
 func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	now := time.Now()
-	token := GenerateServiceToken(secret, http.MethodGet, "/internal/v1/health", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
-	// Override nowFunc so it matches the token timestamp.
 	origNow := nowFunc
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
@@ -32,8 +245,8 @@ func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_InvalidToken(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -51,8 +264,8 @@ func TestServiceTokenMiddleware_InvalidToken(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_MissingToken(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -64,8 +277,8 @@ func TestServiceTokenMiddleware_MissingToken(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_WrongScheme(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -78,8 +291,8 @@ func TestServiceTokenMiddleware_WrongScheme(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -88,8 +301,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
 
-	// Token computed for different path.
-	token := GenerateServiceToken(secret, http.MethodGet, "/other", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/other", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -98,7 +310,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
-func TestServiceTokenMiddleware_EmptySecret(t *testing.T) {
+func TestServiceTokenMiddleware_NilRing(t *testing.T) {
 	handler := ServiceTokenMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
@@ -111,8 +323,8 @@ func TestServiceTokenMiddleware_EmptySecret(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -121,9 +333,8 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
 
-	// Token with timestamp 6 minutes ago (exceeds 5 min window).
 	oldTime := now.Add(-6 * time.Minute)
-	token := GenerateServiceToken(secret, http.MethodGet, "/internal/v1/health", oldTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", oldTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -133,8 +344,8 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -143,9 +354,8 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
 
-	// Token with timestamp exactly 5 minutes ago (boundary = rejected).
 	boundaryTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(secret, http.MethodGet, "/internal/v1/health", boundaryTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", boundaryTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -155,8 +365,8 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -165,9 +375,8 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
 
-	// Token with timestamp 4 minutes 59 seconds ago (within window).
 	recentTime := now.Add(-4*time.Minute - 59*time.Second)
-	token := GenerateServiceToken(secret, http.MethodGet, "/internal/v1/health", recentTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", recentTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -177,8 +386,8 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -187,9 +396,8 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	nowFunc = func() time.Time { return now }
 	defer func() { nowFunc = origNow }()
 
-	// Token with timestamp 6 minutes in the future.
 	futureTime := now.Add(6 * time.Minute)
-	token := GenerateServiceToken(secret, http.MethodGet, "/internal/v1/health", futureTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", futureTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -199,8 +407,8 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
-	secret := []byte("test-secret")
-	handler := ServiceTokenMiddleware(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ring := mustTestRing(t, testSecret, "")
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -213,13 +421,13 @@ func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 }
 
 func TestGenerateServiceToken_Deterministic(t *testing.T) {
-	secret := []byte("test-secret")
+	ring := mustTestRing(t, testSecret, "")
 	ts := time.Unix(1700000000, 0)
-	t1 := GenerateServiceToken(secret, http.MethodPost, "/api", ts)
-	t2 := GenerateServiceToken(secret, http.MethodPost, "/api", ts)
+	t1 := GenerateServiceToken(ring, http.MethodPost, "/api", ts)
+	t2 := GenerateServiceToken(ring, http.MethodPost, "/api", ts)
 	assert.Equal(t, t1, t2)
 
 	// Different method should produce different token.
-	t3 := GenerateServiceToken(secret, http.MethodGet, "/api", ts)
+	t3 := GenerateServiceToken(ring, http.MethodGet, "/api", ts)
 	assert.NotEqual(t, t1, t3)
 }
