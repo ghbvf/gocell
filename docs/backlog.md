@@ -207,6 +207,17 @@
 | WM-2-F3 | runtime/auth 无 Prometheus metrics（key lifecycle counters/gauges），需通过接口注入避免 runtime→adapters 依赖 | 2h (discovered via PR#81 review P2-11，前置 WM-34) |
 | P3-TD-11 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | configpublish.Rollback version 校验 | 2h |
+
+### WM-2 Review Accept（PR#81 六席位审查，不修理由）
+
+| ID | Finding | Accept 理由 |
+|----|---------|-------------|
+| P2-3 | 缺 RFC 7638 external known-good test vector | Thumbprint 仅 3 行无分支（base64url + SHA-256）。已有 determinism + length(43) + encoding 测试。引入 RFC 附录固定密钥收益低。 |
+| P2-4 | kid 未截断，log flooding 风险 | kid = base64url(SHA-256) = 固定 43 chars，由 Thumbprint 产生，不受外部输入控制。无任意长度 flooding 场景。 |
+| P2-8 | 缺 non-RSA key type 拒绝路径测试 | `parseRSAPublicKey` 的 "PKIX key is not RSA" 分支在 develop 上已存在，非本 PR 引入。预存 tech debt。 |
+| P2-9 | Lifecycle log 测试未用 table-driven | 3 个测试验证不同生命周期事件（激活/降级/修剪），场景差异大。table-driven 反而降低可读性。风格偏好。 |
+| P2-10 | init() 模式有 package-level 副作用风险 | cell_test.go 已消除 init()。剩余 3 个 slice test 的 init 仅做 NewJWTIssuer/NewJWTVerifier（需 error 处理，无法用 var 替代）。Go 测试标准做法。 |
+| P2-16 | env loader 仅支持 1 个 prev key | By design — spec FR-005 明确 "env loader 0-1"。KeySet API 支持 0-N。列表型 env 配置属 WM-34 scope。 |
 | P4-TD-12 | demo cell `TestDemo_Startup` t.Skip 占位 | 30min |
 
 ### metadata parser follow-up（PR#67）
