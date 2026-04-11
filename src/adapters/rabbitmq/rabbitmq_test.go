@@ -1968,9 +1968,10 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
-func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
+func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
+	// nil ClaimFailOpen defaults to fail-closed for safety.
 	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
@@ -1982,9 +1983,9 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
 	})
 
 	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
-	assert.True(t, handlerCalled, "should still process on claim error (fail-open)")
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.Nil(t, res.Receipt, "no Receipt on claim error")
+	assert.False(t, handlerCalled, "handler must NOT be called when default fail-closed")
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Error(t, res.Err)
 }
 
 // --- processDelivery Receipt lifecycle tests ---

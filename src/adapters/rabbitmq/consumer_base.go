@@ -36,10 +36,11 @@ type ConsumerBaseConfig struct {
 
 	// ClaimFailOpen controls behavior when Claimer.Claim() fails due to
 	// infrastructure errors (e.g., Redis down).
-	//   true  (default): proceed without idempotency — avoids total consumer
+	//   true:  proceed without idempotency — avoids total consumer
 	//          stall, but risks duplicate processing during outage.
-	//   false: return DispositionRequeue — safe from duplicates, but all
+	//   false (default): return DispositionRequeue — safe from duplicates, but all
 	//          consumption stops until the idempotency backend recovers.
+	// Must be set explicitly; nil defaults to fail-closed for safety.
 	ClaimFailOpen *bool
 }
 
@@ -196,7 +197,7 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 
 		state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 		if err != nil {
-			if cb.config.ClaimFailOpen == nil || *cb.config.ClaimFailOpen {
+			if cb.config.ClaimFailOpen != nil && *cb.config.ClaimFailOpen {
 				slog.Error("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
 					slog.String("event_id", entry.ID),
 					slog.String("topic", topic),

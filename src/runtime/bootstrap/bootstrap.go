@@ -269,7 +269,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			c := asm.Cell(id)
 			if er, ok := c.(cell.EventRegistrar); ok {
 				if err := er.RegisterSubscriptions(sub); err != nil {
-					return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
+					return rollback(fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err))
 				}
 			}
 		}
