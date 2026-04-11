@@ -31,7 +31,7 @@ var _ Publisher = (*mockPublisher)(nil)
 
 type mockSubscriber struct{}
 
-func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler func(context.Context, Entry) error) error {
+func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler) error {
 	return nil
 }
 func (m *mockSubscriber) Close() error { return nil }
@@ -42,8 +42,8 @@ func TestSubscriberInterface(t *testing.T) {
 	var sub Subscriber = &mockSubscriber{}
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
-		handler := func(ctx context.Context, entry Entry) error {
-			return nil
+		handler := func(ctx context.Context, entry Entry) HandleResult {
+			return HandleResult{Disposition: DispositionAck}
 		}
 		err := sub.Subscribe(context.Background(), "test.topic", handler)
 		assert.NoError(t, err)
@@ -78,11 +78,11 @@ func TestEntryFields(t *testing.T) {
 type recordingSubscriber struct {
 	subscribeCalled bool
 	subscribeTopic  string
-	capturedHandler func(context.Context, Entry) error
+	capturedHandler EntryHandler
 	closeErr        error
 }
 
-func (r *recordingSubscriber) Subscribe(_ context.Context, topic string, handler func(context.Context, Entry) error) error {
+func (r *recordingSubscriber) Subscribe(_ context.Context, topic string, handler EntryHandler) error {
 	r.subscribeCalled = true
 	r.subscribeTopic = topic
 	r.capturedHandler = handler
@@ -104,9 +104,9 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	called := false
-	handler := func(_ context.Context, _ Entry) error {
+	handler := func(_ context.Context, _ Entry) HandleResult {
 		called = true
-		return nil
+		return HandleResult{Disposition: DispositionAck}
 	}
 
 	err := sub.Subscribe(context.Background(), "test.topic", handler)
@@ -115,8 +115,8 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	assert.Equal(t, "test.topic", inner.subscribeTopic)
 
 	// Call the captured handler to verify it's the original.
-	err = inner.capturedHandler(context.Background(), Entry{})
-	assert.NoError(t, err)
+	res := inner.capturedHandler(context.Background(), Entry{})
+	assert.Equal(t, DispositionAck, res.Disposition)
 	assert.True(t, called)
 }
 
@@ -124,9 +124,9 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	inner := &recordingSubscriber{}
 
 	var middlewareTopic string
-	middleware := func(topic string, next func(context.Context, Entry) error) func(context.Context, Entry) error {
+	middleware := func(topic string, next EntryHandler) EntryHandler {
 		middlewareTopic = topic
-		return func(ctx context.Context, e Entry) error {
+		return func(ctx context.Context, e Entry) HandleResult {
 			e.Metadata = map[string]string{"wrapped": "true"}
 			return next(ctx, e)
 		}
@@ -138,9 +138,9 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	}
 
 	var receivedEntry Entry
-	handler := func(_ context.Context, e Entry) error {
+	handler := func(_ context.Context, e Entry) HandleResult {
 		receivedEntry = e
-		return nil
+		return HandleResult{Disposition: DispositionAck}
 	}
 
 	err := sub.Subscribe(context.Background(), "orders.created", handler)
@@ -148,8 +148,8 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	assert.Equal(t, "orders.created", middlewareTopic)
 
 	// Call captured handler to verify middleware was applied.
-	err = inner.capturedHandler(context.Background(), Entry{ID: "evt-1"})
-	assert.NoError(t, err)
+	res := inner.capturedHandler(context.Background(), Entry{ID: "evt-1"})
+	assert.Equal(t, DispositionAck, res.Disposition)
 	assert.Equal(t, "evt-1", receivedEntry.ID)
 	assert.Equal(t, "true", receivedEntry.Metadata["wrapped"])
 }
@@ -160,12 +160,12 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 	var order []string
 
 	makeMiddleware := func(name string) TopicHandlerMiddleware {
-		return func(topic string, next func(context.Context, Entry) error) func(context.Context, Entry) error {
-			return func(ctx context.Context, e Entry) error {
+		return func(topic string, next EntryHandler) EntryHandler {
+			return func(ctx context.Context, e Entry) HandleResult {
 				order = append(order, name+"-before")
-				err := next(ctx, e)
+				res := next(ctx, e)
 				order = append(order, name+"-after")
-				return err
+				return res
 			}
 		}
 	}
@@ -178,16 +178,15 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 		},
 	}
 
-	handler := func(_ context.Context, _ Entry) error {
+	handler := func(_ context.Context, _ Entry) HandleResult {
 		order = append(order, "handler")
-		return nil
+		return HandleResult{Disposition: DispositionAck}
 	}
 
 	err := sub.Subscribe(context.Background(), "test.topic", handler)
 	assert.NoError(t, err)
 
-	err = inner.capturedHandler(context.Background(), Entry{})
-	assert.NoError(t, err)
+	_ = inner.capturedHandler(context.Background(), Entry{})
 
 	// [0] is outermost, [len-1] is innermost.
 	assert.Equal(t, []string{
@@ -219,9 +218,12 @@ func TestSubscriberWithMiddleware_Close_PropagatesError(t *testing.T) {
 func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	inner := &recordingSubscriber{}
 
-	shortCircuit := func(_ string, _ func(context.Context, Entry) error) func(context.Context, Entry) error {
-		return func(_ context.Context, _ Entry) error {
-			return assert.AnError
+	shortCircuit := func(_ string, _ EntryHandler) EntryHandler {
+		return func(_ context.Context, _ Entry) HandleResult {
+			return HandleResult{
+				Disposition: DispositionReject,
+				Err:         assert.AnError,
+			}
 		}
 	}
 
@@ -231,17 +233,18 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	}
 
 	handlerCalled := false
-	handler := func(_ context.Context, _ Entry) error {
+	handler := func(_ context.Context, _ Entry) HandleResult {
 		handlerCalled = true
-		return nil
+		return HandleResult{Disposition: DispositionAck}
 	}
 
 	err := sub.Subscribe(context.Background(), "test.topic", handler)
 	assert.NoError(t, err)
 
 	// Call captured handler — middleware should short-circuit.
-	err = inner.capturedHandler(context.Background(), Entry{})
-	assert.Error(t, err)
+	res := inner.capturedHandler(context.Background(), Entry{})
+	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Error(t, res.Err)
 	assert.False(t, handlerCalled)
 }
 
@@ -275,8 +278,8 @@ func TestEntry_RoutingTopic(t *testing.T) {
 			wantTopic: "session.created",
 		},
 		{
-			name: "Both empty — returns empty string",
-			entry: Entry{},
+			name:      "Both empty — returns empty string",
+			entry:     Entry{},
 			wantTopic: "",
 		},
 	}
@@ -285,4 +288,103 @@ func TestEntry_RoutingTopic(t *testing.T) {
 			assert.Equal(t, tt.wantTopic, tt.entry.RoutingTopic())
 		})
 	}
+}
+
+// --- Disposition Tests ---
+
+func TestDisposition_String(t *testing.T) {
+	tests := []struct {
+		d    Disposition
+		want string
+	}{
+		{DispositionAck, "ack"},
+		{DispositionRequeue, "requeue"},
+		{DispositionReject, "reject"},
+		{Disposition(99), "disposition(99)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.d.String())
+		})
+	}
+}
+
+// --- WrapLegacyHandler Tests ---
+
+func TestWrapLegacyHandler_Success(t *testing.T) {
+	legacy := func(_ context.Context, _ Entry) error { return nil }
+	handler := WrapLegacyHandler(legacy)
+
+	res := handler(context.Background(), Entry{ID: "1"})
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.NoError(t, res.Err)
+}
+
+func TestWrapLegacyHandler_Error(t *testing.T) {
+	legacy := func(_ context.Context, _ Entry) error { return assert.AnError }
+	handler := WrapLegacyHandler(legacy)
+
+	res := handler(context.Background(), Entry{ID: "1"})
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Equal(t, assert.AnError, res.Err)
+}
+
+// --- Entry.Validate Tests (F-OB-03) ---
+
+func TestEntry_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   Entry
+		wantErr bool
+	}{
+		{
+			name:    "valid with Topic",
+			entry:   Entry{Topic: "t", Payload: []byte("{}")},
+			wantErr: false,
+		},
+		{
+			name:    "valid with EventType fallback",
+			entry:   Entry{EventType: "e", Payload: []byte("{}")},
+			wantErr: false,
+		},
+		{
+			name:    "missing topic and EventType",
+			entry:   Entry{Payload: []byte("{}")},
+			wantErr: true,
+		},
+		{
+			name:    "missing payload",
+			entry:   Entry{Topic: "t"},
+			wantErr: true,
+		},
+		{
+			name:    "completely empty",
+			entry:   Entry{},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.entry.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// --- HandleResult tests ---
+
+func TestHandleResult_Fields(t *testing.T) {
+	res := HandleResult{
+		Disposition: DispositionReject,
+		Err:         assert.AnError,
+		Receipt:     nil,
+	}
+	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Error(t, res.Err)
+	assert.Nil(t, res.Receipt)
 }

@@ -103,6 +103,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       queueName,
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 
@@ -114,9 +115,9 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Run subscriber in a goroutine since Subscribe blocks.
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -195,7 +196,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	pub := NewPublisher(conn)
 	topic := "test.integration.retry"
 
 	// Track DLQ messages via a separate subscriber on the DLQ topic.
@@ -205,6 +205,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	dlqSub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test.integration.retry.dlq.queue",
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 
@@ -213,9 +214,9 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 
 	// Start DLQ subscriber first.
 	go func() {
-		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) error {
+		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			dlqReceived <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -225,21 +226,19 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	// Create a ConsumerBase with RetryCount=2 and very short delays.
 	cb := NewConsumerBase(
 		&noopChecker{},
-		pub,
 		ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-group",
 			RetryCount:     2,
 			RetryBaseDelay: 100 * time.Millisecond,
 			IdempotencyTTL: time.Hour,
-			DLQTopic:       dlqTopic,
 		},
 	)
 
 	// Wrap a handler that always fails with a transient error.
 	callCount := 0
-	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) error {
+	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount++
-		return assert.AnError
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
 	})
 
 	// Publish a message.
@@ -251,21 +250,10 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	}
 
 	// Invoke the wrapped handler directly (simulates what Subscriber does).
-	err := wrappedHandler(ctx, entry)
-	assert.NoError(t, err, "wrapped handler should return nil (message is DLQ'd)")
+	res := wrappedHandler(ctx, entry)
+	// In Solution B, exhausted retries return Reject (broker routes to DLX).
+	assert.Equal(t, outbox.DispositionReject, res.Disposition, "exhausted retries should reject")
 	assert.Equal(t, 2, callCount, "handler should be called RetryCount times")
-
-	// Wait for the DLQ message.
-	select {
-	case dlqEntry := <-dlqReceived:
-		assert.Equal(t, entry.ID, dlqEntry.ID, "DLQ entry should have same event ID")
-		assert.Contains(t, dlqEntry.Metadata["x-death-reason"], "assert.AnError",
-			"DLQ metadata should contain the error reason")
-		assert.Equal(t, "test-retry-group", dlqEntry.Metadata["x-death-consumer-group"],
-			"DLQ metadata should contain consumer group")
-	case <-dlqCtx.Done():
-		t.Fatal("timed out waiting for DLQ message")
-	}
 
 	// Clean up.
 	dlqCancel()
@@ -286,6 +274,119 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	ch, err := conn.AcquireChannel()
 	require.NoError(t, err, "AcquireChannel should succeed")
 	conn.ReleaseChannel(ch)
+}
+
+// TestIntegration_DLXBrokerNative verifies the full broker-native DLX path:
+//
+//	handler → DispositionReject → Subscriber.processDelivery Nack(requeue=false)
+//	→ RabbitMQ routes to DLX exchange → dead-letter queue receives message
+//
+// This test uses raw AMQP channels to set up the DLX infrastructure and
+// directly consume from the dead-letter queue, proving the broker actually
+// routes rejected messages end-to-end.
+func TestIntegration_DLXBrokerNative(t *testing.T) {
+	conn, cleanup := startRabbitMQ(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	pub := NewPublisher(conn)
+
+	const (
+		topic       = "test.dlx.e2e"
+		dlxExchange = "test.dlx.e2e.dlx"
+		dlxQueue    = "test.dlx.e2e.dlq"
+		mainQueue   = "test.dlx.e2e.main"
+	)
+
+	// --- Set up DLX infrastructure via raw AMQP channel ---
+	rawCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+
+	// Declare the DLX exchange (direct type, durable).
+	err = rawCh.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil)
+	require.NoError(t, err, "declare DLX exchange")
+
+	// Declare the dead-letter queue and bind it to the DLX exchange.
+	_, err = rawCh.QueueDeclare(dlxQueue, true, false, false, false, nil)
+	require.NoError(t, err, "declare DLQ queue")
+
+	err = rawCh.QueueBind(dlxQueue, "", dlxExchange, false, nil)
+	require.NoError(t, err, "bind DLQ to DLX exchange")
+
+	conn.ReleaseChannel(rawCh)
+
+	// --- Start the main subscriber with DLX configured ---
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       mainQueue,
+		PrefetchCount:   1,
+		DLXExchange:     dlxExchange,
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer subCancel()
+
+	handlerCalled := make(chan struct{}, 1)
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			handlerCalled <- struct{}{}
+			// Permanent rejection — broker should route to DLX.
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionReject,
+				Err:         assert.AnError,
+			}
+		})
+	}()
+
+	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
+
+	// --- Publish a message ---
+	entry := outbox.Entry{
+		ID:        "evt-dlx-e2e-001",
+		EventType: "test.dlx.rejected",
+		Payload:   []byte(`{"dlx":"end-to-end"}`),
+		CreatedAt: time.Now().UTC(),
+	}
+	payload, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	err = pub.Publish(ctx, topic, payload)
+	require.NoError(t, err, "publish should succeed")
+
+	// Wait for handler to be called (message consumed → Reject).
+	select {
+	case <-handlerCalled:
+		// Handler was called and returned DispositionReject.
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for handler to be called")
+	}
+
+	// --- Consume from the dead-letter queue via raw AMQP ---
+	// Give broker a moment to route the rejected message to DLX.
+	time.Sleep(500 * time.Millisecond)
+
+	dlxCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	defer conn.ReleaseChannel(dlxCh)
+
+	msgs, err := dlxCh.Consume(dlxQueue, "dlx-test-consumer", true, false, false, false, nil)
+	require.NoError(t, err, "consume from DLQ")
+
+	select {
+	case msg := <-msgs:
+		// Unmarshal and verify the dead-lettered message.
+		var dlEntry outbox.Entry
+		require.NoError(t, json.Unmarshal(msg.Body, &dlEntry))
+		assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
+		assert.JSONEq(t, `{"dlx":"end-to-end"}`, string(dlEntry.Payload), "payload should match")
+		t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for message in dead-letter queue — DLX routing failed")
+	}
+
+	subCancel()
+	_ = sub.Close()
 }
 
 // noopChecker is a minimal idempotency.Checker for testing that always

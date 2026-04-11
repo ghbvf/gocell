@@ -47,6 +47,10 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID is not a valid UUID: "+entry.ID)
 	}
 
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)

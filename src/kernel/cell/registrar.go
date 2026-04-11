@@ -66,6 +66,10 @@ type HTTPRegistrar interface {
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.
+// RegisterSubscriptions MUST validate subscription setup (e.g., DLX config)
+// synchronously and return an error if any subscription cannot be established.
+// Long-running consumption loops should be started in background goroutines
+// only after validation succeeds.
 type EventRegistrar interface {
-	RegisterSubscriptions(sub outbox.Subscriber)
+	RegisterSubscriptions(sub outbox.Subscriber) error
 }

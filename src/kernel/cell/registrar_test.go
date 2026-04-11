@@ -63,7 +63,7 @@ type mockSubscriber struct {
 	topics []string
 }
 
-func (m *mockSubscriber) Subscribe(_ context.Context, topic string, _ func(context.Context, outbox.Entry) error) error {
+func (m *mockSubscriber) Subscribe(_ context.Context, topic string, _ outbox.EntryHandler) error {
 	m.topics = append(m.topics, topic)
 	return nil
 }
@@ -79,11 +79,12 @@ type eventCell struct {
 	registered bool
 }
 
-func (e *eventCell) RegisterSubscriptions(sub outbox.Subscriber) {
+func (e *eventCell) RegisterSubscriptions(sub outbox.Subscriber) error {
 	e.registered = true
-	_ = sub.Subscribe(context.Background(), "session.created", func(_ context.Context, _ outbox.Entry) error {
-		return nil
+	_ = sub.Subscribe(context.Background(), "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
+	return nil
 }
 
 // Compile-time check.
@@ -101,11 +102,12 @@ func (d *dualCell) RegisterRoutes(mux RouteMux) {
 	mux.Handle("/api/v1/devices", http.NotFoundHandler())
 }
 
-func (d *dualCell) RegisterSubscriptions(sub outbox.Subscriber) {
+func (d *dualCell) RegisterSubscriptions(sub outbox.Subscriber) error {
 	d.eventRegistered = true
-	_ = sub.Subscribe(context.Background(), "device.enrolled", func(_ context.Context, _ outbox.Entry) error {
-		return nil
+	_ = sub.Subscribe(context.Background(), "device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
+	return nil
 }
 
 // Compile-time checks.
@@ -149,7 +151,8 @@ func TestEventRegistrar_TypeAssertion(t *testing.T) {
 	assert.True(t, ok, "eventCell should satisfy EventRegistrar")
 
 	sub := &mockSubscriber{}
-	r.RegisterSubscriptions(sub)
+	err := r.RegisterSubscriptions(sub)
+	assert.NoError(t, err)
 
 	assert.True(t, ec.registered)
 	assert.Equal(t, []string{"session.created"}, sub.topics)
@@ -180,7 +183,8 @@ func TestDualRegistrar_BothInterfaces(t *testing.T) {
 	er, ok := c.(EventRegistrar)
 	assert.True(t, ok)
 	sub := &mockSubscriber{}
-	er.RegisterSubscriptions(sub)
+	err := er.RegisterSubscriptions(sub)
+	assert.NoError(t, err)
 	assert.True(t, dc.eventRegistered)
 	assert.Equal(t, []string{"device.enrolled"}, sub.topics)
 }

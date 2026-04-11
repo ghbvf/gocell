@@ -245,6 +245,6 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 
 // RegisterSubscriptions is a no-op for access-core in Phase 2.
 // Future: subscribe to cross-cell events if needed.
-func (c *AccessCore) RegisterSubscriptions(_ outbox.Subscriber) {
-	// No subscriptions in Phase 2.
+func (c *AccessCore) RegisterSubscriptions(_ outbox.Subscriber) error {
+	return nil
 }

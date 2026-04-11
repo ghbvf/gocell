@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // --- Mock AMQP Channel ---
@@ -284,32 +285,8 @@ var _ idempotency.Checker = (*mockIdempotencyChecker)(nil)
 
 // --- Mock Publisher (for DLQ) ---
 
-type mockPublisher struct {
-	mu       sync.Mutex
-	messages []publishedMsg
-	err      error
-}
-
-type publishedMsg struct {
-	topic   string
-	payload []byte
-}
-
-func newMockPublisher() *mockPublisher {
-	return &mockPublisher{}
-}
-
-func (m *mockPublisher) Publish(_ context.Context, topic string, payload []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.err != nil {
-		return m.err
-	}
-	m.messages = append(m.messages, publishedMsg{topic: topic, payload: payload})
-	return nil
-}
-
-var _ outbox.Publisher = (*mockPublisher)(nil)
+// mockPublisher was removed: ConsumerBase no longer uses application-side
+// DLQ publish. Dead-letter routing is now handled by broker-native DLX.
 
 // --- Helper to create a test connection ---
 
@@ -710,6 +687,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		PrefetchCount:   5,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -722,9 +700,9 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	require.NoError(t, err)
 
 	handled := make(chan outbox.Entry, 1)
-	handler := func(_ context.Context, e outbox.Entry) error {
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handled <- e
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -771,12 +749,13 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
-	handler := func(_ context.Context, e outbox.Entry) error {
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		t.Fatal("handler should not be called for unmarshal failure")
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -811,6 +790,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -818,8 +798,8 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	entryBytes, err := json.Marshal(entry)
 	require.NoError(t, err)
 
-	handler := func(_ context.Context, e outbox.Entry) error {
-		return errors.New("transient error")
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -838,7 +818,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled)
-	assert.True(t, ch.nackRequeue) // Transient error should requeue.
+	assert.True(t, ch.nackRequeue) // Requeue disposition should requeue.
 	ch.mu.Unlock()
 
 	assert.NoError(t, sub.Close())
@@ -854,13 +834,14 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits.
 
-	err := sub.Subscribe(ctx, "my.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -870,7 +851,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 func TestSubscriber_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{})
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close())
 	assert.NoError(t, sub.Close()) // Second close is no-op.
@@ -878,11 +859,11 @@ func TestSubscriber_Close_Idempotent(t *testing.T) {
 
 func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{})
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close())
 
-	err := sub.Subscribe(context.Background(), "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
@@ -903,6 +884,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -930,9 +912,9 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	}()
 
 	handled := make(chan string, 1)
-	handler := func(_ context.Context, e outbox.Entry) error {
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handled <- e.ID
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	err := sub.Subscribe(ctx, "test.topic", handler)
@@ -971,6 +953,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
@@ -982,7 +965,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		cancel()
 	}()
 
-	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
 
@@ -1088,12 +1071,13 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
 	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
-		func(_ context.Context, _ outbox.Entry) error { return nil })
+		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
 
@@ -1129,6 +1113,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
@@ -1153,7 +1138,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
-			func(_ context.Context, _ outbox.Entry) error { return nil })
+			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	}()
 
 	select {
@@ -1177,13 +1162,14 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty; ConsumerGroup is set.
 		ConsumerGroup:   "audit-core",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
-	err := sub.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1205,13 +1191,14 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "my-explicit-queue",
 		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1231,13 +1218,14 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// Both QueueName and ConsumerGroup empty — backward compat.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "my.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1264,7 +1252,7 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1294,7 +1282,7 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1305,29 +1293,18 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	ch.mu.Unlock()
 }
 
-func TestSubscriber_Subscribe_NoDLX_NilArgs(t *testing.T) {
-	conn, mockConn := newTestConnection(t)
-
-	ch := newMockChannel()
-	mockConn.mu.Lock()
-	mockConn.nextCh = ch
-	mockConn.mu.Unlock()
+func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
+	conn, _ := newTestConnection(t)
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		ShutdownTimeout: 2 * time.Second,
+		// DLXExchange deliberately left empty.
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := sub.Subscribe(ctx, "test.topic", func(_ context.Context, _ outbox.Entry) error { return nil })
-	assert.NoError(t, err)
-
-	ch.mu.Lock()
-	require.Len(t, ch.queueDeclareArgs, 1)
-	assert.Nil(t, ch.queueDeclareArgs[0], "queue args should be nil when DLX is not configured")
-	ch.mu.Unlock()
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
 
 // =============================================================================
@@ -1345,22 +1322,21 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 
 func TestConsumerBase_Wrap_Success(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		assert.Equal(t, "evt-001", e.ID)
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-001", EventType: "test.created"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err)
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
 
 	// Verify idempotency key was marked.
@@ -1372,46 +1348,44 @@ func TestConsumerBase_Wrap_Success(t *testing.T) {
 func TestConsumerBase_Wrap_AlreadyProcessed(t *testing.T) {
 	checker := newMockIdempotencyChecker()
 	checker.processed["test-group:evt-001"] = true
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-001"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err)
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.False(t, handlerCalled) // Should skip because already processed.
 }
 
 func TestConsumerBase_Wrap_TransientError_Retry(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond, // Fast for test.
 	})
 
 	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		callCount++
 		if callCount < 3 {
-			return errors.New("transient error")
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
 		}
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-002"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err)
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.Equal(t, 3, callCount) // Should retry 3 times total.
 
 	// Should be marked processed on success.
@@ -1420,122 +1394,109 @@ func TestConsumerBase_Wrap_TransientError_Retry(t *testing.T) {
 	checker.mu.Unlock()
 }
 
-func TestConsumerBase_Wrap_RetryExhausted_DLQ(t *testing.T) {
+func TestConsumerBase_Wrap_RetryExhausted_Reject(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     2,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
-		return errors.New("always fails")
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
 	})
 
 	entry := outbox.Entry{ID: "evt-003", EventType: "test.fail"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err) // Returns nil because message was DLQ'd.
+	res := handler(context.Background(), entry)
+	// Exhausted retries now return DispositionReject (broker routes to DLX).
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Error(t, res.Err)
 
-	// Verify DLQ message was published.
-	pub.mu.Lock()
-	require.Len(t, pub.messages, 1)
-	assert.Equal(t, "test.topic.dlq", pub.messages[0].topic)
-
-	var dlqEntry outbox.Entry
-	require.NoError(t, json.Unmarshal(pub.messages[0].payload, &dlqEntry))
-	assert.Equal(t, "evt-003", dlqEntry.ID)
-	assert.Equal(t, "always fails", dlqEntry.Metadata["x-death-reason"])
-	assert.Equal(t, "test.topic", dlqEntry.Metadata["x-death-topic"])
-	assert.Equal(t, "test-group", dlqEntry.Metadata["x-death-consumer-group"])
-	assert.Equal(t, "2", dlqEntry.Metadata["x-death-retry-count"])
-	pub.mu.Unlock()
-
-	// With TryProcess, the key is claimed atomically before the handler runs.
-	// Even though the handler failed and exhausted retries, the key remains marked
-	// to prevent duplicate processing by other consumers (message goes to DLQ).
+	// Receipt should be a checkerReceipt — Release is deferred to processDelivery.
+	require.NotNil(t, res.Receipt, "legacy Checker path should return a checkerReceipt")
+	// Key is still marked (TryProcess set it); Release happens in processDelivery.
 	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-003"])
+	assert.True(t, checker.processed["test-group:evt-003"], "key still marked before processDelivery Release")
+	checker.mu.Unlock()
+
+	// Simulate processDelivery calling Release after broker Nack.
+	require.NoError(t, res.Receipt.Release(context.Background()))
+	checker.mu.Lock()
+	assert.False(t, checker.processed["test-group:evt-003"], "key released after Receipt.Release")
 	checker.mu.Unlock()
 }
 
-func TestConsumerBase_Wrap_PermanentError_DLQ(t *testing.T) {
+func TestConsumerBase_Wrap_PermanentError_Reject(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
-		return NewPermanentError(errors.New("bad payload"))
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         NewPermanentError(errors.New("bad payload")),
+		}
 	})
 
 	entry := outbox.Entry{ID: "evt-004", EventType: "test.permanent"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err) // Returns nil because message was DLQ'd.
-
-	// Verify DLQ message was published — should only be called once (no retry).
-	pub.mu.Lock()
-	require.Len(t, pub.messages, 1)
-	assert.Equal(t, "test.topic.dlq", pub.messages[0].topic)
-	pub.mu.Unlock()
+	res := handler(context.Background(), entry)
+	// PermanentError → DispositionReject (no retry, broker routes to DLX).
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Equal(t, 1, callCount) // Should not retry.
 }
 
-func TestConsumerBase_Wrap_CustomDLQTopic(t *testing.T) {
+func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
-		RetryCount:     1,
+		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
-		DLQTopic:       "custom-dlq",
 	})
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
-		return errors.New("fail")
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("reject this")}
 	})
 
-	entry := outbox.Entry{ID: "evt-005"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err)
-
-	pub.mu.Lock()
-	require.Len(t, pub.messages, 1)
-	assert.Equal(t, "custom-dlq", pub.messages[0].topic)
-	pub.mu.Unlock()
+	entry := outbox.Entry{ID: "evt-explicit-reject"}
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Equal(t, 1, callCount)
 }
 
 func TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses(t *testing.T) {
 	checker := newMockIdempotencyChecker()
 	checker.tryProcErr = errors.New("redis down")
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-006"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err)
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled) // Should still process when idempotency check fails.
 }
 
 func TestConsumerBase_Wrap_ContextCancelled_DuringRetry(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 500 * time.Millisecond,
@@ -1543,14 +1504,14 @@ func TestConsumerBase_Wrap_ContextCancelled_DuringRetry(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		cancel() // Cancel context during first handler call.
-		return errors.New("transient error")
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
 	})
 
 	entry := outbox.Entry{ID: "evt-007"}
-	err := handler(ctx, entry)
-	assert.Error(t, err) // Should return context error.
+	res := handler(ctx, entry)
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition) // Should requeue on shutdown.
 }
 
 func TestPermanentError(t *testing.T) {
@@ -1562,83 +1523,58 @@ func TestPermanentError(t *testing.T) {
 	assert.Equal(t, inner, pe.Unwrap())
 }
 
-// --- P0 #5: DLQ publish failure must propagate error (not silently ACK) ---
+// --- Solution B: Reject goes to broker DLX, not application-side DLQ ---
 
-func TestConsumerBase_Wrap_DLQPublishFails_RetryExhausted_ReturnsError(t *testing.T) {
+func TestConsumerBase_Wrap_RetryExhausted_ReleasesIdempotencyKey(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
-	pub.err = errors.New("DLQ broker down")
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
-		return errors.New("always fails")
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
 	})
 
-	entry := outbox.Entry{ID: "evt-dlq-fail-001", EventType: "test.fail"}
-	err := handler(context.Background(), entry)
-	// When DLQ publish fails, Wrap must return an error so subscriber NACKs with requeue.
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "DLQ publish failed after retry exhaustion")
-	assert.Contains(t, err.Error(), "DLQ broker down")
-}
+	entry := outbox.Entry{ID: "evt-dlq-001", EventType: "test.fail"}
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 
-func TestConsumerBase_Wrap_DLQPublishFails_PermanentError_ReturnsError(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
-	pub.err = errors.New("DLQ broker down")
-
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
-		return NewPermanentError(errors.New("bad payload"))
-	})
-
-	entry := outbox.Entry{ID: "evt-dlq-fail-002", EventType: "test.permanent"}
-	err := handler(context.Background(), entry)
-	// When DLQ publish fails for a permanent error, Wrap must return an error.
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "DLQ publish failed for permanent error")
-	assert.Contains(t, err.Error(), "DLQ broker down")
+	// Receipt is deferred to processDelivery; simulate Release.
+	require.NotNil(t, res.Receipt)
+	require.NoError(t, res.Receipt.Release(context.Background()))
+	checker.mu.Lock()
+	assert.False(t, checker.processed["test-group:evt-dlq-001"])
+	checker.mu.Unlock()
 }
 
 // --- Extra fix: wrapped PermanentError detected via errors.As ---
 
 func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 
 	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) error {
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		callCount++
-		// Wrap PermanentError inside fmt.Errorf — the old type assertion would miss this.
-		return fmt.Errorf("handler context: %w", NewPermanentError(errors.New("unmarshal failed")))
+		// Wrap PermanentError inside fmt.Errorf — errors.As should still detect it.
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         fmt.Errorf("handler context: %w", NewPermanentError(errors.New("unmarshal failed"))),
+		}
 	})
 
 	entry := outbox.Entry{ID: "evt-wrapped-perm", EventType: "test.wrapped"}
-	err := handler(context.Background(), entry)
-	assert.NoError(t, err) // Should return nil because message was DLQ'd.
-	assert.Equal(t, 1, callCount) // Should not retry — permanent error detected on first attempt.
-
-	// Verify DLQ message was published.
-	pub.mu.Lock()
-	require.Len(t, pub.messages, 1)
-	assert.Equal(t, "test.topic.dlq", pub.messages[0].topic)
-	pub.mu.Unlock()
+	res := handler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, res.Disposition) // PermanentError → Reject.
+	assert.Equal(t, 1, callCount)                               // Should not retry.
 }
 
 // --- P0 #7: ctx cancel → NACK with requeue (conservative shutdown) ---
@@ -1653,6 +1589,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -1662,10 +1599,10 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	handler := func(_ context.Context, e outbox.Entry) error {
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		// Simulate ctx cancel happening before/during handler.
 		cancel()
-		return errors.New("transient error during shutdown")
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error during shutdown")}
 	}
 
 	go func() {
@@ -1685,7 +1622,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 	ch.mu.Lock()
 	assert.True(t, ch.nackCalled, "should NACK the delivery")
-	assert.True(t, ch.nackRequeue, "should NACK with requeue when ctx is cancelled — without DLX, requeue=false would discard the message")
+	assert.True(t, ch.nackRequeue, "should NACK with requeue when disposition is Requeue")
 	assert.Equal(t, uint64(42), ch.nackTag)
 	ch.mu.Unlock()
 
@@ -1698,9 +1635,8 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
@@ -1710,15 +1646,15 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	var _ outbox.TopicHandlerMiddleware = mw
 
 	handlerCalled := false
-	wrapped := mw("test.topic", func(_ context.Context, e outbox.Entry) error {
+	wrapped := mw("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		assert.Equal(t, "evt-mw-001", e.ID)
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-mw-001", EventType: "test.middleware"}
-	err := wrapped(context.Background(), entry)
-	assert.NoError(t, err)
+	res := wrapped(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
 
 	// Verify idempotency key was marked (ConsumerBase wrapping is active).
@@ -1730,31 +1666,29 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
 	checker := newMockIdempotencyChecker()
 	checker.processed["mw-group:evt-mw-dup"] = true
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
 	mw := cb.AsMiddleware()
 
 	handlerCalled := false
-	wrapped := mw("test.topic", func(_ context.Context, _ outbox.Entry) error {
+	wrapped := mw("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
 	entry := outbox.Entry{ID: "evt-mw-dup"}
-	err := wrapped(context.Background(), entry)
-	assert.NoError(t, err)
+	res := wrapped(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.False(t, handlerCalled, "handler should be skipped for duplicate event")
 }
 
-func TestConsumerBase_AsMiddleware_RoutesToDLQ_OnPermanentError(t *testing.T) {
+func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup:  "mw-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -1762,33 +1696,30 @@ func TestConsumerBase_AsMiddleware_RoutesToDLQ_OnPermanentError(t *testing.T) {
 
 	mw := cb.AsMiddleware()
 
-	wrapped := mw("orders.created", func(_ context.Context, _ outbox.Entry) error {
-		return NewPermanentError(errors.New("corrupted payload"))
+	wrapped := mw("orders.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         NewPermanentError(errors.New("corrupted payload")),
+		}
 	})
 
 	entry := outbox.Entry{ID: "evt-mw-perm", EventType: "orders.created"}
-	err := wrapped(context.Background(), entry)
-	assert.NoError(t, err) // DLQ'd, returns nil.
-
-	pub.mu.Lock()
-	require.Len(t, pub.messages, 1)
-	assert.Equal(t, "orders.created.dlq", pub.messages[0].topic)
-	pub.mu.Unlock()
+	res := wrapped(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, res.Disposition) // Reject → DLX.
 }
 
 func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	// Integration-style test: wire AsMiddleware into SubscriberWithMiddleware.
 	checker := newMockIdempotencyChecker()
-	pub := newMockPublisher()
 
-	cb := NewConsumerBase(checker, pub, ConsumerBaseConfig{
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 
 	// Use a simple recording subscriber to verify the chain works end-to-end.
-	var capturedHandler func(context.Context, outbox.Entry) error
+	var capturedHandler outbox.EntryHandler
 	innerSub := &stubSubscriber{
-		onSubscribe: func(_ context.Context, _ string, h func(context.Context, outbox.Entry) error) error {
+		onSubscribe: func(_ context.Context, _ string, h outbox.EntryHandler) error {
 			capturedHandler = h
 			return nil
 		},
@@ -1801,10 +1732,10 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 
 	var receivedEntry outbox.Entry
 	handlerCalled := false
-	handler := func(_ context.Context, e outbox.Entry) error {
+	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		receivedEntry = e
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
@@ -1813,8 +1744,8 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 
 	// Simulate an incoming entry.
 	entry := outbox.Entry{ID: "evt-integration-001", EventType: "events.test"}
-	err = capturedHandler(context.Background(), entry)
-	assert.NoError(t, err)
+	res := capturedHandler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
 	assert.Equal(t, "evt-integration-001", receivedEntry.ID)
 
@@ -1825,17 +1756,17 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 
 	// Calling again with the same event should be skipped.
 	handlerCalled = false
-	err = capturedHandler(context.Background(), entry)
-	assert.NoError(t, err)
+	res = capturedHandler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.False(t, handlerCalled, "duplicate should be skipped by ConsumerBase middleware")
 }
 
 // stubSubscriber is a minimal Subscriber for integration tests.
 type stubSubscriber struct {
-	onSubscribe func(context.Context, string, func(context.Context, outbox.Entry) error) error
+	onSubscribe func(context.Context, string, outbox.EntryHandler) error
 }
 
-func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler func(context.Context, outbox.Entry) error) error {
+func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
 	if s.onSubscribe != nil {
 		return s.onSubscribe(ctx, topic, handler)
 	}
@@ -1896,4 +1827,697 @@ func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT")
 	assert.Contains(t, err.Error(), "confirm channel closed")
+}
+
+// =============================================================================
+// Mock Claimer / Receipt for Solution B tests
+// =============================================================================
+
+type mockReceipt struct {
+	mu           sync.Mutex
+	commitCalled bool
+	commitErr    error
+	releaseCalled bool
+	releaseErr   error
+	commitCtx    context.Context
+	releaseCtx   context.Context
+}
+
+func (r *mockReceipt) Commit(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commitCalled = true
+	r.commitCtx = ctx
+	return r.commitErr
+}
+
+func (r *mockReceipt) Release(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseCalled = true
+	r.releaseCtx = ctx
+	return r.releaseErr
+}
+
+var _ outbox.Receipt = (*mockReceipt)(nil)
+
+type mockClaimer struct {
+	mu     sync.Mutex
+	state  idempotency.ClaimState
+	receipt outbox.Receipt
+	err    error
+	claims []string
+}
+
+func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.claims = append(c.claims, key)
+	return c.state, c.receipt, c.err
+}
+
+var _ idempotency.Claimer = (*mockClaimer)(nil)
+
+// --- ConsumerBase with Claimer tests ---
+
+func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	entry := outbox.Entry{ID: "evt-claimer-001"}
+	res := handler(context.Background(), entry)
+
+	assert.True(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through HandleResult")
+	// ConsumerBase must NOT call Commit/Release — that's processDelivery's job.
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled)
+	assert.False(t, receipt.releaseCalled)
+	receipt.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimDone}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-done"})
+	assert.False(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "ClaimDone should not return a Receipt")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimBusy}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-busy"})
+	assert.False(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
+func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("fail")}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-reject"})
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Reject should thread Receipt for processDelivery to Release")
+	// ConsumerBase must NOT call Commit/Release on Receipt.
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled)
+	assert.False(t, receipt.releaseCalled)
+	receipt.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
+	assert.True(t, handlerCalled, "should still process on claim error (fail-open)")
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "no Receipt on claim error")
+}
+
+// --- processDelivery Receipt lifecycle tests ---
+
+func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-ack-receipt", EventType: "test.ack"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 1,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.ackCalled)
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Ack should Commit Receipt")
+	assert.False(t, receipt.releaseCalled, "Ack should not Release Receipt")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-reject-receipt", EventType: "test.reject"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         errors.New("permanent"),
+			Receipt:     receipt,
+		}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 2,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	assert.False(t, ch.nackRequeue, "Reject should Nack without requeue")
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "Reject should NOT Commit Receipt")
+	assert.True(t, receipt.releaseCalled, "Reject should Release Receipt (allows DLQ replay)")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	// Should not panic even though Receipt is nil.
+	assert.NotPanics(t, func() {
+		sub.processDelivery(ctx, ch, amqp.Delivery{
+			DeliveryTag: 3,
+			Body:        entryBytes,
+		}, "test.topic", handler)
+	})
+}
+
+func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-detached-ctx", EventType: "test.ctx"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	// Use a cancelled context to simulate shutdown.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 4,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Receipt should still be committed because processDelivery uses
+	// context.WithoutCancel for Receipt operations. The parent ctx is
+	// cancelled but the receipt ctx is detached, so Commit succeeds.
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Receipt should be committed even with cancelled parent ctx")
+	assert.False(t, receipt.releaseCalled, "Should Commit, not Release")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-requeue-receipt", EventType: "test.requeue"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("transient"),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 10,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	assert.True(t, ch.nackRequeue)
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "Requeue should not Commit")
+	assert.True(t, receipt.releaseCalled, "Requeue should Release Receipt")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	// No DLXExchange configured — Subscribe should fail before any delivery processing.
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+		// DLXExchange deliberately left empty.
+	})
+
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DLXExchange is required")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimBusy}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryBaseDelay: 50 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		t.Fatal("handler should not be called for ClaimBusy")
+		return outbox.HandleResult{}
+	})
+
+	start := time.Now()
+	res := handler(context.Background(), outbox.Entry{ID: "evt-busy-backoff"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "ClaimBusy should backoff before requeue")
+}
+
+func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.ackErr = errors.New("channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-broker-fail", EventType: "test.brokerfail"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 5,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "should not Commit when broker Ack fails")
+	assert.True(t, receipt.releaseCalled, "should Release when broker Ack fails")
+	receipt.mu.Unlock()
+}
+
+// =============================================================================
+// ClaimFailOpen config tests
+// =============================================================================
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+		ClaimFailOpen: boolPtr(false),
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-fail-closed"})
+	assert.False(t, handlerCalled, "handler must NOT be called when fail-closed")
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "redis down")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+		ClaimFailOpen: boolPtr(true),
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-fail-open-explicit"})
+	assert.True(t, handlerCalled, "handler must be called when fail-open is explicit")
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "no Receipt when claim fails")
+}
+
+// =============================================================================
+// processDelivery uncovered branch tests
+// =============================================================================
+
+func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	// Handler returns DispositionAck but also an error (e.g., a warning).
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Err:         errors.New("warning: partial data"),
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 20,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Ack should still be called (error does not affect disposition).
+	ch.mu.Lock()
+	assert.True(t, ch.ackCalled, "Ack should be called even when handler reports an error")
+	assert.Equal(t, uint64(20), ch.ackTag)
+	assert.False(t, ch.nackCalled, "Nack should NOT be called for DispositionAck")
+	ch.mu.Unlock()
+}
+
+func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.nackErr = errors.New("channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-requeue-nack-fail", EventType: "test.requeue.nackfail"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("transient"),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 30,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Nack was attempted (requeue=true) but failed.
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	ch.mu.Unlock()
+
+	// Receipt should be Released because broker nack failed (brokerErr != nil path).
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "should not Commit when broker Nack fails")
+	assert.True(t, receipt.releaseCalled, "should Release when broker Nack fails, so redelivery can re-enter")
+	receipt.mu.Unlock()
+}
+
+func TestIsRecoverableAMQPError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "non-AMQP error",
+			err:  errors.New("some random error"),
+			want: false,
+		},
+		{
+			name: "AMQP error with Recover=true",
+			err:  &amqp.Error{Code: 501, Reason: "frame error", Server: true, Recover: true},
+			want: true,
+		},
+		{
+			name: "AMQP error with Recover=false",
+			err:  &amqp.Error{Code: 403, Reason: "access refused", Server: true, Recover: false},
+			want: false,
+		},
+		{
+			name: "connection error Code 320 (connection forced) with Recover=true",
+			err:  &amqp.Error{Code: 320, Reason: "connection forced", Server: true, Recover: true},
+			want: true,
+		},
+		{
+			name: "channel error Code 404 (not found) with Recover=false",
+			err:  &amqp.Error{Code: 404, Reason: "not found", Server: true, Recover: false},
+			want: false,
+		},
+		{
+			name: "amqp.ErrClosed",
+			err:  amqp.ErrClosed,
+			want: true,
+		},
+		{
+			name: "wrapped amqp.ErrClosed",
+			err:  fmt.Errorf("channel: %w", amqp.ErrClosed),
+			want: true,
+		},
+		{
+			name: "ErrAdapterAMQPConnect errcode",
+			err:  errcode.New(ErrAdapterAMQPConnect, "connection not available"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRecoverableAMQPError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestConsumerBase_Wrap_ReleaseCheckerError_Logged(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	checker.releaseErr = errors.New("redis timeout")
+
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+	})
+
+	entry := outbox.Entry{ID: "evt-release-err", EventType: "test.release.err"}
+	res := handler(context.Background(), entry)
+
+	// Retry exhausted (RetryCount=1) → DispositionReject.
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+
+	// Receipt defers Release to processDelivery. Simulate it.
+	require.NotNil(t, res.Receipt)
+	err := res.Receipt.Release(context.Background())
+	assert.Error(t, err, "Release should propagate checker error")
+	assert.Contains(t, err.Error(), "redis timeout")
+
+	checker.mu.Lock()
+	assert.Contains(t, checker.releaseCalls, "test-group:evt-release-err",
+		"Release should have been called with the idempotency key")
+	checker.mu.Unlock()
+}
+
+func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-unknown-disp", EventType: "test.unknown"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.Disposition(99),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 42,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Unknown disposition should Nack with requeue=true.
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled, "unknown disposition should trigger Nack")
+	assert.True(t, ch.nackRequeue, "unknown disposition should requeue")
+	ch.mu.Unlock()
+
+	// Receipt should be Released (not Committed) for unknown disposition.
+	receipt.mu.Lock()
+	assert.True(t, receipt.releaseCalled, "unknown disposition should Release Receipt")
+	assert.False(t, receipt.commitCalled, "unknown disposition should not Commit Receipt")
+	receipt.mu.Unlock()
 }

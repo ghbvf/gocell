@@ -166,6 +166,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:       "outbox.fullchain.queue",
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 	checker := redis.NewIdempotencyChecker(redisClient)
@@ -236,9 +237,9 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
