@@ -59,13 +59,13 @@
 
 | 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
 |------|-----|------|------|------|------|
-| K-1 | CS-AR-2 | Dependencies 精简 + 冻结注释 | `kernel/cell/interfaces.go`, `kernel/assembly/assembly.go`, ~20 test files | 1h | ~~Phase 2~~ ✅ 无阻塞 |
-| K-2 | CS-AR-3 | net/http ADR 注释 | `kernel/cell/registrar.go` | 15min | 无 |
-| K-3 | F-OB-01 | BatchWriter 接口 + WriteBatchFallback | `kernel/outbox/outbox.go`, `adapters/postgres/outbox_writer.go` | 3h | 无 |
+| ~~K-1~~ | CS-AR-2 | ~~Dependencies 精简 + 冻结注释~~ | — | — | ✅ PR#79 |
+| ~~K-2~~ | CS-AR-3 | ~~net/http ADR 注释~~ | — | — | ✅ PR#79（ADR 已存在于 registrar.go） |
+| ~~K-3~~ | F-OB-01 | ~~BatchWriter 接口 + WriteBatchFallback~~ | — | — | ✅ PR#79 |
 | K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
-| K-5 | — | 三角色审查 mandatory actions | Dependencies 冻结 + registrar ADR + WriteBatchFallback godoc | 含在 K-1/K-2/K-3 |
+| ~~K-5~~ | — | ~~三角色审查 mandatory actions~~ | — | — | ✅ 含在 PR#79 |
 
-> K-1/K-2/K-3 全程无阻塞可并行（Phase 2 已合并）；K-4 依赖 Phase 3
+> ~~K-1/K-2/K-3~~ ✅ 已合并（PR#79）；K-4 依赖 Phase 3
 
 ---
 
@@ -355,7 +355,7 @@
 | A | Phase 1: PermanentError → kernel | PR#74 | ✅ |
 | A | Phase 2: EventRouter 引入 | PR#76 | ✅ |
 | B | 0-G B-03 RabbitMQ 重连 backoff | PR#75 | ✅ |
-| B | K-2 net/http ADR 注释 | — | 待做 |
+| B | K-1/K-2/K-3/K-5 Kernel 架构整理 | PR#79 | ✅ |
 
 ### Batch 3: Tier 0 收尾 + 基础稳定（2d，Batch 2 后）
 

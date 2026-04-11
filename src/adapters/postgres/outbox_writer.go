@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -14,8 +16,9 @@ import (
 // uuidPattern matches a canonical UUID string (8-4-4-4-12 hex digits).
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// Compile-time interface check.
+// Compile-time interface checks.
 var _ outbox.Writer = (*OutboxWriter)(nil)
+var _ outbox.BatchWriter = (*OutboxWriter)(nil)
 
 // OutboxWriter writes outbox entries within a PostgreSQL transaction.
 // It relies on TxFromContext to obtain the current transaction, ensuring
@@ -78,6 +81,84 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery,
 			fmt.Sprintf("outbox: failed to insert entry %s", entry.ID), err)
+	}
+
+	return nil
+}
+
+// WriteBatch inserts multiple outbox entries in a single multi-row INSERT
+// within the caller's transaction. All entries are validated upfront;
+// if any entry is invalid, no entries are written.
+//
+// An empty entries slice is a no-op and returns nil.
+// All-or-nothing: the transaction guarantees atomicity.
+func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return errcode.New(ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
+	}
+
+	// Validate all entries upfront.
+	for i, e := range entries {
+		if e.ID == "" {
+			return errcode.New(errcode.ErrValidationFailed,
+				fmt.Sprintf("outbox entry[%d] ID must not be empty", i))
+		}
+		if !uuidPattern.MatchString(e.ID) {
+			return errcode.New(errcode.ErrValidationFailed,
+				fmt.Sprintf("outbox entry[%d] ID is not a valid UUID: %s", i, e.ID))
+		}
+		if err := e.Validate(); err != nil {
+			return fmt.Errorf("outbox entry[%d]: %w", i, err)
+		}
+	}
+
+	// Build multi-row INSERT: INSERT INTO ... VALUES ($1,...,$9), ($10,...,$18), ...
+	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO outbox_entries
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published)
+		VALUES `)
+
+	args := make([]any, 0, len(entries)*cols)
+	for i, e := range entries {
+		metadata, err := json.Marshal(e.Metadata)
+		if err != nil {
+			return errcode.Wrap(ErrAdapterPGMarshal,
+				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", i), err)
+		}
+
+		createdAt := e.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
+		}
+
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		base := i * cols
+		sb.WriteString("(")
+		for j := range cols {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("$")
+			sb.WriteString(strconv.Itoa(base + j + 1))
+		}
+		sb.WriteString(")")
+
+		args = append(args, e.ID, e.AggregateID, e.AggregateType,
+			e.EventType, e.Topic, e.Payload, metadata, createdAt, false)
+	}
+
+	_, err := tx.Exec(ctx, sb.String(), args...)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGQuery,
+			fmt.Sprintf("outbox: failed to batch insert %d entries", len(entries)), err)
 	}
 
 	return nil

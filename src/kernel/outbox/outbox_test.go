@@ -472,6 +472,117 @@ func TestEntry_Validate(t *testing.T) {
 	}
 }
 
+// --- WriteBatchFallback Tests (F-OB-01) ---
+
+// batchRecorder implements BatchWriter and records calls.
+type batchRecorder struct {
+	writeEntries []Entry
+	batchEntries []Entry
+	writeErr     error
+	batchErr     error
+}
+
+func (r *batchRecorder) Write(ctx context.Context, entry Entry) error {
+	r.writeEntries = append(r.writeEntries, entry)
+	return r.writeErr
+}
+
+func (r *batchRecorder) WriteBatch(ctx context.Context, entries []Entry) error {
+	r.batchEntries = entries
+	return r.batchErr
+}
+
+var _ BatchWriter = (*batchRecorder)(nil)
+
+// sequentialRecorder implements only Writer (no BatchWriter).
+type sequentialRecorder struct {
+	entries  []Entry
+	writeErr error
+	failAt   int // fail on the Nth write (0-based); -1 = never fail
+}
+
+func (r *sequentialRecorder) Write(_ context.Context, entry Entry) error {
+	if r.failAt >= 0 && len(r.entries) == r.failAt {
+		return r.writeErr
+	}
+	r.entries = append(r.entries, entry)
+	return nil
+}
+
+var _ Writer = (*sequentialRecorder)(nil)
+
+func validEntry(id string) Entry {
+	return Entry{ID: id, Topic: "test.topic", Payload: []byte("{}")}
+}
+
+func TestWriteBatchFallback_EmptySlice(t *testing.T) {
+	w := &batchRecorder{}
+	err := WriteBatchFallback(context.Background(), w, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, w.batchEntries)
+	assert.Nil(t, w.writeEntries)
+
+	err = WriteBatchFallback(context.Background(), w, []Entry{})
+	assert.NoError(t, err)
+}
+
+func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
+	w := &batchRecorder{}
+	entries := []Entry{
+		validEntry("e1"),
+		{ID: "e2", Payload: []byte("{}")}, // missing topic
+		validEntry("e3"),
+	}
+
+	err := WriteBatchFallback(context.Background(), w, entries)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "entry[1]")
+	assert.Nil(t, w.batchEntries, "no writes should occur on validation failure")
+	assert.Nil(t, w.writeEntries)
+}
+
+func TestWriteBatchFallback_UsesBatchWriter(t *testing.T) {
+	w := &batchRecorder{}
+	entries := []Entry{validEntry("e1"), validEntry("e2")}
+
+	err := WriteBatchFallback(context.Background(), w, entries)
+	assert.NoError(t, err)
+	assert.Len(t, w.batchEntries, 2)
+	assert.Nil(t, w.writeEntries, "should not use sequential Write when BatchWriter is available")
+}
+
+func TestWriteBatchFallback_BatchWriterError(t *testing.T) {
+	w := &batchRecorder{batchErr: errors.New("batch insert failed")}
+	entries := []Entry{validEntry("e1")}
+
+	err := WriteBatchFallback(context.Background(), w, entries)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "batch insert failed")
+}
+
+func TestWriteBatchFallback_SequentialFallback(t *testing.T) {
+	w := &sequentialRecorder{failAt: -1}
+	entries := []Entry{validEntry("e1"), validEntry("e2"), validEntry("e3")}
+
+	err := WriteBatchFallback(context.Background(), w, entries)
+	assert.NoError(t, err)
+	assert.Len(t, w.entries, 3)
+}
+
+func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
+	w := &sequentialRecorder{
+		failAt:   1,
+		writeErr: errors.New("db write failed"),
+	}
+	entries := []Entry{validEntry("e1"), validEntry("e2"), validEntry("e3")}
+
+	err := WriteBatchFallback(context.Background(), w, entries)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "entry[1]")
+	assert.Contains(t, err.Error(), "db write failed")
+	assert.Len(t, w.entries, 1, "only the first entry should have been written")
+}
+
 // --- HandleResult tests ---
 
 func TestHandleResult_Fields(t *testing.T) {
