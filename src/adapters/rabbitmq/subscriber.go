@@ -141,10 +141,10 @@ func (s *Subscriber) resolveQueueName(topic string) string {
 // or defaulting to the topic) is declared and bound to the exchange.
 //
 // Consumer: cg-{QueueName}-{topic}
-// Idempotency key: handled by ConsumerBase (not in Subscriber)
-// ACK timing: after handler returns nil
-// Retry: transient errors -> NACK+requeue / permanent errors -> handled by ConsumerBase DLQ
-func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(context.Context, outbox.Entry) error) error {
+// Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
+// ACK timing: after handler returns DispositionAck
+// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) → DLX
+func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
 	if s.closed.Load() {
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
@@ -214,7 +214,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler func(c
 func (s *Subscriber) subscribeOnce(
 	ctx context.Context,
 	topic, queueName string,
-	handler func(context.Context, outbox.Entry) error,
+	handler outbox.EntryHandler,
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
@@ -322,7 +322,7 @@ func (s *Subscriber) consumeLoop(
 	ch AMQPChannel,
 	deliveries <-chan amqp.Delivery,
 	topic string,
-	handler func(context.Context, outbox.Entry) error,
+	handler outbox.EntryHandler,
 ) error {
 	for {
 		select {
@@ -354,7 +354,7 @@ func (s *Subscriber) processDelivery(
 	ch AMQPChannel,
 	delivery amqp.Delivery,
 	topic string,
-	handler func(context.Context, outbox.Entry) error,
+	handler outbox.EntryHandler,
 ) {
 	defer s.wg.Done()
 
@@ -379,42 +379,76 @@ func (s *Subscriber) processDelivery(
 	}
 	entry.Metadata["topic"] = topic
 
-	if err := handler(ctx, entry); err != nil {
-		// If the context is cancelled (shutdown), NACK with requeue so the broker
-		// redelivers the message to another consumer. Without DLX configured,
-		// requeue=false would silently discard the message.
-		if ctx.Err() != nil {
-			slog.Info("rabbitmq: context cancelled during handler, nacking with requeue",
+	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
+	res := handler(ctx, entry)
+
+	// Execute broker-level disposition.
+	var brokerErr error
+	switch res.Disposition {
+	case outbox.DispositionAck:
+		brokerErr = ch.Ack(delivery.DeliveryTag, false)
+		if brokerErr != nil {
+			slog.Error("rabbitmq: ack failed",
 				slog.String("topic", topic),
 				slog.String("event_id", entry.ID),
-				slog.String("error", err.Error()))
-			if nackErr := ch.Nack(delivery.DeliveryTag, false, true); nackErr != nil {
-				slog.Error("rabbitmq: nack failed",
-					slog.String("topic", topic),
-					slog.String("error", nackErr.Error()))
-			}
-			return
+				slog.String("error", brokerErr.Error()))
 		}
+	case outbox.DispositionReject:
+		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
+		if brokerErr != nil {
+			slog.Error("rabbitmq: nack(reject) failed",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", brokerErr.Error()))
+		}
+	case outbox.DispositionRequeue:
+		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
+		if brokerErr != nil {
+			slog.Error("rabbitmq: nack(requeue) failed",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", brokerErr.Error()))
+		}
+	}
 
-		// Handler error is a transient failure — NACK with requeue.
-		slog.Warn("rabbitmq: handler returned error, nacking with requeue",
+	// Log handler-level error if present (separate from broker error).
+	if res.Err != nil {
+		slog.Warn("rabbitmq: handler reported error",
 			slog.String("topic", topic),
 			slog.String("event_id", entry.ID),
-			slog.String("error", err.Error()))
-		if nackErr := ch.Nack(delivery.DeliveryTag, false, true); nackErr != nil {
-			slog.Error("rabbitmq: nack failed",
+			slog.String("disposition", res.Disposition.String()),
+			slog.String("error", res.Err.Error()))
+	}
+
+	// Commit or release the idempotency receipt based on broker outcome.
+	if res.Receipt == nil {
+		return
+	}
+	if brokerErr != nil {
+		// Broker disposition failed — release so redelivery can re-enter.
+		if relErr := res.Receipt.Release(ctx); relErr != nil {
+			slog.Error("rabbitmq: receipt release failed after broker error",
 				slog.String("topic", topic),
-				slog.String("error", nackErr.Error()))
+				slog.String("event_id", entry.ID),
+				slog.String("error", relErr.Error()))
 		}
 		return
 	}
-
-	// Handler succeeded — ACK.
-	if err := ch.Ack(delivery.DeliveryTag, false); err != nil {
-		slog.Error("rabbitmq: ack failed",
-			slog.String("topic", topic),
-			slog.String("event_id", entry.ID),
-			slog.String("error", err.Error()))
+	switch res.Disposition {
+	case outbox.DispositionAck, outbox.DispositionReject:
+		if commitErr := res.Receipt.Commit(ctx); commitErr != nil {
+			slog.Error("rabbitmq: receipt commit failed",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", commitErr.Error()))
+		}
+	case outbox.DispositionRequeue:
+		if relErr := res.Receipt.Release(ctx); relErr != nil {
+			slog.Error("rabbitmq: receipt release failed",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", relErr.Error()))
+		}
 	}
 }
 

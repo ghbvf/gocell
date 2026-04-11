@@ -23,11 +23,11 @@ func TestPublishSubscribe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "test.topic", func(_ context.Context, e outbox.Entry) error {
+		done <- bus.Subscribe(ctx, "test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			mu.Lock()
 			received = append(received, e)
 			mu.Unlock()
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -75,9 +75,9 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "retry.topic", func(_ context.Context, e outbox.Entry) error {
+		done <- bus.Subscribe(ctx, "retry.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
-			return testErr
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}
 		})
 	}()
 
@@ -108,6 +108,42 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	<-done
 }
 
+func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var attempts atomic.Int32
+	testErr := errors.New("permanent error")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "reject.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			attempts.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: testErr}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "reject.topic", []byte("perm-fail"))
+	require.NoError(t, err)
+
+	// Should go directly to dead letter on first attempt (no retries).
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, time.Second, 50*time.Millisecond)
+
+	assert.Equal(t, int32(1), attempts.Load(), "reject should not trigger retries")
+
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, testErr, dl[0].LastErr)
+
+	cancel()
+	<-done
+}
+
 func TestClose_PreventsFurtherPublish(t *testing.T) {
 	bus := New()
 	err := bus.Close()
@@ -127,8 +163,8 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 	bus := New()
 	_ = bus.Close()
 
-	err := bus.Subscribe(context.Background(), "topic", func(_ context.Context, e outbox.Entry) error {
-		return nil
+	err := bus.Subscribe(context.Background(), "topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 	assert.Error(t, err)
 }
@@ -145,16 +181,16 @@ func TestMultipleSubscribers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) error {
+		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count1.Add(1)
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) error {
+		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count2.Add(1)
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -180,12 +216,12 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "partial.fail", func(_ context.Context, e outbox.Entry) error {
+		done <- bus.Subscribe(ctx, "partial.fail", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			n := attempts.Add(1)
 			if n < 3 {
-				return errors.New("not yet")
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("not yet")}
 			}
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -225,8 +261,8 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "cleanup.topic", func(_ context.Context, e outbox.Entry) error {
-			return nil
+		done <- bus.Subscribe(ctx, "cleanup.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 

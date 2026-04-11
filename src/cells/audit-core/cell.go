@@ -168,11 +168,12 @@ func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 
 // RegisterSubscriptions registers event subscriptions for all 6 topics.
 func (c *AuditCore) RegisterSubscriptions(sub outbox.Subscriber) {
+	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
 	for _, topic := range auditappend.Topics {
 		topic := topic
 		go func() {
 			ctx := context.Background()
-			if err := sub.Subscribe(ctx, topic, c.appendSvc.HandleEvent); err != nil {
+			if err := sub.Subscribe(ctx, topic, handler); err != nil {
 				c.logger.Error("audit-core: subscription ended",
 					slog.Any("error", err), slog.String("topic", topic))
 			}

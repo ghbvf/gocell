@@ -114,9 +114,9 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Run subscriber in a goroutine since Subscribe blocks.
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -213,9 +213,9 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 
 	// Start DLQ subscriber first.
 	go func() {
-		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) error {
+		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			dlqReceived <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
@@ -225,21 +225,19 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	// Create a ConsumerBase with RetryCount=2 and very short delays.
 	cb := NewConsumerBase(
 		&noopChecker{},
-		pub,
 		ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-group",
 			RetryCount:     2,
 			RetryBaseDelay: 100 * time.Millisecond,
 			IdempotencyTTL: time.Hour,
-			DLQTopic:       dlqTopic,
 		},
 	)
 
 	// Wrap a handler that always fails with a transient error.
 	callCount := 0
-	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) error {
+	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount++
-		return assert.AnError
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
 	})
 
 	// Publish a message.
@@ -251,21 +249,10 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	}
 
 	// Invoke the wrapped handler directly (simulates what Subscriber does).
-	err := wrappedHandler(ctx, entry)
-	assert.NoError(t, err, "wrapped handler should return nil (message is DLQ'd)")
+	res := wrappedHandler(ctx, entry)
+	// In Solution B, exhausted retries return Reject (broker routes to DLX).
+	assert.Equal(t, outbox.DispositionReject, res.Disposition, "exhausted retries should reject")
 	assert.Equal(t, 2, callCount, "handler should be called RetryCount times")
-
-	// Wait for the DLQ message.
-	select {
-	case dlqEntry := <-dlqReceived:
-		assert.Equal(t, entry.ID, dlqEntry.ID, "DLQ entry should have same event ID")
-		assert.Contains(t, dlqEntry.Metadata["x-death-reason"], "assert.AnError",
-			"DLQ metadata should contain the error reason")
-		assert.Equal(t, "test-retry-group", dlqEntry.Metadata["x-death-consumer-group"],
-			"DLQ metadata should contain consumer group")
-	case <-dlqCtx.Done():
-		t.Fatal("timed out waiting for DLQ message")
-	}
 
 	// Clean up.
 	dlqCancel()

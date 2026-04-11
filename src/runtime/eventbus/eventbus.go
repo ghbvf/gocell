@@ -109,14 +109,14 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	return nil
 }
 
-// Subscribe registers a handler for the given topic. It blocks until ctx is
-// cancelled or the bus is closed.
+// Subscribe registers an EntryHandler for the given topic. It blocks until ctx
+// is cancelled or the bus is closed.
 //
 // Consumer: cg-eventbus-{topic}
 // Idempotency key: N/A (in-memory, no persistence)
-// ACK timing: after handler returns nil
+// ACK timing: after handler returns DispositionAck
 // Retry: transient errors -> retry 3x with exponential backoff / permanent -> dead letter
-func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler func(context.Context, outbox.Entry) error) error {
+func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
 	subCtx, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
@@ -211,17 +211,36 @@ func (b *InMemoryEventBus) removeSub(topic string, target *subscription) {
 	}
 }
 
-func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler func(context.Context, outbox.Entry) error) {
+func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.EntryHandler) {
 	var lastErr error
 	for attempt := range maxRetries {
-		if err := handler(ctx, entry); err != nil {
-			lastErr = err
+		res := handler(ctx, entry)
+		switch res.Disposition {
+		case outbox.DispositionAck:
+			return // success or safe duplicate
+		case outbox.DispositionReject:
+			// Permanent failure — route directly to dead letter.
+			slog.Warn("eventbus: handler rejected message, routing to dead letter",
+				slog.String("topic", topic),
+				slog.String("entry_id", entry.ID),
+				slog.Any("error", res.Err),
+			)
+			b.deadLettersMu.Lock()
+			b.deadLetters = append(b.deadLetters, DeadLetter{
+				Topic:   topic,
+				Entry:   entry,
+				LastErr: res.Err,
+			})
+			b.deadLettersMu.Unlock()
+			return
+		case outbox.DispositionRequeue:
+			lastErr = res.Err
 			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
 			delay := baseRetryDelay*(1<<attempt) + jitter // e.g. 100-200ms, 200-300ms, 400-500ms
-			slog.Warn("eventbus: handler error, retrying",
+			slog.Warn("eventbus: handler requested requeue, retrying",
 				slog.String("topic", topic),
 				slog.Int("attempt", attempt+1),
-				slog.Any("error", err),
+				slog.Any("error", res.Err),
 				slog.Duration("retry_delay", delay),
 			)
 			select {
@@ -231,7 +250,6 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 				continue
 			}
 		}
-		return // success
 	}
 
 	// Exhausted retries → dead letter.

@@ -176,7 +176,8 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 func (c *ConfigCore) RegisterSubscriptions(sub outbox.Subscriber) {
 	go func() {
 		ctx := context.Background()
-		if err := sub.Subscribe(ctx, configsubscribe.TopicConfigChanged, c.subscribeSvc.HandleEvent); err != nil {
+		handler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEvent)
+		if err := sub.Subscribe(ctx, configsubscribe.TopicConfigChanged, handler); err != nil {
 			c.logger.Error("config-subscribe: subscription ended",
 				slog.Any("error", err))
 		}

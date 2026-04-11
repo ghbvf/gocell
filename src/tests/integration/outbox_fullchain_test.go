@@ -236,9 +236,9 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
-			return nil
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
