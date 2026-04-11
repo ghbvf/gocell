@@ -193,54 +193,37 @@
 | F-5 | `kernel/journey/catalog.go` | Journey catalog 不校验引用 | TODO |
 | F-2 | `kernel/assembly/assembly.go` | Start()/StartWithConfig() 重复代码 | ✅ 已重构为 startInternal |
 
-#### P1 — kernel 六角色深审新发现（12 条）
+#### P1 — kernel 六角色深审新发现（~~12~~ 0 条未修，全部已修）
 
 > 来源：`tools/docs/reviews/2026-04-09-*`（4 组六角色审查）
-> 跨模块共性：① 数据所有权不隔离 ② Metadata 声明 ≠ 运行时行为 ③ 输入校验缺失 ④ 假绿测试
+> 全部修复于 PR#59-64。验证日期: 2026-04-11。
 
-**安全（1 条）：**
-
-| ID | 文件 | 问题 |
+| ID | 问题 | 状态 |
 |----|------|------|
-| ASJ-2 | `kernel/scaffold/scaffold.go:64-223` | scaffold 多入口路径穿越：ID/CellID/OwnerCell 含 `..` 可写任意文件 |
+| ASJ-2 | scaffold 路径穿越 | ✅ PR#59 validatePathComponent |
+| CS-F1 | VerifySlice 不消费 metadata | ✅ PR#61 kernel/verify 重构 |
+| CS-F2 | VerifyCell 硬编码 -run Smoke | ✅ PR#61 + PR#62 smoke stubs |
+| CS-F3 | 零匹配测试当成功 | ✅ PR#61 ZeroMatch 检测 |
+| CS-F4 | manual criteria 不参与判定 | ✅ PR#61 ManualPending |
+| GOV-1 | TOPO-04 用 ownerCell 做约束 | ✅ PR#60 contractProvider |
+| GOV-2 | DEP-03 空 assembly 绕过 | ✅ PR#59 |
+| GOV-3 | active contract 无 provider | ✅ PR#60 VERIFY-04 |
+| MR-R01 | belongsToCell 路径不一致 | ✅ PR#59 |
+| MR-R02 | ownerCell 未推导 | ✅ PR#60 inferContractOwner |
+| MR-R03 | integration test 硬编码 | ✅ PR#59 GreaterOrEqual |
+| ASJ-1 | journey id 缺 J- 前缀 | ✅ PR#59 |
 
-**假绿 / verify 系统失效（4 条）：**
+#### P2 — kernel 六角色深审新发现（~~7~~ 0 条未修，全部已修）
 
-| ID | 文件 | 问题 |
+| ID | 问题 | 状态 |
 |----|------|------|
-| CS-F1 | `kernel/slice/verify.go:61` | VerifySlice 完全不消费 metadata 声明的 verify.unit / verify.contract | ✅ PR#61 + PR#62 |
-| CS-F2 | `kernel/slice/verify.go:89` | VerifyCell 完全不消费 verify.smoke，硬编码 `-run Smoke` | ✅ PR#61 + PR#62 |
-| CS-F3 | `kernel/slice/verify.go:181,205` | RunJourney + runGoTest 零匹配测试当成功（checkRef 退化为 `./...`） | ✅ PR#61 ZeroMatch 检测 |
-| CS-F4 | `kernel/slice/verify.go:117,123` | RunJourney manual criteria 不参与判定，自动检查没失败 = "已通过" | ✅ PR#61 ManualPending |
-
-**治理语义错误（3 条）：**
-
-| ID | 文件 | 问题 |
-|----|------|------|
-| GOV-1 | `kernel/governance/rules_topo.go:97-127` | TOPO-04 拿 ownerCell 当 provider 做一致性约束（误报+漏报） |
-| GOV-2 | `kernel/governance/depcheck.go:177-205` | DEP-03 空 assembly 绕过同域约束（零值 `""` 当合法 ID） |
-| GOV-3 | `kernel/governance/validate.go:106-137` | active contract 可零 provider 实现通过校验（幽灵能力） |
-
-**数据完整性（4 条）：**
-
-| ID | 文件 | 问题 |
-|----|------|------|
-| MR-R01 | `kernel/metadata/parser.go:148-156` + `kernel/registry/cell.go:31-36` | parser 与 registry slice 归属可产出矛盾视图（目录路径 vs belongsToCell） |
-| MR-R02 | `kernel/metadata/parser.go:165` + `kernel/registry/contract.go:28` | schema 声称 ownerCell 可省略并默认到 provider，实现未回填 |
-| MR-R03 | `kernel/metadata/parser_integration_test.go:30-80` | integration test 硬编码数字已过期（Cells 3→6, Slices 16→21），启用即红 |
-| ASJ-1 | `kernel/scaffold/scaffold.go:151-173` + `templates/journey.yaml.tpl` | CreateJourney 生成文件违反 J-* schema（id 缺 J- 前缀，passCriteria 为空） |
-
-#### P2 — kernel 六角色深审新发现（7 条）
-
-| ID | 文件 | 问题 |
-|----|------|------|
-| CS-F5 | `kernel/cell/base.go:222-243` | BaseSlice getter/setter 暴露可变内部切片（与 BaseCell defensive copy 不一致） |
-| MR-R05 | `kernel/registry/cell.go:48-53` + `contract.go:39-76` | registry 声称 read-only 但返回内部可变指针，调用方可篡改 |
-| ASJ-3 | `kernel/assembly/assembly.go:57-76` | CoreAssembly.Register(nil) 直接 panic，非可处理错误 |
-| ASJ-4 | `kernel/journey/catalog.go:20-35,74-129` | journey.Catalog 返回原始可变指针，外部可污染内部状态 |
-| ASJ-5 | `kernel/assembly/generator.go:170-204` | sourceFingerprint 不含 contract metadata，boundary 变更检测假阴性 |
-| GOV-5 | `kernel/governance/rules_verify.go:10-57` | verify/checkRef 标识符格式无静态校验，坏格式延迟到运行期才炸 |
-| GOV-6 | `kernel/governance/targets.go:34-180` | select-targets 不追踪 l0Dependencies，L0 变更不选入依赖方 |
+| CS-F5 | BaseSlice 可变切片暴露 | ✅ PR#59 defensive copy |
+| MR-R05 | registry 可变指针 | ✅ PR#60 deepCopy |
+| ASJ-3 | Register(nil) panic | ✅ PR#59 nil guard |
+| ASJ-4 | Catalog 可变指针 | ✅ PR#59 copyJourneyMeta |
+| ASJ-5 | fingerprint 缺 contract | ✅ PR#59 boundary hash |
+| GOV-5 | verify 格式无校验 | ✅ PR#64 VERIFY-05 |
+| GOV-6 | select-targets 缺 L0 | ✅ PR#64 expandL0Dependents |
 
 #### P1 — pkg（~~3~~ 0 条，全部已修）
 
@@ -261,40 +244,46 @@
 | R1C2-F02 | `runtime/eventbus/eventbus.go` | Subscribe 退出时 subs map 泄漏 stale channel | TODO |
 | R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | TODO |
 
-#### P2 — kernel 旧有（~~7~~ 6 条未修）
+#### P2 — kernel 旧有（~~7~~ 1 条未修）
 
 | ID | 文件 | 问题 | 状态 |
 |----|------|------|------|
-| R1B1-03 | `kernel/cell/base.go:85-93` | Init 不重置 shutdownCtx/Cancel，Stop→Init→Start 复用过期 context | TODO |
-| R1B1-04 | `kernel/cell/base.go:39` | sync.Mutex 应改 sync.RWMutex（读多写少） | TODO |
-| F-OB-01 | `kernel/outbox/outbox.go:68` | 无批量写支持，Writer.Write 只接受单条 Entry | TODO |
-| F-OB-03 | `kernel/outbox/outbox.go:99-107` | Entry 必填字段（ID, AggregateID, EventType）无校验 | TODO |
-| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略（= MR-R04 / GOV-4 同源） | TODO |
-| F-META-02 | `cells/audit-core/cell.yaml` vs `cell.go:93` | cell.yaml 声明 `consistencyLevel: L2`，cell.go 硬编码 `cell.L3`（及 slices L3），二者不一致 (discovered via /fix PR#62 review) | TODO |
-| F-3 | `kernel/assembly/assembly.go:93-116` | Stop() 只返回首个错误，吞后续 | TODO |
-| F-4 | `kernel/scaffold/templates.go:1-9` | doc.go 和 templates.go 包注释冲突 | ✅ 已修（两文件注释已统一） |
+| R1B1-03 | `kernel/cell/base.go` | Init 不重置 shutdownCtx/Cancel | ✅ PR#59 |
+| R1B1-04 | `kernel/cell/base.go` | sync.Mutex → sync.RWMutex | ✅ PR#59 |
+| F-OB-01 | `kernel/outbox/outbox.go` | 无批量写支持 | TODO（随 0-F） |
+| F-OB-03 | `kernel/outbox/outbox.go` | Entry 必填校验 | TODO（随 0-F） |
+| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略 | ✅ PR#65 KnownFields(true) |
+| F-META-02 | `cells/audit-core` | L2/L3 不一致 | ✅ PR#63 |
+| F-3 | `kernel/assembly/assembly.go` | Stop() errors.Join | ✅ PR#59 |
+| F-4 | `kernel/scaffold/templates.go` | 包注释冲突 | ✅ 已修 |
 
 **附加架构风险（来自六角色深审）：**
 
-| ID | 文件 | 问题 |
-|----|------|------|
-| CS-AR-1 | `kernel/cell/base.go:106-115` | BaseCell.Start(ctx) 忽略传入 ctx，从 context.Background() 派生 |
-| CS-AR-2 | `kernel/cell/interfaces.go:6-10` | Dependencies 把完整 Cell 图注入 Init，暴露过多信息 |
-| CS-AR-3 | `kernel/cell/registrar.go:3-39` | kernel/cell 直接依赖 net/http + outbox，违反分层约束 |
+| ID | 文件 | 问题 | 状态 |
+|----|------|------|------|
+| CS-AR-1 | `kernel/cell/base.go` | Start(ctx) 忽略传入 ctx | ✅ PR#59 context.WithoutCancel(ctx) |
+| CS-AR-2 | `kernel/cell/interfaces.go` | Dependencies 暴露完整 Cell 图 | TODO（Tier 3） |
+| CS-AR-3 | `kernel/cell/registrar.go` | kernel/cell 依赖 net/http + outbox | TODO（Tier 3） |
 
-#### P2 — pkg + runtime（~~6~~ 4 条未修）
+**PR#62-64 发现的新条目：**
+
+| ID | 问题 | 状态 |
+|----|------|------|
+| F-HTTP-MAP-01 | ErrCheckRefInvalid/ErrZeroTestMatch 缺 HTTP 映射 | ✅ PR#63 |
+
+#### P2 — pkg + runtime（4 条未修）
 
 | ID | 文件 | 问题 | 状态 |
 |----|------|------|------|
-| F-HTTP-MAP-01 | `pkg/httputil/response.go` mapCodeToStatus | `ERR_CHECKREF_INVALID` 和 `ERR_ZERO_TEST_MATCH`（PR#61 新增）缺少 HTTP status 映射，穷举测试会报 fallback 500 (discovered via /fix PR#62 review) | TODO |
+| F-HTTP-MAP-01 | `pkg/httputil/response.go` | ERR_CHECKREF_INVALID/ERR_ZERO_TEST_MATCH 缺 HTTP 映射 | ✅ PR#63 |
 | R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ | ✅ 已删除（PR#40） |
-| R1A1-F06 | `pkg/ctxkeys/keys_test.go` | TestFromMissingKey 遗漏覆盖 | ✅ PR#50 补全 9 个 key |
+| R1A1-F06 | `pkg/ctxkeys/keys_test.go` | TestFromMissingKey 遗漏覆盖 | ✅ PR#50 |
 | R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致 | TODO |
-| F-04 | `runtime/auth/middleware.go` | writeAuthError 忽略 JSON encode 错误 | ✅ PR#50 重构为 httputil.WriteError |
+| F-04 | `runtime/auth/middleware.go` | writeAuthError 忽略 encode 错误 | ✅ PR#50 |
 | R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 | TODO |
-| R1C2-F05 | `runtime/worker/periodic.go` | PeriodicWorker.Stop 不防 double-Start，done channel 复用 | TODO |
-| PROM-01 | `runtime/http/middleware/metrics.go` | metrics path label 基数爆炸，需路由模板归一化 | TODO |
-| TX-NIL-01 | 7 个 slice service (`cells/*/service.go`) | txRunner nil-safe 回退行为未文档化 | TODO |
+| R1C2-F05 | `runtime/worker/periodic.go` | PeriodicWorker.Stop double-Start 问题 | TODO |
+| PROM-01 | `runtime/http/middleware/metrics.go` | metrics path label 基数爆炸 | TODO |
+| TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | TODO |
 
 ### 0-H: DecodeJSON 严格模式 — DisallowUnknownFields opt-in（0.5d）
 
@@ -348,7 +337,7 @@
 | G-2 | TOPO-07: actor.maxConsistencyLevel 约束 | MEDIUM | 解析了但无校验 | TODO |
 | G-3 | FMT: owner.team/owner.role 非空校验 | MEDIUM | 必填字段无验证 | ✅ validateFMT11 |
 | G-4 | FMT: deprecated contract 引用阻断（非仅 warning） | MEDIUM | 当前仅警告不阻断 | TODO |
-| G-5 | VERIFY: verify 标识符前缀格式严格校验 | ~~LOW~~ → P2 | 六角色深审确认（= GOV-5），坏格式延迟到运行期 | TODO |
+| G-5 | VERIFY: verify 标识符前缀格式严格校验 | ~~LOW~~ → P2 | 六角色深审确认（= GOV-5） | ✅ PR#64 VERIFY-05 |
 | G-6 | Assembly boundary.yaml 存在性校验 | LOW | 派生文件，非真相源 | TODO |
 | G-7 | slice.belongsToCell / contract.ownerCell 自动推导 | ~~LOW~~ → P1 | 六角色深审确认缺失造成矛盾视图（= MR-R01/R02） | TODO |
 
