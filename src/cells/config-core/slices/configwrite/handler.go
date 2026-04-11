@@ -23,13 +23,13 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Value string `json:"value"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Create(r.Context(), CreateInput{Key: req.Key, Value: req.Value})
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -44,13 +44,13 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		Value string `json:"value"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Update(r.Context(), UpdateInput{Key: key, Value: req.Value})
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -62,7 +62,7 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

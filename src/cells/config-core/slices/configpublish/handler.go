@@ -22,7 +22,7 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 
 	version, err := h.svc.Publish(r.Context(), key)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -37,13 +37,13 @@ func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 		Version int `json:"version"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Rollback(r.Context(), key, req.Version)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

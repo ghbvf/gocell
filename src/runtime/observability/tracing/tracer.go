@@ -29,6 +29,33 @@ type Span interface {
 	SpanID() string
 }
 
+// SpanRecorder is an optional interface that Span implementations may support
+// for recording errors and setting status. Use the SpanRecordError and
+// SpanSetStatus helper functions which handle type-assertion gracefully.
+type SpanRecorder interface {
+	// RecordError adds an error event to the span for diagnostics.
+	RecordError(err error)
+	// SetStatus sets the span's status. When isError is true the span is
+	// marked as failed with the given description; otherwise it is marked OK.
+	SetStatus(isError bool, description string)
+}
+
+// SpanRecordError records an error on the span if it implements SpanRecorder.
+// Spans that do not support error recording are silently skipped.
+func SpanRecordError(s Span, err error) {
+	if r, ok := s.(SpanRecorder); ok {
+		r.RecordError(err)
+	}
+}
+
+// SpanSetStatus sets the status on the span if it implements SpanRecorder.
+// Spans that do not support status setting are silently skipped.
+func SpanSetStatus(s Span, isError bool, description string) {
+	if r, ok := s.(SpanRecorder); ok {
+		r.SetStatus(isError, description)
+	}
+}
+
 // Tracer creates spans.
 type Tracer interface {
 	// Start creates a new span with the given name. The returned context

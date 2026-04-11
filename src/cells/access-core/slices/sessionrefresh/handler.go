@@ -22,13 +22,13 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refreshToken"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	pair, err := h.svc.Refresh(r.Context(), req.RefreshToken)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

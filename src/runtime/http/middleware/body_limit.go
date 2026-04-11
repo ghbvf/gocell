@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -19,7 +20,7 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.ContentLength > maxBytes {
-				writeBodyTooLarge(w)
+				writeBodyTooLarge(r.Context(), w)
 				return
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
@@ -28,6 +29,6 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
-func writeBodyTooLarge(w http.ResponseWriter) {
-	httputil.WriteError(w, http.StatusRequestEntityTooLarge, "ERR_BODY_TOO_LARGE", "request body too large")
+func writeBodyTooLarge(ctx context.Context, w http.ResponseWriter) {
+	httputil.WriteError(ctx, w, http.StatusRequestEntityTooLarge, "ERR_BODY_TOO_LARGE", "request body too large")
 }

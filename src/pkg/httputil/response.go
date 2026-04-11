@@ -2,11 +2,13 @@
 package httputil
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -21,19 +23,36 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WriteError writes a structured error response in the canonical format:
 //
-//	{"error": {"code": "ERR_*", "message": "...", "details": {}}}
+//	{"error": {"code": "ERR_*", "message": "...", "details": {}, "request_id": "..."}}
 //
+// If ctx carries a request_id (via ctxkeys), it is included in the response.
 // Callers that need additional response headers (e.g. Retry-After) must set
 // them before calling WriteError, as it calls w.WriteHeader internally.
-func WriteError(w http.ResponseWriter, status int, code, message string) {
+// For 5xx responses, message is forced to "internal server error" to prevent
+// accidental information leakage through this low-level function.
+func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
+	msg := message
+	if status >= 500 && message != "internal server error" {
+		slog.Error("write error (5xx)",
+			slog.String("code", code),
+			slog.String("message", message),
+		)
+		msg = "internal server error"
+	}
+
+	errBody := map[string]any{
+		"code":    code,
+		"message": msg,
+		"details": map[string]any{},
+	}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		errBody["request_id"] = reqID
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"code":    code,
-			"message": message,
-			"details": map[string]any{},
-		},
+		"error": errBody,
 	}); err != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", err))
 	}
@@ -45,36 +64,72 @@ func WriteError(w http.ResponseWriter, status int, code, message string) {
 //   - ErrValidationFailed  → 400
 //   - ErrBodyTooLarge      → 413
 //   - ErrInternal          → 500
-func WriteDecodeError(w http.ResponseWriter, err error) {
+func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		WriteError(w, mapCodeToStatus(ecErr.Code), string(ecErr.Code), ecErr.Message)
+		WriteError(ctx, w, MapCodeToStatus(ecErr.Code), string(ecErr.Code), ecErr.Message)
 		return
 	}
-	WriteError(w, http.StatusBadRequest, string(errcode.ErrValidationFailed), "invalid request body")
+	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), "invalid request body")
 }
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
-//   - If err is an *errcode.Error the error code is mapped to an HTTP status and
-//     the errcode Message is used as the response message.
+//   - If err is an *errcode.Error the error code is mapped to an HTTP status.
+//     For 5xx responses the message is always "internal server error" and the
+//     original detail is logged via slog. For other statuses Message is used.
 //   - Otherwise a generic 500 "internal server error" is returned and the
 //     original error is logged via slog.
-func WriteDomainError(w http.ResponseWriter, err error) {
+func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		status := mapCodeToStatus(ecErr.Code)
+		status := MapCodeToStatus(ecErr.Code)
 		details := ecErr.Details
 		if details == nil {
 			details = map[string]any{}
 		}
+
+		msg := ecErr.Message
+		if status >= 500 {
+			// Never expose internal details in 5xx responses.
+			logAttrs := []any{
+				slog.String("code", string(ecErr.Code)),
+				slog.String("message", ecErr.Message),
+			}
+			if ecErr.InternalMessage != "" {
+				logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+			}
+			if ecErr.Cause != nil {
+				logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+			}
+			// Include request correlation context so this log can be matched
+			// to the request_id returned in the error response.
+			if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("request_id", reqID))
+			}
+			if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+			}
+			if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("span_id", spanID))
+			}
+			slog.Error("domain error (5xx)", logAttrs...)
+			msg = "internal server error"
+			details = map[string]any{}
+		}
+
+		errBody := map[string]any{
+			"code":    string(ecErr.Code),
+			"message": msg,
+			"details": details,
+		}
+		if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+			errBody["request_id"] = reqID
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		if encErr := json.NewEncoder(w).Encode(map[string]any{
-			"error": map[string]any{
-				"code":    string(ecErr.Code),
-				"message": ecErr.Message,
-				"details": details,
-			},
+			"error": errBody,
 		}); encErr != nil {
 			slog.Error("httputil: encode domain error response", slog.Any("error", encErr))
 		}
@@ -82,8 +137,15 @@ func WriteDomainError(w http.ResponseWriter, err error) {
 	}
 
 	// Non-errcode errors: 500 + log original error, do not expose internals.
-	slog.Error("unhandled error", slog.Any("error", err))
-	WriteError(w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
+	logAttrs := []any{slog.Any("error", err)}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		logAttrs = append(logAttrs, slog.String("request_id", reqID))
+	}
+	if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+		logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+	}
+	slog.Error("unhandled error", logAttrs...)
+	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
 }
 
 // codeToStatus maps known error codes to HTTP status codes.
@@ -176,13 +238,20 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrNotImplemented: http.StatusNotImplemented,
 }
 
-// mapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
+// MapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
 // Known codes use an explicit lookup table. Unknown codes default to 500
 // and emit a warning log to prompt registration.
-func mapCodeToStatus(code errcode.Code) int {
+func MapCodeToStatus(code errcode.Code) int {
 	if status, ok := codeToStatus[code]; ok {
 		return status
 	}
 	slog.Warn("unmapped error code, defaulting to 500", slog.String("code", string(code)))
 	return http.StatusInternalServerError
+}
+
+// IsClientError returns true if the given error code maps to a 4xx HTTP status
+// (client error). Unknown codes return false.
+func IsClientError(code errcode.Code) bool {
+	status, ok := codeToStatus[code]
+	return ok && status >= 400 && status < 500
 }

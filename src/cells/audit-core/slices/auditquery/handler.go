@@ -33,7 +33,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
 		t, err := time.Parse(time.RFC3339, fromStr)
 		if err != nil {
-			httputil.WriteError(w, http.StatusBadRequest, errInvalidTimeFormat,
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, errInvalidTimeFormat,
 				"invalid 'from' parameter: expected RFC3339 format")
 			return
 		}
@@ -42,7 +42,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if toStr := r.URL.Query().Get("to"); toStr != "" {
 		t, err := time.Parse(time.RFC3339, toStr)
 		if err != nil {
-			httputil.WriteError(w, http.StatusBadRequest, errInvalidTimeFormat,
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, errInvalidTimeFormat,
 				"invalid 'to' parameter: expected RFC3339 format")
 			return
 		}
@@ -51,7 +51,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := h.svc.Query(r.Context(), filters)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

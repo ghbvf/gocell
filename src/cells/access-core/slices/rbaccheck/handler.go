@@ -28,7 +28,7 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 	roles, err := h.svc.ListRoles(r.Context(), userID)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -41,7 +41,7 @@ func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 
 	has, err := h.svc.HasRole(r.Context(), userID, roleName)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

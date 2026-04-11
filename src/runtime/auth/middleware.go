@@ -44,7 +44,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 
 			token := extractBearerToken(r)
 			if token == "" {
-				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
+				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 				return
 			}
 
@@ -54,7 +54,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 					slog.Any("error", err),
 					slog.String("path", r.URL.Path),
 				)
-				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
+				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 				return
 			}
 
@@ -78,7 +78,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			claims, ok := ClaimsFrom(r.Context())
 			if !ok {
-				httputil.WriteError(w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
+				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
 				return
 			}
 
@@ -100,7 +100,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 							slog.Any("error", err),
 							slog.String("subject", sub),
 						)
-						httputil.WriteError(w, http.StatusInternalServerError, "ERR_INTERNAL", "authorization check failed")
+						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 						return
 					}
 					if allowed {
@@ -110,7 +110,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 				}
 			}
 
-			httputil.WriteError(w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+			httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
 		})
 	}
 }

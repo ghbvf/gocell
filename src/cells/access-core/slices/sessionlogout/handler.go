@@ -21,7 +21,7 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 
 	if err := h.svc.Logout(r.Context(), sessionID); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

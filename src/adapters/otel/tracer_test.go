@@ -2,10 +2,12 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -148,4 +150,62 @@ func TestTracerConfig_Validate(t *testing.T) {
 
 func TestSpan_ImplementsInterface(t *testing.T) {
 	var _ tracing.Span = (*otelSpan)(nil)
+	var _ tracing.SpanRecorder = (*otelSpan)(nil)
+}
+
+func TestSpan_RecordError(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "error-op")
+	tracing.SpanRecordError(span, errors.New("connection refused"))
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+
+	events := spans[0].Events
+	require.NotEmpty(t, events, "RecordError should add an event to the span")
+	assert.Equal(t, "exception", events[0].Name)
+}
+
+func TestSpan_SetStatus_Error(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "err-status")
+	tracing.SpanSetStatus(span, true, "db connection failed")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, otelcodes.Error, spans[0].Status.Code)
+	assert.Equal(t, "db connection failed", spans[0].Status.Description)
+}
+
+func TestSpan_SetStatus_Ok(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "ok-status")
+	tracing.SpanSetStatus(span, false, "")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, otelcodes.Ok, spans[0].Status.Code)
+}
+
+func TestSpanHelper_NonRecorder(t *testing.T) {
+	// simpleSpan does not implement SpanRecorder — helpers must not panic.
+	simple := tracing.NewTracer("test")
+	_, span := simple.Start(context.Background(), "op")
+	defer span.End()
+
+	assert.NotPanics(t, func() {
+		tracing.SpanRecordError(span, errors.New("some error"))
+	})
+	assert.NotPanics(t, func() {
+		tracing.SpanSetStatus(span, true, "fail")
+	})
 }
