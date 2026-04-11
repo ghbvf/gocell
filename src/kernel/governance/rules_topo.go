@@ -293,7 +293,7 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 						Severity:  SeverityError,
 						IssueType: IssueMismatch,
 						File:      contractFile(c.ID),
-						Field:     fmt.Sprintf("endpoints.consumers[%d]", i),
+						Field:     fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
 						Message: fmt.Sprintf(
 							"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
 							c.ID, c.ConsistencyLevel, consumerID, maxLvl,

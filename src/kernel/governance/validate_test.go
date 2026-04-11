@@ -2440,12 +2440,42 @@ func TestIsWithinRoot(t *testing.T) {
 		{"dot-dot escapes", "/project/src", "/project/src/../etc/passwd", false},
 		{"different tree", "/project/src", "/other/place", false},
 	}
+	// Also test relative paths (P1 fix: isWithinRoot must handle relative root).
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	tests = append(tests, struct {
+		name   string
+		root   string
+		target string
+		want   bool
+	}{
+		"relative root dot",
+		".",
+		filepath.Join(cwd, "assemblies", "core-bundle", "generated", "boundary.yaml"),
+		true,
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isWithinRoot(tt.root, tt.target)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestIsWithinRoot_Symlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+
+	// Create a file outside root.
+	outsideFile := filepath.Join(outside, "secret.yaml")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("x"), 0o644))
+
+	// Create a symlink inside root pointing outside.
+	symlink := filepath.Join(root, "escape")
+	require.NoError(t, os.Symlink(outside, symlink))
+
+	target := filepath.Join(symlink, "secret.yaml")
+	assert.False(t, isWithinRoot(root, target), "symlink target outside root should be rejected")
 }
 
 // --- S1: REF-11 path traversal ---
@@ -2786,6 +2816,67 @@ func TestTOPO07(t *testing.T) {
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
 			}
+		})
+	}
+}
+
+func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
+	tests := []struct {
+		name      string
+		kind      string
+		wantField string
+		setup     func(*metadata.ContractMeta)
+	}{
+		{
+			name: "http uses clients",
+			kind: "http", wantField: "endpoints.clients[0]",
+			setup: func(c *metadata.ContractMeta) { c.Endpoints.Clients = []string{"edge-bff"} },
+		},
+		{
+			name: "event uses subscribers",
+			kind: "event", wantField: "endpoints.subscribers[0]",
+			setup: func(c *metadata.ContractMeta) {
+				r := true
+				c.Endpoints.Subscribers = []string{"edge-bff"}
+				c.Replayable = &r
+				c.IdempotencyKey = "event_id"
+				c.DeliverySemantics = "at-least-once"
+			},
+		},
+		{
+			name: "command uses invokers",
+			kind: "command", wantField: "endpoints.invokers[0]",
+			setup: func(c *metadata.ContractMeta) { c.Endpoints.Invokers = []string{"edge-bff"} },
+		},
+		{
+			name: "projection uses readers",
+			kind: "projection", wantField: "endpoints.readers[0]",
+			setup: func(c *metadata.ContractMeta) {
+				r := true
+				c.Endpoints.Readers = []string{"edge-bff"}
+				c.Replayable = &r
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			pm.Actors = []metadata.ActorMeta{
+				{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+			}
+			c := &metadata.ContractMeta{
+				ID: tt.kind + ".test.v1", Kind: tt.kind,
+				OwnerCell: "access-core", ConsistencyLevel: "L2",
+				Lifecycle: "active",
+				Endpoints: metadata.EndpointsMeta{Server: "access-core", Publisher: "access-core", Handler: "access-core", Provider: "access-core"},
+			}
+			tt.setup(c)
+			pm.Contracts[c.ID] = c
+
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateTOPO07(), "TOPO-07")
+			require.NotEmpty(t, got)
+			assert.Equal(t, tt.wantField, got[0].Field)
 		})
 	}
 }
