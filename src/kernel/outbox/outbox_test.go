@@ -537,6 +537,7 @@ func TestWriteBatchFallback_ValidationFailure(t *testing.T) {
 	err := WriteBatchFallback(context.Background(), w, entries)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "entry[1]")
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 	assert.Nil(t, w.batchEntries, "no writes should occur on validation failure")
 	assert.Nil(t, w.writeEntries)
 }
@@ -579,6 +580,7 @@ func TestWriteBatchFallback_SequentialFallbackError(t *testing.T) {
 	err := WriteBatchFallback(context.Background(), w, entries)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "entry[1]")
+	assert.Contains(t, err.Error(), "id=e2")
 	assert.Contains(t, err.Error(), "db write failed")
 	assert.Len(t, w.entries, 1, "only the first entry should have been written")
 }

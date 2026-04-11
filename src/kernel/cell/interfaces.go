@@ -16,6 +16,10 @@ import "context"
 // Previously this struct also carried Cells map[string]Cell and
 // Contracts map[string]Contract. Analysis showed zero callers read
 // either field — exposing the full cell graph violated least-privilege.
+//
+// The struct wrapper is retained (rather than passing map[string]any
+// directly) for forward compatibility: future fields (e.g. Secrets,
+// ServiceLocator) can be added without changing the Cell.Init signature.
 type Dependencies struct {
 	Config map[string]any
 }

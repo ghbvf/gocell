@@ -132,7 +132,7 @@ func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
 		slog.Int("count", len(entries)))
 	for i, e := range entries {
 		if err := w.Write(ctx, e); err != nil {
-			return fmt.Errorf("outbox: write entry[%d]: %w", i, err)
+			return fmt.Errorf("outbox: write entry[%d] (id=%s): %w", i, e.ID, err)
 		}
 	}
 	return nil
