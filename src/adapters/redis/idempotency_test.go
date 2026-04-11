@@ -173,6 +173,36 @@ func TestIdempotencyChecker_NegativeTTLUsesDefault(t *testing.T) {
 	assert.False(t, entry.expiry.IsZero(), "negative TTL should use DefaultTTL")
 }
 
+func TestIdempotencyChecker_Release_Success(t *testing.T) {
+	mock := newMockCmdable()
+	ic := newIdempotencyCheckerFromCmdable(mock)
+	ctx := context.Background()
+
+	// Mark a key as processed.
+	err := ic.MarkProcessed(ctx, "idem:test:release:1", 24*time.Hour)
+	require.NoError(t, err)
+
+	// Release the key.
+	err = ic.Release(ctx, "idem:test:release:1")
+	require.NoError(t, err)
+
+	// After release, IsProcessed should return false.
+	ok, err := ic.IsProcessed(ctx, "idem:test:release:1")
+	require.NoError(t, err)
+	assert.False(t, ok, "key should not be processed after Release")
+}
+
+func TestIdempotencyChecker_Release_DelError(t *testing.T) {
+	mock := newMockCmdable()
+	mock.delErr = errMock
+	ic := newIdempotencyCheckerFromCmdable(mock)
+	ctx := context.Background()
+
+	err := ic.Release(ctx, "idem:test:release:err")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
+}
+
 // =============================================================================
 // IdempotencyClaimer Tests (Solution B two-phase model)
 // =============================================================================

@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // --- Mock AMQP Channel ---
@@ -2372,5 +2373,136 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	receipt.mu.Lock()
 	assert.False(t, receipt.commitCalled, "should not Commit when broker Nack fails")
 	assert.True(t, receipt.releaseCalled, "should Release when broker Nack fails, so redelivery can re-enter")
+	receipt.mu.Unlock()
+}
+
+func TestIsRecoverableAMQPError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "non-AMQP error",
+			err:  errors.New("some random error"),
+			want: false,
+		},
+		{
+			name: "AMQP error with Recover=true",
+			err:  &amqp.Error{Code: 501, Reason: "frame error", Server: true, Recover: true},
+			want: true,
+		},
+		{
+			name: "AMQP error with Recover=false",
+			err:  &amqp.Error{Code: 403, Reason: "access refused", Server: true, Recover: false},
+			want: false,
+		},
+		{
+			name: "connection error Code 320 (connection forced) with Recover=true",
+			err:  &amqp.Error{Code: 320, Reason: "connection forced", Server: true, Recover: true},
+			want: true,
+		},
+		{
+			name: "channel error Code 404 (not found) with Recover=false",
+			err:  &amqp.Error{Code: 404, Reason: "not found", Server: true, Recover: false},
+			want: false,
+		},
+		{
+			name: "amqp.ErrClosed",
+			err:  amqp.ErrClosed,
+			want: true,
+		},
+		{
+			name: "wrapped amqp.ErrClosed",
+			err:  fmt.Errorf("channel: %w", amqp.ErrClosed),
+			want: true,
+		},
+		{
+			name: "ErrAdapterAMQPConnect errcode",
+			err:  errcode.New(ErrAdapterAMQPConnect, "connection not available"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRecoverableAMQPError(tt.err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestConsumerBase_Wrap_ReleaseCheckerError_Logged(t *testing.T) {
+	checker := newMockIdempotencyChecker()
+	checker.releaseErr = errors.New("redis timeout")
+
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+	})
+
+	entry := outbox.Entry{ID: "evt-release-err", EventType: "test.release.err"}
+	res := handler(context.Background(), entry)
+
+	// Retry exhausted (RetryCount=1) → DispositionReject.
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+
+	// Release was attempted even though it returned an error.
+	checker.mu.Lock()
+	assert.Contains(t, checker.releaseCalls, "test-group:evt-release-err",
+		"Release should have been called with the idempotency key")
+	checker.mu.Unlock()
+}
+
+func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-unknown-disp", EventType: "test.unknown"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.Disposition(99),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 42,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Unknown disposition should Nack with requeue=true.
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled, "unknown disposition should trigger Nack")
+	assert.True(t, ch.nackRequeue, "unknown disposition should requeue")
+	ch.mu.Unlock()
+
+	// Receipt should be Released (not Committed) for unknown disposition.
+	receipt.mu.Lock()
+	assert.True(t, receipt.releaseCalled, "unknown disposition should Release Receipt")
+	assert.False(t, receipt.commitCalled, "unknown disposition should not Commit Receipt")
 	receipt.mu.Unlock()
 }

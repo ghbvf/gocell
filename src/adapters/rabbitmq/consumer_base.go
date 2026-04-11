@@ -333,7 +333,9 @@ func (cb *ConsumerBase) releaseChecker(ctx context.Context, key, eventID string)
 	if cb.checker == nil {
 		return
 	}
-	if relErr := cb.checker.Release(context.WithoutCancel(ctx), key); relErr != nil {
+	releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer releaseCancel()
+	if relErr := cb.checker.Release(releaseCtx, key); relErr != nil {
 		slog.Error("rabbitmq: failed to release idempotency key",
 			slog.String("event_id", eventID),
 			slog.String("key", key),

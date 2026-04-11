@@ -134,7 +134,6 @@ func newIdempotencyClaimerFromCmdable(rdb cmdable) *IdempotencyClaimer {
 //	KEYS[2] = lease:{key}
 //	ARGV[1] = token
 //	ARGV[2] = leaseTTL (seconds)
-//	ARGV[3] = doneTTL  (seconds, used only for reference — not set here)
 //
 // Returns:
 //
