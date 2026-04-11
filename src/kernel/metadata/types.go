@@ -11,7 +11,6 @@ type CellMeta struct {
 	Schema           SchemaMeta    `yaml:"schema"`
 	Verify           CellVerifyMeta `yaml:"verify"`
 	L0Dependencies   []L0DepMeta   `yaml:"l0Dependencies"`
-	RawFields        []string      `yaml:"-"` // top-level YAML keys (populated by parser for governance checks)
 }
 
 // OwnerMeta identifies the team responsible for a Cell or Journey.
@@ -43,7 +42,6 @@ type SliceMeta struct {
 	BelongsToCell  string          `yaml:"belongsToCell"`
 	ContractUsages []ContractUsage `yaml:"contractUsages"`
 	Verify         SliceVerifyMeta `yaml:"verify"`
-	RawFields      []string        `yaml:"-"` // top-level YAML keys (populated by parser for governance checks)
 }
 
 // ContractUsage declares a Slice's participation in a Contract.
@@ -80,7 +78,6 @@ type ContractMeta struct {
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
 	Description       string         `yaml:"description,omitempty"`
-	RawFields         []string       `yaml:"-"` // top-level YAML keys (populated by parser for governance checks)
 }
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract
@@ -147,10 +144,9 @@ type PassCriterion struct {
 
 // AssemblyMeta maps to assemblies/{id}/assembly.yaml.
 type AssemblyMeta struct {
-	ID        string    `yaml:"id"`
-	Cells     []string  `yaml:"cells"`
-	Build     BuildMeta `yaml:"build"`
-	RawFields []string  `yaml:"-"` // top-level YAML keys (populated by parser for governance checks)
+	ID    string    `yaml:"id"`
+	Cells []string  `yaml:"cells"`
+	Build BuildMeta `yaml:"build"`
 }
 
 // BuildMeta holds the build configuration for an Assembly.

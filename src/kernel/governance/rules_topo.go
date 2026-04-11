@@ -235,14 +235,14 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 func (v *Validator) validateTOPO07() []ValidationResult {
 	// Build actor lookup for external consumers.
 	actorMaxLevel := make(map[string]cell.Level)
-	actorMalformed := make(map[string]bool)
+	actorMalformed := make(map[string]string) // ID -> raw invalid value
 	for _, a := range v.project.Actors {
 		if a.MaxConsistencyLevel == "" {
 			continue // no constraint declared
 		}
 		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
 		if err != nil {
-			actorMalformed[a.ID] = true
+			actorMalformed[a.ID] = a.MaxConsistencyLevel
 			continue
 		}
 		actorMaxLevel[a.ID] = lvl
@@ -268,7 +268,7 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 				continue
 			}
 
-			if actorMalformed[consumerID] {
+			if rawVal, malformed := actorMalformed[consumerID]; malformed {
 				results = append(results, ValidationResult{
 					Code:      "TOPO-07",
 					Severity:  SeverityError,
@@ -276,8 +276,8 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 					File:      "actors.yaml",
 					Field:     "maxConsistencyLevel",
 					Message: fmt.Sprintf(
-						"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel",
-						c.ID, consumerID,
+						"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
+						c.ID, consumerID, rawVal,
 					),
 				})
 				continue
@@ -306,7 +306,6 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 // validateTOPO08 checks that no slice references a deprecated contract.
 // A deprecated contract's lifecycle signals it should no longer be consumed;
 // any slice still using it via contractUsages is a blocking error.
-// ADV-02 provides a softer warning-level counterpart for advisory purposes.
 func (v *Validator) validateTOPO08() []ValidationResult {
 	var results []ValidationResult
 
@@ -324,13 +323,17 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 	for key, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if deprecated[cu.Contract] {
+				ownerCell := ""
+				if c, ok := v.project.Contracts[cu.Contract]; ok {
+					ownerCell = c.OwnerCell
+				}
 				results = append(results, ValidationResult{
 					Code:      "TOPO-08",
 					Severity:  SeverityError,
 					IssueType: IssueForbidden,
 					File:      sliceFile(key),
 					Field:     fmt.Sprintf("contractUsages[%d].contract", i),
-					Message:   fmt.Sprintf("slice %q references deprecated contract %q; migrate to the replacement contract", s.ID, cu.Contract),
+					Message:   fmt.Sprintf("slice %q references deprecated contract %q (ownerCell: %q); check the contract description or contact the ownerCell team for the replacement", s.ID, cu.Contract, ownerCell),
 				})
 			}
 		}

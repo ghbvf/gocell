@@ -351,32 +351,6 @@ func (v *Validator) validateREF14() []ValidationResult {
 	return results
 }
 
-// validateREF16 checks that each assembly has a generated boundary.yaml file.
-// The boundary.yaml is produced by `gocell generate` and lives at
-// assemblies/{id}/generated/boundary.yaml relative to the repository root.
-// Skipped when root is empty (no filesystem checks).
-func (v *Validator) validateREF16() []ValidationResult {
-	if v.root == "" {
-		return nil
-	}
-	var results []ValidationResult
-	for _, a := range v.project.Assemblies {
-		repoRoot := repositoryRoot(v.root)
-		boundaryPath := filepath.Join(repoRoot, "assemblies", a.ID, "generated", "boundary.yaml")
-		if !v.fileExists(boundaryPath) {
-			results = append(results, ValidationResult{
-				Code:      "REF-16",
-				Severity:  SeverityWarning,
-				IssueType: IssueRefNotFound,
-				File:      assemblyFile(a.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("assembly %q has no generated boundary.yaml; run 'gocell generate' to create it", a.ID),
-			})
-		}
-	}
-	return results
-}
-
 // validateREF15 checks that assembly.id matches the map key (directory name).
 func (v *Validator) validateREF15() []ValidationResult {
 	var results []ValidationResult
@@ -389,6 +363,43 @@ func (v *Validator) validateREF15() []ValidationResult {
 				File:      assemblyFile(key),
 				Field:     "id",
 				Message:   fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, key),
+			})
+		}
+	}
+	return results
+}
+
+// validateREF16 checks that each assembly has a generated boundary.yaml file.
+// The boundary.yaml is produced by `gocell generate` and lives at
+// assemblies/{id}/generated/boundary.yaml relative to the repository root.
+// Skipped when root is empty (no filesystem checks).
+func (v *Validator) validateREF16() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	repoRoot := repositoryRoot(v.root)
+	for _, a := range v.project.Assemblies {
+		boundaryPath := filepath.Join(repoRoot, "assemblies", a.ID, "generated", "boundary.yaml")
+		if !isWithinRoot(repoRoot, boundaryPath) {
+			results = append(results, ValidationResult{
+				Code:      "REF-16",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      assemblyFile(a.ID),
+				Field:     "id",
+				Message:   fmt.Sprintf("assembly %q boundary.yaml path escapes project root", a.ID),
+			})
+			continue
+		}
+		if !v.fileExists(boundaryPath) {
+			results = append(results, ValidationResult{
+				Code:      "REF-16",
+				Severity:  SeverityWarning,
+				IssueType: IssueRefNotFound,
+				File:      assemblyFile(a.ID),
+				Field:     "id",
+				Message:   fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
 			})
 		}
 	}

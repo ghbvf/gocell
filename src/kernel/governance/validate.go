@@ -11,7 +11,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/journey"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -135,46 +134,13 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT10()...)
 	results = append(results, v.validateFMT11()...)
 	results = append(results, v.validateFMT12()...)
-	results = append(results, v.validateFMT13()...)
-
-	// Journey catalog cross-check (F-5)
-	results = append(results, v.validateJourneyCatalog()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)
-	results = append(results, v.validateADV02()...)
 	results = append(results, v.validateADV03()...)
 	results = append(results, v.validateADV04()...)
 
 	return results
-}
-
-// validateJourneyCatalog delegates to journey.Catalog.Validate() as a
-// cross-check for journey references. This supplements REF-06/REF-07 with
-// the journey package's own validation logic (F-5 integration).
-func (v *Validator) validateJourneyCatalog() []ValidationResult {
-	cat := journey.NewCatalog(v.project)
-
-	cellIDs := make(map[string]struct{}, len(v.project.Cells))
-	for id := range v.project.Cells {
-		cellIDs[id] = struct{}{}
-	}
-	contractIDs := make(map[string]struct{}, len(v.project.Contracts))
-	for id := range v.project.Contracts {
-		contractIDs[id] = struct{}{}
-	}
-
-	if err := cat.Validate(cellIDs, contractIDs); err != nil {
-		return []ValidationResult{{
-			Code:      "JOURNEY-01",
-			Severity:  SeverityError,
-			IssueType: IssueRefNotFound,
-			File:      "journeys/",
-			Field:     "cells/contracts",
-			Message:   err.Error(),
-		}}
-	}
-	return nil
 }
 
 // HasErrors returns true if any result has SeverityError.
