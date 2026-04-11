@@ -258,6 +258,19 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			case <-time.After(delay):
 				continue
 			}
+		default:
+			// Zero-value or unknown Disposition — treat as requeue (safe degradation)
+			// and log at Error level so the programming mistake is surfaced.
+			if res.Receipt != nil {
+				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+			}
+			slog.Error("eventbus: invalid disposition, treating as requeue",
+				slog.String("topic", topic),
+				slog.String("entry_id", entry.ID),
+				slog.String("disposition", res.Disposition.String()),
+			)
+			lastErr = res.Err
+			continue
 		}
 	}
 

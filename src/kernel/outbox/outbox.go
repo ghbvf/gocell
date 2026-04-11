@@ -89,14 +89,28 @@ type Publisher interface {
 type Disposition uint8
 
 const (
-	DispositionAck     Disposition = iota // ACK — success or safe-to-skip duplicate
-	DispositionRequeue                    // NACK+requeue — transient / shutdown
-	DispositionReject                     // NACK+no-requeue — permanent failure → DLX
+	// DispositionAck indicates the message was processed successfully (or is a
+	// safe-to-skip duplicate); broker may discard.
+	//
+	// IMPORTANT: iota+1 ensures the zero value (0) is NOT a valid Disposition.
+	// A forgotten/uninitialised HandleResult.Disposition will NOT silently ACK.
+	DispositionAck     Disposition = iota + 1 // = 1
+	DispositionRequeue                        // NACK+requeue — transient / shutdown
+	DispositionReject                         // NACK+no-requeue — permanent failure → DLX
 )
 
+// Valid reports whether d is a recognised Disposition value.
+// The zero value is deliberately invalid to catch forgotten/uninitialised fields.
+func (d Disposition) Valid() bool {
+	return d >= DispositionAck && d <= DispositionReject
+}
+
 // String returns a human-readable label for the Disposition.
+// The zero value returns "invalid" to surface forgotten/uninitialised fields.
 func (d Disposition) String() string {
 	switch d {
+	case 0:
+		return "invalid"
 	case DispositionAck:
 		return "ack"
 	case DispositionRequeue:

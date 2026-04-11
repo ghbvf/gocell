@@ -297,6 +297,7 @@ func TestDisposition_String(t *testing.T) {
 		d    Disposition
 		want string
 	}{
+		{Disposition(0), "invalid"},
 		{DispositionAck, "ack"},
 		{DispositionRequeue, "requeue"},
 		{DispositionReject, "reject"},
@@ -307,6 +308,43 @@ func TestDisposition_String(t *testing.T) {
 			assert.Equal(t, tt.want, tt.d.String())
 		})
 	}
+}
+
+func TestDisposition_Valid(t *testing.T) {
+	tests := []struct {
+		d    Disposition
+		want bool
+	}{
+		{Disposition(0), false},
+		{DispositionAck, true},
+		{DispositionRequeue, true},
+		{DispositionReject, true},
+		{Disposition(99), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.d.String(), func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.d.Valid())
+		})
+	}
+}
+
+func TestDisposition_ZeroValueIsNotAck(t *testing.T) {
+	// R-1: The zero value of Disposition MUST NOT equal DispositionAck.
+	// A forgotten/uninitialised HandleResult.Disposition must not silently ACK.
+	var zero Disposition
+	assert.NotEqual(t, DispositionAck, zero,
+		"zero-value Disposition must differ from DispositionAck")
+	assert.Equal(t, "invalid", zero.String(),
+		"zero-value Disposition.String() must return \"invalid\"")
+	assert.False(t, zero.Valid(),
+		"zero-value Disposition must not be valid")
+}
+
+func TestHandleResult_ZeroValueDispositionIsInvalid(t *testing.T) {
+	// R-1: HandleResult{} (zero value) must have an invalid Disposition.
+	var res HandleResult
+	assert.NotEqual(t, DispositionAck, res.Disposition)
+	assert.False(t, res.Disposition.Valid())
 }
 
 // --- WrapLegacyHandler Tests ---
