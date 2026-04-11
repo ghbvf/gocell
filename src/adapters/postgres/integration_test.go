@@ -214,19 +214,29 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// First Down() rolls back 002 (drop topic column), table still exists.
+		// First Down() rolls back 003 (status columns), table still exists.
 		err := migrator.Down(ctx)
+		require.NoError(t, err, "Down() should roll back migration 003")
+
+		// Table still exists after rolling back only 003.
+		var exists bool
+		err = pool.DB().QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
+			Scan(&exists)
+		require.NoError(t, err)
+		assert.True(t, exists, "outbox_entries table should still exist after rolling back 003")
+
+		// Second Down() rolls back 002 (drop topic column), table still exists.
+		err = migrator.Down(ctx)
 		require.NoError(t, err, "Down() should roll back migration 002")
 
-		// Table still exists after rolling back only 002.
-		var exists bool
 		err = pool.DB().QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
 			Scan(&exists)
 		require.NoError(t, err)
 		assert.True(t, exists, "outbox_entries table should still exist after rolling back 002")
 
-		// Second Down() rolls back 001 (drop table).
+		// Third Down() rolls back 001 (drop table).
 		err = migrator.Down(ctx)
 		require.NoError(t, err, "Down() should roll back migration 001")
 

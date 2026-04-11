@@ -558,15 +558,18 @@ type outboxWireMessage struct {
 }
 
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
-// It first tries the new outboxWireMessage envelope (camelCase with nested
-// JSON payload), then falls back to the legacy full outbox.Entry format
-// (PascalCase) for backward compatibility during rolling deployments.
+// It first tries the new outboxWireMessage envelope, then falls back to the
+// legacy full outbox.Entry format for backward compatibility.
+//
+// Discriminator: In the new wire format, payload is embedded JSON (starts
+// with '{' or '[' as json.RawMessage). In legacy format, outbox.Entry.Payload
+// is []byte which json.Marshal encodes as base64 (starts with '"'). Go's
+// json.Unmarshal does case-insensitive key matching, so we cannot rely on
+// PascalCase vs camelCase to distinguish formats — we must check the payload
+// shape instead.
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
-	// Try new wire format: detect by checking for camelCase "eventType" key
-	// AND that "payload" is a nested JSON value (object/array/string), not
-	// raw bytes. Legacy format uses PascalCase "EventType" and base64 Payload.
 	var msg outboxWireMessage
-	if err := json.Unmarshal(body, &msg); err == nil && msg.ID != "" && msg.EventType != "" && msg.Payload != nil {
+	if err := json.Unmarshal(body, &msg); err == nil && msg.ID != "" && msg.EventType != "" && isEmbeddedJSON(msg.Payload) {
 		return outbox.Entry{
 			ID:            msg.ID,
 			AggregateID:   msg.AggregateID,
@@ -579,10 +582,26 @@ func unmarshalDelivery(body []byte) (outbox.Entry, error) {
 		}, nil
 	}
 
-	// Fallback: legacy full Entry (PascalCase).
+	// Fallback: legacy full Entry (PascalCase, Payload is base64-encoded []byte).
 	var entry outbox.Entry
 	if err := json.Unmarshal(body, &entry); err != nil {
 		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: %w", err)
 	}
 	return entry, nil
+}
+
+// isEmbeddedJSON returns true if the raw JSON value is an object or array
+// (new wire format), as opposed to a base64 string (legacy format).
+func isEmbeddedJSON(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
