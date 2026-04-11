@@ -1735,6 +1735,20 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
 
+func TestConsumerBaseConfig_Defaults_NegativeLeaseTTL(t *testing.T) {
+	cfg := ConsumerBaseConfig{LeaseTTL: -1 * time.Minute}
+	cfg.setDefaults()
+
+	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
+}
+
+func TestConsumerBaseConfig_Defaults_NegativeIdempotencyTTL(t *testing.T) {
+	cfg := ConsumerBaseConfig{IdempotencyTTL: -1 * time.Hour}
+	cfg.setDefaults()
+
+	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
+}
+
 // Legacy Checker-based TestConsumerBase_Wrap_* tests removed — fully covered
 // by TestConsumerBase_WrapWithClaimer_* tests below.
 

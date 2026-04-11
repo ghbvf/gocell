@@ -66,10 +66,10 @@ func (c *ConsumerBaseConfig) setDefaults() {
 	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 1 * time.Second
 	}
-	if c.IdempotencyTTL == 0 {
+	if c.IdempotencyTTL <= 0 {
 		c.IdempotencyTTL = idempotency.DefaultTTL
 	}
-	if c.LeaseTTL == 0 {
+	if c.LeaseTTL <= 0 {
 		c.LeaseTTL = idempotency.DefaultLeaseTTL
 	}
 	if c.ClaimRetryCount <= 0 {
