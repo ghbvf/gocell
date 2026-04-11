@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
@@ -236,20 +237,7 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 // contract's endpoints. TOPO-04 covers the provider side; this rule covers the
 // consumer side. If an actor has no maxConsistencyLevel, it is unconstrained.
 func (v *Validator) validateTOPO07() []ValidationResult {
-	// Build actor lookup for external consumers.
-	actorMaxLevel := make(map[string]cell.Level)
-	actorMalformed := make(map[string]string) // ID -> raw invalid value
-	for _, a := range v.project.Actors {
-		if a.MaxConsistencyLevel == "" {
-			continue // no constraint declared
-		}
-		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
-		if err != nil {
-			actorMalformed[a.ID] = a.MaxConsistencyLevel
-			continue
-		}
-		actorMaxLevel[a.ID] = lvl
-	}
+	actorMaxLevel, actorMalformed := v.buildActorConsumerLookup()
 	if len(actorMaxLevel) == 0 && len(actorMalformed) == 0 {
 		return nil
 	}
@@ -260,47 +248,69 @@ func (v *Validator) validateTOPO07() []ValidationResult {
 		if err != nil {
 			continue // FMT-03 covers invalid levels
 		}
+		results = append(results, v.checkConsumerActors(c, contractLevel, actorMaxLevel, actorMalformed)...)
+	}
+	return results
+}
 
-		consumers := contractConsumers(c)
-		for i, consumerID := range consumers {
-			if consumerID == "*" {
-				continue
-			}
-			// Only check external actors (cells are not constrained by maxConsistencyLevel).
-			if _, isCell := v.project.Cells[consumerID]; isCell {
-				continue
-			}
+// buildActorConsumerLookup builds lookup maps for external actor maxConsistencyLevel.
+func (v *Validator) buildActorConsumerLookup() (maxLevel map[string]cell.Level, malformed map[string]string) {
+	maxLevel = make(map[string]cell.Level)
+	malformed = make(map[string]string)
+	for _, a := range v.project.Actors {
+		if a.MaxConsistencyLevel == "" {
+			continue // no constraint declared
+		}
+		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
+		if err != nil {
+			malformed[a.ID] = a.MaxConsistencyLevel
+			continue
+		}
+		maxLevel[a.ID] = lvl
+	}
+	return maxLevel, malformed
+}
 
-			if rawVal, malformed := actorMalformed[consumerID]; malformed {
-				results = append(results, ValidationResult{
-					Code:      "TOPO-07",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      "actors.yaml",
-					Field:     "maxConsistencyLevel",
-					Message: fmt.Sprintf(
-						"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
-						c.ID, consumerID, rawVal,
-					),
-				})
-				continue
-			}
-
-			if maxLvl, ok := actorMaxLevel[consumerID]; ok {
-				if contractLevel > maxLvl {
-					results = append(results, ValidationResult{
-						Code:      "TOPO-07",
-						Severity:  SeverityError,
-						IssueType: IssueMismatch,
-						File:      contractFile(c.ID),
-						Field:     fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
-						Message: fmt.Sprintf(
-							"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
-							c.ID, c.ConsistencyLevel, consumerID, maxLvl,
-						),
-					})
-				}
-			}
+// checkConsumerActors checks each consumer actor of a contract against maxConsistencyLevel constraints.
+func (v *Validator) checkConsumerActors(
+	c *metadata.ContractMeta, contractLevel cell.Level,
+	actorMaxLevel map[string]cell.Level, actorMalformed map[string]string,
+) []ValidationResult {
+	var results []ValidationResult
+	consumers := contractConsumers(c)
+	for i, consumerID := range consumers {
+		if consumerID == "*" {
+			continue
+		}
+		if _, isCell := v.project.Cells[consumerID]; isCell {
+			continue // cells are not constrained by maxConsistencyLevel
+		}
+		if rawVal, ok := actorMalformed[consumerID]; ok {
+			results = append(results, ValidationResult{
+				Code:      "TOPO-07",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      "actors.yaml",
+				Field:     "maxConsistencyLevel",
+				Message: fmt.Sprintf(
+					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
+					c.ID, consumerID, rawVal,
+				),
+			})
+			continue
+		}
+		if maxLvl, ok := actorMaxLevel[consumerID]; ok && contractLevel > maxLvl {
+			results = append(results, ValidationResult{
+				Code:      "TOPO-07",
+				Severity:  SeverityError,
+				IssueType: IssueMismatch,
+				File:      contractFile(c.ID),
+				Field:     fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
+				Message: fmt.Sprintf(
+					"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
+					c.ID, c.ConsistencyLevel, consumerID, maxLvl,
+				),
+			})
 		}
 	}
 	return results
