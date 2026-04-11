@@ -1256,6 +1256,13 @@ func TestVERIFY05(t *testing.T) {
 			wantCount: 0,
 		},
 		{
+			name: "leading dot ref rejected as empty prefix",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{".foo.bar"}
+			},
+			wantCount: 1,
+		},
+		{
 			name: "multiple invalid refs accumulate",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["access-core"].Verify.Smoke = []string{"bad.ref"}

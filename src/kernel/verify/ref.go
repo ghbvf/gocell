@@ -29,7 +29,7 @@ type resolvedRef struct {
 // ref: kubernetes pkg/apis validation — segment-level input validation.
 func resolveRef(ref string) (resolvedRef, error) {
 	parts := strings.SplitN(ref, ".", 3)
-	if len(parts) < 3 || parts[1] == "" || parts[2] == "" {
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return resolvedRef{}, errcode.New(errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("ref %q must have at least 3 non-empty dot-separated segments", ref))
 	}
