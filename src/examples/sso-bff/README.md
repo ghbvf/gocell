@@ -117,11 +117,12 @@ returned in response bodies.
 ### Middleware Chain
 
 ```
-CookieSession → CSRF → AuthMiddleware → handler
+CSRF → CookieSession → AuthMiddleware → handler
 ```
 
+- **CSRF**: validates `Sec-Fetch-Site` / `Origin` / `Referer` against `TrustedOrigins`.
+  Runs first to reject cross-origin requests (403) before any cookie processing.
 - **CookieSession**: reads signed cookie → injects `Authorization: Bearer` header
-- **CSRF**: validates `Sec-Fetch-Site` / `Origin` / `Referer` against `TrustedOrigins`
 - **AuthMiddleware**: verifies JWT → injects `Claims` into context
 
 ### CSRF Rejection

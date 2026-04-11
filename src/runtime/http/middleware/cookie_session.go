@@ -99,7 +99,9 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 
 	mw := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// If Authorization header already present, skip cookie processing.
+			// If a Bearer token is already present, skip cookie processing.
+			// Non-Bearer Authorization schemes (e.g., Basic) do NOT suppress
+			// cookie injection — they are not JWT-compatible.
 			if auth := r.Header.Get("Authorization"); auth != "" &&
 				strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 				next.ServeHTTP(w, r)

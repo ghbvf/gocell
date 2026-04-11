@@ -19,24 +19,25 @@
 // For BFF (Browser-Facing) deployments with cookie-based sessions, the
 // middleware chain order is critical:
 //
-//	CookieSession → CSRF → AuthMiddleware → handler
+//	CSRF → CookieSession → AuthMiddleware → handler
 //
-//   - CookieSession runs first: reads the session cookie and injects an
+//   - CSRF runs first: rejects cross-origin requests (403) before any
+//     cookie processing or authentication happens. This prevents a
+//     malicious site from triggering cookie-based actions.
+//   - CookieSession runs second: reads the session cookie and injects an
 //     Authorization: Bearer header so that downstream middleware sees a
 //     standard JWT.
-//   - CSRF runs second: validates Origin/Referer/Sec-Fetch-Site. This must
-//     run before AuthMiddleware because CSRF rejection is a 403 (not 401).
 //   - AuthMiddleware runs third: verifies the JWT (from cookie or header)
 //     and injects Claims into the request context.
 //
 // Example:
 //
-//	sessMW := middleware.MustCookieSession(sessCfg)
 //	csrfMW := middleware.CSRF(csrfCfg)
+//	sessMW := middleware.MustCookieSession(sessCfg)
 //	authMW := auth.AuthMiddleware(verifier, publicEndpoints)
 //
 //	rtr.Route("/api/v1", func(r cell.RouteMux) {
-//	    protected := r.With(sessMW, csrfMW, authMW)
+//	    protected := r.With(csrfMW, sessMW, authMW)
 //	    protected.Handle("/resource", resourceHandler)
 //	})
 package middleware
