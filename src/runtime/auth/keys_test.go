@@ -98,6 +98,15 @@ func TestNewKeySet_NilKeyReturnsError(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
 }
 
+func TestNewKeySet_MismatchedKeyPairReturnsError(t *testing.T) {
+	priv1, _ := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	_, err := NewKeySet(priv1, pub2) // private from pair 1, public from pair 2
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "do not form a valid pair")
+}
+
 func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
 	require.NoError(t, err)

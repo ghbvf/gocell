@@ -15,7 +15,7 @@ The central key management entity for JWT operations. Holds the currently active
 | --- | --- | --- |
 | SigningKey | The active key pair used to sign new tokens | Exactly one; MUST have both private and public key |
 | SigningKeyID | kid of the signing key (RFC 7638 thumbprint) | Derived deterministically from public key material |
-| VerificationKeys | List of demoted public keys still trusted for validation | Zero or more; each has an expiry |
+| VerificationKeys | List of demoted public keys still trusted for validation | Zero or more; each has an expiry. Env loader supports 0-1; programmatic API supports 0-N. |
 
 **State transitions**:
 

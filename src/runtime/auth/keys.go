@@ -59,13 +59,14 @@ type VerificationKey struct {
 //
 // ref: dexidp/dex server/rotation.go — 3-state model (Active → Verification-only → Pruned)
 type KeySet struct {
-	mu               sync.Mutex
+	mu               sync.RWMutex
 	signingKey       *rsa.PrivateKey
 	signingPub       *rsa.PublicKey
 	signingKeyID     string
 	verificationKeys []VerificationKey
 	keyIndex         map[string]*rsa.PublicKey // kid → public key
-	now              func() time.Time         // injectable clock for testing; defaults to time.Now
+	keyExpiry        map[string]time.Time      // kid → expiry (signing key absent = never expires)
+	now              func() time.Time          // injectable clock for testing; defaults to time.Now
 }
 
 // NewKeySet creates a KeySet with a single active signing key pair.
@@ -78,12 +79,22 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey) (*KeySet, error) {
 		return nil, err
 	}
 
+	// Verify that private and public keys form a valid pair.
+	// Without this check, misconfigured key pairs would silently issue
+	// tokens that can never be verified — violating the fail-fast invariant.
+	derivedPub := &priv.PublicKey
+	if derivedPub.N.Cmp(pub.N) != 0 || derivedPub.E != pub.E {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+			"private and public keys do not form a valid pair")
+	}
+
 	kid := Thumbprint(pub)
 	ks := &KeySet{
 		signingKey:   priv,
 		signingPub:   pub,
 		signingKeyID: kid,
 		keyIndex:     map[string]*rsa.PublicKey{kid: pub},
+		keyExpiry:    make(map[string]time.Time),
 		now:          time.Now,
 	}
 
@@ -116,6 +127,7 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 		}
 		ks.verificationKeys = append(ks.verificationKeys, vk)
 		ks.keyIndex[vk.KeyID] = vk.PublicKey
+		ks.keyExpiry[vk.KeyID] = vk.ExpiresAt
 		slog.Info("key demoted to verification-only",
 			slog.String("kid", vk.KeyID),
 			slog.String("transition", "verification-only"),
@@ -136,32 +148,41 @@ func (ks *KeySet) SigningKey() *rsa.PrivateKey {
 	return ks.signingKey
 }
 
-// PublicKeyByKID looks up a public key by its kid. It lazily prunes expired
-// verification keys before lookup (write side-effect: expired keys are removed
-// from the key set). Returns an error if the kid is unknown or expired.
-// This method is safe for concurrent use.
+// PublicKeyByKID looks up a public key by its kid. For verification-only keys,
+// it checks the expiry time and rejects expired keys. This method is a pure-read
+// operation — it does not mutate internal state. Safe for concurrent use.
+//
+// ref: dexidp/dex, hashicorp/vault, gravitational/teleport — all keep the
+// verification/lookup path read-only; lifecycle mutations happen at the
+// rotation/loading boundary, not on every request.
 func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
-	ks.mu.Lock()
-	defer ks.mu.Unlock()
-	ks.pruneExpiredLocked()
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+
 	pub, ok := ks.keyIndex[kid]
 	if !ok {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("unknown kid: %s", kid))
 	}
+
+	// Signing key has no entry in keyExpiry — it never expires.
+	// Verification keys are checked against their expiry.
+	if exp, isVerification := ks.keyExpiry[kid]; isVerification {
+		if !ks.now().Before(exp) {
+			return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("kid %s has expired", kid))
+		}
+	}
+
 	return pub, nil
 }
 
-// PruneExpired removes verification-only keys whose expiry time has passed.
-// This method is safe for concurrent use.
+// PruneExpired removes verification-only keys whose expiry time has passed
+// from the internal maps. This is an explicit cleanup operation — call it at
+// rotation boundaries or during maintenance, not on the request path.
+// Safe for concurrent use.
 func (ks *KeySet) PruneExpired() {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	ks.pruneExpiredLocked()
-}
 
-// pruneExpiredLocked is the lock-free inner implementation of PruneExpired.
-// Caller must hold ks.mu.
-func (ks *KeySet) pruneExpiredLocked() {
 	now := ks.now()
 	remaining := ks.verificationKeys[:0]
 	for _, vk := range ks.verificationKeys {
@@ -169,6 +190,7 @@ func (ks *KeySet) pruneExpiredLocked() {
 			remaining = append(remaining, vk)
 		} else {
 			delete(ks.keyIndex, vk.KeyID)
+			delete(ks.keyExpiry, vk.KeyID)
 			slog.Info("key pruned",
 				slog.String("kid", vk.KeyID),
 				slog.String("transition", "pruned"),

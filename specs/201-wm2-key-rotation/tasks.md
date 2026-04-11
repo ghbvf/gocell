@@ -130,8 +130,9 @@
 - [x] T033 Run `go build ./...` — verify zero compilation errors across entire codebase
 - [x] T034 Run `go test ./src/runtime/auth/...` — verify all tests pass, coverage ≥ 80%
 - [x] T035 Run `go vet ./src/runtime/auth/...` — verify no vet warnings
+- [x] T036 Run `go test -race ./runtime/auth/...` — **mandatory** race detection gate for auth package
 
-**Checkpoint**: Full codebase compiles. All auth tests pass. Coverage meets threshold.
+**Checkpoint**: Full codebase compiles. All auth tests pass with `-race`. Coverage meets threshold.
 
 ---
 

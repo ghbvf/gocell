@@ -78,7 +78,7 @@ Operators must be able to understand the state of each key in the system. Each J
 - What happens when a JWT token has no `kid` header (legacy token)? The system must reject it, since all valid tokens in the new scheme carry a kid.
 - What happens when the HMAC key ring is reconfigured with the same secret in both positions? The system should accept this gracefully (degenerate case, functionally equivalent to a single key).
 - What happens when the verification-only key expiry is set to zero or negative? The key should be pruned immediately, effectively disabling the grace period.
-- What happens when multiple key rotations occur in quick succession before the first grace period expires? The system should support at most one verification-only key; the oldest is pruned when a new one is added.
+- What happens when multiple key rotations occur in quick succession before the first grace period expires? The KeySet API supports multiple verification-only keys simultaneously. However, the environment variable-based loader (`LoadKeySetFromEnv`) supports at most one previous key. For rapid consecutive rotations via env vars, each rotation replaces the previous key.
 
 ## Requirements *(mandatory)*
 
@@ -88,7 +88,7 @@ Operators must be able to understand the state of each key in the system. Each J
 - **FR-002**: System MUST derive the `kid` deterministically from the public key material so that the same key always produces the same kid.
 - **FR-003**: System MUST verify JWT tokens by selecting the matching key from the key set using the token's `kid` header, not by trying all keys.
 - **FR-004**: System MUST reject JWT tokens whose `kid` does not match any key in the current key set.
-- **FR-005**: System MUST support a key set containing one active signing key and zero or more verification-only keys.
+- **FR-005**: System MUST support a key set containing one active signing key and zero or more verification-only keys. The `LoadKeySetFromEnv` loader supports at most one previous key; programmatic construction via `NewKeySetWithVerificationKeys` supports N.
 - **FR-006**: System MUST only use the active signing key for issuing new JWT tokens.
 - **FR-007**: System MUST accept JWT tokens signed by any non-expired verification-only key in the key set.
 - **FR-008**: System MUST prune verification-only keys whose expiry time has passed.
