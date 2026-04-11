@@ -167,16 +167,13 @@ type mockConnection struct {
 	// Channel() pops from the front. Falls back to nextCh / newMockChannel.
 	channelQueue []*mockChannel
 
-	notifyCloseCh    chan *amqp.Error
-	notifyCloseCalls int // number of times NotifyClose was called
-	isClosed         bool
+	notifyCloseCh chan *amqp.Error
+	isClosed      bool
 	closeErr         error
 }
 
 func newMockConnection() *mockConnection {
-	return &mockConnection{
-		notifyCloseCh: make(chan *amqp.Error, 1),
-	}
+	return &mockConnection{}
 }
 
 func (m *mockConnection) Channel() (AMQPChannel, error) {
@@ -205,7 +202,6 @@ func (m *mockConnection) NotifyClose(receiver chan *amqp.Error) chan *amqp.Error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notifyCloseCh = receiver
-	m.notifyCloseCalls++
 	return receiver
 }
 
@@ -612,13 +608,11 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	// Wait for reconnectLoop to call NotifyClose (not just check the initial channel
-	// from newMockConnection — we need notifyCloseCalls > 0 to confirm reconnectLoop
-	// has registered its own channel).
+	// Wait for reconnectLoop to call NotifyClose.
 	require.Eventually(t, func() bool {
 		mocks[0].mu.Lock()
 		defer mocks[0].mu.Unlock()
-		return mocks[0].notifyCloseCalls > 0
+		return mocks[0].notifyCloseCh != nil
 	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
 
 	// Now send on the channel that reconnectLoop is actually selecting on.
@@ -667,7 +661,7 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 	require.Eventually(t, func() bool {
 		mock.mu.Lock()
 		defer mock.mu.Unlock()
-		return mock.notifyCloseCalls > 0
+		return mock.notifyCloseCh != nil
 	}, time.Second, time.Millisecond)
 
 	// Trigger disconnect.
