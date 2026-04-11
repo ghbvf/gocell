@@ -6,6 +6,7 @@ package health
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -125,5 +126,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	_ = json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("health: failed to write response", slog.String("error", err.Error()))
+	}
 }

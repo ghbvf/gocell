@@ -298,7 +298,7 @@ idempChecker := redis.NewIdempotencyChecker(redisClient)
 |---------|------|-----------|
 | postgres | `ERR_ADAPTER_PG_*` | `_CONNECT`, `_QUERY`, `_TX_TIMEOUT`, `_NO_TX` |
 | redis | `ERR_ADAPTER_REDIS_*` | `_CONNECT`, `_LOCK_ACQUIRED`, `_LOCK_TIMEOUT` |
-| rabbitmq | `ERR_ADAPTER_AMQP_*` | `_CONNECT`, `_PUBLISH`, `_CONFIRM_TIMEOUT` |
+| rabbitmq | `ERR_ADAPTER_AMQP_*` | `_CONNECT`, `_CONNECT_PERMANENT`, `_PUBLISH`, `_CONFIRM_TIMEOUT`, `_SUBSCRIBE`, `_CONSUME`, `_RECONNECT_EXHAUSTED` |
 | oidc | `ERR_ADAPTER_OIDC_*` | `_DISCOVERY`, `_TOKEN_VERIFY`, `_TOKEN_EXCHANGE` |
 | s3 | `ERR_ADAPTER_S3_*` | `_UPLOAD`, `_DOWNLOAD`, `_NOT_FOUND` |
 | websocket | `ERR_ADAPTER_WS_*` | `_UPGRADE`, `_SEND`, `_CLOSED` |

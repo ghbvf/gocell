@@ -294,7 +294,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
 	require.Error(t, err1)
 	assert.Contains(t, err1.Error(), "stale lease")
 
-	// Second Commit should return the SAME cached error (sync.Once).
+	// Second Commit should return the SAME cached error (committed/released guard under mu).
 	err2 := receipt.Commit(ctx)
 	require.Error(t, err2)
 	assert.Equal(t, err1, err2, "repeated Commit must return the same cached error")
@@ -320,7 +320,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
 	require.Error(t, err1)
 	assert.Contains(t, err1.Error(), "stale lease")
 
-	// Second Release should return the SAME cached error (sync.Once).
+	// Second Release should return the SAME cached error (committed/released guard under mu).
 	err2 := receipt.Release(ctx)
 	require.Error(t, err2)
 	assert.Equal(t, err1, err2, "repeated Release must return the same cached error")
@@ -369,4 +369,78 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 
 	assert.Equal(t, 1, acquired, "exactly one goroutine should acquire the lease")
 	assert.Equal(t, 1, busy, "exactly one goroutine should get ClaimBusy")
+}
+
+func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	// Claim a key successfully.
+	state, receipt, err := claimer.Claim(ctx, "idem:transient:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Commit: inject a transient Redis error.
+	mock.evalErr = errMock
+	err = receipt.Commit(ctx)
+	require.Error(t, err, "first Commit should fail due to transient error")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
+
+	// Clear the transient error — Redis has recovered.
+	mock.evalErr = nil
+
+	// Second Commit: should succeed (committed=false allows retry).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "second Commit should succeed after transient error clears")
+
+	// Third Commit: should be a no-op (committed=true, returns nil).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "third Commit should be no-op")
+
+	// Verify done key exists and lease key is removed.
+	mock.mu.Lock()
+	_, hasLease := mock.store["lease:idem:transient:1"]
+	_, hasDone := mock.store["done:idem:transient:1"]
+	mock.mu.Unlock()
+	assert.False(t, hasLease, "lease key should be deleted after successful commit")
+	assert.True(t, hasDone, "done key should exist after successful commit")
+}
+
+func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	// Claim a key successfully.
+	state, receipt, err := claimer.Claim(ctx, "idem:transient-rel:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Release: inject a transient Redis error.
+	mock.evalErr = errMock
+	err = receipt.Release(ctx)
+	require.Error(t, err, "first Release should fail due to transient error")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
+
+	// Clear the transient error — Redis has recovered.
+	mock.evalErr = nil
+
+	// Second Release: should succeed (released=false allows retry).
+	err = receipt.Release(ctx)
+	require.NoError(t, err, "second Release should succeed after transient error clears")
+
+	// Third Release: should be a no-op (released=true, returns nil).
+	err = receipt.Release(ctx)
+	require.NoError(t, err, "third Release should be no-op")
+
+	// Verify lease key is removed and done key does NOT exist.
+	mock.mu.Lock()
+	_, hasLease := mock.store["lease:idem:transient-rel:1"]
+	_, hasDone := mock.store["done:idem:transient-rel:1"]
+	mock.mu.Unlock()
+	assert.False(t, hasLease, "lease key should be deleted after successful release")
+	assert.False(t, hasDone, "done key should NOT exist after release")
 }

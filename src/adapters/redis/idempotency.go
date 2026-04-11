@@ -198,6 +198,7 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 		r.committed = true // stale lease is permanent, don't retry
 		return r.commitErr
 	}
+	r.commitErr = nil // clear stale error from a previous transient failure
 	r.committed = true
 	return nil
 }
@@ -225,6 +226,7 @@ func (r *redisReceipt) Release(ctx context.Context) error {
 		r.released = true // stale lease is permanent, don't retry
 		return r.releaseErr
 	}
+	r.releaseErr = nil // clear stale error from a previous transient failure
 	r.released = true
 	return nil
 }
