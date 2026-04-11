@@ -210,6 +210,8 @@ func (r *Router) Running() <-chan struct{} {
 // The provided context controls the maximum wait time for goroutines to
 // drain; if the context expires, Close returns the context error.
 func (r *Router) Close(ctx context.Context) error {
+	start := time.Now()
+
 	r.mu.Lock()
 	cancel := r.cancel
 	r.mu.Unlock()
@@ -226,9 +228,11 @@ func (r *Router) Close(ctx context.Context) error {
 
 	select {
 	case <-done:
+		slog.Info("eventrouter: closed", slog.Duration("elapsed", time.Since(start)))
 		return nil
 	case <-ctx.Done():
-		slog.Warn("eventrouter: close timed out, some goroutines may still be running")
+		slog.Warn("eventrouter: close timed out, some goroutines may still be running",
+			slog.Duration("elapsed", time.Since(start)))
 		return ctx.Err()
 	}
 }
