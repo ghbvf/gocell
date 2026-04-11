@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"math/rand/v2"
 	"time"
 
@@ -90,6 +91,24 @@ func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
 	}
 	if delay > c.MaxRetryDelay {
 		return c.MaxRetryDelay
+	}
+	return delay
+}
+
+// safeDelay computes base * 2^attempt with overflow protection, capped by maxDelay.
+// Uses bits.Len64 to determine the maximum safe shift, matching the strategy
+// in Connection.backoffDelay.
+func safeDelay(base, maxDelay time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	if attempt > maxSafeShift {
+		return maxDelay
+	}
+	delay := base * (1 << uint(attempt))
+	if delay <= 0 || delay > maxDelay {
+		return maxDelay
 	}
 	return delay
 }
@@ -187,7 +206,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			return 0, nil, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
-			base := cb.config.cappedDelay(cb.config.ClaimRetryBaseDelay * (1 << attempt))
+			base := safeDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			var jitter time.Duration
 			if base > 0 {
 				jitter = time.Duration(rand.Int64N(int64(base/2) + 1))
@@ -338,7 +357,7 @@ func (cb *ConsumerBase) retryLoop(
 				}
 			}
 
-			delay := cb.config.cappedDelay(cb.config.RetryBaseDelay * (1 << attempt))
+			delay := safeDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			slog.Warn("rabbitmq: transient error, retrying",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),

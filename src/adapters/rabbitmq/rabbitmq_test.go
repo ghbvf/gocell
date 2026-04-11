@@ -3117,3 +3117,28 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	assert.False(t, receipt.commitCalled, "unknown disposition should not Commit Receipt")
 	receipt.mu.Unlock()
 }
+
+func TestSafeDelay_LargeAttempt_NoPanic(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 100)
+	assert.Equal(t, 30*time.Second, result)
+}
+
+func TestSafeDelay_ZeroBase(t *testing.T) {
+	result := safeDelay(0, 30*time.Second, 5)
+	assert.Equal(t, time.Duration(0), result)
+}
+
+func TestSafeDelay_NormalRange(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 3)
+	assert.Equal(t, 8*time.Second, result)
+}
+
+func TestSafeDelay_ExceedsMax(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 10)
+	assert.Equal(t, 30*time.Second, result) // 1024s > 30s → capped
+}
+
+func TestSafeDelay_NegativeBase(t *testing.T) {
+	result := safeDelay(-time.Second, 30*time.Second, 3)
+	assert.Equal(t, time.Duration(0), result)
+}
