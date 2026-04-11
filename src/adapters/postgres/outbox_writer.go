@@ -66,8 +66,8 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	}
 
 	const query = `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)`
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')`
 
 	_, err = tx.Exec(ctx, query,
 		entry.ID,

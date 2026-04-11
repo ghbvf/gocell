@@ -384,8 +384,8 @@ func (s *Subscriber) processDelivery(
 ) {
 	defer s.wg.Done()
 
-	var entry outbox.Entry
-	if err := json.Unmarshal(delivery.Body, &entry); err != nil {
+	entry, err := unmarshalDelivery(delivery.Body)
+	if err != nil {
 		// Unmarshal failure is a permanent error — NACK without requeue.
 		slog.Error("rabbitmq: unmarshal delivery failed, nacking without requeue",
 			slog.String(logKeyTopic, topic),
@@ -535,4 +535,45 @@ func (s *Subscriber) Close() error {
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Wire format deserialization
+// ---------------------------------------------------------------------------
+
+// outboxWireMessage is the new wire envelope produced by the three-phase relay.
+// Fields use camelCase JSON tags matching the relay's outboxMessage type.
+type outboxWireMessage struct {
+	ID        string            `json:"id"`
+	EventType string            `json:"eventType"`
+	Topic     string            `json:"topic,omitempty"`
+	Payload   json.RawMessage   `json:"payload"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
+}
+
+// unmarshalDelivery deserializes a broker message body into an outbox.Entry.
+// It first tries the new outboxWireMessage envelope (camelCase), then falls
+// back to the legacy full outbox.Entry format (PascalCase) for backward
+// compatibility during rolling deployments.
+func unmarshalDelivery(body []byte) (outbox.Entry, error) {
+	// Try new wire format first.
+	var msg outboxWireMessage
+	if err := json.Unmarshal(body, &msg); err == nil && msg.ID != "" && msg.EventType != "" {
+		return outbox.Entry{
+			ID:        msg.ID,
+			EventType: msg.EventType,
+			Topic:     msg.Topic,
+			Payload:   []byte(msg.Payload),
+			Metadata:  msg.Metadata,
+			CreatedAt: msg.CreatedAt,
+		}, nil
+	}
+
+	// Fallback: legacy full Entry (PascalCase, includes AggregateID etc).
+	var entry outbox.Entry
+	if err := json.Unmarshal(body, &entry); err != nil {
+		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: %w", err)
+	}
+	return entry, nil
 }
