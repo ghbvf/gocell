@@ -428,6 +428,8 @@
 | P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
 | OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
 | OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
+| CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml:101-102 只跑 ./adapters/...，漏掉 src/tests/integration/ (discovered via PR#79 review) |
+| OB-UUID-01 cells evt-<uuid> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID；需统一 ID 生成策略或放宽校验 (discovered via PR#79 review) |
 
 ### 总时间线（修订后，+6 个 Batch）
 
