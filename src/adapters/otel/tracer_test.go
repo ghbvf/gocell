@@ -2,10 +2,12 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -148,4 +150,47 @@ func TestTracerConfig_Validate(t *testing.T) {
 
 func TestSpan_ImplementsInterface(t *testing.T) {
 	var _ tracing.Span = (*otelSpan)(nil)
+}
+
+func TestSpan_RecordError(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "error-op")
+	span.RecordError(errors.New("connection refused"))
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+
+	events := spans[0].Events
+	require.NotEmpty(t, events, "RecordError should add an event to the span")
+	assert.Equal(t, "exception", events[0].Name)
+}
+
+func TestSpan_SetStatus_Error(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "err-status")
+	span.SetStatus(true, "db connection failed")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, otelcodes.Error, spans[0].Status.Code)
+	assert.Equal(t, "db connection failed", spans[0].Status.Description)
+}
+
+func TestSpan_SetStatus_Ok(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	ctx := context.Background()
+
+	_, span := tracer.Start(ctx, "ok-status")
+	span.SetStatus(false, "")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, otelcodes.Ok, spans[0].Status.Code)
 }

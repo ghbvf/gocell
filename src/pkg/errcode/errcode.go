@@ -88,20 +88,31 @@ const (
 
 // Error is a structured error that carries a machine-readable Code, a
 // human-readable Message, optional Details, and an optional wrapped Cause.
+//
+// InternalMessage holds diagnostic detail that must never be exposed to
+// API consumers. When present, Error() uses it (for logs/traces); HTTP
+// response writers use Message (safe for clients).
 type Error struct {
-	Code    Code
-	Message string
-	Details map[string]any
-	Cause   error
+	Code            Code
+	Message         string
+	InternalMessage string
+	Details         map[string]any
+	Cause           error
 }
 
-// Error returns a formatted string representation.
-// Format: "[CODE] message" or "[CODE] message: cause" when a Cause is present.
+// Error returns a formatted string representation for logging/diagnostics.
+// When InternalMessage is set it is preferred over Message, because Error()
+// is consumed by logs and traces — not by API clients.
+// Format: "[CODE] msg" or "[CODE] msg: cause" when a Cause is present.
 func (e *Error) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("[%s] %s: %s", e.Code, e.Message, e.Cause.Error())
+	msg := e.Message
+	if e.InternalMessage != "" {
+		msg = e.InternalMessage
 	}
-	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+	if e.Cause != nil {
+		return fmt.Sprintf("[%s] %s: %s", e.Code, msg, e.Cause.Error())
+	}
+	return fmt.Sprintf("[%s] %s", e.Code, msg)
 }
 
 // Unwrap returns the underlying Cause, enabling errors.Is / errors.As chains.
@@ -114,6 +125,17 @@ func New(code Code, message string) *Error {
 	return &Error{
 		Code:    code,
 		Message: message,
+	}
+}
+
+// Safe creates an *Error with separate public and internal messages.
+// publicMsg is returned to API clients; internalMsg is used in logs/traces
+// via Error() and must never be exposed over the wire.
+func Safe(code Code, publicMsg, internalMsg string) *Error {
+	return &Error{
+		Code:            code,
+		Message:         publicMsg,
+		InternalMessage: internalMsg,
 	}
 }
 
@@ -142,9 +164,10 @@ func WithDetails(err *Error, details map[string]any) *Error {
 		merged[k] = v
 	}
 	return &Error{
-		Code:    err.Code,
-		Message: err.Message,
-		Details: merged,
-		Cause:   err.Cause,
+		Code:            err.Code,
+		Message:         err.Message,
+		InternalMessage: err.InternalMessage,
+		Details:         merged,
+		Cause:           err.Cause,
 	}
 }

@@ -25,13 +25,13 @@ type createRequest struct {
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	order, err := h.svc.Create(r.Context(), req.Item)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

@@ -62,7 +62,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
@@ -70,7 +70,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Username: req.Username, Email: req.Email, Password: req.Password,
 	})
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -93,7 +93,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -115,7 +115,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	// JSON merge patch: only fields present in the JSON body are updated.
 	var raw map[string]json.RawMessage
 	if err := httputil.DecodeJSON(r, &raw); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -150,7 +150,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.svc.Delete(r.Context(), id); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -159,7 +159,7 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.svc.Lock(r.Context(), id); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "locked"}})
@@ -168,7 +168,7 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "active"}})

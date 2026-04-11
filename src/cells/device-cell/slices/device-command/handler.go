@@ -27,13 +27,13 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 	var req enqueueRequest
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	cmd, err := h.svc.Enqueue(r.Context(), deviceID, req.Payload)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -52,7 +52,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 
 	cmds, err := h.svc.ListPending(r.Context(), deviceID)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -68,7 +68,7 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	cmdID := r.PathValue("cmdId")
 
 	if err := h.svc.Ack(r.Context(), deviceID, cmdID); err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

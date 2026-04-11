@@ -193,6 +193,68 @@ func TestErrorsAsChain(t *testing.T) {
 	assert.Equal(t, ErrContractNotFound, inner2.Code)
 }
 
+func TestSafe(t *testing.T) {
+	tests := []struct {
+		name            string
+		code            Code
+		publicMsg       string
+		internalMsg     string
+		wantMessage     string
+		wantInternal    string
+		wantErrorString string
+	}{
+		{
+			name:            "both messages set",
+			code:            ErrInternal,
+			publicMsg:       "internal server error",
+			internalMsg:     "postgres connection pool exhausted",
+			wantMessage:     "internal server error",
+			wantInternal:    "postgres connection pool exhausted",
+			wantErrorString: "[ERR_INTERNAL] postgres connection pool exhausted",
+		},
+		{
+			name:            "empty internal message",
+			code:            ErrValidationFailed,
+			publicMsg:       "invalid input",
+			internalMsg:     "",
+			wantMessage:     "invalid input",
+			wantInternal:    "",
+			wantErrorString: "[ERR_VALIDATION_FAILED] invalid input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Safe(tt.code, tt.publicMsg, tt.internalMsg)
+			assert.Equal(t, tt.code, err.Code)
+			assert.Equal(t, tt.wantMessage, err.Message)
+			assert.Equal(t, tt.wantInternal, err.InternalMessage)
+			assert.Equal(t, tt.wantErrorString, err.Error())
+		})
+	}
+}
+
+func TestNew_InternalMessageEmpty(t *testing.T) {
+	err := New(ErrCellNotFound, "cell not found")
+	assert.Empty(t, err.InternalMessage, "New() should leave InternalMessage empty")
+}
+
+func TestWrap_InternalMessageEmpty(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := Wrap(ErrInternal, "db failed", cause)
+	assert.Empty(t, err.InternalMessage, "Wrap() should leave InternalMessage empty")
+}
+
+func TestWithDetails_PreservesInternalMessage(t *testing.T) {
+	original := Safe(ErrInternal, "internal server error", "pool exhausted")
+	result := WithDetails(original, map[string]any{"host": "db-1"})
+
+	assert.Equal(t, "pool exhausted", result.InternalMessage,
+		"WithDetails must preserve InternalMessage")
+	assert.Equal(t, "internal server error", result.Message)
+	assert.Equal(t, map[string]any{"host": "db-1"}, result.Details)
+}
+
 func TestSentinelCodes(t *testing.T) {
 	codes := []Code{
 		ErrMetadataInvalid,

@@ -22,7 +22,7 @@ func (h *Handler) HandleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	device, err := h.svc.GetStatus(r.Context(), id)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

@@ -22,7 +22,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 	order, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -33,7 +33,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	orders, err := h.svc.List(r.Context())
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

@@ -1,6 +1,7 @@
 package httputil
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"go/ast"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,7 +117,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.code), func(t *testing.T) {
-			got := mapCodeToStatus(tt.code)
+			got := MapCodeToStatus(tt.code)
 			assert.Equal(t, tt.wantStatus, got)
 		})
 	}
@@ -123,13 +125,13 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 
 func TestMapCodeToStatus_UnknownCode(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteDomainError(rec, errcode.New("ERR_TOTALLY_NEW", "test"))
+	WriteDomainError(context.Background(), rec, errcode.New("ERR_TOTALLY_NEW", "test"))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
 func TestWriteError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteError(rec, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "field is required")
+	WriteError(context.Background(), rec, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "field is required")
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -198,7 +200,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			WriteDomainError(rec, tt.err)
+			WriteDomainError(context.Background(), rec,tt.err)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -217,7 +219,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 
 func TestWriteDomainError_PlainError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteDomainError(rec, errors.New("something went wrong"))
+	WriteDomainError(context.Background(), rec,errors.New("something went wrong"))
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -239,7 +241,7 @@ func TestWriteDomainError_WithDetails(t *testing.T) {
 	)
 
 	rec := httptest.NewRecorder()
-	WriteDomainError(rec, ecErr)
+	WriteDomainError(context.Background(), rec,ecErr)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -249,6 +251,184 @@ func TestWriteDomainError_WithDetails(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	details := errObj["details"].(map[string]any)
 	assert.Equal(t, "email", details["field"])
+}
+
+func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantMsg string
+	}{
+		{
+			name:    "Safe error with InternalMessage — 5xx hides both",
+			err:     errcode.Safe(errcode.ErrInternal, "something broke", "postgres pool exhausted"),
+			wantMsg: "internal server error",
+		},
+		{
+			name:    "New error — 5xx hides original Message",
+			err:     errcode.New(errcode.ErrDependencyCycle, "a -> b -> a cycle detected"),
+			wantMsg: "internal server error",
+		},
+		{
+			name:    "500 with Details — still hides message",
+			err:     errcode.WithDetails(errcode.New(errcode.ErrBusClosed, "bus is closed"), map[string]any{"bus": "main"}),
+			wantMsg: "internal server error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteDomainError(context.Background(), rec,tt.err)
+
+			assert.True(t, rec.Code >= 500, "expected 5xx status, got %d", rec.Code)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+			errObj := body["error"].(map[string]any)
+			assert.Equal(t, tt.wantMsg, errObj["message"],
+				"5xx response must not leak internal details")
+		})
+	}
+}
+
+func TestWriteDomainError_4xx_ShowsMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantMsg string
+	}{
+		{
+			name:    "400 shows original message",
+			err:     errcode.New(errcode.ErrValidationFailed, "email is required"),
+			wantMsg: "email is required",
+		},
+		{
+			name:    "404 shows original message",
+			err:     errcode.New(errcode.ErrCellNotFound, "cell access-core not found"),
+			wantMsg: "cell access-core not found",
+		},
+		{
+			name:    "Safe error 400 — shows public Message not InternalMessage",
+			err:     errcode.Safe(errcode.ErrValidationFailed, "invalid input", "field X has regex mismatch"),
+			wantMsg: "invalid input",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteDomainError(context.Background(), rec,tt.err)
+
+			assert.True(t, rec.Code >= 400 && rec.Code < 500, "expected 4xx status, got %d", rec.Code)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+			errObj := body["error"].(map[string]any)
+			assert.Equal(t, tt.wantMsg, errObj["message"],
+				"4xx response should show public message")
+		})
+	}
+}
+
+func TestWriteError_WithRequestID(t *testing.T) {
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-abc-123")
+	rec := httptest.NewRecorder()
+	WriteError(ctx, rec, http.StatusBadRequest, "ERR_VALIDATION_FAILED", "field is required")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "req-abc-123", errObj["request_id"],
+		"response should include request_id from context")
+	assert.Equal(t, "ERR_VALIDATION_FAILED", errObj["code"])
+	assert.Equal(t, "field is required", errObj["message"])
+}
+
+func TestWriteError_WithoutRequestID(t *testing.T) {
+	ctx := context.Background()
+	rec := httptest.NewRecorder()
+	WriteError(ctx, rec, http.StatusBadRequest, "ERR_VALIDATION_FAILED", "field is required")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	_, hasRequestID := errObj["request_id"]
+	assert.False(t, hasRequestID,
+		"response should not include request_id when not in context")
+}
+
+func TestWriteDecodeError_PassesCtx(t *testing.T) {
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-decode-456")
+	rec := httptest.NewRecorder()
+	WriteDecodeError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "bad json"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "req-decode-456", errObj["request_id"])
+}
+
+func TestWriteDomainError_PassesCtx(t *testing.T) {
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-domain-789")
+	rec := httptest.NewRecorder()
+	WriteDomainError(ctx, rec, errcode.New(errcode.ErrCellNotFound, "cell not found"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "req-domain-789", errObj["request_id"])
+}
+
+func TestIsClientError(t *testing.T) {
+	tests := []struct {
+		code errcode.Code
+		want bool
+	}{
+		// 4xx → true
+		{errcode.ErrValidationFailed, true},
+		{errcode.ErrCellNotFound, true},
+		{errcode.ErrAuthUnauthorized, true},
+		{errcode.ErrAuthForbidden, true},
+		{errcode.ErrRateLimited, true},
+		{errcode.ErrBodyTooLarge, true},
+		{errcode.ErrAuthUserDuplicate, true},
+
+		// 5xx → false
+		{errcode.ErrInternal, false},
+		{errcode.ErrDependencyCycle, false},
+		{errcode.ErrBusClosed, false},
+
+		// 503 → false
+		{errcode.ErrWSHubStopping, false},
+
+		// 501 → false
+		{errcode.ErrNotImplemented, false},
+
+		// unknown → false
+		{errcode.Code("ERR_UNKNOWN_CODE"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.code), func(t *testing.T) {
+			got := IsClientError(tt.code)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMapCodeToStatus_Exported(t *testing.T) {
+	// Verify exported MapCodeToStatus matches internal behavior.
+	assert.Equal(t, http.StatusNotFound, MapCodeToStatus(errcode.ErrCellNotFound))
+	assert.Equal(t, http.StatusBadRequest, MapCodeToStatus(errcode.ErrValidationFailed))
+	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus(errcode.ErrInternal))
+	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus("ERR_UNKNOWN"))
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,

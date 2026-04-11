@@ -23,6 +23,11 @@ type Span interface {
 	End()
 	// SetAttribute records a key-value pair on the span.
 	SetAttribute(key string, value any)
+	// RecordError adds an error event to the span for diagnostics.
+	RecordError(err error)
+	// SetStatus sets the span's status. When isError is true the span is
+	// marked as failed with the given description; otherwise it is marked OK.
+	SetStatus(isError bool, description string)
 	// TraceID returns the trace identifier.
 	TraceID() string
 	// SpanID returns the span identifier.
@@ -75,7 +80,9 @@ type simpleSpan struct {
 	attrs   map[string]any
 }
 
-func (s *simpleSpan) End() {}
+func (s *simpleSpan) End()                                  {}
+func (s *simpleSpan) RecordError(_ error)                    {}
+func (s *simpleSpan) SetStatus(_ bool, _ string)             {}
 
 func (s *simpleSpan) SetAttribute(key string, value any) {
 	if s.attrs == nil {

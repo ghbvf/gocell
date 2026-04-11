@@ -20,7 +20,7 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 	flags, err := h.svc.List(r.Context())
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -33,7 +33,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 	flag, err := h.svc.GetByKey(r.Context(), key)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
@@ -48,13 +48,13 @@ func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
 		Subject string `json:"subject"`
 	}
 	if err := httputil.DecodeJSON(r, &req); err != nil {
-		httputil.WriteDecodeError(w, err)
+		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	result, err := h.svc.Evaluate(r.Context(), key, req.Subject)
 	if err != nil {
-		httputil.WriteDomainError(w, err)
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 

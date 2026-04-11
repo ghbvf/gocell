@@ -5,6 +5,7 @@ import (
 
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -37,6 +38,20 @@ func (s *otelSpan) SetAttribute(key string, value any) {
 		s.inner.SetAttributes(attribute.Bool(key, v))
 	default:
 		s.inner.SetAttributes(attribute.String(key, fmt.Sprint(v)))
+	}
+}
+
+// RecordError adds an error event to the span.
+func (s *otelSpan) RecordError(err error) {
+	s.inner.RecordError(err)
+}
+
+// SetStatus sets the span status. isError=true marks the span as failed.
+func (s *otelSpan) SetStatus(isError bool, description string) {
+	if isError {
+		s.inner.SetStatus(codes.Error, description)
+	} else {
+		s.inner.SetStatus(codes.Ok, "")
 	}
 }
 
