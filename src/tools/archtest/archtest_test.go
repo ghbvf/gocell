@@ -1,6 +1,7 @@
 package archtest
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const modulePrefix = "github.com/ghbvf/gocell/"
+// readModulePath parses go.mod to extract the module path (e.g. "github.com/ghbvf/gocell").
+// This avoids hardcoding the module path, which would silently disable all rules on rename or /v2 bump.
+func readModulePath(t *testing.T, modRoot string) string {
+	t.Helper()
+	f, err := os.Open(filepath.Join(modRoot, "go.mod"))
+	require.NoError(t, err, "cannot open go.mod")
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module"))
+		}
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatal("go.mod has no module directive")
+	return ""
+}
 
 // pkgInfo holds the subset of `go list -json` output needed for layering checks.
 type pkgInfo struct {
@@ -33,20 +52,24 @@ type violation struct {
 // --- helpers (pure functions) ---
 
 // layerOf extracts the top-level directory for an internal module path.
-// Returns "" for external packages.
-func layerOf(importPath string) string {
-	if !strings.HasPrefix(importPath, modulePrefix) {
+// Returns "" for external packages or the module root itself.
+// modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
+func layerOf(modPrefix, importPath string) string {
+	if !strings.HasPrefix(importPath, modPrefix) {
 		return ""
 	}
-	rel := strings.TrimPrefix(importPath, modulePrefix)
+	rel := strings.TrimPrefix(importPath, modPrefix)
+	if rel == "" {
+		return "" // module root package, no layer
+	}
 	parts := strings.SplitN(rel, "/", 2)
 	return parts[0]
 }
 
 // cellOf extracts the cell ID (e.g. "access-core") from a cells/ package path.
 // Returns "" if not under cells/.
-func cellOf(importPath string) string {
-	const cellsPrefix = modulePrefix + "cells/"
+func cellOf(modPrefix, importPath string) string {
+	cellsPrefix := modPrefix + "cells/"
 	if !strings.HasPrefix(importPath, cellsPrefix) {
 		return ""
 	}
@@ -61,23 +84,25 @@ func isInternal(importPath string) bool {
 }
 
 // checkLayering runs all 5 layering rules against the given packages and returns violations.
-func checkLayering(pkgs []pkgInfo) []violation {
+// modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
+func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 	var out []violation
 
 	for _, pkg := range pkgs {
-		srcLayer := layerOf(pkg.ImportPath)
-		srcCell := cellOf(pkg.ImportPath)
+		srcLayer := layerOf(modPrefix, pkg.ImportPath)
+		srcCell := cellOf(modPrefix, pkg.ImportPath)
 
 		for _, imp := range pkg.Imports {
-			impLayer := layerOf(imp)
+			impLayer := layerOf(modPrefix, imp)
 			if impLayer == "" {
 				continue // external package, skip
 			}
 
 			var rule string
 			switch {
-			// LAYER-01: kernel/ must not import runtime/, adapters/, cells/
-			case srcLayer == "kernel" && (impLayer == "runtime" || impLayer == "adapters" || impLayer == "cells"):
+			// LAYER-01: kernel/ may only import kernel/ and pkg/ (allow-list).
+			// Any other internal module import is forbidden.
+			case srcLayer == "kernel" && impLayer != "kernel" && impLayer != "pkg":
 				rule = "LAYER-01"
 
 			// LAYER-02: cells/ must not import adapters/
@@ -103,9 +128,12 @@ func checkLayering(pkgs []pkgInfo) []violation {
 				continue
 			}
 
-			// LAYER-05: no cross-cell internal imports
+			// LAYER-05: no cross-cell internal imports.
+			// TODO: L0 Cell exception — CLAUDE.md allows L0 cells to be directly imported
+			// by sibling cells in the same assembly. When L0 cells exist under src/cells/,
+			// parse cell.yaml to identify them and skip LAYER-05 for L0 targets.
 			if srcCell != "" && isInternal(imp) {
-				impCell := cellOf(imp)
+				impCell := cellOf(modPrefix, imp)
 				if impCell != "" && impCell != srcCell {
 					out = append(out, violation{
 						Rule:    "LAYER-05",
@@ -137,14 +165,18 @@ func findModuleRoot(t *testing.T) string {
 	}
 }
 
-// loadPackages runs `go list -json ./...` and parses the concatenated JSON output.
-func loadPackages(t *testing.T) []pkgInfo {
+// loadPackages runs `go list -json -e ./...` and parses the concatenated JSON output.
+// The -e flag tolerates packages with errors (e.g. Go's internal/ visibility rejection),
+// so LAYER-05 violations can be surfaced as rule-specific failures instead of a generic
+// command failure that masks other violations.
+func loadPackages(t *testing.T, root string) []pkgInfo {
 	t.Helper()
-	root := findModuleRoot(t)
-	cmd := exec.Command("go", "list", "-json", "./...")
+	cmd := exec.Command("go", "list", "-json", "-e", "./...")
 	cmd.Dir = root
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	require.NoError(t, err, "go list -json ./... failed")
+	require.NoError(t, err, "go list -json -e ./... failed: %s", stderr.String())
 
 	var pkgs []pkgInfo
 	dec := json.NewDecoder(bytes.NewReader(out))
@@ -159,15 +191,25 @@ func loadPackages(t *testing.T) []pkgInfo {
 // --- integration test (real go list data) ---
 
 func TestLayeringRules(t *testing.T) {
-	pkgs := loadPackages(t)
+	root := findModuleRoot(t)
+	modPrefix := readModulePath(t, root) + "/"
+	pkgs := loadPackages(t, root)
 	require.NotEmpty(t, pkgs, "go list returned no packages")
 
-	violations := checkLayering(pkgs)
+	violations := checkLayering(modPrefix, pkgs)
 
 	// Group violations by rule for readable output.
 	byRule := map[string][]string{}
 	for _, v := range violations {
 		byRule[v.Rule] = append(byRule[v.Rule], v.Message)
+	}
+
+	// Summary log for quick diagnosis when multiple rules are violated.
+	if len(violations) > 0 {
+		t.Logf("Found %d layering violation(s):", len(violations))
+		for _, v := range violations {
+			t.Logf("  %s", v.Message)
+		}
 	}
 
 	t.Run("LAYER-01_kernel_no_upward_imports", func(t *testing.T) {
@@ -190,6 +232,7 @@ func TestLayeringRules(t *testing.T) {
 // --- unit tests for helper functions ---
 
 func TestLayerOf(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
 	tests := []struct {
 		input string
 		want  string
@@ -204,6 +247,9 @@ func TestLayerOf(t *testing.T) {
 		{"github.com/ghbvf/gocell/pkg/errcode", "pkg"},
 		{"github.com/ghbvf/gocell/cmd/gocell", "cmd"},
 		{"github.com/ghbvf/gocell/examples/sso-bff", "examples"},
+		{"github.com/ghbvf/gocell/tools/archtest", "tools"},
+		// Module root package returns "" (no layer segment after prefix).
+		{"github.com/ghbvf/gocell", ""},
 		// External packages return "".
 		{"fmt", ""},
 		{"github.com/stretchr/testify/assert", ""},
@@ -211,12 +257,13 @@ func TestLayerOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, layerOf(tt.input))
+			assert.Equal(t, tt.want, layerOf(mod, tt.input))
 		})
 	}
 }
 
 func TestCellOf(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
 	tests := []struct {
 		input string
 		want  string
@@ -232,7 +279,7 @@ func TestCellOf(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.want, cellOf(tt.input))
+			assert.Equal(t, tt.want, cellOf(mod, tt.input))
 		})
 	}
 }
@@ -258,6 +305,7 @@ func TestIsInternal(t *testing.T) {
 // --- unit tests for checkLayering (table-driven with mock data) ---
 
 func TestCheckLayering(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
 	tests := []struct {
 		name      string
 		pkgs      []pkgInfo
@@ -291,6 +339,25 @@ func TestCheckLayering(t *testing.T) {
 				}},
 			},
 			wantRules: []string{"LAYER-01"},
+		},
+		{
+			name: "LAYER-01 violation: kernel imports cmd (allow-list catch-all)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
+					"github.com/ghbvf/gocell/cmd/gocell", // forbidden by allow-list
+				}},
+			},
+			wantRules: []string{"LAYER-01"},
+		},
+		{
+			name: "LAYER-01 clean: kernel imports kernel (allowed)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/kernel/governance", Imports: []string{
+					"github.com/ghbvf/gocell/kernel/metadata",
+					"github.com/ghbvf/gocell/kernel/registry",
+				}},
+			},
+			wantRules: nil,
 		},
 		{
 			name: "LAYER-01 clean: kernel imports pkg (allowed)",
@@ -361,6 +428,24 @@ func TestCheckLayering(t *testing.T) {
 			wantRules: []string{"LAYER-04"},
 		},
 		{
+			name: "LAYER-04 violation: adapters imports cmd",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/adapters/postgres", Imports: []string{
+					"github.com/ghbvf/gocell/cmd/gocell", // forbidden
+				}},
+			},
+			wantRules: []string{"LAYER-04"},
+		},
+		{
+			name: "LAYER-04 violation: adapters imports examples",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
+					"github.com/ghbvf/gocell/examples/sso-bff", // forbidden
+				}},
+			},
+			wantRules: []string{"LAYER-04"},
+		},
+		{
 			name: "LAYER-04 clean: adapters imports kernel + runtime (allowed)",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/adapters/postgres", Imports: []string{
@@ -404,6 +489,39 @@ func TestCheckLayering(t *testing.T) {
 			wantRules: []string{"LAYER-01", "LAYER-02", "LAYER-03"},
 		},
 		{
+			name: "clean: cmd imports all layers (no rule restricts cmd)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cmd/gocell", Imports: []string{
+					"github.com/ghbvf/gocell/kernel/cell",
+					"github.com/ghbvf/gocell/runtime/auth",
+					"github.com/ghbvf/gocell/adapters/postgres",
+					"github.com/ghbvf/gocell/cells/access-core",
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "clean: examples imports all layers (unrestricted)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/examples/sso-bff", Imports: []string{
+					"github.com/ghbvf/gocell/kernel/cell",
+					"github.com/ghbvf/gocell/runtime/auth",
+					"github.com/ghbvf/gocell/adapters/postgres",
+					"github.com/ghbvf/gocell/cells/access-core",
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "clean: pkg imports nothing forbidden (no rule restricts pkg)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/pkg/errcode", Imports: []string{
+					"fmt", "net/http",
+				}},
+			},
+			wantRules: nil,
+		},
+		{
 			name:      "empty package list",
 			pkgs:      nil,
 			wantRules: nil,
@@ -421,7 +539,7 @@ func TestCheckLayering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			violations := checkLayering(tt.pkgs)
+			violations := checkLayering(mod, tt.pkgs)
 
 			gotRules := make([]string, 0, len(violations))
 			seen := map[string]bool{}
