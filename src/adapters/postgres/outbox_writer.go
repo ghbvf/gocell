@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,8 +13,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// uuidPattern matches a canonical UUID string (8-4-4-4-12 hex digits).
-var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+// allZeroUUID is the sentinel UUID that must be rejected — it would cause
+// idempotency key collisions across unrelated entries.
+const allZeroUUID = "00000000-0000-0000-0000-000000000000"
 
 // Compile-time interface checks.
 var _ outbox.Writer = (*OutboxWriter)(nil)
@@ -44,11 +44,11 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return errcode.New(ErrAdapterPGNoTx, "outbox write requires a transaction in context")
 	}
 
-	if entry.ID == "" {
+	if strings.TrimSpace(entry.ID) == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be empty")
 	}
-	if !uuidPattern.MatchString(entry.ID) {
-		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID is not a valid UUID: "+entry.ID)
+	if entry.ID == allZeroUUID {
+		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
 	}
 
 	if err := entry.Validate(); err != nil {
@@ -67,7 +67,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 
 	const query = `INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')`
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `')`
 
 	_, err = tx.Exec(ctx, query,
 		entry.ID,
@@ -113,13 +113,13 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 
 	// Validate all entries upfront.
 	for i, e := range entries {
-		if e.ID == "" {
+		if strings.TrimSpace(e.ID) == "" {
 			return errcode.New(errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be empty", i))
 		}
-		if !uuidPattern.MatchString(e.ID) {
+		if e.ID == allZeroUUID {
 			return errcode.New(errcode.ErrValidationFailed,
-				fmt.Sprintf("outbox entry[%d] ID is not a valid UUID: %s", i, e.ID))
+				fmt.Sprintf("outbox entry[%d] ID must not be all-zeros UUID (idempotency collision risk)", i))
 		}
 		if err := e.Validate(); err != nil {
 			return fmt.Errorf("outbox entry[%d]: %w", i, err)
@@ -142,10 +142,10 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 // writeBatchChunk inserts a single chunk of entries via multi-row INSERT.
 // globalOffset is the index of the first entry in the original slice (for error messages).
 func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry, globalOffset int) error {
-	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published
+	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published)
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
 		VALUES `)
 
 	args := make([]any, 0, len(entries)*cols)
@@ -176,7 +176,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 		sb.WriteString(")")
 
 		args = append(args, e.ID, e.AggregateID, e.AggregateType,
-			e.EventType, e.Topic, e.Payload, metadata, createdAt, false)
+			e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending)
 	}
 
 	_, err := tx.Exec(ctx, sb.String(), args...)

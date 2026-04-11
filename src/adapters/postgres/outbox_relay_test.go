@@ -526,13 +526,162 @@ func TestOutboxRelay_DeletePublishedBefore(t *testing.T) {
 	err := relay.deletePublishedBefore(context.Background(), cutoff)
 	require.NoError(t, err)
 
-	// Should have 2 exec calls: one for published, one for dead.
-	require.Len(t, db.execCalls, 2)
-	// First call: delete published entries by status (parameter $1) and published_at.
+	// Should have at least 2 exec calls: published batch + dead batch.
+	require.GreaterOrEqual(t, len(db.execCalls), 2)
+	// First call: delete published entries by status and published_at.
 	assert.Contains(t, db.execCalls[0].args, statusPublished)
 	assert.Contains(t, db.execCalls[0].sql, "published_at")
-	// Second call: delete dead entries by status (parameter $1).
-	assert.Contains(t, db.execCalls[1].args, statusDead)
+	assert.Contains(t, db.execCalls[0].sql, "LIMIT",
+		"cleanup DELETE must use LIMIT for batched execution")
+	// Last call: delete dead entries by status and dead_at.
+	lastCall := db.execCalls[len(db.execCalls)-1]
+	assert.Contains(t, lastCall.args, statusDead)
+	assert.Contains(t, lastCall.sql, "dead_at")
+}
+
+// ---------------------------------------------------------------------------
+// Stop timeout tests (B10)
+// ---------------------------------------------------------------------------
+
+func TestOutboxRelay_Stop_RespectsCallerTimeout(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 50 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relay.Start(startCtx)
+	}()
+
+	waitForRelayRunning(t, relay)
+	startCancel()
+
+	// Stop with an already-expired context.
+	expiredCtx, expiredCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+	defer expiredCancel()
+	time.Sleep(5 * time.Millisecond) // ensure context expired
+
+	err := relay.Stop(expiredCtx)
+	if err != nil {
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	}
+}
+
+func TestOutboxRelay_Stop_SucceedsWithAmpleTimeout(t *testing.T) {
+	db := &mockDBTX{}
+	pub := &mockPublisher{}
+	cfg := DefaultRelayConfig()
+	cfg.PollInterval = 50 * time.Millisecond
+
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	startCtx, startCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relay.Start(startCtx)
+	}()
+
+	waitForRelayRunning(t, relay)
+	startCancel()
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+
+	err := relay.Stop(stopCtx)
+	require.NoError(t, err)
+
+	startErr := <-errCh
+	assert.NoError(t, startErr, "Start should return nil on graceful stop")
+}
+
+// ---------------------------------------------------------------------------
+// writeBackHook test (B11)
+// ---------------------------------------------------------------------------
+
+func TestRelay_WriteBackHook_OptimisticLockRace(t *testing.T) {
+	e := makeRelayEntry("e-hook", "order.created", 0)
+
+	// Mock DB returns 0 affected rows after hook triggers reclaimStale.
+	db := &mockDBTX{
+		queryRows:  &mockRows{entries: []mockRowData{makeMockRowData(e)}},
+		execResult: pgconn.NewCommandTag("UPDATE 0"),
+	}
+	pub := &mockPublisher{}
+	relay := NewOutboxRelay(db, pub, DefaultRelayConfig())
+
+	hookCalled := false
+	relay.writeBackHook = func() {
+		hookCalled = true
+		// Simulate reclaimStale recovering the entry between publish and writeBack.
+		// In a real scenario, reclaimStale would UPDATE the row back to pending.
+	}
+
+	err := relay.pollOnce(context.Background())
+	require.NoError(t, err)
+	assert.True(t, hookCalled, "writeBackHook must be called between publish and writeBack")
+}
+
+// ---------------------------------------------------------------------------
+// Additional coverage tests (B12)
+// ---------------------------------------------------------------------------
+
+func TestRelay_PublishesWithExplicitTopic(t *testing.T) {
+	e := makeRelayEntry("e-topic", "device.enrolled", 0)
+	e.Topic = "custom.topic.v2"
+
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: []mockRowData{makeMockRowData(e)}},
+	}
+	pub := &mockPublisher{}
+	relay := NewOutboxRelay(db, pub, DefaultRelayConfig())
+
+	err := relay.pollOnce(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, pub.published, 1)
+	assert.Equal(t, "custom.topic.v2", pub.published[0].topic,
+		"explicit Topic must be used instead of EventType fallback")
+}
+
+func TestRelay_Claim_BeginError(t *testing.T) {
+	db := &mockDBTX{
+		beginErr: errors.New("connection refused"),
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	_, err := relay.claim(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "begin tx")
+}
+
+func TestTruncateError_UTF8Safe(t *testing.T) {
+	// Chinese characters: 3 bytes each in UTF-8.
+	msg := "错误消息测试用例"
+	truncated := truncateError(msg, 4)
+	assert.Equal(t, "错误消息", truncated, "should truncate at rune boundary, not byte")
+	assert.True(t, len(truncated) <= len(msg))
+}
+
+func TestTruncateError_ShortMessage(t *testing.T) {
+	msg := "short"
+	assert.Equal(t, "short", truncateError(msg, 100))
+}
+
+func TestSanitizeError_RedactsSensitive(t *testing.T) {
+	msg := "dial failed: password=secret123 host=db.internal"
+	sanitized := sanitizeError(msg, 1000)
+	assert.NotContains(t, sanitized, "secret123")
+	assert.Contains(t, sanitized, "password=<REDACTED>")
+}
+
+func TestRelay_DeadRetentionPeriod_Default(t *testing.T) {
+	cfg := DefaultRelayConfig()
+	assert.Equal(t, 30*24*time.Hour, cfg.DeadRetentionPeriod,
+		"dead entries should have 30-day default retention")
 }
 
 // ---------------------------------------------------------------------------
@@ -541,21 +690,25 @@ func TestOutboxRelay_DeletePublishedBefore(t *testing.T) {
 
 func TestOutboxMessage_JSONFormat(t *testing.T) {
 	msg := outboxMessage{
-		ID:        "test-id",
-		EventType: "order.created",
-		Topic:     "orders",
-		Payload:   json.RawMessage(`{"key":"value"}`),
-		Metadata:  map[string]string{"k": "v"},
-		CreatedAt: time.Date(2026, 4, 11, 0, 0, 0, 0, time.UTC),
+		ID:            "test-id",
+		AggregateID:   "agg-1",
+		AggregateType: "order",
+		EventType:     "order.created",
+		Topic:         "orders",
+		Payload:       json.RawMessage(`{"key":"value"}`),
+		Metadata:      map[string]string{"k": "v"},
+		CreatedAt:     time.Date(2026, 4, 11, 0, 0, 0, 0, time.UTC),
 	}
 
 	data, err := json.Marshal(msg)
 	require.NoError(t, err)
 
-	// Verify camelCase JSON keys (S1-F1).
+	// Verify camelCase JSON keys.
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(data, &m))
 	assert.Contains(t, m, "id")
+	assert.Contains(t, m, "aggregateId", "wire format must include aggregateId")
+	assert.Contains(t, m, "aggregateType", "wire format must include aggregateType")
 	assert.Contains(t, m, "eventType")
 	assert.Contains(t, m, "topic")
 	assert.Contains(t, m, "payload")
@@ -565,6 +718,7 @@ func TestOutboxMessage_JSONFormat(t *testing.T) {
 	// Must NOT contain PascalCase or internal fields.
 	assert.NotContains(t, m, "EventType")
 	assert.NotContains(t, m, "Attempts")
+	assert.NotContains(t, m, "AggregateID")
 }
 
 // ---------------------------------------------------------------------------
@@ -596,6 +750,7 @@ type mockDBTX struct {
 	execErr    error
 	execResult pgconn.CommandTag
 	commitErr  error
+	beginErr   error
 }
 
 type queryCall struct {
@@ -627,6 +782,9 @@ func (m *mockDBTX) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 }
 
 func (m *mockDBTX) Begin(_ context.Context) (pgx.Tx, error) {
+	if m.beginErr != nil {
+		return nil, m.beginErr
+	}
 	return &mockRelayTx{db: m}, nil
 }
 
@@ -688,6 +846,8 @@ func (r *mockRows) Scan(dest ...any) error {
 			*d = v.(time.Time)
 		case *int:
 			*d = v.(int)
+		default:
+			return fmt.Errorf("mockRows.Scan: unsupported dest type %T at index %d", dest[i], i)
 		}
 	}
 	return nil

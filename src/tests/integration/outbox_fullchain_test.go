@@ -221,11 +221,11 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	require.NoError(t, err, "business row should exist")
 	assert.Equal(t, "full-chain-test", orderData)
 
-	// Verify outbox entry exists and is unpublished.
-	var published bool
-	err = pool.DB().QueryRow(ctx, "SELECT published FROM outbox_entries WHERE id = $1", entryID).Scan(&published)
+	// Verify outbox entry exists and is pending.
+	var status string
+	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
 	require.NoError(t, err, "outbox entry should exist")
-	assert.False(t, published, "outbox entry should be unpublished initially")
+	assert.Equal(t, "pending", status, "outbox entry should have status='pending' initially")
 
 	// ---------------------------------------------------------------
 	// Step 5: Start the subscriber BEFORE the relay so it is ready to
@@ -292,9 +292,9 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Give the relay a moment to commit the UPDATE after publishing.
 	time.Sleep(500 * time.Millisecond)
 
-	err = pool.DB().QueryRow(ctx, "SELECT published FROM outbox_entries WHERE id = $1", entryID).Scan(&published)
+	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
 	require.NoError(t, err)
-	assert.True(t, published, "outbox entry should be marked as published after relay")
+	assert.Equal(t, "published", status, "outbox entry should have status='published' after relay")
 
 	// ---------------------------------------------------------------
 	// Step 10: Verify idempotency semantics with IdempotencyClaimer.
@@ -412,10 +412,10 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	// Verify the entry was marked as published.
 	time.Sleep(300 * time.Millisecond)
 
-	var published bool
-	err = pool.DB().QueryRow(ctx, "SELECT published FROM outbox_entries WHERE id = $1", entryID).Scan(&published)
+	var pubStatus string
+	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
 	require.NoError(t, err)
-	assert.True(t, published, "outbox entry should be marked published after relay")
+	assert.Equal(t, "published", pubStatus, "outbox entry should have status='published' after relay")
 
 	relayCancel()
 	_ = relay.Stop(ctx)

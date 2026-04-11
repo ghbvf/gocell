@@ -282,16 +282,15 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 		require.NoError(t, err, "writing outbox entry inside a tx should succeed")
 
 		// Verify the entry was persisted.
-		var aggID, eventType string
-		var published bool
+		var aggID, eventType, status string
 		err = pool.DB().QueryRow(ctx,
-			"SELECT aggregate_id, event_type, published FROM outbox_entries WHERE id = $1",
+			"SELECT aggregate_id, event_type, status FROM outbox_entries WHERE id = $1",
 			entryID,
-		).Scan(&aggID, &eventType, &published)
+		).Scan(&aggID, &eventType, &status)
 		require.NoError(t, err, "outbox entry should be queryable after commit")
 		assert.Equal(t, "agg-1", aggID)
 		assert.Equal(t, "test.created", eventType)
-		assert.False(t, published, "new outbox entry should be unpublished")
+		assert.Equal(t, "pending", status, "new outbox entry should have status='pending'")
 	})
 
 	t.Run("write_without_tx_returns_error", func(t *testing.T) {

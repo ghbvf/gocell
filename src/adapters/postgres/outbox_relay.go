@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"math/rand/v2"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -38,7 +40,8 @@ const (
 // ---------------------------------------------------------------------------
 
 // relayEntry wraps outbox.Entry with relay runtime state.
-// Attempts is kept in the adapter layer to avoid polluting the kernel model (F-9).
+// Attempts is kept in the adapter layer to avoid polluting the kernel model
+// — Entry is a domain type; retry count is an adapter implementation detail.
 type relayEntry struct {
 	outbox.Entry
 	Attempts int
@@ -59,17 +62,22 @@ type pollStats struct {
 }
 
 // outboxMessage is the wire envelope sent to the broker.
-// Only includes fields consumers need; relay-internal state (Attempts, status)
-// is never serialised to the wire.
+// Includes all domain-meaningful Entry fields; only relay-internal state
+// (Attempts, status) is excluded from the wire.
+//
+// NOTE: rabbitmq/subscriber.go defines an identical outboxWireMessage for
+// deserialization — keep the two structs in sync when modifying fields.
 //
 // ref: Watermill message.Message — payload + metadata envelope
 type outboxMessage struct {
-	ID        string            `json:"id"`
-	EventType string            `json:"eventType"`
-	Topic     string            `json:"topic,omitempty"`
-	Payload   json.RawMessage   `json:"payload"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt time.Time         `json:"createdAt"`
+	ID            string            `json:"id"`
+	AggregateID   string            `json:"aggregateId,omitempty"`
+	AggregateType string            `json:"aggregateType,omitempty"`
+	EventType     string            `json:"eventType"`
+	Topic         string            `json:"topic,omitempty"`
+	Payload       json.RawMessage   `json:"payload"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
 }
 
 // ---------------------------------------------------------------------------
@@ -106,10 +114,16 @@ type RelayConfig struct {
 	// ClaimTTL is how long a claiming entry is held before reclaimStale
 	// recovers it back to pending. Default 60s.
 	ClaimTTL time.Duration
-	// MaxRetryDelay caps the exponential backoff delay. Default 5m. (F-7)
+	// MaxRetryDelay caps the exponential backoff delay to prevent
+	// unbounded retry intervals at high attempt counts. Default 5m.
 	MaxRetryDelay time.Duration
-	// ReclaimInterval is how often reclaimStale runs. Default 30s. (S4-F2)
+	// ReclaimInterval controls the independent reclaimStale goroutine
+	// frequency, decoupled from cleanup interval. Default 30s.
 	ReclaimInterval time.Duration
+	// DeadRetentionPeriod is how long dead-lettered entries are kept before
+	// cleanup. Separate from RetentionPeriod to give operators more time
+	// to investigate and manually retry failed entries. Default 30 days.
+	DeadRetentionPeriod time.Duration
 }
 
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.
@@ -121,8 +135,9 @@ func DefaultRelayConfig() RelayConfig {
 		MaxAttempts:     5,
 		BaseRetryDelay:  5 * time.Second,
 		ClaimTTL:        60 * time.Second,
-		MaxRetryDelay:   5 * time.Minute,
-		ReclaimInterval: 30 * time.Second,
+		MaxRetryDelay:       5 * time.Minute,
+		ReclaimInterval:     30 * time.Second,
+		DeadRetentionPeriod: 30 * 24 * time.Hour, // 30 days
 	}
 }
 
@@ -212,9 +227,12 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 	if cfg.ReclaimInterval <= 0 {
 		cfg.ReclaimInterval = defaults.ReclaimInterval
 	}
+	if cfg.DeadRetentionPeriod <= 0 {
+		cfg.DeadRetentionPeriod = defaults.DeadRetentionPeriod
+	}
 
 	// Guard: ClaimTTL must exceed 2x PollInterval to prevent reclaimStale
-	// from reclaiming entries still being processed (S2-F2).
+	// from reclaiming entries still being processed.
 	if cfg.ClaimTTL <= cfg.PollInterval*2 {
 		slog.Warn("outbox relay: ClaimTTL should be > 2*PollInterval to avoid premature reclaim",
 			slog.Duration("claim_ttl", cfg.ClaimTTL),
@@ -256,14 +274,28 @@ func (r *OutboxRelay) retryDelay(attempts int) time.Duration {
 	return delay
 }
 
-// truncateError truncates an error message to maxLen bytes.
+// truncateError truncates an error message to maxLen runes, preserving valid
+// UTF-8 (avoids splitting multi-byte characters at byte boundaries).
 func truncateError(msg string, maxLen int) string {
-	if len(msg) > maxLen {
-		return msg[:maxLen]
+	if utf8.RuneCountInString(msg) <= maxLen {
+		return msg
 	}
-	return msg
+	runes := []rune(msg)
+	return string(runes[:maxLen])
 }
 
+// sensitivePatterns matches common sensitive substrings in error messages
+// (connection strings, hostnames, credentials) to redact before storage.
+var sensitivePatterns = regexp.MustCompile(
+	`(?i)(password|passwd|secret|token|dsn|connection[_ ]?string)=[^\s;,]+`,
+)
+
+// sanitizeError truncates and redacts sensitive patterns from an error message
+// before storing it in the last_error column.
+func sanitizeError(errMsg string, maxLen int) string {
+	redacted := sensitivePatterns.ReplaceAllString(errMsg, "$1=<REDACTED>")
+	return truncateError(redacted, maxLen)
+}
 
 // Start begins the relay polling loop, cleanup goroutine, and reclaim loop.
 // It blocks until ctx is cancelled or Stop is called.
@@ -400,33 +432,44 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 	}
 	claimDur := time.Since(start)
 
-	// Test hook: allows injecting reclaimStale between Phase 2 and Phase 3
-	// to verify optimistic lock behavior (F-8).
-	if r.writeBackHook != nil {
-		r.writeBackHook()
-	}
-
 	// Phase 2: Publish (outside tx)
 	pubStart := time.Now()
 	results := r.publishAll(ctx, entries)
 	pubDur := time.Since(pubStart)
 
+	// Test hook: called between Phase 2 (publish) and Phase 3 (writeBack)
+	// to allow injecting reclaimStale for optimistic lock testing.
+	if r.writeBackHook != nil {
+		r.writeBackHook()
+	}
+
 	// Phase 3: WriteBack (short tx)
 	stats, wbErr := r.writeBack(ctx, results)
 
-	slog.Info("outbox relay: poll complete",
-		slog.Int("published", stats.published),
-		slog.Int("retried", stats.retried),
-		slog.Int("dead_lettered", stats.dead),
-		slog.Int("skipped", stats.skipped),
-		slog.Duration("claim_dur", claimDur),
-		slog.Duration("publish_dur", pubDur),
-	)
+	// Log only after writeBack completes — if commit fails, stats are
+	// rolled back and logging them would be misleading.
+	if wbErr == nil {
+		slog.Info("outbox relay: poll complete",
+			slog.Int("published", stats.published),
+			slog.Int("retried", stats.retried),
+			slog.Int("dead_lettered", stats.dead),
+			slog.Int("skipped", stats.skipped),
+			slog.Duration("claim_dur", claimDur),
+			slog.Duration("publish_dur", pubDur),
+		)
+	}
 
 	return wbErr
 }
 
 // claim locks a batch of pending entries in a short transaction.
+//
+// Uses FOR UPDATE SKIP LOCKED so multiple relay instances select disjoint
+// batches without blocking each other. Note: SKIP LOCKED does NOT guarantee
+// per-aggregate ordering — entries for the same aggregate may be claimed by
+// different relay instances in different poll cycles. This is acceptable for
+// L2 (OutboxFact) at-least-once semantics; L3/L4 ordered delivery would
+// require per-aggregate partitioning.
 func (r *OutboxRelay) claim(ctx context.Context) ([]relayEntry, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -440,7 +483,8 @@ func (r *OutboxRelay) claim(ctx context.Context) ([]relayEntry, error) {
 		}
 	}()
 
-	// ORDER BY matches idx_outbox_pending (next_retry_at NULLS FIRST, created_at) (F-3).
+	// ORDER BY matches idx_outbox_pending (next_retry_at NULLS FIRST, created_at)
+	// so PostgreSQL can use the partial index for sorting without an extra Sort step.
 	const claimQuery = `UPDATE outbox_entries
 		SET status = $1, claimed_at = now()
 		WHERE id IN (
@@ -495,17 +539,20 @@ func (r *OutboxRelay) claim(ctx context.Context) ([]relayEntry, error) {
 }
 
 // publishAll publishes each entry to the broker outside of any transaction.
-// Uses outboxMessage wire envelope (S1-F1) to avoid leaking internal fields.
+// Uses outboxMessage wire envelope to decouple the broker wire format from
+// the internal Entry struct and enforce camelCase JSON keys.
 func (r *OutboxRelay) publishAll(ctx context.Context, entries []relayEntry) []publishResult {
 	results := make([]publishResult, len(entries))
 	for i, e := range entries {
 		msg := outboxMessage{
-			ID:        e.ID,
-			EventType: e.EventType,
-			Topic:     e.RoutingTopic(),
-			Payload:   json.RawMessage(e.Payload),
-			Metadata:  e.Metadata,
-			CreatedAt: e.CreatedAt,
+			ID:            e.ID,
+			AggregateID:   e.AggregateID,
+			AggregateType: e.AggregateType,
+			EventType:     e.EventType,
+			Topic:         e.RoutingTopic(),
+			Payload:       json.RawMessage(e.Payload),
+			Metadata:      e.Metadata,
+			CreatedAt:     e.CreatedAt,
 		}
 		payload, marshalErr := json.Marshal(msg)
 		if marshalErr != nil {
@@ -520,8 +567,20 @@ func (r *OutboxRelay) publishAll(ctx context.Context, entries []relayEntry) []pu
 	return results
 }
 
+// writeBack SQL constants — consistent with claim/reclaimStale/deletePublishedBefore.
+const (
+	writeBackMarkPublished = `UPDATE outbox_entries SET status = $1, published_at = now()
+		WHERE id = $2 AND status = $3`
+	writeBackMarkDead = `UPDATE outbox_entries SET status = $1, attempts = $2, last_error = $3, dead_at = now()
+		WHERE id = $4 AND status = $5`
+	writeBackMarkRetry = `UPDATE outbox_entries SET status = $1, attempts = $2,
+		next_retry_at = now() + $3::interval, last_error = $4
+		WHERE id = $5 AND status = $6`
+)
+
 // writeBack updates entry statuses based on publish outcomes in a short transaction.
-// All UPDATEs include WHERE status='claiming' as an optimistic lock (F-8).
+// All UPDATEs include WHERE status='claiming' as an optimistic lock — this prevents
+// a race where reclaimStale recovers the entry between Phase 2 and Phase 3.
 func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (pollStats, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
@@ -540,9 +599,7 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 	for _, res := range results {
 		if res.err == nil {
 			// Success → mark published (optimistic lock on status).
-			ct, execErr := tx.Exec(ctx,
-				`UPDATE outbox_entries SET status = $1, published_at = now()
-				 WHERE id = $2 AND status = $3`,
+			ct, execErr := tx.Exec(ctx, writeBackMarkPublished,
 				statusPublished, res.entry.ID, statusClaiming)
 			if execErr != nil {
 				return stats, errcode.Wrap(ErrAdapterPGQuery, "outbox relay: writeBack mark published", execErr)
@@ -555,13 +612,11 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 			stats.published++
 		} else {
 			newAttempts := res.entry.Attempts + 1
-			errMsg := truncateError(res.err.Error(), 1000)
+			errMsg := sanitizeError(res.err.Error(), 1000)
 
 			if newAttempts >= r.config.MaxAttempts {
 				// Dead-letter: exceeded max attempts.
-				if _, execErr := tx.Exec(ctx,
-					`UPDATE outbox_entries SET status = $1, attempts = $2, last_error = $3
-					 WHERE id = $4 AND status = $5`,
+				if _, execErr := tx.Exec(ctx, writeBackMarkDead,
 					statusDead, newAttempts, errMsg, res.entry.ID, statusClaiming); execErr != nil {
 					return stats, errcode.Wrap(ErrAdapterPGQuery, "outbox relay: writeBack mark dead", execErr)
 				}
@@ -575,12 +630,10 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 					slog.String("last_error", errMsg),
 				)
 			} else {
-				// Retry: back to pending with exponential backoff + jitter (F-6).
+				// Retry: back to pending with exponential backoff + jitter,
+				// preventing thundering herd in multi-relay-instance deployments.
 				delay := r.retryDelay(newAttempts)
-				if _, execErr := tx.Exec(ctx,
-					`UPDATE outbox_entries SET status = $1, attempts = $2,
-					 next_retry_at = now() + $3::interval, last_error = $4
-					 WHERE id = $5 AND status = $6`,
+				if _, execErr := tx.Exec(ctx, writeBackMarkRetry,
 					statusPending, newAttempts, delay, errMsg, res.entry.ID, statusClaiming); execErr != nil {
 					return stats, errcode.Wrap(ErrAdapterPGQuery, "outbox relay: writeBack mark retry", execErr)
 				}
@@ -598,20 +651,27 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 }
 
 // reclaimStale recovers entries stuck in 'claiming' past ClaimTTL.
-// It increments attempts and marks dead if MaxAttempts is reached (F-4).
+// It increments attempts and marks dead if MaxAttempts is reached — this
+// prevents an infinite reclaim loop when a relay crashes repeatedly during
+// Phase 2 (publish), since without incrementing attempts the entry would
+// cycle pending→claiming→reclaim→pending forever.
 func (r *OutboxRelay) reclaimStale(ctx context.Context) error {
+	// LEAST caps the SQL-side backoff at MaxRetryDelay, matching the Go-side
+	// retryDelay() behavior used in writeBack.
 	const q = `UPDATE outbox_entries
 		SET status = CASE WHEN attempts + 1 >= $2 THEN $3 ELSE $4 END,
 			attempts = attempts + 1,
 			claimed_at = NULL,
+			dead_at = CASE WHEN attempts + 1 >= $2 THEN now() ELSE NULL END,
 			next_retry_at = CASE WHEN attempts + 1 >= $2 THEN NULL
-				ELSE now() + ($5 * power(2, attempts + 1))::interval END
+				ELSE now() + LEAST($5 * power(2, attempts + 1), $7)::interval END
 		WHERE status = $6 AND claimed_at < now() - $1::interval`
 
 	ct, err := r.db.Exec(ctx, q,
 		r.config.ClaimTTL, r.config.MaxAttempts,
 		statusDead, statusPending,
-		r.config.BaseRetryDelay, statusClaiming)
+		r.config.BaseRetryDelay, statusClaiming,
+		r.config.MaxRetryDelay)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: reclaimStale failed", err)
 	}
@@ -669,28 +729,50 @@ func (r *OutboxRelay) cleanupLoop(ctx context.Context) {
 }
 
 // deletePublishedBefore removes published entries older than the cutoff time.
-// Also cleans up dead entries past the same retention period (S2-F1).
+// Also cleans up dead entries past DeadRetentionPeriod (separate, longer retention
+// to give operators time to investigate and manually retry failed entries).
+// Uses batched DELETE with LIMIT to prevent lock storms on large tables.
 func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Time) error {
-	const publishedQuery = `DELETE FROM outbox_entries WHERE status = $1 AND published_at < $2`
-	ct, err := r.db.Exec(ctx, publishedQuery, statusPublished, before)
-	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete published entries failed", err)
+	const batchLimit = 1000
+
+	// Published entries: retention based on published_at.
+	const publishedQuery = `DELETE FROM outbox_entries WHERE id IN (
+		SELECT id FROM outbox_entries WHERE status = $1 AND published_at < $2 LIMIT $3)`
+	var totalPublished int64
+	for {
+		ct, err := r.db.Exec(ctx, publishedQuery, statusPublished, before, batchLimit)
+		if err != nil {
+			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete published entries failed", err)
+		}
+		totalPublished += ct.RowsAffected()
+		if ct.RowsAffected() < batchLimit {
+			break
+		}
 	}
-	if ct.RowsAffected() > 0 {
+	if totalPublished > 0 {
 		slog.Info("outbox relay: cleaned up published entries",
-			slog.Int64("deleted", ct.RowsAffected()),
+			slog.Int64("deleted", totalPublished),
 		)
 	}
 
-	// Clean up dead entries past retention (uses created_at as dead entries have no published_at).
-	const deadQuery = `DELETE FROM outbox_entries WHERE status = $1 AND created_at < $2`
-	ct, err = r.db.Exec(ctx, deadQuery, statusDead, before)
-	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete dead entries failed", err)
+	// Dead entries: separate retention based on dead_at (when the entry was dead-lettered).
+	deadCutoff := time.Now().Add(-r.config.DeadRetentionPeriod)
+	const deadQuery = `DELETE FROM outbox_entries WHERE id IN (
+		SELECT id FROM outbox_entries WHERE status = $1 AND dead_at < $2 LIMIT $3)`
+	var totalDead int64
+	for {
+		ct, err := r.db.Exec(ctx, deadQuery, statusDead, deadCutoff, batchLimit)
+		if err != nil {
+			return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: delete dead entries failed", err)
+		}
+		totalDead += ct.RowsAffected()
+		if ct.RowsAffected() < batchLimit {
+			break
+		}
 	}
-	if ct.RowsAffected() > 0 {
+	if totalDead > 0 {
 		slog.Info("outbox relay: cleaned up dead entries",
-			slog.Int64("deleted", ct.RowsAffected()),
+			slog.Int64("deleted", totalDead),
 		)
 	}
 
