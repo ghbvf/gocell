@@ -369,3 +369,41 @@ func (v *Validator) validateREF15() []ValidationResult {
 	return results
 }
 
+// validateREF16 checks that each assembly has a generated boundary.yaml file.
+// The boundary.yaml is produced by `gocell generate` and lives at
+// assemblies/{id}/generated/boundary.yaml relative to the metadata root (v.root,
+// typically src/). Note: unlike REF-11 which uses repositoryRoot for entrypoint
+// paths, boundary.yaml lives under the metadata root alongside other metadata dirs.
+// Skipped when root is empty (no filesystem checks).
+func (v *Validator) validateREF16() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	for _, a := range v.project.Assemblies {
+		boundaryPath := filepath.Join(v.root, "assemblies", a.ID, "generated", "boundary.yaml")
+		if !isWithinRoot(v.root, boundaryPath) {
+			results = append(results, ValidationResult{
+				Code:      "REF-16",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      assemblyFile(a.ID),
+				Field:     "id",
+				Message:   fmt.Sprintf("assembly %q boundary.yaml path escapes project root", a.ID),
+			})
+			continue
+		}
+		if !v.fileExists(boundaryPath) {
+			results = append(results, ValidationResult{
+				Code:      "REF-16",
+				Severity:  SeverityWarning,
+				IssueType: IssueRefNotFound,
+				File:      assemblyFile(a.ID),
+				Field:     "id",
+				Message:   fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
+			})
+		}
+	}
+	return results
+}
+

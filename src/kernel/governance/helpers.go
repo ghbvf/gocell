@@ -17,6 +17,23 @@ func contractProvider(c *metadata.ContractMeta) string {
 	return c.ProviderEndpoint()
 }
 
+// consumerFieldName returns the YAML field name for the consumer endpoint
+// based on contract kind (clients, subscribers, invokers, readers).
+func consumerFieldName(kind string) string {
+	switch cell.ContractKind(kind) {
+	case cell.ContractHTTP:
+		return "clients"
+	case cell.ContractEvent:
+		return "subscribers"
+	case cell.ContractCommand:
+		return "invokers"
+	case cell.ContractProjection:
+		return "readers"
+	default:
+		return "consumers"
+	}
+}
+
 // contractConsumers returns the consumer cell/actor list for a contract based on its kind.
 func contractConsumers(c *metadata.ContractMeta) []string {
 	switch cell.ContractKind(c.Kind) {
@@ -106,10 +123,46 @@ func repositoryRoot(root string) string {
 }
 
 // isWithinRoot checks that target resolves to a path inside root.
+// Both sides are normalized to absolute paths, and symlinks are resolved
+// when possible, to prevent both relative-path and symlink-based bypasses.
 func isWithinRoot(root, target string) bool {
-	cleanRoot := filepath.Clean(root) + string(os.PathSeparator)
-	cleanTarget := filepath.Clean(target)
-	return strings.HasPrefix(cleanTarget, cleanRoot) || cleanTarget == filepath.Clean(root)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	// Resolve symlinks on root (which should exist).
+	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = resolved
+	}
+	// For target: resolve symlinks if possible. If the target doesn't exist
+	// (common — we're checking *whether* a file exists), resolve the longest
+	// existing ancestor to handle platforms where intermediate dirs are
+	// symlinks (e.g., macOS /tmp → /private/tmp).
+	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
+		absTarget = resolved
+	} else {
+		absTarget = evalExistingPrefix(absTarget)
+	}
+	cleanRoot := absRoot + string(os.PathSeparator)
+	return strings.HasPrefix(absTarget, cleanRoot) || absTarget == absRoot
+}
+
+// evalExistingPrefix resolves symlinks on the longest existing ancestor of p,
+// then appends the non-existent suffix. This handles platforms where
+// intermediate directories are symlinks (e.g., macOS /tmp → /private/tmp).
+func evalExistingPrefix(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p // filesystem root, stop recursion
+	}
+	return filepath.Join(evalExistingPrefix(parent), filepath.Base(p))
 }
 
 // --- actor helpers ---

@@ -27,38 +27,6 @@ func (v *Validator) validateADV01() []ValidationResult {
 	return results
 }
 
-// validateADV02 checks that deprecated contracts still referenced by slices produce a warning.
-func (v *Validator) validateADV02() []ValidationResult {
-	var results []ValidationResult
-
-	// Build a set of deprecated contract IDs.
-	deprecated := make(map[string]bool)
-	for _, c := range v.project.Contracts {
-		if c.Lifecycle == "deprecated" {
-			deprecated[c.ID] = true
-		}
-	}
-	if len(deprecated) == 0 {
-		return nil
-	}
-
-	for key, s := range v.project.Slices {
-		for i, cu := range s.ContractUsages {
-			if deprecated[cu.Contract] {
-				results = append(results, ValidationResult{
-					Code:      "ADV-02",
-					Severity:  SeverityWarning,
-					IssueType: IssueForbidden,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("contractUsages[%d].contract", i),
-					Message:   fmt.Sprintf("slice %q uses deprecated contract %q", s.ID, cu.Contract),
-				})
-			}
-		}
-	}
-	return results
-}
-
 // validateADV03 checks that waivers reference contracts that appear in the slice's contractUsages.
 func (v *Validator) validateADV03() []ValidationResult {
 	var results []ValidationResult

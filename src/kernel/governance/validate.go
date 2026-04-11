@@ -102,6 +102,7 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateREF13()...)
 	results = append(results, v.validateREF14()...)
 	results = append(results, v.validateREF15()...)
+	results = append(results, v.validateREF16()...)
 
 	// Topological rules
 	results = append(results, v.validateTOPO01()...)
@@ -110,6 +111,8 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateTOPO04()...)
 	results = append(results, v.validateTOPO05()...)
 	results = append(results, v.validateTOPO06()...)
+	results = append(results, v.validateTOPO07()...)
+	results = append(results, v.validateTOPO08()...)
 
 	// Verify closure rules
 	results = append(results, v.validateVERIFY01()...)
@@ -134,7 +137,6 @@ func (v *Validator) Validate() []ValidationResult {
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)
-	results = append(results, v.validateADV02()...)
 	results = append(results, v.validateADV03()...)
 	results = append(results, v.validateADV04()...)
 
