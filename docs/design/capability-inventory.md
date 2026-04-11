@@ -64,7 +64,9 @@
 - `Entry` struct — ID(idempotency 标识)/AggregateID/EventType/Payload/Metadata
 
 ### 2.6 idempotency — 幂等检查接口
-- `Checker` interface — `IsProcessed(ctx, key)/MarkProcessed(ctx, key, ttl)`
+- `Claimer` interface — two-phase `Claim(ctx, key, leaseTTL, doneTTL) (ClaimState, Receipt, error)`
+- `ClaimState` enum — ClaimAcquired / ClaimDone / ClaimBusy
+- Flow: Claim → business logic → Receipt.Commit (success) / Receipt.Release (failure)
 
 ### 2.7 journey — Journey 目录
 - `Catalog` — Get/List/CellJourneys/ContractJourneys/CrossCellJourneys
@@ -163,14 +165,14 @@
 ### 4.2 redis — Redis (go-redis/v9)
 - `Client` — standalone/sentinel + Health/Close
 - `DistLock` — Redlock TTL + Lua atomic release/renew + 续租 goroutine
-- `IdempotencyChecker` — 实现 idempotency.Checker (SET NX + TTL)
+- `IdempotencyClaimer` — 实现 idempotency.Claimer (dual-key Lua: Claim/Commit/Release)
 - `Cache` — Get/Set/Delete + TTL + JSON 泛型 helper
 
 ### 4.3 rabbitmq — RabbitMQ (amqp091-go)
 - `Connection` — AMQP URL + exponential backoff 重连 + channel 池 + Health
 - `Publisher` — 实现 outbox.Publisher + confirm mode
 - `Subscriber` — 实现 outbox.Subscriber + SubscriberConfig (QueueName/PrefetchCount)
-- `ConsumerBase` — idempotency.Checker + 3x retry + DLQ routing + slog 可观测
+- `ConsumerBase` — idempotency.Claimer + exponential backoff retry + DLQ routing + slog 可观测
 - `PermanentError` — 标记不可重试错误直接进 DLQ
 
 ### 4.4 oidc — thin go-oidc v3 wrapper
