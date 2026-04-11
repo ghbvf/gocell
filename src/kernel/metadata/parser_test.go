@@ -488,11 +488,11 @@ verify:
 // of slice.belongsToCell from the file path cells/{cellID}/slices/{sliceID}/slice.yaml.
 func TestParseFS_SliceBelongsToCellDerive(t *testing.T) {
 	tests := []struct {
-		name          string
-		yaml          string
-		path          string
-		wantCell      string
-		wantSliceKey  string
+		name     string
+		yaml     string
+		path     string
+		sliceID  string
+		wantCell string
 	}{
 		{
 			name: "omitted belongsToCell is derived from path",
@@ -503,8 +503,8 @@ verify:
   unit: []
   contract: []
 `,
-			wantCell:     "access-core",
-			wantSliceKey: "access-core/session-login",
+			sliceID:  "session-login",
+			wantCell: "access-core",
 		},
 		{
 			name: "explicit belongsToCell matching path is preserved",
@@ -516,20 +516,20 @@ verify:
   unit: []
   contract: []
 `,
-			wantCell:     "audit-core",
-			wantSliceKey: "audit-core/write-log",
+			sliceID:  "write-log",
+			wantCell: "audit-core",
 		},
 		{
-			name: "derived from path with hyphenated cell name",
-			path: "cells/config-core/slices/hot-reload/slice.yaml",
-			yaml: `id: hot-reload
+			name: "derived from path with simple cell name",
+			path: "cells/crypto/slices/hash/slice.yaml",
+			yaml: `id: hash
 contractUsages: []
 verify:
   unit: []
   contract: []
 `,
-			wantCell:     "config-core",
-			wantSliceKey: "config-core/hot-reload",
+			sliceID:  "hash",
+			wantCell: "crypto",
 		},
 	}
 	for _, tt := range tests {
@@ -540,9 +540,12 @@ verify:
 			p := NewParser("")
 			pm, err := p.ParseFS(fsys)
 			require.NoError(t, err)
+			wantKey := tt.wantCell + "/" + tt.sliceID
 			require.Len(t, pm.Slices, 1)
-			assert.Contains(t, pm.Slices, tt.wantSliceKey)
-			sl := pm.Slices[tt.wantSliceKey]
+			assert.Contains(t, pm.Slices, wantKey)
+			assert.NotContains(t, pm.Slices, "/"+tt.sliceID,
+				"empty belongsToCell must not produce malformed key")
+			sl := pm.Slices[wantKey]
 			require.NotNil(t, sl)
 			assert.Equal(t, tt.wantCell, sl.BelongsToCell)
 		})

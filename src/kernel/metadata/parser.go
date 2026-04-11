@@ -152,7 +152,8 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 
 	// G-7: auto-derive belongsToCell from path.
-	// Path is guaranteed to be cells/{cellID}/slices/{sliceID}/slice.yaml by matchSliceYAML.
+	// matchSliceYAML guarantees len(parts)==5 && parts[0]=="cells",
+	// so parts[1] is always the cellID.
 	parts := splitPath(path)
 	cellID := parts[1]
 
@@ -187,7 +188,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("contract id is empty in %s", path))
 	}
-	// G-7: auto-derive ownerCell from provider endpoint if omitted.
+	// G-7: auto-derive ownerCell from provider endpoint if omitted (per contract.schema.json).
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
