@@ -132,7 +132,9 @@
 
 | # | 任务 | 包位置 | 预估 | 前置依赖 |
 |---|------|--------|------|---------|
-| WM-1 | CSRF 中间件 — Origin/Referer 校验 | `runtime/http/middleware` | 0.5d | 无 |
+| WM-1 | ✅ CSRF 中间件 — Origin/Referer 校验 + BFF cookie session | `runtime/http/middleware` + `pkg/securecookie` | 0.5d | 无 | PR#77 |
+| WM-35 | BFF handler 接入 — login/refresh/logout 接 SessionCookieWriter + BFF 模式不返回 token body | `cells/access-core/slices/session*` | 2d | WM-1 |
+| WM-36 | SecureCookie key rotation — active+previous 双 key ring，灰度轮换 | `pkg/securecookie` | 1.5d | WM-1 |
 | WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
 | WM-2 | 密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go） | `runtime/auth` | 2d | 无 |
 | WM-34 | 配置热更新回调 — Cell 级 OnConfigReload | `runtime/config` | 1d | 无 |

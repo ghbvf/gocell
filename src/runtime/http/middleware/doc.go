@@ -11,14 +11,33 @@
 //   - SecurityHeaders: sets secure default HTTP headers
 //   - BodyLimit: enforces a maximum request body size
 //   - RateLimit: token-bucket rate limiting per client IP
+//   - CSRF: validates request origin via Sec-Fetch-Site, Origin, and Referer headers
+//   - CookieSession: BFF cookie session with signed JWT encapsulation
+//
+// # BFF Middleware Ordering
+//
+// For BFF (Browser-Facing) deployments with cookie-based sessions, the
+// middleware chain order is critical:
+//
+//	CSRF → CookieSession → AuthMiddleware → handler
+//
+//   - CSRF runs first: rejects cross-origin requests (403) before any
+//     cookie processing or authentication happens. This prevents a
+//     malicious site from triggering cookie-based actions.
+//   - CookieSession runs second: reads the session cookie and injects an
+//     Authorization: Bearer header so that downstream middleware sees a
+//     standard JWT.
+//   - AuthMiddleware runs third: verifies the JWT (from cookie or header)
+//     and injects Claims into the request context.
 //
 // Example:
 //
-//	handler := middleware.RequestID(
-//	    middleware.Recovery(
-//	        middleware.AccessLog(
-//	            myHandler,
-//	        ),
-//	    ),
-//	)
+//	csrfMW := middleware.CSRF(csrfCfg)
+//	sessMW := middleware.MustCookieSession(sessCfg)
+//	authMW := auth.AuthMiddleware(verifier, publicEndpoints)
+//
+//	rtr.Route("/api/v1", func(r cell.RouteMux) {
+//	    protected := r.With(csrfMW, sessMW, authMW)
+//	    protected.Handle("/resource", resourceHandler)
+//	})
 package middleware

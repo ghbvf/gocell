@@ -24,6 +24,7 @@ const (
 	ErrAuthUnauthorized Code = "ERR_AUTH_UNAUTHORIZED"
 	ErrAuthForbidden    Code = "ERR_AUTH_FORBIDDEN"
 	ErrRateLimited      Code = "ERR_RATE_LIMITED"
+	ErrCSRFOriginDenied Code = "ERR_CSRF_ORIGIN_DENIED"
 	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
 	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
 	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
