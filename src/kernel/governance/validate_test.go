@@ -41,7 +41,7 @@ func validProject() *metadata.ProjectMeta {
 				Type:             "support",
 				ConsistencyLevel: "L0",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.shared-crypto"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.shared-crypto.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -122,6 +122,10 @@ func validProject() *metadata.ProjectMeta {
 				Contracts: []string{
 					"http.auth.login.v1",
 					"event.session.created.v1",
+				},
+				PassCriteria: []metadata.PassCriterion{
+					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-sso-login.login-returns-token"},
+					{Text: "manual review", Mode: "manual"},
 				},
 			},
 		},
@@ -1146,6 +1150,133 @@ func TestVERIFY04(t *testing.T) {
 			tt.setup(pm)
 			val := NewValidator(pm, ".")
 			got := findByCode(val.validateVERIFY04(), "VERIFY-04")
+			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}
+
+func TestVERIFY05(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "all refs valid format",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "smoke ref missing third segment",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{"smoke.access-core"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "unknown prefix",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{"integration.access-core.startup"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "smoke ref references non-existent cell",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{"smoke.nonexistent-cell.startup"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "unit ref valid format",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit.session-login.service"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "unit ref too few segments",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit.service"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "contract ref valid format",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+					"contract.http.auth.login.v1.serve",
+					"contract.event.session.created.v1.publish",
+					"contract.projection.session.active.v1.provide",
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "journey checkRef valid format",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+					{Text: "login ok", Mode: "auto", CheckRef: "journey.J-sso-login.login-ok"},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "journey checkRef invalid prefix",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+					{Text: "login ok", Mode: "auto", CheckRef: "unknown.J-sso-login.login-ok"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "journey checkRef too few segments",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+					{Text: "login ok", Mode: "auto", CheckRef: "journey.login"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "empty scope segment rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit..service"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "empty checkRef is skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+					{Text: "manual step", Mode: "manual", CheckRef: ""},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "leading dot ref rejected as empty prefix",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{".foo.bar"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "multiple invalid refs accumulate",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].Verify.Smoke = []string{"bad.ref"}
+				pm.Slices["access-core/session-login"].Verify.Unit = []string{"also-bad"}
+			},
+			wantCount: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			got := findByCode(val.validateVERIFY05(), "VERIFY-05")
 			assert.Len(t, got, tt.wantCount)
 		})
 	}

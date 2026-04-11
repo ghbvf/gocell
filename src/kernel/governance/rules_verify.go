@@ -2,6 +2,7 @@ package governance
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -130,6 +131,37 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	return results
 }
 
+// validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
+func (v *Validator) validateVERIFY03() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		for i, dep := range c.L0Dependencies {
+			target, ok := v.project.Cells[dep.Cell]
+			if !ok {
+				continue // REF-09 covers missing cells
+			}
+			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
+			if parseErr != nil {
+				continue // FMT-03 covers invalid levels
+			}
+			if targetLevel != cell.L0 {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-03",
+					Severity:  SeverityError,
+					IssueType: IssueMismatch,
+					File:      cellFile(c.ID),
+					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
+					Message: fmt.Sprintf(
+						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
+						c.ID, dep.Cell, target.ConsistencyLevel,
+					),
+				})
+			}
+		}
+	}
+	return results
+}
+
 // validateVERIFY04 checks that every active contract whose provider is a
 // Cell has at least one provider-role slice. Without this, a contract is
 // "published but nobody provides it" — a ghost capability.
@@ -182,33 +214,110 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 	return results
 }
 
-// validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
-func (v *Validator) validateVERIFY03() []ValidationResult {
+// validRefPrefixes is the set of allowed first segments in a verify ref.
+var validRefPrefixes = map[string]bool{
+	"journey":  true,
+	"smoke":    true,
+	"unit":     true,
+	"contract": true,
+}
+
+// validateVerifyRef checks a single ref string for format compliance.
+// Rules: at least 3 dot-separated segments; first segment must be a known prefix.
+// For smoke refs, second segment must be a cellID present in the project.
+func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResult {
 	var results []ValidationResult
-	for _, c := range v.project.Cells {
-		for i, dep := range c.L0Dependencies {
-			target, ok := v.project.Cells[dep.Cell]
-			if !ok {
-				continue // REF-09 covers missing cells
-			}
-			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
-			if parseErr != nil {
-				continue // FMT-03 covers invalid levels
-			}
-			if targetLevel != cell.L0 {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-03",
-					Severity:  SeverityError,
-					IssueType: IssueMismatch,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message: fmt.Sprintf(
-						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
-						c.ID, dep.Cell, target.ConsistencyLevel,
-					),
-				})
-			}
+	parts := strings.SplitN(ref, ".", 3)
+	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		results = append(results, ValidationResult{
+			Code:      "VERIFY-05",
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      file,
+			Field:     field,
+			Message: fmt.Sprintf(
+				"ref %q must have at least 3 non-empty dot-separated segments", ref,
+			),
+		})
+		return results
+	}
+
+	prefix := parts[0]
+	if !validRefPrefixes[prefix] {
+		results = append(results, ValidationResult{
+			Code:      "VERIFY-05",
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      file,
+			Field:     field,
+			Message: fmt.Sprintf(
+				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
+			),
+		})
+		return results
+	}
+
+	// For smoke refs, the second segment must be an existing cellID.
+	if prefix == "smoke" {
+		cellID := parts[1]
+		if _, ok := v.project.Cells[cellID]; !ok {
+			results = append(results, ValidationResult{
+				Code:      "VERIFY-05",
+				Severity:  SeverityError,
+				IssueType: IssueRefNotFound,
+				File:      file,
+				Field:     field,
+				Message: fmt.Sprintf(
+					"smoke ref %q references non-existent cell %q", ref, cellID,
+				),
+			})
 		}
 	}
+
+	return results
+}
+
+// validateVERIFY05 checks that all verify refs (cell.verify.smoke,
+// slice.verify.unit, slice.verify.contract, journey.passCriteria[].checkRef)
+// use the structured ref format: {prefix}.{scope}.{suffix}, where prefix is
+// one of journey/smoke/unit/contract. For smoke refs the scope must be an
+// existing cellID.
+func (v *Validator) validateVERIFY05() []ValidationResult {
+	var results []ValidationResult
+
+	// cell.yaml verify.smoke refs
+	for _, c := range v.project.Cells {
+		file := cellFile(c.ID)
+		for i, ref := range c.Verify.Smoke {
+			field := fmt.Sprintf("verify.smoke[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// slice.yaml verify.unit + verify.contract refs
+	for key, s := range v.project.Slices {
+		file := sliceFile(key)
+		for i, ref := range s.Verify.Unit {
+			field := fmt.Sprintf("verify.unit[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+		for i, ref := range s.Verify.Contract {
+			field := fmt.Sprintf("verify.contract[%d]", i)
+			results = append(results, v.validateVerifyRef(ref, file, field)...)
+		}
+	}
+
+	// journey passCriteria[].checkRef
+	for _, j := range v.project.Journeys {
+		file := journeyFile(j.ID)
+		for i, pc := range j.PassCriteria {
+			if pc.CheckRef == "" {
+				continue
+			}
+			field := fmt.Sprintf("passCriteria[%d].checkRef", i)
+			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
+		}
+	}
+
 	return results
 }

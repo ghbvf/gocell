@@ -46,7 +46,8 @@ type SchemaConfig struct {
 	Primary string
 }
 
-// CellVerify holds smoke-test paths for a Cell.
+// CellVerify holds structured verify refs for a Cell.
+// Smoke refs use the format: smoke.{cellID}.{suffix}
 type CellVerify struct {
 	Smoke []string
 }

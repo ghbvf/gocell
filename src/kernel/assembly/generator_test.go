@@ -38,7 +38,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "identity", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "users"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"test/smoke/auth_test.go", "test/smoke/session_test.go"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.auth", "smoke.access-core.session"}},
 			},
 			"audit-core": {
 				ID:               "audit-core",
@@ -46,7 +46,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "compliance", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "audit_logs"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"test/smoke/audit_test.go"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.audit"}},
 			},
 			"config-core": {
 				ID:               "config-core",
@@ -54,7 +54,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "config_entries"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"test/smoke/config_test.go"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.config-core.config"}},
 			},
 		},
 		Slices:    make(map[string]*metadata.SliceMeta),
@@ -271,14 +271,14 @@ func TestGenerateBoundary_SmokeTargets(t *testing.T) {
 
 	content := string(out)
 
-	// access-core smoke: test/smoke/auth_test.go, test/smoke/session_test.go
-	// audit-core smoke: test/smoke/audit_test.go
-	assert.Contains(t, content, "test/smoke/auth_test.go")
-	assert.Contains(t, content, "test/smoke/session_test.go")
-	assert.Contains(t, content, "test/smoke/audit_test.go")
+	// access-core smoke: smoke.access-core.auth, smoke.access-core.session
+	// audit-core smoke: smoke.audit-core.audit
+	assert.Contains(t, content, "smoke.access-core.auth")
+	assert.Contains(t, content, "smoke.access-core.session")
+	assert.Contains(t, content, "smoke.audit-core.audit")
 
 	// config-core smoke should NOT appear (config-core is outside assembly)
-	assert.NotContains(t, content, "test/smoke/config_test.go")
+	assert.NotContains(t, content, "smoke.config-core.config")
 }
 
 func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {

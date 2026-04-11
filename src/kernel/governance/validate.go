@@ -116,6 +116,7 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateVERIFY02()...)
 	results = append(results, v.validateVERIFY03()...)
 	results = append(results, v.validateVERIFY04()...)
+	results = append(results, v.validateVERIFY05()...)
 
 	// Format compliance rules
 	results = append(results, v.validateFMT01()...)
