@@ -268,6 +268,11 @@ func (v *Validator) validateREF12() []ValidationResult {
 			{"schemaRefs.response", c.SchemaRefs.Response},
 			{"schemaRefs.payload", c.SchemaRefs.Payload},
 		}
+		for key, val := range c.SchemaRefs.Extra {
+			refs = append(refs, refEntry{
+				fmt.Sprintf("schemaRefs.%s", key), val,
+			})
+		}
 		for _, ref := range refs {
 			if ref.value == "" {
 				continue

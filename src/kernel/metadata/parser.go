@@ -264,5 +264,12 @@ func unmarshalFile(fsys fs.FS, path string, out any) error {
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}
+	// Reject multi-document YAML files. Metadata files must contain exactly
+	// one document; a second document after "---" would be silently ignored
+	// by a single Decode call.
+	if dec.Decode(new(any)) != io.EOF {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("parse %s: unexpected multiple YAML documents", path))
+	}
 	return nil
 }

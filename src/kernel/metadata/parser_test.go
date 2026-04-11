@@ -997,6 +997,43 @@ schemaRefs:
 	assert.Equal(t, "extra.json", c.SchemaRefs.Extra["custom"])
 }
 
+func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   fstest.MapFS
+	}{
+		{
+			name: "multi-doc cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("id: x\ntype: core\nconsistencyLevel: L1\nowner: {team: t, role: r}\nschema: {primary: tbl}\nverify: {smoke: []}\n---\nid: y\ntype: edge\n")},
+			},
+		},
+		{
+			name: "multi-doc contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("id: http.test.v1\nkind: http\nlifecycle: active\nendpoints: {server: x}\n---\nid: injected\n")},
+			},
+		},
+		{
+			name: "multi-doc actors.yaml",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte("- id: a\n  type: external\n  maxConsistencyLevel: L2\n---\n- id: b\n  type: external\n  maxConsistencyLevel: L3\n")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), "multiple YAML documents")
+		})
+	}
+}
+
 func TestParseFS_EmptyFiles(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1021,6 +1058,58 @@ func TestParseFS_EmptyFiles(t *testing.T) {
 			pm, err := p.ParseFS(tt.fs)
 			require.NoError(t, err, "empty file should parse without error")
 			assert.NotNil(t, pm)
+		})
+	}
+}
+
+// TestParseFS_EmptyStructFiles verifies that empty files for struct-based
+// metadata types (cell, contract, journey, assembly) fail with "id is empty"
+// rather than silently succeeding. This documents the boundary: empty list
+// files (actors, status-board) are OK, but empty struct files must have an ID.
+func TestParseFS_EmptyStructFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		fs      fstest.MapFS
+		wantMsg string
+	}{
+		{
+			name: "empty cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "cell id is empty",
+		},
+		{
+			name: "empty contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "contract id is empty",
+		},
+		{
+			name: "empty journey yaml",
+			fs: fstest.MapFS{
+				"journeys/J-test.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "journey id is empty",
+		},
+		{
+			name: "empty assembly yaml",
+			fs: fstest.MapFS{
+				"assemblies/a/assembly.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "assembly id is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), tt.wantMsg)
 		})
 	}
 }

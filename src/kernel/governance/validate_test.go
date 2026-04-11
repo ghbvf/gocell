@@ -2082,6 +2082,37 @@ func TestREF12(t *testing.T) {
 		assert.Len(t, got, 1)
 		assert.Contains(t, got[0].Field, "payload")
 	})
+
+	t.Run("extra schemaRef key missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+		require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
+			Extra: map[string]string{"custom": "custom-schema.json"},
+		}
+		val := NewValidator(pm, tmpDir)
+		got := findByCode(val.validateREF12(), "REF-12")
+		require.Len(t, got, 1)
+		assert.Equal(t, "schemaRefs.custom", got[0].Field)
+		assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+	})
+
+	t.Run("extra schemaRef key exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+		require.NoError(t, os.MkdirAll(contractDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(contractDir, "custom-schema.json"), []byte("{}"), 0o644))
+
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
+			Extra: map[string]string{"custom": "custom-schema.json"},
+		}
+		val := NewValidator(pm, tmpDir)
+		got := findByCode(val.validateREF12(), "REF-12")
+		assert.Empty(t, got)
+	})
 }
 
 // --- REF-13: contract provider actor exists ---

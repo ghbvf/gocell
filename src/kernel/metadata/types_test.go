@@ -142,6 +142,42 @@ func TestContractMetaOmitEmptySchemaRefs(t *testing.T) {
 	assert.NotContains(t, string(data), "schemaRefs")
 }
 
+// TestSchemaRefsInlinePrecedence verifies that when a YAML schemaRefs block
+// contains both named keys (request, response, payload) and extra keys, the
+// decoder fills named struct fields first — Extra never shadows them.
+func TestSchemaRefsInlinePrecedence(t *testing.T) {
+	raw := `request: req.json
+response: res.json
+custom: extra.json
+`
+	var sr SchemaRefsMeta
+	require.NoError(t, yaml.Unmarshal([]byte(raw), &sr))
+
+	// Named fields populated
+	assert.Equal(t, "req.json", sr.Request)
+	assert.Equal(t, "res.json", sr.Response)
+	assert.Empty(t, sr.Payload)
+
+	// Extra captures only the unknown key
+	assert.Equal(t, map[string]string{"custom": "extra.json"}, sr.Extra)
+
+	// Named key must NOT appear in Extra
+	_, hasRequest := sr.Extra["request"]
+	assert.False(t, hasRequest, "named field 'request' must not leak into Extra")
+}
+
+// TestSchemaRefsExtraRoundTrip verifies that Extra keys survive marshal→unmarshal.
+func TestSchemaRefsExtraRoundTrip(t *testing.T) {
+	orig := SchemaRefsMeta{
+		Request: "req.json",
+		Extra:   map[string]string{"custom": "extra.json"},
+	}
+	data, got := roundTrip(t, orig)
+	assert.Equal(t, "req.json", got.Request)
+	assert.Equal(t, "extra.json", got.Extra["custom"])
+	assert.Contains(t, string(data), "custom: extra.json")
+}
+
 func TestContractMetaNilReplayable(t *testing.T) {
 	orig := ContractMeta{
 		ID:               "http.test.v1",
