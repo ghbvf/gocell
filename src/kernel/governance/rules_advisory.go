@@ -27,7 +27,6 @@ func (v *Validator) validateADV01() []ValidationResult {
 	return results
 }
 
-
 // validateADV03 checks that waivers reference contracts that appear in the slice's contractUsages.
 func (v *Validator) validateADV03() []ValidationResult {
 	var results []ValidationResult

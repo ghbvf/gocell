@@ -715,6 +715,46 @@ func TestTOPO04(t *testing.T) {
 	}
 }
 
+func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
+	pm := validProject()
+	pm.Actors = []metadata.ActorMeta{
+		{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: ""},
+	}
+	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
+		ID:               "http.ext.gw.v1",
+		Kind:             "http",
+		OwnerCell:        "ext-gateway",
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"access-core"}},
+	}
+
+	val := NewValidator(pm, "")
+	got := findByCode(val.validateTOPO04(), "TOPO-04")
+	assert.Empty(t, got, "empty maxConsistencyLevel should mean unconstrained, not malformed")
+}
+
+func TestTOPO04_MalformedMessage(t *testing.T) {
+	pm := validProject()
+	pm.Actors = []metadata.ActorMeta{
+		{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "INVALID"},
+	}
+	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
+		ID:               "http.ext.gw.v1",
+		Kind:             "http",
+		OwnerCell:        "ext-gateway",
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"access-core"}},
+	}
+
+	val := NewValidator(pm, "")
+	got := findByCode(val.validateTOPO04(), "TOPO-04")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Message, "INVALID")
+	assert.Contains(t, got[0].Message, "must be L0-L4")
+}
+
 func TestTOPO05(t *testing.T) {
 	tests := []struct {
 		name      string
