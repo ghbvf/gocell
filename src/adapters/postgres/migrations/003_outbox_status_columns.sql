@@ -1,5 +1,9 @@
 -- +goose Up
 
+-- Widen id from UUID to TEXT to support prefixed IDs (evt-<uuid>, audit-<uuid>)
+-- that real producers already generate. Watermill/CloudEvents use string IDs.
+ALTER TABLE outbox_entries ALTER COLUMN id TYPE TEXT;
+
 -- Three-phase relay: add status tracking columns.
 ALTER TABLE outbox_entries
   ADD COLUMN status        TEXT        NOT NULL DEFAULT 'pending'
@@ -35,7 +39,11 @@ ALTER TABLE outbox_entries
   DROP COLUMN IF EXISTS last_error;
 -- Restore old column; entries that were status='published' before rollback
 -- get published=true via backfill from published_at.
+-- NOTE: down migration is lossy — claiming/dead states are compressed to
+-- published=false. This is acceptable per CLAUDE.md "no backward compat".
 ALTER TABLE outbox_entries
   ADD COLUMN published BOOLEAN NOT NULL DEFAULT false;
 UPDATE outbox_entries SET published = true WHERE published_at IS NOT NULL;
 CREATE INDEX idx_outbox_unpublished ON outbox_entries (created_at) WHERE published = false;
+-- Narrow id back to UUID (may fail if non-UUID IDs exist).
+ALTER TABLE outbox_entries ALTER COLUMN id TYPE UUID USING id::uuid;
