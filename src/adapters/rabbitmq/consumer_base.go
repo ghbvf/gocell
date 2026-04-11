@@ -205,11 +205,22 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 					slog.String("error", err.Error()))
 				return cb.retryLoop(ctx, topic, entry, handler, nil)
 			}
-			slog.Error("rabbitmq: idempotency claim failed, requeuing (fail-closed)",
+			// Backoff before requeue to prevent hot loop: RabbitMQ's
+			// Nack(requeue=true) redelivers immediately with no delay.
+			// Without this sleep, an idempotency backend outage would
+			// cause a tight redelivery loop amplifying CPU, broker I/O
+			// and log pressure.
+			delay := cb.config.RetryBaseDelay
+			slog.Error("rabbitmq: idempotency claim failed, requeuing after backoff (fail-closed)",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
 				slog.String("consumer_group", cb.config.ConsumerGroup),
+				slog.Duration("backoff", delay),
 				slog.String("error", err.Error()))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+			}
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
 		}
 

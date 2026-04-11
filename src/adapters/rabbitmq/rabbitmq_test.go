@@ -1972,8 +1972,10 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed(t *testing.T)
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	// nil ClaimFailOpen defaults to fail-closed for safety.
+	// Short RetryBaseDelay so the backoff doesn't slow the test.
 	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
+		ConsumerGroup:  "test-group",
+		RetryBaseDelay: 50 * time.Millisecond,
 	})
 
 	handlerCalled := false
@@ -1982,10 +1984,41 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed(t *testing.T)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
+	start := time.Now()
 	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
+	elapsed := time.Since(start)
+
 	assert.False(t, handlerCalled, "handler must NOT be called when default fail-closed")
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 	assert.Error(t, res.Err)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "fail-closed must backoff before requeue to prevent hot loop")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed_CtxCancel(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after a short time to unblock the backoff select.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := handler(ctx, outbox.Entry{ID: "evt-claim-ctx"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Less(t, elapsed, 1*time.Second, "ctx cancel must short-circuit the backoff")
 }
 
 // --- processDelivery Receipt lifecycle tests ---
@@ -2264,8 +2297,9 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-		ClaimFailOpen: boolPtr(false),
+		ConsumerGroup:  "test-group",
+		ClaimFailOpen:  boolPtr(false),
+		RetryBaseDelay: 50 * time.Millisecond,
 	})
 
 	handlerCalled := false
@@ -2274,11 +2308,15 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
+	start := time.Now()
 	res := handler(context.Background(), outbox.Entry{ID: "evt-fail-closed"})
+	elapsed := time.Since(start)
+
 	assert.False(t, handlerCalled, "handler must NOT be called when fail-closed")
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 	assert.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), "redis down")
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "fail-closed must backoff before requeue")
 }
 
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
