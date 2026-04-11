@@ -28,9 +28,7 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 
 	// Init
@@ -59,7 +57,6 @@ func TestDeviceCell_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -73,9 +70,7 @@ func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 	c := NewDeviceCell(WithPublisher(eventbus.New()))
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	assert.Len(t, c.OwnedSlices(), 3)
@@ -89,9 +84,7 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	assert.Len(t, c.OwnedSlices(), 3)
@@ -101,9 +94,7 @@ func TestDeviceCell_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -143,9 +134,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 

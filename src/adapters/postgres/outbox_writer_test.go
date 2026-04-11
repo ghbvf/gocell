@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -264,6 +265,115 @@ func TestOutboxWriter_Write_MissingPayload(t *testing.T) {
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	assert.Contains(t, ec.Message, "payload")
 	assert.Empty(t, tx.execCalls, "should not reach DB insert")
+}
+
+// --- WriteBatch Tests ---
+
+func TestOutboxWriter_WriteBatch_EmptySlice(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	err := w.WriteBatch(ctx, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, tx.execCalls)
+
+	err = w.WriteBatch(ctx, []outbox.Entry{})
+	assert.NoError(t, err)
+	assert.Empty(t, tx.execCalls)
+}
+
+func TestOutboxWriter_WriteBatch_NoTx(t *testing.T) {
+	w := NewOutboxWriter()
+	entries := []outbox.Entry{{
+		ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"),
+	}}
+
+	err := w.WriteBatch(context.Background(), entries)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterPGNoTx, ec.Code)
+}
+
+func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	entries := []outbox.Entry{
+		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t1", Payload: []byte(`{"a":1}`), CreatedAt: time.Now()},
+		{ID: "b2c3d4e5-f6a7-8901-bcde-f12345678901", Topic: "t2", Payload: []byte(`{"b":2}`), CreatedAt: time.Now()},
+	}
+
+	err := w.WriteBatch(ctx, entries)
+	require.NoError(t, err)
+	require.Len(t, tx.execCalls, 1)
+
+	call := tx.execCalls[0]
+	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
+	// 2 entries × 9 cols = 18 args
+	assert.Len(t, call.args, 18)
+	assert.Equal(t, "a1b2c3d4-e5f6-7890-abcd-ef1234567890", call.args[0])
+	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[9])
+}
+
+func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	entries := []outbox.Entry{
+		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}")},
+		{ID: "not-a-uuid", Topic: "t", Payload: []byte("{}")},
+	}
+
+	err := w.WriteBatch(ctx, entries)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entry[1]")
+	assert.Empty(t, tx.execCalls, "no INSERT should execute on validation failure")
+}
+
+func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "batch exec failed")}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	entries := []outbox.Entry{
+		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"), CreatedAt: time.Now()},
+	}
+
+	err := w.WriteBatch(ctx, entries)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterPGQuery, ec.Code)
+}
+
+func TestOutboxWriter_WriteBatch_ChunksLargeBatch(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	// Create writeBatchChunkSize + 1 entries to force 2 chunks.
+	n := writeBatchChunkSize + 1
+	entries := make([]outbox.Entry, n)
+	for i := range n {
+		entries[i] = outbox.Entry{
+			ID:        fmt.Sprintf("00000000-0000-0000-0000-%012d", i),
+			Topic:     "t",
+			Payload:   []byte("{}"),
+			CreatedAt: time.Now(),
+		}
+	}
+
+	err := w.WriteBatch(ctx, entries)
+	require.NoError(t, err)
+	require.Len(t, tx.execCalls, 2, "should split into 2 chunks")
+	assert.Len(t, tx.execCalls[0].args, writeBatchChunkSize*9)
+	assert.Len(t, tx.execCalls[1].args, 1*9)
 }
 
 // mockOutboxTx records exec calls for assertion.

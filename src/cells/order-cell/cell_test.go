@@ -28,9 +28,7 @@ var _ outbox.Publisher = noopPublisher{}
 
 func newTestDeps() cell.Dependencies {
 	return cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -65,6 +66,76 @@ type Writer interface {
 	// context-embedded transaction pattern (e.g., extract tx from context via
 	// TxFromContext(ctx)) to participate in the caller's transaction scope.
 	Write(ctx context.Context, entry Entry) error
+}
+
+// BatchWriter extends Writer with batch write support.
+// Implementations that support batch operations SHOULD implement this
+// interface for atomic multi-entry writes within a single transaction.
+//
+// If an implementation does not support BatchWriter, callers can use
+// WriteBatchFallback which auto-detects batch support and falls back
+// to sequential Write calls.
+//
+// ref: ThreeDotsLabs/watermill message/pubsub.go — Publish(topic, ...msgs)
+// variadic pattern. GoCell uses a separate interface instead to preserve
+// the existing Writer contract and enable optimized multi-row INSERT.
+type BatchWriter interface {
+	Writer
+	// WriteBatch persists multiple outbox entries atomically within the
+	// caller's transaction scope. Implementations MUST validate entries
+	// independently (defense-in-depth) even when called via
+	// WriteBatchFallback, which only runs Entry.Validate(). If validation
+	// fails for any entry, no entries are written.
+	//
+	// An empty entries slice is a no-op and returns nil.
+	//
+	// Implementations SHOULD use a single batch INSERT for efficiency.
+	// The context MUST carry the caller's transaction (same requirement
+	// as Writer.Write). All-or-nothing: either all entries are written
+	// or none are (transaction rollback on failure).
+	WriteBatch(ctx context.Context, entries []Entry) error
+}
+
+// WriteBatchFallback writes entries using the Writer interface, falling
+// back to sequential Write calls if the writer does not implement
+// BatchWriter.
+//
+// Validation scope: WriteBatchFallback runs Entry.Validate() on all
+// entries upfront (topic + payload checks). Writer-specific validation
+// (e.g. UUID format, transaction presence) is the responsibility of
+// the Writer/BatchWriter implementation and may run independently.
+//
+// The caller MUST ensure ctx carries an active transaction. Atomicity
+// depends on the transaction scope: if all writes happen within the
+// same transaction, a failure rolls back everything. WriteBatchFallback
+// itself does not manage transactions.
+//
+// An empty entries slice is a no-op and returns nil.
+func WriteBatchFallback(ctx context.Context, w Writer, entries []Entry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Phase 1: Validate all entries upfront.
+	for i, e := range entries {
+		if err := e.Validate(); err != nil {
+			return fmt.Errorf("outbox: entry[%d]: %w", i, err)
+		}
+	}
+
+	// Phase 2: Use batch if available, otherwise sequential.
+	if bw, ok := w.(BatchWriter); ok {
+		return bw.WriteBatch(ctx, entries)
+	}
+
+	slog.Debug("outbox: WriteBatchFallback using sequential writes (writer does not implement BatchWriter)",
+		slog.Int("count", len(entries)))
+	for i, e := range entries {
+		if err := w.Write(ctx, e); err != nil {
+			return fmt.Errorf("outbox: write entry[%d] (id=%s): %w", i, e.ID, err)
+		}
+	}
+	return nil
 }
 
 // Relay polls unpublished outbox entries and publishes them.

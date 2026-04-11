@@ -62,7 +62,7 @@
 | 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
 |------|-----|------|------|------|------|
 | ~~K-1~~ | CS-AR-2 | ~~Dependencies 精简 + 冻结注释~~ | — | — | ✅ PR#79 |
-| ~~K-2~~ | CS-AR-3 | ~~net/http ADR 注释~~ | — | — | ✅ PR#79 |
+| ~~K-2~~ | CS-AR-3 | ~~net/http ADR 注释~~ | — | — | ✅ PR#79（ADR 已存在于 registrar.go） |
 | ~~K-3~~ | F-OB-01 | ~~BatchWriter 接口 + WriteBatchFallback~~ | — | — | ✅ PR#79 |
 | K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
 | ~~K-5~~ | — | ~~三角色审查 mandatory actions~~ | — | — | ✅ 含在 PR#79 |
@@ -444,14 +444,16 @@
 | R1C2-F03 WorkerGroup 首个失败 | 2h | runtime/worker |
 | ~~F-OB-01 outbox 批量写~~ | ~~2h~~ | ~~kernel/outbox~~ PR#79 ✅ |
 | TX-NIL-01 txRunner nil-safe 文档 | 1h | cells/ |
-| F-OB-02 outbox UUID nil guard | 30min | adapters/postgres — 拒绝全零 UUID 防幂等碰撞 (discovered via PR#79 review) |
-| P4-TD-01 noopWriter 去重 | 1h | cells/*/cell_test.go → 提取到 kernel/outbox/outboxtest (discovered via PR#79 review) |
+| F-OB-02 outbox UUID nil guard | 30min | adapters/postgres — 拒绝全零 UUID 防幂等碰撞 (discovered via PR#79 review F-2.3) |
+| P4-TD-01 noopWriter 去重 | 1h | cells/*/cell_test.go → 提取到 kernel/outbox/outboxtest (discovered via PR#79 review F-5.2) |
 | CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml 只跑 ./adapters/...，漏掉 tests/integration/ (discovered via PR#79 review) |
 | OB-UUID-01 cells evt-\<uuid\> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID (discovered via PR#79 review) |
 | P3-TD-10 Session refresh TOCTOU | 4h | 高风险，乐观锁方案 |
 | P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
 | OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
 | OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
+| CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml:101-102 只跑 ./adapters/...，漏掉 src/tests/integration/ (discovered via PR#79 review) |
+| OB-UUID-01 cells evt-<uuid> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID；需统一 ID 生成策略或放宽校验 (discovered via PR#79 review) |
 
 ### 总时间线（修订后，+6 个 Batch）
 

@@ -4,6 +4,25 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - PR-Cleanup: Kernel 架构整理
+
+> PR: #79
+> Scope: K-1/K-2/K-3/K-5
+
+### Breaking
+
+- **kernel/cell**: `Dependencies` struct 移除 `Cells map[string]Cell` 和 `Contracts map[string]Contract` 字段（零调用方使用）。仅保留 `Config map[string]any`。迁移：删除 `Dependencies{}` 字面量中的 `Cells:` 和 `Contracts:` 字段。
+
+### Added
+
+- **kernel/outbox**: `BatchWriter` 接口（嵌入 `Writer`，新增 `WriteBatch` 方法）+ `WriteBatchFallback` helper（自动检测 batch 支持，降级到顺序写入）
+- **adapters/postgres**: `OutboxWriter` 实现 `BatchWriter`，使用多行 INSERT，超过 7000 条自动分片
+
+### Documentation
+
+- **kernel/cell/registrar.go**: net/http ADR 注释（CS-AR-3，已存在，标记完成）
+- **kernel/cell/interfaces.go**: `Dependencies` 冻结 ADR 注释
+
 ## [Unreleased] - Phase 4: Examples + Documentation
 
 > Branch: `feat/003-phase4-examples-docs`
