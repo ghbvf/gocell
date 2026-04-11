@@ -3332,3 +3332,86 @@ func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
 	result2 := safeDelay(base, 30*time.Second, maxSafeShift+1)
 	assert.Equal(t, 30*time.Second, result2)
 }
+
+// =============================================================================
+// isTerminalConnectionError Tests
+// =============================================================================
+
+func TestIsTerminalConnectionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		terminal bool
+	}{
+		{"permanent", errcode.New(ErrAdapterAMQPConnectPermanent, "bad creds"), true},
+		{"exhausted", errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
+		{"transient", errcode.New(ErrAdapterAMQPConnect, "timeout"), false},
+		{"publish", errcode.New(ErrAdapterAMQPPublish, "channel error"), false},
+		{"nil", nil, false},
+		{"plain error", fmt.Errorf("oops"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.terminal, isTerminalConnectionError(tt.err))
+		})
+	}
+}
+
+func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T) {
+	// When Connection is in terminal state with ReconnectExhausted,
+	// Publish should return ErrAdapterAMQPReconnectExhausted (not generic publish error).
+	conn := &Connection{
+		config: Config{
+			URL:             "amqp://test:test@localhost:5672/",
+			ChannelPoolSize: 2,
+			ConfirmTimeout:  5 * time.Second,
+		},
+		channelPool:  make(chan AMQPChannel, 2),
+		closeCh:      make(chan struct{}),
+		connected:    make(chan struct{}),
+		terminalCh:   make(chan struct{}),
+		permanentErr: errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
+	}
+	close(conn.terminalCh)
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"Publish in terminal state (reconnect exhausted) should return ReconnectExhausted error, not generic publish error")
+}
+
+// =============================================================================
+// Credential Sanitization Tests
+// =============================================================================
+
+func TestConnection_ErrorChain_DoesNotLeakCredentials(t *testing.T) {
+	url := "amqp://admin:secret123@broker.example.com:5672/vhost"
+	_, err := NewConnection(Config{URL: url}, WithDialFunc(func(u string) (AMQPConnection, error) {
+		return nil, fmt.Errorf("dial tcp: lookup %s: no such host", u)
+	}))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret123", "error chain must not leak password")
+	assert.NotContains(t, err.Error(), "admin:secret123", "error chain must not leak credentials")
+	assert.Contains(t, err.Error(), "***", "error should contain redacted URL")
+}
+
+func TestConnection_SanitizeDialError_NoURL(t *testing.T) {
+	c := &Connection{config: Config{URL: ""}}
+	orig := fmt.Errorf("some error")
+	assert.Equal(t, orig, c.sanitizeDialError(orig), "should return original error when URL is empty")
+}
+
+func TestConnection_SanitizeDialError_URLNotInError(t *testing.T) {
+	c := &Connection{config: Config{URL: "amqp://user:pass@host:5672/"}}
+	orig := fmt.Errorf("generic network error")
+	assert.Equal(t, orig, c.sanitizeDialError(orig), "should return original error when URL not found in error string")
+}
+
+func TestConnection_SanitizeDialError_Nil(t *testing.T) {
+	c := &Connection{config: Config{URL: "amqp://user:pass@host:5672/"}}
+	assert.Nil(t, c.sanitizeDialError(nil), "should return nil for nil error")
+}

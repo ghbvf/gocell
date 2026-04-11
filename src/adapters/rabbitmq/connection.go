@@ -90,6 +90,18 @@ var permanentDialSubstrings = []string{
 	"tls: ",          // crypto/tls → handshake / protocol error
 }
 
+// isTerminalConnectionError reports whether the error indicates the Connection
+// has entered terminal state (permanent dial failure or reconnect attempts
+// exhausted). Callers should not retry — close the dependent component.
+func isTerminalConnectionError(err error) bool {
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		return false
+	}
+	return ecErr.Code == ErrAdapterAMQPConnectPermanent ||
+		ecErr.Code == ErrAdapterAMQPReconnectExhausted
+}
+
 // Config holds configuration for the RabbitMQ connection.
 type Config struct {
 	// URL is the AMQP connection URL (e.g., "amqp://guest:guest@localhost:5672/").
@@ -246,9 +258,9 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 			dialErr = ecErr.Unwrap()
 		}
 		if isPermanentDialError(dialErr) {
-			return nil, errcode.Wrap(ErrAdapterAMQPConnectPermanent, "rabbitmq: initial connection failed (permanent)", err)
+			return nil, errcode.Wrap(ErrAdapterAMQPConnectPermanent, "rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
 		}
-		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", err)
+		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
 	}
 
 	close(c.connected)
@@ -367,7 +379,7 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 
 			if isPermanentDialError(dialErr) {
 				permErr := errcode.Wrap(ErrAdapterAMQPConnectPermanent,
-					"rabbitmq: permanent connection error, giving up", err)
+					"rabbitmq: permanent connection error, giving up", c.sanitizeDialError(err))
 				slog.Error("rabbitmq: permanent connection error, giving up",
 					slog.Int("attempt", attempt+1),
 					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
@@ -384,7 +396,7 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 					slog.Int("attempt", attempt),
 					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 				return false, errcode.Wrap(ErrAdapterAMQPReconnectExhausted,
-					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), err)
+					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), c.sanitizeDialError(err))
 			}
 			continue
 		}
@@ -586,6 +598,23 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 	case <-ctx.Done():
 		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
 	}
+}
+
+// sanitizeDialError wraps a dial error with the URL credentials redacted
+// so the error chain cannot leak credentials when .Error() is called upstream.
+// Returns the original error unchanged if the URL is empty or not found in the
+// error string. The returned error is a plain fmt.Errorf (losing type info),
+// which is acceptable because isPermanentDialError classification happens BEFORE
+// this sanitization, and the outer errcode.Wrap provides the error code.
+func (c *Connection) sanitizeDialError(err error) error {
+	if err == nil || c.config.URL == "" {
+		return err
+	}
+	sanitized := sanitizeErrorURL(err.Error(), c.config.URL)
+	if sanitized == err.Error() {
+		return err // no URL found in error, return as-is
+	}
+	return fmt.Errorf("%s", sanitized)
 }
 
 // sanitizeErrorURL replaces any occurrence of rawURL in errStr with

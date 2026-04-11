@@ -201,10 +201,11 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 
 		// Wait for connection recovery before re-subscribing.
 		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
-			// Permanent connection error — propagate to caller so upstream
+			// Terminal connection error — propagate to caller so upstream
 			// (EventRouter/Bootstrap) can detect and handle terminal failure.
-			var ecErr *errcode.Error
-			if errors.As(waitErr, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent {
+			// Covers both ErrAdapterAMQPConnectPermanent (bad credentials)
+			// and ErrAdapterAMQPReconnectExhausted (max attempts exceeded).
+			if isTerminalConnectionError(waitErr) {
 				return waitErr
 			}
 			// ctx cancelled or subscriber closed during wait — clean exit.
