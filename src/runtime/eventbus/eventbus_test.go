@@ -470,6 +470,154 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	<-done
 }
 
+func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var attempts atomic.Int32
+	var receipts []*mockReceipt
+	var receiptsMu sync.Mutex
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "zero.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			attempts.Add(1)
+			r := &mockReceipt{}
+			receiptsMu.Lock()
+			receipts = append(receipts, r)
+			receiptsMu.Unlock()
+			// Zero-value HandleResult — Disposition is 0 (invalid).
+			return outbox.HandleResult{
+				Err:     errors.New("forgot disposition"),
+				Receipt: r,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	err := bus.Publish(context.Background(), "zero.disp", []byte("data"))
+	require.NoError(t, err)
+
+	// Should exhaust retries and land in dead letter.
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	elapsed := time.Since(start)
+
+	// Must have retried exactly maxRetries times.
+	assert.Equal(t, int32(maxRetries), attempts.Load(),
+		"zero-value disposition should retry exactly maxRetries times")
+
+	// Must have applied backoff (at least ~300ms for 3 attempts: 100+200ms minimum).
+	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(250),
+		"zero-value disposition must apply backoff like DispositionRequeue")
+
+	// All receipts must be released, none committed.
+	receiptsMu.Lock()
+	defer receiptsMu.Unlock()
+	require.Len(t, receipts, maxRetries)
+	for i, r := range receipts {
+		assert.True(t, r.released.Load(), "receipt %d should be released", i)
+		assert.False(t, r.committed.Load(), "receipt %d should not be committed", i)
+	}
+
+	// Dead letter should contain the error.
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, "zero.disp", dl[0].Topic)
+
+	cancel()
+	<-done
+}
+
+func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var attempts atomic.Int32
+	testErr := errors.New("unknown disp error")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "unknown.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			attempts.Add(1)
+			return outbox.HandleResult{
+				Disposition: outbox.Disposition(99), // not a valid Disposition
+				Err:         testErr,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	err := bus.Publish(context.Background(), "unknown.disp", []byte("data"))
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	elapsed := time.Since(start)
+
+	assert.Equal(t, int32(maxRetries), attempts.Load(),
+		"unknown disposition should retry exactly maxRetries times")
+	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(250),
+		"unknown disposition must apply backoff")
+
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, testErr, dl[0].LastErr)
+
+	cancel()
+	<-done
+}
+
+func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var attempts atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "cancel.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			n := attempts.Add(1)
+			if n == 1 {
+				// After first attempt with invalid disposition, cancel ctx
+				// during backoff to verify early exit.
+				go func() {
+					time.Sleep(10 * time.Millisecond)
+					cancel()
+				}()
+			}
+			return outbox.HandleResult{} // zero-value
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "cancel.disp", []byte("data"))
+	require.NoError(t, err)
+
+	// Subscribe should return promptly after cancel.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not exit after ctx cancel during invalid disposition backoff")
+	}
+
+	// Should have been called only once — cancelled during backoff before retry.
+	assert.Equal(t, int32(1), attempts.Load(),
+		"should exit during backoff, not retry after cancel")
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)
