@@ -1112,6 +1112,33 @@ func TestPublisher_Publish_ConfirmModeError(t *testing.T) {
 	assert.Contains(t, err.Error(), "confirm mode")
 }
 
+func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
+	// When Connection is in terminal state, Publish should return
+	// ErrAdapterAMQPConnectPermanent (not generic publish error).
+	conn := &Connection{
+		config: Config{
+			URL:            "amqp://test:test@localhost:5672/",
+			ChannelPoolSize: 2,
+			ConfirmTimeout: 5 * time.Second,
+		},
+		channelPool:  make(chan AMQPChannel, 2),
+		closeCh:      make(chan struct{}),
+		connected:    make(chan struct{}),
+		failed:       make(chan struct{}),
+		permanentErr: errcode.New(ErrAdapterAMQPConnectPermanent, "access refused"),
+	}
+	close(conn.failed)
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"Publish in terminal state should return permanent error, not generic publish error")
+}
+
 // =============================================================================
 // Subscriber Tests
 // =============================================================================
