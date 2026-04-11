@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -30,8 +32,27 @@ func envOrDefault(key, fallback string) []byte {
 }
 
 func main() {
-	signingKey := envOrDefault("GOCELL_SIGNING_KEY", "dev-signing-key-replace-in-prod!!")
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+
+	// RSA key pair for JWT signing/verification.
+	// Production: use auth.LoadKeySetFromEnv() which reads from env vars and
+	// supports key rotation via GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	keySet, err := auth.NewKeySet(privKey, pubKey)
+	if err != nil {
+		slog.Error("failed to create key set", "error", err)
+		os.Exit(1)
+	}
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", 15*time.Minute)
+	if err != nil {
+		slog.Error("failed to create JWT issuer", "error", err)
+		os.Exit(1)
+	}
+	jwtVerifier, err := auth.NewJWTVerifier(keySet)
+	if err != nil {
+		slog.Error("failed to create JWT verifier", "error", err)
+		os.Exit(1)
+	}
 
 	// Determine adapter mode: "real" for production adapters, default for in-memory.
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
@@ -78,7 +99,8 @@ func main() {
 	configOpts = append(configOpts, configcore.WithPublisher(eb))
 	accessOpts = append(accessOpts,
 		accesscore.WithPublisher(eb),
-		accesscore.WithSigningKey(signingKey),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
 	)
 	auditOpts = append(auditOpts,
 		auditcore.WithPublisher(eb),
@@ -112,7 +134,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
-		bootstrap.WithEventBus(eb),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 	)
 
 	if err := app.Run(ctx); err != nil {

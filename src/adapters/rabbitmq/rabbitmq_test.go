@@ -1457,13 +1457,21 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	// 3. Handler processes message, then we cancel ctx to exit cleanly.
 	go func() {
 		// Close ch1's delivery channel to simulate connection loss.
-		time.Sleep(20 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			ch1.mu.Lock()
+			defer ch1.mu.Unlock()
+			return ch1.qosCalled
+		}, 2*time.Second, 10*time.Millisecond, "subscriber did not start consuming from ch1")
 		close(ch1.consumeDeliveries)
 
 		// Let ch2 process one message, then cancel.
 		entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
 		entryBytes, _ := json.Marshal(entry)
-		time.Sleep(100 * time.Millisecond)
+		require.Eventually(t, func() bool {
+			ch2.mu.Lock()
+			defer ch2.mu.Unlock()
+			return ch2.qosCalled
+		}, 2*time.Second, 10*time.Millisecond, "subscriber did not reconnect to ch2")
 		ch2.consumeDeliveries <- amqp.Delivery{
 			DeliveryTag: 1,
 			Body:        entryBytes,

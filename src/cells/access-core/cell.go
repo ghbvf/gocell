@@ -58,12 +58,6 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *AccessCore) { c.logger = l }
 }
 
-// Deprecated: Use WithJWTIssuer and WithJWTVerifier instead.
-// WithSigningKey sets the JWT signing key for backward compatibility.
-func WithSigningKey(key []byte) Option {
-	return func(c *AccessCore) { c.signingKey = key }
-}
-
 // WithJWTIssuer sets the RS256 JWT issuer for token signing.
 func WithJWTIssuer(issuer *auth.JWTIssuer) Option {
 	return func(c *AccessCore) { c.jwtIssuer = issuer }
@@ -98,7 +92,6 @@ type AccessCore struct {
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	logger       *slog.Logger
-	signingKey   []byte // Deprecated: kept for backward compatibility with WithSigningKey.
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
 
@@ -155,26 +148,10 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrCellMissingOutbox, "access-core (L2) requires outboxWriter injection")
 	}
 
-	// Build JWTIssuer/JWTVerifier from signingKey when not explicitly injected (backward compat).
+	// Fail-fast: RS256 key pair required.
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
-		if len(c.signingKey) == 0 {
-			if key, ok := deps.Config["access.signing_key"]; ok {
-				if keyStr, ok := key.(string); ok && keyStr != "" {
-					c.signingKey = []byte(keyStr)
-				}
-			}
-		}
-		if len(c.signingKey) == 0 && (c.jwtIssuer == nil || c.jwtVerifier == nil) {
-			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT issuer/verifier or signing key is required")
-		}
-		if len(c.signingKey) > 0 && len(c.signingKey) < 32 {
-			return errcode.New(errcode.ErrAuthKeyInvalid, "JWT signing key must be at least 32 bytes")
-		}
-		// Fail-fast: WithSigningKey is deprecated. RS256 key pair required.
-		if c.jwtIssuer == nil || c.jwtVerifier == nil {
-			return errcode.New(errcode.ErrAuthKeyInvalid,
-				"RS256 key pair required: use WithJWTIssuer + WithJWTVerifier (WithSigningKey is deprecated)")
-		}
+		return errcode.New(errcode.ErrAuthKeyInvalid,
+			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
 
 	// identity-manage

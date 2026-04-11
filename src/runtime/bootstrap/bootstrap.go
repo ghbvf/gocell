@@ -81,17 +81,6 @@ func WithSubscriber(s outbox.Subscriber) Option {
 	}
 }
 
-// Deprecated: Use WithPublisher and WithSubscriber instead.
-// WithEventBus is a convenience method that sets both Publisher and Subscriber
-// from an InMemoryEventBus. It is equivalent to calling WithPublisher(eb) and
-// WithSubscriber(eb). Retained for backward compatibility.
-func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
-	return func(b *Bootstrap) {
-		b.publisher = eb
-		b.subscriber = eb
-	}
-}
-
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {

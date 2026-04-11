@@ -50,14 +50,13 @@ func TestNew_WithOptions(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithEventBus(eb),
+		WithPublisher(eb), WithSubscriber(eb),
 		WithHTTPAddr(":9090"),
 		WithShutdownTimeout(5*time.Second),
 	)
 
 	assert.Equal(t, ":9090", b.httpAddr)
 	assert.Equal(t, asm, b.assembly)
-	// WithEventBus sets both publisher and subscriber to the same instance.
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
@@ -180,7 +179,7 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	eb := eventbus.New()
 	b := New(
 		WithAssembly(asm),
-		WithEventBus(eb),
+		WithPublisher(eb), WithSubscriber(eb),
 		WithHTTPAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
