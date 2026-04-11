@@ -167,9 +167,10 @@ type mockConnection struct {
 	// Channel() pops from the front. Falls back to nextCh / newMockChannel.
 	channelQueue []*mockChannel
 
-	notifyCloseCh chan *amqp.Error
-	isClosed      bool
-	closeErr      error
+	notifyCloseCh    chan *amqp.Error
+	notifyCloseCalls int // number of times NotifyClose was called
+	isClosed         bool
+	closeErr         error
 }
 
 func newMockConnection() *mockConnection {
@@ -204,6 +205,7 @@ func (m *mockConnection) NotifyClose(receiver chan *amqp.Error) chan *amqp.Error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notifyCloseCh = receiver
+	m.notifyCloseCalls++
 	return receiver
 }
 
@@ -585,10 +587,111 @@ func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
 	_ = conn.WaitConnected(ctx)
 }
 
-// NOTE: reconnectLoop full-cycle test (disconnect → reconnect) requires real amqp
-// connection lifecycle and is covered by integration tests (go test -tags=integration).
-// The individual functions (reconnectWithBackoff, backoffDelay, isPermanentDialError)
-// are thoroughly unit-tested above.
+func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
+	// Full cycle: connect → disconnect → backoff → reconnect.
+	var mu sync.Mutex
+	dialCount := 0
+	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n <= len(mocks) {
+			return mocks[n-1], nil
+		}
+		return newMockConnection(), nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to call NotifyClose (not just check the initial channel
+	// from newMockConnection — we need notifyCloseCalls > 0 to confirm reconnectLoop
+	// has registered its own channel).
+	require.Eventually(t, func() bool {
+		mocks[0].mu.Lock()
+		defer mocks[0].mu.Unlock()
+		return mocks[0].notifyCloseCalls > 0
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Now send on the channel that reconnectLoop is actually selecting on.
+	mocks[0].mu.Lock()
+	ch := mocks[0].notifyCloseCh
+	mocks[0].isClosed = true
+	mocks[0].mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// reconnectLoop should reconnect. Verify dial was called again.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, 10*time.Millisecond, "reconnectLoop should have reconnected")
+}
+
+func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
+	// Full cycle: connect → disconnect → permanent error → loop exits.
+	var mu sync.Mutex
+	dialCount := 0
+	mock := newMockConnection()
+	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock, nil
+		}
+		return nil, permanentErr
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.notifyCloseCalls > 0
+	}, time.Second, time.Millisecond)
+
+	// Trigger disconnect.
+	mock.mu.Lock()
+	ch := mock.notifyCloseCh
+	mock.isClosed = true
+	mock.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for permanent error to be hit.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, 10*time.Millisecond, "reconnect should have attempted dial")
+
+	// After permanent error, WaitConnected should NOT return success.
+	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the return
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	assert.Error(t, waitErr, "WaitConnected should timeout after permanent reconnect failure")
+}
 
 func TestIsPermanentDialError(t *testing.T) {
 	tests := []struct {
