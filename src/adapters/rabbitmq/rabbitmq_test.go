@@ -2295,7 +2295,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2320,7 +2320,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,

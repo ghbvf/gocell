@@ -76,8 +76,8 @@ Phase 3 实现 6 个外部系统适配器（postgres, redis, oidc, s3, rabbitmq,
 |--------|------|
 | FR-5.1 连接管理 | `Connection` struct，支持 AMQP URL 配置、自动重连（exponential backoff）、channel 池、`Health() error` |
 | FR-5.2 Publisher | 实现 `kernel/outbox.Publisher` 接口，`Publish(ctx, topic, payload) error`。支持 confirm mode（publisher confirms）、mandatory flag |
-| FR-5.3 Subscriber | 实现 `kernel/outbox.Subscriber` 接口，`Subscribe(ctx, topic, handler) error`。Consumer group 和 prefetch count 通过 `SubscriberConfig` 构造函数注入（`NewSubscriber(conn, cfg SubscriberConfig)`），不扩展 kernel 接口签名（决策 PM-08） |
-| FR-5.4 ConsumerBase | `ConsumerBase` struct，封装幂等检查（调用 `idempotency.Checker`）、自动重试（3x exponential backoff）、死信路由（DLQ exchange + queue）。遵循 eventbus.md 规范：`return error` → NACK + 重试；`return nil` → ACK；unmarshal 失败 → dead letter |
+| FR-5.3 Subscriber | 实现 `kernel/outbox.Subscriber` 接口，`Subscribe(ctx, topic, handler) error`。`SubscriberConfig` 必须设置 `DLXExchange`（运行时必填，防止 Nack(requeue=false) 静默丢消息）。Consumer group 和 prefetch count 通过 `SubscriberConfig` 构造函数注入（`NewSubscriber(conn, cfg SubscriberConfig)`），不扩展 kernel 接口签名（决策 PM-08） |
+| FR-5.4 ConsumerBase | `ConsumerBase` struct，封装两阶段幂等（`idempotency.Claimer` Claim/Commit/Release）、自动重试（exponential backoff）、死信路由（DLX exchange）。遵循 eventbus.md 规范：`DispositionAck` → broker Ack → Receipt.Commit；`DispositionRequeue` → 退避重试；`DispositionReject` / `PermanentError` → broker Nack(requeue=false) → DLX |
 | FR-5.5 DLQ 可观测 | 死信消息必须有 slog 日志记录（event_id、topic、error、retry_count）+ 死信计数 metric（或 slog 计数日志） |
 
 **对标参考**: Watermill `watermill-amqp` subscriber/publisher 模式。
