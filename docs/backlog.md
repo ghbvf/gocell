@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。历史完成记录已归档至 `docs/reviews/archive/202604111438-backlog-full-history.md`。
-> 更新日期: 2026-04-11（PR#74-77 合并后更新）
+> 更新日期: 2026-04-12（PR#79-82 合并后更新）
 
 ---
 
@@ -20,12 +20,15 @@
 | 0-G B-03 RabbitMQ 重连 backoff | PR#75 ✅ | 三态连接 (connected/reconnecting/terminal) + permanent error 传播 + 结构化错误分类 + 指数退避+jitter |
 | Phase 2: EventRouter 引入 | PR#76 ✅ | cell.EventRouter 接口 + runtime/eventrouter 实现 + 3 Cell 迁移 + bootstrap 集成 + celltest.StubEventRouter |
 | WM-1 CSRF + BFF cookie session | PR#77 ✅ | SecureCookie(→pkg/) + CSRF Origin/Referer校验 + CookieSession JWT bridge，65 tests 97.5% |
+| device-cell 测试对齐 data 信封 | PR#78 ✅ | celltest 覆盖率对齐 + 响应体 data 信封断言 |
+| K-1/K-2/K-3/K-5 Kernel 架构整理 | PR#79 ✅ | Dependencies 精简 + BatchWriter 接口 + ADR 注释 |
+| Phase 3: Checker 清理 + Receipt 加固 + RMQ-75 fixes | PR#80 ✅ | legacy Checker 删除 + sync.Once + LeaseTTL 校验 + RMQ-75 部分修复 |
+| WM-2 密钥轮换 — JWT kid + HMAC key ring | PR#81 ✅ | kid 轮换 + HMAC key ring + KeySet API |
+| 0-B2 Outbox Relay 三阶段重写 | PR#82 ✅ | claim→publish→writeBack + reclaimStale/DLQ + schema 003 (id→TEXT, status/attempts/dead_at) + wire envelope + sanitizeError |
 
 ## 进行中
 
-| 任务 | PR | 说明 |
-|------|-----|------|
-| WM-2 密钥轮换 — JWT kid + HMAC key ring | PR#81 | 待合并，4 commits，所有 P0/P1 已修 |
+（暂无）
 
 ### PR 队列（跨框架分析后修订，PR#70-77 已全部合并）
 
@@ -39,7 +42,7 @@
 |------|------|------|------|------|
 | Phase 1 | ~~PermanentError 提升到 kernel/outbox~~ | — | — | PR#74 ✅ |
 | Phase 2 | ~~EventRouter 引入~~ | — | — | PR#76 ✅ |
-| Phase 3 | Checker 清理 + Receipt 加固 — 删 legacy Checker + sync.Once + LeaseTTL 校验 | `adapters/rabbitmq/consumer_base.go`, `kernel/idempotency/`, `adapters/redis/` | 3h | Phase 2 |
+| Phase 3 | ~~Checker 清理 + Receipt 加固 — 删 legacy Checker + sync.Once + LeaseTTL 校验~~ | — | — | PR#80 ✅ |
 
 > 执行顺序: Phase 1 → Phase 2 → Phase 3（串行）
 > 对标框架: Watermill Router, Sarama ConsumerGroupHandler, Temporal Worker, NATS JetStream, Kratos transport.Server
@@ -64,27 +67,27 @@
 | ~~K-1~~ | CS-AR-2 | ~~Dependencies 精简 + 冻结注释~~ | — | — | ✅ PR#79 |
 | ~~K-2~~ | CS-AR-3 | ~~net/http ADR 注释~~ | — | — | ✅ PR#79（ADR 已存在于 registrar.go） |
 | ~~K-3~~ | F-OB-01 | ~~BatchWriter 接口 + WriteBatchFallback~~ | — | — | ✅ PR#79 |
-| K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
+| K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | ~~Phase 3~~ PR#80 ✅ 完成 |
 | ~~K-5~~ | — | ~~三角色审查 mandatory actions~~ | — | — | ✅ 含在 PR#79 |
 
-> ~~K-1/K-2/K-3~~ ✅ 已合并（PR#79）；K-4 依赖 Phase 3
+> ~~K-1/K-2/K-3/K-4/K-5~~ ✅ 全部已合并（PR#79 + PR#80）
 
 ---
 
 ## P0 — v1.0 阻塞
 
-### 0-B2: Outbox Relay 三阶段重写（1.5d）
+### ~~0-B2: Outbox Relay 三阶段重写~~ PR#82 ✅
 
-| # | 任务 | 预估 |
+| # | 任务 | 状态 |
 |---|------|------|
-| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h |
-| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h |
-| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h |
-| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h |
-| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h |
-| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h |
-| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h |
-| RL-08 | 测试覆盖（8 个场景） | 2h |
+| ~~RL-01~~ | ~~migration `003_outbox_status_columns.sql`~~ | ✅ PR#82 |
+| ~~RL-02~~ | ~~`RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL~~ | ✅ PR#82 |
+| ~~RL-03~~ | ~~重写 `pollOnce` 三阶段（claim → publish → writeBack）~~ | ✅ PR#82 |
+| ~~RL-04~~ | ~~`reclaimStale` 加入 cleanupLoop（超时 claiming → pending/dead）~~ | ✅ PR#82 |
+| ~~RL-05~~ | ~~`OutboxWriter.Write` 显式写 `status = 'pending'`~~ | ✅ PR#82 |
+| ~~RL-06~~ | ~~relay 状态机 enum（替换 bool running + startedCh）~~ | ✅ PR#82 |
+| ~~RL-07~~ | ~~slog 结构化日志（published/retried/dead/skipped + claim/publish 耗时）~~ | ✅ PR#82 |
+| ~~RL-08~~ | ~~测试覆盖（10 个场景，含竞态/乐观锁/DLQ）~~ | ✅ PR#82 |
 
 > 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
 
@@ -152,12 +155,12 @@
 | WM-35 | BFF handler 接入 — login/refresh/logout 接 SessionCookieWriter + BFF 模式不返回 token body | `cells/access-core/slices/session*` | 2d | WM-1 |
 | WM-36 | SecureCookie key rotation — active+previous 双 key ring，灰度轮换 | `pkg/securecookie` | 1.5d | WM-1 |
 | WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
-| ~~WM-2~~ | ~~密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go）~~ | `runtime/auth` | ~~2d~~ | PR#81 🔄 |
+| ~~WM-2~~ | ~~密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go）~~ | `runtime/auth` | ~~2d~~ | PR#81 ✅ |
 | WM-34 | 配置热更新回调 — Cell 级 OnConfigReload | `runtime/config` | 1d | 无 |
 | WM-2-F1 | KeyProvider 接口抽象 — JWTIssuer/JWTVerifier 解耦 *KeySet，为 auto-rotation/JWKS 预留接缝 | `runtime/auth` | 1d | WM-34 (discovered via PR#81 review P1-4) |
 | WM-20 | TestPubSub 测试套件 — TestPublisher/TestSubscriber 标准套件 | `kernel/outbox/outboxtest/` | 1.5d | PR#68 |
 | WM-17 | 生命周期钩子 — BeforeStart/AfterStart/BeforeStop/AfterStop 可选接口 | `kernel/cell` | 1d | 无 |
-| WM-15 | L4 队列状态机 — 合入 0-B2 | `kernel/outbox` | 1.5d | 0-B2 |
+| WM-15 | L4 队列状态机 — 合入 0-B2 | `kernel/outbox` | 1.5d | ~~0-B2~~ PR#82 ✅ 前置完成 |
 | WM-33b | 熔断器 — sony/gobreaker 包装 | `adapters/` | 0.5d | 无 |
 
 ### 运维发现的生产缺口
@@ -172,14 +175,18 @@
 | ID | 问题 | 预估 | 归属 PR |
 |----|------|------|---------|
 | ~~SOL-B-04~~ | ~~HandleResult 零值静默 ACK~~ | ~~1h~~ | PR#72 ✅ |
-| SOL-B-03 | cells Checker → Claimer 迁移 + 删除 legacy Checker 路径 | 2h | **合入 Phase 3** |
+| ~~SOL-B-03~~ | ~~cells Checker → Claimer 迁移 + 删除 legacy Checker 路径~~ | ~~2h~~ | PR#80 ✅ |
 | ~~SOL-B-05~~ | ~~bootstrap 统一包装 subscriber/middleware~~ | ~~3h~~ | **废弃 → Phase 2 EventRouter 取代** |
 | SOL-B-01 | Claimer lease 续租 — handler/retryLoop 超 LeaseTTL 后 Commit stale，需 Receipt.Renew 或后台续租（参考 distlock.go renewLoop） | 4h（C3，改 kernel 接口） | R-4 |
-| SOL-B-02 | `idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包，outbox 反向依赖 idempotency | 3h（C3，10+ 文件） | K-4 |
-| SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | Phase 3 附近 |
+| ~~SOL-B-02~~ | ~~`idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包~~ | ~~3h~~ | PR#80 ✅ |
+| SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | — |
 | ~~P4-TD-03~~ | ~~`IssueTestToken` HS256 死代码（测试陷阱）~~ | ~~30min~~ | PR#81 ✅ (移到 helpers_test.go，删除 HS256 分支) |
 | P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce — order-create/service.go:50-71 + device-register/service.go:50-71 直接 Publish 违反 outbox 规则 | 2h | — |
 | P4-TD-05 | 缺少 outbox 全链路 3-container 集成测试 | 2h | — |
+| RL-INT-01 | Relay 真实 PostgreSQL 集成测试 — testcontainers 覆盖 retry/dead/reclaimStale 落库状态（discovered via PR#82 review P2-4） | 2h | — |
+| RL-MIG-01 | Migration 003 索引创建不是 online-safe — `CREATE INDEX` 在热表上持锁；拆分为独立在线迁移 `004_outbox_pending_idx_online.sql`（discovered via PR#82 review P1-2） | 1h | — |
+| RL-SUB-01 | Subscriber 入站 ID 校验未提升到共享边界 — broker 直发/DLQ 回放携带低熵 ID 仍可污染幂等状态；需在 subscriber 入站路径统一验证（discovered via PR#82 review P1-3） | 2h | — |
+| RL-METRICS-01 | Relay Prometheus 指标 — published/retried/dead_lettered/skipped 计数器，需 Collector 接口注入避免 adapters→prometheus 直依赖（discovered via PR#82） | 2h | PR#81 WM-2-F3 同批 |
 | P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
 | P2-T-02 | J-audit-login-trail e2e 测试 | 2h | — |
 
@@ -444,12 +451,12 @@
 | R1C2-F03 WorkerGroup 首个失败 | 2h | runtime/worker |
 | ~~F-OB-01 outbox 批量写~~ | ~~2h~~ | ~~kernel/outbox~~ PR#79 ✅ |
 | TX-NIL-01 txRunner nil-safe 文档 | 1h | cells/ |
-| F-OB-02 outbox UUID nil guard | 30min | adapters/postgres — 拒绝全零 UUID 防幂等碰撞 (discovered via PR#79 review F-2.3) |
+| ~~F-OB-02 outbox UUID nil guard~~ | ~~30min~~ | PR#82 ✅ — id 列改为 TEXT，Writer 拒绝空串+全零 UUID |
 | P4-TD-01 noopWriter 去重 | 1h | cells/*/cell_test.go → 提取到 kernel/outbox/outboxtest (discovered via PR#79 review F-5.2) |
 | CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml 只跑 ./adapters/...，漏掉 tests/integration/ (discovered via PR#79 review) |
-| OB-UUID-01 cells evt-\<uuid\> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID (discovered via PR#79 review) |
+| ~~OB-UUID-01 cells evt-\<uuid\> 与 Writer UUID 校验冲突~~ | ~~2h~~ | PR#82 ✅ — schema id UUID→TEXT，Writer 接受任何非空非全零串 |
 | P3-TD-10 Session refresh TOCTOU | 4h | 高风险，乐观锁方案 |
-| P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
+| ~~P4-TD-03 IssueTestToken 死代码~~ | ~~30min~~ | PR#81 ✅ |
 | OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
 | OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
 | CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml:101-102 只跑 ./adapters/...，漏掉 src/tests/integration/ (discovered via PR#79 review) |
