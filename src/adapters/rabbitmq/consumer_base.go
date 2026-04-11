@@ -94,45 +94,26 @@ func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
 	return delay
 }
 
-// ConsumerBase wraps an outbox.EntryHandler with idempotency checking and
-// exponential backoff retry. DLQ routing is now handled by the broker via
-// DLX (DispositionReject triggers Nack requeue=false).
+// ConsumerBase wraps an outbox.EntryHandler with two-phase idempotency
+// (Claim/Commit/Release) and exponential backoff retry. DLQ routing is
+// handled by the broker via DLX (DispositionReject triggers Nack requeue=false).
 //
-// ConsumerBase supports two idempotency backends:
-//   - Legacy Checker (via NewConsumerBase): single-phase TryProcess. Has a race
-//     condition where the key is marked done before broker Ack. Retained for
-//     backward compatibility.
-//   - Claimer (via NewConsumerBaseWithClaimer): two-phase Claim/Commit/Release.
-//     Receipt is threaded through HandleResult so processDelivery can Commit
-//     only after broker Ack succeeds.
+// The Receipt is threaded through HandleResult so processDelivery can
+// Commit/Release after broker Ack/Nack succeeds.
 //
 // Consumer: cg-{ConsumerGroup}-{topic}
 // Idempotency key: {ConsumerGroup}:{event-id}, TTL 24h
 // ACK timing: after business logic returns DispositionAck
 // Retry: transient errors -> retry+backoff / permanent errors -> DispositionReject → DLX
 type ConsumerBase struct {
-	checker idempotency.Checker  // legacy, nil when using Claimer
-	claimer idempotency.Claimer  // Solution B, nil when using legacy Checker
+	claimer idempotency.Claimer
 	config  ConsumerBaseConfig
 }
 
-// NewConsumerBase creates a ConsumerBase using the legacy Checker interface.
-//
-// Deprecated: Use NewConsumerBaseWithClaimer for correct two-phase idempotency
-// that aligns idempotency state with broker acknowledgement.
-// Scheduled for removal after all cells migrate to Claimer (target: Phase 3).
-func NewConsumerBase(checker idempotency.Checker, config ConsumerBaseConfig) *ConsumerBase {
-	config.setDefaults()
-	return &ConsumerBase{
-		checker: checker,
-		config:  config,
-	}
-}
-
-// NewConsumerBaseWithClaimer creates a ConsumerBase using the two-phase
-// Claimer interface. The returned Receipt is threaded through HandleResult
-// so that the Subscriber can Commit/Release after broker Ack/Nack.
-func NewConsumerBaseWithClaimer(claimer idempotency.Claimer, config ConsumerBaseConfig) *ConsumerBase {
+// NewConsumerBase creates a ConsumerBase using the two-phase Claimer interface.
+// The returned Receipt is threaded through HandleResult so that the Subscriber
+// can Commit/Release after broker Ack/Nack.
+func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) *ConsumerBase {
 	config.setDefaults()
 	return &ConsumerBase{
 		claimer: claimer,
@@ -151,12 +132,10 @@ func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
 }
 
 // Wrap returns an EntryHandler that wraps the given business handler with
-// idempotency checking and retry with exponential backoff.
+// two-phase idempotency and retry with exponential backoff.
 //
-// When constructed with NewConsumerBaseWithClaimer, Wrap uses two-phase
-// idempotency: the Receipt is attached to HandleResult so processDelivery
-// can Commit/Release after broker Ack/Nack. When constructed with
-// NewConsumerBase (legacy), Wrap uses the single-phase TryProcess path.
+// The Receipt is attached to HandleResult so processDelivery can
+// Commit/Release after broker Ack/Nack.
 //
 // Rules:
 //   - handler returns DispositionAck → pass through as Ack
@@ -167,41 +146,7 @@ func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
 //   - retry budget exhausted → Reject
 //   - ctx cancelled / shutdown → Requeue
 func (cb *ConsumerBase) Wrap(topic string, handler outbox.EntryHandler) outbox.EntryHandler {
-	if cb.claimer != nil {
-		return cb.wrapWithClaimer(topic, handler)
-	}
-	return cb.wrapWithChecker(topic, handler)
-}
-
-// wrapWithChecker is the legacy path using single-phase TryProcess.
-// Deprecated: has a race condition where the key is marked done before broker Ack.
-func (cb *ConsumerBase) wrapWithChecker(topic string, handler outbox.EntryHandler) outbox.EntryHandler {
-	return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
-
-		shouldProcess, err := cb.checker.TryProcess(ctx, idempotencyKey, cb.config.IdempotencyTTL)
-		if err != nil {
-			slog.Warn("rabbitmq: idempotency check failed, proceeding with handler",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup),
-				slog.String("error", err.Error()))
-			shouldProcess = true
-		}
-		if !shouldProcess {
-			slog.Debug("rabbitmq: event already processed, skipping",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup))
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}
-
-		// Wrap legacy Checker as a Receipt so processDelivery can Release
-		// after broker Ack/Nack, not before. This prevents the race where
-		// releaseChecker runs before Nack, opening a duplicate-processing window.
-		receipt := &checkerReceipt{checker: cb.checker, key: idempotencyKey}
-		return cb.retryLoop(ctx, topic, entry, handler, receipt)
-	}
+	return cb.wrapWithClaimer(topic, handler)
 }
 
 // claimWithRetry attempts Claimer.Claim up to ClaimRetryCount times with
@@ -343,8 +288,8 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 }
 
 // retryLoop executes the handler with exponential backoff retries.
-// Receipt (from Claimer or checkerReceipt) is threaded through HandleResult
-// for processDelivery to Commit/Release after broker Ack/Nack.
+// Receipt is threaded through HandleResult for processDelivery to
+// Commit/Release after broker Ack/Nack.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
 	topic string,
@@ -438,26 +383,4 @@ func (cb *ConsumerBase) retryLoop(
 		Err:         lastResult.Err,
 		Receipt:     receipt,
 	}
-}
-
-// checkerReceipt adapts the legacy Checker to the Receipt interface so that
-// processDelivery can manage idempotency state uniformly after broker Ack/Nack.
-//
-//   - Commit: no-op — TryProcess already marked the key as done.
-//   - Release: calls checker.Release to allow redelivery.
-type checkerReceipt struct {
-	checker idempotency.Checker
-	key     string
-}
-
-// Compile-time interface check.
-var _ outbox.Receipt = (*checkerReceipt)(nil)
-
-func (r *checkerReceipt) Commit(_ context.Context) error {
-	// TryProcess already marked the key; nothing more to do.
-	return nil
-}
-
-func (r *checkerReceipt) Release(ctx context.Context) error {
-	return r.checker.Release(ctx, r.key)
 }

@@ -218,70 +218,6 @@ func (m *mockConnection) Close() error {
 	return m.closeErr
 }
 
-// --- Mock Idempotency Checker ---
-
-type mockIdempotencyChecker struct {
-	mu           sync.Mutex
-	processed    map[string]bool
-	checkErr     error
-	markErr      error
-	tryProcErr   error
-	releaseErr   error
-	releaseCalls []string
-}
-
-func newMockIdempotencyChecker() *mockIdempotencyChecker {
-	return &mockIdempotencyChecker{
-		processed: make(map[string]bool),
-	}
-}
-
-func (m *mockIdempotencyChecker) IsProcessed(_ context.Context, key string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.checkErr != nil {
-		return false, m.checkErr
-	}
-	return m.processed[key], nil
-}
-
-func (m *mockIdempotencyChecker) MarkProcessed(_ context.Context, key string, _ time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.markErr != nil {
-		return m.markErr
-	}
-	m.processed[key] = true
-	return nil
-}
-
-func (m *mockIdempotencyChecker) TryProcess(_ context.Context, key string, _ time.Duration) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.tryProcErr != nil {
-		return false, m.tryProcErr
-	}
-	if m.processed[key] {
-		return false, nil
-	}
-	m.processed[key] = true
-	return true, nil
-}
-
-func (m *mockIdempotencyChecker) Release(_ context.Context, key string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.releaseCalls = append(m.releaseCalls, key)
-	if m.releaseErr != nil {
-		return m.releaseErr
-	}
-	delete(m.processed, key)
-	return nil
-}
-
-// Compile-time interface checks.
-var _ idempotency.Checker = (*mockIdempotencyChecker)(nil)
-
 // --- Mock Publisher (for DLQ) ---
 
 // mockPublisher was removed: ConsumerBase no longer uses application-side
@@ -1799,253 +1735,8 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
 
-func TestConsumerBase_Wrap_Success(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		assert.Equal(t, "evt-001", e.ID)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-001", EventType: "test.created"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.True(t, handlerCalled)
-
-	// Verify idempotency key was marked.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-001"])
-	checker.mu.Unlock()
-}
-
-func TestConsumerBase_Wrap_AlreadyProcessed(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.processed["test-group:evt-001"] = true
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-001"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.False(t, handlerCalled) // Should skip because already processed.
-}
-
-func TestConsumerBase_Wrap_TransientError_Retry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond, // Fast for test.
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		if callCount < 3 {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
-		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-002"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.Equal(t, 3, callCount) // Should retry 3 times total.
-
-	// Should be marked processed on success.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-002"])
-	checker.mu.Unlock()
-}
-
-func TestConsumerBase_Wrap_RetryExhausted_Reject(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     2,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
-	})
-
-	entry := outbox.Entry{ID: "evt-003", EventType: "test.fail"}
-	res := handler(context.Background(), entry)
-	// Exhausted retries now return DispositionReject (broker routes to DLX).
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Error(t, res.Err)
-
-	// Receipt should be a checkerReceipt — Release is deferred to processDelivery.
-	require.NotNil(t, res.Receipt, "legacy Checker path should return a checkerReceipt")
-	// Key is still marked (TryProcess set it); Release happens in processDelivery.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-003"], "key still marked before processDelivery Release")
-	checker.mu.Unlock()
-
-	// Simulate processDelivery calling Release after broker Nack.
-	require.NoError(t, res.Receipt.Release(context.Background()))
-	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-003"], "key released after Receipt.Release")
-	checker.mu.Unlock()
-}
-
-func TestConsumerBase_Wrap_PermanentError_Reject(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         outbox.NewPermanentError(errors.New("bad payload")),
-		}
-	})
-
-	entry := outbox.Entry{ID: "evt-004", EventType: "test.permanent"}
-	res := handler(context.Background(), entry)
-	// PermanentError → DispositionReject (no retry, broker routes to DLX).
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Equal(t, 1, callCount) // Should not retry.
-}
-
-func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("reject this")}
-	})
-
-	entry := outbox.Entry{ID: "evt-explicit-reject"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Equal(t, 1, callCount)
-}
-
-func TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.tryProcErr = errors.New("redis down")
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-006"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.True(t, handlerCalled) // Should still process when idempotency check fails.
-}
-
-func TestConsumerBase_Wrap_ContextCancelled_DuringRetry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 500 * time.Millisecond,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		cancel() // Cancel context during first handler call.
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
-	})
-
-	entry := outbox.Entry{ID: "evt-007"}
-	res := handler(ctx, entry)
-	assert.Equal(t, outbox.DispositionRequeue, res.Disposition) // Should requeue on shutdown.
-}
-
-// --- Solution B: Reject goes to broker DLX, not application-side DLQ ---
-
-func TestConsumerBase_Wrap_RetryExhausted_ReleasesIdempotencyKey(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     1,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
-	})
-
-	entry := outbox.Entry{ID: "evt-dlq-001", EventType: "test.fail"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-
-	// Receipt is deferred to processDelivery; simulate Release.
-	require.NotNil(t, res.Receipt)
-	require.NoError(t, res.Receipt.Release(context.Background()))
-	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-dlq-001"])
-	checker.mu.Unlock()
-}
-
-// --- Extra fix: wrapped PermanentError detected via errors.As ---
-
-func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		// Wrap PermanentError inside fmt.Errorf — errors.As should still detect it.
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
-		}
-	})
-
-	entry := outbox.Entry{ID: "evt-wrapped-perm", EventType: "test.wrapped"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition) // PermanentError → Reject.
-	assert.Equal(t, 1, callCount)                               // Should not retry.
-}
+// Legacy Checker-based TestConsumerBase_Wrap_* tests removed — fully covered
+// by TestConsumerBase_WrapWithClaimer_* tests below.
 
 // --- P0 #7: ctx cancel → NACK with requeue (conservative shutdown) ---
 
@@ -2104,9 +1795,10 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 // =============================================================================
 
 func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
@@ -2126,18 +1818,13 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	res := wrapped(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
-
-	// Verify idempotency key was marked (ConsumerBase wrapping is active).
-	checker.mu.Lock()
-	assert.True(t, checker.processed["mw-group:evt-mw-001"])
-	checker.mu.Unlock()
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through HandleResult")
 }
 
 func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.processed["mw-group:evt-mw-dup"] = true
+	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
@@ -2156,9 +1843,10 @@ func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
 }
 
 func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "mw-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2176,13 +1864,20 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	entry := outbox.Entry{ID: "evt-mw-perm", EventType: "orders.created"}
 	res := wrapped(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, res.Disposition) // Reject → DLX.
+	assert.Same(t, receipt, res.Receipt, "Reject should thread Receipt for processDelivery to Release")
 }
 
 func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	// Integration-style test: wire AsMiddleware into SubscriberWithMiddleware.
-	checker := newMockIdempotencyChecker()
+	// First call: ClaimAcquired → handler runs.
+	// Second call: ClaimDone → handler skipped.
+	receipt := &mockReceipt{}
+	claimer := &sequenceClaimer{responses: []claimResponse{
+		{state: idempotency.ClaimAcquired, receipt: receipt},
+		{state: idempotency.ClaimDone},
+	}}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 
@@ -2212,19 +1907,14 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
-	// Simulate an incoming entry.
+	// Simulate an incoming entry — first call gets ClaimAcquired.
 	entry := outbox.Entry{ID: "evt-integration-001", EventType: "events.test"}
 	res := capturedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
 	assert.Equal(t, "evt-integration-001", receivedEntry.ID)
 
-	// Verify idempotency was applied.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["integration-group:evt-integration-001"])
-	checker.mu.Unlock()
-
-	// Calling again with the same event should be skipped.
+	// Calling again with the same event — second call gets ClaimDone, handler skipped.
 	handlerCalled = false
 	res = capturedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
@@ -2354,7 +2044,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2380,7 +2070,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2399,7 +2089,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2418,7 +2108,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2530,7 +2220,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 2 — success
 	}}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -2557,7 +2247,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 
 	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
 	// With jitter, we assert >= base delay only (not exact).
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 20 * time.Millisecond,
@@ -2585,7 +2275,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
@@ -2613,7 +2303,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	// S3-01: boundary — ClaimRetryCount=1 means exactly 1 attempt, no backoff sleep.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    1,
 		ClaimRetryBaseDelay: 5 * time.Second,
@@ -2643,7 +2333,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 1 — success
 	}}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		RetryCount:         5,                   // handler retries — should not affect claim
 		RetryBaseDelay:     1 * time.Second,     // handler backoff — should not affect claim
@@ -2675,7 +2365,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 	// S4-02: MaxRetryDelay caps exponential growth.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 100 * time.Millisecond,
@@ -2699,7 +2389,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
@@ -2717,7 +2407,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -2945,7 +2635,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryBaseDelay: 50 * time.Millisecond,
 	})
@@ -3007,7 +2697,7 @@ func boolPtr(b bool) *bool { return &b }
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimFailOpen:      boolPtr(false),
 		ClaimRetryCount:    3,
@@ -3030,7 +2720,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 		ClaimFailOpen: boolPtr(true),
 	})
@@ -3054,9 +2744,10 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testing.T) {
 	// S3-02: When ctx is cancelled by the time the final retry completes,
 	// retryLoop must return Requeue (not Reject to DLX).
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1, // single attempt, no inter-attempt sleep
 		RetryBaseDelay: time.Millisecond,
@@ -3223,37 +2914,8 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 	}
 }
 
-func TestConsumerBase_Wrap_ReleaseCheckerError_Logged(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.releaseErr = errors.New("redis timeout")
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     1,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
-	})
-
-	entry := outbox.Entry{ID: "evt-release-err", EventType: "test.release.err"}
-	res := handler(context.Background(), entry)
-
-	// Retry exhausted (RetryCount=1) → DispositionReject.
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-
-	// Receipt defers Release to processDelivery. Simulate it.
-	require.NotNil(t, res.Receipt)
-	err := res.Receipt.Release(context.Background())
-	assert.Error(t, err, "Release should propagate checker error")
-	assert.Contains(t, err.Error(), "redis timeout")
-
-	checker.mu.Lock()
-	assert.Contains(t, checker.releaseCalls, "test-group:evt-release-err",
-		"Release should have been called with the idempotency key")
-	checker.mu.Unlock()
-}
+// TestConsumerBase_Wrap_ReleaseCheckerError_Logged removed — legacy Checker path
+// no longer exists. Release error logging is covered by Claimer-based receipt tests.
 
 func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	conn, mockConn := newTestConnection(t)

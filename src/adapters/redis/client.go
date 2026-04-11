@@ -198,7 +198,7 @@ func (c *Client) Close() error {
 }
 
 // Cmdable returns the internal cmdable for use by sibling components
-// (DistLock, Cache, IdempotencyChecker). Not exported.
+// (DistLock, Cache, IdempotencyClaimer). Not exported.
 func (c *Client) cmdable() cmdable {
 	return c.rdb
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -225,7 +226,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 
 	// Create a ConsumerBase with RetryCount=2 and very short delays.
 	cb := NewConsumerBase(
-		&noopChecker{},
+		&noopClaimer{},
 		ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-group",
 			RetryCount:     2,
@@ -389,22 +390,15 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	_ = sub.Close()
 }
 
-// noopChecker is a minimal idempotency.Checker for testing that always
-// reports keys as not-yet-processed.
-type noopChecker struct{}
+// noopClaimer is a minimal idempotency.Claimer for testing that always
+// returns ClaimAcquired with a noopReceipt.
+type noopClaimer struct{}
 
-func (n *noopChecker) IsProcessed(_ context.Context, _ string) (bool, error) {
-	return false, nil
+func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+	return idempotency.ClaimAcquired, &noopReceipt{}, nil
 }
 
-func (n *noopChecker) MarkProcessed(_ context.Context, _ string, _ time.Duration) error {
-	return nil
-}
+type noopReceipt struct{}
 
-func (n *noopChecker) TryProcess(_ context.Context, _ string, _ time.Duration) (bool, error) {
-	return true, nil
-}
-
-func (n *noopChecker) Release(_ context.Context, _ string) error {
-	return nil
-}
+func (n *noopReceipt) Commit(_ context.Context) error  { return nil }
+func (n *noopReceipt) Release(_ context.Context) error { return nil }

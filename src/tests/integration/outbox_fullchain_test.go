@@ -132,7 +132,7 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 //  1. Business write + outbox write (same transaction)
 //  2. OutboxRelay polls unpublished entries and publishes to RabbitMQ
 //  3. Subscriber consumes the message from RabbitMQ
-//  4. IdempotencyChecker verifies idempotency semantics
+//  4. IdempotencyClaimer verifies idempotency semantics
 //
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
@@ -169,7 +169,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
-	checker := redis.NewIdempotencyChecker(redisClient)
+	claimer := redis.NewIdempotencyClaimer(redisClient)
 
 	relayCfg := postgres.DefaultRelayConfig()
 	relayCfg.PollInterval = 200 * time.Millisecond // fast polling for test
@@ -297,41 +297,39 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	assert.True(t, published, "outbox entry should be marked as published after relay")
 
 	// ---------------------------------------------------------------
-	// Step 10: Verify idempotency semantics with RedisIdempotencyChecker.
+	// Step 10: Verify idempotency semantics with IdempotencyClaimer.
 	// ---------------------------------------------------------------
 	idemKey := "idem:outbox-fullchain:" + entryID
 
-	processed, err := checker.IsProcessed(ctx, idemKey)
+	// First Claim should acquire a processing lease.
+	state, receipt, err := claimer.Claim(ctx, idemKey, idempotency.DefaultLeaseTTL, idempotency.DefaultTTL)
 	require.NoError(t, err)
-	assert.False(t, processed, "key should NOT be processed before MarkProcessed")
+	assert.Equal(t, idempotency.ClaimAcquired, state, "first Claim should acquire")
+	require.NotNil(t, receipt, "ClaimAcquired must return a Receipt")
 
-	err = checker.MarkProcessed(ctx, idemKey, idempotency.DefaultTTL)
-	require.NoError(t, err, "MarkProcessed should succeed")
-
-	processed, err = checker.IsProcessed(ctx, idemKey)
-	require.NoError(t, err)
-	assert.True(t, processed, "key should be processed after MarkProcessed")
-
-	// A second MarkProcessed should be idempotent (no error).
-	err = checker.MarkProcessed(ctx, idemKey, idempotency.DefaultTTL)
-	require.NoError(t, err, "duplicate MarkProcessed should be a no-op")
+	// Commit the receipt to mark processing as done.
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "Commit should succeed")
 
 	// ---------------------------------------------------------------
 	// Step 11: Verify duplicate message detection using the same key.
 	// ---------------------------------------------------------------
-	// Simulate receiving the same message again: check idempotency
-	// before processing — should detect the duplicate.
-	isDuplicate, err := checker.IsProcessed(ctx, idemKey)
+	// Second Claim on the same key should return ClaimDone.
+	state, receipt2, err := claimer.Claim(ctx, idemKey, idempotency.DefaultLeaseTTL, idempotency.DefaultTTL)
 	require.NoError(t, err)
-	assert.True(t, isDuplicate, "same idempotency key should be detected as duplicate")
+	assert.Equal(t, idempotency.ClaimDone, state, "same idempotency key should be detected as done")
+	assert.Nil(t, receipt2, "ClaimDone should not return a Receipt")
 
 	// ---------------------------------------------------------------
 	// Step 12: Verify a fresh key is NOT detected as processed.
 	// ---------------------------------------------------------------
 	freshKey := "idem:outbox-fullchain:" + uuid.New().String()
-	isFresh, err := checker.IsProcessed(ctx, freshKey)
+	freshState, freshReceipt, err := claimer.Claim(ctx, freshKey, idempotency.DefaultLeaseTTL, idempotency.DefaultTTL)
 	require.NoError(t, err)
-	assert.False(t, isFresh, "fresh idempotency key should not be processed")
+	assert.Equal(t, idempotency.ClaimAcquired, freshState, "fresh idempotency key should acquire")
+	require.NotNil(t, freshReceipt, "fresh key should return a Receipt")
+	// Clean up: release the fresh key lease.
+	_ = freshReceipt.Release(ctx)
 
 	// ---------------------------------------------------------------
 	// Cleanup: stop relay and subscriber.
