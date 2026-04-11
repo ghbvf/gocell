@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
@@ -44,6 +45,40 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	return conn, cleanup
 }
 
+type queueInspector interface {
+	QueueInspect(name string) (amqp.Queue, error)
+}
+
+func waitForSubscriberReady(t *testing.T, conn *Connection, queueName string, subErrCh <-chan error, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-subErrCh:
+			require.NoError(t, err, "subscriber exited before becoming ready")
+			t.Fatal("subscriber exited before becoming ready")
+		default:
+		}
+
+		ch, err := conn.AcquireChannel()
+		require.NoError(t, err, "AcquireChannel should succeed while waiting for subscriber readiness")
+
+		inspector, ok := ch.(queueInspector)
+		require.True(t, ok, "AMQPChannel should support QueueInspect in integration tests")
+
+		queue, inspectErr := inspector.QueueInspect(queueName)
+		_ = ch.Close()
+		if inspectErr == nil && queue.Consumers > 0 {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)
+}
+
 // TestIntegration_ConnectionHealth verifies the Connection is alive after
 // connecting to a real RabbitMQ broker.
 func TestIntegration_ConnectionHealth(t *testing.T) {
@@ -62,6 +97,31 @@ func TestIntegration_PublishConsume(t *testing.T) {
 
 	pub := NewPublisher(conn)
 	topic := "test.integration.events"
+	queueName := "test.integration.queue"
+
+	// Subscribe and receive.
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       queueName,
+		PrefetchCount:   1,
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	ctx := context.Background()
+	received := make(chan outbox.Entry, 1)
+	subCtx, subCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer subCancel()
+
+	// Run subscriber in a goroutine since Subscribe blocks.
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
+			received <- e
+			return nil
+		})
+	}()
+
+	// Wait until Subscribe has declared, bound, and started consuming from the queue.
+	waitForSubscriberReady(t, conn, queueName, subErrCh, 5*time.Second)
 
 	// Prepare an outbox.Entry as the message payload.
 	entry := outbox.Entry{
@@ -77,30 +137,9 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	payload, err := json.Marshal(entry)
 	require.NoError(t, err, "marshal entry")
 
-	// Publish the message.
-	ctx := context.Background()
+	// Publish the message after the subscriber is ready.
 	err = pub.Publish(ctx, topic, payload)
 	require.NoError(t, err, "Publish should succeed")
-
-	// Subscribe and receive.
-	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test.integration.queue",
-		PrefetchCount:   1,
-		ShutdownTimeout: 5 * time.Second,
-	})
-
-	received := make(chan outbox.Entry, 1)
-	subCtx, subCancel := context.WithTimeout(ctx, 15*time.Second)
-	defer subCancel()
-
-	// Run subscriber in a goroutine since Subscribe blocks.
-	subErrCh := make(chan error, 1)
-	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) error {
-			received <- e
-			return nil
-		})
-	}()
 
 	// Wait for the message.
 	select {
