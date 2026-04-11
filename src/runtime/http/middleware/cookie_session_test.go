@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,9 @@ func encodeCookieValue(t *testing.T, cfg CookieSessionConfig, jwt string) string
 	name := cfg.CookieName
 	if name == "" {
 		name = "session"
+	}
+	if cfg.MaxAge > 0 {
+		sc = sc.WithMaxAge(cfg.MaxAge)
 	}
 	encoded, err := sc.Encode(name, []byte(jwt))
 	require.NoError(t, err)
@@ -69,44 +73,33 @@ func TestCookieSession_ValidCookie_InjectsAuthorization(t *testing.T) {
 
 func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
 	cfg := newTestSessionConfig(t)
-	cfg.MaxAge = 1 // 1 second
+	cfg.MaxAge = 1 // 1 second — cookie expires after 1s
 
+	// Encode with the SAME maxAge so the timestamp is embedded.
 	sc, err := NewSecureCookie(cfg.Secret, nil)
 	require.NoError(t, err)
-	sc = sc.WithMaxAge(1)
-
-	// Create a cookie that will expire by the time we test.
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
 	// Wait for expiry.
-	// We use a trick: create the SecureCookie with maxAge=0 for encoding (no expiry on write)
-	// but the middleware's SecureCookie will have maxAge=1.
-	// Actually, let's just test with a tampered timestamp approach.
-	// Simpler: the middleware creates its own SecureCookie with cfg.MaxAge.
-	// If we encode with a separate SecureCookie that has maxAge=86400, the middleware
-	// will still check against cfg.MaxAge=1. But the timestamp is embedded at encode time.
-	// We'd need to sleep. Let's use a different approach: just verify that no auth header is set.
+	time.Sleep(1100 * time.Millisecond)
 
 	capture := &authCapture{}
 	handler := CookieSession(cfg)(capture.handler())
 
-	// Use the encoded value — it was just created so it's NOT expired yet.
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: encoded})
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	// Just created — should still be valid.
 	assert.True(t, capture.called)
-	assert.Contains(t, capture.authHeader, "Bearer")
+	assert.Empty(t, capture.authHeader, "expired cookie should NOT inject Authorization")
 }
 
 func TestCookieSession_TamperedCookie_NoInjection(t *testing.T) {
 	cfg := newTestSessionConfig(t)
 	cookieVal := encodeCookieValue(t, cfg, "valid-jwt")
 
-	// Tamper the cookie value.
 	tampered := cookieVal[:len(cookieVal)/2] + "XXXX" + cookieVal[len(cookieVal)/2+4:]
 
 	capture := &authCapture{}
@@ -172,7 +165,8 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 	cfg.CookieDomain = "example.com"
 
 	rec := httptest.NewRecorder()
-	SetSessionCookie(rec, cfg, "my-jwt-token")
+	err := SetSessionCookie(rec, cfg, "my-jwt-token")
+	require.NoError(t, err)
 
 	cookies := rec.Result().Cookies()
 	require.Len(t, cookies, 1)
@@ -186,6 +180,15 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 	assert.True(t, c.Secure)
 	assert.True(t, c.HttpOnly)
 	assert.Equal(t, http.SameSiteStrictMode, c.SameSite)
+}
+
+func TestSetSessionCookie_ReturnsError(t *testing.T) {
+	cfg := CookieSessionConfig{
+		Secret: []byte("too-short"), // < 32 bytes
+	}
+	rec := httptest.NewRecorder()
+	err := SetSessionCookie(rec, cfg, "jwt")
+	assert.Error(t, err, "should return error for invalid config")
 }
 
 func TestClearSessionCookie(t *testing.T) {
@@ -236,13 +239,12 @@ func TestDefaultCookieSessionConfig(t *testing.T) {
 func TestSetSessionCookie_RoundTripViaMiddleware(t *testing.T) {
 	cfg := newTestSessionConfig(t)
 
-	// Step 1: SetSessionCookie writes a cookie.
 	rec1 := httptest.NewRecorder()
-	SetSessionCookie(rec1, cfg, "round-trip-jwt")
+	err := SetSessionCookie(rec1, cfg, "round-trip-jwt")
+	require.NoError(t, err)
 	cookies := rec1.Result().Cookies()
 	require.Len(t, cookies, 1)
 
-	// Step 2: Use that cookie with the middleware.
 	capture := &authCapture{}
 	handler := CookieSession(cfg)(capture.handler())
 
@@ -257,7 +259,6 @@ func TestSetSessionCookie_RoundTripViaMiddleware(t *testing.T) {
 
 func TestCookieSession_LargeJWT(t *testing.T) {
 	cfg := newTestSessionConfig(t)
-	// Generate a large JWT-like string (~4KB).
 	largeJWT := make([]byte, 4000)
 	for i := range largeJWT {
 		largeJWT[i] = 'A' + byte(i%26)
@@ -275,4 +276,48 @@ func TestCookieSession_LargeJWT(t *testing.T) {
 
 	assert.True(t, capture.called)
 	assert.Equal(t, "Bearer "+jwt, capture.authHeader)
+}
+
+func TestSessionCookieWriter_SetAndClear(t *testing.T) {
+	cfg := newTestSessionConfig(t)
+	writer, err := NewSessionCookieWriter(cfg)
+	require.NoError(t, err)
+
+	// Set
+	rec := httptest.NewRecorder()
+	err = writer.Set(rec, "writer-jwt")
+	require.NoError(t, err)
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, "session", cookies[0].Name)
+	assert.NotEmpty(t, cookies[0].Value)
+
+	// Verify cookie works with middleware.
+	capture := &authCapture{}
+	handler := CookieSession(cfg)(capture.handler())
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookies[0])
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req)
+	assert.Equal(t, "Bearer writer-jwt", capture.authHeader)
+
+	// Clear
+	rec3 := httptest.NewRecorder()
+	writer.Clear(rec3)
+	clearCookies := rec3.Result().Cookies()
+	require.Len(t, clearCookies, 1)
+	assert.Equal(t, -1, clearCookies[0].MaxAge)
+}
+
+func TestNormalizeCookieSessionConfig(t *testing.T) {
+	// Struct literal with zero values should get safe defaults.
+	cfg := CookieSessionConfig{
+		Secret: generateKey(t, 32),
+	}
+	normalizeCookieSessionConfig(&cfg)
+
+	assert.Equal(t, "session", cfg.CookieName)
+	assert.Equal(t, "/", cfg.CookiePath)
+	assert.Equal(t, http.SameSiteStrictMode, cfg.CookieSameSite)
+	assert.Equal(t, 900, cfg.MaxAge)
 }

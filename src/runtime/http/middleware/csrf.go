@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -19,24 +22,31 @@ type CSRFConfig struct {
 	TrustedOrigins []string
 
 	// ExcludedPathPrefixes: URL path prefixes that bypass CSRF checks.
+	// Paths are normalized with path.Clean before matching to prevent
+	// traversal bypasses (e.g., /api/webhooks/../secret).
 	ExcludedPathPrefixes []string
 
-	// AllowSameSite: whether Sec-Fetch-Site "same-site" is permitted.
-	// Default: true.
+	// AllowSameSite controls behavior for Sec-Fetch-Site: same-site requests.
+	// When true, same-site requests fall through to Origin/Referer validation
+	// (not blindly allowed — still requires TrustedOrigins match).
+	// When false, same-site requests are immediately rejected.
+	// Default: false (secure default — same-site subdomain attacks blocked).
 	AllowSameSite bool
 
-	// AllowMissingOrigin: allow requests without any origin signal
-	// (Sec-Fetch-Site, Origin, Referer all absent).
-	// Default: true (permissive, for JWT API compatibility).
-	// Set false for strict BFF-only mode.
+	// AllowMissingOrigin controls behavior when no origin signal
+	// (Sec-Fetch-Site, Origin, Referer) is present.
+	// Default: false (fail-closed — all requests must carry origin info).
+	// Set true only for API-only endpoints where non-browser clients
+	// (cURL, server-to-server) are expected.
 	AllowMissingOrigin bool
 }
 
-// DefaultCSRFConfig returns a CSRFConfig with safe defaults.
+// DefaultCSRFConfig returns a CSRFConfig with secure defaults.
+// Both AllowSameSite and AllowMissingOrigin default to false (fail-closed).
 func DefaultCSRFConfig() CSRFConfig {
 	return CSRFConfig{
-		AllowSameSite:      true,
-		AllowMissingOrigin: true,
+		AllowSameSite:      false,
+		AllowMissingOrigin: false,
 	}
 }
 
@@ -78,7 +88,9 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 			}
 
 			// Step 2: Excluded paths bypass.
-			if isExcludedPath(r.URL.Path, excluded) {
+			// Normalize path to prevent traversal (e.g., /a/../b → /b).
+			cleanPath := path.Clean(r.URL.Path)
+			if isExcludedPath(cleanPath, excluded) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -86,32 +98,42 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 			// Step 3: Sec-Fetch-Site validation.
 			if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
 				switch sfs {
-				case "same-origin", "none":
+				case "same-origin":
+					w.Header().Add("Vary", "Origin")
+					next.ServeHTTP(w, r)
+					return
+				case "none":
 					w.Header().Add("Vary", "Origin")
 					next.ServeHTTP(w, r)
 					return
 				case "same-site":
-					if allowSameSite {
-						w.Header().Add("Vary", "Origin")
-						next.ServeHTTP(w, r)
+					if !allowSameSite {
+						rejectCSRF(w, r, "same-site not allowed")
 						return
 					}
-					rejectCSRF(w, r)
-					return
+					// AllowSameSite=true: fall through to Origin/Referer
+					// validation — do NOT blindly allow. A malicious
+					// subdomain could send same-site requests.
 				default: // "cross-site" or unknown
-					rejectCSRF(w, r)
+					rejectCSRF(w, r, "cross-site or unknown Sec-Fetch-Site: "+sfs)
 					return
 				}
 			}
 
 			// Step 4: Origin header validation.
 			if origin := r.Header.Get("Origin"); origin != "" {
+				if origin == "null" {
+					// Origin: null is sent by sandboxed iframes, data: URLs,
+					// and redirects — treat as untrusted.
+					rejectCSRF(w, r, "null origin")
+					return
+				}
 				if matchOrigin(origin, exactOrigins, wildcardPatterns) {
 					w.Header().Add("Vary", "Origin")
 					next.ServeHTTP(w, r)
 					return
 				}
-				rejectCSRF(w, r)
+				rejectCSRF(w, r, "origin not trusted: "+origin)
 				return
 			}
 
@@ -123,7 +145,7 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 					next.ServeHTTP(w, r)
 					return
 				}
-				rejectCSRF(w, r)
+				rejectCSRF(w, r, "referer not trusted: "+referer)
 				return
 			}
 
@@ -132,12 +154,29 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			rejectCSRF(w, r)
+			rejectCSRF(w, r, "no origin signal present")
 		})
 	}
 }
 
-func rejectCSRF(w http.ResponseWriter, r *http.Request) {
+func rejectCSRF(w http.ResponseWriter, r *http.Request, reason string) {
+	// Structured log for ops visibility — distinguish misconfig vs real attack.
+	attrs := []any{
+		slog.String("reason", reason),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		attrs = append(attrs, slog.String("origin", origin))
+	}
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
+		attrs = append(attrs, slog.String("sec_fetch_site", sfs))
+	}
+	if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
+		attrs = append(attrs, slog.String("request_id", reqID))
+	}
+	slog.Warn("csrf: request rejected", attrs...)
+
 	httputil.WriteError(r.Context(), w, http.StatusForbidden,
 		"ERR_CSRF_ORIGIN_DENIED", "cross-origin request denied")
 }
@@ -158,19 +197,15 @@ func matchOrigin(origin string, exact map[string]bool, wildcards []string) bool 
 
 // matchWildcardOrigin matches "https://sub.example.com" against "https://*.example.com".
 func matchWildcardOrigin(origin, pattern string) bool {
-	// pattern: "https://*.example.com"
-	// Split at "://" to compare schemes.
 	pScheme, pHost, pOK := splitOrigin(pattern)
 	oScheme, oHost, oOK := splitOrigin(origin)
 	if !pOK || !oOK || pScheme != oScheme {
 		return false
 	}
-	// pHost: "*.example.com", oHost: "sub.example.com"
 	if !strings.HasPrefix(pHost, "*.") {
 		return false
 	}
 	suffix := pHost[1:] // ".example.com"
-	// oHost must end with suffix and have at least one char before it.
 	return len(oHost) > len(suffix) && strings.HasSuffix(oHost, suffix)
 }
 
@@ -198,9 +233,9 @@ func normalizeOrigin(o string) string {
 }
 
 // isExcludedPath checks if path starts with any excluded prefix.
-func isExcludedPath(path string, prefixes []string) bool {
+func isExcludedPath(cleanedPath string, prefixes []string) bool {
 	for _, p := range prefixes {
-		if strings.HasPrefix(path, p) {
+		if strings.HasPrefix(cleanedPath, p) {
 			return true
 		}
 	}

@@ -88,6 +88,9 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		// Cell-local locked -> 403
 		{errcode.ErrAuthUserLocked, http.StatusForbidden},
 
+		// CSRF -> 403
+		{errcode.ErrCSRFOriginDenied, http.StatusForbidden},
+
 		// Cell-local duplicate -> 409
 		{errcode.ErrAuthUserDuplicate, http.StatusConflict},
 		{errcode.ErrConfigDuplicate, http.StatusConflict},

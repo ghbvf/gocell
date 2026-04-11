@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -48,6 +50,26 @@ func DefaultCookieSessionConfig(secret []byte) CookieSessionConfig {
 	}
 }
 
+// normalizeCookieSessionConfig fills zero-value fields with safe defaults.
+func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
+	if cfg.CookieName == "" {
+		cfg.CookieName = "session"
+	}
+	if cfg.CookiePath == "" {
+		cfg.CookiePath = "/"
+	}
+	if cfg.CookieSameSite == 0 {
+		cfg.CookieSameSite = http.SameSiteStrictMode
+	}
+	if cfg.MaxAge == 0 {
+		cfg.MaxAge = 900
+	}
+	// CookieSecure: false zero-value is intentionally not overridden here.
+	// Users constructing via struct literal get Secure=false, which is only
+	// safe for local development. Production code MUST use
+	// DefaultCookieSessionConfig or explicitly set CookieSecure=true.
+}
+
 // CookieSession returns middleware that reads a JWT from a signed cookie and
 // injects it as an Authorization: Bearer header. If the request already has
 // an Authorization header, the cookie is ignored (API client mode).
@@ -55,10 +77,7 @@ func DefaultCookieSessionConfig(secret []byte) CookieSessionConfig {
 // This middleware does NOT set cookies — use SetSessionCookie/ClearSessionCookie
 // in login/logout handlers.
 func CookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
-	name := cfg.CookieName
-	if name == "" {
-		name = "session"
-	}
+	normalizeCookieSessionConfig(&cfg)
 
 	// Build SecureCookie instance at construction time.
 	sc, err := NewSecureCookie(cfg.Secret, cfg.EncryptKey)
@@ -66,9 +85,8 @@ func CookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
 		// Fail-fast: configuration error should surface immediately.
 		panic("cookie_session: invalid config: " + err.Error())
 	}
-	maxAge := cfg.MaxAge
-	if maxAge > 0 {
-		sc = sc.WithMaxAge(maxAge)
+	if cfg.MaxAge > 0 {
+		sc = sc.WithMaxAge(cfg.MaxAge)
 	}
 
 	return func(next http.Handler) http.Handler {
@@ -81,14 +99,14 @@ func CookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
 			}
 
 			// Try to read session cookie.
-			cookie, err := r.Cookie(name)
+			cookie, err := r.Cookie(cfg.CookieName)
 			if err != nil || cookie.Value == "" {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			// Decode and verify cookie.
-			jwt, err := sc.Decode(name, cookie.Value)
+			jwt, err := sc.Decode(cfg.CookieName, cookie.Value)
 			if err != nil {
 				// Invalid/expired cookie — do not inject, let AuthMiddleware handle 401.
 				next.ServeHTTP(w, r)
@@ -103,72 +121,109 @@ func CookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// SetSessionCookie writes a signed (optionally encrypted) JWT cookie to the response.
-// Called by login/refresh handlers after issuing tokens.
-func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string) {
-	name := cfg.CookieName
-	if name == "" {
-		name = "session"
-	}
+// NewSessionCookieWriter creates a reusable writer for setting session cookies.
+// Pre-builds the SecureCookie instance to avoid per-call reconstruction.
+// Use this in login/refresh handlers instead of calling SetSessionCookie
+// directly with config each time.
+func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, error) {
+	normalizeCookieSessionConfig(&cfg)
 
 	sc, err := NewSecureCookie(cfg.Secret, cfg.EncryptKey)
 	if err != nil {
-		// Should not happen if config was validated at startup.
-		return
+		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
 
-	encoded, err := sc.Encode(name, []byte(jwt))
+	return &SessionCookieWriter{sc: sc, cfg: cfg}, nil
+}
+
+// SessionCookieWriter writes and clears session cookies using a pre-built
+// SecureCookie instance for consistent performance.
+type SessionCookieWriter struct {
+	sc  *SecureCookie
+	cfg CookieSessionConfig
+}
+
+// Set writes a signed (optionally encrypted) JWT cookie to the response.
+func (w *SessionCookieWriter) Set(rw http.ResponseWriter, jwt string) error {
+	encoded, err := w.sc.Encode(w.cfg.CookieName, []byte(jwt))
 	if err != nil {
-		return
+		return fmt.Errorf("cookie_session: encode: %w", err)
 	}
 
-	maxAge := cfg.MaxAge
-	if maxAge == 0 {
-		maxAge = 900
-	}
-
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
+	http.SetCookie(rw, &http.Cookie{
+		Name:     w.cfg.CookieName,
 		Value:    encoded,
-		Path:     cookiePath(cfg.CookiePath),
-		Domain:   cfg.CookieDomain,
-		MaxAge:   maxAge,
-		Secure:   cfg.CookieSecure,
-		HttpOnly: true, // Always HttpOnly — never accessible from JS
-		SameSite: cookieSameSite(cfg.CookieSameSite),
+		Path:     w.cfg.CookiePath,
+		Domain:   w.cfg.CookieDomain,
+		MaxAge:   w.cfg.MaxAge,
+		Secure:   w.cfg.CookieSecure,
+		HttpOnly: true,
+		SameSite: w.cfg.CookieSameSite,
+	})
+	return nil
+}
+
+// Clear removes the session cookie by setting MaxAge=-1.
+func (w *SessionCookieWriter) Clear(rw http.ResponseWriter) {
+	http.SetCookie(rw, &http.Cookie{
+		Name:     w.cfg.CookieName,
+		Value:    "",
+		Path:     w.cfg.CookiePath,
+		Domain:   w.cfg.CookieDomain,
+		MaxAge:   -1,
+		Secure:   w.cfg.CookieSecure,
+		HttpOnly: true,
+		SameSite: w.cfg.CookieSameSite,
 	})
 }
 
-// ClearSessionCookie removes the session cookie by setting MaxAge=-1.
-// Called by logout handler.
-func ClearSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig) {
-	name := cfg.CookieName
-	if name == "" {
-		name = "session"
+// SetSessionCookie writes a signed (optionally encrypted) JWT cookie to the response.
+// Returns an error if encoding fails. Callers should handle the error (at minimum log it).
+//
+// For better performance, use NewSessionCookieWriter to pre-build the SecureCookie
+// instance instead of calling this function per-request.
+func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string) error {
+	normalizeCookieSessionConfig(&cfg)
+
+	sc, err := NewSecureCookie(cfg.Secret, cfg.EncryptKey)
+	if err != nil {
+		slog.Error("cookie_session: failed to create SecureCookie",
+			slog.Any("error", err))
+		return fmt.Errorf("cookie_session: %w", err)
+	}
+
+	encoded, err := sc.Encode(cfg.CookieName, []byte(jwt))
+	if err != nil {
+		slog.Error("cookie_session: failed to encode cookie",
+			slog.Any("error", err))
+		return fmt.Errorf("cookie_session: encode: %w", err)
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     name,
+		Name:     cfg.CookieName,
+		Value:    encoded,
+		Path:     cfg.CookiePath,
+		Domain:   cfg.CookieDomain,
+		MaxAge:   cfg.MaxAge,
+		Secure:   cfg.CookieSecure,
+		HttpOnly: true,
+		SameSite: cfg.CookieSameSite,
+	})
+	return nil
+}
+
+// ClearSessionCookie removes the session cookie by setting MaxAge=-1.
+func ClearSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig) {
+	normalizeCookieSessionConfig(&cfg)
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     cfg.CookieName,
 		Value:    "",
-		Path:     cookiePath(cfg.CookiePath),
+		Path:     cfg.CookiePath,
 		Domain:   cfg.CookieDomain,
 		MaxAge:   -1,
 		Secure:   cfg.CookieSecure,
 		HttpOnly: true,
-		SameSite: cookieSameSite(cfg.CookieSameSite),
+		SameSite: cfg.CookieSameSite,
 	})
-}
-
-func cookiePath(p string) string {
-	if p == "" {
-		return "/"
-	}
-	return p
-}
-
-func cookieSameSite(s http.SameSite) http.SameSite {
-	if s == 0 {
-		return http.SameSiteStrictMode
-	}
-	return s
 }

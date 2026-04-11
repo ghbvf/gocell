@@ -169,9 +169,15 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 	return payload, nil
 }
 
-// computeMAC calculates HMAC-SHA256 over (name | ts | nonce | payload).
+// computeMAC calculates HMAC-SHA256 over (len(name) | name | ts | nonce | payload).
+// The 4-byte big-endian length prefix for name prevents cross-cookie MAC
+// collisions where name1||ts1 == name2||ts2 for different name lengths.
 func (sc *SecureCookie) computeMAC(name string, ts, nonce, payload []byte) []byte {
 	h := hmac.New(sha256.New, sc.hashKey)
+	// Length-prefix the name to prevent ambiguity in concatenation.
+	nameLen := make([]byte, 4)
+	binary.BigEndian.PutUint32(nameLen, uint32(len(name)))
+	h.Write(nameLen)
 	h.Write([]byte(name))
 	h.Write(ts)
 	if nonce != nil {

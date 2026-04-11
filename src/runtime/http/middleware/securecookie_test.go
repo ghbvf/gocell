@@ -162,3 +162,26 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 		})
 	}
 }
+
+func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	sc, err := NewSecureCookie(hashKey, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		encoded string
+	}{
+		{"empty string", ""},
+		{"not base64", "!!!not-base64!!!"},
+		{"too short (1 byte)", "AA"},
+		{"exactly timestamp+mac minus 1", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"},
+		{"random garbage", "dGhpcyBpcyBub3QgYSB2YWxpZCBjb29raWU"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := sc.Decode("test", tt.encoded)
+			assert.Error(t, err, "malicious input should fail decode")
+		})
+	}
+}
