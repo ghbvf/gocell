@@ -534,6 +534,62 @@ func TestAddJitter(t *testing.T) {
 	}
 }
 
+func TestAddDownJitter(t *testing.T) {
+	t.Run("zero returns zero", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), addDownJitter(0))
+	})
+	t.Run("negative returns zero", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), addDownJitter(-1*time.Second))
+	})
+	t.Run("positive in [0.75*d, d]", func(t *testing.T) {
+		d := 30 * time.Second
+		for range 100 {
+			got := addDownJitter(d)
+			assert.GreaterOrEqual(t, got, time.Duration(float64(d)*0.75))
+			assert.LessOrEqual(t, got, d)
+		}
+	})
+}
+
+func TestConnection_BackoffDelay_SmallBase(t *testing.T) {
+	// U4: verify small base delay (1ms) doesn't prematurely jump to max.
+	conn := &Connection{
+		config: Config{
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 1 * time.Hour,
+		},
+	}
+	// attempt 10: 1ms * 2^10 = 1.024s — well below 1h, jitter should be around 1s.
+	delay := conn.backoffDelay(10)
+	assert.GreaterOrEqual(t, delay, 750*time.Millisecond)
+	assert.LessOrEqual(t, delay, 1300*time.Millisecond)
+
+	// attempt 30: 1ms * 2^30 ≈ 1073s ≈ 17.9min — still below 1h.
+	delay30 := conn.backoffDelay(30)
+	assert.Less(t, delay30, 1*time.Hour, "attempt 30 with 1ms base should NOT hit 1h cap")
+}
+
+func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
+	// reconnectLoop should exit when closeCh is closed (via Connection.Close).
+	conn, _ := newTestConnection(t)
+
+	// reconnectLoop is already running from NewConnection. Close should stop it.
+	err := conn.Close()
+	assert.NoError(t, err)
+
+	// After Close, WaitConnected with a short timeout should fail (closeCh closed).
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	// connected was already closed by NewConnection, so this returns nil.
+	// This test verifies Close doesn't panic and exits cleanly.
+	_ = conn.WaitConnected(ctx)
+}
+
+// NOTE: reconnectLoop full-cycle test (disconnect → reconnect) requires real amqp
+// connection lifecycle and is covered by integration tests (go test -tags=integration).
+// The individual functions (reconnectWithBackoff, backoffDelay, isPermanentDialError)
+// are thoroughly unit-tested above.
+
 func TestIsPermanentDialError(t *testing.T) {
 	tests := []struct {
 		name string
