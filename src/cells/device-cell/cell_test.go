@@ -126,6 +126,16 @@ func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCo
 func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
+// extractData unmarshals a JSON response and returns the "data" envelope.
+func extractData(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	data, ok := envelope["data"].(map[string]any)
+	require.True(t, ok, "response should have data envelope")
+	return data
+}
+
 // initCellWithRouter creates an initialized DeviceCell with routes registered
 // on a real chi-based router, ready for HTTP testing.
 func initCellWithRouter(t *testing.T) *router.Router {
@@ -156,9 +166,8 @@ func TestDeviceCell_RouteRegisterDevice(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"POST /api/v1/devices/ should return 201")
 
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["id"])
+	data := extractData(t, rec.Body.Bytes())
+	assert.NotEmpty(t, data["id"])
 }
 
 func TestDeviceCell_RouteGetStatus(t *testing.T) {
@@ -172,9 +181,8 @@ func TestDeviceCell_RouteGetStatus(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var created map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	deviceID := created["id"].(string)
+	data := extractData(t, rec.Body.Bytes())
+	deviceID := data["id"].(string)
 
 	// Now get status.
 	rec = httptest.NewRecorder()
@@ -194,9 +202,8 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var created map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	deviceID := created["id"].(string)
+	data := extractData(t, rec.Body.Bytes())
+	deviceID := data["id"].(string)
 
 	// Enqueue command.
 	rec = httptest.NewRecorder()
@@ -217,9 +224,8 @@ func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var created map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	deviceID := created["id"].(string)
+	data := extractData(t, rec.Body.Bytes())
+	deviceID := data["id"].(string)
 
 	// List pending (should be empty).
 	rec = httptest.NewRecorder()
@@ -239,9 +245,8 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var created map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	deviceID := created["id"].(string)
+	data := extractData(t, rec.Body.Bytes())
+	deviceID := data["id"].(string)
 
 	// Enqueue command.
 	rec = httptest.NewRecorder()
@@ -250,9 +255,8 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	var cmdResp map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &cmdResp))
-	cmdID := cmdResp["id"].(string)
+	cmdData := extractData(t, rec.Body.Bytes())
+	cmdID := cmdData["id"].(string)
 
 	// Ack.
 	rec = httptest.NewRecorder()

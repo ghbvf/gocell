@@ -43,12 +43,14 @@ func TestHandleEnqueue(t *testing.T) {
 			body:       `{"payload":"reboot"}`,
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
-				var resp map[string]any
-				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.NotEmpty(t, resp["id"])
-				assert.Equal(t, "dev-1", resp["deviceId"])
-				assert.Equal(t, "reboot", resp["payload"])
-				assert.Equal(t, "pending", resp["status"])
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(body, &envelope))
+				data, ok := envelope["data"].(map[string]any)
+				require.True(t, ok, "response should have data envelope")
+				assert.NotEmpty(t, data["id"])
+				assert.Equal(t, "dev-1", data["deviceId"])
+				assert.Equal(t, "reboot", data["payload"])
+				assert.Equal(t, "pending", data["status"])
 			},
 		},
 		{
@@ -185,9 +187,11 @@ func TestHandleAck(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {
-				var resp map[string]any
-				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-				assert.Equal(t, "acked", resp["status"])
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+				data, ok := envelope["data"].(map[string]any)
+				require.True(t, ok, "response should have data envelope")
+				assert.Equal(t, "acked", data["status"])
 			}
 		})
 	}
