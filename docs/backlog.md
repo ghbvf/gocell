@@ -125,6 +125,8 @@
 | ER-P2-04 | `runtime/bootstrap/bootstrap_test.go` | ~~缺 Router 正路径集成测试~~ PR#76 ✅ | ~~1h~~ |
 | CLEANUP-01 | `runtime/bootstrap/bootstrap.go` | 删除 `WithEventBus` deprecated wrapper，调用方改用 `WithPublisher` + `WithSubscriber` | 30min |
 | CLEANUP-02 | `cells/access-core/cell.go` | 删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier` | 1h |
+| ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级** | Phase 2 后评估 |
+| ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。同 topic 多 handler（如 audit-core + config-core 都订阅 event.config.changed.v1）在 RabbitMQ 下退化为 competing consumers 而非 fan-out。需 AddHandler 增加 ConsumerGroup 参数或 AddHandlerWithOptions，**C3** | Phase 2 后评估 |
 
 ### winmdm Accept P1
 
