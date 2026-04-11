@@ -68,7 +68,7 @@ func isPermanentDialError(err error) bool {
 	// implement a typed error. These are pre-handshake configuration errors
 	// (sourced from amqp091-go v1.10.0: uri.go, connection.go, tls.go).
 	msg := err.Error()
-	for _, keyword := range permanentDialKeywords {
+	for _, keyword := range permanentDialSubstrings {
 		if strings.Contains(msg, keyword) {
 			return true
 		}
@@ -78,10 +78,10 @@ func isPermanentDialError(err error) bool {
 	return false
 }
 
-// permanentDialKeywords are substrings in amqp091-go plain-error messages
+// permanentDialSubstrings are substrings in amqp091-go plain-error messages
 // that indicate permanent dial failures. String matching is the last resort —
 // structural checks (amqp.Error, net.Error, url.Error) are tried first.
-var permanentDialKeywords = []string{
+var permanentDialSubstrings = []string{
 	"AMQP URI",       // amqp.ParseURI → malformed URI
 	"auth mechanism", // connection.go → unsupported SASL mechanism
 	"x509:",          // crypto/tls → certificate validation failure
@@ -187,7 +187,7 @@ func DefaultDial(url string) (AMQPConnection, error) {
 // Connection has three states:
 //   - connected:    ready for use (connected channel is closed)
 //   - reconnecting: lost connection, attempting backoff reconnect
-//   - terminal:     permanent error, will not reconnect (failed channel is closed)
+//   - terminal:     permanent error, will not reconnect (terminalCh is closed)
 type Connection struct {
 	config Config
 	dial   DialFunc
@@ -203,9 +203,9 @@ type Connection struct {
 	// connected is closed when a connection is established, re-created on disconnect.
 	connected chan struct{}
 
-	// failed is closed when a permanent dial error is encountered.
+	// terminalCh is closed when a permanent dial error is encountered.
 	// permanentErr holds the error for callers to inspect.
-	failed       chan struct{}
+	terminalCh   chan struct{}
 	permanentErr error
 }
 
@@ -220,7 +220,7 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		failed:      make(chan struct{}),
+		terminalCh:  make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -314,7 +314,7 @@ func (c *Connection) reconnectLoop() {
 			// Terminal state: permanent dial error. Signal all WaitConnected callers.
 			c.mu.Lock()
 			c.permanentErr = permErr
-			close(c.failed)
+			close(c.terminalCh)
 			c.mu.Unlock()
 			return
 		} else {
@@ -390,8 +390,8 @@ func (c *Connection) backoffDelay(attempt int) time.Duration {
 
 	// Compute max safe exponent: 63 - bits needed to represent base.
 	// This adapts to any ReconnectBaseDelay (1ns → exp 62, 1s → exp 33).
-	safeExp := 63 - bits.Len64(uint64(base))
-	if attempt > safeExp {
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	if attempt > maxSafeShift {
 		return addDownJitter(maxBackoff)
 	}
 
@@ -541,18 +541,23 @@ func (c *Connection) Close() error {
 }
 
 // WaitConnected blocks until the connection is established, a permanent error
-// occurs, or ctx is cancelled. Returns the permanent error if the connection
-// entered terminal state.
+// occurs, or ctx is cancelled.
+//
+// Returns nil on successful connection, or an error:
+//   - ErrAdapterAMQPConnectPermanent: terminal state (bad credentials, TLS
+//     failure, etc). Do NOT retry — close the dependent component.
+//   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel fired.
+//     May retry with a fresh context if the cause was transient.
 func (c *Connection) WaitConnected(ctx context.Context) error {
 	c.mu.RLock()
 	connected := c.connected
-	failed := c.failed
+	terminalCh := c.terminalCh
 	c.mu.RUnlock()
 
 	select {
 	case <-connected:
 		return nil
-	case <-failed:
+	case <-terminalCh:
 		c.mu.RLock()
 		err := c.permanentErr
 		c.mu.RUnlock()

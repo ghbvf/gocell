@@ -650,7 +650,9 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 
 	// After permanent error, WaitConnected should return the permanent error
 	// immediately (not block until ctx timeout).
-	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the terminal state
+	require.Eventually(t, func() bool {
+		return conn.Health() != nil
+	}, 2*time.Second, time.Millisecond, "terminal state should be set")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -832,7 +834,7 @@ func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	ok, err := conn.reconnectWithBackoff()
@@ -865,7 +867,7 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	ok, err := conn.reconnectWithBackoff()
@@ -890,7 +892,7 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		},
 		closeCh:   closeCh,
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	type result struct {
@@ -1060,10 +1062,10 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
 		connected:    make(chan struct{}),
-		failed:       make(chan struct{}),
+		terminalCh:   make(chan struct{}),
 		permanentErr: errcode.New(ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
-	close(conn.failed)
+	close(conn.terminalCh)
 
 	pub := NewPublisher(conn)
 	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
