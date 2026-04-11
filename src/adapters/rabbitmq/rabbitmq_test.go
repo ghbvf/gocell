@@ -455,6 +455,21 @@ func TestConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout)
 }
 
+func TestConfig_Defaults_NegativeValues(t *testing.T) {
+	cfg := Config{
+		ReconnectMaxBackoff: -1 * time.Second,
+		ReconnectBaseDelay:  -500 * time.Millisecond,
+		ChannelPoolSize:     -5,
+		ConfirmTimeout:      -3 * time.Second,
+	}
+	cfg.setDefaults()
+
+	assert.Equal(t, 30*time.Second, cfg.ReconnectMaxBackoff, "negative MaxBackoff should reset to default")
+	assert.Equal(t, 1*time.Second, cfg.ReconnectBaseDelay, "negative BaseDelay should reset to default")
+	assert.Equal(t, 10, cfg.ChannelPoolSize, "negative ChannelPoolSize should reset to default")
+	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout, "negative ConfirmTimeout should reset to default")
+}
+
 func TestConnection_BackoffDelay(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
@@ -470,13 +485,13 @@ func TestConnection_BackoffDelay(t *testing.T) {
 			minDelay: 1500 * time.Millisecond, maxDelay: 2500 * time.Millisecond},
 		{name: "attempt 2", attempt: 2,
 			minDelay: 3 * time.Second, maxDelay: 5 * time.Second},
-		// Capped at MaxBackoff (30s) — jitter may reduce but never exceed.
+		// Capped region: jitter on MaxBackoff → [0.75*30s, 30s] = [22.5s, 30s].
 		{name: "attempt 10 (capped)", attempt: 10,
-			minDelay: 1 * time.Millisecond, maxDelay: 30 * time.Second},
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
 		{name: "attempt 34 (overflow guard)", attempt: 34,
-			minDelay: 30 * time.Second, maxDelay: 30 * time.Second},
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
 		{name: "attempt 100 (far overflow)", attempt: 100,
-			minDelay: 30 * time.Second, maxDelay: 30 * time.Second},
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
 	}
 
 	for _, tt := range tests {
@@ -569,6 +584,37 @@ func TestIsPermanentDialError(t *testing.T) {
 			name: "wrapped AMQP permanent error",
 			err:  fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
 			want: true,
+		},
+		// Plain errors from amqp091-go pre-handshake failures (U2).
+		{
+			name: "URI parse failure — permanent",
+			err:  errors.New("AMQP URI must start with amqp:// or amqps://"),
+			want: true,
+		},
+		{
+			name: "unsupported auth mechanism — permanent",
+			err:  errors.New("unsupported auth mechanism EXTERNAL: no credentials provided"),
+			want: true,
+		},
+		{
+			name: "x509 certificate error — permanent",
+			err:  errors.New("x509: certificate signed by unknown authority"),
+			want: true,
+		},
+		{
+			name: "TLS handshake error — permanent",
+			err:  errors.New("tls: first record does not look like a TLS handshake"),
+			want: true,
+		},
+		{
+			name: "wrapped URI parse failure — permanent",
+			err:  fmt.Errorf("dial: %w", errors.New("AMQP URI scheme must be amqp:// or amqps://")),
+			want: true,
+		},
+		{
+			name: "generic unknown error — recoverable",
+			err:  errors.New("some transient hiccup"),
+			want: false,
 		},
 	}
 
@@ -691,6 +737,40 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 	mu.Lock()
 	assert.Equal(t, 3, dialCount, "should have tried 3 times (2 failures + 1 success)")
 	mu.Unlock()
+}
+
+func TestConnection_ReconnectWithBackoff_CloseCh_ReturnsFalse(t *testing.T) {
+	// When closeCh is closed during backoff wait, reconnectWithBackoff should
+	// return false promptly without waiting for the full delay.
+	closeCh := make(chan struct{})
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  10 * time.Second, // long delay to ensure we'd block
+			ReconnectMaxBackoff: 30 * time.Second,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+		},
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- conn.reconnectWithBackoff()
+	}()
+
+	// Close after a short delay — should interrupt the backoff wait.
+	time.Sleep(50 * time.Millisecond)
+	close(closeCh)
+
+	select {
+	case result := <-done:
+		assert.False(t, result, "reconnectWithBackoff must return false when closeCh fires")
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
+	}
 }
 
 // =============================================================================

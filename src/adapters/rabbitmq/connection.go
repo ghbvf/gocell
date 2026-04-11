@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/bits"
 	"math/rand/v2"
 	"net"
+	"strings"
 	"net/url"
 	"sync"
 	"time"
@@ -27,12 +29,14 @@ const (
 
 // isPermanentDialError returns true if the error from Dial indicates a
 // permanent condition that will not resolve by retrying (e.g., authentication
-// failure, vhost not found). Network-level errors (timeout, connection refused,
-// DNS resolution) are considered recoverable and return false.
+// failure, vhost not found, bad URI, TLS misconfiguration).
 //
 // ref: rabbitmq/amqp091-go README — reconnection is delegated to the caller;
 // the library surfaces amqp.Error with Recover=false for auth/vhost/protocol
-// issues during the AMQP handshake.
+// issues during the AMQP handshake. However, amqp091-go also returns plain
+// errors (not *amqp.Error) for pre-handshake failures: URI parse errors,
+// unsupported auth_mechanism, TLS config/handshake failures. These are
+// permanent configuration errors that should not be retried.
 func isPermanentDialError(err error) bool {
 	if err == nil {
 		return false
@@ -54,8 +58,29 @@ func isPermanentDialError(err error) bool {
 		return false
 	}
 
+	// Pre-handshake permanent errors from amqp091-go that are plain errors
+	// (not *amqp.Error, not net.Error): URI parse failure, unsupported
+	// auth_mechanism, TLS config generation, TLS handshake failure.
+	// These are configuration errors that will never self-resolve.
+	msg := err.Error()
+	for _, keyword := range permanentDialKeywords {
+		if strings.Contains(msg, keyword) {
+			return true
+		}
+	}
+
 	// Unknown errors default to recoverable to avoid false-positive abort.
 	return false
+}
+
+// permanentDialKeywords are substrings found in amqp091-go plain-error messages
+// that indicate permanent (non-retryable) dial failures. Sourced from
+// amqp091-go v1.10.0: uri.go, connection.go, tls.go.
+var permanentDialKeywords = []string{
+	"AMQP URI",          // amqp.ParseURI → malformed URI
+	"auth mechanism",    // connection.go → unsupported SASL mechanism
+	"x509:",             // crypto/tls → certificate validation failure
+	"tls: ",             // crypto/tls → handshake / protocol error
 }
 
 // Config holds configuration for the RabbitMQ connection.
@@ -90,7 +115,7 @@ func (c *Config) setDefaults() {
 	if c.ChannelPoolSize <= 0 {
 		c.ChannelPoolSize = 10
 	}
-	if c.ConfirmTimeout == 0 {
+	if c.ConfirmTimeout <= 0 {
 		c.ConfirmTimeout = 5 * time.Second
 	}
 }
@@ -258,9 +283,14 @@ func (c *Connection) reconnectLoop() {
 			c.mu.Lock()
 			close(c.connected)
 			c.mu.Unlock()
+		} else {
+			// Permanent failure — stop reconnect loop.
+			// TODO(Phase2-EventRouter): connected stays open, so WaitConnected callers
+			// block until ctx is cancelled. This means permanent dial failures (credential
+			// revocation, vhost removal) cause silent consumer stall. Phase 2 EventRouter
+			// will propagate permanent errors to subscribers via Router.Run return value.
+			return
 		}
-		// On permanent failure, connected stays open (never signalled).
-		// Callers blocked on WaitConnected will unblock when ctx is cancelled.
 	}
 }
 
@@ -315,25 +345,52 @@ func (c *Connection) reconnectWithBackoff() bool {
 }
 
 // backoffDelay calculates the reconnect delay for the given attempt using
-// exponential backoff (base * 2^attempt) with +-25% jitter, hard-capped at
-// ReconnectMaxBackoff. The jitter is applied before the cap so that
-// ReconnectMaxBackoff remains a true upper bound.
+// exponential backoff (base * 2^attempt) with +-25% jitter.
+//
+// When the exponential value reaches or exceeds ReconnectMaxBackoff, jitter
+// is applied to ReconnectMaxBackoff itself (not the uncapped value), so the
+// capped result is always in [0.75*max, max]. This prevents thundering-herd
+// at the cap while keeping ReconnectMaxBackoff as a true upper bound.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	// Cap the exponent to prevent int64 overflow in the bit-shift.
-	// 2^30 * 1s = ~34 years — well beyond any reasonable max backoff.
-	const maxExp = 30
-	if attempt > maxExp {
-		return c.config.ReconnectMaxBackoff
+	maxBackoff := c.config.ReconnectMaxBackoff
+	base := c.config.ReconnectBaseDelay
+
+	// Compute max safe exponent: 63 - bits needed to represent base.
+	// This adapts to any ReconnectBaseDelay (1ns → exp 62, 1s → exp 33).
+	safeExp := 63 - bits.Len64(uint64(base))
+	if attempt > safeExp {
+		return addDownJitter(maxBackoff)
 	}
-	base := c.config.ReconnectBaseDelay * time.Duration(1<<uint(attempt))
-	if base <= 0 { // overflow guard
-		return c.config.ReconnectMaxBackoff
+
+	delay := base * time.Duration(1<<uint(attempt))
+	if delay <= 0 { // overflow guard
+		return addDownJitter(maxBackoff)
 	}
-	withJitter := addJitter(base)
-	if withJitter > c.config.ReconnectMaxBackoff {
-		return c.config.ReconnectMaxBackoff
+
+	if delay >= maxBackoff {
+		// Capped region: apply downward-only jitter [0.75*max, max] to prevent
+		// thundering-herd while keeping maxBackoff as a true upper bound.
+		return addDownJitter(maxBackoff)
+	}
+
+	// Uncapped region: jitter on actual delay. Cap any overshoot from +25%.
+	withJitter := addJitter(delay)
+	if withJitter > maxBackoff {
+		return maxBackoff
 	}
 	return withJitter
+}
+
+// addDownJitter applies 0-25% downward jitter to a duration.
+// The result is in the range [0.75*d, d]. Used when d is already at the
+// maximum allowed value so the result never exceeds the cap.
+func addDownJitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	// Remove up to 25% of d.
+	reduction := rand.Int64N(int64(d)/4 + 1)
+	return d - time.Duration(reduction)
 }
 
 // addJitter applies +-25% random jitter to a duration.
