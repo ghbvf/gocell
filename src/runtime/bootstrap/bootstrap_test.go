@@ -2,7 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -234,4 +238,108 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	err := b.Run(ctx)
 	// Either outcome is acceptable in the sandbox.
 	_ = err
+}
+
+func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-hc-healthy"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithHealthChecker("rabbitmq", func() error { return nil }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for the HTTP server to be ready.
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// GET /readyz and verify the checker appears as healthy.
+	resp, err := http.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	checks, ok := body["checks"].(map[string]any)
+	require.True(t, ok, "response must contain checks map")
+	assert.Equal(t, "healthy", checks["rabbitmq"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithHealthChecker("rabbitmq", func() error {
+			return fmt.Errorf("connection closed")
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for the HTTP server to be ready.
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// GET /readyz and verify the checker appears as unhealthy.
+	resp, err := http.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	checks, ok := body["checks"].(map[string]any)
+	require.True(t, ok, "response must contain checks map")
+	assert.Equal(t, "unhealthy", checks["rabbitmq"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
 }

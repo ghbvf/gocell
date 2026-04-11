@@ -114,6 +114,21 @@ func WithListener(ln net.Listener) Option {
 	}
 }
 
+// WithHealthChecker registers a named readiness checker that will be
+// included in /readyz responses. Use this to wire adapter health probes
+// (e.g., conn.Health for RabbitMQ) without bootstrap depending on adapter types.
+func WithHealthChecker(name string, fn health.Checker) Option {
+	return func(b *Bootstrap) {
+		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+	}
+}
+
+// namedChecker pairs a readiness probe name with its check function.
+type namedChecker struct {
+	name string
+	fn   health.Checker
+}
+
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
 	configPath      string
@@ -126,6 +141,7 @@ type Bootstrap struct {
 	routerOpts      []router.Option
 	shutdownTimeout time.Duration
 	listener        net.Listener
+	healthCheckers  []namedChecker
 }
 
 // New creates a Bootstrap with the given options.
@@ -252,6 +268,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 
 	// Step 5: Build router with health handler.
 	hh := health.New(asm)
+	for _, hc := range b.healthCheckers {
+		hh.RegisterChecker(hc.name, hc.fn)
+	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
 	rtr := router.New(routerOpts...)
 
