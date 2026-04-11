@@ -854,3 +854,70 @@ endpoints:
 		})
 	}
 }
+
+func TestParseFS_RejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		fs      fstest.MapFS
+		wantMsg string
+	}{
+		{
+			name: "unknown field in cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(`id: x
+type: core
+consistencyLevel: L1
+owner:
+  team: t
+  role: r
+schema:
+  primary: tbl
+verify:
+  smoke: []
+unknownField: oops
+`)},
+			},
+			wantMsg: "unknownField",
+		},
+		{
+			name: "unknown field in slice.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(`id: x
+type: core
+consistencyLevel: L1
+owner: {team: t, role: r}
+schema: {primary: tbl}
+verify: {smoke: []}
+`)},
+				"cells/x/slices/s/slice.yaml": &fstest.MapFile{Data: []byte(`id: s
+belongsToCell: x
+contractUsages: []
+verify: {unit: [], contract: []}
+typo_field: bad
+`)},
+			},
+			wantMsg: "typo_field",
+		},
+		{
+			name: "unknown field in contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.test.v1
+kind: http
+lifecycle: active
+endpoints: {server: x}
+bogus: 42
+`)},
+			},
+			wantMsg: "bogus",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+			assert.Contains(t, err.Error(), "not found")
+		})
+	}
+}

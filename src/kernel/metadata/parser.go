@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
@@ -240,15 +241,18 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 	return nil
 }
 
-// unmarshalFile reads and decodes a YAML file from fsys.
-// Parse errors are wrapped with the file path and ErrMetadataInvalid.
+// unmarshalFile reads and decodes a YAML file from fsys with strict field
+// checking. Unknown YAML keys that don't map to struct fields are rejected,
+// preventing silent typos in metadata files (e.g., "ownerId" instead of "ownerCell").
 func unmarshalFile(fsys fs.FS, path string, out any) error {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("read %s", path), err)
 	}
-	if err := yaml.Unmarshal(data, out); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}

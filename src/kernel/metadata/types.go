@@ -77,6 +77,7 @@ type ContractMeta struct {
 	Replayable        *bool          `yaml:"replayable,omitempty"`
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
+	Description       string         `yaml:"description,omitempty"`
 }
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract
