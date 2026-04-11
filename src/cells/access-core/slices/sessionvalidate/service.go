@@ -77,6 +77,7 @@ func IssueTestToken(signingKey any, subject string, roles []string, ttl time.Dur
 	switch k := signingKey.(type) {
 	case *rsa.PrivateKey:
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		token.Header["kid"] = auth.Thumbprint(&k.PublicKey)
 		return token.SignedString(k)
 	case []byte:
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

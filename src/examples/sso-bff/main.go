@@ -44,12 +44,17 @@ func main() {
 
 	// RSA key pair for JWT signing/verification (development only).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	jwtIssuer, err := auth.NewJWTIssuer(privKey, "sso-bff-dev", 15*time.Minute)
+	keySet, err := auth.NewKeySet(privKey, pubKey)
+	if err != nil {
+		logger.Error("failed to create key set", slog.Any("error", err))
+		os.Exit(1)
+	}
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-dev", 15*time.Minute)
 	if err != nil {
 		logger.Error("failed to create JWT issuer", slog.Any("error", err))
 		os.Exit(1)
 	}
-	jwtVerifier, err := auth.NewJWTVerifier(pubKey)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet)
 	if err != nil {
 		logger.Error("failed to create JWT verifier", slog.Any("error", err))
 		os.Exit(1)

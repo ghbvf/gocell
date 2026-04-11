@@ -17,13 +17,18 @@ import (
 )
 
 var (
-	testPrivKey, _ = auth.MustGenerateTestKeyPair()
-	testIssuer     *auth.JWTIssuer
+	testPrivKey, testPubKey_ = auth.MustGenerateTestKeyPair()
+	testKeySet_              *auth.KeySet
+	testIssuer               *auth.JWTIssuer
 )
 
 func init() {
 	var err error
-	testIssuer, err = auth.NewJWTIssuer(testPrivKey, "gocell-access-core", 15*time.Minute)
+	testKeySet_, err = auth.NewKeySet(testPrivKey, testPubKey_)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	testIssuer, err = auth.NewJWTIssuer(testKeySet_, "gocell-access-core", 15*time.Minute)
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -21,19 +23,80 @@ const ServiceTokenMaxAge = 5 * time.Minute
 // nowFunc is overridable for testing.
 var nowFunc = time.Now
 
+// HMACKeyRing holds an ordered pair of HMAC secrets for service token operations.
+// Position 0 (current) is used for signing; verification tries all secrets in order.
+//
+// ref: zeromicro/go-zero rest/token/tokenparser.go — dual-key [current, previous] model
+// ref: gorilla/securecookie — DecodeMulti try-all-keys pattern
+type HMACKeyRing struct {
+	current  []byte
+	previous []byte
+}
+
+// NewHMACKeyRing creates an HMACKeyRing. current must not be empty.
+// previous may be nil for single-secret mode.
+func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
+	if len(current) == 0 {
+		return nil, errcode.New(errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
+	}
+	return &HMACKeyRing{
+		current:  current,
+		previous: previous,
+	}, nil
+}
+
+// Current returns the active signing secret.
+func (r *HMACKeyRing) Current() []byte {
+	return r.current
+}
+
+// Secrets returns all secrets in try-order: current first, then previous (if set).
+func (r *HMACKeyRing) Secrets() [][]byte {
+	if len(r.previous) == 0 {
+		return [][]byte{r.current}
+	}
+	return [][]byte{r.current, r.previous}
+}
+
+const (
+	// EnvServiceSecret is the environment variable for the current HMAC secret.
+	EnvServiceSecret = "GOCELL_SERVICE_SECRET"
+	// EnvServiceSecretPrevious is the environment variable for the previous HMAC secret.
+	EnvServiceSecretPrevious = "GOCELL_SERVICE_SECRET_PREVIOUS"
+)
+
+// LoadHMACKeyRingFromEnv loads an HMACKeyRing from environment variables.
+// GOCELL_SERVICE_SECRET is required; GOCELL_SERVICE_SECRET_PREVIOUS is optional.
+func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
+	current := os.Getenv(EnvServiceSecret)
+	if current == "" {
+		return nil, errcode.New(errcode.ErrAuthKeyMissing,
+			fmt.Sprintf("environment variable %s is not set", EnvServiceSecret))
+	}
+
+	previous := os.Getenv(EnvServiceSecretPrevious)
+	var prevBytes []byte
+	if previous != "" {
+		prevBytes = []byte(previous)
+	}
+
+	return NewHMACKeyRing([]byte(current), prevBytes)
+}
+
 // ServiceTokenMiddleware validates requests using HMAC-SHA256 service tokens.
 // The token is expected in the Authorization header as:
 //
 //	ServiceToken {unix_timestamp}:{hex_hmac}
 //
-// The HMAC is computed over "{method} {path} {timestamp}" using the shared
-// secret. Tokens older than 5 minutes (exclusive boundary) are rejected.
-func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
-	if len(secret) == 0 {
-		// Fail-fast: refuse to create middleware with empty secret.
+// The HMAC is computed over "{method} {path} {timestamp}" using secrets from
+// the key ring. Verification tries each secret in order (current, then previous).
+// Tokens older than 5 minutes (exclusive boundary) are rejected.
+func ServiceTokenMiddleware(ring *HMACKeyRing) func(http.Handler) http.Handler {
+	if ring == nil {
+		// Fail-fast: refuse to create middleware with nil key ring.
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				slog.Error("service token middleware called with empty secret")
+				slog.Error("service token middleware called with nil key ring")
 				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			})
 		}
@@ -79,26 +142,27 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Compute expected HMAC over "METHOD PATH TIMESTAMP".
-			mac := hmac.New(sha256.New, secret)
-			_, _ = mac.Write([]byte(fmt.Sprintf("%s %s %s", r.Method, r.URL.Path, tsStr)))
-			expectedMAC := mac.Sum(nil)
-
-			if !hmac.Equal(providedMAC, expectedMAC) {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
-				return
+			// Try all secrets in the key ring (current first, then previous).
+			message := fmt.Sprintf("%s %s %s", r.Method, r.URL.Path, tsStr)
+			for _, secret := range ring.Secrets() {
+				mac := hmac.New(sha256.New, secret)
+				_, _ = mac.Write([]byte(message))
+				if hmac.Equal(providedMAC, mac.Sum(nil)) {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 
-			next.ServeHTTP(w, r)
+			httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
 		})
 	}
 }
 
 // GenerateServiceToken creates a service token for the given method, path,
-// and timestamp using the shared secret.
-func GenerateServiceToken(secret []byte, method, path string, ts time.Time) string {
+// and timestamp using the current secret from the key ring.
+func GenerateServiceToken(ring *HMACKeyRing, method, path string, ts time.Time) string {
 	tsStr := strconv.FormatInt(ts.Unix(), 10)
-	mac := hmac.New(sha256.New, secret)
+	mac := hmac.New(sha256.New, ring.Current())
 	_, _ = mac.Write([]byte(fmt.Sprintf("%s %s %s", method, path, tsStr)))
 	return tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
 }
