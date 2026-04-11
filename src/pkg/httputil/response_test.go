@@ -146,6 +146,20 @@ func TestWriteError(t *testing.T) {
 	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
 }
 
+func TestWriteError_5xx_MasksMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteError(context.Background(), rec, http.StatusInternalServerError, "ERR_INTERNAL", "db connection pool exhausted")
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "internal server error", errObj["message"],
+		"WriteError must mask 5xx messages to prevent information leakage")
+}
+
 func TestWriteJSON(t *testing.T) {
 	payload := map[string]string{"hello": "world"}
 	rec := httptest.NewRecorder()
@@ -362,6 +376,61 @@ func TestWriteError_WithoutRequestID(t *testing.T) {
 	_, hasRequestID := errObj["request_id"]
 	assert.False(t, hasRequestID,
 		"response should not include request_id when not in context")
+}
+
+func TestWriteDecodeError_Contract(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+		wantMsg    string
+	}{
+		{
+			name:       "errcode ErrValidationFailed → 400",
+			err:        errcode.New(errcode.ErrValidationFailed, "bad json"),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "ERR_VALIDATION_FAILED",
+			wantMsg:    "bad json",
+		},
+		{
+			name:       "errcode ErrBodyTooLarge → 413",
+			err:        errcode.New(errcode.ErrBodyTooLarge, "payload exceeded limit"),
+			wantStatus: http.StatusRequestEntityTooLarge,
+			wantCode:   "ERR_BODY_TOO_LARGE",
+			wantMsg:    "payload exceeded limit",
+		},
+		{
+			name:       "errcode ErrInternal → 500 (message masked)",
+			err:        errcode.New(errcode.ErrInternal, "db pool exhausted"),
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "ERR_INTERNAL",
+			wantMsg:    "internal server error",
+		},
+		{
+			name:       "non-errcode error → 400 fallback",
+			err:        errors.New("some decode error"),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "ERR_VALIDATION_FAILED",
+			wantMsg:    "invalid request body",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteDecodeError(context.Background(), rec, tt.err)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+			errObj := body["error"].(map[string]any)
+			assert.Equal(t, tt.wantCode, errObj["code"])
+			assert.Equal(t, tt.wantMsg, errObj["message"])
+		})
+	}
 }
 
 func TestWriteDecodeError_PassesCtx(t *testing.T) {

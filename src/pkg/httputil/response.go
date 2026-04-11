@@ -28,10 +28,21 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // If ctx carries a request_id (via ctxkeys), it is included in the response.
 // Callers that need additional response headers (e.g. Retry-After) must set
 // them before calling WriteError, as it calls w.WriteHeader internally.
+// For 5xx responses, message is forced to "internal server error" to prevent
+// accidental information leakage through this low-level function.
 func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
+	msg := message
+	if status >= 500 && message != "internal server error" {
+		slog.Error("write error (5xx)",
+			slog.String("code", code),
+			slog.String("message", message),
+		)
+		msg = "internal server error"
+	}
+
 	errBody := map[string]any{
 		"code":    code,
-		"message": message,
+		"message": msg,
 		"details": map[string]any{},
 	}
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
