@@ -455,17 +455,25 @@ func (c *Connection) drainChannelPool() {
 }
 
 // AcquireChannel gets a channel from the pool or creates a new one.
+// Returns the permanent error if the connection is in terminal state.
 func (c *Connection) AcquireChannel() (AMQPChannel, error) {
+	c.mu.RLock()
+	permErr := c.permanentErr
+	conn := c.conn
+	c.mu.RUnlock()
+
+	// Terminal state: return permanent error so callers (Publisher, Subscriber)
+	// get a consistent error code instead of generic "connection not available".
+	if permErr != nil {
+		return nil, permErr
+	}
+
 	// Try to get from pool first.
 	select {
 	case ch := <-c.channelPool:
 		return ch, nil
 	default:
 	}
-
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
 
 	if conn == nil || conn.IsClosed() {
 		return nil, errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection not available")

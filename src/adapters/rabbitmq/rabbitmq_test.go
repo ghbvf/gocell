@@ -336,6 +336,40 @@ func TestNewConnection_DialFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
 }
 
+func TestNewConnection_PermanentDialError(t *testing.T) {
+	// Initial connection with permanent error should return ErrAdapterAMQPConnectPermanent.
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+	}
+
+	_, err := NewConnection(Config{
+		URL: "amqp://bad:bad@localhost:5672/",
+	}, WithDialFunc(dialFunc))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"initial permanent dial error should return ErrAdapterAMQPConnectPermanent")
+}
+
+func TestNewConnection_RecoverableDialError(t *testing.T) {
+	// Initial connection with recoverable error should return generic ErrAdapterAMQPConnect.
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	}
+
+	_, err := NewConnection(Config{
+		URL: "amqp://test:test@localhost:5672/",
+	}, WithDialFunc(dialFunc))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnect, ecErr.Code,
+		"recoverable dial error should return generic ErrAdapterAMQPConnect")
+}
+
 func TestConnection_Health_Closed(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -696,6 +730,12 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 	healthErr := conn.Health()
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+
+	// AcquireChannel should also return permanent error (not generic connect error).
+	_, acqErr := conn.AcquireChannel()
+	require.Error(t, acqErr)
+	require.True(t, errors.As(acqErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
 }
 
