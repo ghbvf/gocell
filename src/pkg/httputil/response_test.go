@@ -200,7 +200,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec,tt.err)
+			WriteDomainError(context.Background(), rec, tt.err)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -279,7 +279,7 @@ func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec,tt.err)
+			WriteDomainError(context.Background(), rec, tt.err)
 
 			assert.True(t, rec.Code >= 500, "expected 5xx status, got %d", rec.Code)
 
@@ -289,6 +289,8 @@ func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
 			errObj := body["error"].(map[string]any)
 			assert.Equal(t, tt.wantMsg, errObj["message"],
 				"5xx response must not leak internal details")
+			assert.Equal(t, map[string]any{}, errObj["details"],
+				"5xx response must strip details to empty object")
 		})
 	}
 }
@@ -319,7 +321,7 @@ func TestWriteDomainError_4xx_ShowsMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec,tt.err)
+			WriteDomainError(context.Background(), rec, tt.err)
 
 			assert.True(t, rec.Code >= 400 && rec.Code < 500, "expected 4xx status, got %d", rec.Code)
 

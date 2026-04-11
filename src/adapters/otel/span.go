@@ -9,8 +9,11 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// Compile-time check: otelSpan implements tracing.Span.
-var _ tracing.Span = (*otelSpan)(nil)
+// Compile-time checks: otelSpan implements both tracing.Span and tracing.SpanRecorder.
+var (
+	_ tracing.Span         = (*otelSpan)(nil)
+	_ tracing.SpanRecorder = (*otelSpan)(nil)
+)
 
 // otelSpan wraps an OTel trace.Span to implement the tracing.Span interface.
 type otelSpan struct {

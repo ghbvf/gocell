@@ -90,6 +90,17 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 			if ecErr.Cause != nil {
 				logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
 			}
+			// Include request correlation context so this log can be matched
+			// to the request_id returned in the error response.
+			if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("request_id", reqID))
+			}
+			if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+			}
+			if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("span_id", spanID))
+			}
 			slog.Error("domain error (5xx)", logAttrs...)
 			msg = "internal server error"
 			details = map[string]any{}
@@ -115,7 +126,14 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 	}
 
 	// Non-errcode errors: 500 + log original error, do not expose internals.
-	slog.Error("unhandled error", slog.Any("error", err))
+	logAttrs := []any{slog.Any("error", err)}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		logAttrs = append(logAttrs, slog.String("request_id", reqID))
+	}
+	if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+		logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+	}
+	slog.Error("unhandled error", logAttrs...)
 	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
 }
 

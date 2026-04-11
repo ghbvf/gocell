@@ -100,7 +100,7 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 							slog.Any("error", err),
 							slog.String("subject", sub),
 						)
-						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "authorization check failed")
+						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 						return
 					}
 					if allowed {

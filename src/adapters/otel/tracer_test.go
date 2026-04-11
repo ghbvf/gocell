@@ -150,6 +150,7 @@ func TestTracerConfig_Validate(t *testing.T) {
 
 func TestSpan_ImplementsInterface(t *testing.T) {
 	var _ tracing.Span = (*otelSpan)(nil)
+	var _ tracing.SpanRecorder = (*otelSpan)(nil)
 }
 
 func TestSpan_RecordError(t *testing.T) {
@@ -157,7 +158,7 @@ func TestSpan_RecordError(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "error-op")
-	span.RecordError(errors.New("connection refused"))
+	tracing.SpanRecordError(span, errors.New("connection refused"))
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -173,7 +174,7 @@ func TestSpan_SetStatus_Error(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "err-status")
-	span.SetStatus(true, "db connection failed")
+	tracing.SpanSetStatus(span, true, "db connection failed")
 	span.End()
 
 	spans := exporter.GetSpans()
@@ -187,10 +188,24 @@ func TestSpan_SetStatus_Ok(t *testing.T) {
 	ctx := context.Background()
 
 	_, span := tracer.Start(ctx, "ok-status")
-	span.SetStatus(false, "")
+	tracing.SpanSetStatus(span, false, "")
 	span.End()
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, otelcodes.Ok, spans[0].Status.Code)
+}
+
+func TestSpanHelper_NonRecorder(t *testing.T) {
+	// simpleSpan does not implement SpanRecorder — helpers must not panic.
+	simple := tracing.NewTracer("test")
+	_, span := simple.Start(context.Background(), "op")
+	defer span.End()
+
+	assert.NotPanics(t, func() {
+		tracing.SpanRecordError(span, errors.New("some error"))
+	})
+	assert.NotPanics(t, func() {
+		tracing.SpanSetStatus(span, true, "fail")
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,7 +33,8 @@ func ServiceTokenMiddleware(secret []byte) func(http.Handler) http.Handler {
 		// Fail-fast: refuse to create middleware with empty secret.
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "service token not configured")
+				slog.Error("service token middleware called with empty secret")
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			})
 		}
 	}

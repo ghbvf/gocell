@@ -23,15 +23,37 @@ type Span interface {
 	End()
 	// SetAttribute records a key-value pair on the span.
 	SetAttribute(key string, value any)
+	// TraceID returns the trace identifier.
+	TraceID() string
+	// SpanID returns the span identifier.
+	SpanID() string
+}
+
+// SpanRecorder is an optional interface that Span implementations may support
+// for recording errors and setting status. Use the SpanRecordError and
+// SpanSetStatus helper functions which handle type-assertion gracefully.
+type SpanRecorder interface {
 	// RecordError adds an error event to the span for diagnostics.
 	RecordError(err error)
 	// SetStatus sets the span's status. When isError is true the span is
 	// marked as failed with the given description; otherwise it is marked OK.
 	SetStatus(isError bool, description string)
-	// TraceID returns the trace identifier.
-	TraceID() string
-	// SpanID returns the span identifier.
-	SpanID() string
+}
+
+// SpanRecordError records an error on the span if it implements SpanRecorder.
+// Spans that do not support error recording are silently skipped.
+func SpanRecordError(s Span, err error) {
+	if r, ok := s.(SpanRecorder); ok {
+		r.RecordError(err)
+	}
+}
+
+// SpanSetStatus sets the status on the span if it implements SpanRecorder.
+// Spans that do not support status setting are silently skipped.
+func SpanSetStatus(s Span, isError bool, description string) {
+	if r, ok := s.(SpanRecorder); ok {
+		r.SetStatus(isError, description)
+	}
 }
 
 // Tracer creates spans.
@@ -80,9 +102,7 @@ type simpleSpan struct {
 	attrs   map[string]any
 }
 
-func (s *simpleSpan) End()                                  {}
-func (s *simpleSpan) RecordError(_ error)                    {}
-func (s *simpleSpan) SetStatus(_ bool, _ string)             {}
+func (s *simpleSpan) End() {}
 
 func (s *simpleSpan) SetAttribute(key string, value any) {
 	if s.attrs == nil {
