@@ -368,7 +368,7 @@ func TestCSRF_CookieSessionIntegration(t *testing.T) {
 
 	// Build chain: CSRF → CookieSession → capture handler.
 	capture := &authCapture{}
-	chain := CSRF(csrfCfg)(CookieSession(sessCfg)(capture.handler()))
+	chain := CSRF(csrfCfg)(MustCookieSession(sessCfg)(capture.handler()))
 
 	// Encode a JWT into a session cookie.
 	jwt := "test-jwt-token"

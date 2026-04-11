@@ -107,6 +107,39 @@ curl -s http://localhost:8081/healthz | jq
 curl -s http://localhost:8081/readyz  | jq
 ```
 
+## BFF Cookie Session Mode (Planned)
+
+The middleware package provides CSRF protection and cookie-based session
+management for browser-facing deployments. When enabled, JWT tokens are
+stored in `HttpOnly; Secure; SameSite=Strict` cookies instead of being
+returned in response bodies.
+
+### Middleware Chain
+
+```
+CookieSession → CSRF → AuthMiddleware → handler
+```
+
+- **CookieSession**: reads signed cookie → injects `Authorization: Bearer` header
+- **CSRF**: validates `Sec-Fetch-Site` / `Origin` / `Referer` against `TrustedOrigins`
+- **AuthMiddleware**: verifies JWT → injects `Claims` into context
+
+### CSRF Rejection
+
+When a request is rejected by CSRF middleware, the response is:
+
+```json
+{"error": {"code": "ERR_CSRF_ORIGIN_DENIED", "message": "cross-origin request denied", "details": {}}}
+```
+
+Status: 403 Forbidden. The frontend should handle this by redirecting to the
+login page or displaying an appropriate error.
+
+### Integration Status
+
+Handler-level BFF integration (login/refresh/logout setting cookies) is
+tracked in the backlog. The current PR provides the middleware primitives.
+
 ## Docker Mode (Future)
 
 Infrastructure services are provided for future adapter-based mode:

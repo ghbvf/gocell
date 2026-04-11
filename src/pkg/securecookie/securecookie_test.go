@@ -1,4 +1,4 @@
-package middleware
+package securecookie
 
 import (
 	"crypto/rand"
@@ -20,7 +20,7 @@ func generateKey(t *testing.T, n int) []byte {
 
 func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
 	value := []byte("hello world")
@@ -34,8 +34,8 @@ func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	blockKey := generateKey(t, 32) // AES-256
-	sc, err := NewSecureCookie(hashKey, blockKey)
+	blockKey := generateKey(t, 32)
+	sc, err := New(hashKey, blockKey)
 	require.NoError(t, err)
 
 	value := []byte("secret data")
@@ -49,13 +49,12 @@ func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_TamperedValue(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("test", []byte("original"))
 	require.NoError(t, err)
 
-	// Flip a character in the middle of the encoded string.
 	mid := len(encoded) / 2
 	tampered := encoded[:mid] + "X" + encoded[mid+1:]
 
@@ -65,38 +64,36 @@ func TestSecureCookie_TamperedValue(t *testing.T) {
 
 func TestSecureCookie_Expired(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
-	// Set maxAge to 1 second.
 	sc = sc.WithMaxAge(1)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	// Wait for expiry.
 	time.Sleep(1100 * time.Millisecond)
 
 	_, err = sc.Decode("test", encoded)
-	assert.ErrorIs(t, err, errExpired)
+	assert.ErrorIs(t, err, ErrExpired)
 }
 
 func TestSecureCookie_HashKeyTooShort(t *testing.T) {
-	_, err := NewSecureCookie([]byte("short"), nil)
-	assert.ErrorIs(t, err, errHashKeyTooShort)
+	_, err := New([]byte("short"), nil)
+	assert.ErrorIs(t, err, ErrHashKeyTooShort)
 }
 
 func TestSecureCookie_InvalidBlockKeyLength(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	badBlockKey := generateKey(t, 15) // not 16/24/32
-	_, err := NewSecureCookie(hashKey, badBlockKey)
+	badBlockKey := generateKey(t, 15)
+	_, err := New(hashKey, badBlockKey)
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "blockKey"), "error should mention blockKey")
 }
 
 func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("test", []byte{})
@@ -109,27 +106,26 @@ func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_WrongName(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("cookie-a", []byte("data"))
 	require.NoError(t, err)
 
 	_, err = sc.Decode("cookie-b", encoded)
-	assert.ErrorIs(t, err, errHMACInvalid, "decoding with wrong name should fail HMAC")
+	assert.ErrorIs(t, err, ErrHMACInvalid)
 }
 
 func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
-	sc = sc.WithMaxAge(0) // disable expiry check
+	sc = sc.WithMaxAge(0)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	// Even after a short wait, should still decode.
 	time.Sleep(50 * time.Millisecond)
 	decoded, err := sc.Decode("test", encoded)
 	require.NoError(t, err)
@@ -139,8 +135,8 @@ func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 func TestSecureCookie_AESKeySizes(t *testing.T) {
 	hashKey := generateKey(t, 32)
 	tests := []struct {
-		name    string
-		keyLen  int
+		name   string
+		keyLen int
 	}{
 		{"AES-128", 16},
 		{"AES-192", 24},
@@ -149,7 +145,7 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blockKey := generateKey(t, tt.keyLen)
-			sc, err := NewSecureCookie(hashKey, blockKey)
+			sc, err := New(hashKey, blockKey)
 			require.NoError(t, err)
 
 			value := []byte("test-" + tt.name)
@@ -165,7 +161,7 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 
 func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := NewSecureCookie(hashKey, nil)
+	sc, err := New(hashKey, nil)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -184,4 +180,22 @@ func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 			assert.Error(t, err, "malicious input should fail decode")
 		})
 	}
+}
+
+func TestSecureCookie_WithMaxAge_DeepCopyKeys(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	sc, err := New(hashKey, nil)
+	require.NoError(t, err)
+
+	sc2 := sc.WithMaxAge(60)
+
+	// Mutate original hashKey — should not affect sc2.
+	hashKey[0] ^= 0xFF
+
+	encoded, err := sc2.Encode("test", []byte("data"))
+	require.NoError(t, err)
+
+	decoded, err := sc2.Decode("test", encoded)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("data"), decoded)
 }

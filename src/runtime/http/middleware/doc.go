@@ -14,13 +14,29 @@
 //   - CSRF: validates request origin via Sec-Fetch-Site, Origin, and Referer headers
 //   - CookieSession: BFF cookie session with signed JWT encapsulation
 //
+// # BFF Middleware Ordering
+//
+// For BFF (Browser-Facing) deployments with cookie-based sessions, the
+// middleware chain order is critical:
+//
+//	CookieSession → CSRF → AuthMiddleware → handler
+//
+//   - CookieSession runs first: reads the session cookie and injects an
+//     Authorization: Bearer header so that downstream middleware sees a
+//     standard JWT.
+//   - CSRF runs second: validates Origin/Referer/Sec-Fetch-Site. This must
+//     run before AuthMiddleware because CSRF rejection is a 403 (not 401).
+//   - AuthMiddleware runs third: verifies the JWT (from cookie or header)
+//     and injects Claims into the request context.
+//
 // Example:
 //
-//	handler := middleware.RequestID(
-//	    middleware.Recovery(
-//	        middleware.AccessLog(
-//	            myHandler,
-//	        ),
-//	    ),
-//	)
+//	sessMW := middleware.MustCookieSession(sessCfg)
+//	csrfMW := middleware.CSRF(csrfCfg)
+//	authMW := auth.AuthMiddleware(verifier, publicEndpoints)
+//
+//	rtr.Route("/api/v1", func(r cell.RouteMux) {
+//	    protected := r.With(sessMW, csrfMW, authMW)
+//	    protected.Handle("/resource", resourceHandler)
+//	})
 package middleware

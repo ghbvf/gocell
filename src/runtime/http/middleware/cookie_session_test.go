@@ -1,14 +1,24 @@
 package middleware
 
 import (
+	"crypto/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/securecookie"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func generateKey(t *testing.T, n int) []byte {
+	t.Helper()
+	key := make([]byte, n)
+	_, err := rand.Read(key)
+	require.NoError(t, err)
+	return key
+}
 
 func newTestSessionConfig(t *testing.T) CookieSessionConfig {
 	t.Helper()
@@ -23,10 +33,9 @@ func newTestSessionConfigEncrypted(t *testing.T) CookieSessionConfig {
 	return cfg
 }
 
-// encodeCookieValue encodes a JWT string into a signed cookie value.
 func encodeCookieValue(t *testing.T, cfg CookieSessionConfig, jwt string) string {
 	t.Helper()
-	sc, err := NewSecureCookie(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
 	require.NoError(t, err)
 	name := cfg.CookieName
 	if name == "" {
@@ -40,7 +49,6 @@ func encodeCookieValue(t *testing.T, cfg CookieSessionConfig, jwt string) string
 	return encoded
 }
 
-// authCapture records the Authorization header seen by downstream handler.
 type authCapture struct {
 	authHeader string
 	called     bool
@@ -60,7 +68,7 @@ func TestCookieSession_ValidCookie_InjectsAuthorization(t *testing.T) {
 	cookieVal := encodeCookieValue(t, cfg, jwt)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: cookieVal})
@@ -73,19 +81,17 @@ func TestCookieSession_ValidCookie_InjectsAuthorization(t *testing.T) {
 
 func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
 	cfg := newTestSessionConfig(t)
-	cfg.MaxAge = 1 // 1 second — cookie expires after 1s
+	cfg.MaxAge = 1
 
-	// Encode with the SAME maxAge so the timestamp is embedded.
-	sc, err := NewSecureCookie(cfg.Secret, nil)
+	sc, err := securecookie.New(cfg.Secret, nil)
 	require.NoError(t, err)
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	// Wait for expiry.
 	time.Sleep(1100 * time.Millisecond)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: encoded})
@@ -103,7 +109,7 @@ func TestCookieSession_TamperedCookie_NoInjection(t *testing.T) {
 	tampered := cookieVal[:len(cookieVal)/2] + "XXXX" + cookieVal[len(cookieVal)/2+4:]
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: tampered})
@@ -118,7 +124,7 @@ func TestCookieSession_NoCookie_AuthorizationPresent_PassThrough(t *testing.T) {
 	cfg := newTestSessionConfig(t)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.Header.Set("Authorization", "Bearer existing-jwt")
@@ -126,21 +132,21 @@ func TestCookieSession_NoCookie_AuthorizationPresent_PassThrough(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.True(t, capture.called)
-	assert.Equal(t, "Bearer existing-jwt", capture.authHeader, "existing auth should pass through")
+	assert.Equal(t, "Bearer existing-jwt", capture.authHeader)
 }
 
 func TestCookieSession_NoCookie_NoAuthorization_PassThrough(t *testing.T) {
 	cfg := newTestSessionConfig(t)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	assert.True(t, capture.called)
-	assert.Empty(t, capture.authHeader, "no cookie, no auth — nothing injected")
+	assert.Empty(t, capture.authHeader)
 }
 
 func TestCookieSession_BothCookieAndAuthorization_AuthorizationWins(t *testing.T) {
@@ -148,7 +154,7 @@ func TestCookieSession_BothCookieAndAuthorization_AuthorizationWins(t *testing.T
 	cookieVal := encodeCookieValue(t, cfg, "cookie-jwt")
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.Header.Set("Authorization", "Bearer header-jwt")
@@ -157,7 +163,7 @@ func TestCookieSession_BothCookieAndAuthorization_AuthorizationWins(t *testing.T
 	handler.ServeHTTP(rec, req)
 
 	assert.True(t, capture.called)
-	assert.Equal(t, "Bearer header-jwt", capture.authHeader, "Authorization header should take priority")
+	assert.Equal(t, "Bearer header-jwt", capture.authHeader)
 }
 
 func TestSetSessionCookie_Attributes(t *testing.T) {
@@ -177,18 +183,47 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 	assert.Equal(t, "/", c.Path)
 	assert.Equal(t, "example.com", c.Domain)
 	assert.Equal(t, 900, c.MaxAge)
-	assert.True(t, c.Secure)
+	assert.True(t, c.Secure, "default Insecure=false → Secure=true")
 	assert.True(t, c.HttpOnly)
 	assert.Equal(t, http.SameSiteStrictMode, c.SameSite)
 }
 
-func TestSetSessionCookie_ReturnsError(t *testing.T) {
+func TestSetSessionCookie_InsecureMode(t *testing.T) {
+	cfg := newTestSessionConfig(t)
+	cfg.Insecure = true
+
+	rec := httptest.NewRecorder()
+	err := SetSessionCookie(rec, cfg, "jwt")
+	require.NoError(t, err)
+
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.False(t, cookies[0].Secure, "Insecure=true → Secure=false")
+}
+
+func TestSetSessionCookie_ZeroValueConfig_IsSecure(t *testing.T) {
+	// Struct literal with only Secret set should produce Secure cookie.
 	cfg := CookieSessionConfig{
-		Secret: []byte("too-short"), // < 32 bytes
+		Secret: generateKey(t, 32),
 	}
 	rec := httptest.NewRecorder()
 	err := SetSessionCookie(rec, cfg, "jwt")
-	assert.Error(t, err, "should return error for invalid config")
+	require.NoError(t, err)
+
+	cookies := rec.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.True(t, cookies[0].Secure, "zero-value Insecure=false → Secure=true")
+	assert.Equal(t, http.SameSiteStrictMode, cookies[0].SameSite)
+	assert.Equal(t, 900, cookies[0].MaxAge)
+}
+
+func TestSetSessionCookie_ReturnsError(t *testing.T) {
+	cfg := CookieSessionConfig{
+		Secret: []byte("too-short"),
+	}
+	rec := httptest.NewRecorder()
+	err := SetSessionCookie(rec, cfg, "jwt")
+	assert.Error(t, err)
 }
 
 func TestClearSessionCookie(t *testing.T) {
@@ -203,8 +238,9 @@ func TestClearSessionCookie(t *testing.T) {
 	c := cookies[0]
 	assert.Equal(t, "session", c.Name)
 	assert.Empty(t, c.Value)
-	assert.Equal(t, -1, c.MaxAge, "MaxAge=-1 deletes the cookie")
+	assert.Equal(t, -1, c.MaxAge)
 	assert.True(t, c.HttpOnly)
+	assert.True(t, c.Secure)
 }
 
 func TestCookieSession_EncryptedMode_RoundTrip(t *testing.T) {
@@ -213,7 +249,7 @@ func TestCookieSession_EncryptedMode_RoundTrip(t *testing.T) {
 	cookieVal := encodeCookieValue(t, cfg, jwt)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: cookieVal})
@@ -231,7 +267,7 @@ func TestDefaultCookieSessionConfig(t *testing.T) {
 	assert.Equal(t, secret, cfg.Secret)
 	assert.Equal(t, "session", cfg.CookieName)
 	assert.Equal(t, "/", cfg.CookiePath)
-	assert.True(t, cfg.CookieSecure)
+	assert.False(t, cfg.Insecure, "default is Secure")
 	assert.Equal(t, http.SameSiteStrictMode, cfg.CookieSameSite)
 	assert.Equal(t, 900, cfg.MaxAge)
 }
@@ -246,7 +282,7 @@ func TestSetSessionCookie_RoundTripViaMiddleware(t *testing.T) {
 	require.Len(t, cookies, 1)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookies[0])
@@ -259,7 +295,7 @@ func TestSetSessionCookie_RoundTripViaMiddleware(t *testing.T) {
 
 func TestCookieSession_LargeJWT(t *testing.T) {
 	cfg := newTestSessionConfig(t)
-	largeJWT := make([]byte, 4000)
+	largeJWT := make([]byte, 2000)
 	for i := range largeJWT {
 		largeJWT[i] = 'A' + byte(i%26)
 	}
@@ -267,7 +303,7 @@ func TestCookieSession_LargeJWT(t *testing.T) {
 	cookieVal := encodeCookieValue(t, cfg, jwt)
 
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(&http.Cookie{Name: "session", Value: cookieVal})
@@ -283,25 +319,21 @@ func TestSessionCookieWriter_SetAndClear(t *testing.T) {
 	writer, err := NewSessionCookieWriter(cfg)
 	require.NoError(t, err)
 
-	// Set
 	rec := httptest.NewRecorder()
 	err = writer.Set(rec, "writer-jwt")
 	require.NoError(t, err)
 	cookies := rec.Result().Cookies()
 	require.Len(t, cookies, 1)
 	assert.Equal(t, "session", cookies[0].Name)
-	assert.NotEmpty(t, cookies[0].Value)
 
-	// Verify cookie works with middleware.
 	capture := &authCapture{}
-	handler := CookieSession(cfg)(capture.handler())
+	handler := MustCookieSession(cfg)(capture.handler())
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(cookies[0])
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req)
 	assert.Equal(t, "Bearer writer-jwt", capture.authHeader)
 
-	// Clear
 	rec3 := httptest.NewRecorder()
 	writer.Clear(rec3)
 	clearCookies := rec3.Result().Cookies()
@@ -310,7 +342,6 @@ func TestSessionCookieWriter_SetAndClear(t *testing.T) {
 }
 
 func TestNormalizeCookieSessionConfig(t *testing.T) {
-	// Struct literal with zero values should get safe defaults.
 	cfg := CookieSessionConfig{
 		Secret: generateKey(t, 32),
 	}
@@ -320,4 +351,104 @@ func TestNormalizeCookieSessionConfig(t *testing.T) {
 	assert.Equal(t, "/", cfg.CookiePath)
 	assert.Equal(t, http.SameSiteStrictMode, cfg.CookieSameSite)
 	assert.Equal(t, 900, cfg.MaxAge)
+}
+
+func TestNewCookieSession_ReturnsError(t *testing.T) {
+	cfg := CookieSessionConfig{Secret: []byte("short")}
+	_, err := NewCookieSession(cfg)
+	assert.Error(t, err)
+}
+
+func TestMustCookieSession_PanicsOnError(t *testing.T) {
+	cfg := CookieSessionConfig{Secret: []byte("short")}
+	assert.Panics(t, func() {
+		MustCookieSession(cfg)
+	})
+}
+
+func TestSessionCookieWriter_CookieSizeLimit(t *testing.T) {
+	cfg := newTestSessionConfig(t)
+	writer, err := NewSessionCookieWriter(cfg)
+	require.NoError(t, err)
+
+	// Create a JWT large enough that encoded value exceeds 4096.
+	hugeJWT := make([]byte, 4000)
+	for i := range hugeJWT {
+		hugeJWT[i] = 'X'
+	}
+
+	rec := httptest.NewRecorder()
+	err = writer.Set(rec, string(hugeJWT))
+	assert.Error(t, err, "should reject cookie exceeding browser size limit")
+	assert.Contains(t, err.Error(), "exceeds browser limit")
+}
+
+// TestCookieSession_ExpiredCookie_Returns401 tests the full chain:
+// CookieSession → mock AuthMiddleware → protected handler.
+// An expired cookie means no Authorization is injected, so AuthMiddleware
+// should return 401.
+func TestCookieSession_ExpiredCookie_Returns401(t *testing.T) {
+	cfg := newTestSessionConfig(t)
+	cfg.MaxAge = 1
+
+	sc, err := securecookie.New(cfg.Secret, nil)
+	require.NoError(t, err)
+	encoded, err := sc.Encode("session", []byte("jwt-token"))
+	require.NoError(t, err)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	// Mock AuthMiddleware: returns 401 if no Authorization header.
+	mockAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	protectedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Chain: CookieSession → AuthMiddleware → handler
+	chain := MustCookieSession(cfg)(mockAuth(protectedHandler))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: encoded})
+	rec := httptest.NewRecorder()
+	chain.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"expired cookie → no auth injection → 401")
+}
+
+func TestCookieSession_TamperedCookie_Returns401(t *testing.T) {
+	cfg := newTestSessionConfig(t)
+	cookieVal := encodeCookieValue(t, cfg, "valid-jwt")
+	tampered := "XXXX" + cookieVal[4:]
+
+	mockAuth := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") == "" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	chain := MustCookieSession(cfg)(mockAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: tampered})
+	rec := httptest.NewRecorder()
+	chain.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"tampered cookie → no auth injection → 401")
 }

@@ -19,6 +19,10 @@ import (
 type CSRFConfig struct {
 	// TrustedOrigins: allowed origins (scheme://host[:port]).
 	// Supports wildcard subdomains: "https://*.example.com"
+	//
+	// Note: wildcards match ALL subdomain depths — "https://*.example.com"
+	// matches both "https://sub.example.com" and "https://a.b.c.example.com".
+	// For tighter control, list specific subdomains explicitly.
 	TrustedOrigins []string
 
 	// ExcludedPathPrefixes: URL path prefixes that bypass CSRF checks.
