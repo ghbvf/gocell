@@ -43,6 +43,8 @@ func main() {
 	eb := eventbus.New()
 
 	// RSA key pair for JWT signing/verification (development only).
+	// Production: use auth.LoadKeySetFromEnv() which reads from env vars and
+	// supports key rotation via GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	if err != nil {

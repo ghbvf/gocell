@@ -167,11 +167,11 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 	priv1, pub1 := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
 
-	// Verification key expires in 1 millisecond.
+	baseTime := time.Now()
 	vk := VerificationKey{
 		PublicKey: pub2,
 		KeyID:     Thumbprint(pub2),
-		ExpiresAt: time.Now().Add(100 * time.Millisecond),
+		ExpiresAt: baseTime.Add(time.Hour),
 	}
 
 	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
@@ -182,8 +182,8 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pub2, got)
 
-	// Wait for expiry.
-	time.Sleep(150 * time.Millisecond)
+	// Advance clock past expiry using injectable now func.
+	ks.now = func() time.Time { return baseTime.Add(2 * time.Hour) }
 
 	// Key should be pruned now.
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -317,8 +317,9 @@ func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
 func TestKeySet_LifecycleLog_Activation(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	orig := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(orig)
 
 	priv, pub := generateTestKeyPair(t)
 	_, err := NewKeySet(priv, pub)
@@ -332,8 +333,9 @@ func TestKeySet_LifecycleLog_Activation(t *testing.T) {
 func TestKeySet_LifecycleLog_VerificationOnly(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	orig := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(orig)
 
 	priv1, pub1 := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
@@ -356,27 +358,62 @@ func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
 	priv1, pub1 := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
 
+	baseTime := time.Now()
 	vk := VerificationKey{
 		PublicKey: pub2,
 		KeyID:     Thumbprint(pub2),
-		ExpiresAt: time.Now().Add(50 * time.Millisecond),
+		ExpiresAt: baseTime.Add(time.Hour),
 	}
 
 	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
 	require.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
+	// Advance clock past expiry.
+	ks.now = func() time.Time { return baseTime.Add(2 * time.Hour) }
 
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	orig := slog.Default()
 	slog.SetDefault(logger)
-	defer slog.SetDefault(slog.Default())
+	defer slog.SetDefault(orig)
 
 	ks.PruneExpired()
 
 	output := buf.String()
 	assert.Contains(t, output, "key pruned")
 	assert.Contains(t, output, Thumbprint(pub2))
+}
+
+// --- Concurrency (F1.4 + F3.1) ---
+
+func TestKeySet_ConcurrentPublicKeyByKID(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: pub2,
+		KeyID:     Thumbprint(pub2),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	ks, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.NoError(t, err)
+
+	// Run concurrent lookups — go test -race will detect data races.
+	const goroutines = 50
+	done := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 100; j++ {
+				_, _ = ks.PublicKeyByKID(ks.SigningKeyID())
+				_, _ = ks.PublicKeyByKID(vk.KeyID)
+			}
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
 }
 
 // --- Existing tests (preserved) ---

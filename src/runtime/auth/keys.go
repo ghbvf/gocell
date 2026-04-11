@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/big"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -31,8 +32,9 @@ func validateRSAKeySize(n int, keyKind string) error {
 }
 
 // Thumbprint computes the RFC 7638 JSON Web Key (JWK) Thumbprint of an RSA
-// public key using SHA-256. The result is a base64url-encoded (no padding)
-// hash that serves as a deterministic key identifier (kid).
+// public key using SHA-256. The result is a 43-character base64url-encoded
+// (no padding) string derived from the SHA-256 hash of the canonical JWK
+// representation. The same key always produces the same thumbprint.
 //
 // ref: RFC 7638 §3.2 — required members for RSA in lexicographic order: "e", "kty", "n"
 func Thumbprint(pub *rsa.PublicKey) string {
@@ -53,15 +55,17 @@ type VerificationKey struct {
 
 // KeySet holds a set of cryptographic keys for JWT operations: one active
 // signing key and zero or more verification-only keys. It provides O(1)
-// key lookup by kid (key identifier).
+// key lookup by kid (key identifier). All methods are safe for concurrent use.
 //
 // ref: dexidp/dex server/rotation.go — 3-state model (Active → Verification-only → Pruned)
 type KeySet struct {
+	mu               sync.Mutex
 	signingKey       *rsa.PrivateKey
 	signingPub       *rsa.PublicKey
 	signingKeyID     string
 	verificationKeys []VerificationKey
 	keyIndex         map[string]*rsa.PublicKey // kid → public key
+	now              func() time.Time         // injectable clock for testing; defaults to time.Now
 }
 
 // NewKeySet creates a KeySet with a single active signing key pair.
@@ -80,6 +84,7 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey) (*KeySet, error) {
 		signingPub:   pub,
 		signingKeyID: kid,
 		keyIndex:     map[string]*rsa.PublicKey{kid: pub},
+		now:          time.Now,
 	}
 
 	slog.Info("key activated",
@@ -99,7 +104,7 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 		return nil, err
 	}
 
-	now := time.Now()
+	now := ks.now()
 	for _, vk := range vkeys {
 		if !now.Before(vk.ExpiresAt) {
 			slog.Info("key pruned",
@@ -131,10 +136,14 @@ func (ks *KeySet) SigningKey() *rsa.PrivateKey {
 	return ks.signingKey
 }
 
-// PublicKeyByKID looks up a public key by its kid. It prunes expired
-// verification keys before lookup. Returns an error if the kid is unknown.
+// PublicKeyByKID looks up a public key by its kid. It lazily prunes expired
+// verification keys before lookup (write side-effect: expired keys are removed
+// from the key set). Returns an error if the kid is unknown or expired.
+// This method is safe for concurrent use.
 func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
-	ks.PruneExpired()
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.pruneExpiredLocked()
 	pub, ok := ks.keyIndex[kid]
 	if !ok {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("unknown kid: %s", kid))
@@ -143,8 +152,17 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 }
 
 // PruneExpired removes verification-only keys whose expiry time has passed.
+// This method is safe for concurrent use.
 func (ks *KeySet) PruneExpired() {
-	now := time.Now()
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	ks.pruneExpiredLocked()
+}
+
+// pruneExpiredLocked is the lock-free inner implementation of PruneExpired.
+// Caller must hold ks.mu.
+func (ks *KeySet) pruneExpiredLocked() {
+	now := ks.now()
 	remaining := ks.verificationKeys[:0]
 	for _, vk := range ks.verificationKeys {
 		if now.Before(vk.ExpiresAt) {
@@ -160,9 +178,9 @@ func (ks *KeySet) PruneExpired() {
 	ks.verificationKeys = remaining
 }
 
-// MustGenerateTestKeyPair generates a 2048-bit RSA key pair for testing.
-// It panics on error, following the Go test helper convention (e.g., template.Must).
-// Do NOT use in production code.
+// MustGenerateTestKeyPair generates a 2048-bit RSA key pair for testing and
+// examples. It panics on error, following the Go test helper convention.
+// Production code should use LoadKeySetFromEnv to load keys from configuration.
 func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -198,6 +216,9 @@ const (
 // ErrKeyMissing indicates a required JWT key environment variable is not set.
 var ErrKeyMissing = errcode.ErrAuthKeyMissing
 
+// Deprecated: Use LoadKeySetFromEnv instead, which returns a KeySet with
+// kid support and optional verification-only key loading.
+//
 // LoadKeysFromEnv reads PEM-encoded RSA keys from environment variables
 // GOCELL_JWT_PRIVATE_KEY and GOCELL_JWT_PUBLIC_KEY. It returns an errcode
 // error if either variable is missing or contains invalid PEM/key data.

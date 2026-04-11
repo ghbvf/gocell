@@ -23,6 +23,10 @@ const ServiceTokenMaxAge = 5 * time.Minute
 // nowFunc is overridable for testing.
 var nowFunc = time.Now
 
+// MinHMACKeyBytes is the minimum HMAC secret length. NIST recommends 256-bit
+// (32-byte) keys for HMAC-SHA256; this constant enforces that minimum.
+const MinHMACKeyBytes = 32
+
 // HMACKeyRing holds an ordered pair of HMAC secrets for service token operations.
 // Position 0 (current) is used for signing; verification tries all secrets in order.
 //
@@ -33,11 +37,20 @@ type HMACKeyRing struct {
 	previous []byte
 }
 
-// NewHMACKeyRing creates an HMACKeyRing. current must not be empty.
-// previous may be nil for single-secret mode.
+// NewHMACKeyRing creates an HMACKeyRing. current must be at least MinHMACKeyBytes
+// (32 bytes). previous may be nil for single-secret mode; if set, it must also
+// meet the minimum length.
 func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
 	if len(current) == 0 {
 		return nil, errcode.New(errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
+	}
+	if len(current) < MinHMACKeyBytes {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+			fmt.Sprintf("current HMAC secret is %d bytes, minimum is %d", len(current), MinHMACKeyBytes))
+	}
+	if len(previous) > 0 && len(previous) < MinHMACKeyBytes {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+			fmt.Sprintf("previous HMAC secret is %d bytes, minimum is %d", len(previous), MinHMACKeyBytes))
 	}
 	return &HMACKeyRing{
 		current:  current,
@@ -160,7 +173,11 @@ func ServiceTokenMiddleware(ring *HMACKeyRing) func(http.Handler) http.Handler {
 
 // GenerateServiceToken creates a service token for the given method, path,
 // and timestamp using the current secret from the key ring.
+// It returns an empty string if ring is nil.
 func GenerateServiceToken(ring *HMACKeyRing, method, path string, ts time.Time) string {
+	if ring == nil {
+		return ""
+	}
 	tsStr := strconv.FormatInt(ts.Unix(), 10)
 	mac := hmac.New(sha256.New, ring.Current())
 	_, _ = mac.Write([]byte(fmt.Sprintf("%s %s %s", method, path, tsStr)))

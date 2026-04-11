@@ -4,11 +4,7 @@ package sessionvalidate
 
 import (
 	"context"
-	"crypto/rsa"
 	"log/slog"
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -55,35 +51,3 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 	return claims, nil
 }
 
-// IssueTestToken creates a signed JWT for testing purposes.
-// An optional sessionID can be provided to include the "sid" claim.
-// signingKey can be []byte (HS256) or *rsa.PrivateKey (RS256).
-func IssueTestToken(signingKey any, subject string, roles []string, ttl time.Duration, sessionID ...string) (string, error) {
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"sub": subject,
-		"iat": jwt.NewNumericDate(now),
-		"exp": jwt.NewNumericDate(now.Add(ttl)),
-		"iss": "gocell-access-core",
-		"aud": jwt.ClaimStrings{"gocell"},
-	}
-	if len(roles) > 0 {
-		claims["roles"] = roles
-	}
-	if len(sessionID) > 0 && sessionID[0] != "" {
-		claims["sid"] = sessionID[0]
-	}
-
-	switch k := signingKey.(type) {
-	case *rsa.PrivateKey:
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-		token.Header["kid"] = auth.Thumbprint(&k.PublicKey)
-		return token.SignedString(k)
-	case []byte:
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		return token.SignedString(k)
-	default:
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		return token.SignedString(signingKey)
-	}
-}
