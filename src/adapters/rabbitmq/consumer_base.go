@@ -314,6 +314,17 @@ func (cb *ConsumerBase) retryLoop(
 		}
 	}
 
+	// Context cancelled during or after final attempt — requeue for redelivery
+	// rather than routing to DLX. This ensures graceful shutdown does not
+	// permanently discard in-flight messages.
+	if ctx.Err() != nil {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         ctx.Err(),
+			Receipt:     receipt,
+		}
+	}
+
 	// Exhausted all retries — reject so broker routes to DLX.
 	slog.Error("rabbitmq: retry budget exhausted, rejecting to DLX",
 		slog.String("event_id", entry.ID),

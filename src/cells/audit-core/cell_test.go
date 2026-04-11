@@ -133,7 +133,7 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	eb := eventbus.New()
-	c.RegisterSubscriptions(eb)
+	require.NoError(t, c.RegisterSubscriptions(eb))
 	_ = eb.Close()
 }
 
