@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -157,43 +158,58 @@ type redisReceipt struct {
 	doneKey  string
 	token    string
 	doneTTL  time.Duration
+
+	commitOnce  sync.Once
+	commitErr   error
+	releaseOnce sync.Once
+	releaseErr  error
 }
 
 // Compile-time interface check.
 var _ outbox.Receipt = (*redisReceipt)(nil)
 
 // Commit marks the key as permanently done and removes the lease.
+// Repeat calls are no-ops returning the first call's result.
 func (r *redisReceipt) Commit(ctx context.Context) error {
-	doneSec := int64(r.doneTTL.Seconds())
-	if doneSec < 1 {
-		doneSec = 1
-	}
-	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
-	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet,
-			fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
-	}
-	code, ok := res.(int64)
-	if !ok || code == 0 {
-		return errcode.New(ErrAdapterRedisSet,
-			fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
-	}
-	return nil
+	r.commitOnce.Do(func() {
+		doneSec := int64(r.doneTTL.Seconds())
+		if doneSec < 1 {
+			doneSec = 1
+		}
+		res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
+		if err != nil {
+			r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
+				fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
+			return
+		}
+		code, ok := res.(int64)
+		if !ok || code == 0 {
+			r.commitErr = errcode.New(ErrAdapterRedisSet,
+				fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
+			return
+		}
+	})
+	return r.commitErr
 }
 
 // Release removes the processing lease so a redelivered message can re-enter.
+// Repeat calls are no-ops returning the first call's result.
 func (r *redisReceipt) Release(ctx context.Context) error {
-	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
-	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisDelete,
-			fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
-	}
-	code, ok := res.(int64)
-	if !ok || code == 0 {
-		return errcode.New(ErrAdapterRedisDelete,
-			fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
-	}
-	return nil
+	r.releaseOnce.Do(func() {
+		res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
+		if err != nil {
+			r.releaseErr = errcode.Wrap(ErrAdapterRedisDelete,
+				fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
+			return
+		}
+		code, ok := res.(int64)
+		if !ok || code == 0 {
+			r.releaseErr = errcode.New(ErrAdapterRedisDelete,
+				fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
+			return
+		}
+	})
+	return r.releaseErr
 }
 
 // claimToken generates a 16-byte hex-encoded token for lease ownership.

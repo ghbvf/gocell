@@ -236,6 +236,44 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
 
+func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Commit should succeed.
+	err = receipt.Commit(ctx)
+	require.NoError(t, err)
+
+	// Second Commit should be a no-op (not "stale lease" error).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err)
+}
+
+func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Release should succeed.
+	err = receipt.Release(ctx)
+	require.NoError(t, err)
+
+	// Second Release should be a no-op (not "stale lease" error).
+	err = receipt.Release(ctx)
+	require.NoError(t, err)
+}
+
 func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := newIdempotencyClaimerFromCmdable(mock)
