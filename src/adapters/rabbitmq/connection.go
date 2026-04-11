@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/bits"
 	"math/rand/v2"
@@ -108,6 +109,11 @@ type Config struct {
 	// ConfirmTimeout is the timeout for publisher confirm mode.
 	// Default: 5s.
 	ConfirmTimeout time.Duration
+
+	// MaxReconnectAttempts limits the number of reconnection attempts after
+	// a connection is lost. 0 (default) means unlimited reconnection.
+	// When the limit is reached, the connection enters terminal state.
+	MaxReconnectAttempts int
 }
 
 func (c *Config) setDefaults() {
@@ -368,6 +374,10 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 				slog.Int("attempt", attempt+1),
 				slog.String("error", err.Error()))
 			attempt++
+			if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
+				return false, errcode.Wrap(ErrAdapterAMQPConnectPermanent,
+					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), err)
+			}
 			continue
 		}
 
