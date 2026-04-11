@@ -131,6 +131,37 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	return results
 }
 
+// validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
+func (v *Validator) validateVERIFY03() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		for i, dep := range c.L0Dependencies {
+			target, ok := v.project.Cells[dep.Cell]
+			if !ok {
+				continue // REF-09 covers missing cells
+			}
+			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
+			if parseErr != nil {
+				continue // FMT-03 covers invalid levels
+			}
+			if targetLevel != cell.L0 {
+				results = append(results, ValidationResult{
+					Code:      "VERIFY-03",
+					Severity:  SeverityError,
+					IssueType: IssueMismatch,
+					File:      cellFile(c.ID),
+					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
+					Message: fmt.Sprintf(
+						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
+						c.ID, dep.Cell, target.ConsistencyLevel,
+					),
+				})
+			}
+		}
+	}
+	return results
+}
+
 // validateVERIFY04 checks that every active contract whose provider is a
 // Cell has at least one provider-role slice. Without this, a contract is
 // "published but nobody provides it" — a ghost capability.
@@ -288,36 +319,5 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 		}
 	}
 
-	return results
-}
-
-// validateVERIFY03 checks that l0Dependencies[].cell targets an L0-level cell.
-func (v *Validator) validateVERIFY03() []ValidationResult {
-	var results []ValidationResult
-	for _, c := range v.project.Cells {
-		for i, dep := range c.L0Dependencies {
-			target, ok := v.project.Cells[dep.Cell]
-			if !ok {
-				continue // REF-09 covers missing cells
-			}
-			targetLevel, parseErr := cell.ParseLevel(target.ConsistencyLevel)
-			if parseErr != nil {
-				continue // FMT-03 covers invalid levels
-			}
-			if targetLevel != cell.L0 {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-03",
-					Severity:  SeverityError,
-					IssueType: IssueMismatch,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message: fmt.Sprintf(
-						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
-						c.ID, dep.Cell, target.ConsistencyLevel,
-					),
-				})
-			}
-		}
-	}
 	return results
 }

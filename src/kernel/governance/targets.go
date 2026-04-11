@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -288,7 +289,7 @@ func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileC
 		if !ok {
 			continue
 		}
-		if c.ConsistencyLevel == "L0" {
+		if lvl, err := cell.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cell.L0 {
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
@@ -299,7 +300,7 @@ func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileC
 		if !ok {
 			continue
 		}
-		if c.ConsistencyLevel == "L0" {
+		if lvl, err := cell.ParseLevel(c.ConsistencyLevel); err == nil && lvl == cell.L0 {
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
