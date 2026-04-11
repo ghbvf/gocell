@@ -63,7 +63,7 @@ func (c *ConsumerBaseConfig) setDefaults() {
 	if c.RetryCount <= 0 {
 		c.RetryCount = 3
 	}
-	if c.RetryBaseDelay == 0 {
+	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 1 * time.Second
 	}
 	if c.IdempotencyTTL == 0 {
@@ -75,16 +75,19 @@ func (c *ConsumerBaseConfig) setDefaults() {
 	if c.ClaimRetryCount <= 0 {
 		c.ClaimRetryCount = c.RetryCount
 	}
-	if c.ClaimRetryBaseDelay == 0 {
+	if c.ClaimRetryBaseDelay <= 0 {
 		c.ClaimRetryBaseDelay = c.RetryBaseDelay
 	}
-	if c.MaxRetryDelay == 0 {
+	if c.MaxRetryDelay <= 0 {
 		c.MaxRetryDelay = 30 * time.Second
 	}
 }
 
-// cappedDelay returns min(delay, MaxRetryDelay).
+// cappedDelay clamps delay to [0, MaxRetryDelay].
 func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
 	if delay > c.MaxRetryDelay {
 		return c.MaxRetryDelay
 	}
@@ -258,10 +261,12 @@ func (cb *ConsumerBase) claimWithRetry(
 			return 0, nil, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
-			base := cb.config.ClaimRetryBaseDelay * (1 << attempt)
-			base = cb.config.cappedDelay(base)
-			jitter := time.Duration(rand.Int64N(int64(base/2 + 1)))
-			delay := base + jitter
+			base := cb.config.cappedDelay(cb.config.ClaimRetryBaseDelay * (1 << attempt))
+			var jitter time.Duration
+			if base > 0 {
+				jitter = time.Duration(rand.Int64N(int64(base/2) + 1))
+			}
+			delay := cb.config.cappedDelay(base + jitter)
 			slog.Warn("rabbitmq: idempotency claim failed, retrying locally",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),

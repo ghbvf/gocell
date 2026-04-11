@@ -2174,6 +2174,42 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 		"MaxRetryDelay must cap exponential backoff growth")
 }
 
+func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	// Must not panic; negative delay is clamped to default by setDefaults.
+	res := handler(context.Background(), outbox.Entry{ID: "evt-neg-delay"})
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
+func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: 10 * time.Millisecond,
+		MaxRetryDelay:       -1 * time.Second, // negative — must not panic
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-neg-cap"})
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
 // --- processDelivery Receipt lifecycle tests ---
 
 func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
