@@ -58,20 +58,17 @@ func (h *httpCell) RegisterRoutes(mux RouteMux) {
 // Compile-time check.
 var _ HTTPRegistrar = (*httpCell)(nil)
 
-// mockSubscriber implements outbox.Subscriber for testing.
-type mockSubscriber struct {
+// mockEventRouter implements EventRouter for testing.
+type mockEventRouter struct {
 	topics []string
 }
 
-func (m *mockSubscriber) Subscribe(_ context.Context, topic string, _ outbox.EntryHandler) error {
+func (m *mockEventRouter) AddHandler(topic string, _ outbox.EntryHandler) {
 	m.topics = append(m.topics, topic)
-	return nil
 }
 
-func (m *mockSubscriber) Close() error { return nil }
-
 // Compile-time check.
-var _ outbox.Subscriber = (*mockSubscriber)(nil)
+var _ EventRouter = (*mockEventRouter)(nil)
 
 // eventCell is a Cell that also implements EventRegistrar.
 type eventCell struct {
@@ -79,9 +76,9 @@ type eventCell struct {
 	registered bool
 }
 
-func (e *eventCell) RegisterSubscriptions(sub outbox.Subscriber) error {
+func (e *eventCell) RegisterSubscriptions(r EventRouter) error {
 	e.registered = true
-	_ = sub.Subscribe(context.Background(), "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddHandler("session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 	return nil
@@ -102,9 +99,9 @@ func (d *dualCell) RegisterRoutes(mux RouteMux) {
 	mux.Handle("/api/v1/devices", http.NotFoundHandler())
 }
 
-func (d *dualCell) RegisterSubscriptions(sub outbox.Subscriber) error {
+func (d *dualCell) RegisterSubscriptions(r EventRouter) error {
 	d.eventRegistered = true
-	_ = sub.Subscribe(context.Background(), "device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddHandler("device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 	return nil
@@ -150,12 +147,12 @@ func TestEventRegistrar_TypeAssertion(t *testing.T) {
 	r, ok := c.(EventRegistrar)
 	assert.True(t, ok, "eventCell should satisfy EventRegistrar")
 
-	sub := &mockSubscriber{}
-	err := r.RegisterSubscriptions(sub)
+	router := &mockEventRouter{}
+	err := r.RegisterSubscriptions(router)
 	assert.NoError(t, err)
 
 	assert.True(t, ec.registered)
-	assert.Equal(t, []string{"session.created"}, sub.topics)
+	assert.Equal(t, []string{"session.created"}, router.topics)
 }
 
 func TestEventRegistrar_NegativeTypeAssertion(t *testing.T) {
@@ -182,11 +179,11 @@ func TestDualRegistrar_BothInterfaces(t *testing.T) {
 	// Event
 	er, ok := c.(EventRegistrar)
 	assert.True(t, ok)
-	sub := &mockSubscriber{}
-	err := er.RegisterSubscriptions(sub)
+	router := &mockEventRouter{}
+	err := er.RegisterSubscriptions(router)
 	assert.NoError(t, err)
 	assert.True(t, dc.eventRegistered)
-	assert.Equal(t, []string{"device.enrolled"}, sub.topics)
+	assert.Equal(t, []string{"device.enrolled"}, router.topics)
 }
 
 func TestRouteMux_Group(t *testing.T) {

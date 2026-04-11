@@ -132,10 +132,17 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	eb := eventbus.New()
-	require.NoError(t, c.RegisterSubscriptions(eb))
-	_ = eb.Close()
+	r := &stubEventRouter{}
+	require.NoError(t, c.RegisterSubscriptions(r))
+	assert.Equal(t, 6, r.count, "audit-core should register 6 topic handlers")
 }
+
+// stubEventRouter implements cell.EventRouter for testing.
+type stubEventRouter struct {
+	count int
+}
+
+func (r *stubEventRouter) AddHandler(_ string, _ outbox.EntryHandler) { r.count++ }
 
 // stubMux implements cell.RouteMux for testing.
 type stubMux struct {

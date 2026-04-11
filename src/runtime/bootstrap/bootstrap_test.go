@@ -8,7 +8,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,7 +151,7 @@ func newEventCell(id string, subErr error) *eventCell {
 	}
 }
 
-func (c *eventCell) RegisterSubscriptions(_ outbox.Subscriber) error {
+func (c *eventCell) RegisterSubscriptions(_ cell.EventRouter) error {
 	return c.subErr
 }
 

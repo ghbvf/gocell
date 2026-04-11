@@ -4,10 +4,8 @@ package configcore
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
@@ -174,23 +172,10 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 	})
 }
 
-// RegisterSubscriptions registers event subscriptions for config-core.
-// Returns an error if subscription setup fails (e.g., missing DLX).
-func (c *ConfigCore) RegisterSubscriptions(sub outbox.Subscriber) error {
+// RegisterSubscriptions declares event subscriptions for config-core.
+// The Router manages goroutine lifecycle and setup-error detection.
+func (c *ConfigCore) RegisterSubscriptions(r cell.EventRouter) error {
 	handler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEvent)
-	errCh := make(chan error, 1)
-	go func() {
-		ctx := context.Background()
-		errCh <- sub.Subscribe(ctx, configsubscribe.TopicConfigChanged, handler)
-	}()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return fmt.Errorf("config-subscribe: subscription setup failed: %w", err)
-		}
-		return nil
-	case <-time.After(100 * time.Millisecond):
-		return nil // Subscribe is blocking (consuming) — setup succeeded.
-	}
+	r.AddHandler(configsubscribe.TopicConfigChanged, handler)
+	return nil
 }
