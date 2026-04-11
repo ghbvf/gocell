@@ -33,11 +33,13 @@ func TestHandleRegister(t *testing.T) {
 			body:       `{"name":"sensor-a"}`,
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
-				var resp map[string]any
-				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.NotEmpty(t, resp["id"])
-				assert.Equal(t, "sensor-a", resp["name"])
-				assert.Equal(t, "online", resp["status"])
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(body, &envelope))
+				data, ok := envelope["data"].(map[string]any)
+				require.True(t, ok, "response should have data envelope")
+				assert.NotEmpty(t, data["id"])
+				assert.Equal(t, "sensor-a", data["name"])
+				assert.Equal(t, "online", data["status"])
 			},
 		},
 		{
