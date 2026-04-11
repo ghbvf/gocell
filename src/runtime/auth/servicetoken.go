@@ -63,12 +63,16 @@ func (r *HMACKeyRing) Current() []byte {
 	return r.current
 }
 
-// Secrets returns all secrets in try-order: current first, then previous (if set).
+// Secrets returns a copy of all secrets in try-order: current first, then previous (if set).
+// The returned slice is a fresh allocation; callers cannot mutate the ring's internal state.
 func (r *HMACKeyRing) Secrets() [][]byte {
 	if len(r.previous) == 0 {
-		return [][]byte{r.current}
+		return [][]byte{append([]byte(nil), r.current...)}
 	}
-	return [][]byte{r.current, r.previous}
+	return [][]byte{
+		append([]byte(nil), r.current...),
+		append([]byte(nil), r.previous...),
+	}
 }
 
 const (

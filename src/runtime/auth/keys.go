@@ -189,6 +189,17 @@ func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 	return priv, &priv.PublicKey
 }
 
+// MustNewTestKeySet creates a KeySet from a freshly generated 2048-bit RSA
+// key pair. It panics on error. Intended for test setup and examples only.
+func MustNewTestKeySet() (*KeySet, *rsa.PrivateKey, *rsa.PublicKey) {
+	priv, pub := MustGenerateTestKeyPair()
+	ks, err := NewKeySet(priv, pub)
+	if err != nil {
+		panic(fmt.Sprintf("auth: failed to create test key set: %v", err))
+	}
+	return ks, priv, pub
+}
+
 // LoadRSAKeyPairFromPEM parses PEM-encoded RSA private and public keys.
 func LoadRSAKeyPairFromPEM(privPEM, pubPEM []byte) (*rsa.PrivateKey, *rsa.PublicKey, error) {
 	priv, err := parseRSAPrivateKey(privPEM)
@@ -280,7 +291,7 @@ func LoadKeySetFromEnv() (*KeySet, error) {
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("failed to parse %s as RFC 3339", EnvJWTPrevKeyExpires), err)
+			fmt.Sprintf("failed to parse %s as RFC 3339 (example: 2026-04-12T00:00:00Z)", EnvJWTPrevKeyExpires), err)
 	}
 
 	vk := VerificationKey{

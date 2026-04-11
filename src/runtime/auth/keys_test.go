@@ -37,6 +37,13 @@ func TestThumbprint_DifferentKeys(t *testing.T) {
 	assert.NotEqual(t, kid1, kid2, "different keys must produce different thumbprints")
 }
 
+func TestThumbprint_OutputLength(t *testing.T) {
+	// RFC 7638 SHA-256 thumbprint: 32 bytes → 43 chars base64url (no padding).
+	_, pub := generateTestKeyPair(t)
+	kid := Thumbprint(pub)
+	assert.Len(t, kid, 43, "SHA-256 base64url-encoded without padding is always 43 chars")
+}
+
 func TestThumbprint_Base64URLEncoded(t *testing.T) {
 	_, pub := generateTestKeyPair(t)
 	kid := Thumbprint(pub)
@@ -296,6 +303,19 @@ func TestLoadKeySetFromEnv_PrevKeyMissingExpiryFails(t *testing.T) {
 	_, err := LoadKeySetFromEnv()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), EnvJWTPrevKeyExpires)
+}
+
+func TestLoadKeySetFromEnv_InvalidPrevPEMFails(t *testing.T) {
+	privPEM, pubPEM := generateTestKeyPairPEM(t)
+
+	t.Setenv(EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(EnvJWTPrevPublicKey, "not-valid-pem")
+	t.Setenv(EnvJWTPrevKeyExpires, time.Now().Add(time.Hour).Format(time.RFC3339))
+
+	_, err := LoadKeySetFromEnv()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no PEM block")
 }
 
 func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
