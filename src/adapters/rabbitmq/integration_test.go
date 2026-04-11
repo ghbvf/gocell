@@ -103,6 +103,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       queueName,
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 
@@ -205,6 +206,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	dlqSub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test.integration.retry.dlq.queue",
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 

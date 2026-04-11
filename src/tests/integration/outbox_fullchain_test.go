@@ -166,6 +166,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:       "outbox.fullchain.queue",
 		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 5 * time.Second,
 	})
 	checker := redis.NewIdempotencyChecker(redisClient)

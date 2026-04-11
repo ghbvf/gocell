@@ -686,6 +686,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		PrefetchCount:   5,
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -747,6 +748,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -787,6 +789,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -830,6 +833,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -846,7 +850,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 func TestSubscriber_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{})
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close())
 	assert.NoError(t, sub.Close()) // Second close is no-op.
@@ -854,7 +858,7 @@ func TestSubscriber_Close_Idempotent(t *testing.T) {
 
 func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{})
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
 	assert.NoError(t, sub.Close())
 
@@ -879,6 +883,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -947,6 +952,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
@@ -1064,6 +1070,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
@@ -1105,6 +1112,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 1 * time.Second,
 	})
 
@@ -1153,6 +1161,7 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty; ConsumerGroup is set.
 		ConsumerGroup:   "audit-core",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -1181,6 +1190,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "my-explicit-queue",
 		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -1207,6 +1217,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// Both QueueName and ConsumerGroup empty — backward compat.
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -1281,29 +1292,18 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	ch.mu.Unlock()
 }
 
-func TestSubscriber_Subscribe_NoDLX_NilArgs(t *testing.T) {
-	conn, mockConn := newTestConnection(t)
-
-	ch := newMockChannel()
-	mockConn.mu.Lock()
-	mockConn.nextCh = ch
-	mockConn.mu.Unlock()
+func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
+	conn, _ := newTestConnection(t)
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		ShutdownTimeout: 2 * time.Second,
+		// DLXExchange deliberately left empty.
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
-	assert.NoError(t, err)
-
-	ch.mu.Lock()
-	require.Len(t, ch.queueDeclareArgs, 1)
-	assert.Nil(t, ch.queueDeclareArgs[0], "queue args should be nil when DLX is not configured")
-	ch.mu.Unlock()
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
 
 // =============================================================================
@@ -1578,6 +1578,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -1985,6 +1986,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -2022,6 +2024,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -2064,6 +2067,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -2094,6 +2098,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -2133,6 +2138,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 
@@ -2166,37 +2172,18 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
-func TestProcessDelivery_Reject_NoDLX_LogsError(t *testing.T) {
-	conn, mockConn := newTestConnection(t)
-	ch := newMockChannel()
-	mockConn.mu.Lock()
-	mockConn.nextCh = ch
-	mockConn.mu.Unlock()
+func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
+	conn, _ := newTestConnection(t)
 
-	// No DLXExchange configured.
+	// No DLXExchange configured — Subscribe should fail before any delivery processing.
 	sub := NewSubscriber(conn, SubscriberConfig{
 		ShutdownTimeout: 2 * time.Second,
+		// DLXExchange deliberately left empty.
 	})
 
-	entry := outbox.Entry{ID: "evt-no-dlx", EventType: "test.nodlx"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
-
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}
-	}
-
-	sub.wg.Add(1)
-	sub.processDelivery(context.Background(), ch, amqp.Delivery{
-		DeliveryTag: 11,
-		Body:        entryBytes,
-	}, "test.topic", handler)
-
-	// Verify Nack without requeue was called (message will be discarded since no DLX).
-	ch.mu.Lock()
-	assert.True(t, ch.nackCalled)
-	assert.False(t, ch.nackRequeue)
-	ch.mu.Unlock()
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
 
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
@@ -2229,6 +2216,7 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
 		ShutdownTimeout: 2 * time.Second,
 	})
 

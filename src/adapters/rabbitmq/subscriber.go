@@ -148,6 +148,12 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 	if s.closed.Load() {
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
+	if s.config.DLXExchange == "" {
+		return errcode.New(ErrAdapterAMQPSubscribe,
+			"rabbitmq: DLXExchange is required — without a dead-letter exchange, "+
+				"Nack(requeue=false) silently discards messages. "+
+				"Set SubscriberConfig.DLXExchange to a valid DLX name")
+	}
 
 	// Derive a context that is cancelled when either the parent ctx is done or
 	// the subscriber is closed. This ensures WaitConnected unblocks promptly on
@@ -256,11 +262,7 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// Build queue arguments for dead-letter routing.
-	if s.config.DLXExchange == "" {
-		slog.Warn("rabbitmq: subscribing without DLX configured — Nack(requeue=false) will discard messages",
-			slog.String("topic", topic),
-			slog.String("queue", queueName))
-	}
+	// DLXExchange is guaranteed non-empty here (validated in Subscribe).
 	var queueArgs amqp.Table
 	if s.config.DLXExchange != "" {
 		queueArgs = amqp.Table{
@@ -399,11 +401,6 @@ func (s *Subscriber) processDelivery(
 				slog.String("error", brokerErr.Error()))
 		}
 	case outbox.DispositionReject:
-		if s.config.DLXExchange == "" {
-			slog.Error("rabbitmq: rejecting message without DLX configured — message will be discarded by broker",
-				slog.String("topic", topic),
-				slog.String("event_id", entry.ID))
-		}
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
 		if brokerErr != nil {
 			slog.Error("rabbitmq: nack(reject) failed",
