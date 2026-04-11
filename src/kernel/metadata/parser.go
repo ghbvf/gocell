@@ -1,7 +1,9 @@
 package metadata
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -240,17 +242,34 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 	return nil
 }
 
-// unmarshalFile reads and decodes a YAML file from fsys.
-// Parse errors are wrapped with the file path and ErrMetadataInvalid.
+// unmarshalFile reads and decodes a YAML file from fsys with strict field
+// checking. Unknown YAML keys that don't map to struct fields are rejected,
+// preventing silent typos in metadata files (e.g., "ownerId" instead of "ownerCell").
 func unmarshalFile(fsys fs.FS, path string, out any) error {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("read %s", path), err)
 	}
-	if err := yaml.Unmarshal(data, out); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(out); err != nil {
+		// yaml.Decoder returns io.EOF for empty/whitespace-only files, whereas
+		// yaml.Unmarshal silently leaves the target at its zero value. Preserve
+		// the old behaviour so that empty actors.yaml / status-board.yaml parse
+		// as empty slices instead of aborting.
+		if err == io.EOF {
+			return nil
+		}
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
+	}
+	// Reject multi-document YAML files. Metadata files must contain exactly
+	// one document; a second document after "---" would be silently ignored
+	// by a single Decode call.
+	if dec.Decode(new(any)) != io.EOF {
+		return errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("parse %s: unexpected multiple YAML documents", path))
 	}
 	return nil
 }

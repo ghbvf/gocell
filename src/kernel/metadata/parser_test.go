@@ -1,9 +1,11 @@
 package metadata
 
 import (
+	"errors"
 	"testing"
 	"testing/fstest"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -851,6 +853,263 @@ endpoints:
 			for _, c := range pm.Contracts {
 				assert.Equal(t, tt.wantOwner, c.OwnerCell)
 			}
+		})
+	}
+}
+
+func TestParseFS_RejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		fs      fstest.MapFS
+		wantMsg string
+	}{
+		{
+			name: "unknown field in cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(`id: x
+type: core
+consistencyLevel: L1
+owner:
+  team: t
+  role: r
+schema:
+  primary: tbl
+verify:
+  smoke: []
+unknownField: oops
+`)},
+			},
+			wantMsg: "unknownField",
+		},
+		{
+			name: "unknown field in slice.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(`id: x
+type: core
+consistencyLevel: L1
+owner: {team: t, role: r}
+schema: {primary: tbl}
+verify: {smoke: []}
+`)},
+				"cells/x/slices/s/slice.yaml": &fstest.MapFile{Data: []byte(`id: s
+belongsToCell: x
+contractUsages: []
+verify: {unit: [], contract: []}
+typo_field: bad
+`)},
+			},
+			wantMsg: "typo_field",
+		},
+		{
+			name: "unknown field in contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.test.v1
+kind: http
+lifecycle: active
+endpoints: {server: x}
+bogus: 42
+`)},
+			},
+			wantMsg: "bogus",
+		},
+		{
+			name: "unknown field in journey yaml",
+			fs: fstest.MapFS{
+				"journeys/J-test.yaml": &fstest.MapFile{Data: []byte(`id: J-test
+goal: test
+owner: {team: t, role: r}
+cells: []
+contracts: []
+passCriteria: []
+badField: oops
+`)},
+			},
+			wantMsg: "badField",
+		},
+		{
+			name: "unknown field in assembly yaml",
+			fs: fstest.MapFS{
+				"assemblies/a/assembly.yaml": &fstest.MapFile{Data: []byte(`id: a
+cells: []
+build: {entrypoint: main.go, binary: a, deployTemplate: t}
+nope: true
+`)},
+			},
+			wantMsg: "nope",
+		},
+		{
+			name: "unknown field in status-board entry",
+			fs: fstest.MapFS{
+				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-x
+  state: green
+  risk: none
+  blocker: ""
+  updatedAt: "2026-01-01"
+  extra: bad
+`)},
+			},
+			wantMsg: "extra",
+		},
+		{
+			name: "unknown field in actors entry",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte(`- id: ext
+  type: external
+  maxConsistencyLevel: L2
+  phantom: yes
+`)},
+			},
+			wantMsg: "phantom",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr), "expected *errcode.Error, got: %T", err)
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+		})
+	}
+}
+
+func TestParseFS_SchemaRefsExtraKeys(t *testing.T) {
+	fs := fstest.MapFS{
+		"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.test.v1
+kind: http
+lifecycle: active
+endpoints: {server: x}
+schemaRefs:
+  request: req.json
+  response: res.json
+  custom: extra.json
+`)},
+	}
+	p := NewParser(".")
+	pm, err := p.ParseFS(fs)
+	require.NoError(t, err)
+	c := pm.Contracts["http.test.v1"]
+	require.NotNil(t, c)
+	assert.Equal(t, "req.json", c.SchemaRefs.Request)
+	assert.Equal(t, "res.json", c.SchemaRefs.Response)
+	assert.Equal(t, "extra.json", c.SchemaRefs.Extra["custom"])
+}
+
+func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   fstest.MapFS
+	}{
+		{
+			name: "multi-doc cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("id: x\ntype: core\nconsistencyLevel: L1\nowner: {team: t, role: r}\nschema: {primary: tbl}\nverify: {smoke: []}\n---\nid: y\ntype: edge\n")},
+			},
+		},
+		{
+			name: "multi-doc contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("id: http.test.v1\nkind: http\nlifecycle: active\nendpoints: {server: x}\n---\nid: injected\n")},
+			},
+		},
+		{
+			name: "multi-doc actors.yaml",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte("- id: a\n  type: external\n  maxConsistencyLevel: L2\n---\n- id: b\n  type: external\n  maxConsistencyLevel: L3\n")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), "multiple YAML documents")
+		})
+	}
+}
+
+func TestParseFS_EmptyFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   fstest.MapFS
+	}{
+		{
+			name: "empty actors.yaml",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+		},
+		{
+			name: "whitespace-only status-board.yaml",
+			fs: fstest.MapFS{
+				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte("  \n")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			pm, err := p.ParseFS(tt.fs)
+			require.NoError(t, err, "empty file should parse without error")
+			assert.NotNil(t, pm)
+		})
+	}
+}
+
+// TestParseFS_EmptyStructFiles verifies that empty files for struct-based
+// metadata types (cell, contract, journey, assembly) fail with "id is empty"
+// rather than silently succeeding. This documents the boundary: empty list
+// files (actors, status-board) are OK, but empty struct files must have an ID.
+func TestParseFS_EmptyStructFiles(t *testing.T) {
+	tests := []struct {
+		name    string
+		fs      fstest.MapFS
+		wantMsg string
+	}{
+		{
+			name: "empty cell.yaml",
+			fs: fstest.MapFS{
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "cell id is empty",
+		},
+		{
+			name: "empty contract.yaml",
+			fs: fstest.MapFS{
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "contract id is empty",
+		},
+		{
+			name: "empty journey yaml",
+			fs: fstest.MapFS{
+				"journeys/J-test.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "journey id is empty",
+		},
+		{
+			name: "empty assembly yaml",
+			fs: fstest.MapFS{
+				"assemblies/a/assembly.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "assembly id is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), tt.wantMsg)
 		})
 	}
 }

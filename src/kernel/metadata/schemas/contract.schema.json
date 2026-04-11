@@ -54,6 +54,10 @@
       "type": "string",
       "description": "Delivery guarantee. Required for kind=event.",
       "enum": ["at-least-once", "exactly-once"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the contract's purpose."
     }
   },
   "allOf": [
