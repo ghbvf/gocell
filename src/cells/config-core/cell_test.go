@@ -35,9 +35,7 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 
 	// Init
@@ -68,7 +66,6 @@ func TestConfigCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -81,7 +78,6 @@ func TestConfigCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -95,7 +91,6 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -126,7 +121,6 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))

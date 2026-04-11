@@ -37,9 +37,7 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells:     make(map[string]cell.Cell),
-		Contracts: make(map[string]cell.Contract),
-		Config:    make(map[string]any),
+		Config: make(map[string]any),
 	}
 
 	// Init
@@ -68,7 +66,6 @@ func TestAuditCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -86,7 +83,6 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 
@@ -103,7 +99,6 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
 	}
 
@@ -114,7 +109,6 @@ func TestAuditCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -128,7 +122,6 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
@@ -156,7 +149,6 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Cells: make(map[string]cell.Cell), Contracts: make(map[string]cell.Contract),
 		Config: make(map[string]any),
 	}
 	require.NoError(t, c.Init(ctx, deps))
