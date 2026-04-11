@@ -188,6 +188,56 @@ func (cb *ConsumerBase) wrapWithChecker(topic string, handler outbox.EntryHandle
 	}
 }
 
+// claimWithRetry retries Claimer.Claim locally with exponential backoff.
+// This prevents the hot-loop that would occur if we immediately returned
+// DispositionRequeue on the first Claim failure — RabbitMQ's Nack(requeue=true)
+// redelivers immediately, so without local retry the broker, CPU and logs
+// would be hammered on every redelivery cycle.
+//
+// Only called on the fail-closed path; fail-open skips retries entirely.
+func (cb *ConsumerBase) claimWithRetry(
+	ctx context.Context,
+	topic string,
+	entry outbox.Entry,
+	idempotencyKey string,
+) (idempotency.ClaimState, outbox.Receipt, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < cb.config.RetryCount; attempt++ {
+		state, receipt, err := cb.claimer.Claim(
+			ctx,
+			idempotencyKey,
+			cb.config.LeaseTTL,
+			cb.config.IdempotencyTTL,
+		)
+		if err == nil {
+			return state, receipt, nil
+		}
+		lastErr = err
+
+		if ctx.Err() != nil {
+			return 0, nil, ctx.Err()
+		}
+		if attempt < cb.config.RetryCount-1 {
+			delay := cb.config.RetryBaseDelay * (1 << attempt)
+			slog.Warn("rabbitmq: idempotency claim failed, retrying locally before requeue",
+				slog.String("event_id", entry.ID),
+				slog.String("topic", topic),
+				slog.Int("attempt", attempt+1),
+				slog.Int("max_retries", cb.config.RetryCount),
+				slog.Duration("backoff", delay),
+				slog.String("error", err.Error()))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return 0, nil, ctx.Err()
+			}
+		}
+	}
+
+	return 0, nil, lastErr
+}
+
 // wrapWithClaimer is the Solution B path using two-phase Claim/Commit/Release.
 // The Receipt is threaded through HandleResult — ConsumerBase never calls
 // Commit/Release itself; that is processDelivery's job after broker Ack/Nack.
@@ -205,23 +255,19 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 					slog.String("error", err.Error()))
 				return cb.retryLoop(ctx, topic, entry, handler, nil)
 			}
-			// Backoff before requeue to prevent hot loop: RabbitMQ's
-			// Nack(requeue=true) redelivers immediately with no delay.
-			// Without this sleep, an idempotency backend outage would
-			// cause a tight redelivery loop amplifying CPU, broker I/O
-			// and log pressure.
-			delay := cb.config.RetryBaseDelay
-			slog.Error("rabbitmq: idempotency claim failed, requeuing after backoff (fail-closed)",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup),
-				slog.Duration("backoff", delay),
-				slog.String("error", err.Error()))
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
+
+			// Fail-closed: retry Claim locally with exponential backoff.
+			// Only return to broker after all local retries are exhausted.
+			state, receipt, err = cb.claimWithRetry(ctx, topic, entry, idempotencyKey)
+			if err != nil {
+				slog.Error("rabbitmq: idempotency claim failed after local retries, requeuing (fail-closed)",
+					slog.String("event_id", entry.ID),
+					slog.String("topic", topic),
+					slog.String("consumer_group", cb.config.ConsumerGroup),
+					slog.Int("retry_count", cb.config.RetryCount),
+					slog.String("error", err.Error()))
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
 		}
 
 		switch state {
