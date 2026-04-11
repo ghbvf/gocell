@@ -196,7 +196,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	pub := NewPublisher(conn)
 	topic := "test.integration.retry"
 
 	// Track DLQ messages via a separate subscriber on the DLQ topic.

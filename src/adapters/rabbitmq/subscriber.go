@@ -435,47 +435,49 @@ func (s *Subscriber) processDelivery(
 			slog.String("error", res.Err.Error()))
 	}
 
-	// Commit or release the idempotency receipt based on broker outcome.
-	// Use WithoutCancel + timeout: broker Ack/Nack already succeeded,
-	// idempotency state must be persisted even during graceful shutdown,
-	// but must not block indefinitely on network partitions.
+	s.settleReceipt(ctx, res, topic, entry.ID, brokerErr)
+}
+
+// settleReceipt commits or releases the idempotency receipt after the broker
+// Ack/Nack outcome is known. Uses a detached context with a 5s timeout so
+// the operation completes even during graceful shutdown.
+func (s *Subscriber) settleReceipt(
+	ctx context.Context,
+	res outbox.HandleResult,
+	topic, eventID string,
+	brokerErr error,
+) {
 	if res.Receipt == nil {
 		return
 	}
-	receiptCtx, receiptCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer receiptCancel()
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
 	if brokerErr != nil {
-		// Broker disposition failed — release so redelivery can re-enter.
-		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
+		if relErr := res.Receipt.Release(rctx); relErr != nil {
 			slog.Error("rabbitmq: receipt release failed after broker error",
 				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
+				slog.String("event_id", eventID),
 				slog.String("error", relErr.Error()))
 		}
 		return
 	}
+
 	switch res.Disposition {
 	case outbox.DispositionAck:
-		if commitErr := res.Receipt.Commit(receiptCtx); commitErr != nil {
+		if err := res.Receipt.Commit(rctx); err != nil {
 			slog.Error("rabbitmq: receipt commit failed",
 				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
-				slog.String("error", commitErr.Error()))
-		}
-	case outbox.DispositionReject, outbox.DispositionRequeue:
-		// Reject releases (not commits) so DLQ replay can reprocess.
-		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
-			slog.Error("rabbitmq: receipt release failed",
-				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
-				slog.String("error", relErr.Error()))
+				slog.String("event_id", eventID),
+				slog.String("error", err.Error()))
 		}
 	default:
-		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
-			slog.Error("rabbitmq: receipt release failed (unknown disposition)",
+		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
+		if err := res.Receipt.Release(rctx); err != nil {
+			slog.Error("rabbitmq: receipt release failed",
 				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
-				slog.String("error", relErr.Error()))
+				slog.String("event_id", eventID),
+				slog.String("error", err.Error()))
 		}
 	}
 }
