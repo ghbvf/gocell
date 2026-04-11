@@ -45,7 +45,11 @@ const (
 //  1. Claim(key) → ClaimAcquired + Receipt
 //  2. Execute business logic
 //  3a. Success → broker Ack → receipt.Commit()
-//  3b. Failure → broker Nack(requeue) → receipt.Release()
+//  3b. Transient failure → broker Nack(requeue) → receipt.Release()
+//  3c. Permanent failure → broker Nack(no-requeue) → receipt.Release()
+//
+// Note: Reject (3c) uses Release, not Commit, so that messages replayed
+// from a dead-letter queue can be reprocessed after the root cause is fixed.
 //
 // This eliminates the race condition where TryProcess marks a key as done
 // before the broker has acknowledged the message.

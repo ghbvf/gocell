@@ -255,20 +255,30 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 	if doneSec < 1 {
 		doneSec = 1
 	}
-	_, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
+	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
 	if err != nil {
 		return errcode.Wrap(ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
+	}
+	code, ok := res.(int64)
+	if !ok || code == 0 {
+		return errcode.New(ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
 	}
 	return nil
 }
 
 // Release removes the processing lease so a redelivered message can re-enter.
 func (r *redisReceipt) Release(ctx context.Context) error {
-	_, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
+	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
 	if err != nil {
 		return errcode.Wrap(ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
+	}
+	code, ok := res.(int64)
+	if !ok || code == 0 {
+		return errcode.New(ErrAdapterRedisDelete,
+			fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
 	}
 	return nil
 }

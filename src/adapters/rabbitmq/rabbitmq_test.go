@@ -1816,3 +1816,345 @@ func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT")
 	assert.Contains(t, err.Error(), "confirm channel closed")
 }
+
+// =============================================================================
+// Mock Claimer / Receipt for Solution B tests
+// =============================================================================
+
+type mockReceipt struct {
+	mu           sync.Mutex
+	commitCalled bool
+	commitErr    error
+	releaseCalled bool
+	releaseErr   error
+	commitCtx    context.Context
+	releaseCtx   context.Context
+}
+
+func (r *mockReceipt) Commit(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commitCalled = true
+	r.commitCtx = ctx
+	return r.commitErr
+}
+
+func (r *mockReceipt) Release(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseCalled = true
+	r.releaseCtx = ctx
+	return r.releaseErr
+}
+
+var _ outbox.Receipt = (*mockReceipt)(nil)
+
+type mockClaimer struct {
+	mu     sync.Mutex
+	state  idempotency.ClaimState
+	receipt outbox.Receipt
+	err    error
+	claims []string
+}
+
+func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.claims = append(c.claims, key)
+	return c.state, c.receipt, c.err
+}
+
+var _ idempotency.Claimer = (*mockClaimer)(nil)
+
+// --- ConsumerBase with Claimer tests ---
+
+func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	entry := outbox.Entry{ID: "evt-claimer-001"}
+	res := handler(context.Background(), entry)
+
+	assert.True(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through HandleResult")
+	// ConsumerBase must NOT call Commit/Release — that's processDelivery's job.
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled)
+	assert.False(t, receipt.releaseCalled)
+	receipt.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimDone}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-done"})
+	assert.False(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "ClaimDone should not return a Receipt")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimBusy}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-busy"})
+	assert.False(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
+func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("fail")}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-reject"})
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Reject should thread Receipt for processDelivery to Release")
+	// ConsumerBase must NOT call Commit/Release on Receipt.
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled)
+	assert.False(t, receipt.releaseCalled)
+	receipt.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
+	assert.True(t, handlerCalled, "should still process on claim error (fail-open)")
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "no Receipt on claim error")
+}
+
+// --- processDelivery Receipt lifecycle tests ---
+
+func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-ack-receipt", EventType: "test.ack"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 1,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.ackCalled)
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Ack should Commit Receipt")
+	assert.False(t, receipt.releaseCalled, "Ack should not Release Receipt")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-reject-receipt", EventType: "test.reject"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         errors.New("permanent"),
+			Receipt:     receipt,
+		}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 2,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	assert.False(t, ch.nackRequeue, "Reject should Nack without requeue")
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "Reject should NOT Commit Receipt")
+	assert.True(t, receipt.releaseCalled, "Reject should Release Receipt (allows DLQ replay)")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	// Should not panic even though Receipt is nil.
+	assert.NotPanics(t, func() {
+		sub.processDelivery(ctx, ch, amqp.Delivery{
+			DeliveryTag: 3,
+			Body:        entryBytes,
+		}, "test.topic", handler)
+	})
+}
+
+func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-detached-ctx", EventType: "test.ctx"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	// Use a cancelled context to simulate shutdown.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 4,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Receipt should still be committed because processDelivery uses
+	// context.WithoutCancel for Receipt operations.
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Receipt should be committed even with cancelled ctx")
+	assert.NotNil(t, receipt.commitCtx, "Commit ctx should be non-nil")
+	assert.NoError(t, receipt.commitCtx.Err(), "Commit ctx should NOT be cancelled (WithoutCancel)")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.ackErr = errors.New("channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-broker-fail", EventType: "test.brokerfail"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	}
+
+	ctx := context.Background()
+	sub.wg.Add(1)
+	sub.processDelivery(ctx, ch, amqp.Delivery{
+		DeliveryTag: 5,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "should not Commit when broker Ack fails")
+	assert.True(t, receipt.releaseCalled, "should Release when broker Ack fails")
+	receipt.mu.Unlock()
+}

@@ -217,8 +217,26 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		res := handler(ctx, entry)
 		switch res.Disposition {
 		case outbox.DispositionAck:
+			if res.Receipt != nil {
+				if err := res.Receipt.Commit(ctx); err != nil {
+					slog.Error("eventbus: receipt commit failed",
+						slog.String("topic", topic),
+						slog.String("entry_id", entry.ID),
+						slog.String("error", err.Error()),
+					)
+				}
+			}
 			return // success or safe duplicate
 		case outbox.DispositionReject:
+			if res.Receipt != nil {
+				if err := res.Receipt.Release(ctx); err != nil {
+					slog.Error("eventbus: receipt release failed",
+						slog.String("topic", topic),
+						slog.String("entry_id", entry.ID),
+						slog.String("error", err.Error()),
+					)
+				}
+			}
 			// Permanent failure — route directly to dead letter.
 			slog.Warn("eventbus: handler rejected message, routing to dead letter",
 				slog.String("topic", topic),
@@ -234,6 +252,15 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			b.deadLettersMu.Unlock()
 			return
 		case outbox.DispositionRequeue:
+			if res.Receipt != nil {
+				if err := res.Receipt.Release(ctx); err != nil {
+					slog.Error("eventbus: receipt release failed",
+						slog.String("topic", topic),
+						slog.String("entry_id", entry.ID),
+						slog.String("error", err.Error()),
+					)
+				}
+			}
 			lastErr = res.Err
 			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
 			delay := baseRetryDelay*(1<<attempt) + jitter // e.g. 100-200ms, 200-300ms, 400-500ms

@@ -256,6 +256,11 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// Build queue arguments for dead-letter routing.
+	if s.config.DLXExchange == "" {
+		slog.Warn("rabbitmq: subscribing without DLX configured — Nack(requeue=false) will discard messages",
+			slog.String("topic", topic),
+			slog.String("queue", queueName))
+	}
 	var queueArgs amqp.Table
 	if s.config.DLXExchange != "" {
 		queueArgs = amqp.Table{
@@ -394,6 +399,11 @@ func (s *Subscriber) processDelivery(
 				slog.String("error", brokerErr.Error()))
 		}
 	case outbox.DispositionReject:
+		if s.config.DLXExchange == "" {
+			slog.Error("rabbitmq: rejecting message without DLX configured — message will be discarded by broker",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID))
+		}
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
 		if brokerErr != nil {
 			slog.Error("rabbitmq: nack(reject) failed",
@@ -409,6 +419,12 @@ func (s *Subscriber) processDelivery(
 				slog.String("event_id", entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
+	default:
+		slog.Error("rabbitmq: unknown disposition, nacking with requeue",
+			slog.String("topic", topic),
+			slog.String("event_id", entry.ID),
+			slog.String("disposition", res.Disposition.String()))
+		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
 	}
 
 	// Log handler-level error if present (separate from broker error).
@@ -421,12 +437,15 @@ func (s *Subscriber) processDelivery(
 	}
 
 	// Commit or release the idempotency receipt based on broker outcome.
+	// Use WithoutCancel: broker Ack/Nack already succeeded, idempotency
+	// state must be persisted even during graceful shutdown.
 	if res.Receipt == nil {
 		return
 	}
+	receiptCtx := context.WithoutCancel(ctx)
 	if brokerErr != nil {
 		// Broker disposition failed — release so redelivery can re-enter.
-		if relErr := res.Receipt.Release(ctx); relErr != nil {
+		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
 			slog.Error("rabbitmq: receipt release failed after broker error",
 				slog.String("topic", topic),
 				slog.String("event_id", entry.ID),
@@ -435,16 +454,24 @@ func (s *Subscriber) processDelivery(
 		return
 	}
 	switch res.Disposition {
-	case outbox.DispositionAck, outbox.DispositionReject:
-		if commitErr := res.Receipt.Commit(ctx); commitErr != nil {
+	case outbox.DispositionAck:
+		if commitErr := res.Receipt.Commit(receiptCtx); commitErr != nil {
 			slog.Error("rabbitmq: receipt commit failed",
 				slog.String("topic", topic),
 				slog.String("event_id", entry.ID),
 				slog.String("error", commitErr.Error()))
 		}
-	case outbox.DispositionRequeue:
-		if relErr := res.Receipt.Release(ctx); relErr != nil {
+	case outbox.DispositionReject, outbox.DispositionRequeue:
+		// Reject releases (not commits) so DLQ replay can reprocess.
+		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
 			slog.Error("rabbitmq: receipt release failed",
+				slog.String("topic", topic),
+				slog.String("event_id", entry.ID),
+				slog.String("error", relErr.Error()))
+		}
+	default:
+		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {
+			slog.Error("rabbitmq: receipt release failed (unknown disposition)",
 				slog.String("topic", topic),
 				slog.String("event_id", entry.ID),
 				slog.String("error", relErr.Error()))

@@ -285,6 +285,134 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	assert.Equal(t, 0, subsAfter, "subscriber should be cleaned up after exit")
 }
 
+// mockReceipt records Commit/Release calls for testing.
+type mockReceipt struct {
+	committed atomic.Bool
+	released  atomic.Bool
+}
+
+func (r *mockReceipt) Commit(_ context.Context) error {
+	r.committed.Store(true)
+	return nil
+}
+
+func (r *mockReceipt) Release(_ context.Context) error {
+	r.released.Store(true)
+	return nil
+}
+
+func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	receipt := &mockReceipt{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "receipt.ack", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionAck,
+				Receipt:     receipt,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "receipt.ack", []byte("data"))
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return receipt.committed.Load()
+	}, time.Second, 10*time.Millisecond, "receipt should be committed on Ack")
+
+	assert.False(t, receipt.released.Load(), "receipt should not be released on Ack")
+
+	cancel()
+	<-done
+}
+
+func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	receipt := &mockReceipt{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "receipt.reject", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionReject,
+				Err:         errors.New("permanent"),
+				Receipt:     receipt,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "receipt.reject", []byte("data"))
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		return receipt.released.Load()
+	}, time.Second, 10*time.Millisecond, "receipt should be released on Reject")
+
+	assert.False(t, receipt.committed.Load(), "receipt should not be committed on Reject")
+
+	cancel()
+	<-done
+}
+
+func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var receipts []*mockReceipt
+	var receiptsMu sync.Mutex
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "receipt.requeue", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			r := &mockReceipt{}
+			receiptsMu.Lock()
+			receipts = append(receipts, r)
+			receiptsMu.Unlock()
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         errors.New("transient"),
+				Receipt:     r,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "receipt.requeue", []byte("data"))
+	require.NoError(t, err)
+
+	// Wait for all retries to exhaust.
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	receiptsMu.Lock()
+	defer receiptsMu.Unlock()
+
+	require.Len(t, receipts, maxRetries, "should have one receipt per retry attempt")
+
+	for i, r := range receipts {
+		assert.True(t, r.released.Load(), "receipt %d should be released on Requeue", i)
+		assert.False(t, r.committed.Load(), "receipt %d should not be committed on Requeue", i)
+	}
+
+	cancel()
+	<-done
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)

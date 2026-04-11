@@ -368,6 +368,7 @@ func TestEntry_Validate(t *testing.T) {
 			err := tt.entry.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 			} else {
 				assert.NoError(t, err)
 			}

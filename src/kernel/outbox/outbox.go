@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,10 +43,10 @@ func (e Entry) RoutingTopic() string {
 // present. Writers SHOULD call Validate before persisting. (F-OB-03)
 func (e Entry) Validate() error {
 	if e.RoutingTopic() == "" {
-		return fmt.Errorf("outbox: entry missing topic (Topic and EventType are both empty)")
+		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing topic (Topic and EventType are both empty)")
 	}
 	if len(e.Payload) == 0 {
-		return fmt.Errorf("outbox: entry missing payload")
+		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing payload")
 	}
 	return nil
 }
@@ -107,12 +109,22 @@ func (d Disposition) String() string {
 }
 
 // Receipt represents a claimable idempotency token attached to a single
-// message processing attempt. The broker-layer (Subscriber) calls Commit
-// after a successful Ack/Reject, or Release after a Requeue or broker error.
+// message processing attempt. The broker-layer (Subscriber) manages the
+// Receipt lifecycle AFTER executing the broker Ack/Nack:
+//
+//   - DispositionAck    + broker Ack success  → Receipt.Commit()
+//   - DispositionReject + broker Nack success → Receipt.Release()  (allows DLQ replay)
+//   - DispositionRequeue + broker Nack success → Receipt.Release()
+//   - Any broker Ack/Nack failure             → Receipt.Release()
+//
+// Callers MUST use context.WithoutCancel for Receipt operations to ensure
+// idempotency state is persisted even during graceful shutdown.
 type Receipt interface {
 	// Commit marks the idempotency key as permanently done.
+	// Only called after DispositionAck + successful broker Ack.
 	Commit(ctx context.Context) error
 	// Release removes the processing lease so redelivery can re-enter.
+	// Called for Reject (allows DLQ replay), Requeue, and broker errors.
 	Release(ctx context.Context) error
 }
 

@@ -224,6 +224,48 @@ func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
 	}
 }
 
+func TestOutboxWriter_Write_MissingTopic(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	entry := outbox.Entry{
+		ID:      "f6a7b8c9-d0e1-2345-faba-456789012345",
+		Payload: []byte(`{"data":true}`),
+		// Topic and EventType are both empty → Validate should fail
+	}
+
+	err := w.Write(ctx, entry)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, ec.Message, "topic")
+	assert.Empty(t, tx.execCalls, "should not reach DB insert")
+}
+
+func TestOutboxWriter_Write_MissingPayload(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+	ctx := CtxWithTx(context.Background(), tx)
+
+	entry := outbox.Entry{
+		ID:    "a7b8c9d0-e1f2-3456-abcd-567890123456",
+		Topic: "some.topic",
+		// Payload is nil → Validate should fail
+	}
+
+	err := w.Write(ctx, entry)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, ec.Message, "payload")
+	assert.Empty(t, tx.execCalls, "should not reach DB insert")
+}
+
 // mockOutboxTx records exec calls for assertion.
 // Embeds pgx.Tx to satisfy the full interface; only Exec/Commit/Rollback are overridden.
 type mockOutboxTx struct {

@@ -342,6 +342,50 @@ func TestIdempotencyClaimer_Claim_EvalError(t *testing.T) {
 	assert.Nil(t, receipt)
 }
 
+func TestIdempotencyClaimer_Receipt_Commit_StaleToken(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:stale-commit:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Simulate lease expiry by deleting the lease key from the store.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:stale-commit:1")
+	mock.mu.Unlock()
+
+	// Commit should fail with stale lease error.
+	err = receipt.Commit(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
+	assert.Contains(t, err.Error(), "stale lease")
+}
+
+func TestIdempotencyClaimer_Receipt_Release_StaleToken(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:stale-release:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Simulate lease expiry by deleting the lease key from the store.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:stale-release:1")
+	mock.mu.Unlock()
+
+	// Release should fail with stale lease error.
+	err = receipt.Release(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
+	assert.Contains(t, err.Error(), "stale lease")
+}
+
 func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	mock := newClaimerMock()
 	client := newClientFromCmdable(mock, Config{})
