@@ -119,6 +119,10 @@
 | TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | 1h |
 | OTEL-COV-01 | `adapters/otel/` | 覆盖率 67.3%（PR#72 删除了依赖内部 API 的旧测试后回升，但仍 < 80%；成功路径需 gRPC OTLP endpoint，需 testcontainers 集成测试） | 2h |
 | SUB-SETUP-01 | `kernel/outbox`, `cells/*/cell.go` | RegisterSubscriptions 用 100ms 启发式区分 setup 失败与正常阻塞消费。**已被 Phase 2 EventRouter 解决**——Router.Run() 同步返回 setup error，消除启发式 | ~~4h~~ → Phase 2 |
+| ER-P2-01 | `runtime/eventrouter/router.go` | Close() 正常关停缺 elapsed 日志（超时路径已有 slog.Warn） | 15min |
+| ER-P2-02 | `cells/audit-core/cell_test.go`, `cells/config-core/cell_test.go` | stubEventRouter 重复定义 → 提取到 `kernel/cell/celltest` | 30min |
+| ER-P2-03 | `runtime/eventrouter/router.go`, `runtime/bootstrap/bootstrap.go` | Running() 是一次性信号，无持续 health check 集成（OPS-3 readiness 探针可复用） | 1h |
+| ER-P2-04 | `runtime/bootstrap/bootstrap_test.go` | 缺 Router 正路径集成测试（HandlerCount > 0 成功启动 + 关停） | 1h |
 
 ### winmdm Accept P1
 
