@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -82,10 +81,10 @@ type Config struct {
 }
 
 func (c *Config) setDefaults() {
-	if c.ReconnectMaxBackoff == 0 {
+	if c.ReconnectMaxBackoff <= 0 {
 		c.ReconnectMaxBackoff = 30 * time.Second
 	}
-	if c.ReconnectBaseDelay == 0 {
+	if c.ReconnectBaseDelay <= 0 {
 		c.ReconnectBaseDelay = 1 * time.Second
 	}
 	if c.ChannelPoolSize <= 0 {
@@ -255,31 +254,35 @@ func (c *Connection) reconnectLoop() {
 		c.connected = make(chan struct{})
 		c.mu.Unlock()
 
-		c.reconnectWithBackoff()
-
-		c.mu.Lock()
-		close(c.connected)
-		c.mu.Unlock()
+		if c.reconnectWithBackoff() {
+			c.mu.Lock()
+			close(c.connected)
+			c.mu.Unlock()
+		}
+		// On permanent failure, connected stays open (never signalled).
+		// Callers blocked on WaitConnected will unblock when ctx is cancelled.
 	}
 }
 
-func (c *Connection) reconnectWithBackoff() {
+// reconnectWithBackoff attempts to re-establish the connection with exponential
+// backoff. Returns true if reconnected, false if gave up (permanent error or closed).
+func (c *Connection) reconnectWithBackoff() bool {
 	attempt := 0
 	for {
 		select {
 		case <-c.closeCh:
-			return
+			return false
 		default:
 		}
 
 		delay := c.backoffDelay(attempt)
-		slog.Info("rabbitmq: reconnect attempt",
+		slog.Warn("rabbitmq: reconnect attempt",
 			slog.Int("attempt", attempt+1),
 			slog.Duration("delay", delay))
 
 		select {
 		case <-c.closeCh:
-			return
+			return false
 		case <-time.After(delay):
 		}
 
@@ -295,7 +298,7 @@ func (c *Connection) reconnectWithBackoff() {
 				slog.Error("rabbitmq: permanent connection error, giving up",
 					slog.Int("attempt", attempt+1),
 					slog.String("error", err.Error()))
-				return
+				return false
 			}
 
 			slog.Warn("rabbitmq: reconnect failed (recoverable), will retry",
@@ -307,19 +310,30 @@ func (c *Connection) reconnectWithBackoff() {
 
 		slog.Info("rabbitmq: reconnected successfully",
 			slog.Int("attempts", attempt+1))
-		return
+		return true
 	}
 }
 
 // backoffDelay calculates the reconnect delay for the given attempt using
-// exponential backoff (base * 2^attempt) capped at ReconnectMaxBackoff,
-// with +-25% jitter to prevent thundering-herd reconnects.
+// exponential backoff (base * 2^attempt) with +-25% jitter, hard-capped at
+// ReconnectMaxBackoff. The jitter is applied before the cap so that
+// ReconnectMaxBackoff remains a true upper bound.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	base := c.config.ReconnectBaseDelay * time.Duration(math.Pow(2, float64(attempt)))
-	if base > c.config.ReconnectMaxBackoff {
-		base = c.config.ReconnectMaxBackoff
+	// Cap the exponent to prevent int64 overflow in the bit-shift.
+	// 2^30 * 1s = ~34 years — well beyond any reasonable max backoff.
+	const maxExp = 30
+	if attempt > maxExp {
+		return c.config.ReconnectMaxBackoff
 	}
-	return addJitter(base)
+	base := c.config.ReconnectBaseDelay * time.Duration(1<<uint(attempt))
+	if base <= 0 { // overflow guard
+		return c.config.ReconnectMaxBackoff
+	}
+	withJitter := addJitter(base)
+	if withJitter > c.config.ReconnectMaxBackoff {
+		return c.config.ReconnectMaxBackoff
+	}
+	return withJitter
 }
 
 // addJitter applies +-25% random jitter to a duration.
@@ -439,6 +453,9 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 
 // sanitizeURL redacts credentials from the AMQP URL for safe logging.
 func sanitizeURL(raw string) string {
+	if raw == "" {
+		return "amqp://***"
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "amqp://***"

@@ -459,26 +459,33 @@ func TestConnection_BackoffDelay(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	tests := []struct {
-		name    string
-		attempt int
-		// baseDelay is the expected delay before jitter (+-25%).
-		baseDelay time.Duration
+		name     string
+		attempt  int
+		minDelay time.Duration
+		maxDelay time.Duration // hard cap: never exceeds ReconnectMaxBackoff (30s)
 	}{
-		{name: "attempt 0", attempt: 0, baseDelay: 1 * time.Second},
-		{name: "attempt 1", attempt: 1, baseDelay: 2 * time.Second},
-		{name: "attempt 2", attempt: 2, baseDelay: 4 * time.Second},
-		{name: "attempt 10 (capped)", attempt: 10, baseDelay: 30 * time.Second},
+		{name: "attempt 0", attempt: 0,
+			minDelay: 750 * time.Millisecond, maxDelay: 1250 * time.Millisecond},
+		{name: "attempt 1", attempt: 1,
+			minDelay: 1500 * time.Millisecond, maxDelay: 2500 * time.Millisecond},
+		{name: "attempt 2", attempt: 2,
+			minDelay: 3 * time.Second, maxDelay: 5 * time.Second},
+		// Capped at MaxBackoff (30s) — jitter may reduce but never exceed.
+		{name: "attempt 10 (capped)", attempt: 10,
+			minDelay: 1 * time.Millisecond, maxDelay: 30 * time.Second},
+		{name: "attempt 34 (overflow guard)", attempt: 34,
+			minDelay: 30 * time.Second, maxDelay: 30 * time.Second},
+		{name: "attempt 100 (far overflow)", attempt: 100,
+			minDelay: 30 * time.Second, maxDelay: 30 * time.Second},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			delay := conn.backoffDelay(tt.attempt)
-			minDelay := time.Duration(float64(tt.baseDelay) * 0.75)
-			maxDelay := time.Duration(float64(tt.baseDelay) * 1.25)
-			assert.GreaterOrEqual(t, delay, minDelay,
-				"delay %v should be >= 75%% of base %v", delay, tt.baseDelay)
-			assert.LessOrEqual(t, delay, maxDelay,
-				"delay %v should be <= 125%% of base %v", delay, tt.baseDelay)
+			assert.GreaterOrEqual(t, delay, tt.minDelay,
+				"delay %v should be >= %v", delay, tt.minDelay)
+			assert.LessOrEqual(t, delay, tt.maxDelay,
+				"delay %v should be <= %v (hard cap)", delay, tt.maxDelay)
 		})
 	}
 }
@@ -600,9 +607,9 @@ func TestSanitizeURL(t *testing.T) {
 			expected: "amqp://***:***@rabbit.example.com:5672/production",
 		},
 		{
-			name:     "empty string returns empty",
+			name:     "empty string returns redacted placeholder",
 			url:      "",
-			expected: "",
+			expected: "amqp://***",
 		},
 		{
 			name:     "amqps scheme with credentials",
@@ -622,6 +629,68 @@ func TestSanitizeURL(t *testing.T) {
 			assert.NotContains(t, result, ":pass@")
 		})
 	}
+}
+
+func TestConnection_ReconnectWithBackoff_PermanentError_ReturnsFalse(t *testing.T) {
+	// reconnectWithBackoff should return false when dial returns a permanent error,
+	// so reconnectLoop does NOT close(connected) — preventing false "connected" signal.
+	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 5 * time.Millisecond,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			return nil, permanentErr
+		},
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+	}
+
+	result := conn.reconnectWithBackoff()
+	assert.False(t, result, "reconnectWithBackoff must return false on permanent dial error")
+
+	// connected channel must NOT be closed — WaitConnected should block.
+	select {
+	case <-conn.connected:
+		t.Fatal("connected channel was closed after permanent error — WaitConnected would falsely succeed")
+	default:
+		// Good: channel is still open.
+	}
+}
+
+func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
+	// reconnectWithBackoff should return true after recovering from a transient error.
+	var mu sync.Mutex
+	dialCount := 0
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 5 * time.Millisecond,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			mu.Lock()
+			dialCount++
+			n := dialCount
+			mu.Unlock()
+			if n <= 2 {
+				return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+			}
+			return newMockConnection(), nil
+		},
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+	}
+
+	result := conn.reconnectWithBackoff()
+	assert.True(t, result, "reconnectWithBackoff must return true after successful reconnect")
+
+	mu.Lock()
+	assert.Equal(t, 3, dialCount, "should have tried 3 times (2 failures + 1 success)")
+	mu.Unlock()
 }
 
 // =============================================================================
