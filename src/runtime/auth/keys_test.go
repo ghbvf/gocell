@@ -108,7 +108,7 @@ func TestNewKeySet_MismatchedKeyPairReturnsError(t *testing.T) {
 }
 
 func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) //NOSONAR — intentional weak key to test rejection
 	require.NoError(t, err)
 
 	_, err = NewKeySet(weakKey, &weakKey.PublicKey)
@@ -505,7 +505,7 @@ func TestLoadKeysFromEnv_ValidKeys(t *testing.T) {
 
 func TestLoadRSAKeyPairFromPEM_RejectsWeakKey(t *testing.T) {
 	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) //NOSONAR — intentional weak key to test rejection
 	require.NoError(t, err)
 
 	privPEM := pem.EncodeToMemory(&pem.Block{
