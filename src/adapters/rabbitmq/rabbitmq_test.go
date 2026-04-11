@@ -678,13 +678,25 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 		return dialCount >= 2
 	}, 2*time.Second, 10*time.Millisecond, "reconnect should have attempted dial")
 
-	// After permanent error, WaitConnected should NOT return success.
-	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the return
+	// After permanent error, WaitConnected should return the permanent error
+	// immediately (not block until ctx timeout).
+	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the terminal state
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	waitErr := conn.WaitConnected(ctx)
-	assert.Error(t, waitErr, "WaitConnected should timeout after permanent reconnect failure")
+	require.Error(t, waitErr, "WaitConnected must return error after permanent failure")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"WaitConnected should return permanent error code, not generic connect error")
+
+	// Health should also reflect terminal state.
+	healthErr := conn.Health()
+	require.Error(t, healthErr)
+	require.True(t, errors.As(healthErr, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
 }
 
 func TestIsPermanentDialError(t *testing.T) {
@@ -830,9 +842,7 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
-func TestConnection_ReconnectWithBackoff_PermanentError_ReturnsFalse(t *testing.T) {
-	// reconnectWithBackoff should return false when dial returns a permanent error,
-	// so reconnectLoop does NOT close(connected) — preventing false "connected" signal.
+func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
 	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
 
 	conn := &Connection{
@@ -846,22 +856,19 @@ func TestConnection_ReconnectWithBackoff_PermanentError_ReturnsFalse(t *testing.
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
 	}
 
-	result := conn.reconnectWithBackoff()
-	assert.False(t, result, "reconnectWithBackoff must return false on permanent dial error")
+	ok, err := conn.reconnectWithBackoff()
+	assert.False(t, ok, "must return false on permanent dial error")
+	assert.Error(t, err, "must return the permanent error")
 
-	// connected channel must NOT be closed — WaitConnected should block.
-	select {
-	case <-conn.connected:
-		t.Fatal("connected channel was closed after permanent error — WaitConnected would falsely succeed")
-	default:
-		// Good: channel is still open.
-	}
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
 }
 
 func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
-	// reconnectWithBackoff should return true after recovering from a transient error.
 	var mu sync.Mutex
 	dialCount := 0
 	conn := &Connection{
@@ -882,24 +889,24 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
 	}
 
-	result := conn.reconnectWithBackoff()
-	assert.True(t, result, "reconnectWithBackoff must return true after successful reconnect")
+	ok, err := conn.reconnectWithBackoff()
+	assert.True(t, ok, "must return true after successful reconnect")
+	assert.NoError(t, err)
 
 	mu.Lock()
 	assert.Equal(t, 3, dialCount, "should have tried 3 times (2 failures + 1 success)")
 	mu.Unlock()
 }
 
-func TestConnection_ReconnectWithBackoff_CloseCh_ReturnsFalse(t *testing.T) {
-	// When closeCh is closed during backoff wait, reconnectWithBackoff should
-	// return false promptly without waiting for the full delay.
+func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 	closeCh := make(chan struct{})
 	conn := &Connection{
 		config: Config{
 			URL:                 "amqp://test:test@localhost:5672/",
-			ReconnectBaseDelay:  10 * time.Second, // long delay to ensure we'd block
+			ReconnectBaseDelay:  10 * time.Second,
 			ReconnectMaxBackoff: 30 * time.Second,
 		},
 		dial: func(url string) (AMQPConnection, error) {
@@ -907,20 +914,26 @@ func TestConnection_ReconnectWithBackoff_CloseCh_ReturnsFalse(t *testing.T) {
 		},
 		closeCh:   closeCh,
 		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
 	}
 
-	done := make(chan bool, 1)
+	type result struct {
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
-		done <- conn.reconnectWithBackoff()
+		ok, err := conn.reconnectWithBackoff()
+		done <- result{ok, err}
 	}()
 
-	// Close after a short delay — should interrupt the backoff wait.
 	time.Sleep(50 * time.Millisecond)
 	close(closeCh)
 
 	select {
-	case result := <-done:
-		assert.False(t, result, "reconnectWithBackoff must return false when closeCh fires")
+	case r := <-done:
+		assert.False(t, r.ok, "must return false when closeCh fires")
+		assert.NoError(t, r.err, "clean shutdown, no permanent error")
 	case <-time.After(2 * time.Second):
 		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
 	}
