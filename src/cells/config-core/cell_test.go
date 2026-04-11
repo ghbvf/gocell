@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -99,9 +100,9 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	eb := eventbus.New()
-	require.NoError(t, c.RegisterSubscriptions(eb))
-	_ = eb.Close()
+	r := &celltest.StubEventRouter{}
+	require.NoError(t, c.RegisterSubscriptions(r))
+	assert.Equal(t, 1, r.HandlerCount(), "config-core should register 1 topic handler")
 }
 
 // stubMux implements cell.RouteMux for testing.

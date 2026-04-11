@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -262,16 +263,37 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 6: Register event subscriptions for cells implementing EventRegistrar.
-	// Subscription setup errors (e.g., missing DLX) abort startup.
+	// Step 6: Register event subscriptions via EventRouter.
+	// Cells declare handlers (non-blocking), then Router.Run starts consumption.
+	// Setup errors (e.g., missing DLX) abort startup.
+	var routerErrCh chan error // hoisted for Step 9 monitoring
 	if sub != nil {
+		evtRouter := eventrouter.New(sub)
 		for _, id := range asm.CellIDs() {
 			c := asm.Cell(id)
 			if er, ok := c.(cell.EventRegistrar); ok {
-				if err := er.RegisterSubscriptions(sub); err != nil {
+				if err := er.RegisterSubscriptions(evtRouter); err != nil {
 					return rollback(fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err))
 				}
 			}
+		}
+		if evtRouter.HandlerCount() > 0 {
+			slog.Info("bootstrap: starting event router",
+				slog.Int("handler_count", evtRouter.HandlerCount()))
+			routerErrCh = make(chan error, 1)
+			go func() {
+				routerErrCh <- evtRouter.Run(ctx)
+			}()
+			// Wait for all subscriptions to start or a setup error.
+			select {
+			case err := <-routerErrCh:
+				return rollback(fmt.Errorf("bootstrap: event router: %w", err))
+			case <-evtRouter.Running():
+				// All subscriptions consuming.
+			}
+			teardowns = append(teardowns, func(c context.Context) error {
+				return evtRouter.Close(c)
+			})
 		}
 	}
 
@@ -326,6 +348,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 9: Wait for shutdown signal or error.
+	// Monitor all background components: HTTP, workers, and event router.
 	slog.Info("bootstrap: application started successfully")
 	select {
 	case <-ctx.Done():
@@ -338,6 +361,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if err != nil {
 			slog.Error("bootstrap: worker failed, initiating shutdown", slog.Any("error", err))
 			return rollback(fmt.Errorf("bootstrap: worker: %w", err))
+		}
+	case err := <-routerErrCh:
+		if err != nil {
+			slog.Error("bootstrap: event router failed, initiating shutdown", slog.Any("error", err))
+			return rollback(fmt.Errorf("bootstrap: event router: %w", err))
 		}
 	}
 

@@ -119,6 +119,14 @@
 | TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | 1h |
 | OTEL-COV-01 | `adapters/otel/` | 覆盖率 67.3%（PR#72 删除了依赖内部 API 的旧测试后回升，但仍 < 80%；成功路径需 gRPC OTLP endpoint，需 testcontainers 集成测试） | 2h |
 | SUB-SETUP-01 | `kernel/outbox`, `cells/*/cell.go` | RegisterSubscriptions 用 100ms 启发式区分 setup 失败与正常阻塞消费。**已被 Phase 2 EventRouter 解决**——Router.Run() 同步返回 setup error，消除启发式 | ~~4h~~ → Phase 2 |
+| ER-P2-01 | `runtime/eventrouter/router.go` | ~~Close() 正常关停缺 elapsed 日志~~ PR#76 ✅ | ~~15min~~ |
+| ER-P2-02 | `kernel/cell/celltest/eventrouter.go` | ~~stubEventRouter 重复 → 提取到 celltest~~ PR#76 ✅ | ~~30min~~ |
+| ER-P2-03 | `runtime/eventrouter/router.go`, `runtime/bootstrap/bootstrap.go` | Running() 是一次性信号，无持续 health check 集成（OPS-3 readiness 探针可复用） | 1h |
+| ER-P2-04 | `runtime/bootstrap/bootstrap_test.go` | ~~缺 Router 正路径集成测试~~ PR#76 ✅ | ~~1h~~ |
+| CLEANUP-01 | `runtime/bootstrap/bootstrap.go` | 删除 `WithEventBus` deprecated wrapper，调用方改用 `WithPublisher` + `WithSubscriber` | 30min |
+| CLEANUP-02 | `cells/access-core/cell.go` | 删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier` | 1h |
+| ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
+| ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
 
 ### winmdm Accept P1
 
@@ -394,6 +402,7 @@
 | A | WM-33b 熔断器 | 0.5d | `adapters/` sony/gobreaker 包装 |
 | B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop） | 1d | `kernel/cell` 可选接口（type assertion） |
 | B | WM-15 L4 队列状态机 | 1.5d | `kernel/outbox` 合入 0-B2，状态 enum + 超时检测 |
+| B | ER-ARCH-02 EventRouter ConsumerGroup 支持 | 2h | `AddHandler(...HandlerOption)` + `WithConsumerGroup`，修复 competing consumers |
 
 **安全底线**: 熔断器防级联故障；AfterStop 清理敏感资源
 **测试策略**: TestPubSub 标准套件 12 场景；lifecycle hooks 回归验证（不注册钩子时行为不变）

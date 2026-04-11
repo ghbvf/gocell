@@ -8,7 +8,8 @@
 //	app := bootstrap.New(
 //	    bootstrap.WithAssembly(asm),
 //	    bootstrap.WithHTTPAddr(":8080"),
-//	    bootstrap.WithEventBus(eb),
+//	    bootstrap.WithPublisher(pub),
+//	    bootstrap.WithSubscriber(sub),
 //	)
 //	if err := app.Run(ctx); err != nil { ... }
 package bootstrap

@@ -152,8 +152,14 @@ func newEventCell(id string, subErr error) *eventCell {
 	}
 }
 
-func (c *eventCell) RegisterSubscriptions(_ outbox.Subscriber) error {
-	return c.subErr
+func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
+	if c.subErr != nil {
+		return c.subErr
+	}
+	r.AddHandler("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	return nil
 }
 
 func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
@@ -179,6 +185,37 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	assert.Contains(t, err.Error(), "DLX not configured")
 	// After rollback, assembly should be stopped (health returns empty or degraded).
 	// The key assertion is that Run returns the error instead of hanging.
+}
+
+func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
+	// Cell registers a handler → Router starts → bootstrap serves → ctx cancel → clean shutdown.
+	asm := assembly.New(assembly.Config{ID: "test-router-ok"})
+	ec := newEventCell("ok-cell", nil) // nil error → registers 1 handler
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New()
+	b := New(
+		WithAssembly(asm),
+		WithSubscriber(eb),
+		WithPublisher(eb),
+		WithHTTPAddr("127.0.0.1:0"),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Give bootstrap time to start (Router + HTTP).
+	time.Sleep(time.Second)
+	cancel()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err, "clean shutdown should not produce an error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
 }
 
 func TestBootstrap_RunContextCancel(t *testing.T) {

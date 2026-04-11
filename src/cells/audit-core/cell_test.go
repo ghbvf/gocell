@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -132,9 +133,9 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	eb := eventbus.New()
-	require.NoError(t, c.RegisterSubscriptions(eb))
-	_ = eb.Close()
+	r := &celltest.StubEventRouter{}
+	require.NoError(t, c.RegisterSubscriptions(r))
+	assert.Equal(t, 6, r.HandlerCount(), "audit-core should register 6 topic handlers")
 }
 
 // stubMux implements cell.RouteMux for testing.

@@ -65,11 +65,25 @@ type HTTPRegistrar interface {
 	RegisterRoutes(mux RouteMux)
 }
 
+// EventRouter declares event subscriptions. Cells call AddHandler during
+// RegisterSubscriptions to declare intent; the caller (bootstrap/Router)
+// is responsible for starting consumption.
+//
+// The minimal interface lives in kernel/cell so Cells can depend on it
+// without importing runtime/. The concrete implementation is in
+// runtime/eventrouter.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — AddHandler registers
+// intent; Router.Run starts consumption. GoCell simplifies to topic+handler
+// (no publish side in the same call).
+type EventRouter interface {
+	AddHandler(topic string, handler outbox.EntryHandler)
+}
+
 // EventRegistrar is optionally implemented by Cells that subscribe to events.
-// RegisterSubscriptions MUST validate subscription setup (e.g., DLX config)
-// synchronously and return an error if any subscription cannot be established.
-// Long-running consumption loops should be started in background goroutines
-// only after validation succeeds.
+// RegisterSubscriptions declares subscriptions by calling r.AddHandler for
+// each topic. It MUST NOT start goroutines or block — the Router manages
+// the subscription lifecycle.
 type EventRegistrar interface {
-	RegisterSubscriptions(sub outbox.Subscriber) error
+	RegisterSubscriptions(r EventRouter) error
 }
