@@ -218,7 +218,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		switch res.Disposition {
 		case outbox.DispositionAck:
 			if res.Receipt != nil {
-				if err := res.Receipt.Commit(ctx); err != nil {
+				if err := res.Receipt.Commit(context.WithoutCancel(ctx)); err != nil {
 					slog.Error("eventbus: receipt commit failed",
 						slog.String("topic", topic),
 						slog.String("entry_id", entry.ID),
@@ -229,7 +229,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			return // success or safe duplicate
 		case outbox.DispositionReject:
 			if res.Receipt != nil {
-				if err := res.Receipt.Release(ctx); err != nil {
+				if err := res.Receipt.Release(context.WithoutCancel(ctx)); err != nil {
 					slog.Error("eventbus: receipt release failed",
 						slog.String("topic", topic),
 						slog.String("entry_id", entry.ID),
@@ -253,7 +253,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 			return
 		case outbox.DispositionRequeue:
 			if res.Receipt != nil {
-				if err := res.Receipt.Release(ctx); err != nil {
+				if err := res.Receipt.Release(context.WithoutCancel(ctx)); err != nil {
 					slog.Error("eventbus: receipt release failed",
 						slog.String("topic", topic),
 						slog.String("entry_id", entry.ID),

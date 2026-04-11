@@ -183,7 +183,7 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 
 		state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 		if err != nil {
-			slog.Warn("rabbitmq: idempotency claim failed, proceeding without receipt",
+			slog.Error("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
 				slog.String("consumer_group", cb.config.ConsumerGroup),
@@ -200,10 +200,18 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 				slog.String("consumer_group", cb.config.ConsumerGroup))
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		case idempotency.ClaimBusy:
-			slog.Debug("rabbitmq: event being processed by another consumer, requeuing",
+			// Backoff before requeue to prevent busy loop: RabbitMQ's
+			// Nack(requeue=true) redelivers immediately with no delay.
+			delay := cb.config.RetryBaseDelay
+			slog.Debug("rabbitmq: event being processed by another consumer, requeuing after backoff",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup))
+				slog.String("consumer_group", cb.config.ConsumerGroup),
+				slog.Duration("backoff", delay))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+			}
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
 		default:
 			// ClaimAcquired — proceed with handler, thread Receipt through.

@@ -2125,6 +2125,101 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
+func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-requeue-receipt", EventType: "test.requeue"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("transient"),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 10,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	assert.True(t, ch.nackRequeue)
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "Requeue should not Commit")
+	assert.True(t, receipt.releaseCalled, "Requeue should Release Receipt")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_Reject_NoDLX_LogsError(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	// No DLXExchange configured.
+	sub := NewSubscriber(conn, SubscriberConfig{
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-no-dlx", EventType: "test.nodlx"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 11,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Verify Nack without requeue was called (message will be discarded since no DLX).
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	assert.False(t, ch.nackRequeue)
+	ch.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
+	claimer := &mockClaimer{state: idempotency.ClaimBusy}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryBaseDelay: 50 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		t.Fatal("handler should not be called for ClaimBusy")
+		return outbox.HandleResult{}
+	})
+
+	start := time.Now()
+	res := handler(context.Background(), outbox.Entry{ID: "evt-busy-backoff"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "ClaimBusy should backoff before requeue")
+}
+
 func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
