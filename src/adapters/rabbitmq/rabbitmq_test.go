@@ -1968,11 +1968,50 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
-func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
-	claimer := &mockClaimer{err: errors.New("redis down")}
+// sequenceClaimer returns different results on successive Claim calls.
+// Used to test claimWithRetry: first N calls fail, then succeed.
+type sequenceClaimer struct {
+	mu        sync.Mutex
+	responses []claimResponse
+	callCount int
+}
+
+type claimResponse struct {
+	state   idempotency.ClaimState
+	receipt outbox.Receipt
+	err     error
+}
+
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx := c.callCount
+	c.callCount++
+	if idx < len(c.responses) {
+		r := c.responses[idx]
+		return r.state, r.receipt, r.err
+	}
+	// Default: return last response forever.
+	r := c.responses[len(c.responses)-1]
+	return r.state, r.receipt, r.err
+}
+
+var _ idempotency.Claimer = (*sequenceClaimer)(nil)
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThenSuccess(t *testing.T) {
+	receipt := &mockReceipt{}
+	// fail-closed: claimWithRetry handles ALL attempts (no naked first Claim).
+	// ClaimRetryCount=3 → 3 total Claim calls, last succeeds.
+	claimer := &sequenceClaimer{responses: []claimResponse{
+		{err: errors.New("redis down")},                                     // attempt 0
+		{err: errors.New("redis down")},                                     // attempt 1
+		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 2 — success
+	}}
 
 	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
+		ConsumerGroup:      "test-group",
+		ClaimRetryCount:    3,
+		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
 
 	handlerCalled := false
@@ -1981,10 +2020,194 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
-	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
-	assert.True(t, handlerCalled, "should still process on claim error (fail-open)")
+	res := handler(context.Background(), outbox.Entry{ID: "evt-retry-ok"})
+	assert.True(t, handlerCalled, "handler must be called after claim retry succeeds")
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.Nil(t, res.Receipt, "no Receipt on claim error")
+	assert.Same(t, receipt, res.Receipt, "Receipt from successful retry must be threaded through")
+
+	claimer.mu.Lock()
+	assert.Equal(t, 3, claimer.callCount, "claimWithRetry makes ClaimRetryCount total attempts")
+	claimer.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
+	// With jitter, we assert >= base delay only (not exact).
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:      "test-group",
+		ClaimRetryCount:    3,
+		ClaimRetryBaseDelay: 20 * time.Millisecond,
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	start := time.Now()
+	res := handler(context.Background(), outbox.Entry{ID: "evt-claim-err"})
+	elapsed := time.Since(start)
+
+	assert.False(t, handlerCalled, "handler must NOT be called when all retries fail")
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Error(t, res.Err)
+	// Base delays: 20ms + 40ms = 60ms between 3 attempts. With jitter >= base,
+	// total must be at least 50ms (allowing timing slack).
+	assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond,
+		"fail-closed must do local exponential backoff before returning to broker")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:      "test-group",
+		ClaimRetryCount:    3,
+		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := handler(ctx, outbox.Entry{ID: "evt-claim-ctx"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Less(t, elapsed, 1*time.Second, "ctx cancel must short-circuit the backoff")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t *testing.T) {
+	// S3-01: boundary — ClaimRetryCount=1 means exactly 1 attempt, no backoff sleep.
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:      "test-group",
+		ClaimRetryCount:    1,
+		ClaimRetryBaseDelay: 5 * time.Second,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	start := time.Now()
+	res := handler(context.Background(), outbox.Entry{ID: "evt-retry1"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Less(t, elapsed, 500*time.Millisecond, "RetryCount=1 must not sleep (single attempt)")
+
+	claimer.mu.Lock()
+	assert.Equal(t, 1, len(claimer.claims), "exactly 1 Claim attempt with ClaimRetryCount=1")
+	claimer.mu.Unlock()
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T) {
+	// S1-01: ClaimRetryCount/ClaimRetryBaseDelay independent from RetryCount/RetryBaseDelay.
+	receipt := &mockReceipt{}
+	claimer := &sequenceClaimer{responses: []claimResponse{
+		{err: errors.New("redis down")},                                     // attempt 0
+		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 1 — success
+	}}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:      "test-group",
+		RetryCount:         5,                   // handler retries — should not affect claim
+		RetryBaseDelay:     1 * time.Second,     // handler backoff — should not affect claim
+		ClaimRetryCount:    2,                   // claim retries
+		ClaimRetryBaseDelay: 10 * time.Millisecond, // claim backoff
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	start := time.Now()
+	res := handler(context.Background(), outbox.Entry{ID: "evt-independent"})
+	elapsed := time.Since(start)
+
+	assert.True(t, handlerCalled)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	// Should complete quickly using claim delay (10ms), not handler delay (1s).
+	assert.Less(t, elapsed, 500*time.Millisecond, "claim retry must use ClaimRetryBaseDelay, not RetryBaseDelay")
+
+	claimer.mu.Lock()
+	assert.Equal(t, 2, claimer.callCount)
+	claimer.mu.Unlock()
+}
+
+func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
+	// S4-02: MaxRetryDelay caps exponential growth.
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:      "test-group",
+		ClaimRetryCount:    3,
+		ClaimRetryBaseDelay: 100 * time.Millisecond,
+		MaxRetryDelay:      50 * time.Millisecond, // cap below base — forces all delays to 50ms
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	start := time.Now()
+	_ = handler(context.Background(), outbox.Entry{ID: "evt-cap"})
+	elapsed := time.Since(start)
+
+	// Without cap: 100ms + 200ms = 300ms. With cap at 50ms: 50ms + 50ms = 100ms.
+	// Allow generous slack but verify it's well below uncapped.
+	assert.Less(t, elapsed, 250*time.Millisecond,
+		"MaxRetryDelay must cap exponential backoff growth")
+}
+
+func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	// Must not panic; negative delay is clamped to default by setDefaults.
+	res := handler(context.Background(), outbox.Entry{ID: "evt-neg-delay"})
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+}
+
+func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: 10 * time.Millisecond,
+		MaxRetryDelay:       -1 * time.Second, // negative — must not panic
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-neg-cap"})
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 }
 
 // --- processDelivery Receipt lifecycle tests ---
@@ -2263,8 +2486,10 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-		ClaimFailOpen: boolPtr(false),
+		ConsumerGroup:      "test-group",
+		ClaimFailOpen:      boolPtr(false),
+		ClaimRetryCount:    3,
+		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
 
 	handlerCalled := false
@@ -2298,6 +2523,35 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 	assert.True(t, handlerCalled, "handler must be called when fail-open is explicit")
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.Nil(t, res.Receipt, "no Receipt when claim fails")
+}
+
+// =============================================================================
+// retryLoop post-loop ctx.Err() test (S3-02)
+// =============================================================================
+
+func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testing.T) {
+	// S3-02: When ctx is cancelled by the time the final retry completes,
+	// retryLoop must return Requeue (not Reject to DLX).
+	checker := newMockIdempotencyChecker()
+
+	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     1, // single attempt, no inter-attempt sleep
+		RetryBaseDelay: time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		// Cancel context during the handler — simulates shutdown mid-processing.
+		cancel()
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
+	})
+
+	res := handler(ctx, outbox.Entry{ID: "evt-ctx-final"})
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
+		"must Requeue (not Reject to DLX) when ctx is cancelled after final attempt")
+	assert.ErrorIs(t, res.Err, context.Canceled)
 }
 
 // =============================================================================
