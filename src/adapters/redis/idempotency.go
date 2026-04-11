@@ -4,99 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	goredis "github.com/redis/go-redis/v9"
 )
-
-// ---------------------------------------------------------------------------
-// IdempotencyChecker — legacy (Deprecated, retained for Checker interface)
-// ---------------------------------------------------------------------------
-
-// Compile-time interface check.
-var _ idempotency.Checker = (*IdempotencyChecker)(nil)
-
-// Deprecated: IdempotencyChecker implements the legacy idempotency.Checker.
-// New code should use IdempotencyClaimer (two-phase Claim/Commit/Release).
-type IdempotencyChecker struct {
-	rdb cmdable
-}
-
-// NewIdempotencyChecker creates a new IdempotencyChecker using the given Client.
-func NewIdempotencyChecker(client *Client) *IdempotencyChecker {
-	return &IdempotencyChecker{rdb: client.cmdable()}
-}
-
-// newIdempotencyCheckerFromCmdable creates an IdempotencyChecker with a
-// pre-built cmdable for testing.
-func newIdempotencyCheckerFromCmdable(rdb cmdable) *IdempotencyChecker {
-	return &IdempotencyChecker{rdb: rdb}
-}
-
-// IsProcessed returns true if the given idempotency key has already been
-// marked as processed. It returns false and nil error for keys that do not
-// exist (i.e., not yet processed).
-func (ic *IdempotencyChecker) IsProcessed(ctx context.Context, key string) (bool, error) {
-	val, err := ic.rdb.Get(ctx, key).Result()
-	if err != nil {
-		if errors.Is(err, goredis.Nil) {
-			return false, nil
-		}
-		return false, errcode.Wrap(ErrAdapterRedisGet,
-			fmt.Sprintf("redis: idempotency check failed (key=%s)", key), err)
-	}
-	return val == "1", nil
-}
-
-// MarkProcessed atomically marks the idempotency key as processed using
-// SET NX with the given TTL. If the key already exists (already processed),
-// the operation is a no-op and returns nil.
-// If ttl <= 0, idempotency.DefaultTTL (24h) is used to prevent permanent keys.
-func (ic *IdempotencyChecker) MarkProcessed(ctx context.Context, key string, ttl time.Duration) error {
-	if ttl <= 0 {
-		ttl = idempotency.DefaultTTL
-	}
-	_, err := ic.rdb.SetNX(ctx, key, "1", ttl).Result()
-	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet,
-			fmt.Sprintf("redis: idempotency mark failed (key=%s)", key), err)
-	}
-	return nil
-}
-
-// TryProcess atomically checks whether key has been processed and marks it if not.
-// Returns true if the caller should process (key was not previously seen).
-// Returns false if already processed (another consumer got there first).
-// Uses Redis SetNX which is inherently atomic, eliminating the TOCTOU race.
-// If ttl <= 0, idempotency.DefaultTTL (24h) is used to prevent permanent keys.
-func (ic *IdempotencyChecker) TryProcess(ctx context.Context, key string, ttl time.Duration) (bool, error) {
-	if ttl <= 0 {
-		ttl = idempotency.DefaultTTL
-	}
-	set, err := ic.rdb.SetNX(ctx, key, "1", ttl).Result()
-	if err != nil {
-		return false, errcode.Wrap(ErrAdapterRedisSet,
-			fmt.Sprintf("redis: idempotency try-process failed (key=%s)", key), err)
-	}
-	return set, nil
-}
-
-// Release removes the idempotency key so a redelivered message can be processed
-// again. This must be called when a message is requeued after TryProcess already
-// claimed the key (e.g., DLQ publish failure, shutdown).
-func (ic *IdempotencyChecker) Release(ctx context.Context, key string) error {
-	_, err := ic.rdb.Del(ctx, key).Result()
-	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisDelete,
-			fmt.Sprintf("redis: idempotency release failed (key=%s)", key), err)
-	}
-	return nil
-}
 
 // ---------------------------------------------------------------------------
 // IdempotencyClaimer — two-phase model (Solution B)
@@ -107,6 +22,8 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 
 // IdempotencyClaimer implements idempotency.Claimer using a dual-key Lua
 // script model:
+//
+// Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
 //   - lease:{key} — SET NX with leaseTTL, value = random token. Indicates "processing".
 //   - done:{key}  — SET with doneTTL, value = "1". Indicates "completed".
@@ -243,42 +160,74 @@ type redisReceipt struct {
 	doneKey  string
 	token    string
 	doneTTL  time.Duration
+
+	mu        sync.Mutex
+	committed bool
+	commitErr error
+	released  bool
+	releaseErr error
 }
 
 // Compile-time interface check.
 var _ outbox.Receipt = (*redisReceipt)(nil)
 
 // Commit marks the key as permanently done and removes the lease.
+// Repeat calls after a successful Commit are no-ops (return nil).
+// Stale-lease errors are cached (permanent). Redis timeouts are NOT cached,
+// allowing retry with a fresh ctx.
 func (r *redisReceipt) Commit(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.committed {
+		return r.commitErr
+	}
 	doneSec := int64(r.doneTTL.Seconds())
 	if doneSec < 1 {
 		doneSec = 1
 	}
 	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet,
+		r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
+		return r.commitErr
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {
-		return errcode.New(ErrAdapterRedisSet,
+		r.commitErr = errcode.New(ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
+		r.committed = true // stale lease is permanent, don't retry
+		return r.commitErr
 	}
+	r.commitErr = nil // clear stale error from a previous transient failure
+	r.committed = true
 	return nil
 }
 
 // Release removes the processing lease so a redelivered message can re-enter.
+// Repeat calls after a successful Release are no-ops (return nil).
+// Stale-lease errors are cached (permanent). Redis timeouts are NOT cached,
+// allowing retry with a fresh ctx.
 func (r *redisReceipt) Release(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.released {
+		return r.releaseErr
+	}
 	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisDelete,
+		r.releaseErr = errcode.Wrap(ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
+		return r.releaseErr
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {
-		return errcode.New(ErrAdapterRedisDelete,
+		r.releaseErr = errcode.New(ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
+		r.released = true // stale lease is permanent, don't retry
+		return r.releaseErr
 	}
+	r.releaseErr = nil // clear stale error from a previous transient failure
+	r.released = true
 	return nil
 }
 

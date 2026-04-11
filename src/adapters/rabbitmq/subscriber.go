@@ -195,16 +195,17 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 		}
 
 		slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
-			slog.String("topic", topic),
+			slog.String(logKeyTopic, topic),
 			slog.String("queue", queueName),
 			slog.String("error", err.Error()))
 
 		// Wait for connection recovery before re-subscribing.
 		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
-			// Permanent connection error — propagate to caller so upstream
+			// Terminal connection error — propagate to caller so upstream
 			// (EventRouter/Bootstrap) can detect and handle terminal failure.
-			var ecErr *errcode.Error
-			if errors.As(waitErr, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent {
+			// Covers both ErrAdapterAMQPConnectPermanent (bad credentials)
+			// and ErrAdapterAMQPReconnectExhausted (max attempts exceeded).
+			if isTerminalConnectionError(waitErr) {
 				return waitErr
 			}
 			// ctx cancelled or subscriber closed during wait — clean exit.
@@ -212,7 +213,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 		}
 
 		slog.Info("rabbitmq: resubscribing after reconnect",
-			slog.String("topic", topic),
+			slog.String(logKeyTopic, topic),
 			slog.String("queue", queueName))
 	}
 }
@@ -230,6 +231,10 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
+		// Terminal state — propagate immediately, do not wrap as subscribe error.
+		if isTerminalConnectionError(err) {
+			return err
+		}
 		if isRecoverableAMQPError(err) {
 			return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
 		}
@@ -302,7 +307,7 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	slog.Info("rabbitmq: subscriber started",
-		slog.String("topic", topic),
+		slog.String(logKeyTopic, topic),
 		slog.String("queue", queueName),
 		slog.String("consumer", consumerTag),
 		slog.Int("prefetch", s.config.PrefetchCount))
@@ -349,18 +354,18 @@ func (s *Subscriber) consumeLoop(
 		select {
 		case <-ctx.Done():
 			slog.Info("rabbitmq: subscriber context cancelled",
-				slog.String("topic", topic))
+				slog.String(logKeyTopic, topic))
 			return nil
 
 		case <-s.closeCh:
 			slog.Info("rabbitmq: subscriber closing",
-				slog.String("topic", topic))
+				slog.String(logKeyTopic, topic))
 			return nil
 
 		case delivery, ok := <-deliveries:
 			if !ok {
 				slog.Warn("rabbitmq: delivery channel closed, subscriber exiting",
-					slog.String("topic", topic))
+					slog.String(logKeyTopic, topic))
 				return fmt.Errorf("%w: delivery channel closed", errSubscriptionLost)
 			}
 
@@ -383,12 +388,12 @@ func (s *Subscriber) processDelivery(
 	if err := json.Unmarshal(delivery.Body, &entry); err != nil {
 		// Unmarshal failure is a permanent error — NACK without requeue.
 		slog.Error("rabbitmq: unmarshal delivery failed, nacking without requeue",
-			slog.String("topic", topic),
+			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
 			slog.String("error", err.Error()))
 		if nackErr := ch.Nack(delivery.DeliveryTag, false, false); nackErr != nil {
 			slog.Error("rabbitmq: nack failed",
-				slog.String("topic", topic),
+				slog.String(logKeyTopic, topic),
 				slog.String("error", nackErr.Error()))
 		}
 		return
@@ -410,30 +415,30 @@ func (s *Subscriber) processDelivery(
 		brokerErr = ch.Ack(delivery.DeliveryTag, false)
 		if brokerErr != nil {
 			slog.Error("rabbitmq: ack failed",
-				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
 	case outbox.DispositionReject:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
 		if brokerErr != nil {
 			slog.Error("rabbitmq: nack(reject) failed",
-				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
 	case outbox.DispositionRequeue:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
 		if brokerErr != nil {
 			slog.Error("rabbitmq: nack(requeue) failed",
-				slog.String("topic", topic),
-				slog.String("event_id", entry.ID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
 	default:
 		slog.Error("rabbitmq: unknown disposition, nacking with requeue",
-			slog.String("topic", topic),
-			slog.String("event_id", entry.ID),
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()))
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
 	}
@@ -441,8 +446,8 @@ func (s *Subscriber) processDelivery(
 	// Log handler-level error if present (separate from broker error).
 	if res.Err != nil {
 		slog.Warn("rabbitmq: handler reported error",
-			slog.String("topic", topic),
-			slog.String("event_id", entry.ID),
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()),
 			slog.String("error", res.Err.Error()))
 	}
@@ -468,8 +473,8 @@ func (s *Subscriber) settleReceipt(
 	if brokerErr != nil {
 		if relErr := res.Receipt.Release(rctx); relErr != nil {
 			slog.Error("rabbitmq: receipt release failed after broker error",
-				slog.String("topic", topic),
-				slog.String("event_id", eventID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
 				slog.String("error", relErr.Error()))
 		}
 		return
@@ -479,16 +484,16 @@ func (s *Subscriber) settleReceipt(
 	case outbox.DispositionAck:
 		if err := res.Receipt.Commit(rctx); err != nil {
 			slog.Error("rabbitmq: receipt commit failed",
-				slog.String("topic", topic),
-				slog.String("event_id", eventID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
 		}
 	default:
 		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
 		if err := res.Receipt.Release(rctx); err != nil {
 			slog.Error("rabbitmq: receipt release failed",
-				slog.String("topic", topic),
-				slog.String("event_id", eventID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
 		}
 	}

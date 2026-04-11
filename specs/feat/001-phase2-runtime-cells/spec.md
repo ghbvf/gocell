@@ -47,7 +47,7 @@ RateLimit 验收标准：超限请求返回 **429** + `Retry-After` 头；默认
 
 - `/healthz` — liveness probe，聚合 `Assembly.Health()` 结果
 - `/readyz` — readiness probe，支持注册自定义 readiness checker
-- 返回 200 (healthy) 或 503 (unhealthy) + JSON body `{"status": "healthy|unhealthy", "checks": {...}}`
+- 返回 200 (healthy) 或 503 (unhealthy) + JSON body `{"status": "healthy|unhealthy", "cells": {...}, "dependencies": {...}}`
 
 #### FR-1.3: 路由构建器
 

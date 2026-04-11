@@ -131,8 +131,56 @@ func TestReadyzHandler(t *testing.T) {
 			var body map[string]any
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 			assert.Equal(t, tt.wantBodyStat, body["status"])
+
+			// Verify namespace separation: cells and dependencies are in distinct maps.
+			cells, ok := body["cells"].(map[string]any)
+			require.True(t, ok, "response must contain cells map")
+			_, hasCellCheck := cells["cell-1"]
+			assert.True(t, hasCellCheck, "should include cell-1 in cells")
+
+			deps, ok := body["dependencies"].(map[string]any)
+			require.True(t, ok, "response must contain dependencies map")
+			_, hasDBCheck := deps["db"]
+			assert.True(t, hasDBCheck, "should include db in dependencies")
 		})
 	}
+}
+
+func TestReadyzHandler_MultipleCheckers(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("rabbitmq", func() error { return nil })
+	h.RegisterChecker("postgres", func() error { return fmt.Errorf("connection refused") })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body["status"])
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+}
+
+func TestRegisterChecker_DuplicatePanics(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	h := New(asm)
+	h.RegisterChecker("db", func() error { return nil })
+
+	assert.PanicsWithValue(t, `health: duplicate checker name "db"`, func() {
+		h.RegisterChecker("db", func() error { return nil })
+	})
 }
 
 func TestEmptyAssembly(t *testing.T) {

@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/bits"
 	"math/rand/v2"
@@ -23,8 +24,9 @@ const (
 	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
 	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
 	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe        errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume          errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPSubscribe           errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume             errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPReconnectExhausted  errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
 )
 
 // isPermanentDialError returns true if the error from Dial indicates a
@@ -68,7 +70,7 @@ func isPermanentDialError(err error) bool {
 	// implement a typed error. These are pre-handshake configuration errors
 	// (sourced from amqp091-go v1.10.0: uri.go, connection.go, tls.go).
 	msg := err.Error()
-	for _, keyword := range permanentDialKeywords {
+	for _, keyword := range permanentDialSubstrings {
 		if strings.Contains(msg, keyword) {
 			return true
 		}
@@ -78,14 +80,26 @@ func isPermanentDialError(err error) bool {
 	return false
 }
 
-// permanentDialKeywords are substrings in amqp091-go plain-error messages
+// permanentDialSubstrings are substrings in amqp091-go plain-error messages
 // that indicate permanent dial failures. String matching is the last resort —
 // structural checks (amqp.Error, net.Error, url.Error) are tried first.
-var permanentDialKeywords = []string{
+var permanentDialSubstrings = []string{
 	"AMQP URI",       // amqp.ParseURI → malformed URI
 	"auth mechanism", // connection.go → unsupported SASL mechanism
 	"x509:",          // crypto/tls → certificate validation failure
 	"tls: ",          // crypto/tls → handshake / protocol error
+}
+
+// isTerminalConnectionError reports whether the error indicates the Connection
+// has entered terminal state (permanent dial failure or reconnect attempts
+// exhausted). Callers should not retry — close the dependent component.
+func isTerminalConnectionError(err error) bool {
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		return false
+	}
+	return ecErr.Code == ErrAdapterAMQPConnectPermanent ||
+		ecErr.Code == ErrAdapterAMQPReconnectExhausted
 }
 
 // Config holds configuration for the RabbitMQ connection.
@@ -108,6 +122,14 @@ type Config struct {
 	// ConfirmTimeout is the timeout for publisher confirm mode.
 	// Default: 5s.
 	ConfirmTimeout time.Duration
+
+	// MaxReconnectAttempts limits the number of reconnection attempts after
+	// a connection is lost. 0 (default) means unlimited reconnection.
+	// When the limit is reached, the connection enters terminal state.
+	//
+	// Production recommendation: 30-60 with the default 30s max backoff
+	// gives ~15-30 minutes of retry before entering terminal state.
+	MaxReconnectAttempts int
 }
 
 func (c *Config) setDefaults() {
@@ -187,7 +209,7 @@ func DefaultDial(url string) (AMQPConnection, error) {
 // Connection has three states:
 //   - connected:    ready for use (connected channel is closed)
 //   - reconnecting: lost connection, attempting backoff reconnect
-//   - terminal:     permanent error, will not reconnect (failed channel is closed)
+//   - terminal:     permanent error, will not reconnect (terminalCh is closed)
 type Connection struct {
 	config Config
 	dial   DialFunc
@@ -203,9 +225,9 @@ type Connection struct {
 	// connected is closed when a connection is established, re-created on disconnect.
 	connected chan struct{}
 
-	// failed is closed when a permanent dial error is encountered.
+	// terminalCh is closed when a permanent dial error is encountered.
 	// permanentErr holds the error for callers to inspect.
-	failed       chan struct{}
+	terminalCh   chan struct{}
 	permanentErr error
 }
 
@@ -220,7 +242,7 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		failed:      make(chan struct{}),
+		terminalCh:  make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -236,9 +258,9 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 			dialErr = ecErr.Unwrap()
 		}
 		if isPermanentDialError(dialErr) {
-			return nil, errcode.Wrap(ErrAdapterAMQPConnectPermanent, "rabbitmq: initial connection failed (permanent)", err)
+			return nil, errcode.Wrap(ErrAdapterAMQPConnectPermanent, "rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
 		}
-		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", err)
+		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
 	}
 
 	close(c.connected)
@@ -314,7 +336,7 @@ func (c *Connection) reconnectLoop() {
 			// Terminal state: permanent dial error. Signal all WaitConnected callers.
 			c.mu.Lock()
 			c.permanentErr = permErr
-			close(c.failed)
+			close(c.terminalCh)
 			c.mu.Unlock()
 			return
 		} else {
@@ -357,17 +379,25 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 
 			if isPermanentDialError(dialErr) {
 				permErr := errcode.Wrap(ErrAdapterAMQPConnectPermanent,
-					"rabbitmq: permanent connection error, giving up", err)
+					"rabbitmq: permanent connection error, giving up", c.sanitizeDialError(err))
 				slog.Error("rabbitmq: permanent connection error, giving up",
 					slog.Int("attempt", attempt+1),
-					slog.String("error", err.Error()))
+					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 				return false, permErr
 			}
 
 			slog.Warn("rabbitmq: reconnect failed (recoverable), will retry",
 				slog.Int("attempt", attempt+1),
-				slog.String("error", err.Error()))
+				slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 			attempt++
+			if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
+				slog.Error("rabbitmq: max reconnect attempts exceeded, entering terminal state",
+					slog.Int("max_attempts", c.config.MaxReconnectAttempts),
+					slog.Int("attempt", attempt),
+					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
+				return false, errcode.Wrap(ErrAdapterAMQPReconnectExhausted,
+					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), c.sanitizeDialError(err))
+			}
 			continue
 		}
 
@@ -390,8 +420,8 @@ func (c *Connection) backoffDelay(attempt int) time.Duration {
 
 	// Compute max safe exponent: 63 - bits needed to represent base.
 	// This adapts to any ReconnectBaseDelay (1ns → exp 62, 1s → exp 33).
-	safeExp := 63 - bits.Len64(uint64(base))
-	if attempt > safeExp {
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	if attempt > maxSafeShift {
 		return addDownJitter(maxBackoff)
 	}
 
@@ -541,18 +571,26 @@ func (c *Connection) Close() error {
 }
 
 // WaitConnected blocks until the connection is established, a permanent error
-// occurs, or ctx is cancelled. Returns the permanent error if the connection
-// entered terminal state.
+// occurs, or ctx is cancelled.
+//
+// Returns nil on successful connection, or an error:
+//   - ErrAdapterAMQPConnectPermanent: terminal state due to unrecoverable
+//     condition (bad credentials, TLS failure). Do NOT retry.
+//   - ErrAdapterAMQPReconnectExhausted: terminal state because
+//     MaxReconnectAttempts was exceeded. May recover after Pod restart
+//     with fresh config/network.
+//   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel.
+//     May retry with a fresh context.
 func (c *Connection) WaitConnected(ctx context.Context) error {
 	c.mu.RLock()
 	connected := c.connected
-	failed := c.failed
+	terminalCh := c.terminalCh
 	c.mu.RUnlock()
 
 	select {
 	case <-connected:
 		return nil
-	case <-failed:
+	case <-terminalCh:
 		c.mu.RLock()
 		err := c.permanentErr
 		c.mu.RUnlock()
@@ -560,6 +598,29 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 	case <-ctx.Done():
 		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
 	}
+}
+
+// sanitizeDialError wraps a dial error with the URL credentials redacted
+// so the error chain cannot leak credentials when .Error() is called upstream.
+// Returns the original error unchanged if the URL is empty or not found in the
+// error string. The returned error is a plain fmt.Errorf (losing type info),
+// which is acceptable because isPermanentDialError classification happens BEFORE
+// this sanitization, and the outer errcode.Wrap provides the error code.
+func (c *Connection) sanitizeDialError(err error) error {
+	if err == nil || c.config.URL == "" {
+		return err
+	}
+	sanitized := sanitizeErrorURL(err.Error(), c.config.URL)
+	if sanitized == err.Error() {
+		return err // no URL found in error, return as-is
+	}
+	return fmt.Errorf("%s", sanitized)
+}
+
+// sanitizeErrorURL replaces any occurrence of rawURL in errStr with
+// the redacted form, preventing credential leaks in log messages.
+func sanitizeErrorURL(errStr, rawURL string) string {
+	return strings.ReplaceAll(errStr, rawURL, sanitizeURL(rawURL))
 }
 
 // sanitizeURL redacts credentials from the AMQP URL for safe logging.

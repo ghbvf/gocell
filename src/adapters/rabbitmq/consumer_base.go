@@ -5,11 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/bits"
 	"math/rand/v2"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+// Structured log field keys used across consumer_base and subscriber.
+const (
+	logKeyEventID       = "event_id"
+	logKeyTopic         = "topic"
+	logKeyConsumerGroup = "consumer_group"
 )
 
 // ConsumerBaseConfig configures ConsumerBase behavior.
@@ -66,10 +74,10 @@ func (c *ConsumerBaseConfig) setDefaults() {
 	if c.RetryBaseDelay <= 0 {
 		c.RetryBaseDelay = 1 * time.Second
 	}
-	if c.IdempotencyTTL == 0 {
+	if c.IdempotencyTTL <= 0 {
 		c.IdempotencyTTL = idempotency.DefaultTTL
 	}
-	if c.LeaseTTL == 0 {
+	if c.LeaseTTL <= 0 {
 		c.LeaseTTL = idempotency.DefaultLeaseTTL
 	}
 	if c.ClaimRetryCount <= 0 {
@@ -83,56 +91,44 @@ func (c *ConsumerBaseConfig) setDefaults() {
 	}
 }
 
-// cappedDelay clamps delay to [0, MaxRetryDelay].
-func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
-	if delay <= 0 {
+// safeDelay computes base * 2^attempt with overflow protection, capped by maxDelay.
+// Uses bits.Len64 to determine the maximum safe shift, matching the strategy
+// in Connection.backoffDelay.
+func safeDelay(base, maxDelay time.Duration, attempt int) time.Duration {
+	if base <= 0 {
 		return 0
 	}
-	if delay > c.MaxRetryDelay {
-		return c.MaxRetryDelay
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	if attempt > maxSafeShift {
+		return maxDelay
+	}
+	delay := base * (1 << uint(attempt))
+	if delay <= 0 || delay > maxDelay {
+		return maxDelay
 	}
 	return delay
 }
 
-// ConsumerBase wraps an outbox.EntryHandler with idempotency checking and
-// exponential backoff retry. DLQ routing is now handled by the broker via
-// DLX (DispositionReject triggers Nack requeue=false).
+// ConsumerBase wraps an outbox.EntryHandler with two-phase idempotency
+// (Claim/Commit/Release) and exponential backoff retry. DLQ routing is
+// handled by the broker via DLX (DispositionReject triggers Nack requeue=false).
 //
-// ConsumerBase supports two idempotency backends:
-//   - Legacy Checker (via NewConsumerBase): single-phase TryProcess. Has a race
-//     condition where the key is marked done before broker Ack. Retained for
-//     backward compatibility.
-//   - Claimer (via NewConsumerBaseWithClaimer): two-phase Claim/Commit/Release.
-//     Receipt is threaded through HandleResult so processDelivery can Commit
-//     only after broker Ack succeeds.
+// The Receipt is threaded through HandleResult so processDelivery can
+// Commit/Release after broker Ack/Nack succeeds.
 //
 // Consumer: cg-{ConsumerGroup}-{topic}
 // Idempotency key: {ConsumerGroup}:{event-id}, TTL 24h
 // ACK timing: after business logic returns DispositionAck
 // Retry: transient errors -> retry+backoff / permanent errors -> DispositionReject → DLX
 type ConsumerBase struct {
-	checker idempotency.Checker  // legacy, nil when using Claimer
-	claimer idempotency.Claimer  // Solution B, nil when using legacy Checker
+	claimer idempotency.Claimer
 	config  ConsumerBaseConfig
 }
 
-// NewConsumerBase creates a ConsumerBase using the legacy Checker interface.
-//
-// Deprecated: Use NewConsumerBaseWithClaimer for correct two-phase idempotency
-// that aligns idempotency state with broker acknowledgement.
-// Scheduled for removal after all cells migrate to Claimer (target: Phase 3).
-func NewConsumerBase(checker idempotency.Checker, config ConsumerBaseConfig) *ConsumerBase {
-	config.setDefaults()
-	return &ConsumerBase{
-		checker: checker,
-		config:  config,
-	}
-}
-
-// NewConsumerBaseWithClaimer creates a ConsumerBase using the two-phase
-// Claimer interface. The returned Receipt is threaded through HandleResult
-// so that the Subscriber can Commit/Release after broker Ack/Nack.
-func NewConsumerBaseWithClaimer(claimer idempotency.Claimer, config ConsumerBaseConfig) *ConsumerBase {
+// NewConsumerBase creates a ConsumerBase using the two-phase Claimer interface.
+// The returned Receipt is threaded through HandleResult so that the Subscriber
+// can Commit/Release after broker Ack/Nack.
+func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) *ConsumerBase {
 	config.setDefaults()
 	return &ConsumerBase{
 		claimer: claimer,
@@ -151,12 +147,19 @@ func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
 }
 
 // Wrap returns an EntryHandler that wraps the given business handler with
-// idempotency checking and retry with exponential backoff.
+// two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
-// When constructed with NewConsumerBaseWithClaimer, Wrap uses two-phase
-// idempotency: the Receipt is attached to HandleResult so processDelivery
-// can Commit/Release after broker Ack/Nack. When constructed with
-// NewConsumerBase (legacy), Wrap uses the single-phase TryProcess path.
+// The Receipt is threaded through HandleResult — ConsumerBase never calls
+// Commit/Release itself; that is processDelivery's job after broker Ack/Nack.
+//
+// Fail-open (ClaimFailOpen=true): single Claim attempt; on error, proceed
+// without idempotency — avoids total consumer stall, but risks duplicate
+// processing during outage.
+//
+// Fail-closed (ClaimFailOpen=false or nil, default): all Claim attempts go
+// through claimWithRetry (including the first), so every failure is followed
+// by exponential backoff + jitter. Safe from duplicates, but all consumption
+// stops until the idempotency backend recovers.
 //
 // Rules:
 //   - handler returns DispositionAck → pass through as Ack
@@ -167,40 +170,35 @@ func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
 //   - retry budget exhausted → Reject
 //   - ctx cancelled / shutdown → Requeue
 func (cb *ConsumerBase) Wrap(topic string, handler outbox.EntryHandler) outbox.EntryHandler {
-	if cb.claimer != nil {
-		return cb.wrapWithClaimer(topic, handler)
-	}
-	return cb.wrapWithChecker(topic, handler)
-}
-
-// wrapWithChecker is the legacy path using single-phase TryProcess.
-// Deprecated: has a race condition where the key is marked done before broker Ack.
-func (cb *ConsumerBase) wrapWithChecker(topic string, handler outbox.EntryHandler) outbox.EntryHandler {
 	return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
 
-		shouldProcess, err := cb.checker.TryProcess(ctx, idempotencyKey, cb.config.IdempotencyTTL)
-		if err != nil {
-			slog.Warn("rabbitmq: idempotency check failed, proceeding with handler",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup),
-				slog.String("error", err.Error()))
-			shouldProcess = true
-		}
-		if !shouldProcess {
-			slog.Debug("rabbitmq: event already processed, skipping",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup))
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		// Fail-open: single Claim attempt, proceed without idempotency on error.
+		if cb.config.ClaimFailOpen != nil && *cb.config.ClaimFailOpen {
+			state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
+			if err != nil {
+				slog.Warn("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
+					slog.String(logKeyEventID, entry.ID),
+					slog.String(logKeyTopic, topic),
+					slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
+					slog.String("error", err.Error()))
+				return cb.retryLoop(ctx, topic, entry, handler, nil)
+			}
+			return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
 		}
 
-		// Wrap legacy Checker as a Receipt so processDelivery can Release
-		// after broker Ack/Nack, not before. This prevents the race where
-		// releaseChecker runs before Nack, opening a duplicate-processing window.
-		receipt := &checkerReceipt{checker: cb.checker, key: idempotencyKey}
-		return cb.retryLoop(ctx, topic, entry, handler, receipt)
+		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
+		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey)
+		if err != nil {
+			slog.Error("rabbitmq: idempotency claim exhausted, requeuing (fail-closed)",
+				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
+				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
+				slog.String("error", err.Error()))
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
+		}
+		return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
 	}
 }
 
@@ -242,15 +240,15 @@ func (cb *ConsumerBase) claimWithRetry(
 			return 0, nil, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
-			base := cb.config.cappedDelay(cb.config.ClaimRetryBaseDelay * (1 << attempt))
+			base := safeDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			var jitter time.Duration
 			if base > 0 {
 				jitter = time.Duration(rand.Int64N(int64(base/2) + 1))
 			}
-			delay := cb.config.cappedDelay(base + jitter)
+			delay := min(base+jitter, cb.config.MaxRetryDelay)
 			slog.Warn("rabbitmq: idempotency claim failed, retrying locally",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
+				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyTopic, topic),
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", cb.config.ClaimRetryCount),
 				slog.Duration("backoff", delay),
@@ -266,9 +264,8 @@ func (cb *ConsumerBase) claimWithRetry(
 	return 0, nil, lastErr
 }
 
-// handleClaimState dispatches on the Claim result state. Extracted from
-// wrapWithClaimer so both fail-open and fail-closed paths share the same
-// ClaimDone / ClaimBusy / ClaimAcquired logic.
+// handleClaimState dispatches on the Claim result state. Both fail-open and
+// fail-closed paths share the same ClaimDone / ClaimBusy / ClaimAcquired logic.
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
 	topic string,
@@ -280,16 +277,16 @@ func (cb *ConsumerBase) handleClaimState(
 	switch state {
 	case idempotency.ClaimDone:
 		slog.Debug("rabbitmq: event already processed, skipping",
-			slog.String("event_id", entry.ID),
-			slog.String("topic", topic),
-			slog.String("consumer_group", cb.config.ConsumerGroup))
+			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup))
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		slog.Debug("rabbitmq: event being processed by another consumer, requeuing after backoff",
-			slog.String("event_id", entry.ID),
-			slog.String("topic", topic),
-			slog.String("consumer_group", cb.config.ConsumerGroup),
+			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 			slog.Duration("backoff", delay))
 		select {
 		case <-time.After(delay):
@@ -302,49 +299,18 @@ func (cb *ConsumerBase) handleClaimState(
 	}
 }
 
-// wrapWithClaimer is the Solution B path using two-phase Claim/Commit/Release.
-// The Receipt is threaded through HandleResult — ConsumerBase never calls
-// Commit/Release itself; that is processDelivery's job after broker Ack/Nack.
-//
-// Fail-open: single Claim attempt; on error, proceed without idempotency.
-// Fail-closed: all Claim attempts go through claimWithRetry (including the
-// first), so every failure is followed by exponential backoff + jitter.
-func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandler) outbox.EntryHandler {
-	return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
-
-		// Fail-open: single Claim attempt, proceed without idempotency on error.
-		if cb.config.ClaimFailOpen != nil && *cb.config.ClaimFailOpen {
-			state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
-			if err != nil {
-				slog.Warn("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
-					slog.String("event_id", entry.ID),
-					slog.String("topic", topic),
-					slog.String("consumer_group", cb.config.ConsumerGroup),
-					slog.String("error", err.Error()))
-				return cb.retryLoop(ctx, topic, entry, handler, nil)
-			}
-			return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
-		}
-
-		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
-		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey)
-		if err != nil {
-			slog.Error("rabbitmq: idempotency claim exhausted, requeuing (fail-closed)",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup),
-				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
-				slog.String("error", err.Error()))
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
-		}
-		return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
+// requeueResult constructs a Requeue HandleResult with the given error and receipt.
+func requeueResult(err error, receipt outbox.Receipt) outbox.HandleResult {
+	return outbox.HandleResult{
+		Disposition: outbox.DispositionRequeue,
+		Err:         err,
+		Receipt:     receipt,
 	}
 }
 
 // retryLoop executes the handler with exponential backoff retries.
-// Receipt (from Claimer or checkerReceipt) is threaded through HandleResult
-// for processDelivery to Commit/Release after broker Ack/Nack.
+// Receipt is threaded through HandleResult for processDelivery to
+// Commit/Release after broker Ack/Nack.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
 	topic string,
@@ -371,9 +337,9 @@ func (cb *ConsumerBase) retryLoop(
 		if lastResult.Disposition == outbox.DispositionReject ||
 			(lastResult.Err != nil && errors.As(lastResult.Err, &permErr)) {
 			slog.Warn("rabbitmq: permanent error, rejecting to DLX",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
-				slog.String("consumer_group", cb.config.ConsumerGroup),
+				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 				slog.Any("error", lastResult.Err))
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
@@ -386,17 +352,13 @@ func (cb *ConsumerBase) retryLoop(
 		if attempt < cb.config.RetryCount-1 {
 			if ctx.Err() != nil {
 				// Receipt.Release is deferred to processDelivery after broker Ack/Nack.
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionRequeue,
-					Err:         ctx.Err(),
-					Receipt:     receipt,
-				}
+				return requeueResult(ctx.Err(), receipt)
 			}
 
-			delay := cb.config.cappedDelay(cb.config.RetryBaseDelay * (1 << attempt))
+			delay := safeDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			slog.Warn("rabbitmq: transient error, retrying",
-				slog.String("event_id", entry.ID),
-				slog.String("topic", topic),
+				slog.String(logKeyEventID, entry.ID),
+				slog.String(logKeyTopic, topic),
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", cb.config.RetryCount),
 				slog.Duration("backoff", delay),
@@ -406,11 +368,7 @@ func (cb *ConsumerBase) retryLoop(
 			case <-time.After(delay):
 			case <-ctx.Done():
 				// Receipt.Release is deferred to processDelivery after broker Ack/Nack.
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionRequeue,
-					Err:         ctx.Err(),
-					Receipt:     receipt,
-				}
+				return requeueResult(ctx.Err(), receipt)
 			}
 		}
 	}
@@ -419,18 +377,14 @@ func (cb *ConsumerBase) retryLoop(
 	// rather than routing to DLX. This ensures graceful shutdown does not
 	// permanently discard in-flight messages.
 	if ctx.Err() != nil {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         ctx.Err(),
-			Receipt:     receipt,
-		}
+		return requeueResult(ctx.Err(), receipt)
 	}
 
 	// Exhausted all retries — reject so broker routes to DLX.
 	slog.Error("rabbitmq: retry budget exhausted, rejecting to DLX",
-		slog.String("event_id", entry.ID),
-		slog.String("topic", topic),
-		slog.String("consumer_group", cb.config.ConsumerGroup),
+		slog.String(logKeyEventID, entry.ID),
+		slog.String(logKeyTopic, topic),
+		slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.Any("error", lastResult.Err))
 	return outbox.HandleResult{
@@ -438,26 +392,4 @@ func (cb *ConsumerBase) retryLoop(
 		Err:         lastResult.Err,
 		Receipt:     receipt,
 	}
-}
-
-// checkerReceipt adapts the legacy Checker to the Receipt interface so that
-// processDelivery can manage idempotency state uniformly after broker Ack/Nack.
-//
-//   - Commit: no-op — TryProcess already marked the key as done.
-//   - Release: calls checker.Release to allow redelivery.
-type checkerReceipt struct {
-	checker idempotency.Checker
-	key     string
-}
-
-// Compile-time interface check.
-var _ outbox.Receipt = (*checkerReceipt)(nil)
-
-func (r *checkerReceipt) Commit(_ context.Context) error {
-	// TryProcess already marked the key; nothing more to do.
-	return nil
-}
-
-func (r *checkerReceipt) Release(ctx context.Context) error {
-	return r.checker.Release(ctx, r.key)
 }

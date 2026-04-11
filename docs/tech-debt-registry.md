@@ -160,7 +160,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| P4-TD-01 | [TECH] | OPEN | 各处定义 ad-hoc noop outbox.Writer / idempotency.Checker；KG-02 建议提取到共享包 | 代码重复；测试辅助工具散落各处 | v1.1 |
+| P4-TD-01 | [TECH] | OPEN | 各处定义 ad-hoc noop outbox.Writer / idempotency.Claimer；KG-02 建议提取到共享包 | 代码重复；测试辅助工具散落各处 | v1.1 |
 | P4-TD-02 | [TECH] | OPEN | Cell handler 代码直接 import chi.URLParam；应通过 pkg/httputil 抽象层 | cell 代码与 chi router 实现耦合，违背 RouteMux 抽象意图 | v1.1 |
 | P4-TD-03 | [TECH] | OPEN | IssueTestToken 仍保留 HS256 dead code（[]byte 参数路径）；JWTVerifier 会拒绝所有 HS256 token | 测试陷阱：测试编写者可能误用 HS256 路径，产生永远失败的 token | v1.1 |
 

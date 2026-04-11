@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/bits"
 	"net"
 	"sync"
 	"testing"
@@ -218,70 +219,6 @@ func (m *mockConnection) Close() error {
 	return m.closeErr
 }
 
-// --- Mock Idempotency Checker ---
-
-type mockIdempotencyChecker struct {
-	mu           sync.Mutex
-	processed    map[string]bool
-	checkErr     error
-	markErr      error
-	tryProcErr   error
-	releaseErr   error
-	releaseCalls []string
-}
-
-func newMockIdempotencyChecker() *mockIdempotencyChecker {
-	return &mockIdempotencyChecker{
-		processed: make(map[string]bool),
-	}
-}
-
-func (m *mockIdempotencyChecker) IsProcessed(_ context.Context, key string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.checkErr != nil {
-		return false, m.checkErr
-	}
-	return m.processed[key], nil
-}
-
-func (m *mockIdempotencyChecker) MarkProcessed(_ context.Context, key string, _ time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.markErr != nil {
-		return m.markErr
-	}
-	m.processed[key] = true
-	return nil
-}
-
-func (m *mockIdempotencyChecker) TryProcess(_ context.Context, key string, _ time.Duration) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.tryProcErr != nil {
-		return false, m.tryProcErr
-	}
-	if m.processed[key] {
-		return false, nil
-	}
-	m.processed[key] = true
-	return true, nil
-}
-
-func (m *mockIdempotencyChecker) Release(_ context.Context, key string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.releaseCalls = append(m.releaseCalls, key)
-	if m.releaseErr != nil {
-		return m.releaseErr
-	}
-	delete(m.processed, key)
-	return nil
-}
-
-// Compile-time interface checks.
-var _ idempotency.Checker = (*mockIdempotencyChecker)(nil)
-
 // --- Mock Publisher (for DLQ) ---
 
 // mockPublisher was removed: ConsumerBase no longer uses application-side
@@ -467,6 +404,7 @@ func TestConnection_WaitConnected_Timeout(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
+		terminalCh:  make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -714,7 +652,9 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 
 	// After permanent error, WaitConnected should return the permanent error
 	// immediately (not block until ctx timeout).
-	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the terminal state
+	require.Eventually(t, func() bool {
+		return conn.Health() != nil
+	}, 2*time.Second, time.Millisecond, "terminal state should be set")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -737,6 +677,148 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 	require.Error(t, acqErr)
 	require.True(t, errors.As(acqErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+}
+
+func TestConnection_MaxReconnectAttempts_Exceeded(t *testing.T) {
+	// connect → disconnect → 2 recoverable dial failures → terminal state.
+	var mu sync.Mutex
+	dialCount := 0
+	mock := newMockConnection()
+	recoverableErr := errors.New("connection refused")
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock, nil
+		}
+		// All subsequent dials fail with a recoverable error.
+		return nil, recoverableErr
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+		MaxReconnectAttempts: 2,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.notifyCloseCh != nil
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Trigger disconnect.
+	mock.mu.Lock()
+	ch := mock.notifyCloseCh
+	mock.isClosed = true
+	mock.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for at least 2 reconnect dial attempts (plus the initial).
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 3 // 1 initial + 2 reconnect attempts
+	}, 2*time.Second, time.Millisecond, "reconnect should have attempted 2 dials")
+
+	// Wait for terminal state (permanentErr set by reconnectLoop).
+	require.Eventually(t, func() bool {
+		conn.mu.RLock()
+		defer conn.mu.RUnlock()
+		return conn.permanentErr != nil
+	}, 2*time.Second, time.Millisecond, "terminal state should be set after max attempts")
+
+	// WaitConnected should return permanent error.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	require.Error(t, waitErr, "WaitConnected must return error after max attempts exceeded")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"WaitConnected should return reconnect-exhausted error code")
+
+	// Health should also reflect terminal state.
+	healthErr := conn.Health()
+	require.Error(t, healthErr)
+	require.True(t, errors.As(healthErr, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code)
+}
+
+func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
+	// MaxReconnectAttempts=0 (default) → fail twice then succeed → recovers.
+	var mu sync.Mutex
+	dialCount := 0
+	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
+	recoverableErr := errors.New("connection refused")
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		switch {
+		case n == 1:
+			return mocks[0], nil
+		case n <= 3:
+			// Dial attempts 2 and 3 fail (recoverable).
+			return nil, recoverableErr
+		default:
+			// Dial attempt 4+ succeeds.
+			return mocks[1], nil
+		}
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+		MaxReconnectAttempts: 0, // unlimited
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mocks[0].mu.Lock()
+		defer mocks[0].mu.Unlock()
+		return mocks[0].notifyCloseCh != nil
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Trigger disconnect.
+	mocks[0].mu.Lock()
+	ch := mocks[0].notifyCloseCh
+	mocks[0].isClosed = true
+	mocks[0].mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for reconnection to succeed (dial count >= 4: 1 initial + 2 failed + 1 success).
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 4
+	}, 5*time.Second, time.Millisecond, "should have retried past 2 failures")
+
+	// After reconnection, Health should return nil.
+	require.Eventually(t, func() bool {
+		return conn.Health() == nil
+	}, 2*time.Second, time.Millisecond, "connection should be healthy after reconnect")
+
+	// WaitConnected should succeed (connected channel re-closed on reconnect).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	require.NoError(t, waitErr, "WaitConnected should succeed with unlimited reconnect attempts")
 }
 
 func TestIsPermanentDialError(t *testing.T) {
@@ -896,7 +978,7 @@ func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	ok, err := conn.reconnectWithBackoff()
@@ -929,7 +1011,7 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 		},
 		closeCh:   make(chan struct{}),
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	ok, err := conn.reconnectWithBackoff()
@@ -954,7 +1036,7 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		},
 		closeCh:   closeCh,
 		connected: make(chan struct{}),
-		failed:    make(chan struct{}),
+		terminalCh: make(chan struct{}),
 	}
 
 	type result struct {
@@ -1124,10 +1206,10 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
 		connected:    make(chan struct{}),
-		failed:       make(chan struct{}),
+		terminalCh:   make(chan struct{}),
 		permanentErr: errcode.New(ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
-	close(conn.failed)
+	close(conn.terminalCh)
 
 	pub := NewPublisher(conn)
 	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
@@ -1423,6 +1505,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
+		terminalCh:  make(chan struct{}),
 	}
 
 	// Make AcquireChannel fail so subscribeOnce returns error, entering reconnect wait.
@@ -1581,6 +1664,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
+		terminalCh:  make(chan struct{}),
 	}
 	// Mark as initially connected.
 	close(c.connected)
@@ -1799,253 +1883,22 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
 
-func TestConsumerBase_Wrap_Success(t *testing.T) {
-	checker := newMockIdempotencyChecker()
+func TestConsumerBaseConfig_Defaults_NegativeLeaseTTL(t *testing.T) {
+	cfg := ConsumerBaseConfig{LeaseTTL: -1 * time.Minute}
+	cfg.setDefaults()
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		assert.Equal(t, "evt-001", e.ID)
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-001", EventType: "test.created"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.True(t, handlerCalled)
-
-	// Verify idempotency key was marked.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-001"])
-	checker.mu.Unlock()
+	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
 }
 
-func TestConsumerBase_Wrap_AlreadyProcessed(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.processed["test-group:evt-001"] = true
+func TestConsumerBaseConfig_Defaults_NegativeIdempotencyTTL(t *testing.T) {
+	cfg := ConsumerBaseConfig{IdempotencyTTL: -1 * time.Hour}
+	cfg.setDefaults()
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-001"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.False(t, handlerCalled) // Should skip because already processed.
+	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
 
-func TestConsumerBase_Wrap_TransientError_Retry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond, // Fast for test.
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		if callCount < 3 {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
-		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-002"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.Equal(t, 3, callCount) // Should retry 3 times total.
-
-	// Should be marked processed on success.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-002"])
-	checker.mu.Unlock()
-}
-
-func TestConsumerBase_Wrap_RetryExhausted_Reject(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     2,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
-	})
-
-	entry := outbox.Entry{ID: "evt-003", EventType: "test.fail"}
-	res := handler(context.Background(), entry)
-	// Exhausted retries now return DispositionReject (broker routes to DLX).
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Error(t, res.Err)
-
-	// Receipt should be a checkerReceipt — Release is deferred to processDelivery.
-	require.NotNil(t, res.Receipt, "legacy Checker path should return a checkerReceipt")
-	// Key is still marked (TryProcess set it); Release happens in processDelivery.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["test-group:evt-003"], "key still marked before processDelivery Release")
-	checker.mu.Unlock()
-
-	// Simulate processDelivery calling Release after broker Nack.
-	require.NoError(t, res.Receipt.Release(context.Background()))
-	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-003"], "key released after Receipt.Release")
-	checker.mu.Unlock()
-}
-
-func TestConsumerBase_Wrap_PermanentError_Reject(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         outbox.NewPermanentError(errors.New("bad payload")),
-		}
-	})
-
-	entry := outbox.Entry{ID: "evt-004", EventType: "test.permanent"}
-	res := handler(context.Background(), entry)
-	// PermanentError → DispositionReject (no retry, broker routes to DLX).
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Equal(t, 1, callCount) // Should not retry.
-}
-
-func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("reject this")}
-	})
-
-	entry := outbox.Entry{ID: "evt-explicit-reject"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-	assert.Equal(t, 1, callCount)
-}
-
-func TestConsumerBase_Wrap_IdempotencyCheckError_StillProcesses(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.tryProcErr = errors.New("redis down")
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
-
-	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		handlerCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	entry := outbox.Entry{ID: "evt-006"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.True(t, handlerCalled) // Should still process when idempotency check fails.
-}
-
-func TestConsumerBase_Wrap_ContextCancelled_DuringRetry(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 500 * time.Millisecond,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		cancel() // Cancel context during first handler call.
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
-	})
-
-	entry := outbox.Entry{ID: "evt-007"}
-	res := handler(ctx, entry)
-	assert.Equal(t, outbox.DispositionRequeue, res.Disposition) // Should requeue on shutdown.
-}
-
-// --- Solution B: Reject goes to broker DLX, not application-side DLQ ---
-
-func TestConsumerBase_Wrap_RetryExhausted_ReleasesIdempotencyKey(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     1,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("always fails")}
-	})
-
-	entry := outbox.Entry{ID: "evt-dlq-001", EventType: "test.fail"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-
-	// Receipt is deferred to processDelivery; simulate Release.
-	require.NotNil(t, res.Receipt)
-	require.NoError(t, res.Receipt.Release(context.Background()))
-	checker.mu.Lock()
-	assert.False(t, checker.processed["test-group:evt-dlq-001"])
-	checker.mu.Unlock()
-}
-
-// --- Extra fix: wrapped PermanentError detected via errors.As ---
-
-func TestConsumerBase_Wrap_WrappedPermanentError_DetectedByErrorsAs(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		callCount++
-		// Wrap PermanentError inside fmt.Errorf — errors.As should still detect it.
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
-		}
-	})
-
-	entry := outbox.Entry{ID: "evt-wrapped-perm", EventType: "test.wrapped"}
-	res := handler(context.Background(), entry)
-	assert.Equal(t, outbox.DispositionReject, res.Disposition) // PermanentError → Reject.
-	assert.Equal(t, 1, callCount)                               // Should not retry.
-}
+// Legacy Checker-based TestConsumerBase_Wrap_* tests removed — fully covered
+// by TestConsumerBase_WrapWithClaimer_* tests below.
 
 // --- P0 #7: ctx cancel → NACK with requeue (conservative shutdown) ---
 
@@ -2104,9 +1957,10 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 // =============================================================================
 
 func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
@@ -2126,18 +1980,13 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	res := wrapped(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
-
-	// Verify idempotency key was marked (ConsumerBase wrapping is active).
-	checker.mu.Lock()
-	assert.True(t, checker.processed["mw-group:evt-mw-001"])
-	checker.mu.Unlock()
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through HandleResult")
 }
 
 func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.processed["mw-group:evt-mw-dup"] = true
+	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 
@@ -2156,9 +2005,10 @@ func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
 }
 
 func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "mw-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2176,13 +2026,20 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	entry := outbox.Entry{ID: "evt-mw-perm", EventType: "orders.created"}
 	res := wrapped(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionReject, res.Disposition) // Reject → DLX.
+	assert.Same(t, receipt, res.Receipt, "Reject should thread Receipt for processDelivery to Release")
 }
 
 func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	// Integration-style test: wire AsMiddleware into SubscriberWithMiddleware.
-	checker := newMockIdempotencyChecker()
+	// First call: ClaimAcquired → handler runs.
+	// Second call: ClaimDone → handler skipped.
+	receipt := &mockReceipt{}
+	claimer := &sequenceClaimer{responses: []claimResponse{
+		{state: idempotency.ClaimAcquired, receipt: receipt},
+		{state: idempotency.ClaimDone},
+	}}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 
@@ -2212,19 +2069,14 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
-	// Simulate an incoming entry.
+	// Simulate an incoming entry — first call gets ClaimAcquired.
 	entry := outbox.Entry{ID: "evt-integration-001", EventType: "events.test"}
 	res := capturedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, handlerCalled)
 	assert.Equal(t, "evt-integration-001", receivedEntry.ID)
 
-	// Verify idempotency was applied.
-	checker.mu.Lock()
-	assert.True(t, checker.processed["integration-group:evt-integration-001"])
-	checker.mu.Unlock()
-
-	// Calling again with the same event should be skipped.
+	// Calling again with the same event — second call gets ClaimDone, handler skipped.
 	handlerCalled = false
 	res = capturedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
@@ -2354,7 +2206,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2380,7 +2232,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2399,7 +2251,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 
@@ -2418,7 +2270,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2443,7 +2295,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2468,7 +2320,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2530,7 +2382,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 2 — success
 	}}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -2557,7 +2409,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 
 	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
 	// With jitter, we assert >= base delay only (not exact).
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 20 * time.Millisecond,
@@ -2585,7 +2437,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
@@ -2613,7 +2465,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	// S3-01: boundary — ClaimRetryCount=1 means exactly 1 attempt, no backoff sleep.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    1,
 		ClaimRetryBaseDelay: 5 * time.Second,
@@ -2643,7 +2495,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 1 — success
 	}}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		RetryCount:         5,                   // handler retries — should not affect claim
 		RetryBaseDelay:     1 * time.Second,     // handler backoff — should not affect claim
@@ -2675,7 +2527,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 	// S4-02: MaxRetryDelay caps exponential growth.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimRetryCount:    3,
 		ClaimRetryBaseDelay: 100 * time.Millisecond,
@@ -2699,7 +2551,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
@@ -2717,7 +2569,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -2945,7 +2797,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryBaseDelay: 50 * time.Millisecond,
 	})
@@ -3007,7 +2859,7 @@ func boolPtr(b bool) *bool { return &b }
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:      "test-group",
 		ClaimFailOpen:      boolPtr(false),
 		ClaimRetryCount:    3,
@@ -3030,7 +2882,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 		ClaimFailOpen: boolPtr(true),
 	})
@@ -3054,9 +2906,10 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testing.T) {
 	// S3-02: When ctx is cancelled by the time the final retry completes,
 	// retryLoop must return Requeue (not Reject to DLX).
-	checker := newMockIdempotencyChecker()
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1, // single attempt, no inter-attempt sleep
 		RetryBaseDelay: time.Millisecond,
@@ -3223,37 +3076,8 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 	}
 }
 
-func TestConsumerBase_Wrap_ReleaseCheckerError_Logged(t *testing.T) {
-	checker := newMockIdempotencyChecker()
-	checker.releaseErr = errors.New("redis timeout")
-
-	cb := NewConsumerBase(checker, ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
-		RetryCount:     1,
-		RetryBaseDelay: 10 * time.Millisecond,
-	})
-
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
-	})
-
-	entry := outbox.Entry{ID: "evt-release-err", EventType: "test.release.err"}
-	res := handler(context.Background(), entry)
-
-	// Retry exhausted (RetryCount=1) → DispositionReject.
-	assert.Equal(t, outbox.DispositionReject, res.Disposition)
-
-	// Receipt defers Release to processDelivery. Simulate it.
-	require.NotNil(t, res.Receipt)
-	err := res.Receipt.Release(context.Background())
-	assert.Error(t, err, "Release should propagate checker error")
-	assert.Contains(t, err.Error(), "redis timeout")
-
-	checker.mu.Lock()
-	assert.Contains(t, checker.releaseCalls, "test-group:evt-release-err",
-		"Release should have been called with the idempotency key")
-	checker.mu.Unlock()
-}
+// TestConsumerBase_Wrap_ReleaseCheckerError_Logged removed — legacy Checker path
+// no longer exists. Release error logging is covered by Claimer-based receipt tests.
 
 func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
@@ -3296,4 +3120,298 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	assert.True(t, receipt.releaseCalled, "unknown disposition should Release Receipt")
 	assert.False(t, receipt.commitCalled, "unknown disposition should not Commit Receipt")
 	receipt.mu.Unlock()
+}
+
+func TestSafeDelay_LargeAttempt_NoPanic(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 100)
+	assert.Equal(t, 30*time.Second, result)
+}
+
+func TestSafeDelay_ZeroBase(t *testing.T) {
+	result := safeDelay(0, 30*time.Second, 5)
+	assert.Equal(t, time.Duration(0), result)
+}
+
+func TestSafeDelay_NormalRange(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 3)
+	assert.Equal(t, 8*time.Second, result)
+}
+
+func TestSafeDelay_ExceedsMax(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 10)
+	assert.Equal(t, 30*time.Second, result) // 1024s > 30s → capped
+}
+
+func TestSafeDelay_NegativeBase(t *testing.T) {
+	result := safeDelay(-time.Second, 30*time.Second, 3)
+	assert.Equal(t, time.Duration(0), result)
+}
+
+// =============================================================================
+// retryLoop regression tests (S3 P1)
+// =============================================================================
+
+func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
+	// Handler fails with Requeue on attempt 0, succeeds (Ack) on attempt 1.
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	attempt := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := attempt
+		attempt++
+		if n == 0 {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         errors.New("transient failure"),
+			}
+		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	entry := outbox.Entry{ID: "evt-transient-ok"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through on success")
+	assert.Equal(t, 2, attempt, "handler should have been called 2 times")
+}
+
+func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
+	// Handler returns DispositionReject directly (not via PermanentError).
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     5,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         errors.New("bad payload shape"),
+		}
+	})
+
+	entry := outbox.Entry{ID: "evt-explicit-reject"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, 1, callCount, "handler should be called exactly once (no retry for Reject)")
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
+}
+
+func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.T) {
+	// Handler returns Requeue with fmt.Errorf("ctx: %w", outbox.NewPermanentError(...)).
+	// retryLoop should detect PermanentError via errors.As and upgrade to Reject.
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     5,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         fmt.Errorf("ctx: %w", outbox.NewPermanentError(errors.New("bad payload"))),
+		}
+	})
+
+	entry := outbox.Entry{ID: "evt-wrapped-perm"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, 1, callCount, "handler should be called once (PermanentError detected, no retry)")
+	assert.Equal(t, outbox.DispositionReject, res.Disposition,
+		"wrapped PermanentError should be detected by errors.As and upgraded to Reject")
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
+}
+
+// =============================================================================
+// MaxReconnectAttempts=1 boundary test (S3 P2)
+// =============================================================================
+
+func TestConnection_MaxReconnectAttempts_One(t *testing.T) {
+	// MaxReconnectAttempts=1: after exactly 1 reconnect attempt, should enter terminal state.
+	var mu sync.Mutex
+	dialCount := 0
+	mock := newMockConnection()
+	recoverableErr := errors.New("connection refused")
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock, nil
+		}
+		return nil, recoverableErr
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                  "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:      2,
+		ReconnectBaseDelay:   1 * time.Millisecond,
+		ReconnectMaxBackoff:  5 * time.Millisecond,
+		MaxReconnectAttempts: 1,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.notifyCloseCh != nil
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Trigger disconnect.
+	mock.mu.Lock()
+	ch := mock.notifyCloseCh
+	mock.isClosed = true
+	mock.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for exactly 1 reconnect attempt (total dials: 1 initial + 1 reconnect = 2).
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, time.Millisecond, "reconnect should have attempted 1 dial")
+
+	// Wait for terminal state.
+	require.Eventually(t, func() bool {
+		conn.mu.RLock()
+		defer conn.mu.RUnlock()
+		return conn.permanentErr != nil
+	}, 2*time.Second, time.Millisecond, "terminal state should be set after 1 attempt")
+
+	// WaitConnected should return permanent error.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	require.Error(t, waitErr, "WaitConnected must return error after max attempts exceeded")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"WaitConnected should return reconnect-exhausted error code")
+}
+
+// =============================================================================
+// safeDelay boundary tests (S3 P2)
+// =============================================================================
+
+func TestSafeDelay_AttemptZero(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 0)
+	assert.Equal(t, time.Second, result) // base * 2^0 = base
+}
+
+func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
+	base := time.Second
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	// At maxSafeShift, result should still be capped to maxDelay.
+	result := safeDelay(base, 30*time.Second, maxSafeShift)
+	assert.Equal(t, 30*time.Second, result)
+	// At maxSafeShift+1, also capped (overflow guard).
+	result2 := safeDelay(base, 30*time.Second, maxSafeShift+1)
+	assert.Equal(t, 30*time.Second, result2)
+}
+
+// =============================================================================
+// isTerminalConnectionError Tests
+// =============================================================================
+
+func TestIsTerminalConnectionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		terminal bool
+	}{
+		{"permanent", errcode.New(ErrAdapterAMQPConnectPermanent, "bad creds"), true},
+		{"exhausted", errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
+		{"transient", errcode.New(ErrAdapterAMQPConnect, "timeout"), false},
+		{"publish", errcode.New(ErrAdapterAMQPPublish, "channel error"), false},
+		{"nil", nil, false},
+		{"plain error", fmt.Errorf("oops"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.terminal, isTerminalConnectionError(tt.err))
+		})
+	}
+}
+
+func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T) {
+	// When Connection is in terminal state with ReconnectExhausted,
+	// Publish should return ErrAdapterAMQPReconnectExhausted (not generic publish error).
+	conn := &Connection{
+		config: Config{
+			URL:             "amqp://test:test@localhost:5672/",
+			ChannelPoolSize: 2,
+			ConfirmTimeout:  5 * time.Second,
+		},
+		channelPool:  make(chan AMQPChannel, 2),
+		closeCh:      make(chan struct{}),
+		connected:    make(chan struct{}),
+		terminalCh:   make(chan struct{}),
+		permanentErr: errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
+	}
+	close(conn.terminalCh)
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
+		"Publish in terminal state (reconnect exhausted) should return ReconnectExhausted error, not generic publish error")
+}
+
+// =============================================================================
+// Credential Sanitization Tests
+// =============================================================================
+
+func TestConnection_ErrorChain_DoesNotLeakCredentials(t *testing.T) {
+	url := "amqp://admin:secret123@broker.example.com:5672/vhost"
+	_, err := NewConnection(Config{URL: url}, WithDialFunc(func(u string) (AMQPConnection, error) {
+		return nil, fmt.Errorf("dial tcp: lookup %s: no such host", u)
+	}))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "secret123", "error chain must not leak password")
+	assert.NotContains(t, err.Error(), "admin:secret123", "error chain must not leak credentials")
+	assert.Contains(t, err.Error(), "***", "error should contain redacted URL")
+}
+
+func TestConnection_SanitizeDialError_NoURL(t *testing.T) {
+	c := &Connection{config: Config{URL: ""}}
+	orig := fmt.Errorf("some error")
+	assert.Equal(t, orig, c.sanitizeDialError(orig), "should return original error when URL is empty")
+}
+
+func TestConnection_SanitizeDialError_URLNotInError(t *testing.T) {
+	c := &Connection{config: Config{URL: "amqp://user:pass@host:5672/"}}
+	orig := fmt.Errorf("generic network error")
+	assert.Equal(t, orig, c.sanitizeDialError(orig), "should return original error when URL not found in error string")
+}
+
+func TestConnection_SanitizeDialError_Nil(t *testing.T) {
+	c := &Connection{config: Config{URL: "amqp://user:pass@host:5672/"}}
+	assert.Nil(t, c.sanitizeDialError(nil), "should return nil for nil error")
 }

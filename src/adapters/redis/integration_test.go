@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
@@ -124,27 +125,29 @@ func TestIntegration_DistLockContention(t *testing.T) {
 	defer func() { _ = lock2.Release(ctx) }()
 }
 
-// TestIntegration_IdempotencyKeyExpiry verifies the IdempotencyChecker:
-// IsProcessed(new key) = false -> MarkProcessed -> IsProcessed = true.
-func TestIntegration_IdempotencyKeyExpiry(t *testing.T) {
+// TestIntegration_IdempotencyClaimer verifies the Claimer two-phase model:
+// Claim → ClaimAcquired, Commit, Claim again → ClaimDone.
+func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	checker := NewIdempotencyChecker(client)
+	claimer := NewIdempotencyClaimer(client)
 	key := "idem:integration:test:001"
 
-	// New key should not be processed.
-	processed, err := checker.IsProcessed(ctx, key)
+	// First claim should acquire.
+	state, receipt, err := claimer.Claim(ctx, key, 5*time.Minute, 10*time.Second)
 	require.NoError(t, err)
-	assert.False(t, processed, "new key should not be processed")
+	assert.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
 
-	// Mark as processed.
-	err = checker.MarkProcessed(ctx, key, 10*time.Second)
-	require.NoError(t, err, "MarkProcessed should succeed")
+	// Commit the receipt.
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "Commit should succeed")
 
-	// Now it should be processed.
-	processed, err = checker.IsProcessed(ctx, key)
+	// Second claim should return ClaimDone.
+	state, receipt2, err := claimer.Claim(ctx, key, 5*time.Minute, 10*time.Second)
 	require.NoError(t, err)
-	assert.True(t, processed, "key should be processed after MarkProcessed")
+	assert.Equal(t, idempotency.ClaimDone, state)
+	assert.Nil(t, receipt2)
 }

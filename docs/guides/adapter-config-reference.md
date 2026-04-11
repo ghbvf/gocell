@@ -51,31 +51,41 @@ This document lists every adapter shipped with GoCell and its configuration surf
 
 ## RabbitMQ (`adapters/rabbitmq`)
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `url` | string | yes | - | AMQP connection URL (`amqp://user:pass@host:5672/`) |
-| `reconnectDelay` | duration | no | 5s | Delay before reconnection attempt |
-| `maxReconnect` | int | no | 10 | Maximum reconnection attempts (0 = unlimited) |
-
-### Publisher
+### Connection Config (`Config`)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `exchange` | string | yes | - | Target exchange name |
-| `exchangeType` | string | no | "topic" | Exchange type (topic, direct, fanout) |
-| `confirmMode` | bool | no | true | Enable publisher confirms |
+| `URL` | string | yes | - | AMQP connection URL (`amqp://user:pass@host:5672/`) |
+| `ReconnectMaxBackoff` | duration | no | 30s | Maximum backoff duration between reconnect attempts |
+| `ReconnectBaseDelay` | duration | no | 1s | Initial delay for exponential backoff |
+| `ChannelPoolSize` | int | no | 10 | Maximum number of channels in the pool |
+| `ConfirmTimeout` | duration | no | 5s | Timeout for publisher confirm mode |
+| `MaxReconnectAttempts` | int | no | 0 | Maximum reconnection attempts (0 = unlimited). When exceeded, connection enters terminal state |
 
-### ConsumerBase
+### ConsumerBase Config (`ConsumerBaseConfig`)
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `queue` | string | yes | - | Queue to consume from |
-| `consumerTag` | string | no | auto | Consumer tag for identification |
-| `prefetchCount` | int | no | 10 | Prefetch (QoS) count |
-| `retryMax` | int | no | 3 | Maximum retries before dead-lettering |
-| `retryBackoff` | duration | no | 1s | Initial backoff between retries |
-| `dlqExchange` | string | no | "" | Dead-letter exchange (empty = default DLX) |
-| `idempotencyStore` | idempotency.Store | no | nil | Idempotency checker (e.g., Redis store) |
+| `ConsumerGroup` | string | yes | - | Consumer group identifier for idempotency keys |
+| `RetryCount` | int | no | 3 | Maximum retries for transient errors |
+| `RetryBaseDelay` | duration | no | 1s | Initial delay for exponential backoff retries |
+| `IdempotencyTTL` | duration | no | 24h | TTL for idempotency done-keys |
+| `LeaseTTL` | duration | no | 5m | Processing-lease TTL for Claimer backend |
+| `ClaimFailOpen` | *bool | no | nil (fail-closed) | `true`: proceed without idempotency on Claim failure; `false`/nil: requeue until backend recovers |
+| `ClaimRetryCount` | int | no | RetryCount | Max Claim() attempts on the fail-closed path |
+| `ClaimRetryBaseDelay` | duration | no | RetryBaseDelay | Initial backoff between Claim() retries |
+| `MaxRetryDelay` | duration | no | 30s | Cap for exponential backoff delay |
+
+### Subscriber Config (`SubscriberConfig`)
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `DLXExchange` | string | yes | - | Dead-letter exchange name (required — without it, Nack silently discards messages) |
+| `QueueName` | string | no | - | Explicit queue name. Takes precedence over ConsumerGroup-based naming |
+| `ConsumerGroup` | string | no | - | Logical consumer group. When QueueName is empty, queue is derived as `{ConsumerGroup}.{topic}` |
+| `DLXRoutingKey` | string | no | "" | Routing key for dead-lettered messages (only effective when DLXExchange is set) |
+| `PrefetchCount` | int | no | 10 | Prefetch (QoS) count per consumer |
+| `ShutdownTimeout` | duration | no | 30s | How long to wait for in-flight messages during Close() |
 
 ## OIDC (`adapters/oidc`) — thin go-oidc v3 wrapper
 

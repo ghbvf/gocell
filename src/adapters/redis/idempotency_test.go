@@ -11,198 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Compile-time interface check.
-var _ idempotency.Checker = (*IdempotencyChecker)(nil)
-
-func TestIdempotencyChecker_MarkAndCheck(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// Not processed initially.
-	ok, err := ic.IsProcessed(ctx, "idem:test:1")
-	require.NoError(t, err)
-	assert.False(t, ok)
-
-	// Mark as processed.
-	err = ic.MarkProcessed(ctx, "idem:test:1", 24*time.Hour)
-	require.NoError(t, err)
-
-	// Now should be processed.
-	ok, err = ic.IsProcessed(ctx, "idem:test:1")
-	require.NoError(t, err)
-	assert.True(t, ok)
-}
-
-func TestIdempotencyChecker_MarkIdempotent(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// Mark twice - second should be no-op (SetNX returns false but no error).
-	err := ic.MarkProcessed(ctx, "idem:test:2", 24*time.Hour)
-	require.NoError(t, err)
-
-	err = ic.MarkProcessed(ctx, "idem:test:2", 24*time.Hour)
-	require.NoError(t, err)
-}
-
-func TestIdempotencyChecker_IsProcessed_GetError(t *testing.T) {
-	mock := newMockCmdable()
-	mock.getErr = errMock
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	ok, err := ic.IsProcessed(ctx, "idem:test:err")
-	require.Error(t, err)
-	assert.False(t, ok)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_GET")
-}
-
-func TestIdempotencyChecker_MarkProcessed_SetNXError(t *testing.T) {
-	mock := newMockCmdable()
-	mock.setNXErr = errMock
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	err := ic.MarkProcessed(ctx, "idem:test:err", 24*time.Hour)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
-}
-
-func TestIdempotencyChecker_TryProcess_FirstCall(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// First call: key does not exist, should return true (caller should process).
-	shouldProcess, err := ic.TryProcess(ctx, "idem:test:try:1", 24*time.Hour)
-	require.NoError(t, err)
-	assert.True(t, shouldProcess, "first TryProcess should return true")
-
-	// Verify key is now marked as processed via IsProcessed.
-	ok, err := ic.IsProcessed(ctx, "idem:test:try:1")
-	require.NoError(t, err)
-	assert.True(t, ok, "key should be processed after TryProcess")
-}
-
-func TestIdempotencyChecker_TryProcess_Duplicate(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// First call succeeds.
-	shouldProcess, err := ic.TryProcess(ctx, "idem:test:try:2", 24*time.Hour)
-	require.NoError(t, err)
-	assert.True(t, shouldProcess)
-
-	// Second call: key already exists, should return false.
-	shouldProcess, err = ic.TryProcess(ctx, "idem:test:try:2", 24*time.Hour)
-	require.NoError(t, err)
-	assert.False(t, shouldProcess, "duplicate TryProcess should return false")
-}
-
-func TestIdempotencyChecker_TryProcess_SetNXError(t *testing.T) {
-	mock := newMockCmdable()
-	mock.setNXErr = errMock
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	shouldProcess, err := ic.TryProcess(ctx, "idem:test:try:err", 24*time.Hour)
-	require.Error(t, err)
-	assert.False(t, shouldProcess)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
-}
-
-func TestIdempotencyChecker_ViaClientConstructor(t *testing.T) {
-	mock := newMockCmdable()
-	client := newClientFromCmdable(mock, Config{})
-	ic := NewIdempotencyChecker(client)
-	ctx := context.Background()
-
-	ok, err := ic.IsProcessed(ctx, "idem:test:client")
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
-func TestIdempotencyChecker_MarkProcessed_ZeroTTLUsesDefault(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// TTL=0 should use DefaultTTL (24h), not create permanent keys.
-	err := ic.MarkProcessed(ctx, "idem:test:zero-ttl", 0)
-	require.NoError(t, err)
-
-	// Verify the key was stored with an expiry (non-zero).
-	mock.mu.Lock()
-	entry, ok := mock.store["idem:test:zero-ttl"]
-	mock.mu.Unlock()
-	require.True(t, ok)
-	assert.False(t, entry.expiry.IsZero(), "TTL=0 should use DefaultTTL, not permanent key")
-}
-
-func TestIdempotencyChecker_TryProcess_ZeroTTLUsesDefault(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	shouldProcess, err := ic.TryProcess(ctx, "idem:test:try-zero-ttl", 0)
-	require.NoError(t, err)
-	assert.True(t, shouldProcess)
-
-	mock.mu.Lock()
-	entry, ok := mock.store["idem:test:try-zero-ttl"]
-	mock.mu.Unlock()
-	require.True(t, ok)
-	assert.False(t, entry.expiry.IsZero(), "TTL=0 should use DefaultTTL, not permanent key")
-}
-
-func TestIdempotencyChecker_NegativeTTLUsesDefault(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	err := ic.MarkProcessed(ctx, "idem:test:neg-ttl", -5*time.Second)
-	require.NoError(t, err)
-
-	mock.mu.Lock()
-	entry, ok := mock.store["idem:test:neg-ttl"]
-	mock.mu.Unlock()
-	require.True(t, ok)
-	assert.False(t, entry.expiry.IsZero(), "negative TTL should use DefaultTTL")
-}
-
-func TestIdempotencyChecker_Release_Success(t *testing.T) {
-	mock := newMockCmdable()
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	// Mark a key as processed.
-	err := ic.MarkProcessed(ctx, "idem:test:release:1", 24*time.Hour)
-	require.NoError(t, err)
-
-	// Release the key.
-	err = ic.Release(ctx, "idem:test:release:1")
-	require.NoError(t, err)
-
-	// After release, IsProcessed should return false.
-	ok, err := ic.IsProcessed(ctx, "idem:test:release:1")
-	require.NoError(t, err)
-	assert.False(t, ok, "key should not be processed after Release")
-}
-
-func TestIdempotencyChecker_Release_DelError(t *testing.T) {
-	mock := newMockCmdable()
-	mock.delErr = errMock
-	ic := newIdempotencyCheckerFromCmdable(mock)
-	ctx := context.Background()
-
-	err := ic.Release(ctx, "idem:test:release:err")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
-}
-
 // =============================================================================
 // IdempotencyClaimer Tests (Solution B two-phase model)
 // =============================================================================
@@ -428,6 +236,96 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
 
+func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Commit should succeed.
+	err = receipt.Commit(ctx)
+	require.NoError(t, err)
+
+	// Second Commit should be a no-op (not "stale lease" error).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err)
+}
+
+func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Release should succeed.
+	err = receipt.Release(ctx)
+	require.NoError(t, err)
+
+	// Second Release should be a no-op (not "stale lease" error).
+	err = receipt.Release(ctx)
+	require.NoError(t, err)
+}
+
+func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit-err:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Delete the lease key to make Commit fail with stale token error.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:double-commit-err:1")
+	mock.mu.Unlock()
+
+	// First Commit should fail.
+	err1 := receipt.Commit(ctx)
+	require.Error(t, err1)
+	assert.Contains(t, err1.Error(), "stale lease")
+
+	// Second Commit should return the SAME cached error (committed/released guard under mu).
+	err2 := receipt.Commit(ctx)
+	require.Error(t, err2)
+	assert.Equal(t, err1, err2, "repeated Commit must return the same cached error")
+}
+
+func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release-err:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Delete the lease key to make Release fail with stale token error.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:double-release-err:1")
+	mock.mu.Unlock()
+
+	// First Release should fail.
+	err1 := receipt.Release(ctx)
+	require.Error(t, err1)
+	assert.Contains(t, err1.Error(), "stale lease")
+
+	// Second Release should return the SAME cached error (committed/released guard under mu).
+	err2 := receipt.Release(ctx)
+	require.Error(t, err2)
+	assert.Equal(t, err1, err2, "repeated Release must return the same cached error")
+}
+
 func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := newIdempotencyClaimerFromCmdable(mock)
@@ -471,4 +369,78 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 
 	assert.Equal(t, 1, acquired, "exactly one goroutine should acquire the lease")
 	assert.Equal(t, 1, busy, "exactly one goroutine should get ClaimBusy")
+}
+
+func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	// Claim a key successfully.
+	state, receipt, err := claimer.Claim(ctx, "idem:transient:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Commit: inject a transient Redis error.
+	mock.evalErr = errMock
+	err = receipt.Commit(ctx)
+	require.Error(t, err, "first Commit should fail due to transient error")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
+
+	// Clear the transient error — Redis has recovered.
+	mock.evalErr = nil
+
+	// Second Commit: should succeed (committed=false allows retry).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "second Commit should succeed after transient error clears")
+
+	// Third Commit: should be a no-op (committed=true, returns nil).
+	err = receipt.Commit(ctx)
+	require.NoError(t, err, "third Commit should be no-op")
+
+	// Verify done key exists and lease key is removed.
+	mock.mu.Lock()
+	_, hasLease := mock.store["lease:idem:transient:1"]
+	_, hasDone := mock.store["done:idem:transient:1"]
+	mock.mu.Unlock()
+	assert.False(t, hasLease, "lease key should be deleted after successful commit")
+	assert.True(t, hasDone, "done key should exist after successful commit")
+}
+
+func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	// Claim a key successfully.
+	state, receipt, err := claimer.Claim(ctx, "idem:transient-rel:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// First Release: inject a transient Redis error.
+	mock.evalErr = errMock
+	err = receipt.Release(ctx)
+	require.Error(t, err, "first Release should fail due to transient error")
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_DELETE")
+
+	// Clear the transient error — Redis has recovered.
+	mock.evalErr = nil
+
+	// Second Release: should succeed (released=false allows retry).
+	err = receipt.Release(ctx)
+	require.NoError(t, err, "second Release should succeed after transient error clears")
+
+	// Third Release: should be a no-op (released=true, returns nil).
+	err = receipt.Release(ctx)
+	require.NoError(t, err, "third Release should be no-op")
+
+	// Verify lease key is removed and done key does NOT exist.
+	mock.mu.Lock()
+	_, hasLease := mock.store["lease:idem:transient-rel:1"]
+	_, hasDone := mock.store["done:idem:transient-rel:1"]
+	mock.mu.Unlock()
+	assert.False(t, hasLease, "lease key should be deleted after successful release")
+	assert.False(t, hasDone, "done key should NOT exist after release")
 }

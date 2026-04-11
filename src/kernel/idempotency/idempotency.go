@@ -63,31 +63,3 @@ type Claimer interface {
 	//   - (_, nil, err) — infrastructure error.
 	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, outbox.Receipt, error)
 }
-
-// ---------------------------------------------------------------------------
-// Checker — legacy interface (deprecated)
-// ---------------------------------------------------------------------------
-
-// Deprecated: Checker is the pre-Solution-B idempotency interface. New code
-// should use Claimer which provides two-phase Claim/Commit/Release semantics
-// that correctly align idempotency state with broker acknowledgement. (F-ID-01)
-//
-// Checker will be removed in a future release.
-type Checker interface {
-	// IsProcessed returns true if the given key has already been processed.
-	IsProcessed(ctx context.Context, key string) (bool, error)
-
-	// MarkProcessed marks the key as processed with the given TTL.
-	MarkProcessed(ctx context.Context, key string, ttl time.Duration) error
-
-	// TryProcess atomically checks whether key has been processed and marks it if not.
-	// Returns true if the caller should process (key was not previously seen).
-	// Returns false if already processed (another consumer got there first).
-	// This eliminates the TOCTOU race between separate IsProcessed + MarkProcessed calls.
-	TryProcess(ctx context.Context, key string, ttl time.Duration) (bool, error)
-
-	// Release removes the idempotency key so that a redelivered message can be
-	// processed again. Must be called on requeue/shutdown paths where TryProcess
-	// already claimed the key but business logic did not complete.
-	Release(ctx context.Context, key string) error
-}

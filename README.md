@@ -242,7 +242,7 @@ examples/  ← all layers
 | Adapter | Capabilities | Kernel Interface |
 |---------|-------------|-----------------|
 | `adapters/postgres` | Pool, TxManager, Migrator (goose v3), OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.BatchWriter`, `outbox.Relay` |
-| `adapters/redis` | Client, DistLock, IdempotencyChecker, Cache | `idempotency.Checker` |
+| `adapters/redis` | Client, DistLock, IdempotencyClaimer, Cache | `idempotency.Claimer` |
 | `adapters/oidc` | Thin go-oidc v3 wrapper (Config, Provider, Refresh, Verifier, OAuth2Config) | — |
 | `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |

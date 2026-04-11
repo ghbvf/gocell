@@ -248,7 +248,8 @@
 - **任务映射**: T23
 - **验证方式**: [集成测试]
 - **验收条件**:
-  - Given `NewSubscriber(conn, SubscriberConfig{QueueName, PrefetchCount})`; When `Subscribe(ctx, topic, handler)` 被调用; Then 消息消费正常，prefetch 按配置值
+  - Given `NewSubscriber(conn, SubscriberConfig{DLXExchange: "dlx", QueuePrefix: "app"})`; When `Subscribe(ctx, topic, handler)` 被调用; Then 消息消费正常
+  - Given `NewSubscriber(conn, SubscriberConfig{})`（DLXExchange 为空）; When `Subscribe` 被调用; Then 返回 `ERR_ADAPTER_AMQP_SUBSCRIBE` 错误（运行时必填校验）
   - Given `var _ outbox.Subscriber = (*RabbitMQSubscriber)(nil)`; When 编译; Then 通过
 
 ### AC-5.4 -- ConsumerBase [P1]
