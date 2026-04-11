@@ -180,7 +180,7 @@ func TestRouter_Close_CancelsSubscriptions(t *testing.T) {
 
 	<-r.Running()
 
-	err := r.Close()
+	err := r.Close(context.Background())
 	assert.NoError(t, err)
 
 	select {
@@ -302,6 +302,115 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection lost")
 }
+
+func TestRouter_Run_DoubleRun_ReturnsError(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(sub, WithStartupTimeout(100*time.Millisecond))
+	r.AddHandler("topic.a", noopHandler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	<-r.Running()
+
+	// Second Run should return error, not panic.
+	err := r.Run(ctx)
+	assert.ErrorIs(t, err, errAlreadyRunning)
+
+	cancel()
+	<-done
+}
+
+func TestRouter_Close_ZeroHandlers(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(sub)
+
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	<-r.Running()
+
+	// Close should terminate Run even with zero handlers.
+	err := r.Close(context.Background())
+	assert.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit after Close with zero handlers")
+	}
+}
+
+func TestRouter_Close_Timeout(t *testing.T) {
+	// Subscriber that ignores context cancellation (simulates stuck goroutine).
+	stuck := make(chan struct{})
+	sub := &stuckSubscriber{block: stuck}
+	r := New(sub, WithStartupTimeout(100*time.Millisecond))
+	r.AddHandler("topic.stuck", noopHandler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = r.Run(ctx) }()
+
+	<-r.Running()
+
+	// Close with a very short timeout — should return context deadline error.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer closeCancel()
+	err := r.Close(closeCtx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+	close(stuck) // unblock the subscriber so test cleanup works
+}
+
+func TestRouter_AddHandler_PanicsOnEmptyTopic(t *testing.T) {
+	r := New(&blockingSubscriber{})
+	assert.Panics(t, func() {
+		r.AddHandler("", noopHandler)
+	})
+}
+
+func TestRouter_AddHandler_PanicsOnNilHandler(t *testing.T) {
+	r := New(&blockingSubscriber{})
+	assert.Panics(t, func() {
+		r.AddHandler("topic", nil)
+	})
+}
+
+func TestRouter_Run_PanicInSubscriber_CapturedAsError(t *testing.T) {
+	// A subscriber whose Subscribe panics.
+	panickySub := &panickingSubscriber{}
+	r := New(panickySub, WithStartupTimeout(500*time.Millisecond))
+	r.AddHandler("topic.panic", noopHandler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := r.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+}
+
+// stuckSubscriber blocks on an external channel, ignoring context cancellation.
+type stuckSubscriber struct {
+	block chan struct{}
+}
+
+func (s *stuckSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler) error {
+	<-s.block // ignores ctx — simulates unresponsive subscriber
+	return nil
+}
+func (s *stuckSubscriber) Close() error { return nil }
+
+// panickingSubscriber panics on Subscribe.
+type panickingSubscriber struct{}
+
+func (s *panickingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler) error {
+	panic("boom")
+}
+func (s *panickingSubscriber) Close() error { return nil }
 
 // --- Helpers ---
 

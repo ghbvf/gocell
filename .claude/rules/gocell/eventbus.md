@@ -51,6 +51,19 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 - **零值 HandleResult{} 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
 - `PermanentError` 包装的错误即使返回 Requeue 也会被 ConsumerBase 升级为 Reject
 
+### Cell 订阅注册（EventRouter 模式）
+
+Cell 在 `RegisterSubscriptions` 中通过 `r.AddHandler(topic, handler)` 声明订阅意图，
+**禁止手动启动 goroutine 或调用 sub.Subscribe**——Router 管理所有 goroutine 生命周期。
+
+```go
+func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
+    handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
+    r.AddHandler("my.topic.v1", handler)
+    return nil
+}
+```
+
 ### 旧 handler 迁移
 
 使用 `outbox.WrapLegacyHandler` 适配旧签名：
@@ -58,7 +71,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 ```go
 legacy := func(ctx context.Context, entry outbox.Entry) error { ... }
 handler := outbox.WrapLegacyHandler(legacy)
-// nil error → Ack, non-nil → Requeue
+// nil error → Ack, PermanentError → Reject, other error → Requeue
 ```
 
 WrapLegacyHandler 检测 PermanentError 并返回 DispositionReject，无需 ConsumerBase 包装即可路由到 DLX。
