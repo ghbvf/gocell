@@ -120,6 +120,12 @@ func WithListener(ln net.Listener) Option {
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
 func WithHealthChecker(name string, fn func() error) Option {
+	if name == "" {
+		panic("bootstrap: health checker name must not be empty")
+	}
+	if fn == nil {
+		panic(fmt.Sprintf("bootstrap: health checker %q must not be nil", name))
+	}
 	return func(b *Bootstrap) {
 		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 	}

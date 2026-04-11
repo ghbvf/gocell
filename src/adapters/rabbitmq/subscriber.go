@@ -231,6 +231,10 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
+		// Terminal state — propagate immediately, do not wrap as subscribe error.
+		if isTerminalConnectionError(err) {
+			return err
+		}
 		if isRecoverableAMQPError(err) {
 			return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
 		}

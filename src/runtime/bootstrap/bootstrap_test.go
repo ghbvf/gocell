@@ -18,6 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testHTTPClient is used in place of http.DefaultClient to prevent test
+// hangs on stalled connections (e.g., during shutdown races).
+var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
 // testCell is a minimal Cell for bootstrap testing.
 type testCell struct {
 	*cell.BaseCell
@@ -261,7 +265,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	// Wait for the HTTP server to be ready.
 	addr := ln.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
 		}
@@ -270,7 +274,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// GET /readyz and verify the checker appears as healthy.
-	resp, err := http.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -314,7 +318,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	// Wait for the HTTP server to be ready.
 	addr := ln.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
 			return false
 		}
@@ -323,7 +327,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// GET /readyz and verify the checker appears as unhealthy.
-	resp, err := http.Get(fmt.Sprintf("http://%s/readyz", addr))
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -342,4 +346,16 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
+}
+
+func TestWithHealthChecker_EmptyName_Panics(t *testing.T) {
+	assert.PanicsWithValue(t, "bootstrap: health checker name must not be empty", func() {
+		WithHealthChecker("", func() error { return nil })
+	})
+}
+
+func TestWithHealthChecker_NilFn_Panics(t *testing.T) {
+	assert.PanicsWithValue(t, `bootstrap: health checker "rabbitmq" must not be nil`, func() {
+		WithHealthChecker("rabbitmq", nil)
+	})
 }
