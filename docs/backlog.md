@@ -1,395 +1,294 @@
 # GoCell Backlog
 
-> Phase 0-4 已完成并合并到 develop。本文档汇总全部待办事项。
-> 更新日期: 2026-04-10
+> 只含待办事项。历史完成记录已归档至 `docs/reviews/archive/202604111438-backlog-full-history.md`。
+> 更新日期: 2026-04-11（跨框架分析后修订）
 
 ---
 
-## Tier 0: Review 修复 + 依赖替换（进行中）
+## 已合并（本轮）
 
-> PR#37 (postgres) ✅ PR#38 (rabbitmq) ✅ PR#39 (redis) ✅ PR#40 (dep-cleanup) ✅ PR#41 (dep-sdk-replace) ✅ PR#42 (dep-migrator-otel) ✅ 已合并
-> PR#43 (websocket-split) ✅ PR#49 (mapCodeToStatus fix) ✅ PR#50 (http-1-envelope) ✅ PR#51 (http-2-observability) ✅ PR#52 (http-3-cells-dechi) ✅ 已合并
-> PR#56 (http-3 集成: middleware reorder + DecodeJSON + RouteMux.Use) 待合并
+| 任务 | PR | 说明 |
+|------|-----|------|
+| G-7 auto-derive belongsToCell/ownerCell | PR#67 ✅ | metadata parser 自动推导 + table-driven test |
+| 0-F + 0-G 部分: Solution B 接口 + Subscriber 重写 | PR#68 ✅ | kernel/outbox Disposition/Receipt/HandleResult + idempotency Claimer + eventbus ConsumerMiddleware + rabbitmq processDelivery |
+| WM-9/10/11 errcode 三合一 | PR#69 ✅ | errcode 内外分离 + TraceID + OTel 4xx/5xx 分类 |
+| P0 止血: bootstrap rollback + ClaimFailOpen + ctx cancel | PR#70 ✅ | claimWithRetry + fail-closed 默认 + 最后重试 ctx cancel → Requeue |
+| governance rules: G-2/G-4/G-6 + review fixes | PR#71 ✅ | TOPO-07 + deprecated 阻断 + assembly boundary 校验 |
+| HandleResult 零值改 invalid (SOL-B-04/R-1) | PR#72 ✅ | DispositionAck = iota+1, Disposition.Valid() |
+| WM-12 archtest 边界守护 | PR#73 ✅ | 5 条 LAYER 规则 + 49 tests，go list -json -e，零新依赖 |
 
-### 0-A: 依赖替换 Phase 0 — 安全风险（1d）
+## 进行中
 
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| D-01 | `adapters/s3`: aws-sdk-go-v2 薄 adapter（Config + Upload + Health + SDK 逃生口） | 0.5d | ✅ PR#41 |
-| D-02 | `adapters/oidc`: go-oidc v3 薄 adapter（Config + Provider/Refresh，暴露原生类型） | 0.5d | ✅ PR#41 |
-| D-03 | `adapters/redis/distlock`: 删除 FenceToken（零调用者） | 0.5h | ✅ PR#40 |
+无
 
-### 0-B: Outbox Relay Plan A（0.5d）
+### PR 队列（跨框架分析后修订，PR#70-73 已全部合并）
 
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| R-01 | `pollOnce()` markQuery 失败 fail-fast | 2h | ✅ PR#46 |
-| R-02 | Start/Stop handshake (`startedCh`) | 2h | ✅ PR#46 |
+> 2026-04-11 跨框架分析结论: 对比 7 个主流框架后，识别出 2 个架构根因。
+> 修订: R-3 废弃（被 Phase 2 EventRouter 取代）、R-5 废弃（合入 Phase 2 Cell 迁移）。
+> 分析文档: `docs/reviews/20260411-architecture-root-cause-analysis.md`, `docs/reviews/20260411-cross-framework-architecture-analysis.md`
 
-> 来源: `docs/reviews/202604061401-pr39-six-role/PR39-postgres-outbox-followup.md`
+**架构修复（跨框架分析产出，取代部分 PR-Rollout）**
+
+| 阶段 | 任务 | 文件 | 预估 | 依赖 |
+|------|------|------|------|------|
+| Phase 1 | PermanentError 提升到 kernel/outbox — WrapLegacyHandler 直接检测 + InMemoryEventBus 对齐 | `kernel/outbox/outbox.go`, `adapters/rabbitmq/consumer_base.go`, `runtime/eventbus/eventbus.go` | 1h | 无（PR#70 ✅） |
+| Phase 2 | EventRouter 引入 — cell.EventRouter 接口 + runtime/eventrouter 实现 + 3 Cell 迁移 | `kernel/cell/registrar.go`, `runtime/eventrouter/`(新), `cells/*/cell.go`, `runtime/bootstrap/` | 4h | Phase 1 |
+| Phase 3 | Checker 清理 + Receipt 加固 — 删 legacy Checker + sync.Once + LeaseTTL 校验 | `adapters/rabbitmq/consumer_base.go`, `kernel/idempotency/`, `adapters/redis/` | 3h | Phase 2 |
+
+> 执行顺序: Phase 1 → Phase 2 → Phase 3（串行）
+> 对标框架: Watermill Router, Sarama ConsumerGroupHandler, Temporal Worker, NATS JetStream, Kratos transport.Server
+> 根因 1: Subscribe() 混合 setup/run → Phase 2 EventRouter 修复
+> 根因 2: PermanentError 在 adapter 层 → Phase 1 修复
+
+**PR-Rollout 剩余（独立任务）**
+
+| 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
+|------|-----|------|------|------|------|
+| R-4 | SOL-B-01 | lease 续租 Receipt.Renew / 后台 renew loop | `kernel/idempotency/idempotency.go`, `adapters/redis/idempotency.go`, `adapters/rabbitmq/consumer_base.go` | 4h | Phase 3 |
+
+> ~~R-1~~: PR#72 ✅ 已合并
+> ~~R-2~~: 合入 Phase 3（删 Checker）
+> ~~R-3~~: **废弃** → Phase 2 EventRouter 取代
+> ~~R-5~~: **废弃** → Phase 2 Cell 迁移包含
+
+**PR-Cleanup: Kernel 架构整理**
+
+| 序号 | ID | 任务 | 文件 | 预估 | 依赖 |
+|------|-----|------|------|------|------|
+| K-1 | CS-AR-2 | Dependencies 精简 + 冻结注释 | `kernel/cell/interfaces.go`, `kernel/assembly/assembly.go`, ~20 test files | 1h | Phase 2 |
+| K-2 | CS-AR-3 | net/http ADR 注释 | `kernel/cell/registrar.go` | 15min | 无 |
+| K-3 | F-OB-01 | BatchWriter 接口 + WriteBatchFallback | `kernel/outbox/outbox.go`, `adapters/postgres/outbox_writer.go` | 3h | 无 |
+| K-4 | SOL-B-02 | Receipt 移回 idempotency 包 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go`, adapters + tests | 3h | Phase 3 |
+| K-5 | — | 三角色审查 mandatory actions | Dependencies 冻结 + registrar ADR + WriteBatchFallback godoc | 含在 K-1/K-2/K-3 |
+
+> K-2/K-3 全程无阻塞可并行；K-1 依赖 Phase 2（EventRegistrar 接口变更）；K-4 依赖 Phase 3
+
+---
+
+## P0 — v1.0 阻塞
 
 ### 0-B2: Outbox Relay 三阶段重写（1.5d）
 
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h | TODO |
-| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h | TODO |
-| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h | TODO |
-| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h | TODO |
-| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h | TODO |
-| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h | TODO |
-| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h | TODO |
-| RL-08 | 测试覆盖（8 个场景） | 2h | TODO |
+| # | 任务 | 预估 |
+|---|------|------|
+| RL-01 | migration `003_outbox_status_columns.sql`（status/attempts/next_retry_at/claimed_at） | 0.5h |
+| RL-02 | `RelayConfig` 新增 MaxAttempts / BaseRetryDelay / ClaimTTL | 0.5h |
+| RL-03 | 重写 `pollOnce` 三阶段（claim → publish → writeBack） | 2h |
+| RL-04 | `reclaimStale` 加入 cleanupLoop（超时 claiming → pending） | 0.5h |
+| RL-05 | `OutboxWriter.Write` 显式写 `status = 'pending'` | 0.5h |
+| RL-06 | relay 状态机 enum（替换 bool running + startedCh） | 1h |
+| RL-07 | slog 指标 + `outbox.Entry.Attempts` 字段 | 0.5h |
+| RL-08 | 测试覆盖（8 个场景） | 2h |
 
 > 设计文档: `docs/reviews/202604072154-outbox-relay-three-phase-plan.md`
 
-### 0-C: 依赖替换 Phase 1 — 快速收益（1d）
+### 0-G 剩余: RabbitMQ 重连 backoff（2h，无阻塞）
 
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| D-04 | `pkg/uid`: google/uuid 替换手写 UUIDv4（18 调用点） | 0.5d | ✅ PR#40 |
-| D-05 | shutdown/bootstrap: errors.Join 替换 firstErr（2 文件 6 行） | 0.5h | ✅ PR#40 |
-| D-06 | middleware: chi/middleware 替换 recovery/requestID/realIP（删 ~200 行） | 0.5d | WONTFIX — GoCell 需要结构化 JSON 错误体、自定义 UUID 注入、trusted proxy 校验，chi/middleware 不满足 |
-
-### 0-D: RabbitMQ Solution B（2-3d）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| S-01 | `outbox.Subscriber` handler 返回 HandleResult{Disposition, Receipt} | 0.5d | TODO |
-| S-02 | `idempotency.Checker` 升级为 Claim/Commit/Release | 0.5d | TODO |
-| S-03 | `ConsumerBase` 去掉应用侧 DLQ，返回 Disposition | 0.5d | TODO |
-| S-04 | `Subscriber.processDelivery` 按 Disposition 做 Ack/Nack/Requeue | 0.5d | TODO |
-| S-05 | 重连策略完善 + backoff | 0.5d | TODO |
-| S-06 | 测试覆盖（幂等时序、setup 重连、集成） | 0.5d | TODO |
-
-> 来源: `docs/reviews/202604061449-pr38-solution-b-report.md`
-
-### 0-E: 依赖替换 Phase 2（2d）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| D-07 | `adapters/postgres/migrator`: pressly/goose v3 替换（删 ~418 行） | 1d | ✅ PR#42 |
-| D-08 | 新建 `adapters/otel` + `adapters/prometheus`（OTel + Prometheus） | 1d | ✅ PR#42 |
-
-### 0-F: Solution B 接口 + 基础设施 — PR-A3（1.5d）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| A3-01 | `kernel/outbox`: +Disposition, +Receipt, +HandleResult, +EntryHandler, +WrapLegacyHandler；~Subscriber, ~TopicHandlerMiddleware 签名变更 | 2h | TODO |
-| A3-02 | `kernel/idempotency`: +ClaimState, +Claimer；删除 Checker | 1h | TODO |
-| A3-03 | `adapters/redis/idempotency.go`: IdempotencyClaimer 双 key Lua（lease:{k} + done:{k}） | 3h | TODO |
-| A3-04 | `runtime/eventbus/consumer.go`: ConsumerMiddleware 从 rabbitmq/consumer_base.go 迁入+重写 | 2h | TODO |
-| A3-05 | `runtime/eventbus/eventbus.go`: InMemoryEventBus 适配新 EntryHandler 签名 | 1h | TODO |
-| A3-06 | Cell handler 迁移（configsubscribe, auditappend 等返回 HandleResult） | 1h | TODO |
-| A3-07 | 测试更新（mock 适配 + 新接口覆盖） | 2h | TODO |
-
-> 设计来源: `docs/reviews/202604061449-pr38-solution-b-report.md`
-> 依赖: PR#44 ✅, PR#45 ✅
-
-### 0-G: RabbitMQ Subscriber 重写 — PR-B（1.5d）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| B-01 | `subscriber.go`: processDelivery 读 HandleResult → Ack/Nack/Requeue + Receipt Commit/Release | 3h | TODO |
-| B-02 | 删除 `consumer_base.go`（已迁到 runtime/eventbus/consumer.go） | 0.5h | TODO |
-| B-03 | `connection.go`: setup 错误分类（recoverable vs permanent）+ anti-hot-loop backoff | 2h | TODO |
-| B-04 | 测试覆盖（processDelivery 重写 + receipt 行为 + 集成） | 3h | TODO |
-
-> 依赖: 0-F (PR-A3) 必须先合并
-
-### 0-I: HTTP decode 兼容回归测试补强（0.5d）
-
-> 来源: PR#56 复审 low-priority reminder（2026-04-09）
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| HT-01 | `cells/order-cell/slices/order-create`, `cells/device-cell/slices/device-register`, `cells/device-cell/slices/device-command`: handler 级显式回归测试，锁定 malformed JSON / empty body / type mismatch 的错误 code 兼容性 | 2h | TODO |
-| HT-02 | `pkg/httputil/response_test.go`: 补 `WriteDecodeError` 显式测试，覆盖 `ErrValidationFailed` → 400 / `ERR_VALIDATION_FAILED` 与 `ErrBodyTooLarge` → 413 / `ERR_BODY_TOO_LARGE` | 1h | TODO |
-
-### 执行顺序
-
-```
-已完成:
-  0-A ✅ → 0-B ✅ (PR#46) → 0-C ✅ → 0-E ✅
-  PR#44 (QueryBuilder) ✅ → PR#45 (TxRunner) ✅
-  PR#49 (mapCodeToStatus fix) ✅ → PR#50 (http-1-envelope) ✅
-  PR#51 (http-2-observability) ✅ → PR#52 (http-3-cells-dechi) ✅
-  PR#53 (panic-observability) ✅ → PR#54 (DecodeJSON) ✅ → PR#55 (RouteMux.Use) ✅
-  PR#56 (http-3 集成) 待合并
-
-剩余（可并行）:
-  0-F (PR-A3 Solution B 接口) → 0-G (PR-B RabbitMQ 重写)
-  0-B2 (Relay 三阶段重写)
-  0-H (DecodeJSONStrict)
-  0-I (HTTP decode 兼容回归测试)
-  → 继续 Tier 1 (R1E → R2)
-```
-
-> 完整分析: `docs/reviews/202604061630-dependency-replacement-plan.md`
-> 路线图: `docs/reviews/202604061530-post-pr38-roadmap.md`
+| # | 任务 | 预估 |
+|---|------|------|
+| B-03 | `connection.go`: setup 错误分类（recoverable vs permanent）+ anti-hot-loop backoff | 2h |
 
 ---
 
-## Tier 1: 全量代码 Review（3-5 天）
+## P1 — v1.0 强烈建议
 
-### 目标
-对 200 文件 / 18,840 行代码做跨 Phase 集成 review，产出依赖图和模块级 findings。
+### Tier 0 收尾
 
-> 执行计划: `docs/reviews/202604060739-review-plan/202604060830-001-review-plan.md`
+| # | 任务 | 预估 | 说明 |
+|---|------|------|------|
+| HT-01 | handler 级 decode 回归测试（order-create/device-register/device-command） | 2h | 0-I |
+| HT-02 | `WriteDecodeError` 显式测试（400/413/500 + fallback） | 1h | 0-I |
+| OB-02 | safe_observe_test.go 注入 panicking slog handler 测试 | 1h | 0-J 剩余 |
+| SF-01 | `DecodeJSONStrict` 启用 DisallowUnknownFields | 1h | 0-H |
+| SF-02 | handler 逐个切到 `DecodeJSONStrict`（10 个 struct） | 1h | 0-H |
+| SF-03 | `WriteDecodeError` 适配严格/宽松模式 | 0.5h | 0-H |
+| SF-04 | CHANGELOG / API 文档标注 breaking change | 0.5h | 0-H |
+| HR-01 | RealIP / trustedProxies 产品决策 + WithTrustedProxies 或移除 | 2h | 0-K |
+| HR-02 | 统一 route pattern 元数据，修复 metrics label 基数爆炸 (PROM-01) | 2h | 0-K |
+| HR-03 | chi/middleware.RequestID bridge 替换自研 UUID 生成 | 1h | 0-K |
+| HR-04 | tracing 官方能力决策（WithTracer 或补文档） | 1h | 0-K |
 
-### 进度
+### Review Findings 未修
+
+| ID | 文件 | 问题 | 预估 |
+|----|------|------|------|
+| F-5 | `kernel/journey/catalog.go` | Journey catalog 不校验引用 | 2h |
+| R1C2-F01 | `runtime/eventbus/eventbus.go` | Close()+Subscribe() 竞态 | 2h |
+| R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | 2h |
+| F-OB-01 | `kernel/outbox/outbox.go` | 无批量写支持 | 2h |
+| TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | 1h |
+| OTEL-COV-01 | `adapters/otel/` | 覆盖率 67.3%（PR#72 删除了依赖内部 API 的旧测试后回升，但仍 < 80%；成功路径需 gRPC OTLP endpoint，需 testcontainers 集成测试） | 2h |
+| SUB-SETUP-01 | `kernel/outbox`, `cells/*/cell.go` | RegisterSubscriptions 用 100ms 启发式区分 setup 失败与正常阻塞消费。**已被 Phase 2 EventRouter 解决**——Router.Run() 同步返回 setup error，消除启发式 | ~~4h~~ → Phase 2 |
+
+### winmdm Accept P1
+
+| # | 任务 | 包位置 | 预估 | 前置依赖 |
+|---|------|--------|------|---------|
+| WM-1 | CSRF 中间件 — Origin/Referer 校验 | `runtime/http/middleware` | 0.5d | 无 |
+| WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
+| WM-2 | 密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go） | `runtime/auth` | 2d | 无 |
+| WM-34 | 配置热更新回调 — Cell 级 OnConfigReload | `runtime/config` | 1d | 无 |
+| WM-20 | TestPubSub 测试套件 — TestPublisher/TestSubscriber 标准套件 | `kernel/outbox/outboxtest/` | 1.5d | PR#68 |
+| WM-17 | 生命周期钩子 — BeforeStart/AfterStart/BeforeStop/AfterStop 可选接口 | `kernel/cell` | 1d | 无 |
+| WM-15 | L4 队列状态机 — 合入 0-B2 | `kernel/outbox` | 1.5d | 0-B2 |
+| WM-33b | 熔断器 — sony/gobreaker 包装 | `adapters/` | 0.5d | 无 |
+
+### 运维发现的生产缺口
+
+| # | 问题 | 建议 |
+|---|------|------|
+| OPS-2 | 日志缺 trace_id 关联 — AccessLog/ConsumerBase 无 trace_id | 随 WM-10 一并补充 |
+| OPS-3 | readiness 探针未接 adapter — postgres/redis/rabbitmq 不报告健康状态 | 各 adapter 注册 HealthChecker |
+
+### Tech Debt P1
+
+| ID | 问题 | 预估 | 归属 PR |
+|----|------|------|---------|
+| ~~SOL-B-04~~ | ~~HandleResult 零值静默 ACK~~ | ~~1h~~ | PR#72 ✅ |
+| SOL-B-03 | cells Checker → Claimer 迁移 + 删除 legacy Checker 路径 | 2h | **合入 Phase 3** |
+| ~~SOL-B-05~~ | ~~bootstrap 统一包装 subscriber/middleware~~ | ~~3h~~ | **废弃 → Phase 2 EventRouter 取代** |
+| SOL-B-01 | Claimer lease 续租 — handler/retryLoop 超 LeaseTTL 后 Commit stale，需 Receipt.Renew 或后台续租（参考 distlock.go renewLoop） | 4h（C3，改 kernel 接口） | R-4 |
+| SOL-B-02 | `idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包，outbox 反向依赖 idempotency | 3h（C3，10+ 文件） | K-4 |
+| SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | Phase 3 附近 |
+| P4-TD-03 | `IssueTestToken` HS256 死代码（测试陷阱） | 30min | — |
+| P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce | 1h | — |
+| P4-TD-05 | 缺少 outbox 全链路 3-container 集成测试 | 2h | — |
+| P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
+| P2-T-02 | J-audit-login-trail e2e 测试 | 2h | — |
+
+---
+
+## P2 — v1.0 后
+
+### winmdm Accept P2
+
+| # | 任务 | 包位置 | 预估 |
+|---|------|--------|------|
+| WM-7 | 批量操作 helper — BulkResult + 部分成功语义 | `pkg/httputil` 或 `pkg/bulk` | 1d |
+
+### Tech Debt P2
+
+| ID | 问题 | 预估 |
+|----|------|------|
+| P4-TD-01 | 缺少共享 NoopOutboxWriter | 30min |
+| P4-TD-09 | List 端点缺分页（WM-6 游标分页可解决） | 2h |
+| P4-TD-10 | POST 201 响应未包装 `{"data":...}` | 2h |
+| P4-TD-11 | in-memory repository 缺并发测试 | 1h |
+| P3-TD-11 | access-core domain 模型重构 | 4h（高风险） |
+| P3-TD-12 | configpublish.Rollback version 校验 | 2h |
+| P4-TD-12 | demo cell `TestDemo_Startup` t.Skip 占位 | 30min |
+
+### metadata parser follow-up（PR#67）
+
+| ID | 问题 | 预估 |
+|----|------|------|
+| META-67-01 | `kernel/metadata/parser_test.go`: 补 `parseContract()` parser 层集成用例，覆盖“省略 `ownerCell` 且 `kind` 未知或为空时保持空值” | 30min |
+| META-67-02 | `kernel/metadata/parser_test.go`, `kernel/governance/*`: 补跨模块断言，锁住“provider 为空 -> parser 保持 `ownerCell` 为空 -> governance 报错（REF-03/FMT-07）”链路 | 1h |
+| META-67-03 | `kernel/metadata/types.go`, `kernel/metadata/parser.go`, `kernel/metadata/parser_test.go`: 收敛 `kind -> provider endpoint` 映射的维护点，减少注释/测试/实现三处漂移 | 1h |
+
+### 运维 P2
+
+| # | 问题 | 建议 |
+|---|------|------|
+| OPS-4 | 优雅关闭缺 drain 期 | bootstrap shutdown 增加 drain 阶段 |
+| OPS-5 | 连接池无指标 | 暴露 PG/Redis/RabbitMQ pool stats |
+
+---
+
+## Review 待完成
+
+### 代码审查进度
 
 | 层 | 状态 |
 |---|------|
-| R1A pkg | ✅ 已审 |
-| R1B kernel | ✅ 已审 + 六角色深审完成（40+ findings，见 `tools/docs/reviews/2026-04-09-*`） |
-| R1C runtime | ✅ 已审 + 已修 |
-| R1D-1 postgres | ✅ 已审 + 已修 (PR#37) |
-| R1D-2 redis | ✅ 已审 + 已修 (PR#39) |
-| R1D-3 rabbitmq | ✅ 已审 + 已修 (PR#38) |
-| R1D-4 oidc | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
-| R1D-5 s3 | ✅ 已审（6 份 review 文档，见 `docs/reviews/archive/202604060830-R0/`） |
-| R1D-6 websocket | ✅ 已审 + 已修 (PR#43) — 6 条 tech debt 记入 WS-* |
 | R1E cells | 待审 |
 | R1F+G delivery + YAML | 待审 |
 | R2 数据流合并 | 待审 |
 | R3-R5 PR追溯/集成/裁决 | 待审 |
 
-### 任务
+### Review 任务
 
 | # | 任务 | 预估 |
 |---|------|------|
-| T1-1 | 生成模块依赖图（`go list -json ./...` → DOT/SVG） | 2h |
-| T1-2 | Review kernel/（11 包，4,429 行）— 接口稳定性、coverage 交叉验证 | 4h |
-| T1-3 | Review cells/（6 cell，5,811 行）— 聚合边界、errcode 一致性 | 4h |
-| T1-4 | Review runtime/（8 包，2,835 行）— 生命周期、中间件完整性 | 3h |
-| T1-5 | Review adapters/（6 包，4,185 行）— 接口实现合规、集成测试 | 3h |
-| T1-6 | Review examples/（3 项目，233 行）— 教学质量、可运行性 | 2h |
+| T1-3 | Review cells/（6 cell，5,811 行） | 4h |
+| T1-6 | Review examples/（3 项目，233 行） | 2h |
 | T1-7 | CI 加 golangci-lint / staticcheck | 2h |
 | T1-8 | 产出 review 报告 + 汇总 findings | 2h |
 
 ---
 
-## Tier 2: Review 产出的修复 + Tech-Debt 清理
+## v1.1 — 核心能力完善
 
-> 规模：R1A-R1D 旧有 35 条（10 已修） + Kernel 六角色深审新增 19 条 = **44 条未修**
+### metadata-model-v3 校验规则
 
-### Review Findings 汇总
-
-> Review 原则：P0 当层修，P1/P2 记录到此处留 Fix Pack。
-> R1A-R1D 来源报告已归档至 `docs/reviews/archive/`。
-> Kernel 六角色深审报告：`tools/docs/reviews/2026-04-09-*`（4 组，覆盖全部 kernel 子模块）。
-
-#### P1 — kernel 旧有（~~8~~ 2 条未修，6 条已修）
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| R1B1-01 | `kernel/cell/base.go` | Add*/collection accessor 无 mutex | ✅ 已修（Add 方法已有 Lock/Unlock） |
-| R1B1-02 | `kernel/cell/base.go` | 读可变字段无锁 | ✅ 已修（读 accessor 已有 Lock，RWMutex 降级为 P2） |
-| F-OB-02 | `kernel/outbox/outbox.go` | Entry 无显式 Topic 字段 | ✅ 已修（Topic + RoutingTopic 回退） |
-| F-ID-01 | `kernel/idempotency/idempotency.go` | IsProcessed+MarkProcessed 旧接口未废弃 | TODO（随 0-F 一并处理） |
-| G-01 | `kernel/governance/rules_fmt.go` | owner.team/role, verify.smoke 必填校验 | ✅ validateFMT11 已实现 |
-| G-02 | `kernel/governance/rules_verify.go` | verify.unit 未校验为必填 | ✅ validateFMT12 已实现 |
-| F-5 | `kernel/journey/catalog.go` | Journey catalog 不校验引用 | TODO |
-| F-2 | `kernel/assembly/assembly.go` | Start()/StartWithConfig() 重复代码 | ✅ 已重构为 startInternal |
-
-#### P1 — kernel 六角色深审新发现（~~12~~ 0 条未修，全部已修）
-
-> 来源：`tools/docs/reviews/2026-04-09-*`（4 组六角色审查）
-> 全部修复于 PR#59-64。验证日期: 2026-04-11。
-
-| ID | 问题 | 状态 |
-|----|------|------|
-| ASJ-2 | scaffold 路径穿越 | ✅ PR#59 validatePathComponent |
-| CS-F1 | VerifySlice 不消费 metadata | ✅ PR#61 kernel/verify 重构 |
-| CS-F2 | VerifyCell 硬编码 -run Smoke | ✅ PR#61 + PR#62 smoke stubs |
-| CS-F3 | 零匹配测试当成功 | ✅ PR#61 ZeroMatch 检测 |
-| CS-F4 | manual criteria 不参与判定 | ✅ PR#61 ManualPending |
-| GOV-1 | TOPO-04 用 ownerCell 做约束 | ✅ PR#60 contractProvider |
-| GOV-2 | DEP-03 空 assembly 绕过 | ✅ PR#59 |
-| GOV-3 | active contract 无 provider | ✅ PR#60 VERIFY-04 |
-| MR-R01 | belongsToCell 路径不一致 | ✅ PR#59 |
-| MR-R02 | ownerCell 未推导 | ✅ PR#60 inferContractOwner |
-| MR-R03 | integration test 硬编码 | ✅ PR#59 GreaterOrEqual |
-| ASJ-1 | journey id 缺 J- 前缀 | ✅ PR#59 |
-
-#### P2 — kernel 六角色深审新发现（~~7~~ 0 条未修，全部已修）
-
-| ID | 问题 | 状态 |
-|----|------|------|
-| CS-F5 | BaseSlice 可变切片暴露 | ✅ PR#59 defensive copy |
-| MR-R05 | registry 可变指针 | ✅ PR#60 deepCopy |
-| ASJ-3 | Register(nil) panic | ✅ PR#59 nil guard |
-| ASJ-4 | Catalog 可变指针 | ✅ PR#59 copyJourneyMeta |
-| ASJ-5 | fingerprint 缺 contract | ✅ PR#59 boundary hash |
-| GOV-5 | verify 格式无校验 | ✅ PR#64 VERIFY-05 |
-| GOV-6 | select-targets 缺 L0 | ✅ PR#64 expandL0Dependents |
-
-#### P1 — pkg（~~3~~ 0 条，全部已修）
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| R1A1-F02 | `pkg/httputil/response.go` | mapCodeToStatus 子串匹配漏掉 ERR_AUTH_TOKEN_EXPIRED | ✅ PR#49 + PR#54 |
-| R1A1-F03 | `pkg/httputil/response.go` | mapCodeToStatus 子串调度脆弱，顺序依赖 | ✅ PR#54 explicit mapping |
-| R1A1-F04 | `pkg/httputil/response.go` | json.NewEncoder 错误被静默丢弃 | ✅ PR#50 slog.Error |
-
-#### P1 — runtime（~~6~~ 3 条未修）
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| F-01 | `runtime/auth/jwt.go` | ErrAuthUnauthorized 重复定义 | ✅ PR#50 errcode 统一 |
-| F-02 | `runtime/auth/keys.go` | 无 RSA 最小 key size 校验 | ✅ MinRSAKeyBits=2048 已实现 |
-| F-03 | `runtime/auth/keys.go` | LoadRSAKeyPairFromPEM 裸 fmt.Errorf | ✅ 已改用 errcode |
-| R1C2-F01 | `runtime/eventbus/eventbus.go` | Close()+Subscribe() 竞态，channel read after close | TODO |
-| R1C2-F02 | `runtime/eventbus/eventbus.go` | Subscribe 退出时 subs map 泄漏 stale channel | TODO |
-| R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | TODO |
-
-#### P2 — kernel 旧有（~~7~~ 1 条未修）
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| R1B1-03 | `kernel/cell/base.go` | Init 不重置 shutdownCtx/Cancel | ✅ PR#59 |
-| R1B1-04 | `kernel/cell/base.go` | sync.Mutex → sync.RWMutex | ✅ PR#59 |
-| F-OB-01 | `kernel/outbox/outbox.go` | 无批量写支持 | TODO（随 0-F） |
-| F-OB-03 | `kernel/outbox/outbox.go` | Entry 必填校验 | TODO（随 0-F） |
-| F-META-01 | `kernel/metadata/parser.go` | 未知 YAML 字段静默忽略 | ✅ PR#65 KnownFields(true) |
-| F-META-02 | `cells/audit-core` | L2/L3 不一致 | ✅ PR#63 |
-| F-3 | `kernel/assembly/assembly.go` | Stop() errors.Join | ✅ PR#59 |
-| F-4 | `kernel/scaffold/templates.go` | 包注释冲突 | ✅ 已修 |
-
-**附加架构风险（来自六角色深审）：**
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| CS-AR-1 | `kernel/cell/base.go` | Start(ctx) 忽略传入 ctx | ✅ PR#59 context.WithoutCancel(ctx) |
-| CS-AR-2 | `kernel/cell/interfaces.go` | Dependencies 暴露完整 Cell 图 | TODO（Tier 3） |
-| CS-AR-3 | `kernel/cell/registrar.go` | kernel/cell 依赖 net/http + outbox | TODO（Tier 3） |
-
-**PR#62-64 发现的新条目：**
-
-| ID | 问题 | 状态 |
-|----|------|------|
-| F-HTTP-MAP-01 | ErrCheckRefInvalid/ErrZeroTestMatch 缺 HTTP 映射 | ✅ PR#63 |
-
-#### P2 — pkg + runtime（4 条未修）
-
-| ID | 文件 | 问题 | 状态 |
-|----|------|------|------|
-| F-HTTP-MAP-01 | `pkg/httputil/response.go` | ERR_CHECKREF_INVALID/ERR_ZERO_TEST_MATCH 缺 HTTP 映射 | ✅ PR#63 |
-| R1A1-F05 | `pkg/id/` | ~~已废弃包仍存在~~ | ✅ 已删除（PR#40） |
-| R1A1-F06 | `pkg/ctxkeys/keys_test.go` | TestFromMissingKey 遗漏覆盖 | ✅ PR#50 |
-| R1A1-F08 | `adapters/redis/client.go:16` | ErrAdapterRedisLockAcquire 常量名/值不一致 | TODO |
-| F-04 | `runtime/auth/middleware.go` | writeAuthError 忽略 encode 错误 | ✅ PR#50 |
-| R1C2-F04 | `runtime/worker/periodic.go` | PeriodicWorker 缺编译时接口检查 | TODO |
-| R1C2-F05 | `runtime/worker/periodic.go` | PeriodicWorker.Stop double-Start 问题 | TODO |
-| PROM-01 | `runtime/http/middleware/metrics.go` | metrics path label 基数爆炸 | TODO |
-| TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | TODO |
-
-### 0-H: DecodeJSON 严格模式 — DisallowUnknownFields opt-in（0.5d）
-
-> 来源: PR#54 review 讨论（2026-04-09）
-> 架构师意见: 校验策略属于 handler 层决策，不应在 pkg/ 基础设施强制；需独立 PR + migration guide
-> 产品意见: 内部项目 Fail Fast 收益大于成本；保留严格模式但需明确列出未知字段名
-
-| # | 任务 | 预估 | 状态 |
-|---|------|------|------|
-| SF-01 | `DecodeJSONStrict` 启用 DisallowUnknownFields，复用 classifyDecodeError（含 unknown field 分支） | 1h | TODO |
-| SF-02 | handler 逐个从 `DecodeJSON` 切到 `DecodeJSONStrict`（10 个 struct 目标） | 1h | TODO |
-| SF-03 | `WriteDecodeError` 适配：严格模式返回 ERR_VALIDATION_FAILED + unknown field details，宽松模式保持 ERR_VALIDATION_REQUIRED_FIELD | 0.5h | TODO |
-| SF-04 | CHANGELOG / API 文档标注 breaking change | 0.5h | TODO |
-
-### 历史 Tech-Debt（合并保留）
-
-#### P1（5 条）
-
-| ID | 来源 | 问题 | 预估 |
-|----|------|------|------|
-| P4-TD-03 | S6 P1-8 | `IssueTestToken` HS256 死代码（测试陷阱） | 30min |
-| P4-TD-04 | S6 P2-1 | order-cell 声明 L2 但无 outboxWriter enforce | 1h |
-| P4-TD-05 | S6 INT-1 | 缺少 outbox 全链路 3-container 集成测试 | 2h |
-| P3-TD-10 | Phase 2 #54 | Session refresh TOCTOU 竞态 | 4h（高风险） |
-| P2-T-02 | Phase 2 | J-audit-login-trail e2e 测试 | 2h |
-
-#### P2（7 条）
-
-| ID | 来源 | 问题 | 预估 |
-|----|------|------|------|
-| P4-TD-01 | S6 P2-5 | 缺少共享 NoopOutboxWriter | 30min |
-| P4-TD-02 | S6 P2-3 | ~~chi.URLParam 耦合（10 个文件）~~ | ✅ PR#52 PathValue 迁移 |
-| P4-TD-09 | Tier0 F-06 | List 端点缺分页 | 2h |
-| P4-TD-10 | Tier0 F-07 | POST 201 响应未包装 `{"data":...}` | 2h |
-| P4-TD-11 | Tier0 F-14 | in-memory repository 缺并发测试 | 1h |
-| P3-TD-11 | Phase 2 #56-59 | access-core domain 模型重构 | 4h（高风险） |
-| P3-TD-12 | Phase 2 #62 | configpublish.Rollback version 校验 | 2h |
-| P4-TD-12 | PR#62 | demo cell `TestDemo_Startup` 是 `t.Skip` 占位，不验证 Init/Start 行为；待 demo cell 实现后补真实 smoke 测试 | 30min |
-
----
-
-## Tier 3: 核心能力完善 — v1.1（持续）
-
-### metadata-model-v3 校验规则补全
-
-来源: KG 分析 + 六角色深审，对照 `docs/architecture/metadata-model-v3.md`。
-
-| # | 缺失规则 | 优先级 | 说明 | 状态 |
-|---|---------|--------|------|------|
-| G-1 | FMT-11: 动态状态字段禁入非 status-board 文件 | HIGH | V3 核心约束，完全未实现 | TODO |
-| G-2 | TOPO-07: actor.maxConsistencyLevel 约束 | MEDIUM | 解析了但无校验 | TODO |
-| G-3 | FMT: owner.team/owner.role 非空校验 | MEDIUM | 必填字段无验证 | ✅ validateFMT11 |
-| G-4 | FMT: deprecated contract 引用阻断（非仅 warning） | MEDIUM | 当前仅警告不阻断 | TODO |
-| G-5 | VERIFY: verify 标识符前缀格式严格校验 | ~~LOW~~ → P2 | 六角色深审确认（= GOV-5） | ✅ PR#64 VERIFY-05 |
-| G-6 | Assembly boundary.yaml 存在性校验 | LOW | 派生文件，非真相源 | TODO |
-| G-7 | slice.belongsToCell / contract.ownerCell 自动推导 | ~~LOW~~ → P1 | 六角色深审确认缺失造成矛盾视图（= MR-R01/R02） | TODO |
+| # | 缺失规则 | 优先级 |
+|---|---------|--------|
+| G-1 | FMT-11: 动态状态字段禁入非 status-board 文件 | HIGH |
+| G-2 | TOPO-07: actor.maxConsistencyLevel 约束 | MEDIUM |
+| G-4 | deprecated contract 引用阻断（非仅 warning） | MEDIUM |
+| G-6 | Assembly boundary.yaml 存在性校验 | LOW |
 
 ### 未实现的 Kernel 子模块
 
-来源: master-plan Section 5 vs 实际实现。Phase 4 决策 5 正式记录为 v1.1 scope cut。
-
-| 子模块 | master-plan 描述 | 实践评估 | v1.1 优先级 |
-|--------|-----------------|---------|------------|
-| **kernel/wrapper** | traced sync/event/command wrapper | ~~chi.URLParam 耦合~~ 已解（PR#52）；剩余价值：契约级可观测 | P1 |
-| **kernel/command** | 命令队列接口 | iot-device 暴露 L4 无框架支持 | P1 |
-| kernel/webhook | receiver + dispatcher | 无实际需求验证 | P2 |
-| kernel/reconcile | 最终状态收敛 | 无实际需求验证 | P2 |
-| kernel/replay | projection rebuild | 无实际需求验证 | P3 |
-| kernel/rollback | rollback metadata | 无实际需求验证 | P3 |
-| kernel/consumed | consumed marker | 已被 idempotency.Checker 覆盖 | DROP |
-| runtime/scheduler | cron/定时任务 | 无实际需求验证 | P2 |
-| runtime/retry | retry/backoff | 已在 ConsumerBase 中实现 | P3 |
-| runtime/tls | TLS/mTLS | 无实际需求验证 | P3 |
-| runtime/keymanager | 密钥管理 | 已在 auth/keys.go 中部分实现 | P3 |
+| 子模块 | 说明 | 优先级 |
+|--------|------|--------|
+| kernel/wrapper | 契约级可观测 traced wrapper | P1 |
+| kernel/command | 命令队列接口（L4 框架支持） | P1 |
+| kernel/webhook | receiver + dispatcher | P2 |
+| kernel/reconcile | 最终状态收敛 | P2 |
+| runtime/scheduler | cron/定时任务 | P2 |
+| kernel/replay | projection rebuild | P3 |
+| kernel/rollback | rollback metadata | P3 |
 
 ### adapters/ 与 runtime/ 分层重整
 
-> 来源: 2026-04-07 依赖替换期间分析。删除 adapters/s3 + adapters/oidc（零 import）后，
-> 发现剩余 adapter 混合了两类职责：纯 SDK 胶水 vs 领域/框架逻辑。
+| # | 问题 | 方向 |
+|---|------|------|
+| AL-01 | outbox_relay.go 轮询调度逻辑属于 runtime | 拆出 `runtime/outbox/relay.go` |
+| AL-02 | distlock.go 续期 goroutine 属于 runtime | 拆出通用 distlock 接口 |
+| AL-04 | runtime/auth 直接 import golang-jwt | 评估是否值得拆 |
 
-| # | 当前位置 | 问题 | 方向 |
-|---|---------|------|------|
-| AL-01 | `adapters/postgres/outbox_relay.go` | 轮询调度逻辑属于 runtime，只有 SQL 执行属于 adapter | 拆出 `runtime/outbox/relay.go`，adapter 只提供 store 接口实现 |
-| AL-02 | `adapters/redis/distlock.go` | 续期 goroutine + TTL 策略属于 runtime | 拆出通用 distlock 接口到 runtime，adapter 只做 Redis SET NX/Eval |
-| AL-03a | `adapters/websocket/hub.go` | Hub（广播/连接管理/Start/Stop）是框架调度逻辑，不是 SDK 胶水 | ✅ PR#43: Hub 上提到 `runtime/websocket/`，定义 `Conn` 接口；adapter 只实现 nhooyr 绑定 |
-| AL-03b | `adapters/websocket/hub.go` readLoop/pingLoop/pingAll | 循环调度与 nhooyr API 调用混在一起 | ✅ PR#43: 调度逻辑随 Hub 搬到 runtime/；adapter 的 nhooyrConn 实现 Conn 接口 |
-| AL-04 | `runtime/auth` | 直接 import golang-jwt，按规则应通过接口解耦 | 评估是否值得拆（jwt 是事实标准，拆可能过度设计） |
-| AL-05 | `runtime/http` | 直接 import chi | ✅ RouteMux 接口解耦 + Use() (PR#55)，可接受 |
+### 架构风险
 
-**优先级:** AL-03 正在 PR#43 实施，其余 P3（等 0-B/0-D 完成后评估）
+| ID | 问题 | 归属 PR | 状态 |
+|----|------|---------|------|
+| CS-AR-2 | Dependencies 精简 — 移除 `Cells`/`Contracts` 字段（零 caller），加冻结注释 | PR-Cleanup | 设计完成，三角色 PASS |
+| CS-AR-3 | kernel/cell net/http 决策 — 确认 net/http 为 stdlib 允许依赖，registrar.go 加 ADR 注释 | PR-Cleanup | 设计完成，文档化即可 |
+| F-OB-01 | BatchWriter 接口 + WriteBatchFallback helper — 独立接口，向后兼容 | PR-Cleanup | 设计完成，三角色 PASS |
+| Cell 接口 | 12 个方法，考虑拆分为 Cell + CellLifecycle + CellMetadata | — | 暂缓（assembly 需全部 facet） |
+| adapter 测试 | 15 个 t.Skip 集成测试待补全 | — | TODO |
 
-### Cell 接口审计
+### winmdm Defer v1.1
 
-| 问题 | 说明 |
-|------|------|
-| Cell 接口 11 个方法 | 混合了 metadata accessor + lifecycle，考虑拆分为 Cell + CellLifecycle + CellMetadata |
-| adapter 15 个 t.Skip | 6 个 adapter 共 15 个 skip 的集成测试待补全 |
+> 六席位审查裁决为 Defer 的 7 项需求。Accept 票数不足或有前置依赖未满足。
+
+| # | 需求 | 票数 | 理由 |
+|---|------|------|------|
+| WM-18 | 延迟消息原语 — outbox Entry 标记延迟时间 | 3/6 | 架构/安全/产品 Accept，但 DX/测试/运维 Defer。InMemoryEventBus 无法支持延迟投递（需 timer heap），RabbitMQ 需 x-delayed-message 插件增加运维复杂度。等 0-B2 Outbox Relay 三阶段重写稳定后再评估 |
+| WM-32 | mTLS 中间件 — TLS 客户端证书提取+验证 | 4/6 | 安全席认为 MDM 场景安全阻塞项，但架构/DX 认为 mTLS 通常由反向代理/service mesh 处理，非框架核心。v1.1 做通用 `runtime/tls` 配置构建器 + mTLS 验证中间件 |
+| WM-4 | Webhook 出站 adapter — HMAC 签名/重试/健康检查 | 4/6 | 通用能力，但依赖 outbox relay 稳定作为投递基础。安全注意 SSRF 防护（URL 白名单/禁内网 IP）。backlog 已列 kernel/webhook 为 P2 |
+| WM-5 | 查询过滤语言 (OData $filter) — pkg/query 过滤 DSL | 2/6 | OData 是微软/MDM 生态偏好，大多数 Go 微服务用简单 query parameter。当前 `pkg/query/builder.go` 已提供参数化 SQL builder。如需过滤语言，建议用成熟 OData 库包装而非自建解析器 |
+| WM-22 | Visibility Query API — 统一查询异步任务状态 | 1/6 | `/healthz` + `/readyz` + logs + traces 已覆盖运维需求。依赖 WM-17 生命周期钩子和 HR-02 路由元数据先稳定。运维/诊断能力，v1.1 diagnostics 范畴 |
+| WM-23 | 模块化单体→微服务 — Assembly API 对等验证 | 2/6 | Assembly 已天然支持多 Cell 单进程部署。拆分为独立二进制需要服务发现（WM-28）、分布式追踪等基础设施。当前优先验证 + 文档，而非新建 |
+| WM-16 | 投影按需重算 — RecalcTrigger + debounce + checkpoint | 1/6 | backlog 已列 kernel/replay 为 P3，标注"无实际需求验证"。需先稳定 outbox relay + consumer middleware，投影重算建立在这之上 |
 
 ---
 
-## Tier 4: 发布准备
+## v2+ — 长期
+
+| # | 需求 | 票数 | 理由 |
+|---|------|------|------|
+| WM-28 | 服务发现 Registry | 0/6 | K8s Service 已提供服务发现。框架内置 Registry 是过早抽象。与 WM-23（单体→微服务）绑定评估：若 WM-23 提升优先级，需同步评估 |
+| WM-29 | Saga 补偿 — 跨 Cell 分布式事务补偿链 | 0/6 | GoCell L2 outbox + L3 WorkflowEventual 最终一致模式已覆盖设计范围。Saga 引入补偿事务管理和分布式状态，显著增加 kernel/ 复杂度。等有真实多步补偿场景再引入 |
+
+---
+
+## 发布准备
 
 | # | 任务 | 说明 |
 |---|------|------|
-| R-1 | 仓库公开或 GOPRIVATE 配置文档 | `go get` 当前无法使用 |
-| R-2 | v1.0.0 tag | 无 semver tag，pkg.go.dev 无法索引 |
+| R-1 | 仓库公开或 GOPRIVATE 配置文档 | `go get` 无法使用 |
+| R-2 | v1.0.0 tag | pkg.go.dev 无法索引 |
 | R-3 | CONTRIBUTING.md | 无贡献指南 |
 | R-4 | 性能基准 | 无 benchmark |
 | R-5 | 棕地迁移指南 | 已有项目如何接入 GoCell |
@@ -397,15 +296,150 @@
 
 ---
 
-## 执行建议
+## winmdm Reject 项（附详细理由 + 替代方案）
+
+> 六席位审查裁决为 Reject 的 9 项需求。判断标准："如果换一个非 MDM 项目（电商/SaaS/IoT），至少 2 个领域也需要，才是框架能力。"
+
+| # | 需求 | 票数 | 裁决理由 | winmdm 替代方案 |
+|---|------|------|---------|----------------|
+| WM-3 | X.509 证书管理 — CA/CSR 签发/CRL/SCEP | 1/6 | MDM 专属。CA 签发、CRL 发布、SCEP 协议是设备管理/IoT 特有场景。X.509 PKI 是一个完整子系统，不应嵌入框架内核。安全席虽标为阻塞项，但这是 winmdm 部署的阻塞项，不是 GoCell 框架的阻塞项 | winmdm 在 `cells/cert-core` 自建，或集成 step-ca/Vault PKI 通过 adapter |
+| WM-14 | Codec 注册表 — Content-Type 协商 JSON/XML/SOAP | 1/6 | YAGNI。GoCell 是 JSON-first 框架，现有 DecodeJSON/WriteJSON 覆盖所有使用场景。SOAP/SyncML 是 MDM OMA-DM 协议专属。引入 Codec 注册表需要重构全部编解码路径，影响 ~20 个 handler_test.go | winmdm handler 层自行实现 SyncML 编解码 |
+| WM-21 | Mixin 共享逻辑 — kernel/mixin Hook 注册点+组合 | 2/6 | 非 Go-idiomatic。Go 的组合通过 embedding + interface 实现，BaseCell embedding 已是 Go 风格的 mixin。新建 kernel/mixin 引入非 Go 惯用概念，增加认知负担。如需跨 Cell 共享横切关注点，正确做法是中间件（HTTP + ConsumerMiddleware PR#68） | 用 BaseCell embedding + middleware 实现横切关注点 |
+| WM-24 | Policy Engine — 证书签发 DNS/IP 白名单策略 | 1/6 | MDM 专属（CA 签发策略）。通用策略引擎（OPA/Casbin/Cedar）是独立产品，嵌入框架会引入 DSL 运行时和策略管理生命周期。GoCell 最多做 `PolicyEvaluator` 钩子接口 | winmdm 集成 OPA/Casbin 作为 adapter |
+| WM-25 | 短期证书 — 5 分钟有效期免 CRL/OCSP | 1/6 | MDM/PKI 领域。运维成本极高（签发基础设施变为 5 分钟 RTO 硬依赖，需多区域签发、sub-minute 告警）。依赖 WM-3 X.509（已 Reject） | winmdm 集成 step-ca |
+| WM-26 | FanOut/FanIn 消息拓扑 | 0/6 | RabbitMQ 原生 fanout exchange 是 broker 级能力，框架不应重复实现。应用级 fan-out 在 consumer handler 中 publish 到多个 topic 即可 | 使用 RabbitMQ exchange 类型配置 |
+| WM-30 | 编译期 Contract 验证 — proto-gen-validate 风格 | 2/6 | 已并入 WM-12 archtest 作为扩展规则集。YAML 验证 + governance rules（40+ 条已实现）+ archtest 已覆盖。编译期验证需 go generate，增加构建复杂度 | — |
+| WM-31 | 跨协议元数据同步 — HTTP/gRPC/WS 间 metadata 传播 | 0/6 | GoCell 当前纯 HTTP，无第二协议。MDM 的 SyncML 可在 MDM 侧的 handler 中处理 | 等引入 gRPC 时再做 |
+| WM-34b | Kratos 两层中间件 — 协议无关层 + HTTP 专用层统一 | 2/6 | GoCell 已有两套中间件：HTTP `func(http.Handler) http.Handler` + Event `TopicHandlerMiddleware`。两者 handler 签名本质不同，强制统一增加抽象层无实际收益。DX 席明确反对："GoCell 不是 Kratos，现有中间件模型是 DX 优势" | 保持现有两套中间件各自演进 |
+
+---
+
+## 执行路线图（六席位审查后更新）
+
+> 来源: 2026-04-11 架构/安全/测试/运维/DX/产品六席位独立探索后汇总
+> 原则: 自底向上（pkg → kernel → runtime → adapters）、每 batch 独立可交付、安全风险递减
+> 总周期: ~2.5 周（5 个 Batch）
+
+### Batch 1: pkg 层稳定 ✅ 已完成
+
+| 轨道 | 任务 | PR | 状态 |
+|------|------|-----|------|
+| A | WM-9/10/11 errcode 三合一 | PR#69 | ✅ |
+| B | WM-12 archtest 边界守护（5 条 LAYER 规则，49 tests） | PR#73 | ✅ |
+
+### Batch 2: 架构修复（1d，PR#70-73 已合并，可立即开始）
+
+> **新增**: 跨框架分析产出的架构修复（Phase 1-2）插入此阶段，消除 6 个反复 review finding 的根因。
+> PR#70/71/72/73 已全部合并，无阻塞依赖。
+
+| 轨道 | 任务 | 预估 | 交付物 |
+|------|------|------|--------|
+| A | PR#70/71/72 合并 | — | ✅ 已完成 |
+| A | **Phase 1: PermanentError → kernel** | 1h | 修复 P2(PermanentError语义陷阱) + P5(EventBus偏离) |
+| A | **Phase 2: EventRouter 引入** | 4h | 修复 P1(100ms竞态) + P5(偏离) + P6(goroutine无监管) |
+| B | 0-G B-03 RabbitMQ 重连 backoff | 2h | 错误分类 + 指数退避 |
+| B | K-2 net/http ADR 注释 | 15min | 无阻塞，顺手做 |
+
+**安全底线**: PermanentError 在所有层正确路由到 DLX；Subscribe setup 失败同步检测
+**测试策略**: Phase 1 WrapLegacyHandler+PermanentError 测试；Phase 2 Router setup-error + graceful-shutdown 测试
+**运维增益**: 消除 100ms 启发式；goroutine 有监管和 drain
+**DX 增益**: Cell 开发者只需 `r.AddHandler(topic, handler)`，无需手写 goroutine
+
+### Batch 3: Tier 0 收尾 + 基础稳定（2d，Batch 2 后）
+
+> Batch 2 完成架构修复后，继续 Relay 重写 + HTTP 产品化。
+
+| 轨道 | 任务 | 预估 | 交付物 |
+|------|------|------|--------|
+| A | 0-B2 RL-01~08 Outbox Relay 三阶段重写 | 1.5d | claim→publish→writeBack + 8 场景测试 |
+| A | **Phase 3: Checker 清理 + Receipt 加固** | 3h | 删 legacy + sync.Once + LeaseTTL 校验 |
+| B | HR-02 metrics 基数爆炸修复 (PROM-01) | 2h | route pattern 元数据替代 r.URL.Path |
+| B | HR-01/03/04 HTTP 产品化收尾 | 4h | RealIP 决策 + RequestID bridge + tracing 决策 |
+| B | 0-H SF-01~04 DecodeJSONStrict | 3h | 严格模式 + handler 迁移 |
+| C | HT-01/02 handler decode 回归测试 | 3h | order/device handler 兼容性锁定 |
+| C | OB-02 safe_observe broken logger 测试 | 1h | panic guard 补全 |
+| C | 25+ handler WriteError → WriteErrorWithContext 批量改造 | 2h | WM-10 全量适配 |
+
+**安全底线**: outbox 消息不丢失；decode 恶意 payload 有防护
+**测试策略**: Relay 8 场景覆盖 ≥ 90%；handler decode 路径 ≥ 80%
+**运维增益**: metrics 基数可控（< 100 series）；outbox 状态可观测
+**DX 增益**: 所有 handler 统一错误响应格式
+
+### Batch 4: P1 功能 — 安全 + 查询（2d，Batch 3 后或并行后期）
+
+> 安全席位要求 CSRF + 密钥轮换尽早；DX 要求游标分页尽早。
+> 可与 Batch 3 后期部分并行。
+
+| 轨道 | 任务 | 预估 | 交付物 |
+|------|------|------|--------|
+| A | WM-1 CSRF 中间件 | 0.5d | `runtime/http/middleware/csrf.go` Origin/Referer 校验 |
+| A | WM-2 密钥轮换（JWT kid + HMAC，范围限定） | 2d | `runtime/auth` KeyRotator + kid 支持 |
+| B | WM-6 游标分页 | 1.5d | `pkg/query` KeysetPagination + HMAC cursor |
+| B | WM-34 配置热更新回调 | 1d | `runtime/config` Cell 级 OnConfigReload |
+
+**安全底线**: CSRF 防护覆盖所有 POST/PUT/DELETE；密钥泄露后可轮换止损
+**测试策略**: CSRF table-driven；cursor HMAC 签名验证 + 边界条件；key rotation 并发测试
+**DX 增益**: 分页从 O(n) → O(log n)；配置变更无需重启
+
+### Batch 5: P1 功能 — 事件 + 生命周期（1.5d，Batch 3 后）
+
+> 测试席位强调 WM-20 TestPubSub 是测试基础设施投资（ROI 最高之一）。
+> 架构师要求 WM-17 必须用可选接口，不改 Cell 核心方法。
+
+| 轨道 | 任务 | 预估 | 交付物 |
+|------|------|------|--------|
+| A | WM-20 TestPubSub 认证测试套件 | 1.5d | `kernel/outbox/outboxtest/` 标准 Publisher/Subscriber 套件 |
+| A | WM-33b 熔断器 | 0.5d | `adapters/` sony/gobreaker 包装 |
+| B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop） | 1d | `kernel/cell` 可选接口（type assertion） |
+| B | WM-15 L4 队列状态机 | 1.5d | `kernel/outbox` 合入 0-B2，状态 enum + 超时检测 |
+
+**安全底线**: 熔断器防级联故障；AfterStop 清理敏感资源
+**测试策略**: TestPubSub 标准套件 12 场景；lifecycle hooks 回归验证（不注册钩子时行为不变）
+**运维增益**: OPS-3 readiness 探针可通过 AfterStart 注册；adapter 健康检查
+**DX 增益**: Cell 开发有标准事件测试模板；启动流程清晰可调试
+
+### Batch 6: Review Findings + Tech Debt（2d）
+
+| 任务 | 预估 | 说明 |
+|------|------|------|
+| F-5 Journey catalog 校验 | 2h | kernel/journey |
+| R1C2-F01 eventbus Close+Subscribe 竞态 | 2h | runtime/eventbus（需 -race 验证） |
+| R1C2-F03 WorkerGroup 首个失败 | 2h | runtime/worker |
+| F-OB-01 outbox 批量写 | 2h | kernel/outbox |
+| TX-NIL-01 txRunner nil-safe 文档 | 1h | cells/ |
+| P3-TD-10 Session refresh TOCTOU | 4h | 高风险，乐观锁方案 |
+| P4-TD-03 IssueTestToken 死代码 | 30min | runtime/auth |
+| OPS-3 readiness 探针接 adapter | 2h | adapters/ 注册 HealthChecker |
+| OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
+
+### 总时间线（修订后，+6 个 Batch）
 
 ```
-Kernel 止血（安全+假绿+语义）→ Kernel 接口 (0-F) + Runtime 安全 → 0-B2/0-G → Review 剩余 → Tech-Debt → 发布
-                                                                    ↘ Tier 3（v1.1 持续）
+Week 1:
+  Day 1-2: Batch 1 (pkg: errcode 三合一 + archtest) ✅ 已完成
+
+Week 2:
+  Day 1:   Batch 2 (架构修复: PR合并 + Phase 1 + Phase 2 + B-03)
+  Day 2-3: Batch 3 (Tier 0 收尾: Phase 3 + Relay + HTTP + handler)
+  Day 4-5: Batch 4 (CSRF + 密钥轮换 + 游标分页 + 配置热更新)
+           ┊ Batch 5 部分并行启动 (WM-17 lifecycle hooks 无前置依赖)
+
+Week 3:
+  Day 1-2: Batch 5 (TestPubSub + 熔断器 + L4 状态机)
+  Day 3-4: Batch 6 (Review Findings + Tech Debt)
+  Day 5:   → v1.0 Release Candidate
+
+后续:
+  Review R1E/R1F+G/R2-R5 → Tech Debt P2 → 发布准备 → v1.0
 ```
 
-**优先级重排依据（2026-04-09 六角色深审后）：**
-- Kernel 层发现 12 个 P1（安全漏洞、假绿测试、治理语义 bug、数据完整性）
-- verify 系统本质失效，metadata-driven verification 是空壳
-- 0-F 是关键路径瓶颈，应尽早启动
-- 修复计划详见 `tools/docs/20260408-fix-order-plan.md`
+### 价值递增里程碑
+
+| 阶段 | winmdm 可感知价值 | 运维成熟度 |
+|------|-----------------|-----------|
+| Batch 1 后 | 框架有"安全带"：错误链路清晰，分层守护自动化 | L1: 可追踪 |
+| **Batch 2 后** | **事件消费架构对齐行业标准**: 100ms 竞态消除、PermanentError 全栈生效、goroutine 有监管 | **L2: 可监控** |
+| Batch 3 后 | 依赖可预测：outbox 不丢消息，metrics 有意义，legacy 清理完成 | L2.5: 可运维 |
+| Batch 4 后 | 开发效率提升：分页 O(1)，配置热更新，密钥可轮换 | L3: 可自愈 |
+| Batch 5 后 | 事件系统有标准测试，生命周期清晰，熔断防护 | L3.5: 可保证 |
+| Batch 6 后 | 所有已知 bug 修复，Tech Debt 收敛 | L4: 生产就绪 |
