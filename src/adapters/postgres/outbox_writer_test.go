@@ -154,21 +154,19 @@ func TestOutboxWriter_Write_EmptyID(t *testing.T) {
 	assert.Contains(t, ec.Message, "must not be empty")
 }
 
-func TestOutboxWriter_Write_InvalidUUID(t *testing.T) {
+func TestOutboxWriter_Write_InvalidID(t *testing.T) {
 	w := NewOutboxWriter()
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
 	tests := []struct {
-		name string
-		id   string
+		name    string
+		id      string
+		wantMsg string
 	}{
-		{"plain string", "not-a-uuid"},
-		{"too short", "a1b2c3d4"},
-		{"missing dashes", "a1b2c3d4e5f67890abcdef1234567890"},
-		{"invalid hex char", "g1b2c3d4-e5f6-7890-abcd-ef1234567890"},
-		{"extra segment", "a1b2c3d4-e5f6-7890-abcd-ef1234567890-extra"},
-		{"whitespace padded", " a1b2c3d4-e5f6-7890-abcd-ef1234567890 "},
+		{"empty string", "", "must not be empty"},
+		{"whitespace only", "   ", "must not be empty"},
+		{"all-zeros UUID", "00000000-0000-0000-0000-000000000000", "all-zeros UUID"},
 	}
 
 	for _, tt := range tests {
@@ -186,7 +184,7 @@ func TestOutboxWriter_Write_InvalidUUID(t *testing.T) {
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-			assert.Contains(t, ec.Message, "not a valid UUID")
+			assert.Contains(t, ec.Message, tt.wantMsg)
 		})
 	}
 }
@@ -203,8 +201,10 @@ func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
 		{"lowercase v4", "550e8400-e29b-41d4-a716-446655440000"},
 		{"uppercase", "550E8400-E29B-41D4-A716-446655440000"},
 		{"mixed case", "550e8400-E29B-41d4-A716-446655440000"},
-		{"all zeros", "00000000-0000-0000-0000-000000000000"},
 		{"all f", "ffffffff-ffff-ffff-ffff-ffffffffffff"},
+		{"evt-uuid prefix", "evt-550e8400-e29b-41d4-a716-446655440000"},
+		{"audit prefix", "audit-550e8400-e29b-41d4-a716-446655440000"},
+		{"short id", "my-event-42"},
 	}
 
 	for _, tt := range tests {
@@ -324,15 +324,28 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
-	entries := []outbox.Entry{
-		{ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}")},
-		{ID: "not-a-uuid", Topic: "t", Payload: []byte("{}")},
-	}
+	t.Run("empty ID", func(t *testing.T) {
+		entries := []outbox.Entry{
+			{ID: "valid-id", Topic: "t", Payload: []byte("{}")},
+			{ID: "", Topic: "t", Payload: []byte("{}")},
+		}
+		err := w.WriteBatch(ctx, entries)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "entry[1]")
+		assert.Empty(t, tx.execCalls)
+	})
 
-	err := w.WriteBatch(ctx, entries)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "entry[1]")
-	assert.Empty(t, tx.execCalls, "no INSERT should execute on validation failure")
+	t.Run("all-zeros UUID", func(t *testing.T) {
+		entries := []outbox.Entry{
+			{ID: "valid-id", Topic: "t", Payload: []byte("{}")},
+			{ID: "00000000-0000-0000-0000-000000000000", Topic: "t", Payload: []byte("{}")},
+		}
+		err := w.WriteBatch(ctx, entries)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "entry[1]")
+		assert.Contains(t, err.Error(), "all-zeros")
+		assert.Empty(t, tx.execCalls)
+	})
 }
 
 func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
@@ -362,7 +375,7 @@ func TestOutboxWriter_WriteBatch_ChunksLargeBatch(t *testing.T) {
 	entries := make([]outbox.Entry, n)
 	for i := range n {
 		entries[i] = outbox.Entry{
-			ID:        fmt.Sprintf("00000000-0000-0000-0000-%012d", i),
+			ID:        fmt.Sprintf("evt-%012d", i),
 			Topic:     "t",
 			Payload:   []byte("{}"),
 			CreatedAt: time.Now(),

@@ -384,8 +384,8 @@ func (s *Subscriber) processDelivery(
 ) {
 	defer s.wg.Done()
 
-	var entry outbox.Entry
-	if err := json.Unmarshal(delivery.Body, &entry); err != nil {
+	entry, err := unmarshalDelivery(delivery.Body)
+	if err != nil {
 		// Unmarshal failure is a permanent error — NACK without requeue.
 		slog.Error("rabbitmq: unmarshal delivery failed, nacking without requeue",
 			slog.String(logKeyTopic, topic),
@@ -535,4 +535,73 @@ func (s *Subscriber) Close() error {
 	}
 
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Wire format deserialization
+// ---------------------------------------------------------------------------
+
+// outboxWireMessage is the wire envelope produced by the three-phase relay.
+// Fields use camelCase JSON tags.
+//
+// NOTE: adapters/postgres/outbox_relay.go defines an identical outboxMessage
+// for serialization — keep the two structs in sync when modifying fields.
+type outboxWireMessage struct {
+	ID            string            `json:"id"`
+	AggregateID   string            `json:"aggregateId,omitempty"`
+	AggregateType string            `json:"aggregateType,omitempty"`
+	EventType     string            `json:"eventType"`
+	Topic         string            `json:"topic,omitempty"`
+	Payload       json.RawMessage   `json:"payload"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+}
+
+// unmarshalDelivery deserializes a broker message body into an outbox.Entry.
+// It first tries the new outboxWireMessage envelope, then falls back to the
+// legacy full outbox.Entry format for backward compatibility.
+//
+// Discriminator: In the new wire format, payload is embedded JSON (starts
+// with '{' or '[' as json.RawMessage). In legacy format, outbox.Entry.Payload
+// is []byte which json.Marshal encodes as base64 (starts with '"'). Go's
+// json.Unmarshal does case-insensitive key matching, so we cannot rely on
+// PascalCase vs camelCase to distinguish formats — we must check the payload
+// shape instead.
+func unmarshalDelivery(body []byte) (outbox.Entry, error) {
+	var msg outboxWireMessage
+	if err := json.Unmarshal(body, &msg); err == nil && msg.ID != "" && msg.EventType != "" && isEmbeddedJSON(msg.Payload) {
+		return outbox.Entry{
+			ID:            msg.ID,
+			AggregateID:   msg.AggregateID,
+			AggregateType: msg.AggregateType,
+			EventType:     msg.EventType,
+			Topic:         msg.Topic,
+			Payload:       []byte(msg.Payload),
+			Metadata:      msg.Metadata,
+			CreatedAt:     msg.CreatedAt,
+		}, nil
+	}
+
+	// Fallback: legacy full Entry (PascalCase, Payload is base64-encoded []byte).
+	var entry outbox.Entry
+	if err := json.Unmarshal(body, &entry); err != nil {
+		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: %w", err)
+	}
+	return entry, nil
+}
+
+// isEmbeddedJSON returns true if the raw JSON value is an object or array
+// (new wire format), as opposed to a base64 string (legacy format).
+func isEmbeddedJSON(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
