@@ -24,7 +24,8 @@ type SchemaMeta struct {
 	Primary string `yaml:"primary"`
 }
 
-// CellVerifyMeta holds smoke-test paths for a Cell.
+// CellVerifyMeta holds structured verify refs for a Cell.
+// Smoke refs use the format: smoke.{cellID}.{suffix}
 type CellVerifyMeta struct {
 	Smoke []string `yaml:"smoke"`
 }
