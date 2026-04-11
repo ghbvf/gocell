@@ -4,8 +4,10 @@ package auditcore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
@@ -167,16 +169,29 @@ func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 }
 
 // RegisterSubscriptions registers event subscriptions for all 6 topics.
-func (c *AuditCore) RegisterSubscriptions(sub outbox.Subscriber) {
+// Returns an error if any subscription fails during setup (e.g., missing DLX).
+// Long-running consumption loops are started in background goroutines.
+func (c *AuditCore) RegisterSubscriptions(sub outbox.Subscriber) error {
 	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
 	for _, topic := range auditappend.Topics {
 		topic := topic
+		errCh := make(chan error, 1)
 		go func() {
 			ctx := context.Background()
-			if err := sub.Subscribe(ctx, topic, handler); err != nil {
-				c.logger.Error("audit-core: subscription failed — consumer NOT running for this topic",
-					slog.Any("error", err), slog.String("topic", topic))
-			}
+			errCh <- sub.Subscribe(ctx, topic, handler)
 		}()
+
+		// Subscribe returns immediately on config errors (DLX missing, closed).
+		// On success it blocks — a short wait distinguishes the two.
+		select {
+		case err := <-errCh:
+			if err != nil {
+				return fmt.Errorf("audit-core: subscription setup failed for topic %s: %w", topic, err)
+			}
+			// Subscribe returned nil without blocking — clean shutdown, not an error.
+		case <-time.After(100 * time.Millisecond):
+			// Subscribe is blocking (consuming) — setup succeeded.
+		}
 	}
+	return nil
 }

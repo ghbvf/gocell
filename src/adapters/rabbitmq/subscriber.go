@@ -261,8 +261,13 @@ func (s *Subscriber) subscribeOnce(
 		return setupErr("rabbitmq: declare exchange", ErrAdapterAMQPSubscribe, err)
 	}
 
+	// Declare the dead-letter exchange to ensure it exists before binding.
+	// Uses "direct" type so rejected messages are routed by DLXRoutingKey.
+	if err := ch.ExchangeDeclare(s.config.DLXExchange, "direct", true, false, false, false, nil); err != nil {
+		return setupErr("rabbitmq: declare DLX exchange", ErrAdapterAMQPSubscribe, err)
+	}
+
 	// Build queue arguments for dead-letter routing.
-	// DLXExchange is guaranteed non-empty (validated in Subscribe).
 	queueArgs := amqp.Table{
 		"x-dead-letter-exchange": s.config.DLXExchange,
 	}
