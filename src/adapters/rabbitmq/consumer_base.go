@@ -94,23 +94,17 @@ func (c *ConsumerBaseConfig) cappedDelay(delay time.Duration) time.Duration {
 	return delay
 }
 
-// PermanentError wraps an error to indicate it should not be retried
-// and should be routed to the dead-letter queue.
-type PermanentError struct {
-	Err error
-}
-
-func (e *PermanentError) Error() string {
-	return fmt.Sprintf("permanent: %s", e.Err.Error())
-}
-
-func (e *PermanentError) Unwrap() error {
-	return e.Err
-}
+// PermanentError is an alias for outbox.PermanentError, kept for backward
+// compatibility. New code should use outbox.PermanentError directly.
+//
+// Deprecated: Use outbox.PermanentError.
+type PermanentError = outbox.PermanentError
 
 // NewPermanentError wraps an error as a PermanentError.
+//
+// Deprecated: Use outbox.NewPermanentError.
 func NewPermanentError(err error) *PermanentError {
-	return &PermanentError{Err: err}
+	return outbox.NewPermanentError(err)
 }
 
 // ConsumerBase wraps an outbox.EntryHandler with idempotency checking and

@@ -6,6 +6,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -157,6 +158,35 @@ type HandleResult struct {
 type EntryHandler func(context.Context, Entry) HandleResult
 
 // ---------------------------------------------------------------------------
+// PermanentError — error classification (domain concept)
+// ---------------------------------------------------------------------------
+
+// PermanentError wraps an error to indicate it should not be retried
+// and should be routed to the dead-letter queue. This is a domain concept
+// alongside Disposition and HandleResult.
+//
+// ref: Temporal SDK temporal.ApplicationError (NonRetryable flag in SDK core);
+// Watermill delegates error classification to middleware — GoCell makes it
+// explicit at the kernel level so WrapLegacyHandler and InMemoryEventBus
+// can detect it without depending on adapter-layer types.
+type PermanentError struct {
+	Err error
+}
+
+func (e *PermanentError) Error() string {
+	return fmt.Sprintf("permanent: %s", e.Err.Error())
+}
+
+func (e *PermanentError) Unwrap() error {
+	return e.Err
+}
+
+// NewPermanentError wraps an error as a PermanentError.
+func NewPermanentError(err error) *PermanentError {
+	return &PermanentError{Err: err}
+}
+
+// ---------------------------------------------------------------------------
 // Legacy compatibility
 // ---------------------------------------------------------------------------
 
@@ -165,19 +195,19 @@ type EntryHandler func(context.Context, Entry) HandleResult
 type LegacyHandler = func(context.Context, Entry) error
 
 // WrapLegacyHandler adapts a LegacyHandler to the new EntryHandler contract:
-//   - nil error  → DispositionAck
-//   - non-nil error → DispositionRequeue (transient by default)
-//
-// Note: PermanentError is mapped to DispositionRequeue, not DispositionReject.
-// ConsumerBase.Wrap detects PermanentError via errors.As and upgrades to Reject.
-// Without ConsumerBase wrapping, PermanentError will be retried like any other
-// error. Direct Subscribe callers needing Reject should use EntryHandler directly.
+//   - nil error         → DispositionAck
+//   - PermanentError    → DispositionReject (routed to DLX)
+//   - other non-nil err → DispositionRequeue (transient by default)
 //
 // This allows existing cell handlers to compile against the new Subscriber
 // interface without immediate rewrite.
 func WrapLegacyHandler(fn LegacyHandler) EntryHandler {
 	return func(ctx context.Context, entry Entry) HandleResult {
 		if err := fn(ctx, entry); err != nil {
+			var permErr *PermanentError
+			if errors.As(err, &permErr) {
+				return HandleResult{Disposition: DispositionReject, Err: err}
+			}
 			return HandleResult{Disposition: DispositionRequeue, Err: err}
 		}
 		return HandleResult{Disposition: DispositionAck}

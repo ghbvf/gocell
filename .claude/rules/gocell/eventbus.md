@@ -24,7 +24,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
         // 永久错误 — Reject 路由到 DLX，不重试
         return outbox.HandleResult{
             Disposition: outbox.DispositionReject,
-            Err:         &rabbitmq.PermanentError{Err: err},
+            Err:         outbox.NewPermanentError(err),
         }
     }
 
@@ -61,7 +61,7 @@ handler := outbox.WrapLegacyHandler(legacy)
 // nil error → Ack, non-nil → Requeue
 ```
 
-注意：WrapLegacyHandler 不检测 PermanentError，需要通过 ConsumerBase 包装才能路由到 DLX。
+WrapLegacyHandler 检测 PermanentError 并返回 DispositionReject，无需 ConsumerBase 包装即可路由到 DLX。
 
 ## 死信路由
 

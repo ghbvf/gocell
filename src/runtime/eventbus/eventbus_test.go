@@ -144,6 +144,49 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	<-done
 }
 
+func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var attempts atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "perm.requeue", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			attempts.Add(1)
+			// Return Requeue with PermanentError — eventbus should detect
+			// the PermanentError and route directly to dead letter.
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "perm.requeue", []byte("bad-payload"))
+	require.NoError(t, err)
+
+	// Should go directly to dead letter on first attempt (no retries).
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, time.Second, 50*time.Millisecond)
+
+	assert.Equal(t, int32(1), attempts.Load(),
+		"PermanentError in Requeue must not trigger retries")
+
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+
+	var permErr *outbox.PermanentError
+	assert.True(t, errors.As(dl[0].LastErr, &permErr))
+
+	cancel()
+	<-done
+}
+
 func TestClose_PreventsFurtherPublish(t *testing.T) {
 	bus := New()
 	err := bus.Close()
