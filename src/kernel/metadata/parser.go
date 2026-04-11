@@ -3,6 +3,7 @@ package metadata
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -253,6 +254,13 @@ func unmarshalFile(fsys fs.FS, path string, out any) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil {
+		// yaml.Decoder returns io.EOF for empty/whitespace-only files, whereas
+		// yaml.Unmarshal silently leaves the target at its zero value. Preserve
+		// the old behaviour so that empty actors.yaml / status-board.yaml parse
+		// as empty slices instead of aborting.
+		if err == io.EOF {
+			return nil
+		}
 		return errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}

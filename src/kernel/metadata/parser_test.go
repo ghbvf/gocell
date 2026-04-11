@@ -1,9 +1,11 @@
 package metadata
 
 import (
+	"errors"
 	"testing"
 	"testing/fstest"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -910,14 +912,115 @@ bogus: 42
 			},
 			wantMsg: "bogus",
 		},
+		{
+			name: "unknown field in journey yaml",
+			fs: fstest.MapFS{
+				"journeys/J-test.yaml": &fstest.MapFile{Data: []byte(`id: J-test
+goal: test
+owner: {team: t, role: r}
+cells: []
+contracts: []
+passCriteria: []
+badField: oops
+`)},
+			},
+			wantMsg: "badField",
+		},
+		{
+			name: "unknown field in assembly yaml",
+			fs: fstest.MapFS{
+				"assemblies/a/assembly.yaml": &fstest.MapFile{Data: []byte(`id: a
+cells: []
+build: {entrypoint: main.go, binary: a, deployTemplate: t}
+nope: true
+`)},
+			},
+			wantMsg: "nope",
+		},
+		{
+			name: "unknown field in status-board entry",
+			fs: fstest.MapFS{
+				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-x
+  state: green
+  risk: none
+  blocker: ""
+  updatedAt: "2026-01-01"
+  extra: bad
+`)},
+			},
+			wantMsg: "extra",
+		},
+		{
+			name: "unknown field in actors entry",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte(`- id: ext
+  type: external
+  maxConsistencyLevel: L2
+  phantom: yes
+`)},
+			},
+			wantMsg: "phantom",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewParser(".")
 			_, err := p.ParseFS(tt.fs)
 			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr), "expected *errcode.Error, got: %T", err)
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
 			assert.Contains(t, err.Error(), tt.wantMsg)
-			assert.Contains(t, err.Error(), "not found")
+		})
+	}
+}
+
+func TestParseFS_SchemaRefsExtraKeys(t *testing.T) {
+	fs := fstest.MapFS{
+		"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.test.v1
+kind: http
+lifecycle: active
+endpoints: {server: x}
+schemaRefs:
+  request: req.json
+  response: res.json
+  custom: extra.json
+`)},
+	}
+	p := NewParser(".")
+	pm, err := p.ParseFS(fs)
+	require.NoError(t, err)
+	c := pm.Contracts["http.test.v1"]
+	require.NotNil(t, c)
+	assert.Equal(t, "req.json", c.SchemaRefs.Request)
+	assert.Equal(t, "res.json", c.SchemaRefs.Response)
+	assert.Equal(t, "extra.json", c.SchemaRefs.Extra["custom"])
+}
+
+func TestParseFS_EmptyFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   fstest.MapFS
+	}{
+		{
+			name: "empty actors.yaml",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+		},
+		{
+			name: "whitespace-only status-board.yaml",
+			fs: fstest.MapFS{
+				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte("  \n")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser(".")
+			pm, err := p.ParseFS(tt.fs)
+			require.NoError(t, err, "empty file should parse without error")
+			assert.NotNil(t, pm)
 		})
 	}
 }
