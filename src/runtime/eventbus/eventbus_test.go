@@ -413,6 +413,63 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	<-done
 }
 
+func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	// Track all receipts across retry attempts to verify each is released
+	// and none is committed when retries exhaust.
+	var receipts []*mockReceipt
+	var receiptsMu sync.Mutex
+
+	testErr := errors.New("persistent transient error")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "receipt.exhaust", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			r := &mockReceipt{}
+			receiptsMu.Lock()
+			receipts = append(receipts, r)
+			receiptsMu.Unlock()
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         testErr,
+				Receipt:     r,
+			}
+		})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	err := bus.Publish(context.Background(), "receipt.exhaust", []byte("exhaust-data"))
+	require.NoError(t, err)
+
+	// Wait for retries to exhaust and message to land in dead letter.
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	receiptsMu.Lock()
+	defer receiptsMu.Unlock()
+
+	require.Equal(t, maxRetries, len(receipts), "handler should be called exactly maxRetries times")
+
+	for i, r := range receipts {
+		assert.True(t, r.released.Load(), "receipt %d should be released after requeue", i)
+		assert.False(t, r.committed.Load(), "receipt %d must never be committed on retry exhaustion", i)
+	}
+
+	// Verify dead letter contains the correct error.
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, testErr, dl[0].LastErr)
+	assert.Equal(t, "receipt.exhaust", dl[0].Topic)
+
+	cancel()
+	<-done
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)

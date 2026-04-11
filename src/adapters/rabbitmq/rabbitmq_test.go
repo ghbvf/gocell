@@ -2122,11 +2122,11 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	}, "test.topic", handler)
 
 	// Receipt should still be committed because processDelivery uses
-	// context.WithoutCancel for Receipt operations.
+	// context.WithoutCancel for Receipt operations. The parent ctx is
+	// cancelled but the receipt ctx is detached, so Commit succeeds.
 	receipt.mu.Lock()
-	assert.True(t, receipt.commitCalled, "Receipt should be committed even with cancelled ctx")
-	assert.NotNil(t, receipt.commitCtx, "Commit ctx should be non-nil")
-	assert.NoError(t, receipt.commitCtx.Err(), "Commit ctx should NOT be cancelled (WithoutCancel)")
+	assert.True(t, receipt.commitCalled, "Receipt should be committed even with cancelled parent ctx")
+	assert.False(t, receipt.releaseCalled, "Should Commit, not Release")
 	receipt.mu.Unlock()
 }
 
@@ -2239,5 +2239,138 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 	receipt.mu.Lock()
 	assert.False(t, receipt.commitCalled, "should not Commit when broker Ack fails")
 	assert.True(t, receipt.releaseCalled, "should Release when broker Ack fails")
+	receipt.mu.Unlock()
+}
+
+// =============================================================================
+// ClaimFailOpen config tests
+// =============================================================================
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+		ClaimFailOpen: boolPtr(false),
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-fail-closed"})
+	assert.False(t, handlerCalled, "handler must NOT be called when fail-closed")
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "redis down")
+}
+
+func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
+	claimer := &mockClaimer{err: errors.New("redis down")}
+
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "test-group",
+		ClaimFailOpen: boolPtr(true),
+	})
+
+	handlerCalled := false
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-fail-open-explicit"})
+	assert.True(t, handlerCalled, "handler must be called when fail-open is explicit")
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "no Receipt when claim fails")
+}
+
+// =============================================================================
+// processDelivery uncovered branch tests
+// =============================================================================
+
+func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	// Handler returns DispositionAck but also an error (e.g., a warning).
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Err:         errors.New("warning: partial data"),
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 20,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Ack should still be called (error does not affect disposition).
+	ch.mu.Lock()
+	assert.True(t, ch.ackCalled, "Ack should be called even when handler reports an error")
+	assert.Equal(t, uint64(20), ch.ackTag)
+	assert.False(t, ch.nackCalled, "Nack should NOT be called for DispositionAck")
+	ch.mu.Unlock()
+}
+
+func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.nackErr = errors.New("channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{}
+	entry := outbox.Entry{ID: "evt-requeue-nack-fail", EventType: "test.requeue.nackfail"}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("transient"),
+			Receipt:     receipt,
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 30,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	// Nack was attempted (requeue=true) but failed.
+	ch.mu.Lock()
+	assert.True(t, ch.nackCalled)
+	ch.mu.Unlock()
+
+	// Receipt should be Released because broker nack failed (brokerErr != nil path).
+	receipt.mu.Lock()
+	assert.False(t, receipt.commitCalled, "should not Commit when broker Nack fails")
+	assert.True(t, receipt.releaseCalled, "should Release when broker Nack fails, so redelivery can re-enter")
 	receipt.mu.Unlock()
 }

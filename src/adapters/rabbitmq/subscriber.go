@@ -262,15 +262,12 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	// Build queue arguments for dead-letter routing.
-	// DLXExchange is guaranteed non-empty here (validated in Subscribe).
-	var queueArgs amqp.Table
-	if s.config.DLXExchange != "" {
-		queueArgs = amqp.Table{
-			"x-dead-letter-exchange": s.config.DLXExchange,
-		}
-		if s.config.DLXRoutingKey != "" {
-			queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
-		}
+	// DLXExchange is guaranteed non-empty (validated in Subscribe).
+	queueArgs := amqp.Table{
+		"x-dead-letter-exchange": s.config.DLXExchange,
+	}
+	if s.config.DLXRoutingKey != "" {
+		queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
 	}
 
 	// Declare queue.
@@ -434,12 +431,14 @@ func (s *Subscriber) processDelivery(
 	}
 
 	// Commit or release the idempotency receipt based on broker outcome.
-	// Use WithoutCancel: broker Ack/Nack already succeeded, idempotency
-	// state must be persisted even during graceful shutdown.
+	// Use WithoutCancel + timeout: broker Ack/Nack already succeeded,
+	// idempotency state must be persisted even during graceful shutdown,
+	// but must not block indefinitely on network partitions.
 	if res.Receipt == nil {
 		return
 	}
-	receiptCtx := context.WithoutCancel(ctx)
+	receiptCtx, receiptCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer receiptCancel()
 	if brokerErr != nil {
 		// Broker disposition failed — release so redelivery can re-enter.
 		if relErr := res.Receipt.Release(receiptCtx); relErr != nil {

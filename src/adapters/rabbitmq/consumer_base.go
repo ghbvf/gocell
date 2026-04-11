@@ -33,6 +33,14 @@ type ConsumerBaseConfig struct {
 	// duration, allowing another consumer to re-claim.
 	// Default: 5m (idempotency.DefaultLeaseTTL). Only used with Claimer.
 	LeaseTTL time.Duration
+
+	// ClaimFailOpen controls behavior when Claimer.Claim() fails due to
+	// infrastructure errors (e.g., Redis down).
+	//   true  (default): proceed without idempotency — avoids total consumer
+	//          stall, but risks duplicate processing during outage.
+	//   false: return DispositionRequeue — safe from duplicates, but all
+	//          consumption stops until the idempotency backend recovers.
+	ClaimFailOpen *bool
 }
 
 func (c *ConsumerBaseConfig) setDefaults() {
@@ -95,6 +103,7 @@ type ConsumerBase struct {
 //
 // Deprecated: Use NewConsumerBaseWithClaimer for correct two-phase idempotency
 // that aligns idempotency state with broker acknowledgement.
+// Scheduled for removal after all cells migrate to Claimer (target: Phase 3).
 func NewConsumerBase(checker idempotency.Checker, config ConsumerBaseConfig) *ConsumerBase {
 	config.setDefaults()
 	return &ConsumerBase{
@@ -183,13 +192,20 @@ func (cb *ConsumerBase) wrapWithClaimer(topic string, handler outbox.EntryHandle
 
 		state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 		if err != nil {
-			slog.Error("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
+			if cb.config.ClaimFailOpen == nil || *cb.config.ClaimFailOpen {
+				slog.Error("rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",
+					slog.String("event_id", entry.ID),
+					slog.String("topic", topic),
+					slog.String("consumer_group", cb.config.ConsumerGroup),
+					slog.String("error", err.Error()))
+				return cb.retryLoop(ctx, topic, entry, handler, idempotencyKey, nil)
+			}
+			slog.Error("rabbitmq: idempotency claim failed, requeuing (fail-closed)",
 				slog.String("event_id", entry.ID),
 				slog.String("topic", topic),
 				slog.String("consumer_group", cb.config.ConsumerGroup),
 				slog.String("error", err.Error()))
-			// Fail-open: proceed without Receipt (legacy behavior).
-			return cb.retryLoop(ctx, topic, entry, handler, idempotencyKey, nil)
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
 		}
 
 		switch state {
@@ -243,6 +259,10 @@ func (cb *ConsumerBase) retryLoop(
 		}
 
 		// Check if this is a permanent error / explicit rejection.
+		// Note: if handler returns DispositionRequeue with a PermanentError,
+		// the PermanentError takes precedence and upgrades to Reject (no retry).
+		// This allows WrapLegacyHandler (which always returns Requeue) to still
+		// have PermanentError detected and routed to DLX by ConsumerBase.
 		var permErr *PermanentError
 		if lastResult.Disposition == outbox.DispositionReject ||
 			(lastResult.Err != nil && errors.As(lastResult.Err, &permErr)) {

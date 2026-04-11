@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -395,4 +396,49 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	state, _, err := claimer.Claim(ctx, "idem:client:1", 5*time.Minute, 24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
+}
+
+func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	type result struct {
+		state   idempotency.ClaimState
+		receipt interface{} // non-nil check only
+		err     error
+	}
+
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	for range 2 {
+		go func() {
+			defer wg.Done()
+			state, receipt, err := claimer.Claim(ctx, "idem:concurrent:1", 5*time.Minute, 24*time.Hour)
+			results <- result{state: state, receipt: receipt, err: err}
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	var acquired, busy int
+	for r := range results {
+		require.NoError(t, r.err)
+		switch r.state {
+		case idempotency.ClaimAcquired:
+			acquired++
+			assert.NotNil(t, r.receipt, "ClaimAcquired must return a non-nil receipt")
+		case idempotency.ClaimBusy:
+			busy++
+			assert.Nil(t, r.receipt, "ClaimBusy must return nil receipt")
+		default:
+			t.Fatalf("unexpected ClaimState %d", r.state)
+		}
+	}
+
+	assert.Equal(t, 1, acquired, "exactly one goroutine should acquire the lease")
+	assert.Equal(t, 1, busy, "exactly one goroutine should get ClaimBusy")
 }

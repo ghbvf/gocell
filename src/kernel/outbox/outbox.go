@@ -154,6 +154,11 @@ type LegacyHandler = func(context.Context, Entry) error
 //   - nil error  → DispositionAck
 //   - non-nil error → DispositionRequeue (transient by default)
 //
+// Note: PermanentError is mapped to DispositionRequeue, not DispositionReject.
+// ConsumerBase.Wrap detects PermanentError via errors.As and upgrades to Reject.
+// Without ConsumerBase wrapping, PermanentError will be retried like any other
+// error. Direct Subscribe callers needing Reject should use EntryHandler directly.
+//
 // This allows existing cell handlers to compile against the new Subscriber
 // interface without immediate rewrite.
 func WrapLegacyHandler(fn LegacyHandler) EntryHandler {
