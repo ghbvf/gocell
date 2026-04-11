@@ -2671,3 +2671,412 @@ func TestFMT12(t *testing.T) {
 		})
 	}
 }
+
+// --- FMT-13: dynamic status fields forbidden in non-status-board ---
+
+func TestFMT13(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "no dynamic status fields in metadata",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "cell with risk raw field",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = []string{"id", "type", "risk"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "slice with readiness raw field",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["access-core/session-login"].RawFields = []string{"id", "readiness"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "contract with updatedAt raw field",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].RawFields = []string{"id", "kind", "updatedAt"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "assembly with blocker raw field",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Assemblies["core-bundle"].RawFields = []string{"id", "cells", "blocker"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "multiple dynamic fields in one entity",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = []string{"id", "risk", "blocker", "done"}
+			},
+			wantCount: 3,
+		},
+		{
+			name: "dynamic fields across multiple entity types",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = []string{"id", "readiness"}
+				pm.Contracts["http.auth.login.v1"].RawFields = []string{"id", "verified"}
+			},
+			wantCount: 2,
+		},
+		{
+			name: "all 7 dynamic status fields detected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = []string{
+					"readiness", "risk", "blocker", "done", "verified", "nextAction", "updatedAt",
+				}
+			},
+			wantCount: 7,
+		},
+		{
+			name: "legitimate fields like id and type are not flagged",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = []string{"id", "type", "consistencyLevel", "owner", "schema", "verify"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "nil RawFields does not cause panic",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].RawFields = nil
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT13(), "FMT-13")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueForbidden, r.IssueType)
+			}
+		})
+	}
+}
+
+// --- TOPO-07: actor maxConsistencyLevel constraint for consumers ---
+
+func TestTOPO07(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "no actor consumers",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "consumer actor within max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L2"},
+				}
+				// http.auth.login.v1 is L1, edge-bff max is L2: OK
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "consumer actor exceeds max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+				}
+				// http.auth.login.v1 is L1, edge-bff max is L0: violation
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "consumer actor with no max level (unconstrained)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: ""},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "consumer actor with malformed max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "INVALID"},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "cell consumer is not checked by TOPO-07",
+			setup: func(pm *metadata.ProjectMeta) {
+				// audit-core is a cell consumer (L2), contract is L1: TOPO-07 should skip cells
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"audit-core"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "wildcard consumer is skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "event contract consumer actor exceeds max level",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},
+				}
+				// event.session.created.v1 is L2, edge-bff max is L1: violation
+				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "multiple consumer actors, one exceeds",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+					{ID: "ext-monitor", Type: "external", MaxConsistencyLevel: "L4"},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "ext-monitor"}
+			},
+			wantCount: 1, // only edge-bff exceeds
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateTOPO07(), "TOPO-07")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+			}
+		})
+	}
+}
+
+// --- TOPO-08: deprecated contract reference blocking ---
+
+func TestTOPO08(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "no deprecated contracts",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "deprecated contract referenced by slice is error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
+			},
+			wantCount: 1, // session-login uses http.auth.login.v1
+		},
+		{
+			name: "deprecated contract referenced by multiple slices",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.session.created.v1"].Lifecycle = "deprecated"
+			},
+			wantCount: 2, // session-login publishes + audit-write subscribes
+		},
+		{
+			name: "draft contract not flagged",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Lifecycle = "draft"
+			},
+			wantCount: 0,
+		},
+		{
+			name: "active contract not flagged",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Lifecycle = "active"
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateTOPO08(), "TOPO-08")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueForbidden, r.IssueType)
+			}
+		})
+	}
+}
+
+// --- TOPO-08 + ADV-02 coexistence: deprecated contract produces both error and warning ---
+
+func TestTOPO08_ADV02_Coexistence(t *testing.T) {
+	pm := validProject()
+	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
+
+	val := NewValidator(pm, "")
+	results := val.Validate()
+
+	topo08 := findByCode(results, "TOPO-08")
+	adv02 := findByCode(results, "ADV-02")
+
+	assert.NotEmpty(t, topo08, "TOPO-08 error should fire for deprecated contract")
+	assert.NotEmpty(t, adv02, "ADV-02 warning should also fire for deprecated contract")
+
+	for _, r := range topo08 {
+		assert.Equal(t, SeverityError, r.Severity)
+	}
+	for _, r := range adv02 {
+		assert.Equal(t, SeverityWarning, r.Severity)
+	}
+}
+
+// --- REF-16: assembly boundary.yaml existence ---
+
+func TestREF16(t *testing.T) {
+	t.Run("skipped when root is empty", func(t *testing.T) {
+		pm := validProject()
+		val := NewValidator(pm, "")
+		got := findByCode(val.validateREF16(), "REF-16")
+		assert.Empty(t, got)
+	})
+
+	t.Run("boundary.yaml exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcDir := filepath.Join(tmpDir, "src")
+		require.NoError(t, os.MkdirAll(srcDir, 0o755))
+		// Create boundary.yaml for core-bundle.
+		boundaryDir := filepath.Join(tmpDir, "assemblies", "core-bundle", "generated")
+		require.NoError(t, os.MkdirAll(boundaryDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(boundaryDir, "boundary.yaml"), []byte("assembly: core-bundle"), 0o644))
+
+		pm := validProject()
+		val := NewValidator(pm, srcDir)
+		got := findByCode(val.validateREF16(), "REF-16")
+		assert.Empty(t, got)
+	})
+
+	t.Run("boundary.yaml missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcDir := filepath.Join(tmpDir, "src")
+		require.NoError(t, os.MkdirAll(srcDir, 0o755))
+
+		pm := validProject()
+		val := NewValidator(pm, srcDir)
+		got := findByCode(val.validateREF16(), "REF-16")
+		assert.Len(t, got, 1)
+		assert.Equal(t, SeverityWarning, got[0].Severity)
+		assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+		assert.Contains(t, got[0].Message, "boundary.yaml")
+	})
+
+	t.Run("multiple assemblies with missing boundary.yaml", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcDir := filepath.Join(tmpDir, "src")
+		require.NoError(t, os.MkdirAll(srcDir, 0o755))
+
+		pm := validProject()
+		pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
+			ID:    "edge-bundle",
+			Cells: []string{"access-core"},
+			Build: metadata.BuildMeta{
+				Entrypoint:     "src/cmd/edge-bundle/main.go",
+				Binary:         "edge-bundle",
+				DeployTemplate: "k8s",
+			},
+		}
+
+		val := NewValidator(pm, srcDir)
+		got := findByCode(val.validateREF16(), "REF-16")
+		assert.Len(t, got, 2) // both assemblies missing boundary.yaml
+	})
+}
+
+// --- JOURNEY-01: journey catalog cross-check (F-5 integration) ---
+
+func TestJourneyCatalog(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "all journey refs valid",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "journey references non-existent cell",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].Cells = append(pm.Journeys["J-sso-login"].Cells, "ghost-cell")
+			},
+			wantCount: 1,
+		},
+		{
+			name: "journey references non-existent contract",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-sso-login"].Contracts = append(pm.Journeys["J-sso-login"].Contracts, "http.ghost.v1")
+			},
+			wantCount: 1,
+		},
+		{
+			name: "empty journeys produce no error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys = map[string]*metadata.JourneyMeta{}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateJourneyCatalog(), "JOURNEY-01")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueRefNotFound, r.IssueType)
+			}
+		})
+	}
+}
+
+// --- JOURNEY-01: integration with Validate() aggregation ---
+
+func TestJourneyCatalog_IntegratedInValidate(t *testing.T) {
+	pm := validProject()
+	pm.Journeys["J-sso-login"].Cells = append(pm.Journeys["J-sso-login"].Cells, "ghost-cell")
+
+	val := NewValidator(pm, "")
+	results := val.Validate()
+
+	journey01 := findByCode(results, "JOURNEY-01")
+	assert.NotEmpty(t, journey01, "JOURNEY-01 should appear in Validate() results")
+}

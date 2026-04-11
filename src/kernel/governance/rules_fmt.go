@@ -388,3 +388,89 @@ func (v *Validator) validateFMT12() []ValidationResult {
 	}
 	return results
 }
+
+// dynamicStatusFields are fields that must only appear in status-board.yaml.
+// CLAUDE.md mandates: readiness, risk, blocker, done, verified, nextAction, updatedAt
+// are dynamic delivery status fields forbidden in cell.yaml / slice.yaml /
+// contract.yaml / assembly.yaml.
+var dynamicStatusFields = map[string]bool{
+	"readiness":  true,
+	"risk":       true,
+	"blocker":    true,
+	"done":       true,
+	"verified":   true,
+	"nextAction": true,
+	"updatedAt":  true,
+}
+
+// validateFMT13 checks that dynamic delivery status fields do not appear as
+// entity IDs in cell, slice, contract, or assembly metadata. These fields
+// (readiness, risk, blocker, done, verified, nextAction, updatedAt) are only
+// allowed in journeys/status-board.yaml. Full YAML-level field detection
+// requires raw-key surfacing from the parser; this rule catches entities whose
+// RawFields map contains any of those keys.
+func (v *Validator) validateFMT13() []ValidationResult {
+	var results []ValidationResult
+
+	for _, c := range v.project.Cells {
+		for _, field := range c.RawFields {
+			if dynamicStatusFields[field] {
+				results = append(results, ValidationResult{
+					Code:      "FMT-13",
+					Severity:  SeverityError,
+					IssueType: IssueForbidden,
+					File:      cellFile(c.ID),
+					Field:     field,
+					Message:   fmt.Sprintf("cell %q contains dynamic status field %q which is only allowed in status-board.yaml", c.ID, field),
+				})
+			}
+		}
+	}
+
+	for key, s := range v.project.Slices {
+		for _, field := range s.RawFields {
+			if dynamicStatusFields[field] {
+				results = append(results, ValidationResult{
+					Code:      "FMT-13",
+					Severity:  SeverityError,
+					IssueType: IssueForbidden,
+					File:      sliceFile(key),
+					Field:     field,
+					Message:   fmt.Sprintf("slice %q contains dynamic status field %q which is only allowed in status-board.yaml", s.ID, field),
+				})
+			}
+		}
+	}
+
+	for _, c := range v.project.Contracts {
+		for _, field := range c.RawFields {
+			if dynamicStatusFields[field] {
+				results = append(results, ValidationResult{
+					Code:      "FMT-13",
+					Severity:  SeverityError,
+					IssueType: IssueForbidden,
+					File:      contractFile(c.ID),
+					Field:     field,
+					Message:   fmt.Sprintf("contract %q contains dynamic status field %q which is only allowed in status-board.yaml", c.ID, field),
+				})
+			}
+		}
+	}
+
+	for _, a := range v.project.Assemblies {
+		for _, field := range a.RawFields {
+			if dynamicStatusFields[field] {
+				results = append(results, ValidationResult{
+					Code:      "FMT-13",
+					Severity:  SeverityError,
+					IssueType: IssueForbidden,
+					File:      assemblyFile(a.ID),
+					Field:     field,
+					Message:   fmt.Sprintf("assembly %q contains dynamic status field %q which is only allowed in status-board.yaml", a.ID, field),
+				})
+			}
+		}
+	}
+
+	return results
+}

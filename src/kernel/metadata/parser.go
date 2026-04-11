@@ -133,6 +133,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
 	}
+	m.RawFields = readRawFields(fsys, path)
 	pm.Cells[m.ID] = &m
 	return nil
 }
@@ -170,6 +171,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate slice ID %q: %s and previous", key, path))
 	}
+	m.RawFields = readRawFields(fsys, path)
 	pm.Slices[key] = &m
 	return nil
 }
@@ -197,6 +199,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate contract ID %q: %s and previous", m.ID, path))
 	}
+	m.RawFields = readRawFields(fsys, path)
 	pm.Contracts[m.ID] = &m
 	return nil
 }
@@ -231,6 +234,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))
 	}
+	m.RawFields = readRawFields(fsys, path)
 	pm.Assemblies[m.ID] = &m
 	return nil
 }
@@ -283,4 +287,29 @@ func unmarshalFile(fsys fs.FS, path string, out any) error {
 			fmt.Sprintf("parse %s: unexpected multiple YAML documents", path))
 	}
 	return nil
+}
+
+// extractTopLevelKeys performs a lenient YAML decode to extract the top-level
+// mapping keys from a YAML document. It ignores unknown fields (unlike the
+// strict unmarshalFile) because its purpose is to surface raw key names for
+// governance checks like FMT-13 (dynamic status field prohibition).
+func extractTopLevelKeys(data []byte) []string {
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// readRawFields reads a YAML file from fsys and returns its top-level keys.
+func readRawFields(fsys fs.FS, path string) []string {
+	data, err := fs.ReadFile(fsys, path)
+	if err != nil {
+		return nil
+	}
+	return extractTopLevelKeys(data)
 }

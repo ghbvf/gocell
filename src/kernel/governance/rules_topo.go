@@ -228,6 +228,116 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 	return results
 }
 
+// validateTOPO07 checks that contract.consistencyLevel does not exceed the
+// maxConsistencyLevel of any external actor referenced as a consumer in the
+// contract's endpoints. TOPO-04 covers the provider side; this rule covers the
+// consumer side. If an actor has no maxConsistencyLevel, it is unconstrained.
+func (v *Validator) validateTOPO07() []ValidationResult {
+	// Build actor lookup for external consumers.
+	actorMaxLevel := make(map[string]cell.Level)
+	actorMalformed := make(map[string]bool)
+	for _, a := range v.project.Actors {
+		if a.MaxConsistencyLevel == "" {
+			continue // no constraint declared
+		}
+		lvl, err := cell.ParseLevel(a.MaxConsistencyLevel)
+		if err != nil {
+			actorMalformed[a.ID] = true
+			continue
+		}
+		actorMaxLevel[a.ID] = lvl
+	}
+	if len(actorMaxLevel) == 0 && len(actorMalformed) == 0 {
+		return nil
+	}
+
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			continue // FMT-03 covers invalid levels
+		}
+
+		consumers := contractConsumers(c)
+		for i, consumerID := range consumers {
+			if consumerID == "*" {
+				continue
+			}
+			// Only check external actors (cells are not constrained by maxConsistencyLevel).
+			if _, isCell := v.project.Cells[consumerID]; isCell {
+				continue
+			}
+
+			if actorMalformed[consumerID] {
+				results = append(results, ValidationResult{
+					Code:      "TOPO-07",
+					Severity:  SeverityError,
+					IssueType: IssueInvalid,
+					File:      "actors.yaml",
+					Field:     "maxConsistencyLevel",
+					Message: fmt.Sprintf(
+						"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel",
+						c.ID, consumerID,
+					),
+				})
+				continue
+			}
+
+			if maxLvl, ok := actorMaxLevel[consumerID]; ok {
+				if contractLevel > maxLvl {
+					results = append(results, ValidationResult{
+						Code:      "TOPO-07",
+						Severity:  SeverityError,
+						IssueType: IssueMismatch,
+						File:      contractFile(c.ID),
+						Field:     fmt.Sprintf("endpoints.consumers[%d]", i),
+						Message: fmt.Sprintf(
+							"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
+							c.ID, c.ConsistencyLevel, consumerID, maxLvl,
+						),
+					})
+				}
+			}
+		}
+	}
+	return results
+}
+
+// validateTOPO08 checks that no slice references a deprecated contract.
+// A deprecated contract's lifecycle signals it should no longer be consumed;
+// any slice still using it via contractUsages is a blocking error.
+// ADV-02 provides a softer warning-level counterpart for advisory purposes.
+func (v *Validator) validateTOPO08() []ValidationResult {
+	var results []ValidationResult
+
+	// Build a set of deprecated contract IDs.
+	deprecated := make(map[string]bool)
+	for _, c := range v.project.Contracts {
+		if c.Lifecycle == "deprecated" {
+			deprecated[c.ID] = true
+		}
+	}
+	if len(deprecated) == 0 {
+		return nil
+	}
+
+	for key, s := range v.project.Slices {
+		for i, cu := range s.ContractUsages {
+			if deprecated[cu.Contract] {
+				results = append(results, ValidationResult{
+					Code:      "TOPO-08",
+					Severity:  SeverityError,
+					IssueType: IssueForbidden,
+					File:      sliceFile(key),
+					Field:     fmt.Sprintf("contractUsages[%d].contract", i),
+					Message:   fmt.Sprintf("slice %q references deprecated contract %q; migrate to the replacement contract", s.ID, cu.Contract),
+				})
+			}
+		}
+	}
+	return results
+}
+
 // validateTOPO06 checks that each cell belongs to at most one assembly.
 func (v *Validator) validateTOPO06() []ValidationResult {
 	var results []ValidationResult
