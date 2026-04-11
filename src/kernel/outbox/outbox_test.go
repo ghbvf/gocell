@@ -405,6 +405,16 @@ func TestPermanentError(t *testing.T) {
 	assert.ErrorIs(t, pe, inner)
 }
 
+func TestPermanentError_NilErr(t *testing.T) {
+	pe := NewPermanentError(nil)
+	assert.Equal(t, "permanent: <nil>", pe.Error())
+	assert.Nil(t, pe.Unwrap())
+
+	// Zero-value struct — same nil Err path.
+	var zero PermanentError
+	assert.Equal(t, "permanent: <nil>", zero.Error())
+}
+
 func TestPermanentError_ErrorsAs_ThroughWrapping(t *testing.T) {
 	inner := errors.New("decode error")
 	pe := NewPermanentError(inner)

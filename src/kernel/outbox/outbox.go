@@ -174,6 +174,9 @@ type PermanentError struct {
 }
 
 func (e *PermanentError) Error() string {
+	if e.Err == nil {
+		return "permanent: <nil>"
+	}
 	return fmt.Sprintf("permanent: %s", e.Err.Error())
 }
 
