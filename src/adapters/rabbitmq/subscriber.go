@@ -201,6 +201,12 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 
 		// Wait for connection recovery before re-subscribing.
 		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
+			// Permanent connection error — propagate to caller so upstream
+			// (EventRouter/Bootstrap) can detect and handle terminal failure.
+			var ecErr *errcode.Error
+			if errors.As(waitErr, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent {
+				return waitErr
+			}
 			// ctx cancelled or subscriber closed during wait — clean exit.
 			return nil
 		}
@@ -236,7 +242,10 @@ func (s *Subscriber) subscribeOnce(
 	// paths to prevent channel leaks.
 	cleanupCh := func() {
 		s.untrackChannel(ch)
-		_ = ch.Close()
+		if err := ch.Close(); err != nil {
+			slog.Debug("rabbitmq: error closing channel during cleanup",
+				slog.String("error", err.Error()))
+		}
 	}
 
 	// setupErr wraps a setup-stage error. If the underlying AMQP error is
@@ -302,7 +311,10 @@ func (s *Subscriber) subscribeOnce(
 
 	// Clean up the dead channel after consumeLoop exits.
 	s.untrackChannel(ch)
-	_ = ch.Close() // Best-effort close; channel is likely already dead.
+	if closeErr := ch.Close(); closeErr != nil {
+		slog.Debug("rabbitmq: error closing consumed channel",
+			slog.String("error", closeErr.Error()))
+	}
 
 	return loopErr
 }

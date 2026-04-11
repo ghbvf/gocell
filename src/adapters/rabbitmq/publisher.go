@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -31,6 +32,12 @@ func NewPublisher(conn *Connection) *Publisher {
 func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) error {
 	ch, err := p.conn.AcquireChannel()
 	if err != nil {
+		// Preserve permanent error code from Connection terminal state so callers
+		// can distinguish "permanent config failure" from "transient publish failure".
+		var ecErr *errcode.Error
+		if errors.As(err, &ecErr) && ecErr.Code == ErrAdapterAMQPConnectPermanent {
+			return err
+		}
 		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
 	defer p.conn.ReleaseChannel(ch)

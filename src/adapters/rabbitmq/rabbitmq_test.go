@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -168,13 +169,11 @@ type mockConnection struct {
 
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
-	closeErr      error
+	closeErr         error
 }
 
 func newMockConnection() *mockConnection {
-	return &mockConnection{
-		notifyCloseCh: make(chan *amqp.Error, 1),
-	}
+	return &mockConnection{}
 }
 
 func (m *mockConnection) Channel() (AMQPChannel, error) {
@@ -337,6 +336,40 @@ func TestNewConnection_DialFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
 }
 
+func TestNewConnection_PermanentDialError(t *testing.T) {
+	// Initial connection with permanent error should return ErrAdapterAMQPConnectPermanent.
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+	}
+
+	_, err := NewConnection(Config{
+		URL: "amqp://bad:bad@localhost:5672/",
+	}, WithDialFunc(dialFunc))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"initial permanent dial error should return ErrAdapterAMQPConnectPermanent")
+}
+
+func TestNewConnection_RecoverableDialError(t *testing.T) {
+	// Initial connection with recoverable error should return generic ErrAdapterAMQPConnect.
+	dialFunc := func(url string) (AMQPConnection, error) {
+		return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+	}
+
+	_, err := NewConnection(Config{
+		URL: "amqp://test:test@localhost:5672/",
+	}, WithDialFunc(dialFunc))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnect, ecErr.Code,
+		"recoverable dial error should return generic ErrAdapterAMQPConnect")
+}
+
 func TestConnection_Health_Closed(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -454,24 +487,346 @@ func TestConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout)
 }
 
+func TestConfig_Defaults_NegativeValues(t *testing.T) {
+	cfg := Config{
+		ReconnectMaxBackoff: -1 * time.Second,
+		ReconnectBaseDelay:  -500 * time.Millisecond,
+		ChannelPoolSize:     -5,
+		ConfirmTimeout:      -3 * time.Second,
+	}
+	cfg.setDefaults()
+
+	assert.Equal(t, 30*time.Second, cfg.ReconnectMaxBackoff, "negative MaxBackoff should reset to default")
+	assert.Equal(t, 1*time.Second, cfg.ReconnectBaseDelay, "negative BaseDelay should reset to default")
+	assert.Equal(t, 10, cfg.ChannelPoolSize, "negative ChannelPoolSize should reset to default")
+	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout, "negative ConfirmTimeout should reset to default")
+}
+
 func TestConnection_BackoffDelay(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	tests := []struct {
 		name     string
 		attempt  int
-		expected time.Duration
+		minDelay time.Duration
+		maxDelay time.Duration // hard cap: never exceeds ReconnectMaxBackoff (30s)
 	}{
-		{name: "attempt 0", attempt: 0, expected: 1 * time.Second},
-		{name: "attempt 1", attempt: 1, expected: 2 * time.Second},
-		{name: "attempt 2", attempt: 2, expected: 4 * time.Second},
-		{name: "attempt 10 (capped)", attempt: 10, expected: 30 * time.Second},
+		{name: "attempt 0", attempt: 0,
+			minDelay: 750 * time.Millisecond, maxDelay: 1250 * time.Millisecond},
+		{name: "attempt 1", attempt: 1,
+			minDelay: 1500 * time.Millisecond, maxDelay: 2500 * time.Millisecond},
+		{name: "attempt 2", attempt: 2,
+			minDelay: 3 * time.Second, maxDelay: 5 * time.Second},
+		// Capped region: jitter on MaxBackoff → [0.75*30s, 30s] = [22.5s, 30s].
+		{name: "attempt 10 (capped)", attempt: 10,
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
+		{name: "attempt 34 (overflow guard)", attempt: 34,
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
+		{name: "attempt 100 (far overflow)", attempt: 100,
+			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			delay := conn.backoffDelay(tt.attempt)
-			assert.Equal(t, tt.expected, delay)
+			assert.GreaterOrEqual(t, delay, tt.minDelay,
+				"delay %v should be >= %v", delay, tt.minDelay)
+			assert.LessOrEqual(t, delay, tt.maxDelay,
+				"delay %v should be <= %v (hard cap)", delay, tt.maxDelay)
+		})
+	}
+}
+
+func TestAddJitter(t *testing.T) {
+	tests := []struct {
+		name string
+		d    time.Duration
+	}{
+		{name: "zero", d: 0},
+		{name: "1s", d: 1 * time.Second},
+		{name: "30s", d: 30 * time.Second},
+		{name: "100ms", d: 100 * time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.d == 0 {
+				assert.Equal(t, time.Duration(0), addJitter(tt.d))
+				return
+			}
+			// Run multiple times to check range.
+			for range 100 {
+				got := addJitter(tt.d)
+				minD := time.Duration(float64(tt.d) * 0.75)
+				maxD := time.Duration(float64(tt.d) * 1.25)
+				assert.GreaterOrEqual(t, got, minD)
+				assert.LessOrEqual(t, got, maxD)
+			}
+		})
+	}
+}
+
+func TestAddDownJitter(t *testing.T) {
+	t.Run("zero returns zero", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), addDownJitter(0))
+	})
+	t.Run("negative returns zero", func(t *testing.T) {
+		assert.Equal(t, time.Duration(0), addDownJitter(-1*time.Second))
+	})
+	t.Run("positive in [0.75*d, d]", func(t *testing.T) {
+		d := 30 * time.Second
+		for range 100 {
+			got := addDownJitter(d)
+			assert.GreaterOrEqual(t, got, time.Duration(float64(d)*0.75))
+			assert.LessOrEqual(t, got, d)
+		}
+	})
+}
+
+func TestConnection_BackoffDelay_SmallBase(t *testing.T) {
+	// U4: verify small base delay (1ms) doesn't prematurely jump to max.
+	conn := &Connection{
+		config: Config{
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 1 * time.Hour,
+		},
+	}
+	// attempt 10: 1ms * 2^10 = 1.024s — well below 1h, jitter should be around 1s.
+	delay := conn.backoffDelay(10)
+	assert.GreaterOrEqual(t, delay, 750*time.Millisecond)
+	assert.LessOrEqual(t, delay, 1300*time.Millisecond)
+
+	// attempt 30: 1ms * 2^30 ≈ 1073s ≈ 17.9min — still below 1h.
+	delay30 := conn.backoffDelay(30)
+	assert.Less(t, delay30, 1*time.Hour, "attempt 30 with 1ms base should NOT hit 1h cap")
+}
+
+func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
+	// reconnectLoop should exit when closeCh is closed (via Connection.Close).
+	conn, _ := newTestConnection(t)
+
+	// reconnectLoop is already running from NewConnection. Close should stop it.
+	err := conn.Close()
+	assert.NoError(t, err)
+
+	// After Close, WaitConnected with a short timeout should fail (closeCh closed).
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	// connected was already closed by NewConnection, so this returns nil.
+	// This test verifies Close doesn't panic and exits cleanly.
+	_ = conn.WaitConnected(ctx)
+}
+
+func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
+	// Full cycle: connect → disconnect → backoff → reconnect.
+	var mu sync.Mutex
+	dialCount := 0
+	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n <= len(mocks) {
+			return mocks[n-1], nil
+		}
+		return newMockConnection(), nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to call NotifyClose.
+	require.Eventually(t, func() bool {
+		mocks[0].mu.Lock()
+		defer mocks[0].mu.Unlock()
+		return mocks[0].notifyCloseCh != nil
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Now send on the channel that reconnectLoop is actually selecting on.
+	mocks[0].mu.Lock()
+	ch := mocks[0].notifyCloseCh
+	mocks[0].isClosed = true
+	mocks[0].mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// reconnectLoop should reconnect. Verify dial was called again.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, 10*time.Millisecond, "reconnectLoop should have reconnected")
+}
+
+func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
+	// Full cycle: connect → disconnect → permanent error → loop exits.
+	var mu sync.Mutex
+	dialCount := 0
+	mock := newMockConnection()
+	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock, nil
+		}
+		return nil, permanentErr
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.notifyCloseCh != nil
+	}, time.Second, time.Millisecond)
+
+	// Trigger disconnect.
+	mock.mu.Lock()
+	ch := mock.notifyCloseCh
+	mock.isClosed = true
+	mock.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for permanent error to be hit.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, 10*time.Millisecond, "reconnect should have attempted dial")
+
+	// After permanent error, WaitConnected should return the permanent error
+	// immediately (not block until ctx timeout).
+	time.Sleep(20 * time.Millisecond) // let reconnectLoop process the terminal state
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	require.Error(t, waitErr, "WaitConnected must return error after permanent failure")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"WaitConnected should return permanent error code, not generic connect error")
+
+	// Health should also reflect terminal state.
+	healthErr := conn.Health()
+	require.Error(t, healthErr)
+	require.True(t, errors.As(healthErr, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+
+	// AcquireChannel should also return permanent error (not generic connect error).
+	_, acqErr := conn.AcquireChannel()
+	require.Error(t, acqErr)
+	require.True(t, errors.As(acqErr, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+}
+
+func TestIsPermanentDialError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "AMQP ACCESS_REFUSED (403) — auth failure",
+			err:  &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP NOT_FOUND (404) — vhost does not exist",
+			err:  &amqp.Error{Code: 404, Reason: "NOT_FOUND", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP NOT_ALLOWED (530) — connection not allowed",
+			err:  &amqp.Error{Code: 530, Reason: "NOT_ALLOWED", Server: true, Recover: false},
+			want: true,
+		},
+		{
+			name: "AMQP connection.forced (320) — recoverable",
+			err:  &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Server: true, Recover: true},
+			want: false,
+		},
+		{
+			name: "AMQP frame error (501) — recoverable",
+			err:  &amqp.Error{Code: 501, Reason: "FRAME_ERROR", Server: true, Recover: true},
+			want: false,
+		},
+		{
+			name: "net.OpError (connection refused) — recoverable",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+			want: false,
+		},
+		{
+			name: "generic error — defaults to recoverable",
+			err:  errors.New("some unknown error"),
+			want: false,
+		},
+		{
+			name: "wrapped AMQP permanent error",
+			err:  fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
+			want: true,
+		},
+		// Plain errors from amqp091-go pre-handshake failures (U2).
+		{
+			name: "URI parse failure — permanent",
+			err:  errors.New("AMQP URI must start with amqp:// or amqps://"),
+			want: true,
+		},
+		{
+			name: "unsupported auth mechanism — permanent",
+			err:  errors.New("unsupported auth mechanism EXTERNAL: no credentials provided"),
+			want: true,
+		},
+		{
+			name: "x509 certificate error — permanent",
+			err:  errors.New("x509: certificate signed by unknown authority"),
+			want: true,
+		},
+		{
+			name: "TLS handshake error — permanent",
+			err:  errors.New("tls: first record does not look like a TLS handshake"),
+			want: true,
+		},
+		{
+			name: "wrapped URI parse failure — permanent",
+			err:  fmt.Errorf("dial: %w", errors.New("AMQP URI scheme must be amqp:// or amqps://")),
+			want: true,
+		},
+		{
+			name: "generic unknown error — recoverable",
+			err:  errors.New("some transient hiccup"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isPermanentDialError(tt.err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -503,9 +858,9 @@ func TestSanitizeURL(t *testing.T) {
 			expected: "amqp://***:***@rabbit.example.com:5672/production",
 		},
 		{
-			name:     "empty string returns empty",
+			name:     "empty string returns redacted placeholder",
 			url:      "",
-			expected: "",
+			expected: "amqp://***",
 		},
 		{
 			name:     "amqps scheme with credentials",
@@ -524,6 +879,103 @@ func TestSanitizeURL(t *testing.T) {
 			assert.NotContains(t, result, "secret")
 			assert.NotContains(t, result, ":pass@")
 		})
+	}
+}
+
+func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
+	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 5 * time.Millisecond,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			return nil, permanentErr
+		},
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
+	}
+
+	ok, err := conn.reconnectWithBackoff()
+	assert.False(t, ok, "must return false on permanent dial error")
+	assert.Error(t, err, "must return the permanent error")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+}
+
+func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
+	var mu sync.Mutex
+	dialCount := 0
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 5 * time.Millisecond,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			mu.Lock()
+			dialCount++
+			n := dialCount
+			mu.Unlock()
+			if n <= 2 {
+				return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+			}
+			return newMockConnection(), nil
+		},
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
+	}
+
+	ok, err := conn.reconnectWithBackoff()
+	assert.True(t, ok, "must return true after successful reconnect")
+	assert.NoError(t, err)
+
+	mu.Lock()
+	assert.Equal(t, 3, dialCount, "should have tried 3 times (2 failures + 1 success)")
+	mu.Unlock()
+}
+
+func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
+	closeCh := make(chan struct{})
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  10 * time.Second,
+			ReconnectMaxBackoff: 30 * time.Second,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
+		},
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+		failed:    make(chan struct{}),
+	}
+
+	type result struct {
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ok, err := conn.reconnectWithBackoff()
+		done <- result{ok, err}
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	close(closeCh)
+
+	select {
+	case r := <-done:
+		assert.False(t, r.ok, "must return false when closeCh fires")
+		assert.NoError(t, r.err, "clean shutdown, no permanent error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
 	}
 }
 
@@ -658,6 +1110,33 @@ func TestPublisher_Publish_ConfirmModeError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_PUBLISH")
 	assert.Contains(t, err.Error(), "confirm mode")
+}
+
+func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
+	// When Connection is in terminal state, Publish should return
+	// ErrAdapterAMQPConnectPermanent (not generic publish error).
+	conn := &Connection{
+		config: Config{
+			URL:            "amqp://test:test@localhost:5672/",
+			ChannelPoolSize: 2,
+			ConfirmTimeout: 5 * time.Second,
+		},
+		channelPool:  make(chan AMQPChannel, 2),
+		closeCh:      make(chan struct{}),
+		connected:    make(chan struct{}),
+		failed:       make(chan struct{}),
+		permanentErr: errcode.New(ErrAdapterAMQPConnectPermanent, "access refused"),
+	}
+	close(conn.failed)
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"Publish in terminal state should return permanent error, not generic publish error")
 }
 
 // =============================================================================
