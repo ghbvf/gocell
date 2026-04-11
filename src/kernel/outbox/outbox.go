@@ -82,9 +82,10 @@ type Writer interface {
 type BatchWriter interface {
 	Writer
 	// WriteBatch persists multiple outbox entries atomically within the
-	// caller's transaction scope. All entries MUST be validated before any
-	// write occurs. If validation fails for any entry, no entries are
-	// written and the first validation error is returned.
+	// caller's transaction scope. Implementations MUST validate entries
+	// independently (defense-in-depth) even when called via
+	// WriteBatchFallback, which only runs Entry.Validate(). If validation
+	// fails for any entry, no entries are written.
 	//
 	// An empty entries slice is a no-op and returns nil.
 	//
@@ -97,7 +98,12 @@ type BatchWriter interface {
 
 // WriteBatchFallback writes entries using the Writer interface, falling
 // back to sequential Write calls if the writer does not implement
-// BatchWriter. All entries are validated upfront before any write occurs.
+// BatchWriter.
+//
+// Validation scope: WriteBatchFallback runs Entry.Validate() on all
+// entries upfront (topic + payload checks). Writer-specific validation
+// (e.g. UUID format, transaction presence) is the responsibility of
+// the Writer/BatchWriter implementation and may run independently.
 //
 // The caller MUST ensure ctx carries an active transaction. Atomicity
 // depends on the transaction scope: if all writes happen within the

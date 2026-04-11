@@ -2438,6 +2438,58 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
+func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	handlerCallCount := 0
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCallCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         errors.New("bad payload"),
+		}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-reject-direct"})
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Equal(t, 1, handlerCallCount, "DispositionReject must skip retry loop — handler called exactly once")
+	assert.Same(t, receipt, res.Receipt)
+}
+
+func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	handlerCallCount := 0
+	cb := NewConsumerBaseWithClaimer(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		handlerCallCount++
+		// Wrapped PermanentError — must be detected by errors.As through fmt.Errorf wrapping.
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
+		}
+	})
+
+	res := handler(context.Background(), outbox.Entry{ID: "evt-perm-wrapped"})
+	assert.Equal(t, outbox.DispositionReject, res.Disposition,
+		"wrapped PermanentError must be detected and upgraded to Reject")
+	assert.Equal(t, 1, handlerCallCount, "PermanentError must skip retry loop — handler called exactly once")
+	assert.Same(t, receipt, res.Receipt)
+}
+
 // sequenceClaimer returns different results on successive Claim calls.
 // Used to test claimWithRetry: first N calls fail, then succeed.
 type sequenceClaimer struct {

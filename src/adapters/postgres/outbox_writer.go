@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/jackc/pgx/v5"
 )
 
 // uuidPattern matches a canonical UUID string (8-4-4-4-12 hex digits).
@@ -86,12 +87,20 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	return nil
 }
 
-// WriteBatch inserts multiple outbox entries in a single multi-row INSERT
-// within the caller's transaction. All entries are validated upfront;
-// if any entry is invalid, no entries are written.
+// writeBatchChunkSize is the maximum number of entries per INSERT statement.
+// PostgreSQL supports at most 65535 bind parameters; each entry uses 9 columns,
+// so the theoretical max is 65535/9 = 7281. We use 7000 as a safe margin.
+const writeBatchChunkSize = 7000
+
+// WriteBatch inserts multiple outbox entries within the caller's transaction.
+// All entries are validated upfront (ID format + Entry.Validate); if any entry
+// is invalid, no entries are written.
+//
+// For batches exceeding writeBatchChunkSize, entries are split into chunks
+// and each chunk is inserted with a separate multi-row INSERT within the
+// same transaction, preserving all-or-nothing semantics.
 //
 // An empty entries slice is a no-op and returns nil.
-// All-or-nothing: the transaction guarantees atomicity.
 func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) error {
 	if len(entries) == 0 {
 		return nil
@@ -117,7 +126,22 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		}
 	}
 
-	// Build multi-row INSERT: INSERT INTO ... VALUES ($1,...,$9), ($10,...,$18), ...
+	// Split into chunks to stay within PostgreSQL's 65535 parameter limit.
+	for offset := 0; offset < len(entries); offset += writeBatchChunkSize {
+		end := offset + writeBatchChunkSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		if err := w.writeBatchChunk(ctx, tx, entries[offset:end], offset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBatchChunk inserts a single chunk of entries via multi-row INSERT.
+// globalOffset is the index of the first entry in the original slice (for error messages).
+func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry, globalOffset int) error {
 	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, published
 	var sb strings.Builder
 	sb.WriteString(`INSERT INTO outbox_entries
@@ -129,7 +153,7 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		metadata, err := json.Marshal(e.Metadata)
 		if err != nil {
 			return errcode.Wrap(ErrAdapterPGMarshal,
-				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", i), err)
+				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)
 		}
 
 		createdAt := e.CreatedAt
@@ -160,6 +184,5 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		return errcode.Wrap(ErrAdapterPGQuery,
 			fmt.Sprintf("outbox: failed to batch insert %d entries", len(entries)), err)
 	}
-
 	return nil
 }
