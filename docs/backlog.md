@@ -125,8 +125,8 @@
 | ER-P2-04 | `runtime/bootstrap/bootstrap_test.go` | ~~缺 Router 正路径集成测试~~ PR#76 ✅ | ~~1h~~ |
 | CLEANUP-01 | `runtime/bootstrap/bootstrap.go` | 删除 `WithEventBus` deprecated wrapper，调用方改用 `WithPublisher` + `WithSubscriber` | 30min |
 | CLEANUP-02 | `cells/access-core/cell.go` | 删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier` | 1h |
-| ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级** | Phase 2 后评估 |
-| ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。同 topic 多 handler（如 audit-core + config-core 都订阅 event.config.changed.v1）在 RabbitMQ 下退化为 competing consumers 而非 fan-out。需 AddHandler 增加 ConsumerGroup 参数或 AddHandlerWithOptions，**C3** | Phase 2 后评估 |
+| ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
+| ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
 
 ### winmdm Accept P1
 
@@ -402,6 +402,7 @@
 | A | WM-33b 熔断器 | 0.5d | `adapters/` sony/gobreaker 包装 |
 | B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop） | 1d | `kernel/cell` 可选接口（type assertion） |
 | B | WM-15 L4 队列状态机 | 1.5d | `kernel/outbox` 合入 0-B2，状态 enum + 超时检测 |
+| B | ER-ARCH-02 EventRouter ConsumerGroup 支持 | 2h | `AddHandler(...HandlerOption)` + `WithConsumerGroup`，修复 competing consumers |
 
 **安全底线**: 熔断器防级联故障；AfterStop 清理敏感资源
 **测试策略**: TestPubSub 标准套件 12 场景；lifecycle hooks 回归验证（不注册钩子时行为不变）
