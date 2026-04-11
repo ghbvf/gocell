@@ -274,6 +274,58 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit-err:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Delete the lease key to make Commit fail with stale token error.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:double-commit-err:1")
+	mock.mu.Unlock()
+
+	// First Commit should fail.
+	err1 := receipt.Commit(ctx)
+	require.Error(t, err1)
+	assert.Contains(t, err1.Error(), "stale lease")
+
+	// Second Commit should return the SAME cached error (sync.Once).
+	err2 := receipt.Commit(ctx)
+	require.Error(t, err2)
+	assert.Equal(t, err1, err2, "repeated Commit must return the same cached error")
+}
+
+func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release-err:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, idempotency.ClaimAcquired, state)
+	require.NotNil(t, receipt)
+
+	// Delete the lease key to make Release fail with stale token error.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:double-release-err:1")
+	mock.mu.Unlock()
+
+	// First Release should fail.
+	err1 := receipt.Release(ctx)
+	require.Error(t, err1)
+	assert.Contains(t, err1.Error(), "stale lease")
+
+	// Second Release should return the SAME cached error (sync.Once).
+	err2 := receipt.Release(ctx)
+	require.Error(t, err2)
+	assert.Equal(t, err1, err2, "repeated Release must return the same cached error")
+}
+
 func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := newIdempotencyClaimerFromCmdable(mock)

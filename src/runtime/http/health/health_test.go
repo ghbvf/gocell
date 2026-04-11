@@ -146,6 +146,33 @@ func TestReadyzHandler(t *testing.T) {
 	}
 }
 
+func TestReadyzHandler_MultipleCheckers(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("rabbitmq", func() error { return nil })
+	h.RegisterChecker("postgres", func() error { return fmt.Errorf("connection refused") })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body["status"])
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+}
+
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test"})
 	h := New(asm)

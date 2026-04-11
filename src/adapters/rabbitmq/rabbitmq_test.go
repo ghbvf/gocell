@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/bits"
 	"net"
 	"sync"
 	"testing"
@@ -403,6 +404,7 @@ func TestConnection_WaitConnected_Timeout(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
+		terminalCh:  make(chan struct{}),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -1503,6 +1505,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
+		terminalCh:  make(chan struct{}),
 	}
 
 	// Make AcquireChannel fail so subscribeOnce returns error, entering reconnect wait.
@@ -1661,6 +1664,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
+		terminalCh:  make(chan struct{}),
 	}
 	// Mark as initially connected.
 	close(c.connected)
@@ -3141,4 +3145,190 @@ func TestSafeDelay_ExceedsMax(t *testing.T) {
 func TestSafeDelay_NegativeBase(t *testing.T) {
 	result := safeDelay(-time.Second, 30*time.Second, 3)
 	assert.Equal(t, time.Duration(0), result)
+}
+
+// =============================================================================
+// retryLoop regression tests (S3 P1)
+// =============================================================================
+
+func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
+	// Handler fails with Requeue on attempt 0, succeeds (Ack) on attempt 1.
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     3,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	attempt := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := attempt
+		attempt++
+		if n == 0 {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         errors.New("transient failure"),
+			}
+		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+
+	entry := outbox.Entry{ID: "evt-transient-ok"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through on success")
+	assert.Equal(t, 2, attempt, "handler should have been called 2 times")
+}
+
+func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
+	// Handler returns DispositionReject directly (not via PermanentError).
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     5,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         errors.New("bad payload shape"),
+		}
+	})
+
+	entry := outbox.Entry{ID: "evt-explicit-reject"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, 1, callCount, "handler should be called exactly once (no retry for Reject)")
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
+}
+
+func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.T) {
+	// Handler returns Requeue with fmt.Errorf("ctx: %w", outbox.NewPermanentError(...)).
+	// retryLoop should detect PermanentError via errors.As and upgrade to Reject.
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "test-group",
+		RetryCount:     5,
+		RetryBaseDelay: 10 * time.Millisecond,
+	})
+
+	callCount := 0
+	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         fmt.Errorf("ctx: %w", outbox.NewPermanentError(errors.New("bad payload"))),
+		}
+	})
+
+	entry := outbox.Entry{ID: "evt-wrapped-perm"}
+	res := handler(context.Background(), entry)
+
+	assert.Equal(t, 1, callCount, "handler should be called once (PermanentError detected, no retry)")
+	assert.Equal(t, outbox.DispositionReject, res.Disposition,
+		"wrapped PermanentError should be detected by errors.As and upgraded to Reject")
+	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
+}
+
+// =============================================================================
+// MaxReconnectAttempts=1 boundary test (S3 P2)
+// =============================================================================
+
+func TestConnection_MaxReconnectAttempts_One(t *testing.T) {
+	// MaxReconnectAttempts=1: after exactly 1 reconnect attempt, should enter terminal state.
+	var mu sync.Mutex
+	dialCount := 0
+	mock := newMockConnection()
+	recoverableErr := errors.New("connection refused")
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock, nil
+		}
+		return nil, recoverableErr
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                  "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:      2,
+		ReconnectBaseDelay:   1 * time.Millisecond,
+		ReconnectMaxBackoff:  5 * time.Millisecond,
+		MaxReconnectAttempts: 1,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.notifyCloseCh != nil
+	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
+
+	// Trigger disconnect.
+	mock.mu.Lock()
+	ch := mock.notifyCloseCh
+	mock.isClosed = true
+	mock.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait for exactly 1 reconnect attempt (total dials: 1 initial + 1 reconnect = 2).
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, time.Millisecond, "reconnect should have attempted 1 dial")
+
+	// Wait for terminal state.
+	require.Eventually(t, func() bool {
+		conn.mu.RLock()
+		defer conn.mu.RUnlock()
+		return conn.permanentErr != nil
+	}, 2*time.Second, time.Millisecond, "terminal state should be set after 1 attempt")
+
+	// WaitConnected should return permanent error.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	waitErr := conn.WaitConnected(ctx)
+	require.Error(t, waitErr, "WaitConnected must return error after max attempts exceeded")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
+		"WaitConnected should return permanent error code")
+}
+
+// =============================================================================
+// safeDelay boundary tests (S3 P2)
+// =============================================================================
+
+func TestSafeDelay_AttemptZero(t *testing.T) {
+	result := safeDelay(time.Second, 30*time.Second, 0)
+	assert.Equal(t, time.Second, result) // base * 2^0 = base
+}
+
+func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
+	base := time.Second
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	// At maxSafeShift, result should still be capped to maxDelay.
+	result := safeDelay(base, 30*time.Second, maxSafeShift)
+	assert.Equal(t, 30*time.Second, result)
+	// At maxSafeShift+1, also capped (overflow guard).
+	result2 := safeDelay(base, 30*time.Second, maxSafeShift+1)
+	assert.Equal(t, 30*time.Second, result2)
 }
