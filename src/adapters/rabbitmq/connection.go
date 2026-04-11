@@ -370,19 +370,19 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 					"rabbitmq: permanent connection error, giving up", err)
 				slog.Error("rabbitmq: permanent connection error, giving up",
 					slog.Int("attempt", attempt+1),
-					slog.String("error", err.Error()))
+					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 				return false, permErr
 			}
 
 			slog.Warn("rabbitmq: reconnect failed (recoverable), will retry",
 				slog.Int("attempt", attempt+1),
-				slog.String("error", err.Error()))
+				slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 			attempt++
 			if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
 				slog.Error("rabbitmq: max reconnect attempts exceeded, entering terminal state",
 					slog.Int("max_attempts", c.config.MaxReconnectAttempts),
 					slog.Int("attempt", attempt),
-					slog.String("error", err.Error()))
+					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 				return false, errcode.Wrap(ErrAdapterAMQPReconnectExhausted,
 					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), err)
 			}

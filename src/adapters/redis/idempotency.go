@@ -23,6 +23,8 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 // IdempotencyClaimer implements idempotency.Claimer using a dual-key Lua
 // script model:
 //
+// Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
+//
 //   - lease:{key} — SET NX with leaseTTL, value = random token. Indicates "processing".
 //   - done:{key}  — SET with doneTTL, value = "1". Indicates "completed".
 //
