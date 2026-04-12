@@ -510,6 +510,18 @@ func (v *Validator) validateFMT13() []ValidationResult {
 				Message:   fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
 			})
 		}
+
+		// Advisory: noContent=false without schemaRefs.response is likely incomplete.
+		if !httpMeta.NoContent && c.SchemaRefs.Response == "" {
+			results = append(results, ValidationResult{
+				Code:      "FMT-13",
+				Severity:  SeverityWarning,
+				IssueType: IssueRequired,
+				File:      contractFile(c.ID),
+				Field:     "schemaRefs.response",
+				Message:   fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
+			})
+		}
 	}
 	return results
 }

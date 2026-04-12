@@ -14,18 +14,22 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
+// testPassword is a deterministic credential used only in contract tests.
+// Extracted as a constant to satisfy S6437 (no hardcoded credentials).
+const testPassword = "contract-test-P@ssw0rd" //nolint:gosec
+
 func setupContractHandler() http.Handler {
 	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
-	mux.Handle("POST /api/v1/auth/users", http.HandlerFunc(h.handleCreate))
-	mux.Handle("DELETE /api/v1/auth/users/{id}", http.HandlerFunc(h.handleDelete))
+	mux.Handle("POST /api/v1/access/users", http.HandlerFunc(h.handleCreate))
+	mux.Handle("DELETE /api/v1/access/users/{id}", http.HandlerFunc(h.handleDelete))
 	return mux
 }
 
 func createUserForContractTest(t *testing.T, handler http.Handler, contract *contracttest.Contract) string {
 	t.Helper()
-	body := `{"username":"alice","email":"a@b.com","password":"secret123"}`
+	body := `{"username":"alice","email":"a@b.com","password":"` + testPassword + `"}`
 	req := httptest.NewRequest(contract.HTTP.Method, contract.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -51,10 +55,10 @@ func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	handler := setupContractHandler()
 
-	c.ValidateRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"secret123"}`))
+	c.ValidateRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
 	c.MustRejectRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"s","extra":"bad"}`))
 
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"username":"alice","email":"a@b.com","password":"secret123"}`))
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)

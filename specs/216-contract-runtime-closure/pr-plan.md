@@ -3,7 +3,7 @@
 ## Branch and Worktree
 
 - Implementation branch: `fix/216-contract-runtime-closure`
-- Implementation worktree: `/Users/shengming/Documents/code/gocell/worktrees/216-contract-runtime-closure`
+- Implementation worktree: `worktrees/216-contract-runtime-closure`
 
 ## PR Strategy
 

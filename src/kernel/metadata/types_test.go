@@ -291,14 +291,14 @@ func TestActorMetaRoundTrip(t *testing.T) {
 
 func TestEndpointsMetaOmitEmpty(t *testing.T) {
 	tests := []struct {
-		name     string
-		meta     EndpointsMeta
-		present  []string
-		absent   []string
+		name    string
+		meta    EndpointsMeta
+		present []string
+		absent  []string
 	}{
 		{
-			name: "http only",
-			meta: EndpointsMeta{Server: "cell-a", Clients: []string{"cell-b"}},
+			name:    "http only",
+			meta:    EndpointsMeta{Server: "cell-a", Clients: []string{"cell-b"}},
 			present: []string{"server", "clients"},
 			absent:  []string{"http", "publisher", "subscribers", "handler", "invokers", "provider", "readers"},
 		},
@@ -318,20 +318,20 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 			absent:  []string{"publisher", "subscribers", "handler", "invokers", "provider", "readers"},
 		},
 		{
-			name: "event only",
-			meta: EndpointsMeta{Publisher: "cell-a", Subscribers: []string{"cell-b"}},
+			name:    "event only",
+			meta:    EndpointsMeta{Publisher: "cell-a", Subscribers: []string{"cell-b"}},
 			present: []string{"publisher", "subscribers"},
 			absent:  []string{"server", "clients", "http", "handler", "invokers", "provider", "readers"},
 		},
 		{
-			name: "command only",
-			meta: EndpointsMeta{Handler: "cell-a", Invokers: []string{"cell-b"}},
+			name:    "command only",
+			meta:    EndpointsMeta{Handler: "cell-a", Invokers: []string{"cell-b"}},
 			present: []string{"handler", "invokers"},
 			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "provider", "readers"},
 		},
 		{
-			name: "projection only",
-			meta: EndpointsMeta{Provider: "cell-a", Readers: []string{"cell-b"}},
+			name:    "projection only",
+			meta:    EndpointsMeta{Provider: "cell-a", Readers: []string{"cell-b"}},
 			present: []string{"provider", "readers"},
 			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "handler", "invokers"},
 		},

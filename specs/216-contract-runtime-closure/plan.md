@@ -30,8 +30,8 @@ Close the current contract/runtime mismatch by delivering one coherent batch tha
 
 ## Worktree
 
-- Root repo: `/Users/shengming/Documents/code/gocell`
-- Implementation worktree: `/Users/shengming/Documents/code/gocell/worktrees/216-contract-runtime-closure`
+- Root repo: `<repo-root>`
+- Implementation worktree: `worktrees/216-contract-runtime-closure`
 - Branch: `fix/216-contract-runtime-closure`
 - Base: `origin/develop`
 

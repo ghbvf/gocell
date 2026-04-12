@@ -34,11 +34,11 @@ func WithTxManager(tx persistence.TxRunner) Option {
 
 // Service handles order creation business logic.
 type Service struct {
-	repo      domain.OrderRepository
-	publisher outbox.Publisher
+	repo         domain.OrderRepository
+	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
-	logger    *slog.Logger
+	logger       *slog.Logger
 }
 
 // NewService creates an order-create Service.

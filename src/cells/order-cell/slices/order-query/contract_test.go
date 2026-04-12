@@ -12,8 +12,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 func newContractQueryHandler(orders ...*domain.Order) http.Handler {

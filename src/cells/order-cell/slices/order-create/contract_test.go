@@ -1,7 +1,6 @@
 package ordercreate
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -10,34 +9,13 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-type contractWriter struct {
-	entries []outbox.Entry
-}
-
-func (w *contractWriter) Write(_ context.Context, entry outbox.Entry) error {
-	w.entries = append(w.entries, entry)
-	return nil
-}
-
-var _ outbox.Writer = (*contractWriter)(nil)
-
-type contractTxRunner struct{}
-
-func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-
-var _ persistence.TxRunner = contractTxRunner{}
-
-func newContractHandler() (http.Handler, *contractWriter) {
+func newContractHandler() (http.Handler, *recordingWriter) {
 	repo := mem.NewOrderRepository()
-	writer := &contractWriter{}
-	svc := NewService(repo, stubPublisher{}, slog.Default(), WithOutboxWriter(writer), WithTxManager(contractTxRunner{}))
+	writer := &recordingWriter{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(), WithOutboxWriter(writer), WithTxManager(&stubTxRunner{}))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
 	return mux, writer

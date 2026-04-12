@@ -39,3 +39,18 @@
 
 - Final focused re-review result: `no blocking issues`
 - Residual observations were recorded in `tech-debt.md`
+
+## Round 3 — Cross-cutting PR review fixes
+
+### Findings (from comprehensive PR #106 review)
+
+| # | Severity | Issue | Fix |
+|---|----------|-------|-----|
+| 1 | P1 | `evt-` prefix contradicts headers.schema.json "UUID" description | Updated all 10 event `headers.schema.json` descriptions to "Prefixed event identifier (evt-{uuid})" |
+| 2 | P1 | access-core contract test routes `/api/v1/auth/` don't match production `/api/v1/access/` | Updated contract YAML paths and contract_test.go routes |
+| 3 | P2 | `outbox.Entry.Validate()` doesn't check empty ID | Added `ID != ""` check as first validation |
+| 4 | P2 | FMT-13 missing reverse constraint: noContent=false without response schema | Added SeverityWarning for the gap |
+| 5 | P2 | contractWriter/contractTxRunner duplicate mocks in order-create tests | Consolidated to use recordingWriter/stubTxRunner from service_test.go |
+| 6 | P3 | Hardcoded `secret123` in identitymanage/contract_test.go | Extracted to testPassword constant |
+| 7 | P3 | Specs contain absolute local paths | Replaced with relative/generic paths |
+| 8 | — | Whitespace/alignment fixes across kernel types and governance | gofmt alignment cleanup |

@@ -432,31 +432,41 @@ func TestEntry_Validate(t *testing.T) {
 		name    string
 		entry   Entry
 		wantErr bool
+		errMsg  string
 	}{
 		{
 			name:    "valid with Topic",
-			entry:   Entry{Topic: "t", Payload: []byte("{}")},
+			entry:   Entry{ID: "evt-1", Topic: "t", Payload: []byte("{}")},
 			wantErr: false,
 		},
 		{
 			name:    "valid with EventType fallback",
-			entry:   Entry{EventType: "e", Payload: []byte("{}")},
+			entry:   Entry{ID: "evt-2", EventType: "e", Payload: []byte("{}")},
 			wantErr: false,
 		},
 		{
-			name:    "missing topic and EventType",
-			entry:   Entry{Payload: []byte("{}")},
+			name:    "missing ID",
+			entry:   Entry{Topic: "t", Payload: []byte("{}")},
 			wantErr: true,
+			errMsg:  "missing ID",
+		},
+		{
+			name:    "missing topic and EventType",
+			entry:   Entry{ID: "evt-3", Payload: []byte("{}")},
+			wantErr: true,
+			errMsg:  "missing topic",
 		},
 		{
 			name:    "missing payload",
-			entry:   Entry{Topic: "t"},
+			entry:   Entry{ID: "evt-4", Topic: "t"},
 			wantErr: true,
+			errMsg:  "missing payload",
 		},
 		{
 			name:    "completely empty",
 			entry:   Entry{},
 			wantErr: true,
+			errMsg:  "missing ID",
 		},
 	}
 	for _, tt := range tests {
@@ -465,6 +475,9 @@ func TestEntry_Validate(t *testing.T) {
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+				if tt.errMsg != "" {
+					assert.Contains(t, err.Error(), tt.errMsg)
+				}
 			} else {
 				assert.NoError(t, err)
 			}

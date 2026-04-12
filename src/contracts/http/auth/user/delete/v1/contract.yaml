@@ -9,7 +9,7 @@ endpoints:
     - edge-bff
   http:
     method: DELETE
-    path: /api/v1/auth/users/{id}
+    path: /api/v1/access/users/{id}
     successStatus: 204
     noContent: true
 schemaRefs:

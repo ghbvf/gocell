@@ -374,9 +374,9 @@ verify:
     - smoke.access-core.startup
 `)},
 		// These should be ignored:
-		"README.md":                             &fstest.MapFile{Data: []byte(`# readme`)},
-		"cells/access-core/main.go":             &fstest.MapFile{Data: []byte(`package main`)},
-		"journeys/status-board.yaml.bak":        &fstest.MapFile{Data: []byte(`backup`)},
+		"README.md":                                &fstest.MapFile{Data: []byte(`# readme`)},
+		"cells/access-core/main.go":                &fstest.MapFile{Data: []byte(`package main`)},
+		"journeys/status-board.yaml.bak":           &fstest.MapFile{Data: []byte(`backup`)},
 		"contracts/http/auth/login/v1/schema.json": &fstest.MapFile{Data: []byte(`{}`)},
 	}
 

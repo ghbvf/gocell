@@ -61,12 +61,12 @@ func WithLogger(l *slog.Logger) Option {
 // OrderCell is the order-cell Cell implementation.
 type OrderCell struct {
 	*cell.BaseCell
-	repo        domain.OrderRepository
-	publisher   outbox.Publisher
+	repo         domain.OrderRepository
+	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
-	cursorCodec *query.CursorCodec
-	logger      *slog.Logger
+	cursorCodec  *query.CursorCodec
+	logger       *slog.Logger
 
 	createHandler *ordercreate.Handler
 	queryHandler  *orderquery.Handler

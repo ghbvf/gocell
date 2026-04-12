@@ -3,7 +3,7 @@
 ## Working Mode
 
 - Follow TDD: write the failing test first, verify it fails for the right reason, then implement the smallest change that makes it pass.
-- Use the implementation worktree at `/Users/shengming/Documents/code/gocell/worktrees/216-contract-runtime-closure`.
+- Use the implementation worktree at `worktrees/216-contract-runtime-closure`.
 - Keep changes inside the defined scope for this batch.
 
 ## Task List

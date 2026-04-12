@@ -1658,7 +1658,6 @@ func TestADV01(t *testing.T) {
 	}
 }
 
-
 // --- helper function tests ---
 
 func TestContractProviderAndConsumers(t *testing.T) {
@@ -2714,15 +2713,17 @@ func TestFMT12(t *testing.T) {
 
 func TestFMT13(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(*metadata.ProjectMeta)
-		wantCount int
-		wantField string
+		name         string
+		setup        func(*metadata.ProjectMeta)
+		wantErrors   int
+		wantWarnings int
+		wantField    string
 	}{
 		{
-			name:      "legacy http contract without transport metadata is allowed",
-			setup:     func(_ *metadata.ProjectMeta) {},
-			wantCount: 0,
+			name:         "legacy http contract without transport metadata is allowed",
+			setup:        func(_ *metadata.ProjectMeta) {},
+			wantErrors:   0,
+			wantWarnings: 0,
 		},
 		{
 			name: "complete migrated http contract is allowed",
@@ -2735,7 +2736,8 @@ func TestFMT13(t *testing.T) {
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
-			wantCount: 0,
+			wantErrors:   0,
+			wantWarnings: 0,
 		},
 		{
 			name: "migrated http contract requires all transport fields",
@@ -2745,7 +2747,8 @@ func TestFMT13(t *testing.T) {
 					NoContent: false,
 				}
 			},
-			wantCount: 2,
+			wantErrors:   2,
+			wantWarnings: 1, // noContent=false without response
 		},
 		{
 			name: "transport metadata is only valid on http contracts",
@@ -2757,8 +2760,8 @@ func TestFMT13(t *testing.T) {
 					NoContent:     false,
 				}
 			},
-			wantCount: 1,
-			wantField: "endpoints.http",
+			wantErrors: 1,
+			wantField:  "endpoints.http",
 		},
 		{
 			name: "noContent forbids a response schema",
@@ -2771,8 +2774,8 @@ func TestFMT13(t *testing.T) {
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
-			wantCount: 1,
-			wantField: "schemaRefs.response",
+			wantErrors: 1,
+			wantField:  "schemaRefs.response",
 		},
 		{
 			name: "noContent requires 204",
@@ -2785,8 +2788,8 @@ func TestFMT13(t *testing.T) {
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
 			},
-			wantCount: 1,
-			wantField: "endpoints.http.noContent",
+			wantErrors: 1,
+			wantField:  "endpoints.http.noContent",
 		},
 		{
 			name: "204 requires noContent true",
@@ -2799,8 +2802,24 @@ func TestFMT13(t *testing.T) {
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
 			},
-			wantCount: 1,
-			wantField: "endpoints.http.noContent",
+			wantErrors:   1,
+			wantWarnings: 1, // noContent=false without response
+			wantField:    "endpoints.http.noContent",
+		},
+		{
+			name: "noContent false without response schema warns",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users",
+					SuccessStatus: 200,
+					NoContent:     false,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
+			},
+			wantErrors:   0,
+			wantWarnings: 1,
+			wantField:    "schemaRefs.response",
 		},
 	}
 	for _, tt := range tests {
@@ -2809,10 +2828,10 @@ func TestFMT13(t *testing.T) {
 			tt.setup(pm)
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateFMT13(), "FMT-13")
-			assert.Len(t, got, tt.wantCount)
-			for _, r := range got {
-				assert.Equal(t, SeverityError, r.Severity)
-			}
+			errors := FilterErrors(got)
+			warnings := FilterWarnings(got)
+			assert.Len(t, errors, tt.wantErrors)
+			assert.Len(t, warnings, tt.wantWarnings)
 			if tt.wantField != "" && len(got) > 0 {
 				assert.Equal(t, tt.wantField, got[0].Field)
 			}
@@ -3175,5 +3194,3 @@ func TestREF16(t *testing.T) {
 		assert.Len(t, got, 2) // both assemblies missing boundary.yaml
 	})
 }
-
-
