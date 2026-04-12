@@ -79,11 +79,12 @@ Update `docs/backlog.md` so the runtime race row reflects what this branch actua
 ## Validation Plan
 
 1. `go test ./runtime/bootstrap ./runtime/eventbus ./runtime/worker`
-2. `go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap`
-3. `go build ./...`
+2. `cd src && go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap`
+3. `cd src && go build ./...`
 
 ## Risk Notes
 
 - The bootstrap change touches shutdown ordering; regressions would show up as hung shutdown, post-stop reloads, or dropped in-flight reloads.
+- Shutdown drain is bounded by `shutdownTimeout`; if a reload callback never leaves, `Run` returns the timeout error and later teardown steps are not guaranteed.
 - The eventbus test must avoid flaky timing and only assert invariants that the lock ordering guarantees.
 - The worker item should not be "fixed again" unless a new failing case is proven; otherwise we risk reopening already-correct code.
