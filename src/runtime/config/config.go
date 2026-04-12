@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,15 @@ type Config interface {
 // The concrete *config returned by Load implements this; NewFromMap does not.
 type Reloader interface {
 	Reload(yamlPath, envPrefix string) error
+}
+
+// Snapshotter is an optional interface for configs that support atomic
+// point-in-time snapshots. The concrete *config returned by Load implements
+// this. Snapshot holds the read lock for the entire copy, ensuring the
+// returned map is a consistent view — unlike iterating Keys()+Get() which
+// acquires/releases the lock per call.
+type Snapshotter interface {
+	Snapshot() map[string]any
 }
 
 // config is the default in-memory implementation of Config.
@@ -102,6 +112,18 @@ func (c *config) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Snapshot returns an atomic point-in-time copy of the flat config data.
+// The read lock is held for the entire copy operation, ensuring consistency.
+func (c *config) Snapshot() map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snap := make(map[string]any, len(c.data))
+	for k, v := range c.data {
+		snap[k] = v
+	}
+	return snap
 }
 
 // Reload re-reads the YAML file and overlays environment variables.
@@ -189,7 +211,7 @@ func Diff(oldData, newData map[string]any) (added, updated, removed []string) {
 		ov, exists := oldData[k]
 		if !exists {
 			added = append(added, k)
-		} else if fmt.Sprintf("%v", ov) != fmt.Sprintf("%v", nv) {
+		} else if !reflect.DeepEqual(ov, nv) {
 			updated = append(updated, k)
 		}
 	}

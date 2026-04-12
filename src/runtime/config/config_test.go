@@ -262,15 +262,15 @@ func TestDiff(t *testing.T) {
 			removed: []string{"a"},
 		},
 		{
-			name:    "same string repr not detected as update",
+			name:    "type change int to string detected as update",
 			old:     map[string]any{"port": 8080},
 			new:     map[string]any{"port": "8080"},
 			added:   nil,
-			updated: nil, // %v renders both as "8080"
+			updated: []string{"port"}, // reflect.DeepEqual distinguishes int from string
 			removed: nil,
 		},
 		{
-			name:    "actual value change across types",
+			name:    "value change across types",
 			old:     map[string]any{"port": 8080},
 			new:     map[string]any{"port": "9090"},
 			added:   nil,
@@ -287,6 +287,22 @@ func TestDiff(t *testing.T) {
 			assert.Equal(t, tt.removed, removed, "removed")
 		})
 	}
+}
+
+func TestConfig_Snapshot(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("a: 1\nb: two\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	snap := cfg.(Snapshotter).Snapshot()
+	assert.Equal(t, map[string]any{"a": 1, "b": "two"}, snap)
+
+	// Mutations to the snapshot should not affect the config.
+	snap["a"] = 999
+	assert.Equal(t, 1, cfg.Get("a"))
 }
 
 // TestConfig_ConcurrentGetAndReload verifies that concurrent Get() and Reload()

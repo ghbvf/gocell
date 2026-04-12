@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -723,7 +722,6 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-reload-noop"})
-	var callCount atomic.Int32
 	rc := newReloaderCell("noop-cell")
 	require.NoError(t, asm.Register(rc))
 
@@ -757,7 +755,6 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 
 	// No changes should mean no callback.
 	assert.Equal(t, 0, rc.eventCount(), "no-change reload should not trigger callback")
-	_ = callCount // suppress unused warning
 
 	cancel()
 	select {

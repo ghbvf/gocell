@@ -299,6 +299,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 					defer func() {
 						if r := recover(); r != nil {
 							slog.Error("bootstrap: config reload callback panic",
+								slog.String("cell", id),
+								slog.String("type", fmt.Sprintf("%T", r)))
+							slog.Debug("bootstrap: config reload callback panic detail",
 								slog.String("cell", id), slog.Any("panic", r))
 						}
 					}()
@@ -463,8 +466,14 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// snapshotConfig builds a flat key-value map from the Config interface.
+// snapshotConfig builds an atomic point-in-time copy of the config.
+// If the config implements Snapshotter (the concrete *config from Load does),
+// the snapshot is taken under a single read lock for consistency. Otherwise,
+// it falls back to iterating Keys()+Get() which is non-atomic but functional.
 func snapshotConfig(cfg config.Config) map[string]any {
+	if s, ok := cfg.(config.Snapshotter); ok {
+		return s.Snapshot()
+	}
 	snap := make(map[string]any)
 	for _, k := range cfg.Keys() {
 		snap[k] = cfg.Get(k)
