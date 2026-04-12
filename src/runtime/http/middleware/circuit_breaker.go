@@ -1,14 +1,13 @@
 package middleware
 
 import (
-	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // CircuitBreakerRetryAfter is an optional interface that CircuitBreakerPolicy
@@ -71,11 +70,19 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 				r = r.WithContext(ctx)
 			}
 
-			// Defer done callback so it fires even when the handler panics.
-			// Recovery middleware (further down the chain) catches the panic
-			// and sets status 500, but if there is no Recovery, we still need
-			// the breaker to record the failure before the panic propagates.
+			// Use recover to guarantee done(false) on panic, then re-panic.
+			// Without this, a standalone breaker (no Recovery middleware) would
+			// see the default status 200 and record success for a crashing handler.
+			// With Recovery in the chain, Recovery catches first and writes 500,
+			// so recover() here returns nil and we fall through to status-based logic.
+			//
+			// ref: sony/gobreaker — Execute treats panic as failure
+			// ref: go-kit/kit circuitbreaker — panic propagates after failure recording
 			defer func() {
+				if p := recover(); p != nil {
+					done(false)
+					panic(p)
+				}
 				done(state.Status() < 500)
 			}()
 
@@ -85,15 +92,15 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 }
 
 // writeCircuitOpenError writes a 503 response with the ERR_CIRCUIT_OPEN code.
-// This bypasses httputil.WriteError because that function masks all 5xx
-// messages to "internal server error". For a circuit breaker, "service
-// unavailable" is the correct client-facing message — it indicates a
-// deliberate protective action, not a bug.
+// Uses httputil.WritePublicError so the message "service unavailable" is
+// preserved (not masked to "internal server error"), while inheriting the
+// canonical error envelope format.
 //
 // If the policy implements CircuitBreakerRetryAfter, the Retry-After header
 // is set per RFC 7231 Section 7.1.3.
 func writeCircuitOpenError(w http.ResponseWriter, r *http.Request, cb CircuitBreakerPolicy) {
-	// Set Retry-After if the policy provides it.
+	// Set Retry-After if the policy provides it. Must be set before
+	// WritePublicError calls w.WriteHeader.
 	if ra, ok := cb.(CircuitBreakerRetryAfter); ok {
 		if d := ra.RetryAfter(); d > 0 {
 			secs := int(math.Ceil(d.Seconds()))
@@ -101,16 +108,6 @@ func writeCircuitOpenError(w http.ResponseWriter, r *http.Request, cb CircuitBre
 		}
 	}
 
-	body := map[string]any{
-		"code":    string(errcode.ErrCircuitOpen),
-		"message": "service unavailable",
-		"details": map[string]any{},
-	}
-	if rid, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
-		body["request_id"] = rid
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": body})
+	httputil.WritePublicError(r.Context(), w, http.StatusServiceUnavailable,
+		string(errcode.ErrCircuitOpen), "service unavailable")
 }

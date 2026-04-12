@@ -104,22 +104,36 @@ func WithTracer(t tracing.Tracer) Option {
 
 // WithRateLimiter enables per-IP rate limiting for HTTP requests. The limiter
 // is forwarded to the router's middleware chain via router.WithRateLimiter.
+// If the limiter implements io.Closer (e.g. adapters/ratelimit.Limiter),
+// Bootstrap registers it for teardown on shutdown and startup rollback.
+//
+// Note: the rate limiter uses the client IP from RealIP middleware as the
+// bucket key. Ensure WithTrustedProxies is correctly configured; an overly
+// permissive trust list allows X-Forwarded-For spoofing, which bypasses
+// rate limiting.
 //
 // ref: go-zero — rate limiting configuration at app level
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
+		if cl, ok := rl.(io.Closer); ok {
+			b.closers = append(b.closers, cl)
+		}
 	}
 }
 
 // WithCircuitBreaker enables circuit breaker protection for HTTP requests.
 // The breaker is forwarded to the router's middleware chain via
-// router.WithCircuitBreaker.
+// router.WithCircuitBreaker. If the breaker implements io.Closer,
+// Bootstrap registers it for teardown on shutdown and startup rollback.
 //
 // ref: go-zero — resilience middleware configuration at app level
 func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
+		if cl, ok := cb.(io.Closer); ok {
+			b.closers = append(b.closers, cl)
+		}
 	}
 }
 
@@ -174,6 +188,7 @@ type Bootstrap struct {
 	shutdownTimeout time.Duration
 	listener        net.Listener
 	healthCheckers  []namedChecker
+	closers         []io.Closer // middleware dependencies that need shutdown
 }
 
 // New creates a Bootstrap with the given options.
@@ -247,6 +262,16 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				return cfgWatcher.Close()
 			})
 		}
+	}
+
+	// Step 1.5b: Register closable middleware dependencies for teardown.
+	// Middleware like ratelimit.Limiter owns background goroutines; if injected
+	// via bootstrap convenience options, bootstrap takes ownership of Close.
+	for _, cl := range b.closers {
+		cl := cl // capture loop variable
+		teardowns = append(teardowns, func(_ context.Context) error {
+			return cl.Close()
+		})
 	}
 
 	// Step 2: Initialise publisher and subscriber.

@@ -113,7 +113,16 @@ func WithTrustedProxies(proxies []string) Option {
 }
 
 // Router wraps chi.Mux and implements kernel/cell.RouteMux.
+//
+// Internally it uses two chi.Mux instances:
+//   - outerMux: shared observability + Recovery + SecurityHeaders + infra endpoints
+//   - mux: business routes with optional RL/CB + BodyLimit
+//
+// outerMux delegates unmatched paths to mux via Mount("/", mux). This ensures
+// infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
+// routes get the full protection chain.
 type Router struct {
+	outerMux         *chi.Mux
 	mux              *chi.Mux
 	healthHandler    *health.Handler
 	metricsCollector metrics.Collector
@@ -130,15 +139,17 @@ type Router struct {
 // Use NewE for an error-returning variant suitable for managed startup
 // sequences like Bootstrap.Run where rollback must be possible.
 //
-// Default middleware chain (applied in order):
+// Default middleware chain for business routes (applied in order):
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [RateLimit] → [CircuitBreaker] → [Metrics] → Recovery → SecurityHeaders → BodyLimit
+//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → [RateLimit] → [CircuitBreaker] → Recovery → SecurityHeaders → BodyLimit
 //
-// Infrastructure endpoints (/healthz, /readyz, /metrics) are registered after
-// the default middleware chain, so they are subject to the same observability
-// pipeline (tracing, access logging, metrics). This is intentional — probe
-// traffic is observable by default. To exclude probes from tracing, callers
-// can mount them on a separate chi.Mux without the default chain.
+// Infrastructure endpoints (/healthz, /readyz, /metrics) are registered in a
+// separate group that shares the observability stack (RequestID through Metrics)
+// but bypasses RateLimit and CircuitBreaker. This prevents overload protection
+// from short-circuiting health probes and metric scrapes.
+//
+// ref: go-zero rest/engine.go — management endpoints on separate handler chain
+// ref: Kratos transport/http — middleware split between server and business
 func New(opts ...Option) *Router {
 	r, err := NewE(opts...)
 	if err != nil {
@@ -156,6 +167,7 @@ func New(opts ...Option) *Router {
 // ref: uber-go/fx — startup failures return error, trigger rollback
 func NewE(opts ...Option) (*Router, error) {
 	r := &Router{
+		outerMux:  chi.NewRouter(),
 		mux:       chi.NewRouter(),
 		bodyLimit: middleware.DefaultBodyLimit,
 	}
@@ -178,64 +190,62 @@ func NewE(opts ...Option) (*Router, error) {
 		realIPMW = middleware.RealIP(nil)
 	}
 
-	// Default middleware chain — Recorder before AccessLog/Metrics,
-	// Recovery after them so panic-recovered 500s are observable.
-	r.mux.Use(
+	// --- Phase 1: outerMux — shared observability + infra ---
+	// All requests pass through: RequestID → RealIP → Recorder → [Tracing]
+	// → AccessLog → [Metrics] → Recovery → SecurityHeaders.
+	// Metrics is placed before RL/CB so 429/503 short-circuit responses are
+	// counted. Recovery + SecurityHeaders apply to all paths.
+	r.outerMux.Use(
 		middleware.RequestID,
 		realIPMW,
 		middleware.Recorder,
 	)
-
-	// Tracing (if configured) — after Recorder so it reuses RecorderState,
-	// before AccessLog so trace_id is available in log output.
 	if r.tracer != nil {
-		r.mux.Use(middleware.Tracing(r.tracer))
+		r.outerMux.Use(middleware.Tracing(r.tracer))
 	}
-
-	r.mux.Use(middleware.AccessLog)
-
-	// Rate limiter (if configured) — after AccessLog so rejected requests
-	// are logged, after RealIP so the limiter sees the real client IP.
-	if r.rateLimiter != nil {
-		r.mux.Use(middleware.RateLimit(r.rateLimiter))
-	}
-
-	// Circuit breaker (if configured) — after RateLimit (rate-limited
-	// requests don't count toward breaker failures), before Recovery.
-	if r.circuitBreaker != nil {
-		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
-	}
-
-	// Metrics (if configured) — must be before Recovery so panic
-	// requests are recorded as status 500.
+	r.outerMux.Use(middleware.AccessLog)
 	if r.metricsCollector != nil {
-		r.mux.Use(middleware.Metrics(r.metricsCollector))
+		r.outerMux.Use(middleware.Metrics(r.metricsCollector))
 	}
-
-	r.mux.Use(
+	r.outerMux.Use(
 		middleware.Recovery,
 		middleware.SecurityHeaders,
-		middleware.BodyLimit(r.bodyLimit),
 	)
 
-	// Auto-register infrastructure endpoints.
+	// Infrastructure endpoints: registered on outerMux before business mount.
+	// They get shared observability + Recovery + SecurityHeaders but NOT
+	// RateLimit or CircuitBreaker, so probes and scrapes work during overload.
+	//
+	// ref: go-zero rest/engine.go — management endpoints on separate chain
 	if r.healthHandler != nil {
-		r.mux.Get("/healthz", r.healthHandler.LivezHandler())
-		r.mux.Get("/readyz", r.healthHandler.ReadyzHandler())
+		r.outerMux.Get("/healthz", r.healthHandler.LivezHandler())
+		r.outerMux.Get("/readyz", r.healthHandler.ReadyzHandler())
 	}
-	// Auto-register /metrics: explicit handler takes precedence, otherwise
-	// check if the collector itself can serve metrics (e.g. InMemoryCollector,
-	// Prometheus Collector). This preserves backward compatibility — callers
-	// that only pass WithMetricsCollector still get /metrics automatically.
 	switch {
 	case r.metricsHandler != nil:
-		r.mux.Handle("/metrics", r.metricsHandler)
+		r.outerMux.Handle("/metrics", r.metricsHandler)
 	case r.metricsCollector != nil:
 		type handlerProvider interface{ Handler() http.Handler }
 		if hp, ok := r.metricsCollector.(handlerProvider); ok {
-			r.mux.Handle("/metrics", hp.Handler())
+			r.outerMux.Handle("/metrics", hp.Handler())
 		}
 	}
+
+	// --- Phase 2: mux — business routes with RL/CB ---
+	// Cells register routes on mux via Handle/Route/Mount/Group/With.
+	// Business chain: [RateLimit] → [CircuitBreaker] → BodyLimit → handler.
+	// Recovery + SecurityHeaders already applied by outerMux.
+	if r.rateLimiter != nil {
+		r.mux.Use(middleware.RateLimit(r.rateLimiter))
+	}
+	if r.circuitBreaker != nil {
+		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
+	}
+	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+
+	// Mount business mux on outerMux. Paths not matched by infra routes
+	// (/healthz, /readyz, /metrics) fall through to business routes.
+	r.outerMux.Mount("/", r.mux)
 
 	return r, nil
 }
@@ -273,14 +283,15 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 	return &chiRouterAdapter{r.mux.With(mw...)}
 }
 
-// ServeHTTP delegates to the underlying chi.Mux.
+// ServeHTTP delegates to the outer mux (shared observability + infra routes +
+// business routes via mount).
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	r.mux.ServeHTTP(w, req)
+	r.outerMux.ServeHTTP(w, req)
 }
 
-// Handler returns the underlying http.Handler.
+// Handler returns the outer http.Handler (entry point for the full chain).
 func (r *Router) Handler() http.Handler {
-	return r.mux
+	return r.outerMux
 }
 
 // chiRouterAdapter wraps chi.Router to implement cell.RouteMux.

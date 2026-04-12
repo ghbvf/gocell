@@ -23,6 +23,32 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// WritePublicError writes a structured error response with the given message
+// verbatim, even for 5xx status codes. Use this for framework-level errors
+// where the message is deliberately chosen and safe to expose (e.g. "service
+// unavailable" for circuit breaker 503, "gateway timeout" for proxy 504).
+//
+// Most callers should use WriteError instead, which masks 5xx messages to
+// prevent accidental information leakage.
+func WritePublicError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
+	errBody := map[string]any{
+		"code":    code,
+		"message": message,
+		"details": map[string]any{},
+	}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		errBody["request_id"] = reqID
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"error": errBody,
+	}); err != nil {
+		slog.Error("httputil: encode error response", slog.Any("error", err))
+	}
+}
+
 // WriteError writes a structured error response in the canonical format:
 //
 //	{"error": {"code": "ERR_*", "message": "...", "details": {}, "request_id": "..."}}

@@ -46,8 +46,8 @@ func TestRouter_Handler(t *testing.T) {
 	r := New()
 	h := r.Handler()
 	assert.NotNil(t, h)
-	// Handler should be the underlying chi.Mux.
-	assert.Equal(t, r.mux, h)
+	// Handler should be the outer mux (entry point for the full chain).
+	assert.Equal(t, r.outerMux, h)
 }
 
 func TestRouteGroup_Route(t *testing.T) {

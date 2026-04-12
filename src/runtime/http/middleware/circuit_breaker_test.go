@@ -100,10 +100,8 @@ func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 	}, "panic must propagate")
 
 	require.NotNil(t, cb.doneSuccess, "done callback must be invoked even when handler panics")
-	// Default RecorderState status is 200 (no WriteHeader called before panic).
-	// In the real chain, Recovery sets 500 before this point.
-	assert.True(t, *cb.doneSuccess,
-		"without Recovery, panic-before-WriteHeader leaves status at default 200")
+	assert.False(t, *cb.doneSuccess,
+		"panic must always be recorded as failure, regardless of status code")
 }
 
 func TestCircuitBreaker_HandlerError5xx_ReportsFalse(t *testing.T) {

@@ -527,3 +527,73 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
 }
+
+// --- Infra endpoints bypass RL/CB ---
+
+func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	hh := health.New(asm)
+	limiter := &routerTestLimiter{allow: false} // reject ALL business traffic
+	r := New(WithHealthHandler(hh), WithRateLimiter(limiter))
+
+	// /healthz must bypass rate limiter and return 200.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"/healthz must be reachable even when rate limiter rejects all traffic")
+}
+
+func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	hh := health.New(asm)
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")} // reject ALL
+	r := New(WithHealthHandler(hh), WithCircuitBreaker(breaker))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"/readyz must be reachable even when circuit breaker is open")
+}
+
+func TestMetrics_Records429And503(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	limiter := &routerTestLimiter{allow: false}
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
+	r := New(
+		WithMetricsCollector(mc),
+		WithRateLimiter(limiter),
+		WithCircuitBreaker(breaker),
+	)
+	r.Handle("/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Rate-limited request → 429 must be recorded in metrics.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/biz", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	snap := mc.Snapshot()
+	found429 := false
+	for key, count := range snap.RequestCounts {
+		if strings.Contains(key, "429") && count > 0 {
+			found429 = true
+		}
+	}
+	assert.True(t, found429, "metrics must record 429 responses from rate limiter")
+}
