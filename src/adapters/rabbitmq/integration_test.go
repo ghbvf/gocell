@@ -119,7 +119,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "integration-test")
 	}()
 
 	// Wait until Subscribe has declared, bound, and started consuming from the queue.
@@ -218,7 +218,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			dlqReceived <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "integration-test-dlq")
 	}()
 
 	// Give DLQ subscriber time to bind.
@@ -337,7 +337,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 				Disposition: outbox.DispositionReject,
 				Err:         assert.AnError,
 			}
-		})
+		}, "integration-test-dlx")
 	}()
 
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
