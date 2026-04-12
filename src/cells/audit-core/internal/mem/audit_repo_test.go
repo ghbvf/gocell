@@ -3,6 +3,8 @@ package mem
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -331,6 +333,42 @@ func TestAuditRepository_Query_UnknownSortField(t *testing.T) {
 	assert.Len(t, result, 2)
 }
 
+func TestAuditRepository_Query_Cursor_SubsecondPrecision(t *testing.T) {
+	repo := NewAuditRepository()
+	ctx := context.Background()
+
+	// Two entries at the same second but different nanoseconds.
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
+		ID: "ae-01", EventType: "login", ActorID: "usr-1",
+		Timestamp: base.Add(100 * time.Nanosecond),
+	}))
+	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
+		ID: "ae-02", EventType: "login", ActorID: "usr-1",
+		Timestamp: base.Add(200 * time.Nanosecond),
+	}))
+	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
+		ID: "ae-03", EventType: "login", ActorID: "usr-1",
+		Timestamp: base.Add(300 * time.Nanosecond),
+	}))
+
+	// Sort DESC by timestamp, cursor at ae-02.
+	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTS, "ae-02"},
+		Sort: []query.SortColumn{
+			{Name: "timestamp", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	result, err := repo.Query(ctx, ports.AuditFilters{}, params)
+	require.NoError(t, err)
+	// After ae-02 in DESC order: ae-01 (100ns)
+	require.Len(t, result, 1)
+	assert.Equal(t, "ae-01", result[0].ID)
+}
+
 func TestAuditRepository_Query_SortByID(t *testing.T) {
 	repo := NewAuditRepository()
 	ctx := context.Background()
@@ -354,4 +392,68 @@ func TestAuditRepository_Query_SortByID(t *testing.T) {
 	require.Len(t, result, 2)
 	assert.Equal(t, "ae-a", result[0].ID)
 	assert.Equal(t, "ae-z", result[1].ID)
+}
+
+// TestAuditRepository_ConcurrentAppendAndQuery verifies that concurrent
+// Append and Query calls do not race. Run with -race to verify.
+func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
+	repo := NewAuditRepository()
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				_ = repo.Append(ctx, &domain.AuditEntry{
+					ID:        fmt.Sprintf("ae-w%d-i%d", id, i),
+					EventType: "login",
+					ActorID:   fmt.Sprintf("usr-%d", id),
+					Timestamp: base.Add(time.Duration(id*iterations+i) * time.Millisecond),
+				})
+			}
+		}(w)
+	}
+
+	var readErrors atomic.Int64
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort: []query.SortColumn{
+					{Name: "timestamp", Direction: query.SortDESC},
+					{Name: "id", Direction: query.SortASC},
+				},
+			}
+			for range iterations {
+				items, err := repo.Query(ctx, ports.AuditFilters{}, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: results must be DESC-sorted by timestamp.
+				for j := 1; j < len(items); j++ {
+					if items[j].Timestamp.After(items[j-1].Timestamp) {
+						t.Errorf("query results not DESC-sorted by timestamp")
+					}
+				}
+				_, _ = repo.GetRange(ctx, 0, 10)
+				_ = repo.Len()
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
+	assert.Equal(t, writers*iterations, repo.Len())
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

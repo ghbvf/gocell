@@ -1,6 +1,7 @@
 package auditappend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -87,6 +88,34 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 
 	assert.Equal(t, 5, svc.ChainLen())
 	assert.Equal(t, 5, repo.Len())
+}
+
+func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	eb := eventbus.New()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	svc := NewService(repo, testHMACKey, eb, logger)
+
+	entry := outbox.Entry{
+		ID:        "evt-bad-json",
+		EventType: "event.user.created.v1",
+		Payload:   []byte("{invalid json}"),
+	}
+
+	err := svc.HandleEvent(context.Background(), entry)
+	require.NoError(t, err, "invalid payload should not cause HandleEvent to fail")
+
+	// Verify audit entry was created with fallback actorID.
+	entries, getErr := repo.GetRange(context.Background(), 0, 1)
+	require.NoError(t, getErr)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "system", entries[0].ActorID, "should fallback to system actor")
+
+	// Verify warning was logged.
+	logOutput := logBuf.String()
+	assert.Contains(t, logOutput, "failed to extract actor from payload")
+	assert.Contains(t, logOutput, "evt-bad-json")
 }
 
 func mustJSON(v any) []byte {

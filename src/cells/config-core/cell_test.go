@@ -2,11 +2,14 @@ package configcore
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -177,4 +180,84 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
+}
+
+func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Seed enough config entries to produce a nextCursor.
+	for i := range 3 {
+		body := fmt.Sprintf(`{"key":"cfg-%d","value":"val-%d"}`, i, i)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
+	}
+
+	// Get config-read page with limit=1 to obtain a cursor.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var configPage struct {
+		NextCursor string `json:"nextCursor"`
+		HasMore    bool   `json:"hasMore"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&configPage))
+	require.True(t, configPage.HasMore, "need hasMore to get a cursor")
+	require.NotEmpty(t, configPage.NextCursor)
+
+	// Use config-read cursor on feature-flag list endpoint — must be rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"config-read cursor must be rejected by feature-flag endpoint")
+
+}
+
+func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	// Seed flags directly via repository (no HTTP create endpoint for flags).
+	for i := range 3 {
+		require.NoError(t, c.flagRepo.Create(ctx, &domain.FeatureFlag{
+			ID:      fmt.Sprintf("id-%d", i),
+			Key:     fmt.Sprintf("flag-%d", i),
+			Type:    domain.FlagBoolean,
+			Enabled: true,
+		}))
+	}
+
+	// Get flag page with limit=1 to obtain a cursor.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var flagPage struct {
+		NextCursor string `json:"nextCursor"`
+		HasMore    bool   `json:"hasMore"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&flagPage))
+	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
+
+	// Use flag cursor on config-read endpoint — must be rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"feature-flag cursor must be rejected by config-read endpoint")
 }

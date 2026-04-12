@@ -3,6 +3,8 @@ package mem
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -405,4 +407,91 @@ func TestOrderRepository_ListPaged_CursorStatusField(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	assert.Equal(t, "pending", orders[0].Status)
+}
+
+func TestOrderRepository_ListPaged_SubsecondPrecision(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base.Add(100 * time.Nanosecond)})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: base.Add(200 * time.Nanosecond)})
+	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "c", CreatedAt: base.Add(300 * time.Nanosecond)})
+
+	// Cursor at order 2 (200ns), ASC → should return order 3 only.
+	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTS, "2"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	assert.Equal(t, "3", orders[0].ID)
+}
+
+// TestOrderRepository_ConcurrentCreateAndList verifies that concurrent
+// Create and List calls do not race. Run with -race to verify.
+func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				_ = repo.Create(ctx, &domain.Order{
+					ID:        fmt.Sprintf("ord-w%d-i%d", id, i),
+					Item:      "item",
+					Status:    "pending",
+					CreatedAt: time.Now(),
+				})
+			}
+		}(w)
+	}
+
+	var readErrors atomic.Int64
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort: []query.SortColumn{
+					{Name: "created_at", Direction: query.SortDESC},
+					{Name: "id", Direction: query.SortASC},
+				},
+			}
+			for range iterations {
+				items, err := repo.List(ctx, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: no duplicate IDs in a page.
+				seen := make(map[string]bool, len(items))
+				for _, o := range items {
+					if seen[o.ID] {
+						t.Errorf("duplicate order ID in list results: %s", o.ID)
+					}
+					seen[o.ID] = true
+				}
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

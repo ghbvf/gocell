@@ -191,3 +191,32 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	assert.Contains(t, ecErr.Message, "context mismatch")
 }
+
+func TestService_Query_SubsecondFilterContext(t *testing.T) {
+	// Two queries with from/to at the same second but different nanoseconds
+	// must produce different QueryContext fingerprints, so a cursor from one
+	// is rejected by the other.
+	base := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	svc, repo := newTestService()
+	for i := range 10 {
+		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
+			base.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	// Query A: from = base+100ns
+	filtersA := ports.AuditFilters{From: base.Add(100 * time.Nanosecond)}
+	pageA, err := svc.Query(context.Background(), filtersA, query.PageRequest{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, pageA.HasMore)
+
+	// Query B: from = base+200ns (same second, different nanosecond)
+	filtersB := ports.AuditFilters{From: base.Add(200 * time.Nanosecond)}
+	_, err = svc.Query(context.Background(), filtersB, query.PageRequest{
+		Limit:  3,
+		Cursor: pageA.NextCursor,
+	})
+	require.Error(t, err, "cursor from query A must be rejected by query B with different sub-second from filter")
+	var ecErr2 *errcode.Error
+	require.ErrorAs(t, err, &ecErr2)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr2.Code)
+}

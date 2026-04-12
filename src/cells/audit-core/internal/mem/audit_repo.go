@@ -4,7 +4,7 @@ package mem
 import (
 	"cmp"
 	"context"
-	"slices"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
@@ -63,8 +63,12 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 	defer r.mu.RUnlock()
 
 	filtered := filterEntries(r.entries, filters)
-	sortAuditEntries(filtered, params.Sort)
-	return applyAuditCursor(filtered, params), nil
+	query.Sort(filtered, params.Sort, compareAuditField)
+	result, err := query.ApplyCursor(filtered, params, auditFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("audit-repo: query: %w", err)
+	}
+	return result, nil
 }
 
 // filterEntries returns clones of entries matching the given filters.
@@ -89,56 +93,28 @@ func filterEntries(entries []*domain.AuditEntry, filters ports.AuditFilters) []*
 	return out
 }
 
-// sortAuditEntries sorts entries in-place by the given sort columns.
-func sortAuditEntries(entries []*domain.AuditEntry, cols []query.SortColumn) {
-	if len(cols) == 0 {
-		return
-	}
-	slices.SortFunc(entries, func(a, b *domain.AuditEntry) int {
-		for _, col := range cols {
-			var c int
-			switch col.Name {
-			case "timestamp":
-				c = a.Timestamp.Compare(b.Timestamp)
-			case "id":
-				c = cmp.Compare(a.ID, b.ID)
-			}
-			if col.Direction == query.SortDESC {
-				c = -c
-			}
-			if c != 0 {
-				return c
-			}
-		}
+// compareAuditField compares a single field of two audit entries.
+func compareAuditField(a, b *domain.AuditEntry, field string) int {
+	switch field {
+	case "timestamp":
+		return a.Timestamp.Compare(b.Timestamp)
+	case "id":
+		return cmp.Compare(a.ID, b.ID)
+	default:
 		return 0
-	})
+	}
 }
 
-// applyAuditCursor skips entries at or before the cursor position, then limits.
-func applyAuditCursor(entries []*domain.AuditEntry, params query.ListParams) []*domain.AuditEntry {
-	if len(params.CursorValues) >= 2 {
-		cursorTS, _ := params.CursorValues[0].(string)
-		cursorID, _ := params.CursorValues[1].(string)
-		var after []*domain.AuditEntry
-		for _, e := range entries {
-			ts := e.Timestamp.Format("2006-01-02T15:04:05.999999999Z07:00")
-			// Sort is timestamp DESC, id ASC: skip while (ts > cursorTS) or (ts == cursorTS && id <= cursorID)
-			if ts > cursorTS {
-				continue
-			}
-			if ts == cursorTS && e.ID <= cursorID {
-				continue
-			}
-			after = append(after, e)
-		}
-		entries = after
+// auditFieldValue extracts a cursor-comparable value from an audit entry.
+func auditFieldValue(e *domain.AuditEntry, field string) any {
+	switch field {
+	case "timestamp":
+		return e.Timestamp
+	case "id":
+		return e.ID
+	default:
+		return ""
 	}
-
-	limit := params.FetchLimit()
-	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit]
-	}
-	return entries
 }
 
 // Len returns the number of entries (for testing).

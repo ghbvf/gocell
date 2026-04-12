@@ -87,7 +87,12 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	var payload struct {
 		UserID string `json:"user_id"`
 	}
-	_ = json.Unmarshal(entry.Payload, &payload)
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+		s.logger.Warn("audit-append: failed to extract actor from payload",
+			slog.Any("error", err),
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
+	}
 
 	actorID := payload.UserID
 	if actorID == "" {
@@ -99,35 +104,20 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	auditEntry.ID = "audit" + "-" + uuid.NewString()
 
 	// Publish audit.appended event.
-	appendedPayload, _ := json.Marshal(map[string]any{
+	appendedPayload, err := json.Marshal(map[string]any{
 		"audit_entry_id": auditEntry.ID,
 		"event_type":     entry.EventType,
 	})
-
-	// Wrap persist + outbox write in a transaction for L2 atomicity.
-	persistAndPublish := func(txCtx context.Context) error {
-		if err := s.repo.Append(txCtx, auditEntry); err != nil {
-			return err // transient, will be retried
-		}
-		if s.outboxWriter != nil {
-			outboxEntry := outbox.Entry{
-				ID:        "evt" + "-" + uuid.NewString(),
-				EventType: TopicAuditAppended,
-				Payload:   appendedPayload,
-			}
-			if writeErr := s.outboxWriter.Write(txCtx, outboxEntry); writeErr != nil {
-				return writeErr
-			}
-		}
-		return nil
+	if err != nil {
+		s.logger.Error("audit-append: failed to marshal appended event payload",
+			slog.Any("error", err),
+			slog.String("event_id", entry.ID))
+		return err
 	}
 
-	var persistErr error
-	if s.txRunner != nil {
-		persistErr = s.txRunner.RunInTx(ctx, persistAndPublish)
-	} else {
-		persistErr = persistAndPublish(ctx)
-	}
+	// Persist + outbox write in a transaction for L2 atomicity.
+	persistFn := s.buildPersistFn(auditEntry, appendedPayload)
+	persistErr := s.runPersist(ctx, persistFn)
 	if persistErr != nil {
 		s.logger.Error("audit-append: failed to persist entry",
 			slog.Any("error", persistErr), slog.String("event_id", entry.ID))
@@ -146,6 +136,33 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 		slog.String("entry_id", auditEntry.ID),
 		slog.String("event_type", entry.EventType))
 	return nil
+}
+
+// buildPersistFn returns a transaction function that persists the audit entry
+// and writes the outbox event.
+func (s *Service) buildPersistFn(auditEntry *domain.AuditEntry, appendedPayload []byte) func(context.Context) error {
+	return func(txCtx context.Context) error {
+		if err := s.repo.Append(txCtx, auditEntry); err != nil {
+			return err
+		}
+		if s.outboxWriter == nil {
+			return nil
+		}
+		return s.outboxWriter.Write(txCtx, outbox.Entry{
+			ID:        "evt" + "-" + uuid.NewString(),
+			EventType: TopicAuditAppended,
+			Payload:   appendedPayload,
+		})
+	}
+}
+
+// runPersist executes fn within a transaction if txRunner is configured,
+// otherwise calls fn directly.
+func (s *Service) runPersist(ctx context.Context, fn func(context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }
 
 // ChainLen returns the number of entries in the chain (for testing).

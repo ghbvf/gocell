@@ -2,6 +2,9 @@ package mem
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -479,4 +482,127 @@ func TestConfigRepository_PublishVersion_And_GetVersion(t *testing.T) {
 		_, err := repo.GetVersion(ctx, "cfg-1", 99)
 		require.Error(t, err)
 	})
+}
+
+func TestConfigRepository_List_SubsecondPrecision_CreatedAt(t *testing.T) {
+	repo := NewConfigRepository()
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		now := base.Add(time.Duration(i*100) * time.Nanosecond)
+		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+			ID: fmt.Sprintf("id-%d", i), Key: fmt.Sprintf("key-%d", i),
+			Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
+		}))
+	}
+
+	cursorTS := base.Add(100 * time.Nanosecond).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTS, "id-1"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	result, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "id-2", result[0].ID)
+}
+
+func TestConfigRepository_List_SubsecondPrecision_UpdatedAt(t *testing.T) {
+	repo := NewConfigRepository()
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 3 {
+		now := base.Add(time.Duration(i*100) * time.Nanosecond)
+		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+			ID: fmt.Sprintf("id-%d", i), Key: fmt.Sprintf("key-%d", i),
+			Value: "v", Version: 1, CreatedAt: base, UpdatedAt: now,
+		}))
+	}
+
+	// DESC sort by updated_at, cursor at entry 1 (100ns).
+	cursorTS := base.Add(100 * time.Nanosecond).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTS, "id-1"},
+		Sort: []query.SortColumn{
+			{Name: "updated_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	result, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, "id-0", result[0].ID)
+}
+
+// TestConfigRepository_ConcurrentCRUDAndList verifies that concurrent
+// CRUD and List calls do not race and maintain semantic invariants.
+func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
+	repo := NewConfigRepository()
+	ctx := context.Background()
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+	var writeErrors, readErrors atomic.Int64
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				now := time.Now()
+				if err := repo.Create(ctx, &domain.ConfigEntry{
+					ID:        fmt.Sprintf("id-w%d-i%d", id, i),
+					Key:       fmt.Sprintf("key-w%d-i%d", id, i),
+					Value:     "val",
+					Version:   1,
+					CreatedAt: now,
+					UpdatedAt: now,
+				}); err != nil {
+					writeErrors.Add(1)
+				}
+			}
+		}(w)
+	}
+
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort: []query.SortColumn{
+					{Name: "key", Direction: query.SortASC},
+					{Name: "id", Direction: query.SortASC},
+				},
+			}
+			for range iterations {
+				items, err := repo.List(ctx, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: results must be sorted.
+				for j := 1; j < len(items); j++ {
+					if items[j].Key < items[j-1].Key {
+						t.Errorf("list results not sorted: %s < %s", items[j].Key, items[j-1].Key)
+					}
+				}
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
+	assert.Zero(t, writeErrors.Load(), "concurrent writes should not error (unique keys)")
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

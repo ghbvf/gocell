@@ -38,8 +38,8 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 	qctx := query.QueryContext("endpoint", "audit-query",
 		"eventType", filters.EventType,
 		"actorId", filters.ActorID,
-		"from", filters.From.Format(time.RFC3339),
-		"to", filters.To.Format(time.RFC3339),
+		"from", filters.From.Format(time.RFC3339Nano),
+		"to", filters.To.Format(time.RFC3339Nano),
 	)
 
 	var cursorValues []any

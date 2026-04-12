@@ -2,6 +2,9 @@ package mem
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -522,4 +525,79 @@ func TestCommandRepository_ListPending_CursorDESC(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, cmds, 1)
 	assert.Equal(t, "c1", cmds[0].ID)
+}
+
+func TestCommandRepository_ListPending_SubsecondPrecision(t *testing.T) {
+	repo := NewCommandRepository()
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	_ = repo.Create(ctx, &domain.Command{ID: "c1", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(100 * time.Nanosecond)})
+	_ = repo.Create(ctx, &domain.Command{ID: "c2", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(200 * time.Nanosecond)})
+	_ = repo.Create(ctx, &domain.Command{ID: "c3", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(300 * time.Nanosecond)})
+
+	// Cursor at c2 (200ns), ASC → should return c3 only.
+	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTS, "c2"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	require.Len(t, cmds, 1)
+	assert.Equal(t, "c3", cmds[0].ID)
+}
+
+// TestCommandRepository_ConcurrentCreateAndListPending verifies that concurrent
+// Create and ListPending calls do not race. Run with -race to verify.
+func TestCommandRepository_ConcurrentCreateAndListPending(t *testing.T) {
+	repo := NewCommandRepository()
+	ctx := context.Background()
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				_ = repo.Create(ctx, &domain.Command{
+					ID:        fmt.Sprintf("cmd-w%d-i%d", id, i),
+					DeviceID:  "dev-1",
+					Status:    "pending",
+					CreatedAt: time.Now(),
+				})
+			}
+		}(w)
+	}
+
+	var readErrors atomic.Int64
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort:  defaultCmdSort,
+			}
+			for range iterations {
+				_, err := repo.ListPending(ctx, "dev-1", params)
+				if err != nil {
+					readErrors.Add(1)
+				}
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

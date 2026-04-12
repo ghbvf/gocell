@@ -6,9 +6,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"sync"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
@@ -95,49 +93,12 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 		all = append(all, &clone)
 	}
 
-	sortConfigEntries(all, params.Sort)
-	return applyConfigCursor(all, params), nil
-}
-
-// sortConfigEntries sorts config entries in-place by the given sort columns.
-func sortConfigEntries(entries []*domain.ConfigEntry, cols []query.SortColumn) {
-	if len(cols) == 0 {
-		return
+	query.Sort(all, params.Sort, compareConfigField)
+	result, err := query.ApplyCursor(all, params, configFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("config-repo: list: %w", err)
 	}
-	slices.SortFunc(entries, func(a, b *domain.ConfigEntry) int {
-		for _, col := range cols {
-			v := compareConfigField(a, b, col.Name)
-			if col.Direction == query.SortDESC {
-				v = -v
-			}
-			if v != 0 {
-				return v
-			}
-		}
-		return 0
-	})
-}
-
-// applyConfigCursor skips rows until past the cursor position, then limits.
-func applyConfigCursor(entries []*domain.ConfigEntry, params query.ListParams) []*domain.ConfigEntry {
-	start := 0
-	if params.CursorValues != nil {
-		for i, e := range entries {
-			if configAfterCursor(e, params.Sort, params.CursorValues) {
-				start = i
-				break
-			}
-			if i == len(entries)-1 {
-				start = len(entries) // cursor past all rows
-			}
-		}
-	}
-
-	end := start + params.FetchLimit()
-	if end > len(entries) {
-		end = len(entries)
-	}
-	return entries[start:end]
+	return result, nil
 }
 
 // compareConfigField compares a single field of two config entries.
@@ -160,32 +121,7 @@ func compareConfigField(a, b *domain.ConfigEntry, field string) int {
 	}
 }
 
-// configAfterCursor returns true if the entry is strictly after the cursor
-// position according to the sort columns and their directions.
-func configAfterCursor(e *domain.ConfigEntry, cols []query.SortColumn, cursorValues []any) bool {
-	for level := 0; level < len(cols); level++ {
-		val := configFieldValue(e, cols[level].Name)
-		curVal := cursorValues[level]
-		c := configCompareAny(val, curVal)
-
-		if level < len(cols)-1 {
-			if c != 0 {
-				if cols[level].Direction == query.SortDESC {
-					return c < 0
-				}
-				return c > 0
-			}
-			continue
-		}
-		// Last column: strict inequality.
-		if cols[level].Direction == query.SortDESC {
-			return c < 0
-		}
-		return c > 0
-	}
-	return false
-}
-
+// configFieldValue extracts a cursor-comparable value from a config entry.
 func configFieldValue(e *domain.ConfigEntry, field string) any {
 	switch field {
 	case "key":
@@ -197,27 +133,12 @@ func configFieldValue(e *domain.ConfigEntry, field string) any {
 	case "version":
 		return float64(e.Version)
 	case "created_at":
-		return e.CreatedAt.Format(time.RFC3339Nano)
+		return e.CreatedAt
 	case "updated_at":
-		return e.UpdatedAt.Format(time.RFC3339Nano)
+		return e.UpdatedAt
 	default:
 		return ""
 	}
-}
-
-// configCompareAny compares two values that are either string or float64.
-func configCompareAny(a, b any) int {
-	aStr, aOk := a.(string)
-	bStr, bOk := b.(string)
-	if aOk && bOk {
-		return cmp.Compare(aStr, bStr)
-	}
-	aFloat, aOk := a.(float64)
-	bFloat, bOk := b.(float64)
-	if aOk && bOk {
-		return cmp.Compare(aFloat, bFloat)
-	}
-	panic(fmt.Sprintf("configCompareAny: unsupported type combination %T vs %T", a, b))
 }
 
 func (r *ConfigRepository) PublishVersion(_ context.Context, version *domain.ConfigVersion) error {
