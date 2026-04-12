@@ -81,17 +81,6 @@ func WithSubscriber(s outbox.Subscriber) Option {
 	}
 }
 
-// Deprecated: Use WithPublisher and WithSubscriber instead.
-// WithEventBus is a convenience method that sets both Publisher and Subscriber
-// from an InMemoryEventBus. It is equivalent to calling WithPublisher(eb) and
-// WithSubscriber(eb). Retained for backward compatibility.
-func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
-	return func(b *Bootstrap) {
-		b.publisher = eb
-		b.subscriber = eb
-	}
-}
-
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {
@@ -293,7 +282,22 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Step 6: Register event subscriptions via EventRouter.
 	// Cells declare handlers (non-blocking), then Router.Run starts consumption.
 	// Setup errors (e.g., missing DLX) abort startup.
+	//
+	// Invariant: if any cell declares subscriptions, a subscriber must be injected.
+	// Without this check, callers who migrate from WithEventBus to WithPublisher
+	// but forget WithSubscriber would silently lose all event consumption.
 	var routerErrCh chan error // hoisted for Step 9 monitoring
+	if sub == nil {
+		// Check whether any cell implements EventRegistrar — if so, the missing
+		// subscriber is a configuration error, not a valid "no-events" setup.
+		for _, id := range asm.CellIDs() {
+			if _, ok := asm.Cell(id).(cell.EventRegistrar); ok {
+				return rollback(fmt.Errorf(
+					"bootstrap: cell %s implements EventRegistrar but no subscriber is configured; "+
+						"add WithSubscriber to bootstrap options", id))
+			}
+		}
+	}
 	if sub != nil {
 		evtRouter := eventrouter.New(sub)
 		for _, id := range asm.CellIDs() {

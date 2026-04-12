@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -29,12 +31,45 @@ func envOrDefault(key, fallback string) []byte {
 	return []byte(fallback)
 }
 
+// loadKeySet returns a KeySet based on the adapter mode.
+// In "real" mode, keys are loaded from environment variables (fail-fast if missing).
+// In dev mode (default), an ephemeral RSA key pair is generated per process.
+func loadKeySet(adapterMode string) (*auth.KeySet, error) {
+	if adapterMode == "real" {
+		return auth.LoadKeySetFromEnv()
+	}
+	if adapterMode != "" {
+		slog.Warn("unrecognized GOCELL_ADAPTER_MODE, falling back to dev mode",
+			slog.String("value", adapterMode),
+			slog.String("expected", "real"))
+	}
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
+	return auth.NewKeySet(privKey, pubKey)
+}
+
 func main() {
-	signingKey := envOrDefault("GOCELL_SIGNING_KEY", "dev-signing-key-replace-in-prod!!")
+	// Determine adapter mode early — it controls key loading strategy.
+	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
+
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
-	// Determine adapter mode: "real" for production adapters, default for in-memory.
-	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
+	keySet, err := loadKeySet(adapterMode)
+	if err != nil {
+		slog.Error("failed to load JWT key set", "error", err)
+		os.Exit(1)
+	}
+
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", 15*time.Minute)
+	if err != nil {
+		slog.Error("failed to create JWT issuer", "error", err)
+		os.Exit(1)
+	}
+	jwtVerifier, err := auth.NewJWTVerifier(keySet)
+	if err != nil {
+		slog.Error("failed to create JWT verifier", "error", err)
+		os.Exit(1)
+	}
 
 	// Create shared event bus (in-memory by default).
 	// When GOCELL_ADAPTER_MODE=real, a real message broker adapter would replace
@@ -78,7 +113,8 @@ func main() {
 	configOpts = append(configOpts, configcore.WithPublisher(eb))
 	accessOpts = append(accessOpts,
 		accesscore.WithPublisher(eb),
-		accesscore.WithSigningKey(signingKey),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
 	)
 	auditOpts = append(auditOpts,
 		auditcore.WithPublisher(eb),
@@ -112,7 +148,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
-		bootstrap.WithEventBus(eb),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 	)
 
 	if err := app.Run(ctx); err != nil {

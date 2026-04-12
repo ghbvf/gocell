@@ -100,7 +100,6 @@
 ### 3.2 bootstrap — 应用启动
 - `Bootstrap` struct — config→assembly→HTTP→workers 编排
 - `WithPublisher(outbox.Publisher)` + `WithSubscriber(outbox.Subscriber)` — 接口注入
-- `WithEventBus` — 向后兼容便利方法
 - `WithWorkers` — 注册后台 worker
 
 ### 3.3 config — 配置管理

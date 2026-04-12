@@ -57,6 +57,34 @@ func newTestCell() *AccessCore {
 	)
 }
 
+func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(mem.NewRoleRepository()),
+		WithPublisher(eventbus.New()),
+		WithJWTVerifier(testVerifier), // issuer missing
+		WithOutboxWriter(noopWriter{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WithJWTIssuer")
+}
+
+func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(mem.NewRoleRepository()),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer), // verifier missing
+		WithOutboxWriter(noopWriter{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WithJWTVerifier")
+}
+
 func TestAccessCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

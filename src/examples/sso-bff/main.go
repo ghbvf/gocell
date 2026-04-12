@@ -113,7 +113,7 @@ func main() {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithEventBus(eb),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
 	)
 

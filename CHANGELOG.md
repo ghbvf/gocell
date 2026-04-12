@@ -54,7 +54,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### fix
 
-- **S6 P0 fixes**: errcode 常量替换 string literal；access-core 移除 ephemeral RSA key 生成路径；WithEventBus 添加 // Deprecated 注释 (`eace83a`)
+- **S6 P0 fixes**: errcode 常量替换 string literal；access-core 移除 ephemeral RSA key 生成路径 (`eace83a`)
 - **metadata**: 新 contract / slice 的 YAML 格式对齐 (`f59d0dc`)
 - **tests**: httptest sandbox TCP 监听跳过 guard（非沙箱环境自动跳过） (`26d34ac`)
 - **evidence**: S7 evidence 格式修正——journey/result.txt + validate PASS 行 (`e15462d`)
@@ -83,7 +83,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **cells/access-core**: RS256 JWTIssuer/Verifier Option 注入、refresh token rotation + reuse detection、WithJWTIssuer/WithJWTVerifier (`44b1253`)
 - **cells/audit-core + config-core**: outbox.Writer 重构（7 处 publisher.Publish 替换）、ArchiveStore Cell 内部封装 (`44b1253`)
 - **pkg/uid**: crypto/rand UUID 生成器，替换 7 处 UnixNano ID (`3fe050a`)
-- **runtime/bootstrap**: 接口化重构——WithPublisher + WithSubscriber 替代具体类型注入；WithEventBus 保留向后兼容 (`e1bf267`)
+- **runtime/bootstrap**: 接口化重构——WithPublisher + WithSubscriber 替代具体类型注入；WithEventBus 已删除 (`e1bf267`, PR#83)
 - **devops**: Docker Compose（PostgreSQL + Redis + RabbitMQ + MinIO）+ .env.example + Makefile + healthcheck (`9aabc62`)
 
 ### fix
