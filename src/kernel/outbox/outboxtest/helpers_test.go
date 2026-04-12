@@ -3,7 +3,11 @@ package outboxtest
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func TestTestTopic_UniquePerTest(t *testing.T) {
@@ -141,5 +145,93 @@ func TestFeatures_SetDefaults_PreservesExplicit(t *testing.T) {
 
 	if f.MessageCount != 42 {
 		t.Fatalf("explicit MessageCount should be preserved, got %d", f.MessageCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// collector tests — uses a minimal in-test fake subscriber (no runtime/ import)
+// ---------------------------------------------------------------------------
+
+// fakePubSub is a minimal channel-based Publisher+Subscriber for testing
+// the collector helper without importing runtime/eventbus.
+type fakePubSub struct {
+	mu   sync.Mutex
+	subs []chan outbox.Entry
+}
+
+func (f *fakePubSub) Publish(_ context.Context, topic string, payload []byte) error {
+	entry := outbox.Entry{
+		ID:        "fake-" + topic,
+		EventType: topic,
+		Payload:   payload,
+		CreatedAt: time.Now(),
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, ch := range f.subs {
+		ch <- entry
+	}
+	return nil
+}
+
+func (f *fakePubSub) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler) error {
+	ch := make(chan outbox.Entry, 64)
+	f.mu.Lock()
+	f.subs = append(f.subs, ch)
+	f.mu.Unlock()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case entry := <-ch:
+			handler(ctx, entry)
+		}
+	}
+}
+
+func (f *fakePubSub) Close() error { return nil }
+
+func TestCollector_CollectsAllEntries(t *testing.T) {
+	bus := &fakePubSub{}
+	ctx := context.Background()
+	topic := "test-collector"
+
+	c := startCollecting(t, ctx, bus, topic, 3)
+
+	// Publish 3 messages after collector is ready.
+	for i := range 3 {
+		if err := bus.Publish(ctx, topic, testPayload(i)); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+
+	collected := c.waitAndGet(5 * time.Second)
+	if len(collected) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(collected))
+	}
+}
+
+func TestCollector_ConcurrentPublish(t *testing.T) {
+	bus := &fakePubSub{}
+	ctx := context.Background()
+	topic := "test-collector-concurrent"
+	n := 20
+
+	c := startCollecting(t, ctx, bus, topic, n)
+
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(seq int) {
+			defer wg.Done()
+			_ = bus.Publish(ctx, topic, testPayload(seq))
+		}(i)
+	}
+	wg.Wait()
+
+	collected := c.waitAndGet(5 * time.Second)
+	if len(collected) != n {
+		t.Fatalf("want %d entries, got %d", n, len(collected))
 	}
 }
