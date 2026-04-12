@@ -160,3 +160,32 @@ func TestService_List_Empty(t *testing.T) {
 	assert.False(t, result.HasMore)
 	assert.Empty(t, result.NextCursor)
 }
+
+func TestService_List_ScopeMismatch(t *testing.T) {
+	// Cursor signed for a different sort definition (key ASC, id ASC).
+	// When used with order-query (created_at DESC, id ASC), it must be rejected.
+	codec := testCodec()
+	differentSort := []query.SortColumn{
+		{Name: "key", Direction: query.SortASC},
+		{Name: "id", Direction: query.SortASC},
+	}
+	cur := query.Cursor{
+		Values: []any{"some-key", "some-id"},
+		Scope:  query.SortScope(differentSort),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	repo := seedRepo(&domain.Order{
+		ID: "ord-1", Item: "a", Status: "pending",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	svc := NewService(repo, codec, slog.Default())
+
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "scope mismatch")
+}
