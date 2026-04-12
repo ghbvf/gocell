@@ -322,7 +322,28 @@ func TestNewProxyCheckerStrict(t *testing.T) {
 }
 
 func TestValidateTrustedProxies(t *testing.T) {
-	assert.NoError(t, ValidateTrustedProxies(nil))
-	assert.NoError(t, ValidateTrustedProxies([]string{"10.0.0.0/8", "192.168.1.1"}))
-	assert.Error(t, ValidateTrustedProxies([]string{"bad-entry"}))
+	pc, err := ValidateTrustedProxies(nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, pc)
+
+	pc, err = ValidateTrustedProxies([]string{"10.0.0.0/8", "192.168.1.1"})
+	assert.NoError(t, err)
+	assert.NotNil(t, pc)
+
+	pc, err = ValidateTrustedProxies([]string{"bad-entry"})
+	assert.Error(t, err)
+	assert.Nil(t, pc)
+}
+
+func TestNewProxyCheckerStrict_WhitespaceOnly(t *testing.T) {
+	// P2 fix: whitespace-only entries should be rejected with clear message.
+	pc, err := newProxyCheckerStrict([]string{" "})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+	assert.Nil(t, pc)
+
+	pc, err = newProxyCheckerStrict([]string{"\t"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+	assert.Nil(t, pc)
 }

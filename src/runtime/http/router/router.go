@@ -113,21 +113,26 @@ func New(opts ...Option) *Router {
 		o(r)
 	}
 
-	// Fail-fast: reject invalid trusted proxy configuration at construction
-	// time rather than silently misconfiguring IP extraction at request time.
+	// Fail-fast: validate and construct the proxy checker once. The validated
+	// checker is passed to RealIPFromChecker so proxies are only parsed once.
 	//
 	// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
+	var realIPMW func(http.Handler) http.Handler
 	if len(r.trustedProxies) > 0 {
-		if err := middleware.ValidateTrustedProxies(r.trustedProxies); err != nil {
+		checker, err := middleware.ValidateTrustedProxies(r.trustedProxies)
+		if err != nil {
 			panic(fmt.Sprintf("router: invalid trusted proxy configuration: %v", err))
 		}
+		realIPMW = middleware.RealIPFromChecker(checker)
+	} else {
+		realIPMW = middleware.RealIP(nil)
 	}
 
 	// Default middleware chain — Recorder before AccessLog/Metrics,
 	// Recovery after them so panic-recovered 500s are observable.
 	r.mux.Use(
 		middleware.RequestID,
-		middleware.RealIP(r.trustedProxies),
+		realIPMW,
 		middleware.Recorder,
 	)
 

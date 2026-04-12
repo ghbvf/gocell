@@ -46,6 +46,7 @@ func newProxyChecker(proxies []string) *proxyChecker {
 func newProxyCheckerStrict(proxies []string) (*proxyChecker, error) {
 	pc := &proxyChecker{exact: make(map[string]bool, len(proxies))}
 	for _, p := range proxies {
+		p = strings.TrimSpace(p)
 		if p == "" {
 			return nil, fmt.Errorf("trusted proxy entry is empty")
 		}
@@ -60,14 +61,14 @@ func newProxyCheckerStrict(proxies []string) (*proxyChecker, error) {
 	return pc, nil
 }
 
-// ValidateTrustedProxies checks that every entry in proxies is a valid IP
-// address or CIDR notation. Returns a descriptive error for the first invalid
-// entry. Used by router.New() for fail-fast validation at construction time.
+// ValidateTrustedProxies validates all entries and returns the constructed
+// proxyChecker for reuse. Returns a descriptive error for the first invalid
+// entry. Used by router.New() for fail-fast validation at construction time,
+// eliminating the need to parse proxies twice (once to validate, once to use).
 //
 // ref: gin-gonic/gin — SetTrustedProxies validates eagerly at config time
-func ValidateTrustedProxies(proxies []string) error {
-	_, err := newProxyCheckerStrict(proxies)
-	return err
+func ValidateTrustedProxies(proxies []string) (*proxyChecker, error) {
+	return newProxyCheckerStrict(proxies)
 }
 
 func (pc *proxyChecker) empty() bool {
@@ -106,7 +107,20 @@ func (pc *proxyChecker) isTrusted(ip string) bool {
 // ref: gin-gonic/gin — TrustedProxies CIDR list + reverse XFF scan
 func RealIP(trustedProxies []string) func(http.Handler) http.Handler {
 	checker := newProxyChecker(trustedProxies)
+	return realIPMiddleware(checker)
+}
 
+// RealIPFromChecker creates the RealIP middleware using a pre-validated
+// proxyChecker, avoiding redundant parsing when ValidateTrustedProxies has
+// already constructed one.
+func RealIPFromChecker(checker *proxyChecker) func(http.Handler) http.Handler {
+	if checker == nil {
+		checker = &proxyChecker{exact: make(map[string]bool)}
+	}
+	return realIPMiddleware(checker)
+}
+
+func realIPMiddleware(checker *proxyChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := extractIP(r, checker)
