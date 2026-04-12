@@ -5,15 +5,17 @@
   "required": ["action", "key"],
   "properties": {
     "action": { "type": "string", "enum": ["created", "updated", "deleted", "published"] },
-    "key": { "type": "string" }
+    "key": { "type": "string" },
+    "value": { "type": "string" },
+    "version": { "type": "integer" },
+    "config_id": { "type": "string" }
   },
+  "additionalProperties": false,
   "oneOf": [
     {
       "description": "created/updated: includes value and version",
       "properties": {
-        "action": { "enum": ["created", "updated"] },
-        "value": { "type": "string" },
-        "version": { "type": "integer" }
+        "action": { "enum": ["created", "updated"] }
       },
       "required": ["action", "key", "value", "version"]
     },
@@ -27,9 +29,7 @@
     {
       "description": "published: includes config_id and version (no value)",
       "properties": {
-        "action": { "const": "published" },
-        "config_id": { "type": "string" },
-        "version": { "type": "integer" }
+        "action": { "const": "published" }
       },
       "required": ["action", "key", "config_id", "version"]
     }

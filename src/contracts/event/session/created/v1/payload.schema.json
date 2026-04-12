@@ -6,5 +6,6 @@
     "session_id": { "type": "string" },
     "user_id": { "type": "string" }
   },
-  "required": ["session_id", "user_id"]
+  "required": ["session_id", "user_id"],
+  "additionalProperties": false
 }

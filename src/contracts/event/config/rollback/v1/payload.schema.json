@@ -8,5 +8,6 @@
     "target_version": { "type": "integer" },
     "new_version": { "type": "integer" }
   },
-  "required": ["action", "key", "target_version", "new_version"]
+  "required": ["action", "key", "target_version", "new_version"],
+  "additionalProperties": false
 }
