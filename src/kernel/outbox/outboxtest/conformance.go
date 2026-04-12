@@ -159,60 +159,20 @@ func testPublishSubscribeMultiple(t *testing.T, features Features, constructor P
 	topic := TestTopic(t)
 
 	n := features.MessageCount
+	c := startCollecting(t, ctx, sub, topic, n)
 
-	// Start subscriber FIRST (InMemoryEventBus is at-most-once).
-	var (
-		mu        sync.Mutex
-		collected []outbox.Entry
-		done      = make(chan struct{})
-		closeOnce sync.Once
-	)
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			mu.Lock()
-			collected = append(collected, entry)
-			count := len(collected)
-			mu.Unlock()
-			if count >= n {
-				closeOnce.Do(func() { close(done) })
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	// Now publish.
 	entries := PublishN(t, ctx, pub, topic, n)
+	collected := c.waitAndGet(defaultTimeout)
 
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		mu.Lock()
-		got := len(collected)
-		mu.Unlock()
-		t.Fatalf("timed out: collected %d/%d", got, n)
-	}
-
-	cancel()
-	<-subDone
-
-	mu.Lock()
-	defer mu.Unlock()
 	assertLen(t, len(collected), n, fmt.Sprintf("expected %d messages", n))
 
-	// Verify all payloads arrived (order may vary).
 	publishedPayloads := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		publishedPayloads[string(e.Payload)] = true
 	}
-	for _, c := range collected {
-		assertTrue(t, publishedPayloads[string(c.Payload)],
-			fmt.Sprintf("unexpected payload: %s", string(c.Payload)))
+	for _, entry := range collected {
+		assertTrue(t, publishedPayloads[string(entry.Payload)],
+			fmt.Sprintf("unexpected payload: %s", string(entry.Payload)))
 	}
 }
 
@@ -230,57 +190,17 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 		n = 5
 	}
 
-	// Start subscriber FIRST.
-	var (
-		mu        sync.Mutex
-		collected []outbox.Entry
-		done      = make(chan struct{})
-		closeOnce sync.Once
-	)
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	c := startCollecting(t, ctx, sub, topic, n)
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			mu.Lock()
-			collected = append(collected, entry)
-			count := len(collected)
-			mu.Unlock()
-			if count >= n {
-				closeOnce.Do(func() { close(done) })
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	// Publish sequentially.
 	for i := range n {
 		assertNoError(t, pub.Publish(ctx, topic, testPayload(i)))
 	}
 
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		mu.Lock()
-		got := len(collected)
-		mu.Unlock()
-		t.Fatalf("timed out: collected %d/%d", got, n)
-	}
-
-	cancel()
-	<-subDone
-
-	mu.Lock()
-	defer mu.Unlock()
+	collected := c.waitAndGet(defaultTimeout)
 	assertLen(t, len(collected), n)
 
-	// Verify arrival order matches publish order.
 	for i, entry := range collected {
-		expected := testPayload(i)
-		assertBytesEqual(t, expected, entry.Payload,
+		assertBytesEqual(t, testPayload(i), entry.Payload,
 			fmt.Sprintf("message %d: expected seq %d payload", i, i))
 	}
 }
@@ -291,9 +211,12 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	topicA := TestTopic(t) + "-A"
 	topicB := TestTopic(t) + "-B"
 
-	var receivedA []outbox.Entry
-	var mu sync.Mutex
-	doneA := make(chan struct{})
+	var (
+		receivedA  []outbox.Entry
+		mu         sync.Mutex
+		doneA      = make(chan struct{})
+		closeOnceA sync.Once
+	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -306,11 +229,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 			mu.Lock()
 			receivedA = append(receivedA, entry)
 			if len(receivedA) >= 1 {
-				select {
-				case <-doneA:
-				default:
-					close(doneA)
-				}
+				closeOnceA.Do(func() { close(doneA) })
 			}
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -925,36 +844,14 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 
 	n := min(features.MessageCount, 50)
 
-	// Start subscriber FIRST.
-	var (
-		mu        sync.Mutex
-		collected []outbox.Entry
-		done      = make(chan struct{})
-		closeOnce sync.Once
-		pubErrs   []error
-		pubMu     sync.Mutex
-	)
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			mu.Lock()
-			collected = append(collected, entry)
-			count := len(collected)
-			mu.Unlock()
-			if count >= n {
-				closeOnce.Do(func() { close(done) })
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
+	c := startCollecting(t, ctx, sub, topic, n)
 
 	// Publish concurrently — collect errors safely (t.Fatal from goroutine is illegal).
-	var wg sync.WaitGroup
+	var (
+		pubErrs []error
+		pubMu   sync.Mutex
+		wg      sync.WaitGroup
+	)
 	for i := range n {
 		wg.Add(1)
 		go func(seq int) {
@@ -974,20 +871,7 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 		t.FailNow()
 	}
 
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		mu.Lock()
-		got := len(collected)
-		mu.Unlock()
-		t.Fatalf("timed out: collected %d/%d", got, n)
-	}
-
-	cancel()
-	<-subDone
-
-	mu.Lock()
-	defer mu.Unlock()
+	collected := c.waitAndGet(defaultTimeout)
 	assertLen(t, len(collected), n, "all concurrently published messages should arrive")
 }
 

@@ -134,6 +134,78 @@ func CollectN(
 }
 
 // ---------------------------------------------------------------------------
+// collector — two-phase subscribe helper to reduce conformance.go duplication
+// ---------------------------------------------------------------------------
+
+// collector starts a subscriber in a goroutine and collects entries.
+// Phase 1: call startCollecting — subscriber goroutine starts, waits for init.
+// Phase 2: caller publishes messages.
+// Phase 3: call waitAndGet — blocks until n entries collected or timeout.
+type collector struct {
+	t         *testing.T
+	mu        sync.Mutex
+	collected []outbox.Entry
+	done      chan struct{}
+	closeOnce sync.Once
+	cancel    context.CancelFunc
+	subDone   chan struct{}
+	n         int
+}
+
+// startCollecting launches a subscriber goroutine that collects entries.
+// Returns immediately after the subscriber has had time to register.
+// Call waitAndGet to block until n entries arrive.
+func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic string, n int) *collector {
+	t.Helper()
+	c := &collector{
+		t:       t,
+		done:    make(chan struct{}),
+		subDone: make(chan struct{}),
+		n:       n,
+	}
+
+	subCtx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+	t.Cleanup(cancel)
+
+	go func() {
+		defer close(c.subDone)
+		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+			c.mu.Lock()
+			c.collected = append(c.collected, entry)
+			count := len(c.collected)
+			c.mu.Unlock()
+			if count >= c.n {
+				c.closeOnce.Do(func() { close(c.done) })
+			}
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+	time.Sleep(subscribeInitDelay)
+	return c
+}
+
+// waitAndGet blocks until n entries are collected or timeout elapses.
+// Cancels the subscriber and returns the collected entries.
+func (c *collector) waitAndGet(timeout time.Duration) []outbox.Entry {
+	c.t.Helper()
+	select {
+	case <-c.done:
+	case <-time.After(timeout):
+		c.mu.Lock()
+		got := len(c.collected)
+		c.mu.Unlock()
+		c.t.Fatalf("collector: timed out after %v, collected %d/%d", timeout, got, c.n)
+	}
+	c.cancel()
+	<-c.subDone
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.collected
+}
+
+// ---------------------------------------------------------------------------
 // Internal assertion helpers — stdlib only, no testify in kernel/ non-test files
 // ---------------------------------------------------------------------------
 
