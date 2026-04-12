@@ -87,9 +87,18 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 		delete(s.cache.values, event.Key)
 		s.logger.Info("config-subscribe: key deleted from cache",
 			slog.String("key", event.Key))
-	default:
+	case "created", "updated":
 		s.cache.values[event.Key] = event.Value
 		s.logger.Info("config-subscribe: cache updated",
+			slog.String("key", event.Key), slog.String("action", event.Action))
+	case "published":
+		// Published events carry config_id+version but no value — skip cache
+		// update to avoid overwriting with empty string. The actual value is
+		// already in cache from the preceding created/updated event.
+		s.logger.Info("config-subscribe: published event (no cache update)",
+			slog.String("key", event.Key))
+	default:
+		s.logger.Warn("config-subscribe: unknown action, skipping",
 			slog.String("key", event.Key), slog.String("action", event.Action))
 	}
 

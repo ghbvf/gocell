@@ -8,6 +8,7 @@ endpoints:
   subscribers:
     - audit-core
 schemaRefs:
+  headers: headers.schema.json
   payload: payload.schema.json
 replayable: true
 idempotencyKey: event_id

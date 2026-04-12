@@ -1,10 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "command.device-command.v1.request",
+  "description": "Multi-operation contract. This schema describes the POST enqueue body only. GET list and POST ack have no request body. Will be split to per-operation contracts (backlog: CONTRACT-SPLIT-01).",
   "type": "object",
   "properties": {
     "payload": { "type": "string" }
-  },
-  "required": ["payload"],
-  "additionalProperties": false
+  }
 }
