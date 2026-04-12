@@ -18,8 +18,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
-	rtws "github.com/ghbvf/gocell/runtime/websocket"
-	ws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,14 +132,21 @@ func TestMount(t *testing.T) {
 }
 
 func TestRouterChain_WebSocketUpgrade(t *testing.T) {
-	hub := rtws.NewHub(rtws.HubConfig{ReadLimit: 4096}, func(_ context.Context, _ string, _ []byte) {})
-
-	go func() { _ = hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, 2*time.Second, time.Millisecond)
-	t.Cleanup(func() { _ = hub.Stop(context.Background()) })
+	// Minimal handler that only accepts the WebSocket upgrade.
+	// This tests the router middleware chain (security headers, request-ID,
+	// logging, recovery) does not interfere with the HTTP→WS handshake.
+	// Hub registration is an adapter concern tested in adapters/websocket.
+	upgrader := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		c.CloseNow()
+	})
 
 	r := New()
-	r.Mount("/ws", ws.UpgradeHandler(hub, ws.UpgradeConfig{}))
+	r.Mount("/ws", upgrader)
 
 	srv := httptest.NewServer(r)
 	defer srv.Close()

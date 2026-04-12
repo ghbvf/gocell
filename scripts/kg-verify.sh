@@ -8,6 +8,7 @@
 #   4. go.mod whitelist: only allowed direct dependencies
 #   5. Banned field names: legacy field names must not appear in YAML metadata
 #
+#
 # Exit 0 on all-pass, non-zero on first failure.
 
 set -euo pipefail
@@ -78,15 +79,50 @@ fi
 header "Check 4: go.mod direct dependency whitelist"
 
 ALLOWED_DEPS=(
+    # AWS S3 adapter
+    "github.com/aws/aws-sdk-go-v2"
+    "github.com/aws/aws-sdk-go-v2/credentials"
+    "github.com/aws/aws-sdk-go-v2/service/s3"
+    # OIDC adapter
+    "github.com/coreos/go-oidc/v3"
+    # Config hot-reload
     "github.com/fsnotify/fsnotify"
+    # HTTP router
     "github.com/go-chi/chi/v5"
+    # JWT auth
     "github.com/golang-jwt/jwt/v5"
+    # UUID generation
+    "github.com/google/uuid"
+    # PostgreSQL adapter
     "github.com/jackc/pgx/v5"
+    # Database migrations
+    "github.com/pressly/goose/v3"
+    # Prometheus metrics
+    "github.com/prometheus/client_golang"
+    # RabbitMQ adapter
     "github.com/rabbitmq/amqp091-go"
+    # Redis adapter
     "github.com/redis/go-redis/v9"
+    # Testing
     "github.com/stretchr/testify"
+    "github.com/testcontainers/testcontainers-go"
+    "github.com/testcontainers/testcontainers-go/modules/postgres"
+    "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+    "github.com/testcontainers/testcontainers-go/modules/redis"
+    # OpenTelemetry
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    "go.opentelemetry.io/otel/sdk"
+    "go.opentelemetry.io/otel/trace"
+    # Goroutine leak detection
+    "go.uber.org/goleak"
+    # Crypto
     "golang.org/x/crypto"
+    # OAuth2
+    "golang.org/x/oauth2"
+    # YAML
     "gopkg.in/yaml.v3"
+    # WebSocket
     "nhooyr.io/websocket"
 )
 
