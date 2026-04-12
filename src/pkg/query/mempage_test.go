@@ -124,6 +124,13 @@ func TestSort_MultiColumn(t *testing.T) {
 	assert.Equal(t, "bob", items[2].Name)
 }
 
+func TestSort_EmptyItems(t *testing.T) {
+	var items []testItem
+	cols := []query.SortColumn{{Name: "id", Direction: query.SortASC}}
+	query.Sort(items, cols, compareTestField)
+	assert.Empty(t, items)
+}
+
 func TestSort_EmptyColumns(t *testing.T) {
 	items := []testItem{{ID: "b"}, {ID: "a"}}
 	query.Sort(items, nil, compareTestField)
@@ -260,6 +267,73 @@ func TestApplyCursor_TimeVsString_CrossType(t *testing.T) {
 	assert.Equal(t, "3", result[1].ID)
 }
 
+func TestApplyCursor_EmptyItems_WithCursor(t *testing.T) {
+	var items []testItem
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"x"},
+		Sort:         []query.SortColumn{{Name: "id", Direction: query.SortASC}},
+	}
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestApplyCursor_MultiColumn_MixedDirection(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	items := []testItem{
+		{ID: "1", CreatedAt: base.Add(2 * time.Second)},
+		{ID: "2", CreatedAt: base.Add(2 * time.Second)},
+		{ID: "3", CreatedAt: base.Add(time.Second)},
+		{ID: "4", CreatedAt: base.Add(time.Second)},
+		{ID: "5", CreatedAt: base},
+	}
+	// Sort: created_at DESC, id ASC. Cursor at (base+2s, "1").
+	// After cursor: items with same timestamp and id > "1", or earlier timestamps.
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{base.Add(2 * time.Second), "1"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
+	require.Len(t, result, 4)
+	assert.Equal(t, "2", result[0].ID) // same second, id > "1"
+	assert.Equal(t, "3", result[1].ID)
+	assert.Equal(t, "4", result[2].ID)
+	assert.Equal(t, "5", result[3].ID)
+}
+
+func TestApplyCursor_AllItemsEqualCursor(t *testing.T) {
+	items := []testItem{{ID: "a"}, {ID: "a"}, {ID: "a"}}
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"a"},
+		Sort:         []query.SortColumn{{Name: "id", Direction: query.SortASC}},
+	}
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
+	assert.Empty(t, result, "all items at cursor position should be skipped")
+}
+
+func TestApplyCursor_EmptySortWithCursor_ReturnsError(t *testing.T) {
+	items := []testItem{{ID: "a"}}
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"a"},
+		Sort:         []query.SortColumn{},
+	}
+	_, err := query.ApplyCursor(items, params, testFieldValue)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
 func TestApplyCursor_MismatchedCursorValuesLength_ReturnsError(t *testing.T) {
 	items := []testItem{{ID: "a"}, {ID: "b"}}
 	params := query.ListParams{
@@ -326,11 +400,34 @@ func TestCompareAny_StringVsTime(t *testing.T) {
 	assert.Equal(t, 1, mustCompare(t, s, t1.Add(-time.Second)))
 }
 
-func TestCompareAny_UnsupportedType_ReturnsError(t *testing.T) {
-	_, err := query.CompareAny(42, "str")
+func TestCompareAny_IntVsFloat64(t *testing.T) {
+	assert.Equal(t, -1, mustCompare(t, 1, 2.0))
+	assert.Equal(t, 0, mustCompare(t, 3, 3.0))
+	assert.Equal(t, 1, mustCompare(t, 5, 2.0))
+}
+
+func TestCompareAny_Float64VsInt(t *testing.T) {
+	assert.Equal(t, -1, mustCompare(t, 1.0, 2))
+	assert.Equal(t, 0, mustCompare(t, 3.0, 3))
+	assert.Equal(t, 1, mustCompare(t, 5.0, 2))
+}
+
+func TestCompareAny_IntVsInt(t *testing.T) {
+	assert.Equal(t, -1, mustCompare(t, 1, 2))
+	assert.Equal(t, 0, mustCompare(t, 3, 3))
+	assert.Equal(t, 1, mustCompare(t, 5, 2))
+}
+
+func TestCompareAny_NilValue_ReturnsError(t *testing.T) {
+	_, err := query.CompareAny(nil, "x")
 	require.Error(t, err)
 
-	_, err = query.CompareAny(true, false)
+	_, err = query.CompareAny("x", nil)
+	require.Error(t, err)
+}
+
+func TestCompareAny_UnsupportedType_ReturnsError(t *testing.T) {
+	_, err := query.CompareAny(true, false)
 	require.Error(t, err)
 
 	_, err = query.CompareAny(1.0, "str")

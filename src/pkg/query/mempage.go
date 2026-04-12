@@ -13,9 +13,10 @@ import (
 type CompareFunc[T any] func(a, b T, field string) int
 
 // FieldFunc extracts a cursor-comparable value from an entity by field name.
-// Returned values must be string, float64, or time.Time — other types will
-// cause CompareAny to return an error. Time fields should return time.Time
-// (not a formatted string) so that CompareAny uses temporal comparison.
+// Returned values must be string, int, float64, or time.Time — other types
+// will cause CompareAny to return an error. Time fields should return
+// time.Time (not a formatted string) so that CompareAny uses temporal
+// comparison.
 type FieldFunc[T any] func(item T, field string) any
 
 // Sort sorts items in-place by the given sort columns using compareField.
@@ -40,10 +41,18 @@ func Sort[T any](items []T, cols []SortColumn, compareField CompareFunc[T]) {
 // ApplyCursor skips items at or before the cursor position, then limits to
 // FetchLimit() (Limit+1 for N+1 hasMore detection).
 //
-// Returns ErrCursorInvalid if CursorValues length does not match Sort columns
-// or if cursor value types are incompatible.
+// Precondition: items must already be sorted by params.Sort columns (via Sort).
+// Behavior is undefined on unsorted input.
+//
+// Returns ErrCursorInvalid if CursorValues length does not match Sort columns,
+// if Sort is empty when CursorValues is present, or if cursor value types are
+// incompatible.
 func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) ([]T, error) {
 	if params.CursorValues != nil {
+		if len(params.Sort) == 0 {
+			return nil, errcode.New(errcode.ErrCursorInvalid,
+				"cursor values present but no sort columns defined")
+		}
 		if len(params.CursorValues) != len(params.Sort) {
 			return nil, errcode.New(errcode.ErrCursorInvalid,
 				fmt.Sprintf("cursor values count %d does not match sort columns count %d",
@@ -112,9 +121,9 @@ func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValu
 // which occurs when fieldValue returns time.Time but cursor values are strings
 // from JSON decode.
 //
-// Supported type pairs: string↔string, float64↔float64, time.Time↔time.Time,
-// time.Time↔string (parsed as RFC3339Nano). All other combinations return
-// ErrCursorInvalid.
+// Supported type pairs: string↔string, float64↔float64, int↔float64,
+// time.Time↔time.Time, time.Time↔string (parsed as RFC3339Nano).
+// All other combinations return ErrCursorInvalid.
 func CompareAny(a, b any) (int, error) {
 	switch av := a.(type) {
 	case string:
@@ -128,6 +137,16 @@ func CompareAny(a, b any) (int, error) {
 		if bv, ok := b.(float64); ok {
 			return cmp.Compare(av, bv), nil
 		}
+		if bv, ok := b.(int); ok {
+			return cmp.Compare(av, float64(bv)), nil
+		}
+	case int:
+		if bv, ok := b.(float64); ok {
+			return cmp.Compare(float64(av), bv), nil
+		}
+		if bv, ok := b.(int); ok {
+			return cmp.Compare(av, bv), nil
+		}
 	case time.Time:
 		if bt, ok := b.(time.Time); ok {
 			return av.Compare(bt), nil
@@ -137,8 +156,7 @@ func CompareAny(a, b any) (int, error) {
 		}
 	}
 
-	return 0, errcode.New(errcode.ErrCursorInvalid,
-		fmt.Sprintf("unsupported cursor value type combination %T vs %T", a, b))
+	return 0, errcode.New(errcode.ErrCursorInvalid, "invalid cursor value")
 }
 
 // compareStringWithTime parses s as RFC3339Nano and compares with t.
