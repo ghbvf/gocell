@@ -104,10 +104,16 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	auditEntry.ID = "audit" + "-" + uuid.NewString()
 
 	// Publish audit.appended event.
-	appendedPayload, _ := json.Marshal(map[string]any{
+	appendedPayload, err := json.Marshal(map[string]any{
 		"audit_entry_id": auditEntry.ID,
 		"event_type":     entry.EventType,
 	})
+	if err != nil {
+		s.logger.Error("audit-append: failed to marshal appended event payload",
+			slog.Any("error", err),
+			slog.String("event_id", entry.ID))
+		return err
+	}
 
 	// Wrap persist + outbox write in a transaction for L2 atomicity.
 	persistAndPublish := func(txCtx context.Context) error {

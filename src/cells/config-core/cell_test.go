@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -216,4 +217,47 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
 		"config-read cursor must be rejected by feature-flag endpoint")
+
+}
+
+func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
+	c := newTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	// Seed flags directly via repository (no HTTP create endpoint for flags).
+	for i := range 3 {
+		require.NoError(t, c.flagRepo.Create(ctx, &domain.FeatureFlag{
+			ID:      fmt.Sprintf("id-%d", i),
+			Key:     fmt.Sprintf("flag-%d", i),
+			Type:    domain.FlagBoolean,
+			Enabled: true,
+		}))
+	}
+
+	// Get flag page with limit=1 to obtain a cursor.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var flagPage struct {
+		NextCursor string `json:"nextCursor"`
+		HasMore    bool   `json:"hasMore"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&flagPage))
+	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
+
+	// Use flag cursor on config-read endpoint — must be rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"feature-flag cursor must be rejected by config-read endpoint")
 }

@@ -11,7 +11,9 @@ import (
 type CompareFunc[T any] func(a, b T, field string) int
 
 // FieldFunc extracts a cursor-comparable value from an entity by field name.
-// Returned values must be string, float64, or time.Time.
+// Returned values must be string, float64, or time.Time — other types will
+// cause CompareAny to panic. Time fields should return time.Time (not a
+// formatted string) so that CompareAny uses temporal comparison.
 type FieldFunc[T any] func(item T, field string) any
 
 // Sort sorts items in-place by the given sort columns using compareField.
@@ -55,6 +57,12 @@ func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) [
 
 // afterCursor returns true if item is strictly after the cursor position
 // according to the sort columns and their directions.
+//
+// Algorithm: multi-column lexicographic comparison with direction-awareness.
+// For each column from first to last: compare item value vs cursor value.
+// - Non-last column, values differ: result determined by direction (ASC→positive, DESC→negative).
+// - Non-last column, values equal: continue to next column.
+// - Last column: strict inequality required (excludes the cursor item itself).
 func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValue FieldFunc[T]) bool {
 	for level := range len(cols) {
 		val := fieldValue(item, cols[level].Name)
