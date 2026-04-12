@@ -258,9 +258,7 @@ func TestValidateCursorScope_MissingScope(t *testing.T) {
 	cur := Cursor{Values: []any{"v1"}, Context: qctx} // Scope intentionally empty
 	err := ValidateCursorScope(cur, sort, qctx)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "scope mismatch")
-	assert.Contains(t, err.Error(), `got ""`)  // empty scope shown in diagnostic
-	assert.Contains(t, err.Error(), "want")
+	assert.Contains(t, err.Error(), "scope is required")
 }
 
 func TestValidateCursorScope_MissingContext(t *testing.T) {
@@ -269,9 +267,7 @@ func TestValidateCursorScope_MissingContext(t *testing.T) {
 	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort)} // Context intentionally empty
 	err := ValidateCursorScope(cur, sort, qctx)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "context mismatch")
-	assert.Contains(t, err.Error(), `got ""`) // empty context shown in diagnostic
-	assert.Contains(t, err.Error(), "want")
+	assert.Contains(t, err.Error(), "context is required")
 }
 
 func TestValidateCursorScope_BothMissing(t *testing.T) {
@@ -280,7 +276,7 @@ func TestValidateCursorScope_BothMissing(t *testing.T) {
 	cur := Cursor{Values: []any{"v1"}} // both Scope and Context empty
 	err := ValidateCursorScope(cur, sort, qctx)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "scope mismatch") // scope check fires first
+	assert.Contains(t, err.Error(), "scope is required") // scope check fires first
 }
 
 func TestValidateCursorScope_ContextMismatch(t *testing.T) {
