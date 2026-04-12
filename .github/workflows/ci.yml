@@ -20,6 +20,9 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: src/go.sum
 
+      - name: Reset Go build caches
+        run: go clean -cache -testcache
+
       - name: Build
         run: go build ./...
 
@@ -99,6 +102,9 @@ jobs:
         with:
           go-version: "1.25"
           cache-dependency-path: src/go.sum
+
+      - name: Reset Go build caches
+        run: go clean -cache -testcache
 
       - name: Integration tests (testcontainers)
         run: go test -tags=integration ./adapters/... -count=1 -timeout 5m
