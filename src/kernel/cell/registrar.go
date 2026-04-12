@@ -135,8 +135,13 @@ type ConfigChangeEvent struct {
 	// other cells or the framework.
 	Config map[string]any
 	// Generation is the monotonically increasing reload counter from the config
-	// subsystem. Starts at 0 (initial load); increments by 1 on each successful
-	// Reload. Cells can compare with their last-seen generation to detect drift.
+	// subsystem (source-of-truth version). Starts at 0 (initial load); increments
+	// by 1 on each successful Reload.
+	//
+	// This is a desired-state indicator, NOT an applied-state indicator: it
+	// reflects that the config source has been updated, not that all cells have
+	// successfully applied the new values. Cells can compare with their last-seen
+	// generation to detect drift (observer-only semantics).
 	Generation int64
 }
 

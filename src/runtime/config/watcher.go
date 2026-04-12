@@ -4,7 +4,11 @@
 // atomic saves and renames; fsnotify docs recommend directory-level watch.
 // Adopted: watch filepath.Dir(path), filter by filepath.Base(path).
 // Deviated from go-micro (file-level watch with Rename re-add): directory-level
-// is more robust for Kubernetes ConfigMap symlink swaps.
+// handles atomic replace (rename+create, remove+recreate).
+//
+// Limitation: Kubernetes ConfigMap projected-volume updates via ..data symlink
+// pivot are NOT supported — those events target the symlink, not the config
+// filename. Full symlink-aware watching is tracked as a follow-up (CFG-P2-01).
 package config
 
 import (
@@ -23,9 +27,9 @@ type WatchEvent struct {
 }
 
 // Watcher monitors a file for changes by watching its parent directory.
-// This correctly handles atomic replace (rename+create), remove+recreate,
-// and Kubernetes ConfigMap symlink swaps where file-level inotify/kqueue
-// watches would silently break.
+// This correctly handles atomic replace (rename+create) and remove+recreate,
+// where file-level inotify/kqueue watches would silently break due to inode
+// rebinding.
 type Watcher struct {
 	path       string // original path (reported in WatchEvent)
 	dir        string // parent directory being watched

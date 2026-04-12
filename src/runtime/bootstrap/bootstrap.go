@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -251,14 +252,21 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := asm.StartWithConfig(ctx, cfgMap); err != nil {
 		return rollback(fmt.Errorf("bootstrap: assembly start: %w", err))
 	}
-	// assemblyStopped guards against config reload callbacks firing after
-	// the assembly has been stopped during shutdown. Without this, the LIFO
-	// teardown order (assembly.Stop before watcher.Close) creates a window
-	// where the watcher can dispatch callbacks to already-stopped cells.
+	// assemblyStopped + reloadWG together ensure clean shutdown of the reload
+	// pipeline. The guard prevents new callbacks from entering after shutdown
+	// begins; the WaitGroup drains any in-flight callback that passed the
+	// guard before assemblyStopped was set. Teardown sequence:
+	//   1. assemblyStopped.Store(true) — stop new callbacks
+	//   2. reloadWG.Wait()             — drain in-flight callbacks
+	//   3. asm.Stop(c)                 — safe: no concurrent OnConfigReload
+	//
+	// ref: net/http Server.Shutdown — stop accepting + drain active + close.
 	var assemblyStopped atomic.Bool
+	var reloadWG sync.WaitGroup
 
 	teardowns = append(teardowns, func(c context.Context) error {
 		assemblyStopped.Store(true)
+		reloadWG.Wait()
 		return asm.Stop(c)
 	})
 
@@ -267,6 +275,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if cfgWatcher != nil {
 		yamlPath, envPrefix := b.configPath, b.envPrefix
 		cfgWatcher.OnChange(func(evt config.WatchEvent) {
+			if assemblyStopped.Load() {
+				return
+			}
+			reloadWG.Add(1)
+			defer reloadWG.Done()
+			// Double-check after Add: if shutdown raced between the Load above
+			// and Add, we must not proceed.
 			if assemblyStopped.Load() {
 				return
 			}
