@@ -18,13 +18,27 @@ import "context"
 // This keeps the core Cell interface unchanged while allowing Cells to
 // opt-in to lifecycle hooks.
 //
+// Compensation boundary: the assembly only performs cleanup (BeforeStop →
+// Stop → AfterStop) for cells whose Start has already succeeded. If
+// BeforeStart or Start fails, the current cell is NOT cleaned up by the
+// framework — only previously-started cells are rolled back. This matches
+// Uber fx and Kratos semantics.
+//
 // ref: go-kratos/kratos app.go — BeforeStart/AfterStart/BeforeStop/AfterStop
 // ref: uber-go/fx lifecycle.go — FIFO Start / LIFO Stop / rollback on failure
 
-// BeforeStarter is optionally implemented by Cells that need to run logic
-// before Start is called (e.g., validate runtime prerequisites, warm caches,
-// acquire external resources). If BeforeStart returns an error, Start is NOT
-// called and the assembly rolls back previously-started cells.
+// BeforeStarter is optionally implemented by Cells that need to run
+// preflight checks before Start is called (e.g., validate runtime
+// prerequisites, verify config completeness, check external connectivity).
+//
+// BeforeStart MUST NOT acquire resources that require cleanup. If it
+// returns an error, Start is NOT called, and the framework does NOT run
+// BeforeStop/Stop/AfterStop on the current cell — only previously-started
+// cells are rolled back. Any resource acquisition should happen inside
+// Start, which is responsible for its own internal cleanup on failure.
+//
+// ref: uber-go/fx lifecycle.go — failing OnStart does not trigger OnStop
+// for the same hook; only previously-registered hooks are rolled back
 type BeforeStarter interface {
 	BeforeStart(ctx context.Context) error
 }
@@ -32,7 +46,8 @@ type BeforeStarter interface {
 // AfterStarter is optionally implemented by Cells that need to run logic
 // after Start completes (e.g., register health probes, announce readiness).
 // If AfterStart returns an error, the cell (whose Start already succeeded)
-// is stopped, then previously-started cells are rolled back.
+// is stopped via BeforeStop → Stop → AfterStop, then previously-started
+// cells are rolled back.
 type AfterStarter interface {
 	AfterStart(ctx context.Context) error
 }
@@ -48,6 +63,10 @@ type BeforeStopper interface {
 // AfterStopper is optionally implemented by Cells that need to run logic
 // after Stop completes (e.g., emit final metrics, close audit logs).
 // Errors are accumulated but do not prevent other cells from being stopped.
+//
+// Note: by the time AfterStop runs, the cell's ShutdownCtx() is already
+// cancelled (Stop cancels it). Use the ctx parameter passed by the
+// assembly, which carries the shutdown timeout, not ShutdownCtx().
 type AfterStopper interface {
 	AfterStop(ctx context.Context) error
 }

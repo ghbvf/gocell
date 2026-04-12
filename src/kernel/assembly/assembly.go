@@ -138,6 +138,8 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 		}
 	}
 	if err := c.Stop(ctx); err != nil {
+		slog.Warn("lifecycle: Stop failed",
+			slog.String("cell", c.ID()), slog.Any("error", err))
 		errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("assembly: stop cell %q", c.ID()), err))
 	}

@@ -504,3 +504,27 @@ func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
 		"A.BeforeStop", "A.Stop", "A.AfterStop",
 	}, calls)
 }
+
+func TestAssemblyHooks_PanicRecovery_AfterStop(t *testing.T) {
+	a := New(Config{ID: "hooks-panic-astop"})
+	var calls []string
+
+	good := newHookOrderCell("A", &calls, "")
+	panicker := newPanicHookCell("B", &calls, "AfterStop")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(panicker))
+	require.NoError(t, a.Start(context.Background()))
+
+	calls = nil
+	err := a.Stop(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+
+	// B: BeforeStop + Stop execute normally, AfterStop panics (recovered).
+	// A: fully stopped.
+	assert.Equal(t, []string{
+		"B.BeforeStop", "B.Stop", "B.AfterStop", // AfterStop panicked, recovered
+		"A.BeforeStop", "A.Stop", "A.AfterStop",
+	}, calls)
+}
