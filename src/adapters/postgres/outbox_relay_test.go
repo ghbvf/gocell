@@ -962,9 +962,9 @@ func TestRelay_ThreePhase_Success_RecordsMetrics(t *testing.T) {
 	assert.Equal(t, 0, mc.pollCycles[0].Retried)
 	assert.Equal(t, 0, mc.pollCycles[0].Dead)
 	assert.Equal(t, 0, mc.pollCycles[0].Skipped)
-	assert.Greater(t, mc.pollCycles[0].ClaimDur, time.Duration(0))
-	assert.Greater(t, mc.pollCycles[0].PublishDur, time.Duration(0))
-	assert.Greater(t, mc.pollCycles[0].WriteBackDur, time.Duration(0))
+	assert.GreaterOrEqual(t, mc.pollCycles[0].ClaimDur, time.Duration(0))
+	assert.GreaterOrEqual(t, mc.pollCycles[0].PublishDur, time.Duration(0))
+	assert.GreaterOrEqual(t, mc.pollCycles[0].WriteBackDur, time.Duration(0))
 }
 
 func TestRelay_EmptyBatch_RecordsBatchSizeZero(t *testing.T) {

@@ -75,7 +75,7 @@ type RelayCollector struct {
 }
 
 // NewRelayCollector creates a Prometheus-backed relay metrics collector.
-// ref: Watermill PrometheusMetricsBuilder — register with AlreadyRegistered tolerance
+// Metrics are registered during construction; any registration failure is returned.
 // ref: Temporal MetricsHandler — inject at construction
 func NewRelayCollector(cfg RelayCollectorConfig) (*RelayCollector, error) {
 	cfg.defaults()
