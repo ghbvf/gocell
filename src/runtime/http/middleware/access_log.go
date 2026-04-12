@@ -9,7 +9,7 @@ import (
 )
 
 // AccessLog logs structured request/response information via slog.Info.
-// Fields: method, path, status, duration_ms, request_id.
+// Fields: method, path, route, status, duration_ms, request_id.
 //
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), AccessLog reuses it. Otherwise it creates its own to
@@ -29,9 +29,11 @@ func AccessLog(next http.Handler) http.Handler {
 
 		safeObserve(func() {
 			duration := time.Since(start)
+			route := RoutePatternFromCtx(r.Context())
 			attrs := []any{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
+				slog.String("route", route),
 				slog.Int("status", state.Status()),
 				slog.Int64("duration_ms", duration.Milliseconds()),
 			}

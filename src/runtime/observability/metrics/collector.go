@@ -16,12 +16,14 @@ import (
 // Collector records HTTP request metrics.
 type Collector interface {
 	// RecordRequest records a completed HTTP request with the given labels.
-	RecordRequest(method, path string, status int, durationSeconds float64)
+	// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual
+	// request path. Using route patterns prevents metric cardinality explosion.
+	RecordRequest(method, route string, status int, durationSeconds float64)
 }
 
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	// Key is "method path status".
+	// Key is "method route status" (e.g. "GET /api/v1/users/{id} 200").
 	RequestCounts    map[string]int64
 	DurationSumsMs   map[string]int64
 }
@@ -42,13 +44,13 @@ func NewInMemoryCollector() *InMemoryCollector {
 	}
 }
 
-func metricKey(method, path string, status int) string {
-	return fmt.Sprintf("%s %s %d", method, path, status)
+func metricKey(method, route string, status int) string {
+	return fmt.Sprintf("%s %s %d", method, route, status)
 }
 
 // RecordRequest records a completed HTTP request.
-func (c *InMemoryCollector) RecordRequest(method, path string, status int, durationSeconds float64) {
-	key := metricKey(method, path, status)
+func (c *InMemoryCollector) RecordRequest(method, route string, status int, durationSeconds float64) {
+	key := metricKey(method, route, status)
 
 	c.mu.RLock()
 	cnt, cntOK := c.counts[key]
@@ -100,7 +102,7 @@ func (c *InMemoryCollector) Handler() http.Handler {
 
 		type entry struct {
 			Method      string `json:"method"`
-			Path        string `json:"path"`
+			Route       string `json:"route"`
 			Status      int    `json:"status"`
 			Count       int64  `json:"count"`
 			DurationMs  int64  `json:"duration_sum_ms"`
@@ -108,18 +110,18 @@ func (c *InMemoryCollector) Handler() http.Handler {
 
 		var entries []entry
 		for k, count := range snap.RequestCounts {
-			var method, path string
+			var method, route string
 			var status int
-			_, _ = fmt.Sscanf(k, "%s %s %d", &method, &path, &status)
+			_, _ = fmt.Sscanf(k, "%s %s %d", &method, &route, &status)
 			entries = append(entries, entry{
 				Method:     method,
-				Path:       path,
+				Route:      route,
 				Status:     status,
 				Count:      count,
 				DurationMs: snap.DurationSumsMs[k],
 			})
 		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Route < entries[j].Route })
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"metrics": entries,
@@ -129,7 +131,7 @@ func (c *InMemoryCollector) Handler() http.Handler {
 
 // metricsText formats the counter as a Prometheus-like text line for
 // debugging/testing. Not a full Prometheus exposition format.
-func metricsText(method, path string, status int, count int64) string {
-	return fmt.Sprintf("http_requests_total{method=%q,path=%q,status=%q} %d",
-		method, path, strconv.Itoa(status), count)
+func metricsText(method, route string, status int, count int64) string {
+	return fmt.Sprintf("http_requests_total{method=%q,route=%q,status=%q} %d",
+		method, route, strconv.Itoa(status), count)
 }

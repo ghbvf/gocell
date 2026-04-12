@@ -101,7 +101,7 @@ func TestCollector_Labels(t *testing.T) {
 				labels[lp.GetName()] = lp.GetValue()
 			}
 			assert.Equal(t, "GET", labels["method"])
-			assert.Equal(t, "/api/v1/sessions", labels["path"])
+			assert.Equal(t, "/api/v1/sessions", labels["route"])
 			assert.Equal(t, "200", labels["status"])
 			assert.Equal(t, "access-core", labels["cell"])
 		}
