@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,13 @@ func cmpFloat(a, b float64) int {
 		return 1
 	}
 	return 0
+}
+
+func mustCompare(t *testing.T, a, b any) int {
+	t.Helper()
+	v, err := query.CompareAny(a, b)
+	require.NoError(t, err)
+	return v
 }
 
 // --- Sort tests ---
@@ -135,7 +143,8 @@ func TestApplyCursor_FirstPage(t *testing.T) {
 		Sort:  []query.SortColumn{{Name: "id", Direction: query.SortASC}},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 
 	// FetchLimit = 3, so we get 3 items (for hasMore detection)
 	require.Len(t, result, 3)
@@ -154,7 +163,8 @@ func TestApplyCursor_WithCursor(t *testing.T) {
 		Sort:         []query.SortColumn{{Name: "id", Direction: query.SortASC}},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "c", result[0].ID)
@@ -171,8 +181,8 @@ func TestApplyCursor_CursorPastEnd(t *testing.T) {
 		Sort:         []query.SortColumn{{Name: "id", Direction: query.SortASC}},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
-
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 	assert.Empty(t, result)
 }
 
@@ -194,7 +204,8 @@ func TestApplyCursor_MultiColumnCursor(t *testing.T) {
 		},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 
 	require.Len(t, result, 3)
 	assert.Equal(t, "2", result[0].ID)
@@ -213,7 +224,8 @@ func TestApplyCursor_DESC_Direction(t *testing.T) {
 		Sort:         []query.SortColumn{{Name: "id", Direction: query.SortDESC}},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "b", result[0].ID)
@@ -240,77 +252,15 @@ func TestApplyCursor_TimeVsString_CrossType(t *testing.T) {
 		},
 	}
 
-	result := query.ApplyCursor(items, params, testFieldValue)
+	result, err := query.ApplyCursor(items, params, testFieldValue)
+	require.NoError(t, err)
 
 	require.Len(t, result, 2, "should skip item at cursor position")
 	assert.Equal(t, "2", result[0].ID)
 	assert.Equal(t, "3", result[1].ID)
 }
 
-// --- CompareAny tests ---
-
-func TestCompareAny_StringVsString(t *testing.T) {
-	assert.Equal(t, -1, query.CompareAny("a", "b"))
-	assert.Equal(t, 0, query.CompareAny("x", "x"))
-	assert.Equal(t, 1, query.CompareAny("z", "a"))
-}
-
-func TestCompareAny_Float64VsFloat64(t *testing.T) {
-	assert.Equal(t, -1, query.CompareAny(1.0, 2.0))
-	assert.Equal(t, 0, query.CompareAny(3.14, 3.14))
-	assert.Equal(t, 1, query.CompareAny(9.9, 1.1))
-}
-
-func TestCompareAny_TimeVsTime(t *testing.T) {
-	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	t2 := t1.Add(time.Nanosecond)
-
-	assert.Equal(t, -1, query.CompareAny(t1, t2))
-	assert.Equal(t, 0, query.CompareAny(t1, t1))
-	assert.Equal(t, 1, query.CompareAny(t2, t1))
-}
-
-func TestCompareAny_TimeVsString(t *testing.T) {
-	t1 := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
-	s := t1.Format(time.RFC3339Nano)
-
-	// time.Time vs string(RFC3339Nano) — should compare equal
-	assert.Equal(t, 0, query.CompareAny(t1, s))
-
-	// time.Time earlier than string
-	earlier := t1.Add(-time.Second)
-	assert.Equal(t, -1, query.CompareAny(earlier, s))
-
-	// time.Time later than string
-	later := t1.Add(time.Second)
-	assert.Equal(t, 1, query.CompareAny(later, s))
-}
-
-func TestCompareAny_StringVsTime(t *testing.T) {
-	t1 := time.Date(2026, 6, 15, 8, 30, 0, 500, time.UTC)
-	s := t1.Format(time.RFC3339Nano)
-
-	assert.Equal(t, 0, query.CompareAny(s, t1))
-	assert.Equal(t, -1, query.CompareAny(s, t1.Add(time.Second)))
-	assert.Equal(t, 1, query.CompareAny(s, t1.Add(-time.Second)))
-}
-
-func TestCompareAny_UnsupportedType_Panics(t *testing.T) {
-	assert.Panics(t, func() {
-		query.CompareAny(42, "str")
-	})
-	assert.Panics(t, func() {
-		query.CompareAny(true, false)
-	})
-	assert.Panics(t, func() {
-		query.CompareAny(1.0, "str")
-	})
-	assert.Panics(t, func() {
-		query.CompareAny(1.0, time.Now())
-	})
-}
-
-func TestApplyCursor_MismatchedCursorValuesLength_Panics(t *testing.T) {
+func TestApplyCursor_MismatchedCursorValuesLength_ReturnsError(t *testing.T) {
 	items := []testItem{{ID: "a"}, {ID: "b"}}
 	params := query.ListParams{
 		Limit:        10,
@@ -321,9 +271,71 @@ func TestApplyCursor_MismatchedCursorValuesLength_Panics(t *testing.T) {
 		},
 	}
 
-	// ApplyCursor does not validate length — this is enforced upstream by
-	// ValidateCursorScope. If bypass occurs, it panics with index out of range.
-	assert.Panics(t, func() {
-		query.ApplyCursor(items, params, testFieldValue)
-	})
+	_, err := query.ApplyCursor(items, params, testFieldValue)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// --- CompareAny tests ---
+
+func TestCompareAny_StringVsString(t *testing.T) {
+	assert.Equal(t, -1, mustCompare(t, "a", "b"))
+	assert.Equal(t, 0, mustCompare(t, "x", "x"))
+	assert.Equal(t, 1, mustCompare(t, "z", "a"))
+}
+
+func TestCompareAny_Float64VsFloat64(t *testing.T) {
+	assert.Equal(t, -1, mustCompare(t, 1.0, 2.0))
+	assert.Equal(t, 0, mustCompare(t, 3.14, 3.14))
+	assert.Equal(t, 1, mustCompare(t, 9.9, 1.1))
+}
+
+func TestCompareAny_TimeVsTime(t *testing.T) {
+	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Nanosecond)
+
+	assert.Equal(t, -1, mustCompare(t, t1, t2))
+	assert.Equal(t, 0, mustCompare(t, t1, t1))
+	assert.Equal(t, 1, mustCompare(t, t2, t1))
+}
+
+func TestCompareAny_TimeVsString(t *testing.T) {
+	t1 := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
+	s := t1.Format(time.RFC3339Nano)
+
+	// time.Time vs string(RFC3339Nano) — should compare equal
+	assert.Equal(t, 0, mustCompare(t, t1, s))
+
+	// time.Time earlier than string
+	earlier := t1.Add(-time.Second)
+	assert.Equal(t, -1, mustCompare(t, earlier, s))
+
+	// time.Time later than string
+	later := t1.Add(time.Second)
+	assert.Equal(t, 1, mustCompare(t, later, s))
+}
+
+func TestCompareAny_StringVsTime(t *testing.T) {
+	t1 := time.Date(2026, 6, 15, 8, 30, 0, 500, time.UTC)
+	s := t1.Format(time.RFC3339Nano)
+
+	assert.Equal(t, 0, mustCompare(t, s, t1))
+	assert.Equal(t, -1, mustCompare(t, s, t1.Add(time.Second)))
+	assert.Equal(t, 1, mustCompare(t, s, t1.Add(-time.Second)))
+}
+
+func TestCompareAny_UnsupportedType_ReturnsError(t *testing.T) {
+	_, err := query.CompareAny(42, "str")
+	require.Error(t, err)
+
+	_, err = query.CompareAny(true, false)
+	require.Error(t, err)
+
+	_, err = query.CompareAny(1.0, "str")
+	require.Error(t, err)
+
+	_, err = query.CompareAny(1.0, time.Now())
+	require.Error(t, err)
 }

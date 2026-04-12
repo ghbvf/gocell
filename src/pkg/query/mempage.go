@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // CompareFunc compares a single named field of two entities, returning -1/0/+1.
@@ -12,8 +14,8 @@ type CompareFunc[T any] func(a, b T, field string) int
 
 // FieldFunc extracts a cursor-comparable value from an entity by field name.
 // Returned values must be string, float64, or time.Time — other types will
-// cause CompareAny to panic. Time fields should return time.Time (not a
-// formatted string) so that CompareAny uses temporal comparison.
+// cause CompareAny to return an error. Time fields should return time.Time
+// (not a formatted string) so that CompareAny uses temporal comparison.
 type FieldFunc[T any] func(item T, field string) any
 
 // Sort sorts items in-place by the given sort columns using compareField.
@@ -37,11 +39,26 @@ func Sort[T any](items []T, cols []SortColumn, compareField CompareFunc[T]) {
 
 // ApplyCursor skips items at or before the cursor position, then limits to
 // FetchLimit() (Limit+1 for N+1 hasMore detection).
-func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) []T {
+//
+// Returns ErrCursorInvalid if CursorValues length does not match Sort columns
+// or if cursor value types are incompatible.
+func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) ([]T, error) {
+	if params.CursorValues != nil {
+		if len(params.CursorValues) != len(params.Sort) {
+			return nil, errcode.New(errcode.ErrCursorInvalid,
+				fmt.Sprintf("cursor values count %d does not match sort columns count %d",
+					len(params.CursorValues), len(params.Sort)))
+		}
+	}
+
 	start := 0
 	if params.CursorValues != nil {
 		for i, item := range items {
-			if afterCursor(item, params.Sort, params.CursorValues, fieldValue) {
+			after, err := afterCursor(item, params.Sort, params.CursorValues, fieldValue)
+			if err != nil {
+				return nil, err
+			}
+			if after {
 				start = i
 				break
 			}
@@ -52,7 +69,7 @@ func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) [
 	}
 
 	end := min(start+params.FetchLimit(), len(items))
-	return items[start:end]
+	return items[start:end], nil
 }
 
 // afterCursor returns true if item is strictly after the cursor position
@@ -63,28 +80,31 @@ func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) [
 // - Non-last column, values differ: result determined by direction (ASC→positive, DESC→negative).
 // - Non-last column, values equal: continue to next column.
 // - Last column: strict inequality required (excludes the cursor item itself).
-func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValue FieldFunc[T]) bool {
+func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValue FieldFunc[T]) (bool, error) {
 	for level := range len(cols) {
 		val := fieldValue(item, cols[level].Name)
 		curVal := cursorValues[level]
-		c := CompareAny(val, curVal)
+		c, err := CompareAny(val, curVal)
+		if err != nil {
+			return false, err
+		}
 
 		if level < len(cols)-1 {
 			if c != 0 {
 				if cols[level].Direction == SortDESC {
-					return c < 0
+					return c < 0, nil
 				}
-				return c > 0
+				return c > 0, nil
 			}
 			continue
 		}
 		// Last column: strict inequality.
 		if cols[level].Direction == SortDESC {
-			return c < 0
+			return c < 0, nil
 		}
-		return c > 0
+		return c > 0, nil
 	}
-	return false
+	return false, nil
 }
 
 // CompareAny compares two values that may be string, float64, or time.Time.
@@ -93,40 +113,40 @@ func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValu
 // from JSON decode.
 //
 // Supported type pairs: string↔string, float64↔float64, time.Time↔time.Time,
-// time.Time↔string (parsed as RFC3339Nano). All other combinations panic.
-// This is safe because inputs come from HMAC-validated cursor values (JSON
-// decode produces only string/float64) and FieldFunc callbacks (returning
-// string/float64/time.Time).
-func CompareAny(a, b any) int {
-	// Fast path: both same concrete type.
+// time.Time↔string (parsed as RFC3339Nano). All other combinations return
+// ErrCursorInvalid.
+func CompareAny(a, b any) (int, error) {
 	switch av := a.(type) {
 	case string:
 		if bv, ok := b.(string); ok {
-			return cmp.Compare(av, bv)
+			return cmp.Compare(av, bv), nil
 		}
 		if bt, ok := b.(time.Time); ok {
 			at, err := time.Parse(time.RFC3339Nano, av)
 			if err != nil {
-				panic(fmt.Sprintf("CompareAny: cannot parse string %q as RFC3339Nano: %v", av, err))
+				return 0, errcode.New(errcode.ErrCursorInvalid,
+					fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", av, err))
 			}
-			return at.Compare(bt)
+			return at.Compare(bt), nil
 		}
 	case float64:
 		if bv, ok := b.(float64); ok {
-			return cmp.Compare(av, bv)
+			return cmp.Compare(av, bv), nil
 		}
 	case time.Time:
 		if bt, ok := b.(time.Time); ok {
-			return av.Compare(bt)
+			return av.Compare(bt), nil
 		}
 		if bs, ok := b.(string); ok {
 			bt, err := time.Parse(time.RFC3339Nano, bs)
 			if err != nil {
-				panic(fmt.Sprintf("CompareAny: cannot parse string %q as RFC3339Nano: %v", bs, err))
+				return 0, errcode.New(errcode.ErrCursorInvalid,
+					fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", bs, err))
 			}
-			return av.Compare(bt)
+			return av.Compare(bt), nil
 		}
 	}
 
-	panic(fmt.Sprintf("CompareAny: unsupported type combination %T vs %T", a, b))
+	return 0, errcode.New(errcode.ErrCursorInvalid,
+		fmt.Sprintf("unsupported cursor value type combination %T vs %T", a, b))
 }

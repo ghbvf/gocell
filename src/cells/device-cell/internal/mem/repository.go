@@ -100,7 +100,7 @@ func (r *CommandRepository) ListPending(_ context.Context, deviceID string, para
 	}
 
 	query.Sort(filtered, params.Sort, compareCommandField)
-	return query.ApplyCursor(filtered, params, commandFieldValue), nil
+	return query.ApplyCursor(filtered, params, commandFieldValue)
 }
 
 // compareCommandField compares a single field of two commands.

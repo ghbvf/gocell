@@ -77,7 +77,7 @@ func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*do
 	}
 
 	query.Sort(all, params.Sort, compareFlagField)
-	return query.ApplyCursor(all, params, flagFieldValue), nil
+	return query.ApplyCursor(all, params, flagFieldValue)
 }
 
 // compareFlagField compares a single field of two feature flags.

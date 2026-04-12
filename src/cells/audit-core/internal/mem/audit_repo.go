@@ -63,7 +63,7 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 
 	filtered := filterEntries(r.entries, filters)
 	query.Sort(filtered, params.Sort, compareAuditField)
-	return query.ApplyCursor(filtered, params, auditFieldValue), nil
+	return query.ApplyCursor(filtered, params, auditFieldValue)
 }
 
 // filterEntries returns clones of entries matching the given filters.

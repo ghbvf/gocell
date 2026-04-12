@@ -93,7 +93,7 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 	}
 
 	query.Sort(all, params.Sort, compareConfigField)
-	return query.ApplyCursor(all, params, configFieldValue), nil
+	return query.ApplyCursor(all, params, configFieldValue)
 }
 
 // compareConfigField compares a single field of two config entries.
