@@ -46,7 +46,7 @@
 | PR | 任务合并 | 工时 | 文件 |
 |----|----------|------|------|
 | 运维健康体系 | OPS-3(pg/redis Health) + OPS-4(drain期) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz隔离) + CFG-P2-01(watcher readyz) + READYZ-ROOT + R97-02(debounce) + R97-F1(symlink-pivot) + **BOOT-PANIC-01(bootstrap panic漏口: duplicate checker校验+registrar safe-call)** + **BOOT-OPTION-01(WithRouterOptions覆盖框架能力: 拒绝冲突option或固定优先级)** + **INFRA-EXPOSE-01(infra端点过度暴露: /metrics opt-in + health公开/内部分离或独立mux)** | 14h | `runtime/http/health/` + `runtime/bootstrap/` + `router/` + `config/` + `auth/middleware.go` **(+3 P1 from PR#96 复核)** |
-| runtime 竞态修复 | R1C2-F01(eventbus race) + R1C2-F03(WorkerGroup首失败) + **R97-R3-01(reload WaitGroup Add-after-Wait edge, 改用 channel+select 或 singleflight 消除理论竞态)** (PR#97 round3 review) | 5h | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
+| ~~runtime 竞态修复~~ | ~~R1C2-F01(eventbus 并发回归测试 + Close/Publish 锁序注释) + R1C2-F03(已验证: WorkerGroup cancel-on-error 已覆盖) + R97-R3-01(reload gate 替换 WaitGroup Add-after-Wait 窗口)~~ | ✅ done | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
 | RabbitMQ 连接正确性 | RMQ-RACE-01(WaitConnected竞态) + P3-DEFER-05(Health状态区分) | 4h | `adapters/rabbitmq/connection.go` |
 | kernel outbox 清理 | P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) | 4h | `kernel/outbox/` + `kernel/idempotency/` |
 | **L4 API 收敛** | **L4-API-01**: Validate 改名 ValidateNew（create-only 语义）+ AdvanceCommand 统一 timestamps/attempt 副作用 + CommandStateAdvancer 暴露完整迁移契约。adapter 不应需要绕过状态机语义 | 4h | `kernel/outbox/l4.go` **(P1, discovered via PR#93 六席位复核)** |
