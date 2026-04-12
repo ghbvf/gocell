@@ -214,8 +214,16 @@ func (e *CommandEntry) DeadlineFor(phase TimeoutPhase) time.Time {
 	}
 }
 
-// Validate checks that required fields are present, status is valid, and
-// timeouts are non-negative.
+// Validate checks that required fields are present, status is valid,
+// timeouts are non-negative, and creation-time invariants hold.
+//
+// Creation-time invariants (enforced by NewCommandEntry):
+//   - Status must be CommandPending
+//   - SentAt, DeliveredAt, CompletedAt must be nil
+//   - Attempt must be 0
+//
+// These constraints ensure that callers cannot bypass the state machine
+// by constructing a CommandEntry with an arbitrary status or timestamps.
 func (e *CommandEntry) Validate() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing ID")
@@ -232,8 +240,17 @@ func (e *CommandEntry) Validate() error {
 	if !e.Status.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry has invalid Status")
 	}
+	if e.Status != CommandPending {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: new command entry must have Pending status (use AdvanceCommand to change status)")
+	}
 	if e.CreatedAt.IsZero() {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing CreatedAt")
+	}
+	if e.SentAt != nil || e.DeliveredAt != nil || e.CompletedAt != nil {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: new command entry must not have phase timestamps (SentAt/DeliveredAt/CompletedAt)")
+	}
+	if e.Attempt != 0 {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: new command entry must have Attempt=0")
 	}
 	if e.Timeouts.ScheduleToSend < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: ScheduleToSend timeout must be non-negative")
@@ -244,6 +261,67 @@ func (e *CommandEntry) Validate() error {
 	if e.Timeouts.OverallDeadline < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: OverallDeadline timeout must be non-negative")
 	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Constructors — enforce creation-time invariants
+// ---------------------------------------------------------------------------
+
+// NewCommandEntry creates a CommandEntry in Pending status with the given
+// parameters. This is the only sanctioned way to create a command entry;
+// it enforces:
+//   - Status = CommandPending (callers cannot create non-Pending commands)
+//   - SentAt / DeliveredAt / CompletedAt = nil (no phase timestamps at creation)
+//   - Attempt = 0
+//   - CreatedAt = now
+//
+// ref: Temporal StartWorkflowExecution — callers submit intent + timeouts,
+// status/timestamps are owned by the server.
+func NewCommandEntry(id, deviceID, commandType string, payload []byte, timeouts CommandTimeouts) CommandEntry {
+	return CommandEntry{
+		ID:          id,
+		DeviceID:    deviceID,
+		CommandType: commandType,
+		Payload:     payload,
+		Status:      CommandPending,
+		Timeouts:    timeouts,
+		Attempt:     0,
+		CreatedAt:   time.Now(),
+	}
+}
+
+// AdvanceCommand validates a transition and applies the timestamp side effects
+// that the kernel owns. This is the canonical entry point for all state changes.
+// Adapters SHOULD call this before persisting the new status.
+//
+// Side effects by target status:
+//   - Sent:      sets SentAt, increments Attempt
+//   - Delivered: sets DeliveredAt
+//   - Succeeded/Failed/Expired/Canceled: sets CompletedAt
+//
+// Returns an error if the transition is invalid or if a required prerequisite
+// timestamp is missing (e.g., transitioning to Delivered without SentAt).
+func AdvanceCommand(entry *CommandEntry, to CommandStatus, now time.Time) error {
+	if err := Transition(entry.Status, to); err != nil {
+		return err
+	}
+
+	switch to {
+	case CommandSent:
+		entry.SentAt = &now
+		entry.Attempt++
+	case CommandDelivered:
+		if entry.SentAt == nil {
+			return errcode.New(errcode.ErrValidationFailed,
+				"outbox: cannot transition to Delivered without SentAt")
+		}
+		entry.DeliveredAt = &now
+	case CommandSucceeded, CommandFailed, CommandExpired, CommandCanceled:
+		entry.CompletedAt = &now
+	}
+
+	entry.Status = to
 	return nil
 }
 

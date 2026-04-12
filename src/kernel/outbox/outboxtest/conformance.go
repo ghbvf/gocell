@@ -94,10 +94,7 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 		testReceiptReleasedOnRequeue(t, features, constructor)
 	})
 
-	// Batch 5: Metadata + lifecycle
-	t.Run("MetadataRoundTrip", func(t *testing.T) {
-		testMetadataRoundTrip(t, features, constructor)
-	})
+	// Batch 5: Lifecycle
 	t.Run("SubscribeBlocksUntilCancel", func(t *testing.T) {
 		testSubscribeBlocksUntilCancel(t, features, constructor)
 	})
@@ -535,23 +532,7 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 // Batch 5: Metadata + lifecycle
 // ---------------------------------------------------------------------------
 
-func testMetadataRoundTrip(t *testing.T, features Features, _ PubSubConstructor) {
-	if !features.SupportsMetadata {
-		t.Skip("implementation does not support metadata round-trip")
-	}
 
-	// The standard Publisher.Publish(ctx, topic, payload) interface does not
-	// carry metadata. Adapter-specific conformance tests must verify metadata
-	// round-trip through their own publishing API (e.g., wire-format Entry
-	// with populated Metadata field).
-	//
-	// This test is intentionally a placeholder: setting SupportsMetadata=true
-	// signals that the adapter SHOULD provide its own metadata verification
-	// test alongside this suite. A future Publisher interface evolution
-	// (PublishEntry) could enable a generic metadata test here.
-	t.Skip("metadata round-trip requires adapter-specific publishing API — " +
-		"adapter tests should verify metadata separately")
-}
 
 func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.BlockingSubscribe {

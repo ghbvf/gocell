@@ -5,16 +5,15 @@ import "testing"
 // Features declares which capabilities the implementation under test supports.
 // Tests that require unsupported features are skipped with t.Skip().
 //
+// Only capabilities that the conformance suite can verify with executable
+// assertions are included. Capabilities that require adapter-specific
+// mechanisms (e.g., metadata round-trip, persistence, exactly-once delivery)
+// should be tested in the adapter's own test files, not via this struct.
+//
 // ref: ThreeDotsLabs/watermill pubsub/tests — Features struct pattern.
 type Features struct {
-	// Persistent means messages survive process restart.
-	Persistent bool
-
 	// GuaranteedOrder means messages on a single topic arrive in publish order.
 	GuaranteedOrder bool
-
-	// ExactlyOnceDelivery means the implementation deduplicates at the broker level.
-	ExactlyOnceDelivery bool
 
 	// SupportsRequeue means DispositionRequeue causes redelivery.
 	SupportsRequeue bool
@@ -24,9 +23,6 @@ type Features struct {
 
 	// SupportsReceipt means the implementation threads Receipt through HandleResult.
 	SupportsReceipt bool
-
-	// SupportsMetadata means Entry.Metadata survives pub/sub round-trip.
-	SupportsMetadata bool
 
 	// BlockingSubscribe means Subscribe blocks until ctx is cancelled.
 	BlockingSubscribe bool

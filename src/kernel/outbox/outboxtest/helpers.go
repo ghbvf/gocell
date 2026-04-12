@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -153,7 +154,7 @@ type collector struct {
 }
 
 // startCollecting launches a subscriber goroutine that collects entries.
-// Returns immediately after the subscriber has had time to register.
+// Returns after the subscriber goroutine is running (ready channel handshake).
 // Call waitAndGet to block until n entries arrive.
 func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic string, n int) *collector {
 	t.Helper()
@@ -168,9 +169,11 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 	c.cancel = cancel
 	t.Cleanup(cancel)
 
+	ready := make(chan struct{})
 	go func() {
 		defer close(c.subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		close(ready) // signal: goroutine is running, Subscribe call is imminent
+		err := sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 			c.mu.Lock()
 			c.collected = append(c.collected, entry)
 			count := len(c.collected)
@@ -180,7 +183,14 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			c.t.Errorf("unexpected Subscribe error: %v", err)
+		}
 	}()
+	<-ready
+	// Brief yield to let Subscribe register internally. The ready channel
+	// guarantees the goroutine is running; this yield covers the window
+	// between goroutine start and the Subscribe call's internal registration.
 	time.Sleep(subscribeInitDelay)
 	return c
 }
@@ -236,17 +246,24 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 	}
 }
 
-// subscribe launches a Subscribe goroutine with the given handler and waits
-// for registration.
+// subscribe launches a Subscribe goroutine with the given handler.
+// Waits for the goroutine to start and Subscribe to be called.
+// Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
+	ready := make(chan struct{})
 	go func() {
 		defer close(h.subDone)
-		_ = h.Sub.Subscribe(ctx, h.Topic, handler)
+		close(ready)
+		err := h.Sub.Subscribe(ctx, h.Topic, handler)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			h.T.Errorf("unexpected Subscribe error: %v", err)
+		}
 	}()
+	<-ready
 	time.Sleep(subscribeInitDelay)
 }
 

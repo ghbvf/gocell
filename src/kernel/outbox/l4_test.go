@@ -485,3 +485,156 @@ func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Validate — creation-time invariant enforcement
+// ---------------------------------------------------------------------------
+
+func TestCommandEntry_Validate_NonPendingStatus(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	entry.Status = CommandSent // violate invariant
+	err := entry.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Pending status")
+}
+
+func TestCommandEntry_Validate_NonZeroAttempt(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	entry.Attempt = 1 // violate invariant
+	err := entry.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Attempt=0")
+}
+
+func TestCommandEntry_Validate_HasPhaseTimestamps(t *testing.T) {
+	now := time.Now()
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	entry.SentAt = &now // violate invariant
+	err := entry.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "phase timestamps")
+}
+
+// ---------------------------------------------------------------------------
+// NewCommandEntry
+// ---------------------------------------------------------------------------
+
+func TestNewCommandEntry(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{
+		OverallDeadline: 1 * time.Hour,
+	})
+	assert.Equal(t, "cmd-1", entry.ID)
+	assert.Equal(t, "dev-1", entry.DeviceID)
+	assert.Equal(t, "reboot", entry.CommandType)
+	assert.Equal(t, CommandPending, entry.Status)
+	assert.Equal(t, 0, entry.Attempt)
+	assert.Nil(t, entry.SentAt)
+	assert.Nil(t, entry.DeliveredAt)
+	assert.Nil(t, entry.CompletedAt)
+	assert.False(t, entry.CreatedAt.IsZero())
+	assert.NoError(t, entry.Validate())
+}
+
+// ---------------------------------------------------------------------------
+// AdvanceCommand
+// ---------------------------------------------------------------------------
+
+func TestAdvanceCommand_PendingToSent(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	now := time.Now()
+
+	err := AdvanceCommand(&entry, CommandSent, now)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandSent, entry.Status)
+	assert.Equal(t, 1, entry.Attempt)
+	assert.NotNil(t, entry.SentAt)
+	assert.Equal(t, now, *entry.SentAt)
+	assert.Nil(t, entry.DeliveredAt)
+	assert.Nil(t, entry.CompletedAt)
+}
+
+func TestAdvanceCommand_SentToDelivered(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	now := time.Now()
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+
+	deliveredAt := now.Add(5 * time.Second)
+	err := AdvanceCommand(&entry, CommandDelivered, deliveredAt)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandDelivered, entry.Status)
+	assert.NotNil(t, entry.DeliveredAt)
+	assert.Equal(t, deliveredAt, *entry.DeliveredAt)
+}
+
+func TestAdvanceCommand_DeliveredToSucceeded(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	now := time.Now()
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.NoError(t, AdvanceCommand(&entry, CommandDelivered, now.Add(1*time.Second)))
+
+	completedAt := now.Add(10 * time.Second)
+	err := AdvanceCommand(&entry, CommandSucceeded, completedAt)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandSucceeded, entry.Status)
+	assert.NotNil(t, entry.CompletedAt)
+	assert.Equal(t, completedAt, *entry.CompletedAt)
+}
+
+func TestAdvanceCommand_InvalidTransition(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	err := AdvanceCommand(&entry, CommandSucceeded, time.Now())
+	assert.Error(t, err)
+	assert.Equal(t, CommandPending, entry.Status, "status must not change on invalid transition")
+}
+
+func TestAdvanceCommand_DeliveredWithoutSentAt(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	// Force Sent status without SentAt (simulating a corrupt entry).
+	entry.Status = CommandSent
+	entry.SentAt = nil
+
+	err := AdvanceCommand(&entry, CommandDelivered, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "SentAt")
+}
+
+func TestAdvanceCommand_FullLifecycle(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "cert-renew", []byte(`{}`), CommandTimeouts{
+		ScheduleToSend:  30 * time.Second,
+		SendToComplete:  5 * time.Minute,
+		OverallDeadline: 1 * time.Hour,
+	})
+	now := time.Now()
+
+	// Pending → Sent
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.Equal(t, 1, entry.Attempt)
+
+	// Sent → Delivered
+	assert.NoError(t, AdvanceCommand(&entry, CommandDelivered, now.Add(1*time.Second)))
+
+	// Delivered → Succeeded
+	assert.NoError(t, AdvanceCommand(&entry, CommandSucceeded, now.Add(10*time.Second)))
+	assert.True(t, entry.Status.IsTerminal())
+	assert.NotNil(t, entry.CompletedAt)
+
+	// Terminal → any must fail
+	err := AdvanceCommand(&entry, CommandFailed, now.Add(20*time.Second))
+	assert.Error(t, err)
+}
+
+func TestAdvanceCommand_SentIncrementsAttempt(t *testing.T) {
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	now := time.Now()
+
+	// First attempt
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.Equal(t, 1, entry.Attempt)
+
+	// Simulate retry: reset to Pending (not through AdvanceCommand — adapter does this)
+	entry.Status = CommandPending
+	entry.SentAt = nil
+
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now.Add(1*time.Second)))
+	assert.Equal(t, 2, entry.Attempt)
+}

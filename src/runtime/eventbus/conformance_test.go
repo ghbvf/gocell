@@ -16,7 +16,6 @@ func TestInMemoryEventBus_Conformance(t *testing.T) {
 		SupportsRequeue:   true,
 		SupportsReject:    true,
 		SupportsReceipt:   true,
-		SupportsMetadata:  false, // InMemoryEventBus constructs Entry internally, no metadata passthrough
 		BlockingSubscribe: true,
 	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
 		bus := eventbus.New(eventbus.WithBufferSize(256))
