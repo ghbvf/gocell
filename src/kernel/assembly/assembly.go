@@ -6,6 +6,9 @@
 //   - Start 失败自动 rollback 已启动的 Cell
 //   - Stop 尽力而为，合并错误
 //   - 状态机防止重入
+//
+// ref: go-kratos/kratos app.go — BeforeStart/AfterStart/BeforeStop/AfterStop
+// ref: uber-go/fx lifecycle.go — FIFO Start, LIFO Stop, rollback on failure
 package assembly
 
 import (
@@ -94,7 +97,11 @@ func (a *CoreAssembly) Start(ctx context.Context) error {
 // Stop is only allowed from the Started state; calling Stop in any other state
 // is a no-op.
 //
+// For each cell, the sequence is: BeforeStop → Stop → AfterStop.
+// All three phases are best-effort — errors are accumulated, never abort.
+//
 // ref: uber-go/fx app.go — Stop 尽力而为，不因某个 hook 失败而中止。
+// ref: go-kratos/kratos app.go — BeforeStop/AfterStop hooks around server.Stop
 func (a *CoreAssembly) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	if a.state != stateStarted {
@@ -106,16 +113,45 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 
 	var errs []error
 	for i := len(a.cells) - 1; i >= 0; i-- {
-		if err := a.cells[i].Stop(ctx); err != nil {
-			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
-				fmt.Sprintf("assembly: stop cell %q", a.cells[i].ID()), err))
-		}
+		errs = append(errs, a.stopCellWithHooks(ctx, a.cells[i])...)
 	}
 
 	a.mu.Lock()
 	a.state = stateStopped
 	a.mu.Unlock()
 	return errors.Join(errs...)
+}
+
+// stopCellWithHooks executes BeforeStop → Stop → AfterStop for a single cell.
+// All phases are best-effort: errors are accumulated but never abort the sequence.
+// Logging is handled here — callers should not log the returned errors again.
+//
+// ref: runtime/worker/periodic.go runSafe — panic recovery pattern
+func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []error {
+	var errs []error
+	if bs, ok := c.(cell.BeforeStopper); ok {
+		if err := callHookSafe(func() error { return bs.BeforeStop(ctx) }); err != nil {
+			slog.Warn("lifecycle: BeforeStop failed",
+				slog.String("cell", c.ID()), slog.Any("error", err))
+			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+				fmt.Sprintf("assembly: BeforeStop cell %q", c.ID()), err))
+		}
+	}
+	if err := c.Stop(ctx); err != nil {
+		slog.Warn("lifecycle: Stop failed",
+			slog.String("cell", c.ID()), slog.Any("error", err))
+		errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+			fmt.Sprintf("assembly: stop cell %q", c.ID()), err))
+	}
+	if as, ok := c.(cell.AfterStopper); ok {
+		if err := callHookSafe(func() error { return as.AfterStop(ctx) }); err != nil {
+			slog.Warn("lifecycle: AfterStop failed",
+				slog.String("cell", c.ID()), slog.Any("error", err))
+			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+				fmt.Sprintf("assembly: AfterStop cell %q", c.ID()), err))
+		}
+	}
+	return errs
 }
 
 // Health returns the HealthStatus of every registered Cell, keyed by Cell ID.
@@ -171,21 +207,15 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		}
 	}
 
-	// Phase 2: Start cells in order. On failure, rollback already-started cells.
+	// Phase 2: Start cells in order with lifecycle hooks.
+	// For each cell: BeforeStart → Start → AfterStart.
+	// On any failure, rollback already-started cells in reverse (LIFO).
+	//
+	// ref: go-kratos/kratos app.go — BeforeStart/AfterStart hooks around server.Start
+	// ref: uber-go/fx app.go — Start failure triggers LIFO rollback of started hooks
 	for i, c := range a.cells {
-		if err := c.Start(ctx); err != nil {
-			// Rollback: stop cells [0..i-1] in reverse order.
-			for j := i - 1; j >= 0; j-- {
-				if stopErr := a.cells[j].Stop(ctx); stopErr != nil {
-					slog.Warn("rollback: failed to stop cell",
-						"cell", a.cells[j].ID(), "error", stopErr)
-				}
-			}
-			a.mu.Lock()
-			a.state = stateStopped
-			a.mu.Unlock()
-			return errcode.Wrap(errcode.ErrLifecycleInvalid,
-				fmt.Sprintf("assembly: start cell %q", c.ID()), err)
+		if err := a.startCellWithHooks(ctx, c, i); err != nil {
+			return err
 		}
 	}
 
@@ -193,6 +223,72 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	a.state = stateStarted
 	a.mu.Unlock()
 	return nil
+}
+
+// startCellWithHooks executes BeforeStart → Start → AfterStart for a single
+// cell at index i. On any failure it rolls back cells [0..i-1] (and cell i
+// itself if Start already succeeded) and transitions the assembly to stopped.
+func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i int) error {
+	// BeforeStart hook (optional).
+	if bs, ok := c.(cell.BeforeStarter); ok {
+		slog.Info("lifecycle: BeforeStart", slog.String("cell", c.ID()))
+		if err := callHookSafe(func() error { return bs.BeforeStart(ctx) }); err != nil {
+			a.rollbackCells(ctx, i-1)
+			return a.failStart(c.ID(), "BeforeStart", err)
+		}
+	}
+
+	// Core Start.
+	if err := c.Start(ctx); err != nil {
+		a.rollbackCells(ctx, i-1)
+		return a.failStart(c.ID(), "start", err)
+	}
+
+	// AfterStart hook (optional).
+	// If this fails, the cell itself must be stopped because its Start
+	// already succeeded — resources may have been acquired.
+	if as, ok := c.(cell.AfterStarter); ok {
+		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
+		if err := callHookSafe(func() error { return as.AfterStart(ctx) }); err != nil {
+			// Stop this cell first — its Start already succeeded.
+			a.stopCellWithHooks(ctx, c) //nolint:errcheck // best-effort, logged inside
+			a.rollbackCells(ctx, i-1)
+			return a.failStart(c.ID(), "AfterStart", err)
+		}
+	}
+	return nil
+}
+
+// failStart transitions the assembly to stopped and returns a wrapped error.
+func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
+	a.mu.Lock()
+	a.state = stateStopped
+	a.mu.Unlock()
+	return errcode.Wrap(errcode.ErrLifecycleInvalid,
+		fmt.Sprintf("assembly: %s cell %q", phase, cellID), err)
+}
+
+// rollbackCells stops cells [0..upTo] in reverse order using stopCellWithHooks.
+// All errors are logged inside stopCellWithHooks (best-effort, never abort).
+func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int) {
+	for j := upTo; j >= 0; j-- {
+		a.stopCellWithHooks(ctx, a.cells[j]) //nolint:errcheck // best-effort, logged inside
+	}
+}
+
+// callHookSafe invokes fn with panic recovery. If fn panics, the panic is
+// converted to an error. This protects the assembly from a single misbehaving
+// cell crashing the entire process.
+//
+// ref: runtime/worker/periodic.go runSafe — same panic-to-error pattern
+// ref: runtime/eventrouter/router.go — recover in subscription goroutine
+func callHookSafe(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("lifecycle hook panicked: %v", r)
+		}
+	}()
+	return fn()
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.
