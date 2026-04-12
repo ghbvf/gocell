@@ -116,41 +116,20 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 // ---------------------------------------------------------------------------
 
 func testPublishSubscribe(t *testing.T, _ Features, constructor PubSubConstructor) {
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	payload := []byte(`{"test":"publish_subscribe"}`)
 
 	var received outbox.Entry
-	done := make(chan struct{})
+	h.subscribe(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		received = entry
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			received = entry
-			close(done)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, payload))
-
-	select {
-	case <-done:
-		assertBytesEqual(t, payload, received.Payload)
-		assertTrue(t, received.ID != "", "entry ID must not be empty")
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out waiting for message")
-	}
-
-	cancel()
-	<-subDone
+	h.publishAndWait(payload)
+	assertBytesEqual(t, payload, received.Payload)
+	assertTrue(t, received.ID != "", "entry ID must not be empty")
+	h.teardown()
 }
 
 func testPublishSubscribeMultiple(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -311,41 +290,19 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 // ---------------------------------------------------------------------------
 
 func testDispositionAck(t *testing.T, _ Features, constructor PubSubConstructor) {
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	var callCount atomic.Int32
-	done := make(chan struct{})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			callCount.Add(1)
-			close(done)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"ack"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
-	// Brief pause — Ack should NOT cause redelivery.
-	time.Sleep(200 * time.Millisecond)
+	h.publishAndWait([]byte(`{"test":"ack"}`))
+	time.Sleep(200 * time.Millisecond) // Ack should NOT cause redelivery.
 	assertEqual(t, int32(1), callCount.Load(), "Ack should not cause redelivery")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 func testDispositionRequeue(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -353,51 +310,25 @@ func testDispositionRequeue(t *testing.T, features Features, constructor PubSubC
 		t.Skip("implementation does not support requeue")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
 
-	var (
-		callCount atomic.Int32
-		done      = make(chan struct{})
-		closeOnce sync.Once
-	)
-
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			n := callCount.Add(1)
-			if n == 1 {
-				// First call: requeue.
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionRequeue,
-					Err:         fmt.Errorf("transient failure"),
-				}
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := callCount.Add(1)
+		if n == 1 {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         fmt.Errorf("transient failure"),
 			}
-			// Second call: ack.
-			closeOnce.Do(func() { close(done) })
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
+		}
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"requeue"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out waiting for redelivery after requeue")
-	}
-
+	h.publishAndWait([]byte(`{"test":"requeue"}`))
 	assertTrue(t, callCount.Load() >= 2,
 		"handler should be called at least twice (initial + redelivery)")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 func testDispositionReject(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -405,45 +336,22 @@ func testDispositionReject(t *testing.T, features Features, constructor PubSubCo
 		t.Skip("implementation does not support reject")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	var callCount atomic.Int32
-	done := make(chan struct{})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		h.signalDone()
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("bad payload")),
+		}
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			callCount.Add(1)
-			close(done)
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         outbox.NewPermanentError(fmt.Errorf("bad payload")),
-			}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"reject"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
-	// Brief pause — Reject should NOT cause redelivery.
-	time.Sleep(200 * time.Millisecond)
-	assertEqual(t, int32(1), callCount.Load(),
-		"Reject should route to DLQ, not retry")
-
-	cancel()
-	<-subDone
+	h.publishAndWait([]byte(`{"test":"reject"}`))
+	time.Sleep(200 * time.Millisecond) // Reject should NOT cause redelivery.
+	assertEqual(t, int32(1), callCount.Load(), "Reject should route to DLQ, not retry")
+	h.teardown()
 }
 
 func testZeroValueDisposition(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -451,47 +359,22 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 		t.Skip("implementation does not support requeue (needed to verify safe degradation)")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
 
-	var (
-		callCount atomic.Int32
-		done      = make(chan struct{})
-		closeOnce sync.Once
-	)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := callCount.Add(1)
+		if n == 1 {
+			return outbox.HandleResult{} // zero-value = invalid Disposition
+		}
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			n := callCount.Add(1)
-			if n == 1 {
-				// Return zero-value HandleResult (invalid Disposition).
-				return outbox.HandleResult{}
-			}
-			closeOnce.Do(func() { close(done) })
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"zero-disposition"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out — zero-value Disposition should degrade to requeue")
-	}
-
+	h.publishAndWait([]byte(`{"test":"zero-disposition"}`))
 	assertTrue(t, callCount.Load() >= 2,
 		"zero-value Disposition should be treated as requeue (safe degradation)")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 // ---------------------------------------------------------------------------
@@ -503,50 +386,24 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 		t.Skip("implementation does not support reject")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
-	var (
-		callCount atomic.Int32
-		done      = make(chan struct{})
-		closeOnce sync.Once
-	)
-
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	legacy := func(_ context.Context, _ outbox.Entry) error {
+	h := newHarness(t, constructor)
+	var callCount atomic.Int32
+	legacy := outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error {
 		return outbox.NewPermanentError(fmt.Errorf("unmarshal failed"))
-	}
-	handler := outbox.WrapLegacyHandler(legacy)
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-			callCount.Add(1)
-			res := handler(ctx, entry)
-			closeOnce.Do(func() { close(done) })
-			return res
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
+	h.subscribe(func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		callCount.Add(1)
+		res := legacy(ctx, entry)
+		h.signalDone()
+		return res
+	})
 
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"permanent-error"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
+	h.publishAndWait([]byte(`{"test":"permanent-error"}`))
 	time.Sleep(200 * time.Millisecond)
 	assertEqual(t, int32(1), callCount.Load(),
 		"PermanentError via WrapLegacyHandler should cause reject, not retry")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 func testWrapLegacyHandlerSuccess(t *testing.T) {
@@ -592,43 +449,19 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 		t.Skip("implementation does not support receipt")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
-	done := make(chan struct{})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			close(done)
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionAck,
-				Receipt:     receipt,
-			}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"receipt-ack"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
+	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
 	assertEventually(t, func() bool { return receipt.Committed() },
 		5*time.Second, 10*time.Millisecond, "Receipt.Commit should be called on Ack")
 	assertFalse(t, receipt.Released(), "Receipt.Release should NOT be called on Ack")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 func testReceiptReleasedOnReject(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -639,44 +472,23 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 		t.Skip("implementation does not support reject")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
-	done := make(chan struct{})
 
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		h.signalDone()
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("bad")),
+			Receipt:     receipt,
+		}
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			close(done)
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         outbox.NewPermanentError(fmt.Errorf("bad")),
-				Receipt:     receipt,
-			}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"receipt-reject"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
+	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
 		5*time.Second, 10*time.Millisecond, "Receipt.Release should be called on Reject")
 	assertFalse(t, receipt.Committed(), "Receipt.Commit should NOT be called on Reject")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -687,48 +499,27 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 		t.Skip("implementation does not support requeue")
 	}
 
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
+	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
-	done := make(chan struct{})
-
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
 	var callCount atomic.Int32
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			n := callCount.Add(1)
-			if n == 1 {
-				close(done)
-				return outbox.HandleResult{
-					Disposition: outbox.DispositionRequeue,
-					Err:         fmt.Errorf("transient"),
-					Receipt:     receipt,
-				}
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := callCount.Add(1)
+		if n == 1 {
+			h.signalDone()
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionRequeue,
+				Err:         fmt.Errorf("transient"),
+				Receipt:     receipt,
 			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
+		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"receipt-requeue"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
+	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
 		5*time.Second, 10*time.Millisecond, "Receipt.Release should be called on Requeue")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }
 
 // ---------------------------------------------------------------------------
@@ -876,9 +667,7 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 }
 
 func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubConstructor) {
-	pub, innerSub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
+	h := newHarness(t, constructor)
 
 	var middlewareCalled atomic.Bool
 	middleware := func(_ string, next outbox.EntryHandler) outbox.EntryHandler {
@@ -888,35 +677,18 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 		}
 	}
 
-	sub := &outbox.SubscriberWithMiddleware{
-		Inner:      innerSub,
+	// Wrap inner subscriber with middleware.
+	h.Sub = &outbox.SubscriberWithMiddleware{
+		Inner:      h.Sub,
 		Middleware: []outbox.TopicHandlerMiddleware{middleware},
 	}
 
-	done := make(chan struct{})
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			close(done)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"middleware"}`)))
-
-	select {
-	case <-done:
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
+	h.publishAndWait([]byte(`{"test":"middleware"}`))
 	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")
-
-	cancel()
-	<-subDone
+	h.teardown()
 }

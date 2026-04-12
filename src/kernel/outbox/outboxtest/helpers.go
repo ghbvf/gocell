@@ -206,6 +206,75 @@ func (c *collector) waitAndGet(timeout time.Duration) []outbox.Entry {
 }
 
 // ---------------------------------------------------------------------------
+// pubSubHarness — single-message test scaffold to reduce conformance.go duplication
+// ---------------------------------------------------------------------------
+
+// pubSubHarness wires up the common subscribe→publish→wait→teardown pattern
+// used by most single-message conformance tests.
+type pubSubHarness struct {
+	T       *testing.T
+	Pub     outbox.Publisher
+	Sub     outbox.Subscriber
+	Ctx     context.Context
+	Topic   string
+	done    chan struct{}
+	once    sync.Once
+	subDone chan struct{}
+	cancel  context.CancelFunc
+}
+
+// newHarness creates a pubSubHarness from a PubSubConstructor.
+func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
+	t.Helper()
+	pub, sub := constructor(t)
+	return &pubSubHarness{
+		T:       t,
+		Pub:     pub,
+		Sub:     sub,
+		Ctx:     context.Background(),
+		Topic:   TestTopic(t),
+		done:    make(chan struct{}),
+		subDone: make(chan struct{}),
+	}
+}
+
+// subscribe launches a Subscribe goroutine with the given handler and waits
+// for registration. The handler receives a subCtx derived from the harness.
+func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
+	h.T.Helper()
+	subCtx, cancel := context.WithCancel(h.Ctx)
+	h.cancel = cancel
+	h.T.Cleanup(cancel)
+	go func() {
+		defer close(h.subDone)
+		_ = h.Sub.Subscribe(subCtx, h.Topic, handler)
+	}()
+	time.Sleep(subscribeInitDelay)
+}
+
+// publishAndWait publishes payload and blocks until signalDone or timeout.
+func (h *pubSubHarness) publishAndWait(payload []byte) {
+	h.T.Helper()
+	assertNoError(h.T, h.Pub.Publish(h.Ctx, h.Topic, payload))
+	select {
+	case <-h.done:
+	case <-time.After(defaultTimeout):
+		h.T.Fatal("timed out")
+	}
+}
+
+// signalDone closes the done channel (safe for concurrent calls via sync.Once).
+func (h *pubSubHarness) signalDone() {
+	h.once.Do(func() { close(h.done) })
+}
+
+// teardown cancels the subscriber and waits for the goroutine to exit.
+func (h *pubSubHarness) teardown() {
+	h.cancel()
+	<-h.subDone
+}
+
+// ---------------------------------------------------------------------------
 // Internal assertion helpers — stdlib only, no testify in kernel/ non-test files
 // ---------------------------------------------------------------------------
 
