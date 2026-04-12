@@ -38,6 +38,7 @@ func main() {
 	// Production: use auth.LoadKeySetFromEnv() which reads from env vars and
 	// supports key rotation via GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	slog.Warn("using ephemeral RSA key pair; all issued JWTs will be invalidated on restart — set GOCELL_JWT_PRIVATE_KEY/GOCELL_JWT_PUBLIC_KEY for production")
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	if err != nil {
 		slog.Error("failed to create key set", "error", err)

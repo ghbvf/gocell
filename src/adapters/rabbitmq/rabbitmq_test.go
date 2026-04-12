@@ -1450,35 +1450,12 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// The subscribe loop will:
 	// 1. subscribeOnce with ch1 -> delivery channel closes -> error
 	// 2. WaitConnected (already connected) -> subscribeOnce with ch2
 	// 3. Handler processes message, then we cancel ctx to exit cleanly.
-	go func() {
-		// Close ch1's delivery channel to simulate connection loss.
-		require.Eventually(t, func() bool {
-			ch1.mu.Lock()
-			defer ch1.mu.Unlock()
-			return ch1.qosCalled
-		}, 2*time.Second, 10*time.Millisecond, "subscriber did not start consuming from ch1")
-		close(ch1.consumeDeliveries)
-
-		// Let ch2 process one message, then cancel.
-		entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
-		entryBytes, _ := json.Marshal(entry)
-		require.Eventually(t, func() bool {
-			ch2.mu.Lock()
-			defer ch2.mu.Unlock()
-			return ch2.qosCalled
-		}, 2*time.Second, 10*time.Millisecond, "subscriber did not reconnect to ch2")
-		ch2.consumeDeliveries <- amqp.Delivery{
-			DeliveryTag: 1,
-			Body:        entryBytes,
-		}
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
 
 	handled := make(chan string, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1486,15 +1463,48 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	err := sub.Subscribe(ctx, "test.topic", handler)
-	assert.NoError(t, err) // Clean exit via ctx cancel.
+	// Run Subscribe in a goroutine so require.Eventually can be called safely
+	// from the main test goroutine (t.FailNow must not be called from a helper goroutine).
+	subscribeDone := make(chan error, 1)
+	go func() {
+		subscribeDone <- sub.Subscribe(ctx, "test.topic", handler)
+	}()
 
-	// Verify the handler was called after reconnect.
+	// Drive the reconnect sequence from the main goroutine (safe for require).
+	require.Eventually(t, func() bool {
+		ch1.mu.Lock()
+		defer ch1.mu.Unlock()
+		return ch1.qosCalled
+	}, 2*time.Second, 10*time.Millisecond, "subscriber did not start consuming from ch1")
+	close(ch1.consumeDeliveries)
+
+	require.Eventually(t, func() bool {
+		ch2.mu.Lock()
+		defer ch2.mu.Unlock()
+		return ch2.qosCalled
+	}, 2*time.Second, 10*time.Millisecond, "subscriber did not reconnect to ch2")
+
+	entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
+	entryBytes, _ := json.Marshal(entry)
+	ch2.consumeDeliveries <- amqp.Delivery{
+		DeliveryTag: 1,
+		Body:        entryBytes,
+	}
+
+	// Wait for handler to process, then cancel to exit Subscribe cleanly.
 	select {
 	case id := <-handled:
 		assert.Equal(t, "reconnect-001", id)
 	case <-time.After(2 * time.Second):
 		t.Fatal("handler was not called after reconnect")
+	}
+	cancel()
+
+	select {
+	case err := <-subscribeDone:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not return after cancel")
 	}
 
 	assert.NoError(t, sub.Close())
@@ -1688,29 +1698,34 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		ShutdownTimeout: 1 * time.Second,
 	})
 
+	// Run Subscribe in a goroutine so the main goroutine can safely orchestrate the close sequence.
+	// Note: c.conn is nil in this manually-constructed Connection, so AcquireChannel always returns
+	// "connection not available". The subscriber enters the reconnect hot-loop immediately, never
+	// reaching QoS/Consume. The close(ch.consumeDeliveries) below is a no-op (ch is never consumed);
+	// it is kept for documentary clarity of the original test intent.
 	subscribeDone := make(chan error, 1)
-
-	go func() {
-		// Close delivery channel to trigger reconnect.
-		time.Sleep(20 * time.Millisecond)
-		close(ch.consumeDeliveries)
-
-		// Simulate disconnection: re-create the connected channel so WaitConnected blocks.
-		time.Sleep(10 * time.Millisecond)
-		c.mu.Lock()
-		c.connected = make(chan struct{})
-		c.mu.Unlock()
-
-		// Close subscriber while WaitConnected is blocking.
-		// The derived context in Subscribe should be cancelled by closeCh, unblocking WaitConnected.
-		time.Sleep(30 * time.Millisecond)
-		_ = sub.Close()
-	}()
-
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
 			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	}()
+
+	// Let the subscriber spin briefly in the reconnect hot-loop.
+	time.Sleep(20 * time.Millisecond)
+	close(ch.consumeDeliveries) // no-op: ch is never acquired; kept for test intent clarity.
+
+	// Simulate disconnection: re-create the connected channel so WaitConnected blocks.
+	time.Sleep(10 * time.Millisecond)
+	c.mu.Lock()
+	c.connected = make(chan struct{})
+	c.mu.Unlock()
+
+	// Wait for the subscriber to call WaitConnected and block on the new (unclosed) connected channel.
+	// Only then does sub.Close() reliably unblock it via closeCh → subCtx cancellation.
+	time.Sleep(30 * time.Millisecond)
+
+	// Close subscriber while WaitConnected is blocking.
+	// The derived context in Subscribe is cancelled by closeCh, unblocking WaitConnected.
+	_ = sub.Close()
 
 	select {
 	case err := <-subscribeDone:
