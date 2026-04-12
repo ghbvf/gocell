@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "http.config.flags.v1.request",
+  "title": "http.device.v1.request",
   "type": "object",
   "properties": {
-    "subject": { "type": "string" }
+    "name": { "type": "string" }
   },
-  "required": ["subject"],
+  "required": ["name"],
   "additionalProperties": false
 }
