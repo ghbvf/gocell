@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项（PR#67-91）归档至 `docs/reviews/archive/202604121800-backlog-pre-restructure.md`。
-> 更新日期: 2026-04-12（全量 batch 分配 + 依赖分析 + 并行度标注）
+> 更新日期: 2026-04-12（PR#92-98 状态更新 + 六席位 findings 登记）
 > Batch 1-4: ✅ 全部完成（PR#67-91，25 个 PR）
 
 ---
@@ -12,11 +12,11 @@
 
 | PR | 任务 | 工时 | 文件范围 |
 |----|------|------|---------|
-| CURSOR-FIX | ~~CURSOR-P1-01(时间精度)~~ ✅ PR#94 + ~~P1-02(afterCursor漂移)~~ ✅ PR#94 + **P1-03(scope/context验证强制)** + ~~P2-01(跨slice负例)~~ ✅ PR#94 + ~~P4-TD-11(repo并发测试)~~ ✅ PR#94 + ~~P4-TD-14(json.Unmarshal)~~ ✅ PR#94 + ~~WM-6-F2(mempage.go提取)~~ ✅ PR#94 | 11h → 剩余 ~2h (P1-03) | `cells/*/repo` + `pkg/query/cursor.go` |
+| ~~CURSOR-FIX~~ | ~~P1-01~~ ✅ PR#94 + ~~P1-02~~ ✅ PR#94 + ~~P1-03(scope/context强制)~~ ✅ PR#95 + ~~P2-01~~ ✅ PR#94 + ~~P4-TD-11~~ ✅ PR#94 + ~~P4-TD-14~~ ✅ PR#94 + ~~WM-6-F2~~ ✅ PR#94 | ✅ 全部完成 | — |
 | HTTP-SEC-FIX | HTTP-SEC-01(IP格式校验) + SEC-02(trusted proxy fail-fast) | 3h | `runtime/http/middleware/` + `router/` |
-| CONTRACT-FIX | STRICT-P1-01(contract覆盖) + P1-02(contract_test可执行) + SCHEMA-01(空壳schema) | 8h | `contracts/http/` + `cells/*/contract_test.go` |
-| CFG-WATCHER | CFG-P1-01(目录级监听) + P1-02(shutdown顺序) + P2-02(补测试) | 6h | `runtime/config/watcher.go` + `bootstrap/` |
-| CFG-RELOAD | CFG-P1-03(partial apply) + P1-04(浅拷贝隔离) + WM-34-F4(commit语义) | 5h | `runtime/config/` + `kernel/cell/` |
+| CONTRACT-FIX | ~~STRICT-P1-01(contract覆盖)~~ ✅ PR#98 + ~~P1-02(contract_test可执行)~~ ✅ PR#98 + ~~SCHEMA-01(空壳schema)~~ ✅ PR#98 | 8h → ✅ done | `contracts/http/` + `cells/*/contract_test.go` |
+| ~~CFG-WATCHER~~ | ~~CFG-P1-01(目录级监听)~~ + ~~P1-02(shutdown顺序)~~ + ~~P2-02(补测试)~~ | ✅ PR#97 | — |
+| ~~CFG-RELOAD~~ | ~~CFG-P1-03(generation counter)~~ + ~~P1-04(DeepCloneValue)~~ + ~~WM-34-F4(commit语义)~~ | ✅ PR#97 | — |
 | BATCH3-FIX | OB-02(safe_observe测试) + WriteErrorWithContext(25+ handler) + **PATCH-STRICT(identity PATCH strict decode)** | 4h | `runtime/http/middleware/` + `cells/*/handler.go` |
 | **OBS-WIRE** | **HTTP observability 接入默认链** — tracing + metrics 上提到 router/bootstrap 默认装配面；当前只有 middleware helper，默认链无 Tracing。ref: Kratos server.Middleware / go-zero engine / otelchi root Use | 4h | `runtime/http/router/router.go` + `runtime/bootstrap/` |
 
@@ -67,6 +67,9 @@
 | **TestPubSub 真实 adapter 认证** | **TPUB-01**: conformance harness 替换 sleep 为显式 ready/setup-error 握手 + 接入 RabbitMQ adapter 验证。当前"绿色"仅代表 InMemory 通过，不代表 broker-backed adapter 满足 contract | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` **(P1, discovered via PR#93 六席位复核)** |
 | cursor 可观测 | CURSOR-P2-02 cursor invalid 结构化日志 | 1h | `cells/audit-core/` |
 | order+demo 修复 | P4-TD-04(outboxWriter enforce) + P4-TD-12(t.Skip) | 3h | `cells/order-cell/` + `cells/demo/` |
+| **contract 命名修正** | **CONTRACT-NAME-01**: `http.auth.me.v1` 实际覆盖 identity CRUD（POST create/PUT update/DELETE），命名应为 `http.auth.user.v1`；或拆分为 me(GET only) + user(CRUD) | 2h | `contracts/http/auth/me/` + `cells/access-core/slices/identitymanage/` **(P1, discovered via PR#98 六席位复核)** |
+| **ConfigEntry json tags** | **CFG-JSON-01**: `domain.ConfigEntry` 缺 json tags，config GET 响应用 PascalCase（`Key`/`Value`/`Version`），违反 camelCase 规范。同理 `domain.FeatureFlag` | 1h | `cells/config-core/internal/domain/config_entry.go` + `feature_flag.go` **(P2, discovered via PR#98 六席位复核)** |
+| **flags request schema 拆分** | **FLAGS-SCHEMA-01**: `http.config.flags.v1/request.schema.json` 仅覆盖 POST evaluate 的 `{subject}` body，GET list/get 无 body。单 schema 无法描述多操作 | 0.5h | `contracts/http/config/flags/v1/` **(P2, discovered via PR#98 六席位复核)** |
 
 ---
 
@@ -224,18 +227,19 @@
 
 | Batch | PR 数 | 工时 | 并行度 | 前置 | 里程碑 |
 |-------|-------|------|--------|------|--------|
-| 5A | 7 | ~39h | 7/7 | — | 六席位 P1 全收敛 + observability 接线 |
+| 5A | 7 → 剩 3 | ~~39h~~ → ~11h | 3/3 | — | CURSOR ✅ CFG ✅ CONTRACT open，剩 HTTP-INFRA + BATCH3-FIX + OBS-WIRE |
 | 5B | 6 | ~5d | 2 轨道 | 5A | 事件测试 + CorrelationID + 韧性 |
-| 6A | 4 | ~20h | 4/4 | 5B | 生产级可靠性 |
-| 6B | 10 | ~20.5h | 9/10 | 6A(RMQ) | Tech Debt 主体收敛 |
+| 6A | 4+1 | ~24h | 5/5 | 5B | 生产级可靠性 + L4 API 收敛 |
+| 6B | 10+1 | ~24.5h | 10/11 | 6A(RMQ) | Tech Debt 主体收敛 + TestPubSub adapter 认证 |
 | 6C | 4 | ~5d | 2 轨道 | 6A(Receipt) | P1 功能补全 (BFF+SecureCookie) |
 | 7 | 6 | ~16h | 5+tag | 6全完 | **v1.0 RC → v1.0** |
 | 8 | 14 | ~54h | 14/14 | v1.0 | P2 偿债 |
 
 ```
-Week 1:  Batch 5A (P1修复, 6路并行)
-Week 2:  Batch 5B (功能推进, 2轨道)
-Week 3:  Batch 6A (运维+正确性, 4路) + 6B (tech debt, 9路) + 6C Auth轨道启动
+Week 1:  Batch 5A 近完成（CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT PR#98 open）
+         剩余: HTTP-INFRA(PR#96 open) + BATCH3-FIX + OBS-WIRE
+Week 2:  Batch 5B (功能推进, 2轨道) — WM-33b/RL-WIRE-01/RL-METRICS-01 + ER-ARCH-02/CID-01
+Week 3:  Batch 6A (运维+正确性+L4 API) + 6B (tech debt+TPUB) + 6C Auth轨道启动
 Week 4:  Batch 6C 收尾 + Batch 7 (review+发布) → v1.0 tag
 Post:    Batch 8 (P2偿债, 按需排期)
 ```

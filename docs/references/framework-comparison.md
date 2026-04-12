@@ -111,6 +111,38 @@ secondary: micro/go-micro          → 多 Store/Broker/Registry 后端
 goal:      First-class（PG/Redis/OIDC）+ Family（RabbitMQ/WebSocket）+ Optional 三层
 ```
 
+## Go 标准库参考（问题修复用）
+
+| 领域 | 标准库参考 | 关注点 |
+|------|-----------|--------|
+| 并发保护 | `sync`（Mutex / RWMutex / Once / WaitGroup / Map） | 锁粒度、Once 惯用法、copyChecker 模式 |
+| 原子操作 | `sync/atomic` | Load/Store/CompareAndSwap 的正确用法 |
+| Context 传播 | `context` | 取消传播、Value 的正确使用边界 |
+| HTTP 处理 | `net/http`（Server / Handler / Transport） | Shutdown 优雅关闭、中间件链组合、超时设置 |
+| 连接池 | `database/sql`（DB / Conn / Pool） | SetMaxOpenConns / SetConnMaxLifetime 策略 |
+| IO 与资源释放 | `io`（Closer / Pipe / ReadAll） | defer Close 惯用法、Pipe 组合模式 |
+| 错误处理 | `errors`（Is / As / Join / Unwrap） | 错误链设计、sentinel error vs 类型断言 |
+| 密码学 | `crypto/*` | 常量时间比较、随机数生成 |
+| 测试模式 | `testing`（T / B / TB） | Cleanup / Parallel / Helper 惯用法 |
+
+## 组件官方库参考（问题修复用）
+
+| GoCell 模块 | 官方库 | GitHub 路径 | 重点关注 |
+|-------------|--------|-------------|---------|
+| adapters/postgres | `jackc/pgx/v5` | `jackc/pgx` | 连接池、事务隔离、pgxpool 生命周期 |
+| adapters/redis | `redis/go-redis/v9` | `redis/go-redis` | Pipeline/Tx、Pub/Sub 重连 |
+| adapters/rabbitmq | `rabbitmq/amqp091-go` | `rabbitmq/amqp091-go` | Channel 不跨 goroutine、重连、Confirm |
+| runtime/http | `go-chi/chi/v5` | `go-chi/chi` | 中间件顺序、RouteContext |
+| runtime/auth/jwt | `golang-jwt/jwt/v5` | `golang-jwt/jwt` | SigningMethod、Claims、kid |
+| adapters/oidc | `coreos/go-oidc/v3` | `coreos/go-oidc` | Provider 缓存、JWKS 刷新 |
+| adapters/s3 | `aws/aws-sdk-go-v2` | `aws/aws-sdk-go-v2` | Retry、Context 超时 |
+| adapters/websocket | `nhooyr.io/websocket` | `nhooyr.io/websocket` | 并发写保护、Close handshake |
+| adapters/otel | `go.opentelemetry.io/otel` | `open-telemetry/opentelemetry-go` | TracerProvider 生命周期、Shutdown 顺序 |
+| adapters/prometheus | `prometheus/client_golang` | `prometheus/client_golang` | Registry 隔离、Collector 注册时机 |
+| DB migration | `pressly/goose/v3` | `pressly/goose` | 版本锁、并发 migration |
+| 集成测试 | `testcontainers-go` | `testcontainers/testcontainers-go` | Container 生命周期、Cleanup |
+| 文件监听 | `fsnotify/fsnotify` | `fsnotify/fsnotify` | Rename 语义、重复事件 |
+
 ## Review 对比模板
 
 每完成一个模块，输出对比文档：
