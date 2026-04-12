@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -378,4 +379,126 @@ func TestWithHealthChecker_NilFn_Panics(t *testing.T) {
 	assert.PanicsWithValue(t, `bootstrap: health checker "rabbitmq" must not be nil`, func() {
 		WithHealthChecker("rabbitmq", nil)
 	})
+}
+
+func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-multi-hc"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithHealthChecker("rabbitmq", func() error { return nil }),
+		WithHealthChecker("postgres", func() error { return fmt.Errorf("connection refused") }),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// GET /readyz — one unhealthy checker should make the whole response 503.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"any unhealthy dependency must cause 503")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
+	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+	assert.Equal(t, "unhealthy", body["status"], "overall status must be unhealthy")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-dynamic-hc"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	// Atomic flag to simulate connection health transitions at runtime.
+	var unhealthy atomic.Bool
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithHealthChecker("rabbitmq", func() error {
+			if unhealthy.Load() {
+				return fmt.Errorf("connection lost")
+			}
+			return nil
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// Phase 1: healthy state → 200.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "should be ready when checker is healthy")
+	resp.Body.Close()
+
+	// Phase 2: flip to unhealthy → 503.
+	unhealthy.Store(true)
+
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"should be unready after health state transition")
+	resp.Body.Close()
+
+	// Phase 3: recover → 200.
+	unhealthy.Store(false)
+
+	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "should recover after health state restores")
+	resp.Body.Close()
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
 }
