@@ -10,11 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type capturePub struct {
@@ -84,11 +82,7 @@ func TestHttpAuthLoginV1Serve_ErrorEnvelope(t *testing.T) {
 func TestEventSessionCreatedV1Publish(t *testing.T) {
 	pub := &capturePub{}
 	userRepo := mem.NewUserRepository()
-	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
-	_ = userRepo.Create(context.Background(), &domain.User{
-		ID: "usr-1", Username: "alice", Email: "a@b.com",
-		PasswordHash: string(hash), Status: domain.StatusActive,
-	})
+	seedUser(userRepo, "alice", "correct-pass") // reuse service_test helper
 
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), pub, testIssuer, slog.Default())
 	h := NewHandler(svc)
@@ -106,5 +100,5 @@ func TestEventSessionCreatedV1Publish(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(pub.entries[0].Payload, &payload))
 	assert.NotEmpty(t, payload["session_id"], "payload requires session_id")
-	assert.Equal(t, "usr-1", payload["user_id"], "payload requires user_id")
+	assert.Equal(t, "usr-alice", payload["user_id"], "payload requires user_id")
 }
