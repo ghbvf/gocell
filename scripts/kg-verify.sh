@@ -8,6 +8,9 @@
 #   4. go.mod whitelist: only allowed direct dependencies
 #   5. Banned field names: legacy field names must not appear in YAML metadata
 #
+# Note: Checks 1-3 exclude _test.go files — test files may import higher
+# layers for integration testing without violating production dependency rules.
+#
 # Exit 0 on all-pass, non-zero on first failure.
 
 set -euo pipefail
@@ -25,7 +28,7 @@ header(){ printf '\n=== %s ===\n' "$1"; }
 # ---------------------------------------------------------------
 header "Check 1: kernel/ layer isolation"
 
-KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null || true)
+KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null | grep -v '_test\.go:' || true)
 if [ -n "${KERNEL_VIOLATIONS}" ]; then
     red "FAIL: kernel/ imports forbidden layers:"
     echo "${KERNEL_VIOLATIONS}"
@@ -39,7 +42,7 @@ fi
 # ---------------------------------------------------------------
 header "Check 2: runtime/ layer isolation"
 
-RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null || true)
+RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null | grep -v '_test\.go:' || true)
 if [ -n "${RUNTIME_VIOLATIONS}" ]; then
     red "FAIL: runtime/ imports forbidden layers:"
     echo "${RUNTIME_VIOLATIONS}"
@@ -58,6 +61,7 @@ for CELL_DIR in "${SRC_DIR}"/cells/*/; do
     CELL_NAME=$(basename "${CELL_DIR}")
     # Find imports of other cells' packages (not self)
     OTHER_CELLS=$(grep -rn '"github.com/ghbvf/gocell/cells/' "${CELL_DIR}" --include='*.go' 2>/dev/null \
+        | grep -v '_test\.go:' \
         | grep -v "gocell/cells/${CELL_NAME}/" || true)
     if [ -n "${OTHER_CELLS}" ]; then
         CROSS_CELL_VIOLATIONS="${CROSS_CELL_VIOLATIONS}${OTHER_CELLS}\n"
@@ -78,15 +82,50 @@ fi
 header "Check 4: go.mod direct dependency whitelist"
 
 ALLOWED_DEPS=(
+    # AWS S3 adapter
+    "github.com/aws/aws-sdk-go-v2"
+    "github.com/aws/aws-sdk-go-v2/credentials"
+    "github.com/aws/aws-sdk-go-v2/service/s3"
+    # OIDC adapter
+    "github.com/coreos/go-oidc/v3"
+    # Config hot-reload
     "github.com/fsnotify/fsnotify"
+    # HTTP router
     "github.com/go-chi/chi/v5"
+    # JWT auth
     "github.com/golang-jwt/jwt/v5"
+    # UUID generation
+    "github.com/google/uuid"
+    # PostgreSQL adapter
     "github.com/jackc/pgx/v5"
+    # Database migrations
+    "github.com/pressly/goose/v3"
+    # Prometheus metrics
+    "github.com/prometheus/client_golang"
+    # RabbitMQ adapter
     "github.com/rabbitmq/amqp091-go"
+    # Redis adapter
     "github.com/redis/go-redis/v9"
+    # Testing
     "github.com/stretchr/testify"
+    "github.com/testcontainers/testcontainers-go"
+    "github.com/testcontainers/testcontainers-go/modules/postgres"
+    "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+    "github.com/testcontainers/testcontainers-go/modules/redis"
+    # OpenTelemetry
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    "go.opentelemetry.io/otel/sdk"
+    "go.opentelemetry.io/otel/trace"
+    # Goroutine leak detection
+    "go.uber.org/goleak"
+    # Crypto
     "golang.org/x/crypto"
+    # OAuth2
+    "golang.org/x/oauth2"
+    # YAML
     "gopkg.in/yaml.v3"
+    # WebSocket
     "nhooyr.io/websocket"
 )
 
