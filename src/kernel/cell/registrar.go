@@ -130,9 +130,9 @@ type ConfigChangeEvent struct {
 	Updated []string
 	// Removed contains keys present in the old config but absent in the new.
 	Removed []string
-	// Config is the full reloaded config snapshot (same type as Dependencies.Config).
-	// This map is shared across all ConfigReloader callbacks and MUST NOT be
-	// mutated by the receiver.
+	// Config is a defensive copy of the reloaded config snapshot, isolated per
+	// cell (same type as Dependencies.Config). Mutating it has no effect on
+	// other cells or the framework.
 	Config map[string]any
 }
 
