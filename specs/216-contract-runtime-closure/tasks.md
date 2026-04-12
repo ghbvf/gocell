@@ -72,9 +72,14 @@
 - [x] T39 Run optional device-cell tests if that cell was touched. Not required because device-cell was not changed.
 - [x] T40 Run full `go test ./...`.
 - [x] T41 Run full `go build ./...`.
-- [ ] T42 Create the PR from `fix/216-contract-runtime-closure` to `develop`.
-- [ ] T43 Launch six-role review on the PR.
-- [ ] T44 Triage and fix review findings if needed.
+- [x] T42 Create the PR from `fix/216-contract-runtime-closure` to `develop`.
+- [x] T43 Launch six-role review on the PR.
+- [x] T44 Triage and fix review findings if needed.
+
+## PR Status
+
+- PR: #106
+- URL: https://github.com/ghbvf/gocell/pull/106
 
 ## TDD Notes
 
