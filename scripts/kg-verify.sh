@@ -8,8 +8,6 @@
 #   4. go.mod whitelist: only allowed direct dependencies
 #   5. Banned field names: legacy field names must not appear in YAML metadata
 #
-# Note: Checks 1-3 exclude _test.go files — test files may import higher
-# layers for integration testing without violating production dependency rules.
 #
 # Exit 0 on all-pass, non-zero on first failure.
 
@@ -28,7 +26,7 @@ header(){ printf '\n=== %s ===\n' "$1"; }
 # ---------------------------------------------------------------
 header "Check 1: kernel/ layer isolation"
 
-KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null | grep -v '_test\.go:' || true)
+KERNEL_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(runtime\|adapters\|cells\)' "${SRC_DIR}/kernel/" --include='*.go' 2>/dev/null || true)
 if [ -n "${KERNEL_VIOLATIONS}" ]; then
     red "FAIL: kernel/ imports forbidden layers:"
     echo "${KERNEL_VIOLATIONS}"
@@ -42,7 +40,7 @@ fi
 # ---------------------------------------------------------------
 header "Check 2: runtime/ layer isolation"
 
-RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null | grep -v '_test\.go:' || true)
+RUNTIME_VIOLATIONS=$(grep -rn '"github.com/ghbvf/gocell/\(cells\|adapters\)' "${SRC_DIR}/runtime/" --include='*.go' 2>/dev/null || true)
 if [ -n "${RUNTIME_VIOLATIONS}" ]; then
     red "FAIL: runtime/ imports forbidden layers:"
     echo "${RUNTIME_VIOLATIONS}"
@@ -61,7 +59,6 @@ for CELL_DIR in "${SRC_DIR}"/cells/*/; do
     CELL_NAME=$(basename "${CELL_DIR}")
     # Find imports of other cells' packages (not self)
     OTHER_CELLS=$(grep -rn '"github.com/ghbvf/gocell/cells/' "${CELL_DIR}" --include='*.go' 2>/dev/null \
-        | grep -v '_test\.go:' \
         | grep -v "gocell/cells/${CELL_NAME}/" || true)
     if [ -n "${OTHER_CELLS}" ]; then
         CROSS_CELL_VIOLATIONS="${CROSS_CELL_VIOLATIONS}${OTHER_CELLS}\n"
