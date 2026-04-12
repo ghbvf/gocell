@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"net/http/httptest"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -29,6 +30,21 @@ func TestLoad_HTTPContract(t *testing.T) {
 	}
 	if c.responseSchema == nil {
 		t.Fatal("responseSchema should be compiled, got nil")
+	}
+	if c.HTTP == nil {
+		t.Fatal("HTTP transport metadata should be loaded, got nil")
+	}
+	if c.HTTP.Method != "POST" {
+		t.Errorf("HTTP.Method = %q, want %q", c.HTTP.Method, "POST")
+	}
+	if c.HTTP.Path != "/api/v1/test/valid" {
+		t.Errorf("HTTP.Path = %q, want %q", c.HTTP.Path, "/api/v1/test/valid")
+	}
+	if c.HTTP.SuccessStatus != 200 {
+		t.Errorf("HTTP.SuccessStatus = %d, want %d", c.HTTP.SuccessStatus, 200)
+	}
+	if c.HTTP.NoContent {
+		t.Error("HTTP.NoContent = true, want false")
 	}
 }
 
@@ -85,6 +101,81 @@ func TestValidateResponse_Invalid(t *testing.T) {
 	c.ValidateResponse(mockT, []byte(`{"wrong":"shape"}`)) // missing required "data"
 	if !mockT.failed {
 		t.Error("expected validation to fail for missing required field, but it passed")
+	}
+}
+
+func TestValidateHTTPResponseRecorder_Valid(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(200)
+	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+	c.ValidateHTTPResponseRecorder(t, recorder)
+}
+
+func TestValidateHTTPResponseRecorder_InvalidStatus(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(201)
+	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+
+	mockT := &mockTB{}
+	c.ValidateHTTPResponseRecorder(mockT, recorder)
+	if !mockT.failed {
+		t.Error("expected status mismatch to fail validation, but it passed")
+	}
+}
+
+func TestValidateHTTPResponseRecorder_RequiresBodyForSchema(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(200)
+
+	mockT := &mockTB{}
+	c.ValidateHTTPResponseRecorder(mockT, recorder)
+	if !mockT.failed {
+		t.Error("expected empty body to fail validation when response schema exists")
+	}
+}
+
+func TestValidateHTTPResponseRecorder_NoContentAcceptsEmptyBody(t *testing.T) {
+	c := &Contract{
+		ID:   "http.test.delete.v1",
+		Kind: "http",
+		HTTP: &HTTPTransport{SuccessStatus: 204, NoContent: true},
+	}
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(204)
+	c.ValidateHTTPResponseRecorder(t, recorder)
+}
+
+func TestValidateHTTPResponseRecorder_NoContentRejectsBody(t *testing.T) {
+	c := &Contract{
+		ID:   "http.test.delete.v1",
+		Kind: "http",
+		HTTP: &HTTPTransport{SuccessStatus: 204, NoContent: true},
+	}
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(204)
+	_, _ = recorder.Write([]byte(`{"unexpected":true}`))
+
+	mockT := &mockTB{}
+	c.ValidateHTTPResponseRecorder(mockT, recorder)
+	if !mockT.failed {
+		t.Error("expected non-empty body to fail no-content validation")
+	}
+}
+
+func TestValidateHTTPResponseRecorder_RequiresTransportMetadata(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
+	c.HTTP = nil
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(200)
+	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+
+	mockT := &mockTB{}
+	c.ValidateHTTPResponseRecorder(mockT, recorder)
+	if !mockT.failed {
+		t.Error("expected missing endpoints.http metadata to fail validation")
 	}
 }
 

@@ -6,6 +6,11 @@ lifecycle: active
 endpoints:
   server: test-cell
   clients: []
+  http:
+    method: POST
+    path: /api/v1/test/valid
+    successStatus: 200
+    noContent: false
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

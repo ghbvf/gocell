@@ -81,6 +81,34 @@
                 "type": "array",
                 "description": "Cells or actors that call this HTTP endpoint.",
                 "items": { "type": "string" }
+              },
+              "http": {
+                "type": "object",
+                "description": "Optional transport metadata for migrated HTTP contracts.",
+                "required": ["method", "path", "successStatus", "noContent"],
+                "additionalProperties": false,
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+                    "description": "HTTP method served by this contract."
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "description": "HTTP path template served by this contract."
+                  },
+                  "successStatus": {
+                    "type": "integer",
+                    "minimum": 200,
+                    "maximum": 299,
+                    "description": "Expected success status for provider-driven verification."
+                  },
+                  "noContent": {
+                    "type": "boolean",
+                    "description": "Whether the success response must be bodyless."
+                  }
+                }
               }
             }
           }

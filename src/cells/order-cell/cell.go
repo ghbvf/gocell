@@ -14,6 +14,7 @@ import (
 	orderquery "github.com/ghbvf/gocell/cells/order-cell/slices/order-query"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -21,7 +22,12 @@ import (
 var (
 	_ cell.Cell          = (*OrderCell)(nil)
 	_ cell.HTTPRegistrar = (*OrderCell)(nil)
+	_ outbox.Publisher   = discardPublisher{}
 )
+
+type discardPublisher struct{}
+
+func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
 
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(c *query.CursorCodec) Option {
@@ -41,6 +47,16 @@ func WithPublisher(p outbox.Publisher) Option {
 	return func(c *OrderCell) { c.publisher = p }
 }
 
+// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+func WithOutboxWriter(w outbox.Writer) Option {
+	return func(c *OrderCell) { c.outboxWriter = w }
+}
+
+// WithTxManager sets the TxRunner for transactional guarantees.
+func WithTxManager(tx persistence.TxRunner) Option {
+	return func(c *OrderCell) { c.txRunner = tx }
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *OrderCell) { c.logger = l }
@@ -51,6 +67,8 @@ type OrderCell struct {
 	*cell.BaseCell
 	repo        domain.OrderRepository
 	publisher   outbox.Publisher
+	outboxWriter outbox.Writer
+	txRunner     persistence.TxRunner
 	cursorCodec *query.CursorCodec
 	logger      *slog.Logger
 
@@ -90,14 +108,20 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Info("order-cell: using in-memory repository (demo mode)")
 	}
 
-	// L2 Cell would normally require outboxWriter; in demo mode we skip that
-	// and use the publisher directly for event publishing.
 	if c.publisher == nil {
-		c.logger.Warn("order-cell: no publisher injected, events will not be published")
+		c.publisher = discardPublisher{}
+		c.logger.Warn("order-cell: no publisher injected, using no-op publisher (demo mode)")
 	}
 
 	// order-create slice
-	createSvc := ordercreate.NewService(c.repo, c.publisher, c.logger)
+	var createOpts []ordercreate.Option
+	if c.outboxWriter != nil {
+		createOpts = append(createOpts, ordercreate.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		createOpts = append(createOpts, ordercreate.WithTxManager(c.txRunner))
+	}
+	createSvc := ordercreate.NewService(c.repo, c.publisher, c.logger, createOpts...)
 	c.createHandler = ordercreate.NewHandler(createSvc)
 	c.AddSlice(cell.NewBaseSlice("order-create", "order-cell", cell.L2))
 
