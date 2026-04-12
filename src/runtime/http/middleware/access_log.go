@@ -42,6 +42,9 @@ func AccessLog(next http.Handler) http.Handler {
 			if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
 				attrs = append(attrs, slog.String("request_id", reqID))
 			}
+			if correlationID, ok := ctxkeys.CorrelationIDFrom(r.Context()); ok {
+				attrs = append(attrs, slog.String("correlation_id", correlationID))
+			}
 			if traceID, ok := ctxkeys.TraceIDFrom(r.Context()); ok {
 				attrs = append(attrs, slog.String("trace_id", traceID))
 			}

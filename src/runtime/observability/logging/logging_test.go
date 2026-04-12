@@ -25,6 +25,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	ctx = ctxkeys.WithTraceID(ctx, "trace-abc")
 	ctx = ctxkeys.WithSpanID(ctx, "span-xyz")
 	ctx = ctxkeys.WithRequestID(ctx, "req-123")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
 	ctx = ctxkeys.WithCellID(ctx, "access-core")
 
 	logger.InfoContext(ctx, "test message", slog.String("extra", "value"))
@@ -37,6 +38,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	assert.Equal(t, "trace-abc", entry["trace_id"])
 	assert.Equal(t, "span-xyz", entry["span_id"])
 	assert.Equal(t, "req-123", entry["request_id"])
+	assert.Equal(t, "corr-123", entry["correlation_id"])
 	assert.Equal(t, "access-core", entry["cell_id"])
 	assert.Equal(t, "value", entry["extra"])
 }
@@ -61,6 +63,7 @@ func TestContextHandler_NoContextValues(t *testing.T) {
 	assert.NotContains(t, entry, "trace_id")
 	assert.NotContains(t, entry, "span_id")
 	assert.NotContains(t, entry, "request_id")
+	assert.NotContains(t, entry, "correlation_id")
 	assert.NotContains(t, entry, "cell_id")
 }
 

@@ -250,6 +250,18 @@ examples/  ← all layers
 | `adapters/otel` | OTel SDK tracer (OTLP gRPC exporter, ctxkeys propagation) | `tracing.Tracer` |
 | `adapters/prometheus` | Prometheus metrics (requests counter + duration histogram) | `metrics.Collector` |
 
+### Outbox Observability Bridge
+
+For HTTP flows that publish through the transactional outbox, GoCell now bridges
+`request_id`, `correlation_id`, and optional `trace_id` from handler context
+into `outbox.Entry.Metadata` on the PostgreSQL write path. When the event is
+consumed through bootstrap-managed subscriptions, those keys are restored into
+consumer handler context automatically before business code runs.
+
+This scope is intentionally limited to GoCell-internal HTTP -> outbox ->
+consumer continuity. Inbound `traceparent` / `b3` extraction remains a separate
+work item (`TRACE-PROP-01`).
+
 ## Using in Your Project
 
 ```bash
