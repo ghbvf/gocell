@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。历史完成记录已归档至 `docs/reviews/archive/202604111438-backlog-full-history.md`。
-> 更新日期: 2026-04-12（PR#79-85 合并后更新 + 跨框架 GAP 分析集成）
+> 更新日期: 2026-04-12（PR#79-91 合并后更新 + 跨框架 GAP 分析集成）
 
 ---
 
@@ -28,13 +28,18 @@
 | CLEANUP-01/02 + RMQ-75-01/03/04 清理 | PR#83 ✅ | 删除 WithEventBus/WithSigningKey deprecated wrapper + flaky RMQ test → require.Eventually + bootstrap EventRegistrar invariant |
 | Outbox BatchWriter 性能优化 | PR#84 ✅ | strings.Builder 预分配 + strconv.AppendInt，batch insert 内存分配降低 ~99% |
 | 测试覆盖率 85.8% → 90.6% | PR#85 ✅ | 16 cell/runtime/adapter/cmd 测试文件，1823 行纯测试代码，零源码变更 |
-| RMQ-75-02/05 运维加固 — 补充测试 | PR#88 ✅ | Health 中间状态 + permanent 优先级 + 多 checker + 动态状态切换 4 个新测试；生产示例 deferred → P3-DEFER-03 (blocked on Batch 5) |
+| RMQ-75-02/05 运维加固 — 补充测试 | PR#88 ✅ | Health 中间状态 + permanent 优先级 + 多 checker + 动态状态切换 4 个新测试 |
+| WM-17 生命周期钩子 | PR#86 ✅ | 4 可选接口（BeforeStart/AfterStart/BeforeStop/AfterStop）+ assembly FIFO Start/LIFO Stop + callHookSafe panic recovery + 22 tests |
+| SF-01~04 + HT-01/02 DecodeJSONStrict + 回归测试 | PR#89 ✅ | 11 handler 迁移 strict decode + WriteDecodeError 增强 + writeErrcodeError 提取 + 5 contract schema 对齐 + 26 新测试 |
+| HR-01~04 HTTP 产品化 | PR#90 ✅ | HR-02 metrics cardinality (PROM-01) + HR-04 tracing span rename + HR-01 RealIP CIDR + HR-03 RequestID→CorrelationID bridge |
+| WM-6 游标分页 | PR#87 ✅ | keyset cursor pagination + HMAC cursor 签名 + keyset index migration |
+| WM-34 配置热更新回调 | PR#91 ✅ | Cell 级 OnConfigReload + ConfigChangeEvent + per-cell config cloning |
 
 ## 进行中
 
 （暂无）
 
-### PR 队列（跨框架分析后修订，PR#70-85 已全部合并）
+### PR 队列（跨框架分析后修订，PR#70-91 已全部合并）
 
 > 2026-04-11 跨框架分析结论: 对比 7 个主流框架后，识别出 2 个架构根因。
 > 修订: R-3 废弃（被 Phase 2 EventRouter 取代）、R-5 废弃（合入 Phase 2 Cell 迁移）。
@@ -117,7 +122,7 @@
 |-----|------|----------|------|---------|--------|
 | GAP-9 | CorrelationID 全链路传播 | **CID-01** | 4h | `pkg/ctxkeys` WithCorrelationID + logging.go 提取 trace_id | access_log.go/consumer_base.go 未传播；Entry.Metadata 未写入 trace context |
 | GAP-3 | Rate limiter 激活 | **RL-WIRE-01** | 0.5d | `runtime/http/middleware/rate_limit.go` RateLimiter 接口 + middleware + 测试 | 未接入 router.go 默认链；缺具体 adapter |
-| GAP-10 | Lifecycle hooks | = **WM-17**（已计划） | 1d | Cell Init/Start/Stop 状态机 | 无 hook 注册机制（BeforeStart/AfterStart/BeforeStop/AfterStop） |
+| ~~GAP-10~~ | ~~Lifecycle hooks~~ | = **WM-17** PR#86 ✅ | ~~1d~~ | Cell Init/Start/Stop 状态机 | 4 可选接口 + assembly 集成 + panic recovery |
 | GAP-4 | HTTP→event metadata 桥接 | **META-BRIDGE-01** | 2h | Outbox Entry.Metadata map；HTTP context keys | ctx→Entry.Metadata 自动注入缺失。仅 HTTP↔event 部分，通用跨协议抽象 defer v1.1 |
 
 ### v1.1 工具链/辅助能力 — defer（5 项）
@@ -148,17 +153,17 @@
 
 | # | 任务 | 预估 | 说明 |
 |---|------|------|------|
-| HT-01 | handler 级 decode 回归测试（order-create/device-register/device-command） | 2h | 0-I |
-| HT-02 | `WriteDecodeError` 显式测试（400/413/500 + fallback） | 1h | 0-I |
+| ~~HT-01~~ | ~~handler 级 decode 回归测试（order-create/device-register/device-command）~~ | ~~2h~~ | PR#89 ✅ |
+| ~~HT-02~~ | ~~`WriteDecodeError` 显式测试（400/413/500 + fallback）~~ | ~~1h~~ | PR#89 ✅ |
 | OB-02 | safe_observe_test.go 注入 panicking slog handler 测试 | 1h | 0-J 剩余 |
-| SF-01 | `DecodeJSONStrict` 启用 DisallowUnknownFields | 1h | 0-H |
-| SF-02 | handler 逐个切到 `DecodeJSONStrict`（10 个 struct） | 1h | 0-H |
-| SF-03 | `WriteDecodeError` 适配严格/宽松模式 | 0.5h | 0-H |
-| SF-04 | CHANGELOG / API 文档标注 breaking change | 0.5h | 0-H |
-| HR-01 | RealIP / trustedProxies 产品决策 + WithTrustedProxies 或移除 | 2h | 0-K |
-| HR-02 | 统一 route pattern 元数据，修复 metrics label 基数爆炸 (PROM-01) | 2h | 0-K |
-| HR-03 | chi/middleware.RequestID bridge 替换自研 UUID 生成 | 1h | 0-K |
-| HR-04 | tracing 官方能力决策（WithTracer 或补文档） | 1h | 0-K |
+| ~~SF-01~~ | ~~`DecodeJSONStrict` 启用 DisallowUnknownFields~~ | ~~1h~~ | PR#89 ✅ |
+| ~~SF-02~~ | ~~handler 逐个切到 `DecodeJSONStrict`（11 个 struct）~~ | ~~1h~~ | PR#89 ✅ |
+| ~~SF-03~~ | ~~`WriteDecodeError` 适配严格/宽松模式~~ | ~~0.5h~~ | PR#89 ✅ |
+| ~~SF-04~~ | ~~CHANGELOG / API 文档标注 breaking change~~ | ~~0.5h~~ | PR#89 ✅ |
+| ~~HR-01~~ | ~~RealIP CIDR + WithTrustedProxies~~ | ~~2h~~ | PR#90 ✅ proxyChecker + right-to-left XFF |
+| ~~HR-02~~ | ~~metrics label 基数爆炸 (PROM-01)~~ | ~~2h~~ | PR#90 ✅ RoutePatternFromCtx + "unmatched" sentinel |
+| ~~HR-03~~ | ~~RequestID bridge → CorrelationID~~ | ~~1h~~ | PR#90 ✅ 同时设置 ctxkeys.RequestID + CorrelationID |
+| ~~HR-04~~ | ~~tracing span rename~~ | ~~1h~~ | PR#90 ✅ SpanRenamer + http.route attribute |
 
 ### Review Findings 未修
 
@@ -191,6 +196,8 @@
 | P3-DEFER-05 | `adapters/rabbitmq/connection.go` | Health() 在 reconnecting 和 terminal 状态下返回相同 error code，运维无法区分 | 3h（C3 状态机设计） |
 | RMQ-RACE-01 | `adapters/rabbitmq/connection.go:322-328` | WaitConnected handoff 竞态窗口 — reconnectLoop 在 drainChannelPool (323) 和 mu.Lock (326) 之间存在 gap，WaitConnected 可读到旧已关闭 channel 返回假成功。影响：Subscriber 抖动重试（自愈），不丢消息。修复：将 connected channel 置换提到 drainChannelPool 之前，或 WaitConnected 唤醒后复核 conn 状态 | 1h（C2，改并发语义需 -race 验证） |
 | SEC-READYZ-01 | `runtime/http/health/health.go`, `runtime/http/router/router.go`, `runtime/auth/middleware.go` | /readyz 暴露依赖拓扑 — ReadyzHandler 返回具名 dependencies（如 "rabbitmq"/"postgres"），挂在主 listener 且 auth 白名单跳过认证。公网部署可被匿名枚举。修复方向：admin listener 分离 或 public /readyz 只返回聚合状态 | 2h（C3，需设计 admin listener 或分级响应） |
+| WM17-F2-2 | `kernel/assembly/assembly.go` | Hook ctx 无超时边界 — 与 Start/Stop 相同，调用方职责；未来可在 Config 增加 per-hook timeout（discovered via PR#86 review） | 1h |
+| WM17-F4-3 | `kernel/assembly/assembly.go` | Hook 执行缺 Prometheus metrics — published/failed 计数器+执行耗时直方图，需 Collector 接口注入避免 kernel→adapters 直依赖（discovered via PR#86 review） | 2h |
 
 ### winmdm Accept P1
 
@@ -199,12 +206,12 @@
 | ~~WM-1~~ | ~~CSRF 中间件 — Origin/Referer 校验 + BFF cookie session~~ | `runtime/http/middleware` + `pkg/securecookie` | ~~0.5d~~ | PR#77 ✅ |
 | WM-35 | BFF handler 接入 — login/refresh/logout 接 SessionCookieWriter + BFF 模式不返回 token body | `cells/access-core/slices/session*` | 2d | WM-1 |
 | WM-36 | SecureCookie key rotation — active+previous 双 key ring，灰度轮换 | `pkg/securecookie` | 1.5d | WM-1 |
-| WM-6 | 游标分页 — keyset pagination | `pkg/query` | 1.5d | 无 |
+| ~~WM-6~~ | ~~游标分页 — keyset pagination~~ | `pkg/query` | ~~1.5d~~ | PR#87 ✅ |
 | ~~WM-2~~ | ~~密钥轮换 — JWT kid 轮换 + HMAC（范围限定，扩展 keys.go）~~ | `runtime/auth` | ~~2d~~ | PR#81 ✅ |
-| WM-34 | 配置热更新回调 — Cell 级 OnConfigReload | `runtime/config` | 1d | 无 |
+| ~~WM-34~~ | ~~配置热更新回调 — Cell 级 OnConfigReload~~ | `runtime/config` | ~~1d~~ | PR#91 ✅ |
 | WM-2-F1 | KeyProvider 接口抽象 — JWTIssuer/JWTVerifier 解耦 *KeySet，为 auto-rotation/JWKS 预留接缝 | `runtime/auth` | 1d | WM-34 (discovered via PR#81 review P1-4) |
 | WM-20 | TestPubSub 测试套件 — TestPublisher/TestSubscriber 标准套件 | `kernel/outbox/outboxtest/` | 1.5d | PR#68 |
-| WM-17 | 生命周期钩子 — BeforeStart/AfterStart/BeforeStop/AfterStop 可选接口 | `kernel/cell` | 1d | 无 |
+| ~~WM-17~~ | ~~生命周期钩子 — BeforeStart/AfterStart/BeforeStop/AfterStop 可选接口~~ | `kernel/cell` | ~~1d~~ | PR#86 ✅ |
 | WM-15 | L4 队列状态机 — 合入 0-B2 | `kernel/outbox` | 1.5d | ~~0-B2~~ PR#82 ✅ 前置完成 |
 | WM-33b | 熔断器 — sony/gobreaker 包装 | `adapters/` | 0.5d | 无 |
 
@@ -236,6 +243,22 @@
 | CMD-MODE-01 | core-bundle `GOCELL_ADAPTER_MODE` 错误值静默回退 dev — 当 real adapter 真正接入时升级为 fail-fast（当前 warn 可见性已足够）(discovered via PR#83 review) | 30min | real adapter 接入时 |
 | CMD-REFACTOR-01 | core-bundle 组装逻辑提取到可 import 的 `cmd/core-bundle/app` 包 — 使 assembly 集成 smoke 可测（当前 package main 不可被外部 import）(discovered via PR#83 review) | 3h（C2-C3） | — |
 | P2-T-02 | J-audit-login-trail e2e 测试 | 2h | — |
+| SCHEMA-01 | HTTP contract request.schema.json 全部是空壳 `{"type":"object"}` — 需补真实字段定义（login/refresh/flags/device/order/config），与 DecodeJSONStrict 行为对齐 | 4h | (discovered via PR#89 /fix review) |
+| DECODE-STR-01 | `classifyDecodeError` unknown field 检测依赖 `"json: unknown field"` 字符串前缀匹配 — Go 版本变化可能导致误分类为 500。当前 fail-safe（不是 fail-open），但应建立稳定内部分类 | 2h | (discovered via PR#89 /fix review) |
+| **CURSOR-P1-01** | **audit-query qctx 时间精度截断** — service.go 构造查询上下文用 RFC3339（秒级），但 cursor 边界用 RFC3339Nano；同秒不同子秒窗口被视为同一查询，导致错页而非 cursor invalid。修复: from/to 改纳秒级序列化 + 同秒子秒回归测试 | 2h | **(P1, discovered via PR#87 六席位复核)** |
+| **CURSOR-P1-02** | **内存仓库时间比较语义漂移** — repository 首屏排序用 time.Compare，afterCursor 推进用字符串比较；时间格式/时区/精度不一致时排序与游标推进漂移，demo 路径静默错页。修复: 统一为 typed time 语义，afterCursor 改用 time.Compare | 2h | **(P1, discovered via PR#87 六席位复核)** |
+| CURSOR-P2-01 | config-core 跨 slice 负例测试 — 两条 slice 共用同一 codec (cell.go)，缺测试证明一 slice 生成的 cursor 被另一 slice 拒绝 | 1h | (P2, discovered via PR#87 六席位复核) |
+| CURSOR-P2-02 | cursor invalid 可观测性弱 — response.go 所有 cursor 失败压成同一 400，access log 无法区分 base64 错/签名错/scope mismatch/context mismatch。需结构化日志字段 | 1h | (P2, discovered via PR#87 六席位复核) |
+| **HTTP-SEC-01** | **RealIP 信任边界** — trusted proxy 模式下 header 中选中的 token 直接作为客户端 IP 下发后续链路，RateLimit 直接消费该 RealIP（rate_limit.go）。header token 需显式 IP 格式校验（6/6 确认）。后续修复已补 XFF/X-Real-Ip token 校验，但根因位置（router.go → rate_limit.go 链路）未变 | 2h | **(P1, discovered via PR#90 六席位复核, 已部分修复)** |
+| **HTTP-SEC-02** | **WithTrustedProxies 误配静默** — 新暴露的配置面没有把错误配置做成显式失败或清晰异常路径（5/6 确认）。后续修复已补 warn on invalid proxy config，但未升级为 fail-fast | 1h | **(P1, discovered via PR#90 六席位复核, 已部分修复)** |
+| **STRICT-P1-01** | **HTTP contract 覆盖面不完整** — identity 仍挂 placeholder schema；config write/publish 只声明 event contract 无 HTTP contract；device-command schema 只描述 name 但 handler strict 读 payload。"实现先变，契约后补"状态 | 4h | **(P1, discovered via PR#89 六席位复核)** |
+| **STRICT-P1-02** | **verify.contract 不是可执行门禁** — 6 个 contract_test.go 仍为 stub，行为变更只靠 handler test 守护，contract/schema/handler 三者可继续漂移 | 4h | **(P1, discovered via PR#89 六席位复核)** |
+| **CFG-P1-01** | **Watcher 单文件 inode 绑定** — atomic replace/rename/remove-recreate 时静默断链，进程跑旧配置但外部以为热更新仍活着。测试仅覆盖原地写入。修复: 目录级监听 + 处理 Rename/Remove/Create + 必要时重绑目标文件。ref: fsnotify 官方建议 watch 父目录; Viper WatchConfig 目录级 | 3h | **(P1, discovered via PR#91 六席位复核)** |
+| **CFG-P1-02** | **Shutdown 顺序允许 post-stop reload** — watcher close 的 teardown 注册早于 assembly stop，LIFO 执行导致先停 cell 后关 watcher，停机边界存在状态突变窗口。修复: watcher close 提前于 assembly stop | 1h | **(P1, discovered via PR#91 六席位复核)** |
+| **CFG-P1-03** | **Reload partial apply 无回滚** — 先改写全局 config 再 best-effort 通知 cell，部分 cell（如 audit-core）仍只在 Init 读配置。runtime/config 已切新值但部分 cell 在旧值，失败不回滚。ref: Caddy load/start 成功后才提交; K8s generation/observedGeneration | 3h | **(P1, discovered via PR#91 六席位复核，与 WM-34-F4 同根因)** |
+| **CFG-P1-04** | **ConfigChangeEvent 隔离承诺强于实现** — 契约注释承诺 mutation 不影响其他 cell，但 Snapshot/cloneMap 只浅拷贝，flatten 把非 map 叶子原样放进扁平视图，列表/切片/复合叶子值可在 cell 间串改。修复: 深拷贝复合叶子 或 改为只读按键子树快照。ref: Viper 回调不承诺隔离快照; go-micro 返回只读子值 | 2h | **(P1, discovered via PR#91 六席位复核)** |
+| CFG-P2-01 | watcher/reload 退化不进 readyz — readyz 只看 cell 与显式 checker，热更新子系统失效时服务仍报健康 | 1h | (P2, discovered via PR#91 六席位复核) |
+| CFG-P2-02 | 测试覆盖不足 — rename/remove-recreate、shutdown race、复合值隔离无用例；no-diff 只验终态计数不验中间分支 | 2h | (P2, discovered via PR#91 六席位复核) |
 
 ---
 
@@ -252,15 +275,24 @@
 | ID | 问题 | 预估 |
 |----|------|------|
 | P4-TD-01 | 缺少共享 NoopOutboxWriter | 30min |
-| P4-TD-09 | List 端点缺分页且无 pageSize≤500 强制（order-query / configread / featureflag / device-command / auditquery）— WM-6 游标分页可解决 | 3h |
+| ~~P4-TD-09~~ | ~~List 端点缺分页且无 pageSize≤500 强制（order-query / configread / featureflag / device-command / auditquery）— WM-6 游标分页可解决~~ | ~~3h~~ | PR#87 ✅ |
 | ~~P4-TD-10~~ | ~~POST 201 响应未包装 `{"data":...}`~~ | ~~2h~~ | ✅ 已修复（device-register + device-command） |
 | P4-TD-11 | in-memory repository 缺并发测试 | 1h |
 | P4-TD-13 | Entity 直接作为 API 响应（order-query / configread / configwrite / featureflag / configpublish / device-status / device-register / device-command），需 DTO 转换 | 4h |
 | P4-TD-14 | audit-core/auditappend/service.go:90 `_ = json.Unmarshal` 静默忽略错误，需显式处理或记录日志 | 30min |
 | WM-2-F2 | ServiceToken HMAC message 不含 query string，可跨参数 replay | 2h (discovered via PR#81 review P2-1) |
-| WM-2-F3 | runtime/auth 无 Prometheus metrics（key lifecycle counters/gauges），需通过接口注入避免 runtime→adapters 依赖 | 2h (discovered via PR#81 review P2-11，前置 WM-34) |
+| WM-2-F3 | runtime/auth 无 Prometheus metrics（key lifecycle counters/gauges），需通过接口注入避免 runtime→adapters 依赖 | 2h (discovered via PR#81 review P2-11，前置 ~~WM-34~~ PR#91 ✅) |
 | P3-TD-11 | access-core domain 模型重构 | 4h（高风险） |
 | P3-TD-12 | configpublish.Rollback version 校验 | 2h |
+| WM-6-F1 | CursorCodec demo key prod guard — examples 已显式注入（PR#87），cell.go fallback 仍存在，可加 GOCELL_ENV=production fail-fast | 30min (discovered via PR#87 review F1, partially fixed) |
+| WM-6-F6 | service List 方法 cursor decode→validate→query→build 模板 ~15 行重复 5 次 — 可提取 query.ExecutePagedQuery[T] 泛型 helper | 1h (discovered via PR#87 review F6) |
+| WM-6-F2 | 4 个 in-memory repo 各自实现 compareAny/afterCursor 逻辑 ~50 行重复 — 可提取 pkg/query/mempage.go 通用 helper（需泛型 field accessor） | 1.5h (discovered via PR#87 review F1.2) |
+| WM-6-F7 | handler 分页错误日志 slog.Warn 模板重复 5 次 — 可收口到 ParsePageRequest 或包装函数 | 30min (discovered via PR#87 review F7) |
+| WM-6-F8 | 统一 demo vs production 模式机制 — 当前 repo/publisher/cursorCodec 各自独立 fallback（in-mem/noop/demo-key），缺少全局模式开关。需引入 assembly-level 或 env-level 模式标识（如 GOCELL_ENV=production），非 demo 模式下所有隐式 fallback fail-fast。WM-6-F1 是此项的子集 | 3h (discovered via PR#87 cursor key 策略分析，C3 架构级) |
+| WM-34-F1 | config Watcher 目录级重写 — 当前 `fw.Add(file)` 监听文件本身，atomic replace/rename/symlink swap 丢失 watch；仅处理 Write\|Create 忽略 Rename；需改为监听父目录+文件名过滤+symlink resolve+debounce（合并原 debounce 条目）；顺带补 Close+in-flight callback 并发关闭测试（WaitGroup 保护）。ref: Viper 监听目录+过滤、fsnotify README 推荐目录级、K8s ConfigMap 使用 symlink pivot | 2.5h (discovered via PR#91 review F1a/F1b + F4-01 + final-review S3-3.4，C2) |
+| WM-34-F2 | config reload 无 Prometheus metrics — config_reload_total / config_reload_error_total 计数器，需 Collector 接口注入避免 runtime→adapters 依赖 | 1h (discovered via PR#91 review F4-02，可与 WM-2-F3 合并) |
+| WM-34-F3 | ConfigReloader 无 key 过滤 — 所有 Cell 收到全量 diff，需自行过滤；可增加可选 ConfigWatchKeys() []string 声明关注前缀 | 1h (discovered via PR#91 review F6-01) |
+| WM-34-F4 | config reload commit 语义弱 — Reload 先 commit 全局 config 再 best-effort 通知 Cell，无 generation/observedGeneration 区分"已观测"与"已应用"，Cell 失败后 readyz 无感知。当前 0 个非测试 ConfigReloader，API 已标注 observer-only。ref: K8s generation/observedGeneration、Envoy xDS ACK/NACK、Caddy validate-then-switch | 3h (discovered via PR#91 review F3，C3 需人工决策) |
 
 ### WM-2 Review Accept（PR#81 六席位审查，不修理由）
 
@@ -460,10 +492,10 @@
 | A | ~~Phase 3: Checker 清理 + Receipt 加固~~ | — | PR#80 ✅ |
 | A | ~~RMQ-75-01/03/04~~ + ~~RMQ-75-02~~ MaxReconnectAttempts | ~~1h~~ | 01/03/04 由 PR#83 ✅；02 由 PR#80 实现 + PR#88 补充测试 ✅ |
 | A | ~~RMQ-75-05~~ readiness 接 rabbitmq Health() | ~~30min~~ | PR#83 基础 + PR#88 补充测试 ✅ |
-| B | HR-02 metrics 基数爆炸修复 (PROM-01) | 2h | route pattern 元数据替代 r.URL.Path |
-| B | HR-01/03/04 HTTP 产品化收尾 | 4h | RealIP 决策 + RequestID bridge + tracing 决策 |
-| B | 0-H SF-01~04 DecodeJSONStrict | 3h | 严格模式 + handler 迁移 |
-| C | HT-01/02 handler decode 回归测试 | 3h | order/device handler 兼容性锁定 |
+| B | ~~HR-02 metrics 基数爆炸修复 (PROM-01)~~ | — | PR#90 ✅ RoutePatternFromCtx + "unmatched" sentinel |
+| B | ~~HR-01/03/04 HTTP 产品化收尾~~ | — | PR#90 ✅ RealIP CIDR + RequestID→CorrelationID bridge + SpanRenamer |
+| B | ~~0-H SF-01~04 DecodeJSONStrict~~ | — | PR#89 ✅ 11 handler 迁移 + WriteDecodeError 增强 |
+| C | ~~HT-01/02 handler decode 回归测试~~ | — | PR#89 ✅ 26 新测试 + contract schema 对齐 |
 | C | OB-02 safe_observe broken logger 测试 | 1h | panic guard 补全 |
 | C | 25+ handler WriteError → WriteErrorWithContext 批量改造 | 2h | WM-10 全量适配 |
 
@@ -481,8 +513,8 @@
 |------|------|------|--------|
 | A | ~~WM-1 CSRF 中间件~~ | — | PR#77 ✅ |
 | A | ~~WM-2 密钥轮换（JWT kid + HMAC，范围限定）~~ | — | PR#81 ✅ |
-| B | WM-6 游标分页 | 1.5d | `pkg/query` KeysetPagination + HMAC cursor |
-| B | WM-34 配置热更新回调 | 1d | `runtime/config` Cell 级 OnConfigReload |
+| B | ~~WM-6 游标分页~~ | — | PR#87 ✅ |
+| B | ~~WM-34 配置热更新回调~~ | — | PR#91 ✅ |
 
 **安全底线**: CSRF 防护覆盖所有 POST/PUT/DELETE；密钥泄露后可轮换止损
 **测试策略**: CSRF table-driven；cursor HMAC 签名验证 + 边界条件；key rotation 并发测试
@@ -501,10 +533,10 @@
 | A | WM-33b 熔断器 | 0.5d | `adapters/` sony/gobreaker 包装 |
 | A | **RL-WIRE-01** Rate limiter 激活 + adapter（GAP-3 硬化） | 0.5d | rate_limit.go → router.go 默认链 optional slot + `golang.org/x/time/rate` adapter；与 WM-33b 同 PR |
 | A | **RL-METRICS-01** Relay Prometheus 指标 | 2h | published/retried/dead_lettered/skipped 计数器；Collector 接口注入避免 adapters→prometheus 直依赖。从 Tech Debt P1 提升 |
-| B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop）（= GAP-10） | 1d | `kernel/cell` 可选接口（type assertion） |
+| B | ~~WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop）（= GAP-10）~~ | ~~1d~~ | PR#86 ✅ — 4 可选接口 + assembly 集成 + callHookSafe panic recovery + 22 tests |
 | B | WM-15 L4 队列状态机 | 1.5d | `kernel/outbox` 合入 0-B2，状态 enum + 超时检测 |
 | B | ER-ARCH-02 EventRouter ConsumerGroup 支持 | 2h | `AddHandler(...HandlerOption)` + `WithConsumerGroup`，修复 competing consumers |
-| B | **CID-01** CorrelationID 全链路传播（GAP-9 硬化） | 4h | access_log.go + consumer_base.go 补 trace_id/correlation_id；升级 OPS-2 |
+| B | **CID-01** CorrelationID 全链路传播（GAP-9 硬化） | 3h | PR#90 已完成 HTTP 层（RequestID→CorrelationID bridge）；剩余 consumer_base.go 补 trace_id + Entry.Metadata 写入 |
 | B | **META-BRIDGE-01** HTTP→event metadata 桥接（GAP-4 硬化） | 2h | ctx trace_id/request_id/correlation_id → Entry.Metadata 自动注入；与 CID-01 同 PR。仅 HTTP↔event 部分，通用跨协议抽象 defer v1.1 |
 
 **安全底线**: 熔断器防级联故障；AfterStop 清理敏感资源
@@ -533,7 +565,7 @@
 | ~~CLEANUP-01 WithEventBus 删除~~ | ~~30min~~ | PR#83 ✅ |
 | ~~CLEANUP-02 WithSigningKey 删除~~ | ~~1h~~ | PR#83 ✅ |
 
-### 总时间线（修订后，+GAP 硬化集成）
+### 总时间线（修订后，PR#86-91 合并后）
 
 ```
 Week 1:
@@ -541,14 +573,12 @@ Week 1:
 
 Week 2:
   Day 1:   Batch 2 (架构修复: Phase 1 + Phase 2 + B-03) ✅ 已完成
-  Day 2-3: Batch 3 (Tier 0 收尾: Relay ✅ + Phase 3 ✅ + RMQ cleanup ✅ + HTTP 产品化)
-           ┊ 剩余: ~~RMQ-75-02~~ ✅ PR#88 + HR-01~04 + SF-01~04 + handler 改造
-  Day 4-5: Batch 4 (WM-1 ✅ + WM-2 ✅ + 游标分页 + 配置热更新)
-           ┊ 释放 ~3d 容量（WM-1 + WM-2 + Relay + Phase 3 + CLEANUP 提前完成）
+  Day 2-3: Batch 3 ✅ 近完成（PR#80/82/83/88/89/90），剩余 OB-02 + WriteErrorWithContext 3h
+  Day 4-5: Batch 4 ✅ 全部完成（PR#77/81/87/91）
 
 Week 3:
-  Day 1-3: Batch 5 (TestPubSub + 熔断器 + lifecycle + GAP 硬化)
-           ┊ GAP 硬化: CID-01 + RL-WIRE-01 + META-BRIDGE-01
+  Day 1-3: Batch 5 (TestPubSub + 熔断器 + GAP 硬化 + lifecycle ✅)
+           ┊ WM-17 已由 PR#86 ✅；CID-01 HTTP 层已由 PR#90 部分完成
   Day 3-4: Batch 6 (Review Findings + Tech Debt)
   Day 5:   → v1.0 Release Candidate
 
