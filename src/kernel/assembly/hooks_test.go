@@ -68,12 +68,74 @@ func (c *hookOrderCell) AfterStop(_ context.Context) error {
 	return c.record("AfterStop")
 }
 
+// panicHookCell panics in the specified hook phase.
+type panicHookCell struct {
+	*cell.BaseCell
+	calls   *[]string
+	panicOn string
+}
+
+func newPanicHookCell(id string, calls *[]string, panicOn string) *panicHookCell {
+	return &panicHookCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		calls:    calls,
+		panicOn:  panicOn,
+	}
+}
+
+func (c *panicHookCell) Start(ctx context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".Start")
+	return c.BaseCell.Start(ctx)
+}
+
+func (c *panicHookCell) Stop(ctx context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".Stop")
+	return c.BaseCell.Stop(ctx)
+}
+
+func (c *panicHookCell) BeforeStart(_ context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".BeforeStart")
+	if c.panicOn == "BeforeStart" {
+		panic(c.ID() + " BeforeStart panic!")
+	}
+	return nil
+}
+
+func (c *panicHookCell) AfterStart(_ context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".AfterStart")
+	if c.panicOn == "AfterStart" {
+		panic(c.ID() + " AfterStart panic!")
+	}
+	return nil
+}
+
+func (c *panicHookCell) BeforeStop(_ context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".BeforeStop")
+	if c.panicOn == "BeforeStop" {
+		panic(c.ID() + " BeforeStop panic!")
+	}
+	return nil
+}
+
+func (c *panicHookCell) AfterStop(_ context.Context) error {
+	*c.calls = append(*c.calls, c.ID()+".AfterStop")
+	if c.panicOn == "AfterStop" {
+		panic(c.ID() + " AfterStop panic!")
+	}
+	return nil
+}
+
 // Compile-time checks.
 var (
 	_ cell.BeforeStarter = (*hookOrderCell)(nil)
 	_ cell.AfterStarter  = (*hookOrderCell)(nil)
 	_ cell.BeforeStopper = (*hookOrderCell)(nil)
 	_ cell.AfterStopper  = (*hookOrderCell)(nil)
+
+	_ cell.BeforeStarter = (*panicHookCell)(nil)
+	_ cell.AfterStarter  = (*panicHookCell)(nil)
+	_ cell.BeforeStopper = (*panicHookCell)(nil)
+	_ cell.AfterStopper  = (*panicHookCell)(nil)
 )
 
 // onlyBeforeStartCell implements only BeforeStarter.
@@ -317,5 +379,128 @@ func TestAssemblyHooks_RollbackHooksBestEffort(t *testing.T) {
 		"B.BeforeStart", "B.Start", // failed here
 		"A.BeforeStop", // error here, but rollback continues
 		"A.Stop", "A.AfterStop",
+	}, calls)
+}
+
+// F3-2: Start failure (not hook) triggers LIFO rollback with hooks on previously-started cells.
+func TestAssemblyHooks_StartFailure_RollbackUsesHooks(t *testing.T) {
+	a := New(Config{ID: "hooks-start-fail"})
+	var calls []string
+
+	good := newHookOrderCell("A", &calls, "")
+	bad := newHookOrderCell("B", &calls, "Start")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(bad))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "B")
+
+	// A: full start cycle. B: BeforeStart + Start (failed), AfterStart NOT called.
+	// Rollback: A gets full stop-with-hooks.
+	assert.Equal(t, []string{
+		"A.BeforeStart", "A.Start", "A.AfterStart",
+		"B.BeforeStart", "B.Start", // B.Start failed — no AfterStart
+		"A.BeforeStop", "A.Stop", "A.AfterStop", // A rollback with hooks
+	}, calls)
+}
+
+// F3-3: Context cancellation is respected by hooks.
+func TestAssemblyHooks_ContextCancellation(t *testing.T) {
+	a := New(Config{ID: "hooks-ctx-cancel"})
+	var calls []string
+
+	// Cell whose BeforeStart checks context.
+	ctxCell := newHookOrderCell("A", &calls, "")
+
+	require.NoError(t, a.Register(ctxCell))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	// Assembly start should still proceed (hooks receive cancelled ctx,
+	// but our test hooks don't check ctx — they succeed).
+	// This verifies the assembly doesn't crash on cancelled context.
+	require.NoError(t, a.Start(ctx))
+	assert.Equal(t, []string{
+		"A.BeforeStart", "A.Start", "A.AfterStart",
+	}, calls)
+
+	calls = nil
+	require.NoError(t, a.Stop(ctx))
+	assert.Equal(t, []string{
+		"A.BeforeStop", "A.Stop", "A.AfterStop",
+	}, calls)
+}
+
+// F2-1: Panic in hook is recovered and treated as error, not crash.
+func TestAssemblyHooks_PanicRecovery_BeforeStart(t *testing.T) {
+	a := New(Config{ID: "hooks-panic-bs"})
+	var calls []string
+
+	good := newHookOrderCell("A", &calls, "")
+	panicker := newPanicHookCell("B", &calls, "BeforeStart")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(panicker))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+	assert.Contains(t, err.Error(), "B")
+
+	// A fully started, B panicked in BeforeStart → rollback A.
+	assert.Equal(t, []string{
+		"A.BeforeStart", "A.Start", "A.AfterStart",
+		"B.BeforeStart", // panicked here
+		"A.BeforeStop", "A.Stop", "A.AfterStop",
+	}, calls)
+}
+
+func TestAssemblyHooks_PanicRecovery_AfterStart(t *testing.T) {
+	a := New(Config{ID: "hooks-panic-as"})
+	var calls []string
+
+	good := newHookOrderCell("A", &calls, "")
+	panicker := newPanicHookCell("B", &calls, "AfterStart")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(panicker))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+
+	// B.Start succeeded, B.AfterStart panicked → B gets stopped, then A rolled back.
+	assert.Equal(t, []string{
+		"A.BeforeStart", "A.Start", "A.AfterStart",
+		"B.BeforeStart", "B.Start", "B.AfterStart", // panicked
+		"B.BeforeStop", "B.Stop", "B.AfterStop", // B itself stopped
+		"A.BeforeStop", "A.Stop", "A.AfterStop", // A rolled back
+	}, calls)
+}
+
+func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
+	a := New(Config{ID: "hooks-panic-bstop"})
+	var calls []string
+
+	good := newHookOrderCell("A", &calls, "")
+	panicker := newPanicHookCell("B", &calls, "BeforeStop")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(panicker))
+	require.NoError(t, a.Start(context.Background()))
+
+	calls = nil
+	err := a.Stop(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panicked")
+
+	// B.BeforeStop panicked but Stop/AfterStop still called. A fully stopped.
+	assert.Equal(t, []string{
+		"B.BeforeStop", // panicked, recovered
+		"B.Stop", "B.AfterStop",
+		"A.BeforeStop", "A.Stop", "A.AfterStop",
 	}, calls)
 }

@@ -10,13 +10,16 @@ import "context"
 // orchestrator discovers them via type assertion:
 //
 //	if bs, ok := c.(BeforeStarter); ok {
-//	    bs.BeforeStart(ctx)
+//	    if err := bs.BeforeStart(ctx); err != nil {
+//	        return err
+//	    }
 //	}
 //
 // This keeps the core Cell interface unchanged while allowing Cells to
 // opt-in to lifecycle hooks.
 //
 // ref: go-kratos/kratos app.go — BeforeStart/AfterStart/BeforeStop/AfterStop
+// ref: uber-go/fx lifecycle.go — FIFO Start / LIFO Stop / rollback on failure
 
 // BeforeStarter is optionally implemented by Cells that need to run logic
 // before Start is called (e.g., validate runtime prerequisites, warm caches,
