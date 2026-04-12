@@ -2,6 +2,7 @@ package cell
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -184,6 +185,113 @@ func TestDualRegistrar_BothInterfaces(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, dc.eventRegistered)
 	assert.Equal(t, []string{"device.enrolled"}, router.topics)
+}
+
+// ---------------------------------------------------------------------------
+// ConfigReloader mock + tests
+// ---------------------------------------------------------------------------
+
+// configReloaderCell implements ConfigReloader.
+type configReloaderCell struct {
+	BaseCell
+	lastEvent *ConfigChangeEvent
+	err       error // configurable error to return
+}
+
+func (c *configReloaderCell) OnConfigReload(event ConfigChangeEvent) error {
+	c.lastEvent = &event
+	return c.err
+}
+
+// Compile-time check.
+var _ ConfigReloader = (*configReloaderCell)(nil)
+
+// httpAndReloaderCell implements both HTTPRegistrar and ConfigReloader.
+type httpAndReloaderCell struct {
+	BaseCell
+	httpRegistered bool
+	lastEvent      *ConfigChangeEvent
+}
+
+func (c *httpAndReloaderCell) RegisterRoutes(mux RouteMux) {
+	c.httpRegistered = true
+	mux.Handle("/api/v1/keys", http.NotFoundHandler())
+}
+
+func (c *httpAndReloaderCell) OnConfigReload(event ConfigChangeEvent) error {
+	c.lastEvent = &event
+	return nil
+}
+
+// Compile-time checks.
+var (
+	_ HTTPRegistrar  = (*httpAndReloaderCell)(nil)
+	_ ConfigReloader = (*httpAndReloaderCell)(nil)
+)
+
+func TestConfigReloader_TypeAssertion(t *testing.T) {
+	rc := &configReloaderCell{BaseCell: *NewBaseCell(CellMetadata{ID: "auth-core"})}
+
+	var c Cell = rc
+	cr, ok := c.(ConfigReloader)
+	assert.True(t, ok, "configReloaderCell should satisfy ConfigReloader")
+
+	event := ConfigChangeEvent{
+		Added:   []string{"new.key"},
+		Updated: []string{"server.port"},
+		Removed: []string{"old.key"},
+		Config:  map[string]any{"new.key": "val", "server.port": 9090},
+	}
+	err := cr.OnConfigReload(event)
+	assert.NoError(t, err)
+	assert.Equal(t, &event, rc.lastEvent)
+}
+
+func TestConfigReloader_NegativeTypeAssertion(t *testing.T) {
+	plain := NewBaseCell(CellMetadata{ID: "plain-cell"})
+
+	var c Cell = plain
+	_, ok := c.(ConfigReloader)
+	assert.False(t, ok, "plain BaseCell should NOT satisfy ConfigReloader")
+}
+
+func TestConfigReloader_DualHTTPAndReloader(t *testing.T) {
+	hrc := &httpAndReloaderCell{BaseCell: *NewBaseCell(CellMetadata{ID: "access-core"})}
+
+	var c Cell = hrc
+
+	// HTTP
+	hr, ok := c.(HTTPRegistrar)
+	assert.True(t, ok)
+	mux := &mockRouteMux{}
+	hr.RegisterRoutes(mux)
+	assert.True(t, hrc.httpRegistered)
+	assert.Equal(t, []string{"/api/v1/keys"}, mux.routes)
+
+	// ConfigReloader
+	cr, ok := c.(ConfigReloader)
+	assert.True(t, ok)
+	event := ConfigChangeEvent{
+		Updated: []string{"auth.signing_key"},
+		Config:  map[string]any{"auth.signing_key": "new-key"},
+	}
+	err := cr.OnConfigReload(event)
+	assert.NoError(t, err)
+	assert.Equal(t, &event, hrc.lastEvent)
+}
+
+func TestConfigReloader_ReturnsError(t *testing.T) {
+	rc := &configReloaderCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "failing-cell"}),
+		err:      errors.New("reload failed"),
+	}
+
+	var c Cell = rc
+	cr, ok := c.(ConfigReloader)
+	assert.True(t, ok)
+
+	err := cr.OnConfigReload(ConfigChangeEvent{})
+	assert.EqualError(t, err, "reload failed")
 }
 
 func TestRouteMux_Group(t *testing.T) {

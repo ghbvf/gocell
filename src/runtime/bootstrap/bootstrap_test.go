@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -500,5 +505,530 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		assert.NoError(t, runErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestSnapshotConfig_WithSnapshotter(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("a: 1\nb: two\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
+}
+
+// plainConfig implements config.Config but NOT config.Snapshotter,
+// exercising the snapshotConfig fallback path (Keys+Get iteration).
+type plainConfig struct {
+	data map[string]any
+}
+
+func (c *plainConfig) Get(key string) any        { return c.data[key] }
+func (c *plainConfig) Scan(_ interface{}) error   { return nil }
+func (c *plainConfig) Keys() []string {
+	keys := make([]string, 0, len(c.data))
+	for k := range c.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func TestSnapshotConfig_Fallback(t *testing.T) {
+	// plainConfig does NOT implement Snapshotter, so snapshotConfig
+	// must use the Keys()+Get() fallback path.
+	cfg := &plainConfig{data: map[string]any{"a": 1, "b": "two"}}
+
+	// Verify it does NOT implement Snapshotter.
+	_, ok := config.Config(cfg).(config.Snapshotter)
+	assert.False(t, ok, "plainConfig must not implement Snapshotter")
+
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
+}
+
+// ---------------------------------------------------------------------------
+// ConfigReloader integration tests (WM-34)
+// ---------------------------------------------------------------------------
+
+// reloaderCell is a Cell that implements cell.ConfigReloader for testing.
+type reloaderCell struct {
+	*cell.BaseCell
+	mu        sync.Mutex
+	events    []cell.ConfigChangeEvent
+	callOrder *[]string // shared slice to track call order across cells
+	err        error     // configurable error to return
+	doPanic    bool      // if true, panic instead of returning
+	panicCount atomic.Int32
+}
+
+func newReloaderCell(id string) *reloaderCell {
+	return &reloaderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (c *reloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
+	if c.doPanic {
+		c.panicCount.Add(1)
+		panic("intentional test panic in OnConfigReload")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+	if c.callOrder != nil {
+		*c.callOrder = append(*c.callOrder, c.ID())
+	}
+	return c.err
+}
+
+func (c *reloaderCell) eventCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.events)
+}
+
+func (c *reloaderCell) lastEvent() *cell.ConfigChangeEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.events) == 0 {
+		return nil
+	}
+	e := c.events[len(c.events)-1]
+	return &e
+}
+
+func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 8080\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload"})
+	rc := newReloaderCell("auth-core")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	// Wait for HTTP ready.
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Modify config file — add a new key.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\nnew_key: added\n"), 0o644))
+
+	// Wait for callback.
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected OnConfigReload to fire")
+
+	evt := rc.lastEvent()
+	require.NotNil(t, evt)
+	assert.Contains(t, evt.Updated, "server.port")
+	assert.Contains(t, evt.Added, "new_key")
+	assert.NotNil(t, evt.Config)
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload-err"})
+	rc := newReloaderCell("fail-cell")
+	rc.err = errors.New("reload callback failed")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Modify config — cell will return error.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for callback to be called (even though it returns error).
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Bootstrap should still be running (error does not crash).
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell reload error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload-panic"})
+	rc := newReloaderCell("panic-cell")
+	rc.doPanic = true
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Modify config — cell will panic.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for panic to fire and be recovered.
+	require.Eventually(t, func() bool {
+		return rc.panicCount.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected OnConfigReload panic to fire")
+
+	// Bootstrap should still be running after the panic.
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell panic")
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload-fifo"})
+	callOrder := make([]string, 0, 3)
+	cells := make([]*reloaderCell, 3)
+	for i, id := range []string{"first", "second", "third"} {
+		cells[i] = newReloaderCell(id)
+		cells[i].callOrder = &callOrder
+		require.NoError(t, asm.Register(cells[i]))
+	}
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Modify config.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for all cells to be called.
+	require.Eventually(t, func() bool {
+		return cells[2].eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Verify FIFO order.
+	assert.Equal(t, []string{"first", "second", "third"}, callOrder)
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload-skip"})
+	plain := newTestCell("plain-cell") // does NOT implement ConfigReloader
+	rc := newReloaderCell("reloader-cell")
+	require.NoError(t, asm.Register(plain))
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Modify config.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Wait for reloader cell to be called.
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Plain cell should not have been called (it doesn't implement ConfigReloader).
+	// The test verifies by checking that only the reloader cell receives events.
+	assert.Equal(t, 1, rc.eventCount())
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-reload-noop"})
+	rc := newReloaderCell("noop-cell")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// First: write different content to confirm the callback pipeline works.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected first config change to fire callback")
+
+	// Second: re-write the SAME content that config currently has (val2).
+	// This triggers the watcher but Diff(val2, val2) = empty, so no callback.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+
+	// Third: write different content — proves the watcher is still alive
+	// after the no-diff reload.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 2
+	}, 3*time.Second, 50*time.Millisecond, "expected third config change to fire callback")
+
+	// Exactly 2 callbacks: the no-diff reload in the middle was correctly skipped.
+	assert.Equal(t, 2, rc.eventCount(), "no-diff reload should not trigger callback")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+// mutatingReloaderCell modifies the event to test isolation between cells.
+type mutatingReloaderCell struct {
+	*cell.BaseCell
+	called atomic.Int32
+}
+
+func newMutatingReloaderCell(id string) *mutatingReloaderCell {
+	return &mutatingReloaderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *mutatingReloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
+	c.called.Add(1)
+	// Attempt to corrupt shared state.
+	if len(event.Added) > 0 {
+		event.Added[0] = "CORRUPTED"
+	}
+	event.Config["INJECTED"] = "malicious"
+	delete(event.Config, "key")
+	return nil
+}
+
+func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-isolation"})
+	mutator := newMutatingReloaderCell("mutator")
+	observer := newReloaderCell("observer")
+	// Register mutator first — it tries to corrupt the event.
+	require.NoError(t, asm.Register(mutator))
+	require.NoError(t, asm.Register(observer))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Trigger config change that adds a new key.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\nnew_key: added\n"), 0o644))
+
+	// Wait for both cells to be called.
+	require.Eventually(t, func() bool {
+		return observer.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Observer should see clean data despite mutator's corruption attempt.
+	evt := observer.lastEvent()
+	require.NotNil(t, evt)
+	assert.Contains(t, evt.Added, "new_key", "Added should contain original key, not CORRUPTED")
+	assert.Contains(t, evt.Config, "key", "Config should still have 'key' despite delete attempt")
+	assert.NotContains(t, evt.Config, "INJECTED", "Config should not have mutator's injected key")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
 	}
 }

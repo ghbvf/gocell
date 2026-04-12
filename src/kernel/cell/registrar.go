@@ -111,3 +111,49 @@ type EventRouter interface {
 type EventRegistrar interface {
 	RegisterSubscriptions(r EventRouter) error
 }
+
+// ---------------------------------------------------------------------------
+// Config hot-reload callback
+// ---------------------------------------------------------------------------
+
+// ConfigChangeEvent describes what changed during a config reload.
+// The event is computed by the bootstrap layer and passed to ConfigReloader
+// cells after a successful config file reload.
+//
+// ref: micro/go-micro config/watcher.go — checksum-based change dedup
+// Adopted: explicit diff (Added/Updated/Removed) instead of opaque ChangeSet.
+// Deviated from spf13/viper: includes key-level delta, not just a notification.
+type ConfigChangeEvent struct {
+	// Added contains keys present in the new config but absent in the old.
+	Added []string
+	// Updated contains keys present in both configs with different values.
+	Updated []string
+	// Removed contains keys present in the old config but absent in the new.
+	Removed []string
+	// Config is a defensive copy of the reloaded config snapshot, isolated per
+	// cell (same type as Dependencies.Config). Mutating it has no effect on
+	// other cells or the framework.
+	Config map[string]any
+}
+
+// ConfigReloader is optionally implemented by Cells that need to react to
+// configuration changes at runtime. Bootstrap discovers ConfigReloader cells
+// via type assertion and calls OnConfigReload after each successful config
+// file reload that produces at least one change.
+//
+// Consistency: L0 LocalOnly — in-process notification, no external side effects.
+//
+// OnConfigReload MUST NOT block for extended periods. If a cell needs to
+// perform long-running reconfiguration, it should spawn a goroutine.
+// Errors are logged but do not halt other cells' reload callbacks
+// (best-effort, matching spf13/viper semantics).
+//
+// ref: spf13/viper viper.go — OnConfigChange callback after reload
+// Adopted: callback-after-reload pattern.
+// Deviated: typed ConfigChangeEvent with diff instead of raw fsnotify.Event.
+//
+// ref: go-kratos/kratos config/config.go — Observer func(string, Value)
+// Adopted: typed change event. Deviated: one-to-many (Kratos is one-to-one).
+type ConfigReloader interface {
+	OnConfigReload(event ConfigChangeEvent) error
+}

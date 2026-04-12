@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -32,6 +33,15 @@ type Config interface {
 // The concrete *config returned by Load implements this; NewFromMap does not.
 type Reloader interface {
 	Reload(yamlPath, envPrefix string) error
+}
+
+// Snapshotter is an optional interface for configs that support atomic
+// point-in-time snapshots. The concrete *config returned by Load implements
+// this. Snapshot holds the read lock for the entire copy, ensuring the
+// returned map is a consistent view — unlike iterating Keys()+Get() which
+// acquires/releases the lock per call.
+type Snapshotter interface {
+	Snapshot() map[string]any
 }
 
 // config is the default in-memory implementation of Config.
@@ -102,6 +112,18 @@ func (c *config) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Snapshot returns an atomic point-in-time copy of the flat config data.
+// The read lock is held for the entire copy operation, ensuring consistency.
+func (c *config) Snapshot() map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snap := make(map[string]any, len(c.data))
+	for k, v := range c.data {
+		snap[k] = v
+	}
+	return snap
 }
 
 // Reload re-reads the YAML file and overlays environment variables.
@@ -176,6 +198,32 @@ func applyEnv(prefix string, data map[string]any, raw map[string]any) {
 		// Also set in raw for Scan to pick up.
 		setNested(raw, strings.Split(key, "."), v)
 	}
+}
+
+// Diff computes the difference between two flat config maps.
+// It returns keys that were added, updated (value changed), or removed.
+// Returned slices are sorted for deterministic output.
+//
+// ref: micro/go-micro config/watcher.go — checksum-based change dedup
+// Adopted: explicit key-set diff for deterministic change detection.
+func Diff(oldData, newData map[string]any) (added, updated, removed []string) {
+	for k, nv := range newData {
+		ov, exists := oldData[k]
+		if !exists {
+			added = append(added, k)
+		} else if !reflect.DeepEqual(ov, nv) {
+			updated = append(updated, k)
+		}
+	}
+	for k := range oldData {
+		if _, exists := newData[k]; !exists {
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(updated)
+	sort.Strings(removed)
+	return added, updated, removed
 }
 
 // flatten recursively flattens a nested map into dot-separated keys.
