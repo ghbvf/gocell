@@ -157,3 +157,36 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestHandler_HandleList_InvalidCursor(t *testing.T) {
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+
+	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
+	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
+	crossContextToken, _ := codec.Encode(query.Cursor{
+		Values:  []any{"v1", "v2"},
+		Scope:   query.SortScope(wrongSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	})
+
+	tests := []struct {
+		name   string
+		cursor string
+	}{
+		{"garbage token", "not-a-valid-cursor!!!"},
+		{"missing scope and context", missingFieldsToken},
+		{"cross-context replay", crossContextToken},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, _ := setupHandler()
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/?cursor="+tc.cursor, nil)
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
+		})
+	}
+}

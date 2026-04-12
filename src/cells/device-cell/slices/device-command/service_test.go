@@ -212,7 +212,7 @@ func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "context mismatch")
+	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
 }
 
 func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {

@@ -189,7 +189,7 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "context mismatch")
+	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
 }
 
 func TestService_Query_SubsecondFilterContext(t *testing.T) {

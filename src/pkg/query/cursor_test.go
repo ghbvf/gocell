@@ -226,27 +226,64 @@ func TestSortScope_DifferentColumnsProduceDifferentScope(t *testing.T) {
 
 // --- ValidateCursorScope tests ---
 
+// requireCursorInvalid asserts err is *errcode.Error with ErrCursorInvalid code
+// and the expected reason in Details. This catches regressions where the error
+// type or code drifts while the message text still matches.
+func requireCursorInvalid(t *testing.T, err error, wantReason string) {
+	t.Helper()
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, cursorInvalidMsg, ecErr.Message)
+	assert.Equal(t, wantReason, ecErr.Details["reason"])
+}
+
 func TestValidateCursorScope_Mismatch(t *testing.T) {
 	sortA := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
 	sortB := []SortColumn{{Name: "key", Direction: SortASC}, {Name: "id", Direction: SortASC}}
-	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA)}
-	err := ValidateCursorScope(cur, sortB, "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "scope mismatch")
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA), Context: qctx}
+	err := ValidateCursorScope(cur, sortB, qctx)
+	requireCursorInvalid(t, err, "sort scope mismatch")
 }
 
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
 	sort := []SortColumn{{Name: "id", Direction: SortASC}}
-	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sort)}
-	err := ValidateCursorScope(cur, sort, "")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "expected 1")
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sort), Context: qctx}
+	err := ValidateCursorScope(cur, sort, qctx)
+	requireCursorInvalid(t, err, "has 2 values but expected 1 sort columns")
 }
 
 func TestValidateCursorScope_Valid(t *testing.T) {
 	sort := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
-	cur := Cursor{Values: []any{"2026-01-01T00:00:00Z", "id-1"}, Scope: SortScope(sort)}
-	assert.NoError(t, ValidateCursorScope(cur, sort, ""))
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"2026-01-01T00:00:00Z", "id-1"}, Scope: SortScope(sort), Context: qctx}
+	assert.NoError(t, ValidateCursorScope(cur, sort, qctx))
+}
+
+func TestValidateCursorScope_MissingScope(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"v1"}, Context: qctx} // Scope intentionally empty
+	err := ValidateCursorScope(cur, sort, qctx)
+	requireCursorInvalid(t, err, "sort scope is required")
+}
+
+func TestValidateCursorScope_MissingContext(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort)} // Context intentionally empty
+	err := ValidateCursorScope(cur, sort, qctx)
+	requireCursorInvalid(t, err, "query context is required")
+}
+
+func TestValidateCursorScope_BothMissing(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	qctx := QueryContext("endpoint", "test")
+	cur := Cursor{Values: []any{"v1"}} // both Scope and Context empty
+	err := ValidateCursorScope(cur, sort, qctx)
+	requireCursorInvalid(t, err, "sort scope is required") // scope check fires first
 }
 
 func TestValidateCursorScope_ContextMismatch(t *testing.T) {
@@ -255,8 +292,7 @@ func TestValidateCursorScope_ContextMismatch(t *testing.T) {
 	ctxB := QueryContext("endpoint", "configs")
 	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort), Context: ctxA}
 	err := ValidateCursorScope(cur, sort, ctxB)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "context mismatch")
+	requireCursorInvalid(t, err, "query context mismatch")
 }
 
 func TestValidateCursorScope_ContextMatch(t *testing.T) {
