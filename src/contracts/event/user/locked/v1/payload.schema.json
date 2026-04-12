@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.user.locked.v1.payload",
+  "type": "object",
+  "properties": {
+    "user_id": { "type": "string" }
+  },
+  "required": ["user_id"]
+}

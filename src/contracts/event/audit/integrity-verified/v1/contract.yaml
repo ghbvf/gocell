@@ -6,6 +6,8 @@ lifecycle: active
 endpoints:
   publisher: audit-core
   subscribers: []
+schemaRefs:
+  payload: payload.schema.json
 replayable: true
 idempotencyKey: event_id
 deliverySemantics: at-least-once

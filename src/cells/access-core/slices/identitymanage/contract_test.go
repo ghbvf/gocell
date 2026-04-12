@@ -1,35 +1,68 @@
 package identitymanage
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+type capturePub struct {
+	mu      sync.Mutex
+	entries []capturedEvent
+}
+type capturedEvent struct {
+	Topic   string
+	Payload json.RawMessage
+}
+
+func (p *capturePub) Publish(_ context.Context, topic string, payload []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.entries = append(p.entries, capturedEvent{Topic: topic, Payload: payload})
+	return nil
+}
+
+func setupWithCapture() (http.Handler, *capturePub) {
+	pub := &capturePub{}
+	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), pub, slog.Default())
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux, pub
+}
+
 // Contract: event.user.created.v1 — user creation publishes {user_id, username}.
-// Verifies the action that triggers the event completes successfully.
 func TestEventUserCreatedV1Publish(t *testing.T) {
-	h := setup()
+	h, pub := setupWithCapture()
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/",
 		strings.NewReader(`{"username":"contract-user","email":"c@d.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
 
-	assert.Equal(t, http.StatusCreated, w.Code,
-		"contract: user creation must succeed, triggering event.user.created.v1 publish")
+	require.Len(t, pub.entries, 1, "expected 1 published event")
+	assert.Equal(t, TopicUserCreated, pub.entries[0].Topic)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(pub.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload["user_id"], "payload requires user_id")
+	assert.Equal(t, "contract-user", payload["username"], "payload requires username")
 }
 
 // Contract: event.user.locked.v1 — user lock publishes {user_id}.
-// Verifies the lock action completes successfully.
 func TestEventUserLockedV1Publish(t *testing.T) {
-	h := setup()
+	h, pub := setupWithCapture()
 
 	// Create user first.
 	w := httptest.NewRecorder()
@@ -46,13 +79,22 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
-	// Lock the user.
+	// Clear create event, then lock.
+	pub.mu.Lock()
+	pub.entries = nil
+	pub.mu.Unlock()
+
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/"+created.Data.ID+"/lock", nil)
 	h.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
 
-	assert.Equal(t, http.StatusOK, w.Code,
-		"contract: user lock must succeed, triggering event.user.locked.v1 publish")
+	require.Len(t, pub.entries, 1, "expected 1 published event")
+	assert.Equal(t, TopicUserLocked, pub.entries[0].Topic)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(pub.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload["user_id"], "payload requires user_id")
 }
 
 // Contract: http.auth.me.v1 — identity CRUD returns {data: {id, username, email, status, createdAt, updatedAt}}.
@@ -100,4 +142,26 @@ func TestHttpAuthMeV1Serve(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, created.Data.ID, got.Data.ID)
 	assert.Equal(t, "alice", got.Data.Username)
+}
+
+// Contract: http.auth.me.v1 — error path returns {error: {code, message}}.
+func TestHttpAuthMeV1Serve_ErrorEnvelope(t *testing.T) {
+	h := setup()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{bad json`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Error.Code, "contract requires error.code")
+	assert.NotEmpty(t, resp.Error.Message, "contract requires error.message")
 }

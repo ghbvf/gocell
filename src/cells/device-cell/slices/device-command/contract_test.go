@@ -39,6 +39,29 @@ func TestHttpDeviceV1Serve(t *testing.T) {
 	assert.NotEmpty(t, resp.Data.Status, "contract requires status")
 }
 
+// Contract: http.device.v1 — error path returns {error: {code, message}}.
+func TestHttpDeviceV1Serve_ErrorEnvelope(t *testing.T) {
+	h, _, _ := setupCommandHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands",
+		strings.NewReader(`{bad json`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "dev-1")
+	h.HandleEnqueue(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Error.Code, "contract requires error.code")
+	assert.NotEmpty(t, resp.Error.Message, "contract requires error.message")
+}
+
 // Contract: command.device-command.v1 — device command lifecycle (enqueue, list, ack).
 func TestCommandDeviceCommandV1Handle(t *testing.T) {
 	h, _, _ := setupCommandHandler() // seeds dev-1

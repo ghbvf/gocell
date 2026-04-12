@@ -4,9 +4,39 @@
   "description": "Single flag: {data: FeatureFlag}. List: {data: [...], nextCursor, hasMore}. Evaluate: {data: EvalResult}.",
   "type": "object",
   "properties": {
-    "data": {},
+    "data": {
+      "description": "FeatureFlag object, array of flags, or evaluation result."
+    },
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "oneOf": [
+    {
+      "description": "Single flag or evaluation result (GET /{key}, POST /{key}/evaluate)",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "ID": { "type": "string" },
+            "Key": { "type": "string" },
+            "Type": { "type": "string" },
+            "Enabled": { "type": "boolean" },
+            "RolloutPercentage": { "type": "integer" }
+          }
+        }
+      }
+    },
+    {
+      "description": "Paginated list response (GET /)",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "hasMore": { "type": "boolean" }
+      },
+      "required": ["data", "hasMore"]
+    }
+  ]
 }

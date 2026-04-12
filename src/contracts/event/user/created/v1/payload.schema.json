@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.user.created.v1.payload",
+  "type": "object",
+  "properties": {
+    "user_id": { "type": "string" },
+    "username": { "type": "string" }
+  },
+  "required": ["user_id", "username"]
+}

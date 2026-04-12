@@ -55,4 +55,23 @@ func TestHttpConfigFlagsV1Serve(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Contains(t, resp, "data", "contract requires data envelope")
 	})
+
+	t.Run("error envelope", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate",
+			strings.NewReader(`{bad json`))
+		req.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusBadRequest, w.Code)
+		var resp struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.NotEmpty(t, resp.Error.Code, "contract requires error.code")
+		assert.NotEmpty(t, resp.Error.Message, "contract requires error.message")
+	})
 }

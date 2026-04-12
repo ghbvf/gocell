@@ -8,6 +8,8 @@ endpoints:
   subscribers:
     - access-core
     - audit-core
+schemaRefs:
+  payload: payload.schema.json
 replayable: false
 idempotencyKey: event_id
 deliverySemantics: at-least-once

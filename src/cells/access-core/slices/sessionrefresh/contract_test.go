@@ -35,3 +35,25 @@ func TestHttpAuthRefreshV1Serve(t *testing.T) {
 	assert.NotEmpty(t, resp.Data.RefreshToken, "contract requires refreshToken")
 	assert.NotEmpty(t, resp.Data.ExpiresAt, "contract requires expiresAt")
 }
+
+// Contract: http.auth.refresh.v1 — error path returns {error: {code, message}}.
+func TestHttpAuthRefreshV1Serve_ErrorEnvelope(t *testing.T) {
+	h, _ := setup()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh",
+		strings.NewReader(`{bad json`))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleRefresh(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Error.Code, "contract requires error.code")
+	assert.NotEmpty(t, resp.Error.Message, "contract requires error.message")
+}

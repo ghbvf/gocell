@@ -4,9 +4,49 @@
   "description": "Single entry: {data: ConfigEntry}. List: {data: [...], nextCursor, hasMore}.",
   "type": "object",
   "properties": {
-    "data": {},
+    "data": {
+      "description": "Single ConfigEntry object or array of entries (list endpoint)."
+    },
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "oneOf": [
+    {
+      "description": "Single entry response (GET /{key})",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "ID": { "type": "string" },
+            "Key": { "type": "string" },
+            "Value": { "type": "string" },
+            "Version": { "type": "integer" },
+            "CreatedAt": { "type": "string", "format": "date-time" },
+            "UpdatedAt": { "type": "string", "format": "date-time" }
+          },
+          "required": ["ID", "Key", "Value", "Version"]
+        }
+      }
+    },
+    {
+      "description": "Paginated list response (GET /)",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ID": { "type": "string" },
+              "Key": { "type": "string" },
+              "Value": { "type": "string" },
+              "Version": { "type": "integer" }
+            }
+          }
+        },
+        "hasMore": { "type": "boolean" }
+      },
+      "required": ["data", "hasMore"]
+    }
+  ]
 }
