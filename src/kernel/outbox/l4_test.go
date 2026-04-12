@@ -442,6 +442,21 @@ func TestDeadlineFor_ZeroPhase(t *testing.T) {
 		"zero-value TimeoutPhase must return zero Time")
 }
 
+func TestCommandEntry_Validate_MissingCreatedAt(t *testing.T) {
+	entry := CommandEntry{
+		ID:          "cmd-1",
+		DeviceID:    "dev-1",
+		CommandType: "reboot",
+		Payload:     []byte(`{}`),
+		Status:      CommandPending,
+		// CreatedAt zero value
+	}
+	err := entry.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, err.Error(), "CreatedAt")
+}
+
 func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
 	base := CommandEntry{
 		ID:          "cmd-1",

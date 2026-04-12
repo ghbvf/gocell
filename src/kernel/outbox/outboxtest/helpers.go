@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -65,9 +66,14 @@ func PublishN(t *testing.T, ctx context.Context, pub outbox.Publisher, topic str
 	return entries
 }
 
-// CollectN subscribes and collects exactly n entries, with a timeout.
+// CollectN starts a subscriber and collects exactly n entries, with a timeout.
 // It launches Subscribe in a goroutine (blocking interface) and collects
 // via mutex+slice. Returns collected entries. Fails the test on timeout.
+//
+// IMPORTANT: CollectN only subscribes — the caller must publish messages
+// AFTER calling CollectN (or before, if the implementation is persistent).
+// For at-most-once implementations (e.g., InMemoryEventBus), publish after
+// CollectN returns control, since it includes a subscribeInitDelay wait.
 func CollectN(
 	t *testing.T,
 	ctx context.Context,
@@ -146,7 +152,7 @@ func assertNoError(t *testing.T, err error, msgAndArgs ...any) {
 
 func assertEqual(t *testing.T, want, got any, msgAndArgs ...any) {
 	t.Helper()
-	if fmt.Sprintf("%v", want) != fmt.Sprintf("%v", got) {
+	if !reflect.DeepEqual(want, got) {
 		suffix := ""
 		if len(msgAndArgs) > 0 {
 			suffix = " — " + fmt.Sprint(msgAndArgs...)

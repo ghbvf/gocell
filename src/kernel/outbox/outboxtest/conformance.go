@@ -16,7 +16,9 @@ import (
 const defaultTimeout = 10 * time.Second
 
 // subscribeInitDelay is the time to wait after launching a Subscribe goroutine
-// for the subscription to register. Configurable via Features.SubscribeInitDelay.
+// for the subscription to register internally. This is a fixed constant;
+// adapter implementations with slower initialization should use a wrapper
+// constructor that includes their own warmup delay.
 const subscribeInitDelay = 50 * time.Millisecond
 
 // TestPubSub runs the full conformance test suite against the given
@@ -823,57 +825,22 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 // Batch 5: Metadata + lifecycle
 // ---------------------------------------------------------------------------
 
-func testMetadataRoundTrip(t *testing.T, features Features, constructor PubSubConstructor) {
+func testMetadataRoundTrip(t *testing.T, features Features, _ PubSubConstructor) {
 	if !features.SupportsMetadata {
 		t.Skip("implementation does not support metadata round-trip")
 	}
 
-	// Implementation supports metadata — verify it survives pub/sub.
-	pub, sub := constructor(t)
-	ctx := context.Background()
-	topic := TestTopic(t)
-
-	wantMeta := map[string]string{"trace_id": "abc-123", "correlation_id": "xyz-456"}
-	payload := []byte(`{"test":"metadata"}`)
-
-	var received outbox.Entry
-	done := make(chan struct{})
-
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			received = entry
-			close(done)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-	}()
-	time.Sleep(subscribeInitDelay)
-
-	// Publish with metadata — requires implementation-specific support.
-	// The standard Publisher.Publish(ctx, topic, payload) does not carry metadata.
-	// Implementations that support metadata must provide a way to attach it.
-	// For now, verify the handler receives an entry (metadata check deferred to
-	// adapter-specific conformance tests that can use the adapter's API directly).
-	assertNoError(t, pub.Publish(ctx, topic, payload))
-
-	select {
-	case <-done:
-		assertBytesEqual(t, payload, received.Payload)
-		// Metadata verification is adapter-specific. The Publisher interface
-		// only takes (ctx, topic, payload), so metadata must be injected
-		// through adapter-specific mechanisms. If an adapter claims
-		// SupportsMetadata, it should extend this test via a wrapper.
-		_ = wantMeta // used by adapter-specific extensions
-	case <-time.After(defaultTimeout):
-		t.Fatal("timed out")
-	}
-
-	cancel()
-	<-subDone
+	// The standard Publisher.Publish(ctx, topic, payload) interface does not
+	// carry metadata. Adapter-specific conformance tests must verify metadata
+	// round-trip through their own publishing API (e.g., wire-format Entry
+	// with populated Metadata field).
+	//
+	// This test is intentionally a placeholder: setting SupportsMetadata=true
+	// signals that the adapter SHOULD provide its own metadata verification
+	// test alongside this suite. A future Publisher interface evolution
+	// (PublishEntry) could enable a generic metadata test here.
+	t.Skip("metadata round-trip requires adapter-specific publishing API — " +
+		"adapter tests should verify metadata separately")
 }
 
 func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor PubSubConstructor) {

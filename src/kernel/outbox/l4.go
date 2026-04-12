@@ -135,6 +135,13 @@ const (
 // CommandTimeouts configures per-phase deadlines for an L4 command.
 // Zero duration means no timeout for that phase.
 //
+// Adapter responsibility: the kernel defines timeout configuration and
+// pure deadline calculation (via CommandEntry.DeadlineFor). The adapter
+// MUST run a periodic sweeper (e.g., every 30s–60s) that queries
+// non-terminal commands, computes DeadlineFor for each active phase,
+// and calls AdvanceStatus(..., CommandExpired) when time.Now() exceeds
+// the deadline.
+//
 // ref: Temporal Nexus operations — ScheduleToCloseTimeout, ScheduleToStartTimeout,
 // StartToCloseTimeout. GoCell simplifies to three tiers.
 type CommandTimeouts struct {
@@ -164,7 +171,13 @@ type CommandEntry struct {
 
 	Timeouts CommandTimeouts
 
-	Attempt     int        // current attempt number (0 = first attempt)
+	// Attempt tracks the current delivery attempt (0 = first attempt).
+	// Design note: there is no explicit "Retrying" status. Retry is modelled
+	// as the same Pending→Sent arc with an incremented Attempt counter. This
+	// avoids a combinatorial explosion of states (Retrying×{Sent,Delivered})
+	// and keeps the transition table compact. Adapters inspect Attempt to
+	// decide whether to retry or transition to Failed.
+	Attempt int
 	CreatedAt   time.Time
 	SentAt      *time.Time // set when Status transitions to Sent
 	DeliveredAt *time.Time // set when device ACKs receipt
@@ -218,6 +231,9 @@ func (e *CommandEntry) Validate() error {
 	}
 	if !e.Status.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry has invalid Status")
+	}
+	if e.CreatedAt.IsZero() {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing CreatedAt")
 	}
 	if e.Timeouts.ScheduleToSend < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: ScheduleToSend timeout must be non-negative")
