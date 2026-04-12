@@ -152,14 +152,14 @@ func QueryContext(pairs ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// ValidateCursorScope checks that the decoded cursor matches the expected sort
-// columns and query context. Returns ErrCursorInvalid if the scope or context
-// doesn't match or the value count is wrong.
+// ValidateCursorScope checks that the decoded cursor carries the expected sort
+// scope and query context, and that the value count matches. Scope and context
+// are mandatory — cursors missing either field are rejected.
 func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
-	if cur.Scope != "" && cur.Scope != SortScope(sort) {
+	if cur.Scope != SortScope(sort) {
 		return errcode.New(errcode.ErrCursorInvalid, "cursor: sort scope mismatch")
 	}
-	if cur.Context != "" && cur.Context != queryCtx {
+	if cur.Context != queryCtx {
 		return errcode.New(errcode.ErrCursorInvalid, "cursor: query context mismatch")
 	}
 	if len(cur.Values) != len(sort) {
