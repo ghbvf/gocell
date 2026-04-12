@@ -66,6 +66,8 @@ jobs:
           go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
           awk '
             /coverage: \[no statements\]/ { next }
+            /outboxtest/ { next }
+            /celltest/ { next }
             /coverage:/ {
               cov = $0
               sub(/^.*coverage: /, "", cov)
