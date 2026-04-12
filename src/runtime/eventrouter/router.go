@@ -44,8 +44,9 @@ func WithStartupTimeout(d time.Duration) Option {
 }
 
 type handlerConfig struct {
-	topic   string
-	handler outbox.EntryHandler
+	topic         string
+	handler       outbox.EntryHandler
+	consumerGroup string
 }
 
 // Router manages event subscription lifecycle. It implements cell.EventRouter
@@ -83,7 +84,12 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 
 // AddHandler registers a subscription intent. It MUST be called before Run.
 // Panics if topic is empty or handler is nil.
-func (r *Router) AddHandler(topic string, handler outbox.EntryHandler) {
+//
+// consumerGroup identifies the logical consumer group for this handler.
+// Handlers in the same group compete for messages on the same topic;
+// different groups each receive a full copy (fanout). Cell implementations
+// typically pass their cell ID (e.g. "audit-core") to ensure per-cell isolation.
+func (r *Router) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
 	if topic == "" {
 		panic("eventrouter: AddHandler called with empty topic")
 	}
@@ -92,7 +98,7 @@ func (r *Router) AddHandler(topic string, handler outbox.EntryHandler) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.handlers = append(r.handlers, handlerConfig{topic: topic, handler: handler})
+	r.handlers = append(r.handlers, handlerConfig{topic: topic, handler: handler, consumerGroup: consumerGroup})
 }
 
 // errAlreadyRunning is returned if Run is called more than once.
@@ -150,7 +156,7 @@ func (r *Router) Run(ctx context.Context) error {
 			}()
 			slog.Info("eventrouter: starting subscription",
 				slog.String("topic", h.topic))
-			err := r.subscriber.Subscribe(runCtx, h.topic, h.handler)
+			err := r.subscriber.Subscribe(runCtx, h.topic, h.handler, h.consumerGroup)
 			if err != nil && runCtx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", h.topic, err)
 			}

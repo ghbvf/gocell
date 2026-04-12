@@ -298,13 +298,22 @@ func WrapLegacyHandler(fn LegacyHandler) EntryHandler {
 // Adopted: Close() for clean shutdown; topic-based subscription model.
 // Deviated: callback-based EntryHandler instead of channel-based (<-chan *Message)
 // to align with GoCell's ConsumerBase pattern and simplify consumer lifecycle.
+//
+// ref: Kafka sarama ConsumerGroup — consumerGroup isolates consumption; same group
+// competes, different groups each get a full copy (fanout).
+// ref: go-micro broker.SubscribeOptions.Queue — same concept, different name.
 type Subscriber interface {
 	// Subscribe registers a handler for the given topic. The handler is called
 	// for each incoming entry and returns a HandleResult that declares the
 	// intended broker disposition.
 	//
+	// consumerGroup identifies the logical consumer group. Subscribers in
+	// the same group compete for messages (load-balanced); different groups
+	// each receive a full copy (fanout). When empty, the implementation
+	// falls back to its default behaviour (backward compatible).
+	//
 	// Subscribe blocks until ctx is cancelled or an unrecoverable error occurs.
-	Subscribe(ctx context.Context, topic string, handler EntryHandler) error
+	Subscribe(ctx context.Context, topic string, handler EntryHandler, consumerGroup string) error
 
 	// Close terminates all active subscriptions and releases resources.
 	Close() error
@@ -326,12 +335,12 @@ type SubscriberWithMiddleware struct {
 var _ Subscriber = (*SubscriberWithMiddleware)(nil)
 
 // Subscribe wraps the handler with the middleware chain, then delegates to Inner.
-func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, handler EntryHandler) error {
+func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, handler EntryHandler, consumerGroup string) error {
 	wrapped := handler
 	for i := len(s.Middleware) - 1; i >= 0; i-- {
 		wrapped = s.Middleware[i](topic, wrapped)
 	}
-	return s.Inner.Subscribe(ctx, topic, wrapped)
+	return s.Inner.Subscribe(ctx, topic, wrapped, consumerGroup)
 }
 
 // Close delegates to the inner subscriber.

@@ -64,7 +64,7 @@ type mockEventRouter struct {
 	topics []string
 }
 
-func (m *mockEventRouter) AddHandler(topic string, _ outbox.EntryHandler) {
+func (m *mockEventRouter) AddHandler(topic string, _ outbox.EntryHandler, _ string) {
 	m.topics = append(m.topics, topic)
 }
 
@@ -81,7 +81,7 @@ func (e *eventCell) RegisterSubscriptions(r EventRouter) error {
 	e.registered = true
 	r.AddHandler("session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "test")
 	return nil
 }
 
@@ -104,7 +104,7 @@ func (d *dualCell) RegisterSubscriptions(r EventRouter) error {
 	d.eventRegistered = true
 	r.AddHandler("device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "test")
 	return nil
 }
 

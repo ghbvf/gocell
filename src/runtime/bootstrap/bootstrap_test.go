@@ -216,7 +216,7 @@ func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
 	}
 	r.AddHandler("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "test")
 	return nil
 }
 

@@ -218,7 +218,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 			}
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 	time.Sleep(subscribeInitDelay)
 
@@ -265,7 +265,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	// Subscriber 2.
@@ -275,7 +275,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	time.Sleep(subscribeInitDelay)
@@ -546,7 +546,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	go func() {
 		err := sub.Subscribe(ctx, TestTopic(t), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 		subscribeReturned <- err
 	}()
 
@@ -578,7 +578,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 		defer close(subscribeReturned)
 		_ = sub.Subscribe(ctx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 	time.Sleep(subscribeInitDelay)
 

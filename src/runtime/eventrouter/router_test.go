@@ -26,7 +26,7 @@ type blockingSubscriber struct {
 	topics []string
 }
 
-func (s *blockingSubscriber) Subscribe(ctx context.Context, topic string, _ outbox.EntryHandler) error {
+func (s *blockingSubscriber) Subscribe(ctx context.Context, topic string, _ outbox.EntryHandler, _ string) error {
 	s.mu.Lock()
 	s.topics = append(s.topics, topic)
 	s.mu.Unlock()
@@ -49,7 +49,7 @@ type failingSubscriber struct {
 	err error
 }
 
-func (s *failingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler) error {
+func (s *failingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
 	return s.err
 }
 
@@ -62,7 +62,7 @@ type delayedFailSubscriber struct {
 	err   error
 }
 
-func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ string, _ outbox.EntryHandler) error {
+func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ string, _ outbox.EntryHandler, _ string) error {
 	select {
 	case <-time.After(s.delay):
 		return s.err
@@ -79,8 +79,8 @@ func TestRouter_AddHandler_RegistersTopics(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub)
 
-	r.AddHandler("topic.a", noopHandler)
-	r.AddHandler("topic.b", noopHandler)
+	r.AddHandler("topic.a", noopHandler, "test")
+	r.AddHandler("topic.b", noopHandler, "test")
 
 	assert.Equal(t, 2, r.HandlerCount())
 }
@@ -89,9 +89,9 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, WithStartupTimeout(200*time.Millisecond))
 
-	r.AddHandler("topic.a", noopHandler)
-	r.AddHandler("topic.b", noopHandler)
-	r.AddHandler("topic.c", noopHandler)
+	r.AddHandler("topic.a", noopHandler, "test")
+	r.AddHandler("topic.b", noopHandler, "test")
+	r.AddHandler("topic.c", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -127,7 +127,7 @@ func TestRouter_Run_SetupError_ReturnsImmediately(t *testing.T) {
 	sub := &failingSubscriber{err: setupErr}
 	r := New(sub, WithStartupTimeout(500*time.Millisecond))
 
-	r.AddHandler("topic.fail", noopHandler)
+	r.AddHandler("topic.fail", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -172,7 +172,7 @@ func TestRouter_Close_CancelsSubscriptions(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, WithStartupTimeout(200*time.Millisecond))
 
-	r.AddHandler("topic.a", noopHandler)
+	r.AddHandler("topic.a", noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -201,7 +201,7 @@ func TestRouter_Run_HandlerReceivesMessages(t *testing.T) {
 	}
 
 	r := New(bus, WithStartupTimeout(200*time.Millisecond))
-	r.AddHandler("test.topic", handler)
+	r.AddHandler("test.topic", handler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -230,11 +230,11 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	r.AddHandler("topic.a", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countA.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "test")
 	r.AddHandler("topic.b", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countB.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -293,7 +293,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 		err:   errors.New("connection lost"),
 	}
 	r := New(sub, WithStartupTimeout(100*time.Millisecond))
-	r.AddHandler("topic.a", noopHandler)
+	r.AddHandler("topic.a", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -306,7 +306,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 func TestRouter_Run_DoubleRun_ReturnsError(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, WithStartupTimeout(100*time.Millisecond))
-	r.AddHandler("topic.a", noopHandler)
+	r.AddHandler("topic.a", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -348,7 +348,7 @@ func TestRouter_Close_Timeout(t *testing.T) {
 	stuck := make(chan struct{})
 	sub := &stuckSubscriber{block: stuck}
 	r := New(sub, WithStartupTimeout(100*time.Millisecond))
-	r.AddHandler("topic.stuck", noopHandler)
+	r.AddHandler("topic.stuck", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -368,14 +368,14 @@ func TestRouter_Close_Timeout(t *testing.T) {
 func TestRouter_AddHandler_PanicsOnEmptyTopic(t *testing.T) {
 	r := New(&blockingSubscriber{})
 	assert.Panics(t, func() {
-		r.AddHandler("", noopHandler)
+		r.AddHandler("", noopHandler, "test")
 	})
 }
 
 func TestRouter_AddHandler_PanicsOnNilHandler(t *testing.T) {
 	r := New(&blockingSubscriber{})
 	assert.Panics(t, func() {
-		r.AddHandler("topic", nil)
+		r.AddHandler("topic", nil, "test")
 	})
 }
 
@@ -383,7 +383,7 @@ func TestRouter_Run_PanicInSubscriber_CapturedAsError(t *testing.T) {
 	// A subscriber whose Subscribe panics.
 	panickySub := &panickingSubscriber{}
 	r := New(panickySub, WithStartupTimeout(500*time.Millisecond))
-	r.AddHandler("topic.panic", noopHandler)
+	r.AddHandler("topic.panic", noopHandler, "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -398,7 +398,7 @@ type stuckSubscriber struct {
 	block chan struct{}
 }
 
-func (s *stuckSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler) error {
+func (s *stuckSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
 	<-s.block // ignores ctx — simulates unresponsive subscriber
 	return nil
 }
@@ -407,7 +407,7 @@ func (s *stuckSubscriber) Close() error { return nil }
 // panickingSubscriber panics on Subscribe.
 type panickingSubscriber struct{}
 
-func (s *panickingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler) error {
+func (s *panickingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
 	panic("boom")
 }
 func (s *panickingSubscriber) Close() error { return nil }
@@ -424,7 +424,7 @@ type mockCell struct {
 }
 
 func (m *mockCell) RegisterSubscriptions(r cell.EventRouter) error {
-	r.AddHandler("mock.topic", m.handler)
+	r.AddHandler("mock.topic", m.handler, "mock-cell")
 	return nil
 }
 
@@ -470,7 +470,7 @@ func (b *testBus) Publish(_ context.Context, topic string, payload []byte) error
 	return nil
 }
 
-func (b *testBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
+func (b *testBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, _ string) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	s := &testSub{ch: make(chan outbox.Entry, b.bufSize), cancel: cancel}
 
@@ -506,4 +506,73 @@ func (b *testBus) Close() error {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// ConsumerGroup propagation tests (ER-ARCH-02)
+// ---------------------------------------------------------------------------
+
+// recordingGroupSubscriber records which consumerGroup was passed to Subscribe.
+type recordingGroupSubscriber struct {
+	mu     sync.Mutex
+	calls  []groupSubscribeCall
+}
+
+type groupSubscribeCall struct {
+	Topic         string
+	ConsumerGroup string
+}
+
+func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, topic string, _ outbox.EntryHandler, consumerGroup string) error {
+	s.mu.Lock()
+	s.calls = append(s.calls, groupSubscribeCall{Topic: topic, ConsumerGroup: consumerGroup})
+	s.mu.Unlock()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *recordingGroupSubscriber) Close() error { return nil }
+
+func (s *recordingGroupSubscriber) Calls() []groupSubscribeCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]groupSubscribeCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// TestRouter_ConsumerGroup_PropagatesToSubscriber verifies that the consumerGroup
+// passed to AddHandler is forwarded verbatim to Subscriber.Subscribe.
+func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
+	sub := &recordingGroupSubscriber{}
+	r := New(sub, WithStartupTimeout(200*time.Millisecond))
+
+	r.AddHandler("session.created", noopHandler, "audit-core")
+	r.AddHandler("config.changed", noopHandler, "config-core")
+	r.AddHandler("legacy.event", noopHandler, "") // empty = backward compat
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	// Wait for all subscriptions to start.
+	require.Eventually(t, func() bool {
+		return len(sub.Calls()) >= 3
+	}, 2*time.Second, 10*time.Millisecond)
+
+	cancel()
+	<-done
+
+	calls := sub.Calls()
+	assert.Len(t, calls, 3)
+
+	// Build a map for order-independent assertions.
+	groupByTopic := make(map[string]string)
+	for _, c := range calls {
+		groupByTopic[c.Topic] = c.ConsumerGroup
+	}
+
+	assert.Equal(t, "audit-core", groupByTopic["session.created"])
+	assert.Equal(t, "config-core", groupByTopic["config.changed"])
+	assert.Equal(t, "", groupByTopic["legacy.event"])
 }

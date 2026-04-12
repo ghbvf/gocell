@@ -118,10 +118,15 @@ func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 }
 
 // resolveQueueName derives the queue name from config and topic.
-// Priority: QueueName > ConsumerGroup.topic > topic (backward compat).
-func (s *Subscriber) resolveQueueName(topic string) string {
+// Priority: QueueName > consumerGroup.topic > topic (backward compat).
+// The consumerGroup parameter is the runtime value passed to Subscribe;
+// it takes precedence over config.ConsumerGroup if non-empty.
+func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 	if s.config.QueueName != "" {
 		return s.config.QueueName
+	}
+	if consumerGroup != "" {
+		return consumerGroup + "." + topic
 	}
 	if s.config.ConsumerGroup != "" {
 		return s.config.ConsumerGroup + "." + topic
@@ -144,7 +149,7 @@ func (s *Subscriber) resolveQueueName(topic string) string {
 // Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
 // ACK timing: after handler returns DispositionAck
 // Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) → DLX
-func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
+func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, consumerGroup string) error {
 	if s.closed.Load() {
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
@@ -168,7 +173,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 		}
 	}()
 
-	queueName := s.resolveQueueName(topic)
+	queueName := s.resolveQueueName(topic, consumerGroup)
 
 	for {
 		err := s.subscribeOnce(subCtx, topic, queueName, handler)
