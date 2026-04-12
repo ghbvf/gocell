@@ -113,7 +113,7 @@
 
 | # | 标签 | 状态 | 问题 | 延迟理由 | 建议修复时机 |
 |---|------|------|------|---------|-------------|
-| P3-TD-08 | [TECH] | RESOLVED | WithEventBus 保留具体类型参数未标注 Deprecated | Phase 4 添加 // Deprecated 注释 | Phase 4 ✓ |
+| P3-TD-08 | [TECH] | RESOLVED | ~~WithEventBus 保留具体类型参数~~ | WithEventBus 已删除（PR#83），调用方迁移至 WithPublisher + WithSubscriber | PR#83 ✓ |
 
 ### 安全/权限
 

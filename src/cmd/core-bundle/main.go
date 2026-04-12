@@ -38,6 +38,11 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	if adapterMode == "real" {
 		return auth.LoadKeySetFromEnv()
 	}
+	if adapterMode != "" {
+		slog.Warn("unrecognized GOCELL_ADAPTER_MODE, falling back to dev mode",
+			slog.String("value", adapterMode),
+			slog.String("expected", "real"))
+	}
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey)
