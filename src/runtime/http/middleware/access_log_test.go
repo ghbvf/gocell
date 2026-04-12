@@ -95,3 +95,48 @@ func TestAccessLog_DefaultStatus200(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, float64(200), logEntry["status"])
 }
+
+func TestAccessLog_TraceID_WhenSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	ctx := ctxkeys.WithTraceID(req.Context(), "abc123trace")
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "abc123trace", logEntry["trace_id"])
+}
+
+func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Nil(t, logEntry["trace_id"], "trace_id must not appear when no tracer is configured")
+}

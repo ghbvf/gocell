@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -87,6 +88,16 @@ func WithSubscriber(s outbox.Subscriber) Option {
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, opts...)
+	}
+}
+
+// WithTracer enables distributed tracing for HTTP requests. The tracer is
+// forwarded to the router's middleware chain via router.WithTracer.
+//
+// ref: go-zero — observability configuration at app level
+func WithTracer(t tracing.Tracer) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
 	}
 }
 
@@ -351,12 +362,20 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 5: Build router with health handler.
+	// Use NewE (error-returning) so that configuration errors (e.g. invalid
+	// trusted proxies) enter the rollback path instead of panicking past
+	// already-started components (assembly, config watcher, pub/sub).
+	//
+	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh := health.New(asm)
 	for _, hc := range b.healthCheckers {
 		hh.RegisterChecker(hc.name, health.Checker(hc.fn))
 	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
-	rtr := router.New(routerOpts...)
+	rtr, err := router.NewE(routerOpts...)
+	if err != nil {
+		return rollback(fmt.Errorf("bootstrap: %w", err))
+	}
 
 	// Step 5 continued: Register HTTP routes for cells implementing HTTPRegistrar.
 	for _, id := range asm.CellIDs() {

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -22,6 +23,7 @@ type proxyChecker struct {
 func newProxyChecker(proxies []string) *proxyChecker {
 	pc := &proxyChecker{exact: make(map[string]bool, len(proxies))}
 	for _, p := range proxies {
+		p = strings.TrimSpace(p)
 		if _, cidr, err := net.ParseCIDR(p); err == nil {
 			pc.cidrs = append(pc.cidrs, cidr)
 		} else if parsed := net.ParseIP(p); parsed != nil {
@@ -35,6 +37,39 @@ func newProxyChecker(proxies []string) *proxyChecker {
 		}
 	}
 	return pc
+}
+
+// newProxyCheckerStrict is like newProxyChecker but returns an error for any
+// entry that is not a valid IP address or CIDR notation. Used at configuration
+// time (router construction) for fail-fast validation.
+//
+// ref: gin-gonic/gin — SetTrustedProxies returns error on invalid entries
+func newProxyCheckerStrict(proxies []string) (*proxyChecker, error) {
+	pc := &proxyChecker{exact: make(map[string]bool, len(proxies))}
+	for _, p := range proxies {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return nil, fmt.Errorf("trusted proxy entry is empty")
+		}
+		if _, cidr, err := net.ParseCIDR(p); err == nil {
+			pc.cidrs = append(pc.cidrs, cidr)
+		} else if parsed := net.ParseIP(p); parsed != nil {
+			pc.exact[parsed.String()] = true
+		} else {
+			return nil, fmt.Errorf("trusted proxy %q is not a valid IP or CIDR", p)
+		}
+	}
+	return pc, nil
+}
+
+// ValidateTrustedProxies validates all entries and returns the constructed
+// proxyChecker for reuse. Returns a descriptive error for the first invalid
+// entry. Used by router.New() for fail-fast validation at construction time,
+// eliminating the need to parse proxies twice (once to validate, once to use).
+//
+// ref: gin-gonic/gin — SetTrustedProxies validates eagerly at config time
+func ValidateTrustedProxies(proxies []string) (*proxyChecker, error) {
+	return newProxyCheckerStrict(proxies)
 }
 
 func (pc *proxyChecker) empty() bool {
@@ -73,7 +108,20 @@ func (pc *proxyChecker) isTrusted(ip string) bool {
 // ref: gin-gonic/gin — TrustedProxies CIDR list + reverse XFF scan
 func RealIP(trustedProxies []string) func(http.Handler) http.Handler {
 	checker := newProxyChecker(trustedProxies)
+	return realIPMiddleware(checker)
+}
 
+// RealIPFromChecker creates the RealIP middleware using a pre-validated
+// proxyChecker, avoiding redundant parsing when ValidateTrustedProxies has
+// already constructed one.
+func RealIPFromChecker(checker *proxyChecker) func(http.Handler) http.Handler {
+	if checker == nil {
+		checker = &proxyChecker{exact: make(map[string]bool)}
+	}
+	return realIPMiddleware(checker)
+}
+
+func realIPMiddleware(checker *proxyChecker) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := extractIP(r, checker)

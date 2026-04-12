@@ -89,6 +89,20 @@ func (s *spySpan) SetAttribute(key string, val any) {
 	s.mu.Unlock()
 }
 
+// SpanRecorder methods — capture SetStatus/RecordError calls.
+func (s *spySpan) SetStatus(isError bool, description string) {
+	s.mu.Lock()
+	s.attrs["_status_error"] = isError
+	s.attrs["_status_desc"] = description
+	s.mu.Unlock()
+}
+
+func (s *spySpan) RecordError(err error) {
+	s.mu.Lock()
+	s.attrs["_recorded_error"] = err.Error()
+	s.mu.Unlock()
+}
+
 func (s *spySpan) Name() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -189,4 +203,58 @@ func TestTracing_HttpRouteAttribute(t *testing.T) {
 	require.Len(t, spans, 1)
 	assert.Equal(t, "/api/v1/orders/{orderID}", spans[0].Attr("http.route"))
 	assert.Equal(t, 201, spans[0].Attr("http.status_code"))
+}
+
+// --- Span status tests (otelhttp alignment) ---
+
+func TestTracing_5xxSetsErrorSpanStatus(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/fail", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, true, spans[0].Attr("_status_error"),
+		"5xx must set span status to error")
+	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
+}
+
+func TestTracing_4xxDoesNotSetErrorSpanStatus(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"4xx must not set span status to error (otelhttp convention)")
+}
+
+func TestTracing_2xxDoesNotSetErrorSpanStatus(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"2xx must not set span status to error")
 }

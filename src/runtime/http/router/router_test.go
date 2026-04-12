@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +17,10 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -276,4 +279,154 @@ func TestDefaultMiddlewareApplied(t *testing.T) {
 	assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
 	// RequestID middleware should set X-Request-Id.
 	assert.NotEmpty(t, rec.Header().Get("X-Request-Id"))
+}
+
+// --- Trusted proxy fail-fast validation ---
+
+func TestNewE_InvalidTrustedProxies_ReturnsError(t *testing.T) {
+	r, err := NewE(WithTrustedProxies([]string{"not-an-ip"}))
+	require.Error(t, err)
+	assert.Nil(t, r)
+	assert.Contains(t, err.Error(), "not-an-ip")
+	assert.Contains(t, err.Error(), "router")
+}
+
+func TestNewE_ValidTrustedProxies(t *testing.T) {
+	r, err := NewE(WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
+	require.NoError(t, err)
+	assert.NotNil(t, r)
+}
+
+func TestNewE_NilTrustedProxies(t *testing.T) {
+	r, err := NewE(WithTrustedProxies(nil))
+	require.NoError(t, err)
+	assert.NotNil(t, r)
+}
+
+func TestNew_InvalidTrustedProxies_Panics(t *testing.T) {
+	// New is the panic-wrapper over NewE — convenience for non-bootstrap callers.
+	assert.Panics(t, func() {
+		New(WithTrustedProxies([]string{"not-an-ip"}))
+	}, "router.New must panic when trusted proxies contain an invalid entry")
+}
+
+func TestNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r)
+		msg := fmt.Sprintf("%v", r)
+		assert.Contains(t, msg, "not-an-ip")
+		assert.Contains(t, msg, "router")
+	}()
+	New(WithTrustedProxies([]string{"192.168.1.1", "not-an-ip"}))
+}
+
+// --- Tracing wiring ---
+
+func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
+	tracer := tracing.NewTracer("test-router-tracer")
+	r := New(WithTracer(tracer))
+
+	var gotTraceID string
+	r.Handle("/traced", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		tid, ok := ctxkeys.TraceIDFrom(req.Context())
+		if ok {
+			gotTraceID = tid
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/traced", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, gotTraceID, "trace_id must be set in context when WithTracer is provided")
+}
+
+func TestNoTracer_NoTraceID(t *testing.T) {
+	r := New() // no WithTracer
+
+	var hasTraceID bool
+	r.Handle("/no-trace", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_, hasTraceID = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/no-trace", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, hasTraceID, "trace_id must not be set when no tracer is configured")
+}
+
+func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	tracer := tracing.NewTracer("log-test")
+	r := New(WithTracer(tracer))
+	r.Handle("/log-trace", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/log-trace", nil)
+	r.ServeHTTP(rec, req)
+
+	// Parse the access log entry and check for trace_id.
+	var found bool
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "http request" {
+			found = true
+			assert.NotEmpty(t, entry["trace_id"], "access log must include trace_id when tracing is configured")
+			break
+		}
+	}
+	assert.True(t, found, "access log entry must exist")
+}
+
+func TestWithTracer_PanicRequestTraced(t *testing.T) {
+	tracer := tracing.NewTracer("panic-trace-test")
+	r := New(WithTracer(tracer))
+	r.Handle("/boom-traced", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("tracing panic test")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom-traced", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"recovery must still work with tracing in chain")
+}
+
+func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	tracer := tracing.NewTracer("metrics-panic-test")
+	r := New(WithTracer(tracer), WithMetricsCollector(mc))
+	r.Handle("/boom-full", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("full chain panic test")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom-full", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	snap := mc.Snapshot()
+	key := "GET /boom-full 500"
+	assert.Equal(t, int64(1), snap.RequestCounts[key],
+		"metrics must record panic request as 500 even with tracing in chain")
 }
