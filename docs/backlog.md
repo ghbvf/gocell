@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项（PR#67-91）归档至 `docs/reviews/archive/202604121800-backlog-pre-restructure.md`。
-> 更新日期: 2026-04-12（PR#92-98 状态更新 + 六席位 findings 登记）
+> 更新日期: 2026-04-13（PR#99-101 状态更新 + PR#101 review findings 登记）
 > Batch 1-4: ✅ 全部完成（PR#67-91，25 个 PR）
 
 ---
@@ -13,12 +13,12 @@
 | PR | 任务 | 工时 | 文件范围 |
 |----|------|------|---------|
 | ~~CURSOR-FIX~~ | ~~P1-01~~ ✅ PR#94 + ~~P1-02~~ ✅ PR#94 + ~~P1-03(scope/context强制)~~ ✅ PR#95 + ~~P2-01~~ ✅ PR#94 + ~~P4-TD-11~~ ✅ PR#94 + ~~P4-TD-14~~ ✅ PR#94 + ~~WM-6-F2~~ ✅ PR#94 | ✅ 全部完成 | — |
-| HTTP-SEC-FIX | HTTP-SEC-01(IP格式校验) + SEC-02(trusted proxy fail-fast) | 3h | `runtime/http/middleware/` + `router/` |
+| ~~HTTP-SEC-FIX~~ | ~~HTTP-SEC-01(IP格式校验)~~ ✅ PR#96 `normalizeIPToken` + `net.ParseIP` 校验 + ~~SEC-02(trusted proxy fail-fast)~~ ✅ PR#96 `ValidateTrustedProxies` + `NewE` error return | ✅ done | — |
 | CONTRACT-FIX | ~~STRICT-P1-01(contract覆盖)~~ ✅ PR#98 + ~~P1-02(contract_test可执行)~~ ✅ PR#98 + ~~SCHEMA-01(空壳schema)~~ ✅ PR#98 | 8h → ✅ done | `contracts/http/` + `cells/*/contract_test.go` |
 | ~~CFG-WATCHER~~ | ~~CFG-P1-01(目录级监听)~~ + ~~P1-02(shutdown顺序)~~ + ~~P2-02(补测试)~~ | ✅ PR#97 | — |
 | ~~CFG-RELOAD~~ | ~~CFG-P1-03(generation counter)~~ + ~~P1-04(DeepCloneValue)~~ + ~~WM-34-F4(commit语义)~~ | ✅ PR#97 | — |
-| BATCH3-FIX | OB-02(safe_observe测试) + WriteErrorWithContext(25+ handler) + **PATCH-STRICT(identity PATCH strict decode)** | 4h | `runtime/http/middleware/` + `cells/*/handler.go` |
-| **OBS-WIRE** | **HTTP observability 接入默认链** — tracing + metrics 上提到 router/bootstrap 默认装配面；当前只有 middleware helper，默认链无 Tracing。ref: Kratos server.Middleware / go-zero engine / otelchi root Use | 4h | `runtime/http/router/router.go` + `runtime/bootstrap/` |
+| ~~BATCH3-FIX~~ | ~~OB-02(safe_observe测试)~~ ✅ PR#96 `safe_observe_test.go` + ~~WriteErrorWithContext(25+ handler)~~ ✅ 全部 48 处已用 `WriteDomainError`/`WriteDecodeError` + ~~PATCH-STRICT(identity PATCH strict decode)~~ ✅ PR#96 `handlePatch` 用 `DecodeJSON`(非 strict) + ~~CURSOR-DECODE-01~~ ✅ PR#99 | ✅ done | — |
+| ~~OBS-WIRE~~ | ~~HTTP observability 接入默认链~~ ✅ PR#96 `WithTracer` + `Tracing` middleware 已在默认链 `RequestID→RealIP→Recorder→[Tracing]→AccessLog→[Metrics]→Recovery→SecurityHeaders→BodyLimit` | ✅ done | — |
 
 ---
 
@@ -34,6 +34,8 @@
 | B | 事件模型 | ~~WM-15 L4 队列状态机~~ ✅ PR#93 | 1.5d |
 | B | 事件路由 | ER-ARCH-02 ConsumerGroup 支持 | 2h |
 | B | 链路追踪 | CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入) | 5h |
+| B | ~~config 契约收口~~ | ~~CFG-CONTRACT-01/02~~ ✅ PR#98 schema 填充 + PR#101 additionalProperties 加固 + contract_test 验证 | ✅ done |
+| B | **trace propagation** | **TRACE-PROP-01**: 补 inbound HTTP header extract（W3C traceparent/b3），tracer.Start 前先 extract 上游 context。当前默认每次开根 span，跨服务 trace_id 不连续 | 3h |
 
 ---
 
@@ -43,7 +45,7 @@
 
 | PR | 任务合并 | 工时 | 文件 |
 |----|----------|------|------|
-| 运维健康体系 | OPS-3(pg/redis Health) + OPS-4(drain期) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz隔离) + CFG-P2-01(watcher readyz) + **READYZ-ROOT(readyz 升级为 bootstrap 一等生命周期状态，非可选钩子)** + **R97-02(watcher debounce, 100ms窗口, ref: Viper)** (PR#97 review) + **R97-F1(watcher symlink-pivot支持, K8s ConfigMap ..data 更新检测, ref: Viper EvalSymlinks)** (PR#97 second review) | 10h | `runtime/http/health/` + `runtime/bootstrap/` + `router/` + `config/` |
+| 运维健康体系 | OPS-3(pg/redis Health) + OPS-4(drain期) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz隔离) + CFG-P2-01(watcher readyz) + READYZ-ROOT + R97-02(debounce) + R97-F1(symlink-pivot) + **BOOT-PANIC-01(bootstrap panic漏口: duplicate checker校验+registrar safe-call)** + **BOOT-OPTION-01(WithRouterOptions覆盖框架能力: 拒绝冲突option或固定优先级)** + **INFRA-EXPOSE-01(infra端点过度暴露: /metrics opt-in + health公开/内部分离或独立mux)** | 14h | `runtime/http/health/` + `runtime/bootstrap/` + `router/` + `config/` + `auth/middleware.go` **(+3 P1 from PR#96 复核)** |
 | runtime 竞态修复 | R1C2-F01(eventbus race) + R1C2-F03(WorkerGroup首失败) + **R97-R3-01(reload WaitGroup Add-after-Wait edge, 改用 channel+select 或 singleflight 消除理论竞态)** (PR#97 round3 review) | 5h | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
 | RabbitMQ 连接正确性 | RMQ-RACE-01(WaitConnected竞态) + P3-DEFER-05(Health状态区分) | 4h | `adapters/rabbitmq/connection.go` |
 | kernel outbox 清理 | P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) | 4h | `kernel/outbox/` + `kernel/idempotency/` |
@@ -64,12 +66,19 @@
 | decode 加固 | DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` |
 | Journey 校验 | F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` |
 | OTel 覆盖率 | OTEL-COV-01 testcontainers 集成测试 | 1h | `adapters/otel/` |
-| **TestPubSub 真实 adapter 认证** | **TPUB-01**: conformance harness 替换 sleep 为显式 ready/setup-error 握手 + 接入 RabbitMQ adapter 验证。当前"绿色"仅代表 InMemory 通过，不代表 broker-backed adapter 满足 contract | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` **(P1, discovered via PR#93 六席位复核)** |
+| **TestPubSub 真实 adapter 认证** | **TPUB-01**: conformance harness 替换 sleep 为显式 ready/setup-error 握手 + 接入 RabbitMQ adapter 验证 | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` **(P1, PR#93 复核)** |
+| cursor 回归矩阵 | **CURSOR-TEST-01**: 5 个分页入口 invalid-cursor 测试不齐（order-query 只测 garbage；config-core cross-context 先死在 scope mismatch）。补齐 malformed/missing-scope/same-scope-different-context 三类 | 2h | `cells/*/handler_test.go` + `service_test.go` **(P2, PR#95 复核)** |
 | cursor 可观测 | CURSOR-P2-02 cursor invalid 结构化日志 | 1h | `cells/audit-core/` |
-| order+demo 修复 | P4-TD-04(outboxWriter enforce) + P4-TD-12(t.Skip) | 3h | `cells/order-cell/` + `cells/demo/` |
-| **contract 命名修正** | **CONTRACT-NAME-01**: `http.auth.me.v1` 实际覆盖 identity CRUD（POST create/PUT update/DELETE），命名应为 `http.auth.user.v1`；或拆分为 me(GET only) + user(CRUD) | 2h | `contracts/http/auth/me/` + `cells/access-core/slices/identitymanage/` **(P1, discovered via PR#98 六席位复核)** |
+| order+demo 修复 | P4-TD-04(outboxWriter enforce) + P4-TD-12(t.Skip) + **EVT-HDR-RESTORE(outbox接入后恢复 order/device event headers contract_test 验证，当前 PR#101 已跳过并注释)** | 3h | `cells/order-cell/` + `cells/demo/` + `cells/device-cell/` |
+| ~~contract 命名修正~~ | ~~CONTRACT-NAME-01~~ ✅ PR#101: `http.auth.me.v1` → 7 个 `http.auth.user.{op}.v1` | ✅ done | — |
 | **ConfigEntry json tags** | **CFG-JSON-01**: `domain.ConfigEntry` 缺 json tags，config GET 响应用 PascalCase（`Key`/`Value`/`Version`），违反 camelCase 规范。同理 `domain.FeatureFlag` | 1h | `cells/config-core/internal/domain/config_entry.go` + `feature_flag.go` **(P2, discovered via PR#98 六席位复核)** |
-| **flags request schema 拆分** | **FLAGS-SCHEMA-01**: `http.config.flags.v1/request.schema.json` 仅覆盖 POST evaluate 的 `{subject}` body，GET list/get 无 body。单 schema 无法描述多操作 | 0.5h | `contracts/http/config/flags/v1/` **(P2, discovered via PR#98 六席位复核)** |
+| ~~flags request schema 拆分~~ | ~~FLAGS-SCHEMA-01~~ ✅ PR#101: 拆为 `http.config.flags.list/get/evaluate.v1` | ✅ done | — |
+| ~~contract 操作级拆分~~ | ~~CONTRACT-SPLIT-01~~ ✅ PR#101: 5 个多操作 contract → 18 个 per-operation contract + `required` + `additionalProperties: false` | ✅ done | — |
+| ~~schema-driven contract-test helper~~ | ~~CONTRACT-TEST-01~~ ✅ PR#101: `pkg/contracttest/` + 16 个 contract_test.go 全部重写为 schema 验证 | ✅ done | — |
+| **DELETE 无 body 语义闭环** | **DELETE-NOCONTENT-01**: delete contract request.schema.json 补 description + additionalProperties:false；contract_test 改为 handler 语义测试（断言 204 + body 长度 0 + 无 JSON envelope）。中期 contract 模型补 method/path/successStatus/noContent 一等元数据（→ CONTRACT-META-01） | 1.5h | `contracts/http/auth/user/delete/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` **(P2, discovered via PR#101 二轮复核)** |
+| bootstrap tracing 集成测试 | **BOOT-TEST-01**: bootstrap 业务路由 tracing 集成断言 + router panic→Recovery→Tracing error span 联通测试 | 2h | `runtime/bootstrap/bootstrap_test.go` + `router/router_test.go` **(P2, PR#96 复核)** |
+| bootstrap 次要清理 | **BOOT-MINOR-01**: `router.New` panic(err.Error())→panic(err) 保留 error 链 + access_log 输出 real_ip 字段 | 1h | `runtime/http/router/router.go` + `middleware/access_log.go` **(P2, PR#96 复核)** |
+| ~~session event_id 闭环~~ | ~~EVT-SESSION-01~~ ✅ PR#101: sessionlogin contract_test 验证 payload + headers event_id + MustReject | ✅ done | — |
 
 ---
 
@@ -171,6 +180,12 @@
 | GAP-6 | Singleflight + cache helper | 1d | — |
 | GAP-5 | Adaptive load shedding | 1.5d | WM-33b + RL-WIRE-01 |
 
+### contract 模型增强
+
+| # | 需求 | 优先级 |
+|---|------|--------|
+| CONTRACT-META-01 | contract.yaml 补 method/path/pathParams/queryParams/successStatus/noContent 一等元数据。当前 contract 只描述 body schema，transport 语义（HTTP 方法、状态码、无 body）靠隐含约定。ref: goa operation model / Kratos method binding / go-zero route DSL | P1 |
+
 ### 架构风险
 
 | ID | 问题 | 状态 |
@@ -227,17 +242,18 @@
 
 | Batch | PR 数 | 工时 | 并行度 | 前置 | 里程碑 |
 |-------|-------|------|--------|------|--------|
-| 5A | 7 → 剩 3 | ~~39h~~ → ~11h | 3/3 | — | CURSOR ✅ CFG ✅ CONTRACT open，剩 HTTP-INFRA + BATCH3-FIX + OBS-WIRE |
-| 5B | 6 | ~5d | 2 轨道 | 5A | 事件测试 + CorrelationID + 韧性 |
+| 5A | 7 → ✅ 全部完成 | ~~39h~~ → ✅ done | — | — | CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT ✅ PR#98+101, HTTP-SEC ✅ PR#96, BATCH3 ✅ PR#96+99, OBS-WIRE ✅ PR#96 |
+| 5B | 6 → 剩 5 | ~5d | 2 轨道 | 5A | CFG-CONTRACT ✅ PR#101，剩 韧性+可观测+事件路由+trace |
 | 6A | 4+1 | ~24h | 5/5 | 5B | 生产级可靠性 + L4 API 收敛 |
-| 6B | 10+1 | ~24.5h | 10/11 | 6A(RMQ) | Tech Debt 主体收敛 + TestPubSub adapter 认证 |
+| 6B | 15 → 剩 8 | ~~24.5h~~ → ~16h | 8/8 | 6A(RMQ) | 6 项 ✅ PR#101, +2 新增(DELETE-NOCONTENT + EVT-HDR-RESTORE) |
 | 6C | 4 | ~5d | 2 轨道 | 6A(Receipt) | P1 功能补全 (BFF+SecureCookie) |
 | 7 | 6 | ~16h | 5+tag | 6全完 | **v1.0 RC → v1.0** |
 | 8 | 14 | ~54h | 14/14 | v1.0 | P2 偿债 |
 
 ```
-Week 1:  Batch 5A 近完成（CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT PR#98 open）
-         剩余: HTTP-INFRA(PR#96 open) + BATCH3-FIX + OBS-WIRE
+Week 1:  Batch 5A 近完成（CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT ✅ PR#98+101）
+         PR#99(cursor decode) ✅, PR#100(ConfigReload CI) ✅, PR#101(contract hardening) ✅
+         剩余: HTTP-SEC-FIX + BATCH3-FIX + OBS-WIRE
 Week 2:  Batch 5B (功能推进, 2轨道) — WM-33b/RL-WIRE-01/RL-METRICS-01 + ER-ARCH-02/CID-01
 Week 3:  Batch 6A (运维+正确性+L4 API) + 6B (tech debt+TPUB) + 6C Auth轨道启动
 Week 4:  Batch 6C 收尾 + Batch 7 (review+发布) → v1.0 tag
