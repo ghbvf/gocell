@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -382,6 +383,31 @@ func TestWithHealthChecker_NilFn_Panics(t *testing.T) {
 	assert.PanicsWithValue(t, `bootstrap: health checker "rabbitmq" must not be nil`, func() {
 		WithHealthChecker("rabbitmq", nil)
 	})
+}
+
+func TestSnapshotConfig_WithSnapshotter(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("a: 1\nb: two\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
+}
+
+func TestSnapshotConfig_Fallback(t *testing.T) {
+	// NewFromMap does NOT implement Snapshotter, so snapshotConfig
+	// should use the Keys()+Get() fallback path.
+	cfg := config.NewFromMap(map[string]any{
+		"x": map[string]any{"y": 42},
+		"z": "hello",
+	})
+	snap := snapshotConfig(cfg)
+	assert.Equal(t, 42, snap["x.y"])
+	assert.Equal(t, "hello", snap["z"])
 }
 
 // ---------------------------------------------------------------------------
@@ -752,14 +778,25 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
-	// Rewrite the file with the same content — triggers watcher but no diff.
+	// First: write different content to confirm the callback pipeline works.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected first config change to fire callback")
+
+	// Second: write back original content — triggers watcher + reload, but
+	// the next reload produces val1→val1 = no diff, so no second callback.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
 
-	// Wait enough time for watcher to fire.
-	time.Sleep(500 * time.Millisecond)
+	// Third: write different content again — this proves the watcher is still
+	// alive and processing events after the no-diff reload.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 2
+	}, 3*time.Second, 50*time.Millisecond, "expected third config change to fire callback")
 
-	// No changes should mean no callback.
-	assert.Equal(t, 0, rc.eventCount(), "no-change reload should not trigger callback")
+	// Exactly 2 callbacks: the no-diff reload in the middle was correctly skipped.
+	assert.Equal(t, 2, rc.eventCount(), "no-diff reload should not trigger callback")
 
 	cancel()
 	select {
