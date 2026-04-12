@@ -165,6 +165,23 @@ func TestValidateHTTPResponseRecorder_NoContentRejectsBody(t *testing.T) {
 	}
 }
 
+func TestValidateHTTPResponseRecorder_NoContentRejectsWhitespaceBody(t *testing.T) {
+	c := &Contract{
+		ID:   "http.test.delete.v1",
+		Kind: "http",
+		HTTP: &HTTPTransport{SuccessStatus: 204, NoContent: true},
+	}
+	recorder := httptest.NewRecorder()
+	recorder.WriteHeader(204)
+	_, _ = recorder.Write([]byte(" \n\t"))
+
+	mockT := &mockTB{}
+	c.ValidateHTTPResponseRecorder(mockT, recorder)
+	if !mockT.failed {
+		t.Error("expected whitespace body to fail strict no-content validation")
+	}
+}
+
 func TestValidateHTTPResponseRecorder_RequiresTransportMetadata(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
 	c.HTTP = nil

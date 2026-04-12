@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -15,14 +16,18 @@ import (
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-func newContractQueryHandler(orders ...*domain.Order) *Handler {
+func newContractQueryHandler(orders ...*domain.Order) http.Handler {
 	repo := mem.NewOrderRepository()
 	for _, order := range orders {
 		_ = repo.Create(context.Background(), order)
 	}
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("q"), 32))
 	svc := NewService(repo, codec, slog.Default())
-	return NewHandler(svc)
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/orders/", http.HandlerFunc(h.HandleList))
+	mux.Handle("GET /api/v1/orders/{id}", http.HandlerFunc(h.HandleGet))
+	return mux
 }
 
 func TestHttpOrderGetV1Serve(t *testing.T) {
@@ -37,8 +42,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, strings.Replace(c.HTTP.Path, "{id}", "ord-contract-get", 1), nil)
-	req.SetPathValue("id", "ord-contract-get")
-	h.HandleGet(rec, req)
+	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
@@ -52,6 +56,6 @@ func TestHttpOrderListV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2", nil)
-	h.HandleList(rec, req)
+	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }

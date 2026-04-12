@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -22,12 +23,7 @@ import (
 var (
 	_ cell.Cell          = (*OrderCell)(nil)
 	_ cell.HTTPRegistrar = (*OrderCell)(nil)
-	_ outbox.Publisher   = discardPublisher{}
 )
-
-type discardPublisher struct{}
-
-func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
 
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(c *query.CursorCodec) Option {
@@ -108,9 +104,13 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Info("order-cell: using in-memory repository (demo mode)")
 	}
 
-	if c.publisher == nil {
-		c.publisher = discardPublisher{}
-		c.logger.Warn("order-cell: no publisher injected, using no-op publisher (demo mode)")
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"order-cell durable mode requires both outboxWriter and txRunner")
+	}
+
+	if c.publisher == nil && c.outboxWriter == nil {
+		c.logger.Warn("order-cell: no publisher injected, direct publish path disabled in demo mode")
 	}
 
 	// order-create slice
