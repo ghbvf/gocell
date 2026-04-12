@@ -198,7 +198,7 @@ func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
 	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
 	for _, topic := range auditappend.Topics {
-		r.AddHandler(topic, handler)
+		r.AddHandler(topic, handler, "audit-core")
 	}
 	return nil
 }

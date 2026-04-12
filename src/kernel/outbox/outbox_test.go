@@ -33,7 +33,7 @@ var _ Publisher = (*mockPublisher)(nil)
 
 type mockSubscriber struct{}
 
-func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler) error {
+func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler, _ string) error {
 	return nil
 }
 func (m *mockSubscriber) Close() error { return nil }
@@ -47,7 +47,7 @@ func TestSubscriberInterface(t *testing.T) {
 		handler := func(ctx context.Context, entry Entry) HandleResult {
 			return HandleResult{Disposition: DispositionAck}
 		}
-		err := sub.Subscribe(context.Background(), "test.topic", handler)
+		err := sub.Subscribe(context.Background(), "test.topic", handler, "")
 		assert.NoError(t, err)
 	})
 
@@ -84,7 +84,7 @@ type recordingSubscriber struct {
 	closeErr        error
 }
 
-func (r *recordingSubscriber) Subscribe(_ context.Context, topic string, handler EntryHandler) error {
+func (r *recordingSubscriber) Subscribe(_ context.Context, topic string, handler EntryHandler, _ string) error {
 	r.subscribeCalled = true
 	r.subscribeTopic = topic
 	r.capturedHandler = handler
@@ -111,7 +111,7 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler)
+	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
 	assert.NoError(t, err)
 	assert.True(t, inner.subscribeCalled)
 	assert.Equal(t, "test.topic", inner.subscribeTopic)
@@ -145,7 +145,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "orders.created", handler)
+	err := sub.Subscribe(context.Background(), "orders.created", handler, "")
 	assert.NoError(t, err)
 	assert.Equal(t, "orders.created", middlewareTopic)
 
@@ -185,7 +185,7 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler)
+	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
 	assert.NoError(t, err)
 
 	_ = inner.capturedHandler(context.Background(), Entry{})
@@ -240,7 +240,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler)
+	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
 	assert.NoError(t, err)
 
 	// Call captured handler — middleware should short-circuit.

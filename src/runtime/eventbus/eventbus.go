@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -47,13 +48,28 @@ type subscription struct {
 // InMemoryEventBus is a channel-based event bus for development and testing.
 // It implements both outbox.Publisher and outbox.Subscriber.
 // Semantics: at-most-once delivery (messages are lost on process restart).
+//
+// ConsumerGroup dispatch:
+//   - same consumerGroup on same topic: round-robin (competing consumers)
+//   - different consumerGroups on same topic: each group gets a copy (fanout)
+//   - empty consumerGroup: broadcast to every subscriber (backward compatible)
 type InMemoryEventBus struct {
 	mu            sync.RWMutex
-	subs          map[string][]*subscription
+	// groupSubs: topic → consumerGroup → *groupState
+	// Each groupState holds the subscriber list and an atomic round-robin
+	// counter for competing dispatch. Empty consumerGroup ("" key) entries
+	// are broadcast individually.
+	groupSubs     map[string]map[string]*groupState
 	bufSize       int
 	closed        bool
 	deadLettersMu sync.Mutex
 	deadLetters   []DeadLetter
+}
+
+// groupState tracks subscribers and round-robin index for a consumer group.
+type groupState struct {
+	subs  []*subscription
+	rrIdx atomic.Uint64 // round-robin index for competing dispatch (atomic: accessed under RLock)
 }
 
 // Option configures the InMemoryEventBus.
@@ -71,8 +87,8 @@ func WithBufferSize(size int) Option {
 // New creates an InMemoryEventBus.
 func New(opts ...Option) *InMemoryEventBus {
 	b := &InMemoryEventBus{
-		subs:    make(map[string][]*subscription),
-		bufSize: 256,
+		groupSubs: make(map[string]map[string]*groupState),
+		bufSize:   256,
 	}
 	for _, o := range opts {
 		o(b)
@@ -80,7 +96,12 @@ func New(opts ...Option) *InMemoryEventBus {
 	return b
 }
 
-// Publish sends payload to all subscribers of the given topic.
+// Publish sends payload to subscribers of the given topic.
+//
+// ConsumerGroup dispatch:
+//   - For each named consumer group: pick ONE subscriber via round-robin
+//   - For the empty-group ("") bucket: send to ALL subscribers (broadcast)
+//
 // Non-blocking: if a subscriber's buffer is full, the message is dropped
 // (logged as warning).
 func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []byte) error {
@@ -98,13 +119,35 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 		CreatedAt: time.Now(),
 	}
 
-	for _, sub := range b.subs[topic] {
-		select {
-		case sub.ch <- entry:
-		default:
-			slog.Warn("eventbus: subscriber buffer full, message dropped",
-				slog.String("topic", topic),
-			)
+	groups := b.groupSubs[topic]
+	for group, gs := range groups {
+		if len(gs.subs) == 0 {
+			continue
+		}
+		if group == "" {
+			// Empty group → broadcast to all subscribers (backward compatible).
+			for _, sub := range gs.subs {
+				select {
+				case sub.ch <- entry:
+				default:
+					slog.Warn("eventbus: subscriber buffer full, message dropped",
+						slog.String("topic", topic),
+					)
+				}
+			}
+		} else {
+			// Named group → round-robin to one subscriber (competing).
+			rrVal := gs.rrIdx.Add(1) - 1 // atomic increment, use previous value
+			idx := rrVal % uint64(len(gs.subs))
+			sub := gs.subs[idx]
+			select {
+			case sub.ch <- entry:
+			default:
+				slog.Warn("eventbus: subscriber buffer full, message dropped",
+					slog.String("topic", topic),
+					slog.String("consumer_group", group),
+				)
+			}
 		}
 	}
 	return nil
@@ -113,11 +156,15 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 // Subscribe registers an EntryHandler for the given topic. It blocks until ctx
 // is cancelled or the bus is closed.
 //
-// Consumer: cg-eventbus-{topic}
+// Consumer: cg-eventbus-{consumerGroup}-{topic}
 // Idempotency key: N/A (in-memory, no persistence)
 // ACK timing: after handler returns DispositionAck
 // Retry: transient errors -> retry 3x with exponential backoff / permanent -> dead letter
-func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
+//
+// consumerGroup selects the dispatch mode:
+//   - non-empty: messages are load-balanced among subscribers in the same group
+//   - empty: each subscriber receives every message (broadcast / fanout)
+func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, consumerGroup string) error {
 	subCtx, cancel := context.WithCancel(ctx)
 
 	sub := &subscription{
@@ -132,13 +179,21 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler 
 		cancel()
 		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
-	b.subs[topic] = append(b.subs[topic], sub)
+	if b.groupSubs[topic] == nil {
+		b.groupSubs[topic] = make(map[string]*groupState)
+	}
+	gs := b.groupSubs[topic][consumerGroup]
+	if gs == nil {
+		gs = &groupState{}
+		b.groupSubs[topic][consumerGroup] = gs
+	}
+	gs.subs = append(gs.subs, sub)
 	b.mu.Unlock()
 
 	// Process messages in the current goroutine (Subscribe blocks per interface contract).
 	defer func() {
 		close(sub.done)
-		b.removeSub(topic, sub)
+		b.removeSub(topic, consumerGroup, sub)
 	}()
 	for {
 		select {
@@ -163,10 +218,12 @@ func (b *InMemoryEventBus) Close() error {
 	}
 	b.closed = true
 
-	for _, subs := range b.subs {
-		for _, sub := range subs {
-			sub.cancel()
-			close(sub.ch)
+	for _, groups := range b.groupSubs {
+		for _, gs := range groups {
+			for _, sub := range gs.subs {
+				sub.cancel()
+				close(sub.ch)
+			}
 		}
 	}
 	return nil
@@ -199,14 +256,30 @@ func (b *InMemoryEventBus) DrainDeadLetters() []DeadLetter {
 	return dl
 }
 
-// removeSub removes a specific subscription from the topic's subscriber list.
-func (b *InMemoryEventBus) removeSub(topic string, target *subscription) {
+// removeSub removes a specific subscription from the group's subscriber list.
+// If the group becomes empty after removal, the groupState entry is pruned
+// from the map to prevent unbounded growth.
+func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscription) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	subs := b.subs[topic]
-	for i, s := range subs {
+	groups := b.groupSubs[topic]
+	if groups == nil {
+		return
+	}
+	gs := groups[consumerGroup]
+	if gs == nil {
+		return
+	}
+	for i, s := range gs.subs {
 		if s == target {
-			b.subs[topic] = append(subs[:i], subs[i+1:]...)
+			gs.subs = append(gs.subs[:i], gs.subs[i+1:]...)
+			// Prune empty groupState to prevent map growth.
+			if len(gs.subs) == 0 {
+				delete(groups, consumerGroup)
+				if len(groups) == 0 {
+					delete(b.groupSubs, topic)
+				}
+			}
 			return
 		}
 	}

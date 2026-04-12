@@ -174,7 +174,7 @@ func (f *fakePubSub) Publish(_ context.Context, topic string, payload []byte) er
 	return nil
 }
 
-func (f *fakePubSub) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler) error {
+func (f *fakePubSub) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler, _ string) error {
 	ch := make(chan outbox.Entry, 64)
 	f.mu.Lock()
 	f.subs = append(f.subs, ch)

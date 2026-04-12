@@ -111,7 +111,7 @@ func CollectN(
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, handler)
+		_ = sub.Subscribe(subCtx, topic, handler, "")
 	}()
 
 	// Wait for subscription to register (InMemoryEventBus needs a brief delay).
@@ -182,7 +182,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				c.closeOnce.Do(func() { close(c.done) })
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf("unexpected Subscribe error: %v", err)
 		}
@@ -258,7 +258,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	go func() {
 		defer close(h.subDone)
 		close(ready)
-		err := h.Sub.Subscribe(ctx, h.Topic, handler)
+		err := h.Sub.Subscribe(ctx, h.Topic, handler, "")
 		if err != nil && !errors.Is(err, context.Canceled) {
 			h.T.Errorf("unexpected Subscribe error: %v", err)
 		}

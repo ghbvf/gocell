@@ -194,6 +194,6 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *ConfigCore) RegisterSubscriptions(r cell.EventRouter) error {
 	handler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEvent)
-	r.AddHandler(configsubscribe.TopicConfigChanged, handler)
+	r.AddHandler(configsubscribe.TopicConfigChanged, handler, "config-core")
 	return nil
 }
