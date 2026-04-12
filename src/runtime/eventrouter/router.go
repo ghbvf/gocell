@@ -83,18 +83,23 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 }
 
 // AddHandler registers a subscription intent. It MUST be called before Run.
-// Panics if topic is empty or handler is nil.
+// Panics if topic is empty, handler is nil, or consumerGroup is empty.
 //
 // consumerGroup identifies the logical consumer group for this handler.
 // Handlers in the same group compete for messages on the same topic;
 // different groups each receive a full copy (fanout). Cell implementations
-// typically pass their cell ID (e.g. "audit-core") to ensure per-cell isolation.
+// MUST pass their cell ID (e.g. "audit-core") to ensure per-cell isolation
+// and portable semantics across all backends. Empty consumerGroup is
+// rejected to prevent silent backend-specific behavior divergence.
 func (r *Router) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
 	if topic == "" {
 		panic("eventrouter: AddHandler called with empty topic")
 	}
 	if handler == nil {
 		panic("eventrouter: AddHandler called with nil handler")
+	}
+	if consumerGroup == "" {
+		panic("eventrouter: AddHandler called with empty consumerGroup; cells must declare their identity")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

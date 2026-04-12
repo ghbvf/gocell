@@ -831,6 +831,65 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 	assert.Equal(t, int32(n), sub2Count.Load(), "sub2 should receive all messages (broadcast)")
 }
 
+// TestConsumerGroup_ConcurrentPublish_NoRace verifies that concurrent Publish
+// calls on the same topic and consumer group do not race on rrIdx.
+// This test exists to guard the P1 fix (atomic.Uint64) and MUST be run with
+// -race to be effective.
+func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
+	bus := New(WithBufferSize(256))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		totalReceived atomic.Int64
+		wg            sync.WaitGroup
+	)
+
+	// 4 subscribers in the same group — competing.
+	const numSubs = 4
+	wg.Add(numSubs)
+	for range numSubs {
+		go func() {
+			defer wg.Done()
+			_ = bus.Subscribe(ctx, "race.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				totalReceived.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}, "race-group")
+		}()
+	}
+
+	time.Sleep(20 * time.Millisecond) // let subscriptions register
+
+	// Concurrent publishers hammering the same topic+group.
+	const numPublishers = 8
+	const msgsPerPublisher = 50
+	var pubWg sync.WaitGroup
+	pubWg.Add(numPublishers)
+	for range numPublishers {
+		go func() {
+			defer pubWg.Done()
+			for range msgsPerPublisher {
+				_ = bus.Publish(ctx, "race.topic", []byte(`{"race":"test"}`))
+			}
+		}()
+	}
+	pubWg.Wait()
+
+	totalExpected := numPublishers * msgsPerPublisher
+	require.Eventually(t, func() bool {
+		return totalReceived.Load() >= int64(totalExpected)
+	}, 3*time.Second, 10*time.Millisecond,
+		"all messages should be consumed: got %d, want %d", totalReceived.Load(), totalExpected)
+
+	cancel()
+	wg.Wait()
+
+	assert.Equal(t, int64(totalExpected), totalReceived.Load(),
+		"total consumed should equal total published across all concurrent publishers")
+}
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher  = (*InMemoryEventBus)(nil)

@@ -309,8 +309,13 @@ type Subscriber interface {
 	//
 	// consumerGroup identifies the logical consumer group. Subscribers in
 	// the same group compete for messages (load-balanced); different groups
-	// each receive a full copy (fanout). When empty, the implementation
-	// falls back to its default behaviour (backward compatible).
+	// each receive a full copy (fanout).
+	//
+	// Empty consumerGroup is accepted for backward compatibility but its
+	// semantics are backend-specific and NOT portable:
+	//   - InMemoryEventBus: broadcast to all subscribers (fanout)
+	//   - RabbitMQ: falls back to topic-named queue (competing)
+	// Cell code SHOULD always pass a non-empty group via EventRouter.AddHandler.
 	//
 	// Subscribe blocks until ctx is cancelled or an unrecoverable error occurs.
 	Subscribe(ctx context.Context, topic string, handler EntryHandler, consumerGroup string) error

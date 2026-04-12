@@ -549,7 +549,7 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 
 	r.AddHandler("session.created", noopHandler, "audit-core")
 	r.AddHandler("config.changed", noopHandler, "config-core")
-	r.AddHandler("legacy.event", noopHandler, "") // empty = backward compat
+	r.AddHandler("legacy.event", noopHandler, "legacy-cell")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -574,5 +574,14 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 
 	assert.Equal(t, "audit-core", groupByTopic["session.created"])
 	assert.Equal(t, "config-core", groupByTopic["config.changed"])
-	assert.Equal(t, "", groupByTopic["legacy.event"])
+	assert.Equal(t, "legacy-cell", groupByTopic["legacy.event"])
+}
+
+func TestRouter_AddHandler_PanicsOnEmptyConsumerGroup(t *testing.T) {
+	r := New(&blockingSubscriber{})
+	assert.PanicsWithValue(t,
+		"eventrouter: AddHandler called with empty consumerGroup; cells must declare their identity",
+		func() {
+			r.AddHandler("topic", noopHandler, "")
+		})
 }

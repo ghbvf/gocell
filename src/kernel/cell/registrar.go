@@ -103,6 +103,8 @@ type HTTPRegistrar interface {
 //
 // ref: Kafka ConsumerGroup — consumerGroup isolates per-Cell consumption.
 // Same group competes; different groups each get a full copy (fanout).
+// consumerGroup MUST NOT be empty — Cells must declare their identity
+// to ensure portable dispatch semantics across all backends.
 type EventRouter interface {
 	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
 }
