@@ -33,7 +33,7 @@
 | A | 可观测 | RL-METRICS-01 Relay Prometheus 指标 | 2h |
 | B | 事件模型 | ~~WM-15 L4 队列状态机~~ ✅ PR#93 | 1.5d |
 | B | 事件路由 | ER-ARCH-02 ConsumerGroup 支持 | 2h |
-| B | 链路追踪 | CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入) | 5h |
+| B | 链路追踪 | ~~CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入)~~ ✅ PR#108 | 5h |
 | B | ~~config 契约收口~~ | ~~CFG-CONTRACT-01/02~~ ✅ PR#98 schema 填充 + PR#101 additionalProperties 加固 + contract_test 验证 | ✅ done |
 | B | **trace propagation** | **TRACE-PROP-01**: 补 inbound HTTP header extract（W3C traceparent/b3），tracer.Start 前先 extract 上游 context。当前默认每次开根 span，跨服务 trace_id 不连续 | 3h |
 
