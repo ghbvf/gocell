@@ -116,6 +116,8 @@ func TestMount_MiddlewareInheritance(t *testing.T) {
 		"SecurityHeaders middleware must run for mounted handlers")
 	assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"),
 		"SecurityHeaders middleware must run for mounted handlers")
+	assert.Equal(t, "default-src 'self'", rec.Header().Get("Content-Security-Policy"),
+		"SecurityHeaders middleware must run for mounted handlers")
 }
 
 func TestWith_ScopedMiddleware(t *testing.T) {

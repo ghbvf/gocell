@@ -24,6 +24,7 @@ func TestSecurityHeaders(t *testing.T) {
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
 		{"Strict-Transport-Security", "max-age=31536000"},
+		{"Content-Security-Policy", "default-src 'self'"},
 	}
 
 	for _, tt := range tests {

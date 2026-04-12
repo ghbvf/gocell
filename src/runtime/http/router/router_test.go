@@ -277,6 +277,7 @@ func TestDefaultMiddlewareApplied(t *testing.T) {
 	// Security headers should be set by default middleware.
 	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
 	assert.Equal(t, "DENY", rec.Header().Get("X-Frame-Options"))
+	assert.Equal(t, "default-src 'self'", rec.Header().Get("Content-Security-Policy"))
 	// RequestID middleware should set X-Request-Id.
 	assert.NotEmpty(t, rec.Header().Get("X-Request-Id"))
 }
