@@ -234,3 +234,34 @@ func TestService_Create_RepoFailure(t *testing.T) {
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "persist")
 }
+
+func TestService_Create_DemoPublishSuccess(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	pub := &recordingPublisher{}
+	svc := NewService(repo, pub, slog.Default())
+
+	order, err := svc.Create(context.Background(), "demo-item")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	require.Len(t, pub.calls, 1)
+	assert.Equal(t, TopicOrderCreated, pub.calls[0].topic)
+}
+
+func TestService_Create_DemoNilPublisher(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	svc := NewService(repo, nil, slog.Default())
+
+	order, err := svc.Create(context.Background(), "nil-pub")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, "nil-pub", order.Item)
+}
+
+func TestService_Create_DemoRepoFailure(t *testing.T) {
+	svc := NewService(failRepo{}, &recordingPublisher{}, slog.Default())
+
+	order, err := svc.Create(context.Background(), "fail")
+	require.Error(t, err)
+	assert.Nil(t, order)
+	assert.Contains(t, err.Error(), "persist")
+}

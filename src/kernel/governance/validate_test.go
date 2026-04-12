@@ -2821,6 +2821,45 @@ func TestFMT13(t *testing.T) {
 			wantWarnings: 1,
 			wantField:    "schemaRefs.response",
 		},
+		{
+			name: "invalid HTTP method is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "TRACE",
+					Path:          "/api/v1/auth/login",
+					SuccessStatus: 200,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.method",
+		},
+		{
+			name: "path without leading slash is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "api/v1/auth/users",
+					SuccessStatus: 200,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.path",
+		},
+		{
+			name: "non-2xx successStatus is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "POST",
+					Path:          "/api/v1/auth/login",
+					SuccessStatus: 301,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.successStatus",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
