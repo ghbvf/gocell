@@ -161,6 +161,20 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 	}
 }
 
+func TestOrderCell_InitRejectsDurableModeWithDefaultRepo(t *testing.T) {
+	c := NewOrderCell(
+		WithOutboxWriter(noopWriter{}),
+		WithTxManager(noopTxRunner{}),
+	)
+
+	err := c.Init(context.Background(), newTestDeps())
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.Contains(t, err.Error(), "explicit repository")
+}
+
 func TestOrderCell_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
