@@ -1,28 +1,91 @@
 package ordercreate
 
 import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
+
+type contractWriter struct {
+	entries []outbox.Entry
+}
+
+func (w *contractWriter) Write(_ context.Context, entry outbox.Entry) error {
+	w.entries = append(w.entries, entry)
+	return nil
+}
+
+var _ outbox.Writer = (*contractWriter)(nil)
+
+type contractTxRunner struct{}
+
+func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = contractTxRunner{}
+
+func newContractHandler() (http.Handler, *contractWriter) {
+	repo := mem.NewOrderRepository()
+	writer := &contractWriter{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(), WithOutboxWriter(writer), WithTxManager(contractTxRunner{}))
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
+	return mux, writer
+}
 
 func TestHttpOrderCreateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.order.create.v1")
+	h, _ := newContractHandler()
 
 	c.ValidateRequest(t, []byte(`{"item":"widget"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"o-1","item":"widget","status":"pending"}}`))
 	c.MustRejectRequest(t, []byte(`{"item":"x","extra":"bad"}`))
-	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
 func TestEventOrderCreatedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
+	httpContract := contracttest.LoadByID(t, root, "http.order.create.v1")
 	c := contracttest.LoadByID(t, root, "event.order-created.v1")
+	h, writer := newContractHandler()
 
-	c.ValidatePayload(t, []byte(`{"id":"o-1","item":"widget","status":"pending"}`))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(httpContract.HTTP.Method, httpContract.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+	httpContract.ValidateHTTPResponseRecorder(t, rec)
+
+	if len(writer.entries) != 1 {
+		t.Fatalf("expected one emitted outbox entry, got %d", len(writer.entries))
+	}
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"id":"o-1"}`))
-	// Headers validation skipped: order-cell uses publisher.Publish directly
-	// (no outbox.Entry), so event_id is not emitted at the transport level.
-	// Headers schema documents the outbox transport contract for future L2 migration.
+	c.MustRejectHeaders(t, []byte(`{}`))
+
+	var payload struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+		t.Fatalf("decode emitted payload: %v", err)
+	}
+	if payload.ID == "" {
+		t.Fatal("emitted payload did not include order id")
+	}
 }

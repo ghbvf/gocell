@@ -6,6 +6,11 @@ lifecycle: active
 endpoints:
   server: order-cell
   clients: []
+  http:
+    method: GET
+    path: /api/v1/orders/
+    successStatus: 200
+    noContent: false
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

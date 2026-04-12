@@ -103,6 +103,7 @@ type EndpointsMeta struct {
 	// HTTP
 	Server  string   `yaml:"server,omitempty"`
 	Clients []string `yaml:"clients,omitempty"`
+	HTTP    *HTTPTransportMeta `yaml:"http,omitempty"`
 	// Event
 	Publisher   string   `yaml:"publisher,omitempty"`
 	Subscribers []string `yaml:"subscribers,omitempty"`
@@ -112,6 +113,15 @@ type EndpointsMeta struct {
 	// Projection
 	Provider string   `yaml:"provider,omitempty"`
 	Readers  []string `yaml:"readers,omitempty"`
+}
+
+// HTTPTransportMeta holds transport-level details for migrated HTTP contracts.
+// It is optional so legacy HTTP contracts can remain schema-only until migrated.
+type HTTPTransportMeta struct {
+	Method        string `yaml:"method"`
+	Path          string `yaml:"path"`
+	SuccessStatus int    `yaml:"successStatus"`
+	NoContent     bool   `yaml:"noContent"`
 }
 
 // SchemaRefsMeta holds JSON Schema file references relative to the contract directory.
