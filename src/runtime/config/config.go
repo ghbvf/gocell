@@ -178,6 +178,32 @@ func applyEnv(prefix string, data map[string]any, raw map[string]any) {
 	}
 }
 
+// Diff computes the difference between two flat config maps.
+// It returns keys that were added, updated (value changed), or removed.
+// Returned slices are sorted for deterministic output.
+//
+// ref: micro/go-micro config/watcher.go — checksum-based change dedup
+// Adopted: explicit key-set diff for deterministic change detection.
+func Diff(oldData, newData map[string]any) (added, updated, removed []string) {
+	for k, nv := range newData {
+		ov, exists := oldData[k]
+		if !exists {
+			added = append(added, k)
+		} else if fmt.Sprintf("%v", ov) != fmt.Sprintf("%v", nv) {
+			updated = append(updated, k)
+		}
+	}
+	for k := range oldData {
+		if _, exists := newData[k]; !exists {
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(updated)
+	sort.Strings(removed)
+	return added, updated, removed
+}
+
 // flatten recursively flattens a nested map into dot-separated keys.
 func flatten(prefix string, m map[string]any, out map[string]any) {
 	for k, v := range m {

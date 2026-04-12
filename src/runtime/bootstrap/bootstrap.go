@@ -197,25 +197,19 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		cfg = config.NewFromMap(make(map[string]any))
 	}
 
-	// Step 1.5: Start config watcher (if config file provided).
+	// Step 1.5a: Create config watcher (if config file provided).
+	// The OnChange callback is registered later (Step 4.5) after assembly is
+	// started, so the callback can safely reference `asm`.
+	var cfgWatcher *config.Watcher
 	if b.configPath != "" {
-		watcher, err := config.NewWatcher(b.configPath)
+		w, err := config.NewWatcher(b.configPath)
 		if err != nil {
 			slog.Warn("bootstrap: config watcher not available", slog.Any("error", err))
 		} else {
-			yamlPath, envPrefix := b.configPath, b.envPrefix
-			watcher.OnChange(func(evt config.WatchEvent) {
-				if rc, ok := cfg.(config.Reloader); ok {
-					if err := rc.Reload(yamlPath, envPrefix); err != nil {
-						slog.Error("bootstrap: config reload failed", slog.Any("error", err))
-					} else {
-						slog.Info("bootstrap: config reloaded", slog.String("path", evt.Path))
-					}
-				}
-			})
-			watcher.Start()
+			cfgWatcher = w
+			cfgWatcher.Start()
 			teardowns = append(teardowns, func(_ context.Context) error {
-				return watcher.Close()
+				return cfgWatcher.Close()
 			})
 		}
 	}
@@ -262,6 +256,60 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	teardowns = append(teardowns, func(c context.Context) error {
 		return asm.Stop(c)
 	})
+
+	// Step 4.5: Register config watcher OnChange callback (now that asm is started).
+	// Snapshot → Reload → Diff → notify ConfigReloader cells.
+	if cfgWatcher != nil {
+		yamlPath, envPrefix := b.configPath, b.envPrefix
+		cfgWatcher.OnChange(func(evt config.WatchEvent) {
+			rc, ok := cfg.(config.Reloader)
+			if !ok {
+				return
+			}
+
+			oldSnap := snapshotConfig(cfg)
+
+			if err := rc.Reload(yamlPath, envPrefix); err != nil {
+				slog.Error("bootstrap: config reload failed", slog.Any("error", err))
+				return
+			}
+			slog.Info("bootstrap: config reloaded", slog.String("path", evt.Path))
+
+			newSnap := snapshotConfig(cfg)
+			added, updated, removed := config.Diff(oldSnap, newSnap)
+			if len(added) == 0 && len(updated) == 0 && len(removed) == 0 {
+				slog.Debug("bootstrap: config reloaded but no effective changes")
+				return
+			}
+
+			event := cell.ConfigChangeEvent{
+				Added:   added,
+				Updated: updated,
+				Removed: removed,
+				Config:  newSnap,
+			}
+
+			for _, id := range asm.CellIDs() {
+				c := asm.Cell(id)
+				cr, ok := c.(cell.ConfigReloader)
+				if !ok {
+					continue
+				}
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Error("bootstrap: config reload callback panic",
+								slog.String("cell", id), slog.Any("panic", r))
+						}
+					}()
+					if err := cr.OnConfigReload(event); err != nil {
+						slog.Error("bootstrap: config reload callback failed",
+							slog.String("cell", id), slog.Any("error", err))
+					}
+				}()
+			}
+		})
+	}
 
 	// Step 5: Build router with health handler.
 	hh := health.New(asm)
@@ -413,4 +461,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// snapshotConfig builds a flat key-value map from the Config interface.
+func snapshotConfig(cfg config.Config) map[string]any {
+	snap := make(map[string]any)
+	for _, k := range cfg.Keys() {
+		snap[k] = cfg.Get(k)
+	}
+	return snap
 }

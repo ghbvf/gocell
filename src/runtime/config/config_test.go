@@ -188,6 +188,107 @@ func TestConfig_SetNested_OverwriteNonMap(t *testing.T) {
 	assert.Equal(t, "nested-val", cfg.Get("flat.deep"))
 }
 
+func TestDiff(t *testing.T) {
+	tests := []struct {
+		name    string
+		old     map[string]any
+		new     map[string]any
+		added   []string
+		updated []string
+		removed []string
+	}{
+		{
+			name:    "added keys only",
+			old:     map[string]any{},
+			new:     map[string]any{"a": 1, "b": "two"},
+			added:   []string{"a", "b"},
+			updated: nil,
+			removed: nil,
+		},
+		{
+			name:    "removed keys only",
+			old:     map[string]any{"a": 1, "b": "two"},
+			new:     map[string]any{},
+			added:   nil,
+			updated: nil,
+			removed: []string{"a", "b"},
+		},
+		{
+			name:    "updated keys only",
+			old:     map[string]any{"a": 1, "b": "old"},
+			new:     map[string]any{"a": 2, "b": "new"},
+			added:   nil,
+			updated: []string{"a", "b"},
+			removed: nil,
+		},
+		{
+			name:    "mixed changes",
+			old:     map[string]any{"keep": "same", "update": "old", "remove": "gone"},
+			new:     map[string]any{"keep": "same", "update": "new", "add": "fresh"},
+			added:   []string{"add"},
+			updated: []string{"update"},
+			removed: []string{"remove"},
+		},
+		{
+			name:    "no changes",
+			old:     map[string]any{"a": 1, "b": "two"},
+			new:     map[string]any{"a": 1, "b": "two"},
+			added:   nil,
+			updated: nil,
+			removed: nil,
+		},
+		{
+			name:    "both nil",
+			old:     nil,
+			new:     nil,
+			added:   nil,
+			updated: nil,
+			removed: nil,
+		},
+		{
+			name:    "old nil new populated",
+			old:     nil,
+			new:     map[string]any{"a": 1},
+			added:   []string{"a"},
+			updated: nil,
+			removed: nil,
+		},
+		{
+			name:    "old populated new nil",
+			old:     map[string]any{"a": 1},
+			new:     nil,
+			added:   nil,
+			updated: nil,
+			removed: []string{"a"},
+		},
+		{
+			name:    "same string repr not detected as update",
+			old:     map[string]any{"port": 8080},
+			new:     map[string]any{"port": "8080"},
+			added:   nil,
+			updated: nil, // %v renders both as "8080"
+			removed: nil,
+		},
+		{
+			name:    "actual value change across types",
+			old:     map[string]any{"port": 8080},
+			new:     map[string]any{"port": "9090"},
+			added:   nil,
+			updated: []string{"port"},
+			removed: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			added, updated, removed := Diff(tt.old, tt.new)
+			assert.Equal(t, tt.added, added, "added")
+			assert.Equal(t, tt.updated, updated, "updated")
+			assert.Equal(t, tt.removed, removed, "removed")
+		})
+	}
+}
+
 // TestConfig_ConcurrentGetAndReload verifies that concurrent Get() and Reload()
 // calls do not race. Run with -race to verify.
 func TestConfig_ConcurrentGetAndReload(t *testing.T) {
