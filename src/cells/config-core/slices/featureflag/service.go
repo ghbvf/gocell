@@ -54,13 +54,15 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag
 func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.FeatureFlag], error) {
 	pageReq.Normalize()
 
+	qctx := query.QueryContext("endpoint", "feature-flag")
+
 	var cursorValues []any
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
 			return query.PageResult[*domain.FeatureFlag]{}, err
 		}
-		if err := query.ValidateCursorScope(cur, flagSort); err != nil {
+		if err := query.ValidateCursorScope(cur, flagSort, qctx); err != nil {
 			return query.PageResult[*domain.FeatureFlag]{}, err
 		}
 		cursorValues = cur.Values
@@ -77,7 +79,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.FeatureFlag]{}, fmt.Errorf("feature-flag: list: %w", err)
 	}
 
-	return query.BuildPageResult(flags, pageReq.Limit, s.codec, flagSort, func(f *domain.FeatureFlag) []any {
+	return query.BuildPageResult(flags, pageReq.Limit, s.codec, flagSort, qctx, func(f *domain.FeatureFlag) []any {
 		return []any{f.Key, f.ID}
 	})
 }

@@ -35,13 +35,20 @@ func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *sl
 func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq query.PageRequest) (query.PageResult[*domain.AuditEntry], error) {
 	pageReq.Normalize()
 
+	qctx := query.QueryContext("endpoint", "audit-query",
+		"eventType", filters.EventType,
+		"actorId", filters.ActorID,
+		"from", filters.From.Format(time.RFC3339),
+		"to", filters.To.Format(time.RFC3339),
+	)
+
 	var cursorValues []any
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
-		if err := query.ValidateCursorScope(cur, auditSort); err != nil {
+		if err := query.ValidateCursorScope(cur, auditSort, qctx); err != nil {
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
 		cursorValues = cur.Values
@@ -58,7 +65,7 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 		return query.PageResult[*domain.AuditEntry]{}, fmt.Errorf("audit-query: query: %w", err)
 	}
 
-	return query.BuildPageResult(entries, pageReq.Limit, s.codec, auditSort, func(e *domain.AuditEntry) []any {
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, auditSort, qctx, func(e *domain.AuditEntry) []any {
 		return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
 	})
 }

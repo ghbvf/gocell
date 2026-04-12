@@ -3,11 +3,13 @@ package devicecommand
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,6 +183,36 @@ func TestService_Ack(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
+	// Create a cursor for device-A, then use it on device-B.
+	// The cursor should be rejected.
+	svc, devRepo, cmdRepo := newTestService()
+	ctx := context.Background()
+	seedDevice(devRepo, "dev-A", "sensor-a")
+	seedDevice(devRepo, "dev-B", "sensor-b")
+
+	// Enqueue enough commands for dev-A so a cursor is generated.
+	for i := 0; i < 5; i++ {
+		_ = cmdRepo.Create(ctx, &domain.Command{
+			ID: fmt.Sprintf("c%d", i), DeviceID: "dev-A", Payload: "x", Status: "pending",
+		})
+	}
+
+	// Get first page for dev-A.
+	page1, err := svc.ListPending(ctx, "dev-A", query.PageRequest{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	// Replay the cursor against dev-B — must fail with context mismatch.
+	_, err = svc.ListPending(ctx, "dev-B", query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "context mismatch")
 }
 
 func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {

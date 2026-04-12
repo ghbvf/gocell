@@ -21,6 +21,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -78,19 +79,31 @@ func main() {
 
 	// --- audit-core (L3): tamper-evident audit log ---
 	auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")
+	auditCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-audit-cursor-key-32b!!"))
+	if err != nil {
+		logger.Error("failed to create audit cursor codec", slog.Any("error", err))
+		os.Exit(1)
+	}
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(auditHMACKey),
 		auditcore.WithOutboxWriter(nw),
+		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
 	)
 
 	// --- config-core (L2): configuration + feature flags ---
+	configCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-config-cursor-key-32b!!"))
+	if err != nil {
+		logger.Error("failed to create config cursor codec", slog.Any("error", err))
+		os.Exit(1)
+	}
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithOutboxWriter(nw),
+		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
 	)
 

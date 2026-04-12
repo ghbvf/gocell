@@ -46,13 +46,15 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry
 func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.ConfigEntry], error) {
 	pageReq.Normalize()
 
+	qctx := query.QueryContext("endpoint", "config-read")
+
 	var cursorValues []any
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
 			return query.PageResult[*domain.ConfigEntry]{}, err
 		}
-		if err := query.ValidateCursorScope(cur, configSort); err != nil {
+		if err := query.ValidateCursorScope(cur, configSort, qctx); err != nil {
 			return query.PageResult[*domain.ConfigEntry]{}, err
 		}
 		cursorValues = cur.Values
@@ -69,7 +71,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.ConfigEntry]{}, fmt.Errorf("config-read: list: %w", err)
 	}
 
-	return query.BuildPageResult(entries, pageReq.Limit, s.codec, configSort, func(e *domain.ConfigEntry) []any {
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, configSort, qctx, func(e *domain.ConfigEntry) []any {
 		return []any{e.Key, e.ID}
 	})
 }

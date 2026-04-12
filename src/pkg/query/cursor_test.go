@@ -230,7 +230,7 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 	sortA := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
 	sortB := []SortColumn{{Name: "key", Direction: SortASC}, {Name: "id", Direction: SortASC}}
 	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA)}
-	err := ValidateCursorScope(cur, sortB)
+	err := ValidateCursorScope(cur, sortB, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "scope mismatch")
 }
@@ -238,7 +238,7 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
 	sort := []SortColumn{{Name: "id", Direction: SortASC}}
 	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sort)}
-	err := ValidateCursorScope(cur, sort)
+	err := ValidateCursorScope(cur, sort, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "expected 1")
 }
@@ -246,7 +246,37 @@ func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
 func TestValidateCursorScope_Valid(t *testing.T) {
 	sort := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
 	cur := Cursor{Values: []any{"2026-01-01T00:00:00Z", "id-1"}, Scope: SortScope(sort)}
-	assert.NoError(t, ValidateCursorScope(cur, sort))
+	assert.NoError(t, ValidateCursorScope(cur, sort, ""))
+}
+
+func TestValidateCursorScope_ContextMismatch(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	ctxA := QueryContext("endpoint", "orders")
+	ctxB := QueryContext("endpoint", "configs")
+	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort), Context: ctxA}
+	err := ValidateCursorScope(cur, sort, ctxB)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context mismatch")
+}
+
+func TestValidateCursorScope_ContextMatch(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	qctx := QueryContext("endpoint", "orders")
+	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort), Context: qctx}
+	assert.NoError(t, ValidateCursorScope(cur, sort, qctx))
+}
+
+func TestQueryContext_Deterministic(t *testing.T) {
+	a := QueryContext("endpoint", "audit-query", "eventType", "login")
+	b := QueryContext("endpoint", "audit-query", "eventType", "login")
+	assert.Equal(t, a, b)
+	assert.Len(t, a, 16)
+}
+
+func TestQueryContext_DifferentValues(t *testing.T) {
+	a := QueryContext("endpoint", "audit-query", "eventType", "login")
+	b := QueryContext("endpoint", "audit-query", "eventType", "logout")
+	assert.NotEqual(t, a, b)
 }
 
 // --- Key rotation tests ---

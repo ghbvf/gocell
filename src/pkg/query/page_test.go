@@ -72,7 +72,7 @@ var testSort = []SortColumn{{Name: "name", Direction: SortASC}}
 func TestBuildPageResult_HasMore(t *testing.T) {
 	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	items := []string{"a", "b", "c", "d"} // 4 items, limit=3 → hasMore
-	result, err := BuildPageResult(items, 3, codec, testSort, func(s string) []any {
+	result, err := BuildPageResult(items, 3, codec, testSort, "test", func(s string) []any {
 		return []any{s}
 	})
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestBuildPageResult_HasMore(t *testing.T) {
 func TestBuildPageResult_LastPage(t *testing.T) {
 	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	items := []string{"a", "b"} // 2 items, limit=3 → no more
-	result, err := BuildPageResult(items, 3, codec, testSort, func(s string) []any {
+	result, err := BuildPageResult(items, 3, codec, testSort, "test", func(s string) []any {
 		return []any{s}
 	})
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestBuildPageResult_LastPage(t *testing.T) {
 func TestBuildPageResult_Empty(t *testing.T) {
 	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	var items []string
-	result, err := BuildPageResult(items, 10, codec, testSort, func(s string) []any {
+	result, err := BuildPageResult(items, 10, codec, testSort, "test", func(s string) []any {
 		return []any{s}
 	})
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestBuildPageResult_Empty(t *testing.T) {
 func TestBuildPageResult_ExactLimit(t *testing.T) {
 	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	items := []string{"a", "b", "c"} // 3 items, limit=3 → no more (exactly limit, not limit+1)
-	result, err := BuildPageResult(items, 3, codec, testSort, func(s string) []any {
+	result, err := BuildPageResult(items, 3, codec, testSort, "test", func(s string) []any {
 		return []any{s}
 	})
 	require.NoError(t, err)

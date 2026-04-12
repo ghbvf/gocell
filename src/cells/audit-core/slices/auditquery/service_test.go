@@ -164,3 +164,30 @@ func TestService_Query_Empty(t *testing.T) {
 	assert.False(t, result.HasMore)
 	assert.Empty(t, result.NextCursor)
 }
+
+func TestService_Query_CursorContextMismatch(t *testing.T) {
+	// Create a cursor with eventType=login context, then query with eventType=logout.
+	// The cursor should be rejected.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc, repo := newTestService()
+	for i := 0; i < 5; i++ {
+		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
+			base.Add(time.Duration(i)*time.Hour))
+	}
+
+	// Get first page with eventType=login filter.
+	loginFilters := ports.AuditFilters{EventType: "event.login.v1"}
+	page1, err := svc.Query(context.Background(), loginFilters, query.PageRequest{Limit: 3})
+	require.NoError(t, err)
+	require.True(t, page1.HasMore)
+	require.NotEmpty(t, page1.NextCursor)
+
+	// Replay the cursor with a different eventType filter — must fail.
+	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
+	_, err = svc.Query(context.Background(), logoutFilters, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Contains(t, ecErr.Message, "context mismatch")
+}

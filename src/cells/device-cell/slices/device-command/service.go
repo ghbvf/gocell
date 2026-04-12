@@ -81,13 +81,15 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 
 	pageReq.Normalize()
 
+	qctx := query.QueryContext("endpoint", "device-command", "deviceId", deviceID)
+
 	var cursorValues []any
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
 			return query.PageResult[*domain.Command]{}, err
 		}
-		if err := query.ValidateCursorScope(cur, pendingSort); err != nil {
+		if err := query.ValidateCursorScope(cur, pendingSort, qctx); err != nil {
 			return query.PageResult[*domain.Command]{}, err
 		}
 		cursorValues = cur.Values
@@ -104,7 +106,7 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: list pending: %w", err)
 	}
 
-	return query.BuildPageResult(cmds, pageReq.Limit, s.codec, pendingSort, func(c *domain.Command) []any {
+	return query.BuildPageResult(cmds, pageReq.Limit, s.codec, pendingSort, qctx, func(c *domain.Command) []any {
 		return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
 	})
 }

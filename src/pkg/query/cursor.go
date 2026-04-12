@@ -18,8 +18,9 @@ const minCursorKeyBytes = 32
 // Cursor holds the keyset values at a pagination boundary.
 // Values correspond 1:1 with the SortColumns of the query.
 type Cursor struct {
-	Values []any  `json:"v"`
-	Scope  string `json:"s,omitempty"` // hex hash of sort column definition
+	Values  []any  `json:"v"`
+	Scope   string `json:"s,omitempty"` // hex hash of sort column definition
+	Context string `json:"c,omitempty"` // query context fingerprint (path + filters)
 }
 
 // CursorCodec encodes and decodes cursors with HMAC-SHA256 tamper protection.
@@ -135,11 +136,31 @@ func SortScope(cols []SortColumn) string {
 	return hex.EncodeToString(h.Sum(nil))[:16] // 8-byte prefix is sufficient
 }
 
-// ValidateCursorScope checks that the decoded cursor matches the expected sort columns.
-// Returns ErrCursorInvalid if the scope doesn't match or the value count is wrong.
-func ValidateCursorScope(cur Cursor, sort []SortColumn) error {
+// QueryContext computes a fingerprint of the query context (endpoint identity
+// + filter parameters). Cursors are only valid for the same query context.
+// Pass key-value pairs describing the query identity, e.g.:
+//
+//	QueryContext("endpoint", "order-query")
+//	QueryContext("endpoint", "audit-query", "eventType", "login", "actorId", "user-1")
+//	QueryContext("endpoint", "device-command", "deviceId", "dev-1")
+func QueryContext(pairs ...string) string {
+	h := sha256.New()
+	for _, p := range pairs {
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// ValidateCursorScope checks that the decoded cursor matches the expected sort
+// columns and query context. Returns ErrCursorInvalid if the scope or context
+// doesn't match or the value count is wrong.
+func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
 	if cur.Scope != "" && cur.Scope != SortScope(sort) {
 		return errcode.New(errcode.ErrCursorInvalid, "cursor: sort scope mismatch")
+	}
+	if cur.Context != "" && cur.Context != queryCtx {
+		return errcode.New(errcode.ErrCursorInvalid, "cursor: query context mismatch")
 	}
 	if len(cur.Values) != len(sort) {
 		return errcode.New(errcode.ErrCursorInvalid,

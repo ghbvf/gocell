@@ -67,10 +67,14 @@ type PageResult[T any] struct {
 // sort defines the sort columns; the generated cursor embeds a sort scope
 // fingerprint so cursors cannot be reused across different sort definitions.
 //
+// queryCtx is the query context fingerprint (from QueryContext). The cursor
+// embeds this so it cannot be replayed against a different query context
+// (e.g. different endpoint, different filter values).
+//
 // extractCursor is called on the last item to extract the keyset values for
 // the next-page cursor. It must return values corresponding 1:1 to the sort
 // columns used in the query.
-func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []SortColumn, extractCursor func(T) []any) (PageResult[T], error) {
+func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []SortColumn, queryCtx string, extractCursor func(T) []any) (PageResult[T], error) {
 	hasMore := len(items) > limit
 	if hasMore {
 		items = items[:limit]
@@ -82,7 +86,7 @@ func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []Sor
 
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
-		cur := Cursor{Values: extractCursor(last), Scope: SortScope(sort)}
+		cur := Cursor{Values: extractCursor(last), Scope: SortScope(sort), Context: queryCtx}
 		token, err := codec.Encode(cur)
 		if err != nil {
 			return PageResult[T]{}, err
