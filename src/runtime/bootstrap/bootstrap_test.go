@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -200,6 +201,51 @@ type eventCell struct {
 	subErr error
 }
 
+type contextCaptureCell struct {
+	*cell.BaseCell
+	got chan map[string]string
+}
+
+func newContextCaptureCell(id string, got chan map[string]string) *contextCaptureCell {
+	return &contextCaptureCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+		got: got,
+	}
+}
+
+func (c *contextCaptureCell) RegisterSubscriptions(r cell.EventRouter) error {
+	r.AddHandler("test.context", func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		requestID, _ := ctxkeys.RequestIDFrom(ctx)
+		correlationID, _ := ctxkeys.CorrelationIDFrom(ctx)
+		traceID, _ := ctxkeys.TraceIDFrom(ctx)
+		c.got <- map[string]string{
+			"request_id":     requestID,
+			"correlation_id": correlationID,
+			"trace_id":       traceID,
+		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	return nil
+}
+
+type invokeOnceSubscriber struct {
+	entry outbox.Entry
+	once  sync.Once
+}
+
+func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler) error {
+	s.once.Do(func() {
+		handler(ctx, s.entry)
+	})
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (s *invokeOnceSubscriber) Close() error { return nil }
+
 func newEventCell(id string, subErr error) *eventCell {
 	return &eventCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
@@ -292,6 +338,63 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	select {
 	case err := <-done:
 		assert.NoError(t, err, "clean shutdown should not produce an error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-router-context"})
+	got := make(chan map[string]string, 1)
+	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
+
+	sub := &invokeOnceSubscriber{entry: outbox.Entry{
+		ID:        "evt-context-1",
+		EventType: "test.context",
+		Metadata: map[string]string{
+			"request_id":     "req-ctx-1",
+			"correlation_id": "corr-ctx-1",
+			"trace_id":       "trace-ctx-1",
+		},
+	}}
+
+	b := New(
+		WithAssembly(asm),
+		WithSubscriber(sub),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	select {
+	case observed := <-got:
+		assert.Equal(t, "req-ctx-1", observed["request_id"])
+		assert.Equal(t, "corr-ctx-1", observed["correlation_id"])
+		assert.Equal(t, "trace-ctx-1", observed["trace_id"])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for restored consumer context")
+	}
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}

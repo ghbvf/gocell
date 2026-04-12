@@ -97,6 +97,9 @@ func extractContextAttrs(ctx context.Context) []slog.Attr {
 	if v, ok := ctxkeys.RequestIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("request_id", v))
 	}
+	if v, ok := ctxkeys.CorrelationIDFrom(ctx); ok && v != "" {
+		attrs = append(attrs, slog.String("correlation_id", v))
+	}
 	if v, ok := ctxkeys.CellIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("cell_id", v))
 	}

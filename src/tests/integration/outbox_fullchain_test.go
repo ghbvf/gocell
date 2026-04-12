@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,9 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
 	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-full-chain-001")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-full-chain-001")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-full-chain-001")
 
 	// ---------------------------------------------------------------
 	// Step 1: Start all three containers.
@@ -187,7 +191,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		AggregateType: "order",
 		EventType:     topic,
 		Payload:       []byte(`{"orderId":"order-42","status":"created"}`),
-		Metadata:      map[string]string{"trace_id": "trace-full-chain-001"},
+		Metadata:      map[string]string{"source": "integration-test"},
 		CreatedAt:     time.Now().UTC(),
 	}
 
@@ -281,10 +285,17 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		"payload should match original business event")
 
 	// The relay serialises the full outbox.Entry as the AMQP body, so
-	// Metadata round-trips through JSON.  The subscriber also injects
-	// a "topic" key — verify trace_id survived.
+	// metadata round-trips through JSON. The outbox writer should inject
+	// observability metadata from context before persistence, and the
+	// subscriber also injects a "topic" key.
+	assert.Equal(t, "integration-test", got.Metadata["source"],
+		"business metadata should be preserved")
+	assert.Equal(t, "req-full-chain-001", got.Metadata["request_id"],
+		"request_id should be injected from context")
+	assert.Equal(t, "corr-full-chain-001", got.Metadata["correlation_id"],
+		"correlation_id should be injected from context")
 	assert.Equal(t, "trace-full-chain-001", got.Metadata["trace_id"],
-		"metadata trace_id should survive the full chain")
+		"trace_id should survive the full chain")
 
 	// ---------------------------------------------------------------
 	// Step 9: Verify the relay marked the outbox entry as published.
