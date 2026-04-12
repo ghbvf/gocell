@@ -13,8 +13,9 @@ import (
 // This follows the same pattern as runtime/http/middleware/safe_observe.go
 // which protects HTTP metrics collection from crashing request handlers.
 //
-// It also handles typed-nil implementations (e.g. a nil *prometheus.RelayCollector
-// stored in an interface value) by checking the inner value before delegation.
+// Typed-nil implementations (e.g. a nil *prometheus.RelayCollector stored in
+// an interface value) are handled implicitly: the nil-pointer dereference
+// panic is caught by the deferred recover() in safeCall.
 type safeRelayCollector struct {
 	inner outbox.RelayCollector
 }

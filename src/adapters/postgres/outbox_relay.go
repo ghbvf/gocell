@@ -802,6 +802,11 @@ func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Tim
 		)
 	}
 
+	// NOTE: If an intermediate batch exec fails above, this function returns
+	// early and RecordCleanup is not called — already-deleted rows are not
+	// counted. This is intentionally conservative: under-counting cleanup is
+	// safer than over-counting. If more precise cleanup metrics are needed,
+	// consider accumulating inside the loop and reporting on each iteration.
 	if totalPublished > 0 || totalDead > 0 {
 		r.config.Metrics.RecordCleanup(totalPublished, totalDead)
 	}
