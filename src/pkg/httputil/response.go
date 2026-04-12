@@ -80,10 +80,28 @@ func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 
 		msg := ecErr.Message
 		if status >= 500 {
-			slog.Error("decode error (5xx)",
+			// Mirror WriteDomainError's structured 5xx logging per observability.md:
+			// "Error 级别必须含完整 error + 关联业务字段"
+			logAttrs := []any{
 				slog.String("code", string(ecErr.Code)),
 				slog.String("message", ecErr.Message),
-			)
+			}
+			if ecErr.InternalMessage != "" {
+				logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+			}
+			if ecErr.Cause != nil {
+				logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+			}
+			if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("request_id", reqID))
+			}
+			if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+			}
+			if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
+				logAttrs = append(logAttrs, slog.String("span_id", spanID))
+			}
+			slog.Error("decode error (5xx)", logAttrs...)
 			msg = "internal server error"
 		}
 
