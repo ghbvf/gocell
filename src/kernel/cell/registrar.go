@@ -100,8 +100,13 @@ type HTTPRegistrar interface {
 // ref: ThreeDotsLabs/watermill message/router.go — AddHandler registers
 // intent; Router.Run starts consumption. GoCell simplifies to topic+handler
 // (no publish side in the same call).
+//
+// ref: Kafka ConsumerGroup — consumerGroup isolates per-Cell consumption.
+// Same group competes; different groups each get a full copy (fanout).
+// consumerGroup MUST NOT be empty — Cells must declare their identity
+// to ensure portable dispatch semantics across all backends.
 type EventRouter interface {
-	AddHandler(topic string, handler outbox.EntryHandler)
+	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.

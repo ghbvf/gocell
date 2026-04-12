@@ -240,7 +240,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "fullchain-test")
 	}()
 
 	// Brief pause to let the subscriber bind its queue.

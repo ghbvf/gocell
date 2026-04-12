@@ -28,7 +28,7 @@ func TestPublishSubscribe(t *testing.T) {
 			received = append(received, e)
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	// Give subscriber time to register.
@@ -78,7 +78,7 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 		done <- bus.Subscribe(ctx, "retry.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -121,7 +121,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 		done <- bus.Subscribe(ctx, "reject.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: testErr}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -161,7 +161,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 				Disposition: outbox.DispositionRequeue,
 				Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -208,7 +208,7 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 
 	err := bus.Subscribe(context.Background(), "topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "")
 	assert.Error(t, err)
 }
 
@@ -227,14 +227,14 @@ func TestMultipleSubscribers(t *testing.T) {
 		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count1.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 	go func() {
 		defer wg.Done()
 		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count2.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -265,7 +265,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("not yet")}
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -306,14 +306,18 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	go func() {
 		done <- bus.Subscribe(ctx, "cleanup.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	// Wait for subscriber to register.
 	time.Sleep(20 * time.Millisecond)
 
 	bus.mu.RLock()
-	subsBefore := len(bus.subs["cleanup.topic"])
+	gs := bus.groupSubs["cleanup.topic"][""]
+	subsBefore := 0
+	if gs != nil {
+		subsBefore = len(gs.subs)
+	}
 	bus.mu.RUnlock()
 	assert.Equal(t, 1, subsBefore, "subscriber should be registered")
 
@@ -323,7 +327,11 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 
 	// After exit, the subscription should be removed.
 	bus.mu.RLock()
-	subsAfter := len(bus.subs["cleanup.topic"])
+	gs2 := bus.groupSubs["cleanup.topic"][""]
+	subsAfter := 0
+	if gs2 != nil {
+		subsAfter = len(gs2.subs)
+	}
 	bus.mu.RUnlock()
 	assert.Equal(t, 0, subsAfter, "subscriber should be cleaned up after exit")
 }
@@ -358,7 +366,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 				Disposition: outbox.DispositionAck,
 				Receipt:     receipt,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -391,7 +399,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 				Err:         errors.New("permanent"),
 				Receipt:     receipt,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -429,7 +437,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 				Err:         errors.New("transient"),
 				Receipt:     r,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -480,7 +488,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 				Err:         testErr,
 				Receipt:     r,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -535,7 +543,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 				Err:     errors.New("forgot disposition"),
 				Receipt: r,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -593,7 +601,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 				Disposition: outbox.Disposition(99), // not a valid Disposition
 				Err:         testErr,
 			}
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -641,7 +649,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 				}()
 			}
 			return outbox.HandleResult{} // zero-value
-		})
+		}, "")
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -659,6 +667,227 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 	// Should have been called only once — cancelled during backoff before retry.
 	assert.Equal(t, int32(1), attempts.Load(),
 		"should exit during backoff, not retry after cancel")
+}
+
+// ---------------------------------------------------------------------------
+// ConsumerGroup tests (ER-ARCH-02)
+// ---------------------------------------------------------------------------
+
+// TestConsumerGroup_SameGroup_CompetingConsumption verifies that two subscribers
+// in the SAME consumer group compete for messages (round-robin): each message
+// goes to exactly one subscriber, not both.
+func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		sub1Count atomic.Int32
+		sub2Count atomic.Int32
+		wg        sync.WaitGroup
+	)
+
+	// Two subscribers in the SAME group "audit-core".
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			sub1Count.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "audit-core")
+	}()
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			sub2Count.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "audit-core")
+	}()
+
+	time.Sleep(20 * time.Millisecond) // let subscriptions register
+
+	// Publish 10 messages.
+	n := 10
+	for range n {
+		require.NoError(t, bus.Publish(ctx, "session.created", []byte(`{"event":"test"}`)))
+	}
+
+	// Wait for all messages to be handled.
+	require.Eventually(t, func() bool {
+		return int(sub1Count.Load()+sub2Count.Load()) >= n
+	}, 2*time.Second, 10*time.Millisecond, "all messages should be consumed")
+
+	cancel()
+	wg.Wait()
+
+	total := int(sub1Count.Load() + sub2Count.Load())
+	assert.Equal(t, n, total, "total consumed should equal published")
+
+	// Both should have received some (round-robin distributes evenly).
+	assert.Greater(t, sub1Count.Load(), int32(0), "sub1 should receive at least 1 message")
+	assert.Greater(t, sub2Count.Load(), int32(0), "sub2 should receive at least 1 message")
+}
+
+// TestConsumerGroup_DifferentGroups_Fanout verifies that two subscribers in
+// DIFFERENT consumer groups each receive a full copy of every message (fanout).
+func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		auditCount  atomic.Int32
+		configCount atomic.Int32
+		wg          sync.WaitGroup
+	)
+
+	// Two subscribers in DIFFERENT groups.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			auditCount.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "audit-core")
+	}()
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			configCount.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "config-core")
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	n := 5
+	for range n {
+		require.NoError(t, bus.Publish(ctx, "session.created", []byte(`{"event":"test"}`)))
+	}
+
+	require.Eventually(t, func() bool {
+		return int(auditCount.Load()) >= n && int(configCount.Load()) >= n
+	}, 2*time.Second, 10*time.Millisecond, "both groups should receive all messages")
+
+	cancel()
+	wg.Wait()
+
+	assert.Equal(t, int32(n), auditCount.Load(), "audit-core should get all messages")
+	assert.Equal(t, int32(n), configCount.Load(), "config-core should get all messages")
+}
+
+// TestConsumerGroup_EmptyGroup_BackwardCompatible verifies that subscribers
+// with an empty consumerGroup ("") get broadcast behavior — each subscriber
+// receives every message. This preserves backward compatibility.
+func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		sub1Count atomic.Int32
+		sub2Count atomic.Int32
+		wg        sync.WaitGroup
+	)
+
+	// Two subscribers with EMPTY consumer group — should behave like fanout.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "events.v1", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			sub1Count.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "")
+	}()
+	go func() {
+		defer wg.Done()
+		_ = bus.Subscribe(ctx, "events.v1", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			sub2Count.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "")
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	n := 5
+	for range n {
+		require.NoError(t, bus.Publish(ctx, "events.v1", []byte(`{"event":"test"}`)))
+	}
+
+	require.Eventually(t, func() bool {
+		return int(sub1Count.Load()) >= n && int(sub2Count.Load()) >= n
+	}, 2*time.Second, 10*time.Millisecond, "both empty-group subs should get all messages")
+
+	cancel()
+	wg.Wait()
+
+	assert.Equal(t, int32(n), sub1Count.Load(), "sub1 should receive all messages (broadcast)")
+	assert.Equal(t, int32(n), sub2Count.Load(), "sub2 should receive all messages (broadcast)")
+}
+
+// TestConsumerGroup_ConcurrentPublish_NoRace verifies that concurrent Publish
+// calls on the same topic and consumer group do not race on rrIdx.
+// This test exists to guard the P1 fix (atomic.Uint64) and MUST be run with
+// -race to be effective.
+func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
+	bus := New(WithBufferSize(256))
+	defer func() { _ = bus.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		totalReceived atomic.Int64
+		wg            sync.WaitGroup
+	)
+
+	// 4 subscribers in the same group — competing.
+	const numSubs = 4
+	wg.Add(numSubs)
+	for range numSubs {
+		go func() {
+			defer wg.Done()
+			_ = bus.Subscribe(ctx, "race.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				totalReceived.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}, "race-group")
+		}()
+	}
+
+	time.Sleep(20 * time.Millisecond) // let subscriptions register
+
+	// Concurrent publishers hammering the same topic+group.
+	const numPublishers = 8
+	const msgsPerPublisher = 50
+	var pubWg sync.WaitGroup
+	pubWg.Add(numPublishers)
+	for range numPublishers {
+		go func() {
+			defer pubWg.Done()
+			for range msgsPerPublisher {
+				_ = bus.Publish(ctx, "race.topic", []byte(`{"race":"test"}`))
+			}
+		}()
+	}
+	pubWg.Wait()
+
+	totalExpected := numPublishers * msgsPerPublisher
+	require.Eventually(t, func() bool {
+		return totalReceived.Load() >= int64(totalExpected)
+	}, 3*time.Second, 10*time.Millisecond,
+		"all messages should be consumed: got %d, want %d", totalReceived.Load(), totalExpected)
+
+	cancel()
+	wg.Wait()
+
+	assert.Equal(t, int64(totalExpected), totalReceived.Load(),
+		"total consumed should equal total published across all concurrent publishers")
 }
 
 // Verify interface compliance at compile time.

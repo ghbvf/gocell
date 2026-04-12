@@ -1279,7 +1279,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		cancel()
 	}()
 
-	err = sub.Subscribe(ctx, "test.topic", handler)
+	err = sub.Subscribe(ctx, "test.topic", handler, "")
 	assert.NoError(t, err)
 
 	select {
@@ -1330,7 +1330,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 		cancel()
 	}()
 
-	err := sub.Subscribe(ctx, "test.topic", handler)
+	err := sub.Subscribe(ctx, "test.topic", handler, "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1374,7 +1374,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 		cancel()
 	}()
 
-	err = sub.Subscribe(ctx, "test.topic", handler)
+	err = sub.Subscribe(ctx, "test.topic", handler, "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1402,7 +1402,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits.
 
-	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1424,7 +1424,7 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 
 	assert.NoError(t, sub.Close())
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
@@ -1467,7 +1467,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	// from the main test goroutine (t.FailNow must not be called from a helper goroutine).
 	subscribeDone := make(chan error, 1)
 	go func() {
-		subscribeDone <- sub.Subscribe(ctx, "test.topic", handler)
+		subscribeDone <- sub.Subscribe(ctx, "test.topic", handler, "")
 	}()
 
 	// Drive the reconnect sequence from the main goroutine (safe for require).
@@ -1545,7 +1545,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		cancel()
 	}()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
 
@@ -1553,7 +1553,8 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 	tests := []struct {
 		name          string
 		queueName     string
-		consumerGroup string
+		consumerGroup string // config-level
+		runtimeGroup  string // runtime parameter (passed to Subscribe)
 		topic         string
 		expected      string
 	}{
@@ -1564,7 +1565,7 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 			expected:  "my-queue",
 		},
 		{
-			name:          "consumer group derives queue name",
+			name:          "config consumer group derives queue name",
 			consumerGroup: "audit-cell",
 			topic:         "session.created",
 			expected:      "audit-cell.session.created",
@@ -1581,6 +1582,19 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 			topic:         "session.created",
 			expected:      "override-queue",
 		},
+		{
+			name:          "runtime group takes precedence over config group",
+			consumerGroup: "config-group",
+			runtimeGroup:  "runtime-group",
+			topic:         "session.created",
+			expected:      "runtime-group.session.created",
+		},
+		{
+			name:         "runtime group with no config group",
+			runtimeGroup: "audit-core",
+			topic:        "events.v1",
+			expected:     "audit-core.events.v1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1591,7 +1605,7 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 					ConsumerGroup: tt.consumerGroup,
 				},
 			}
-			assert.Equal(t, tt.expected, sub.resolveQueueName(tt.topic))
+			assert.Equal(t, tt.expected, sub.resolveQueueName(tt.topic, tt.runtimeGroup))
 		})
 	}
 }
@@ -1706,7 +1720,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	subscribeDone := make(chan error, 1)
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
-			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	}()
 
 	// Let the subscriber spin briefly in the reconnect hot-loop.
@@ -1755,7 +1769,7 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
-	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1784,7 +1798,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1811,7 +1825,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1838,7 +1852,7 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1868,7 +1882,7 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1888,7 +1902,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 		// DLXExchange deliberately left empty.
 	})
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -1961,7 +1975,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 		close(ch.consumeDeliveries)
 	}()
 
-	_ = sub.Subscribe(ctx, "test.topic", handler)
+	_ = sub.Subscribe(ctx, "test.topic", handler, "")
 
 	// Wait briefly for async processing.
 	time.Sleep(50 * time.Millisecond)
@@ -2088,7 +2102,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
@@ -2111,7 +2125,7 @@ type stubSubscriber struct {
 	onSubscribe func(context.Context, string, outbox.EntryHandler) error
 }
 
-func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler) error {
+func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, _ string) error {
 	if s.onSubscribe != nil {
 		return s.onSubscribe(ctx, topic, handler)
 	}
@@ -2812,7 +2826,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 		// DLXExchange deliberately left empty.
 	})
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
