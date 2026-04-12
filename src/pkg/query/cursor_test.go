@@ -89,9 +89,15 @@ func TestCursorCodec_Encode_MarshalFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cursor.Values is []any — a func value is not JSON-serializable.
+	// Encode failure is a server-side error (ErrInternal, not ErrCursorInvalid)
+	// because the client sent no cursor; the server failed to build nextCursor.
 	cur := Cursor{Values: []any{func() {}}}
 	_, err = codec.Encode(cur)
-	requireCursorInvalid(t, err, "marshal failed")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Equal(t, "cursor: marshal failed", ecErr.Message)
+	assert.NotNil(t, ecErr.Cause, "must preserve underlying json.Marshal error for diagnosis")
 }
 
 func TestCursorCodec_Decode_TamperedPayload(t *testing.T) {
@@ -273,6 +279,12 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA), Context: qctx}
 	err := ValidateCursorScope(cur, sortB, qctx)
 	requireCursorInvalid(t, err, "sort scope mismatch")
+
+	// Assert got/want diagnostics from cursorInvalidExtra.
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, SortScope(sortA), ecErr.Details["got"])
+	assert.Equal(t, SortScope(sortB), ecErr.Details["want"])
 }
 
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
@@ -321,6 +333,12 @@ func TestValidateCursorScope_ContextMismatch(t *testing.T) {
 	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort), Context: ctxA}
 	err := ValidateCursorScope(cur, sort, ctxB)
 	requireCursorInvalid(t, err, "query context mismatch")
+
+	// Assert got/want diagnostics from cursorInvalidExtra.
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, ctxA, ecErr.Details["got"])
+	assert.Equal(t, ctxB, ecErr.Details["want"])
 }
 
 func TestValidateCursorScope_ContextMatch(t *testing.T) {

@@ -55,7 +55,10 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 func (c *CursorCodec) Encode(cur Cursor) (string, error) {
 	payload, err := json.Marshal(cur)
 	if err != nil {
-		return "", cursorInvalid("marshal failed")
+		// Marshal failure is a server-side programming error (un-serializable
+		// values in Cursor.Values), not a client-provided bad cursor. Use
+		// ErrInternal so it maps to HTTP 500, not 400.
+		return "", errcode.Wrap(errcode.ErrInternal, "cursor: marshal failed", err)
 	}
 
 	sig := c.signWith(c.current, payload)
