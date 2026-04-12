@@ -2,11 +2,24 @@ package middleware
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// CircuitBreakerRetryAfter is an optional interface that CircuitBreakerPolicy
+// implementations can satisfy to provide Retry-After guidance on 503 responses.
+// When implemented, the middleware sets the Retry-After header so clients know
+// when to retry (RFC 7231 Section 7.1.3).
+type CircuitBreakerRetryAfter interface {
+	// RetryAfter returns the suggested duration until the circuit may allow
+	// requests again (typically the open-state timeout).
+	RetryAfter() time.Duration
+}
 
 // CircuitBreakerPolicy abstracts a circuit breaker's two-step protocol.
 // Implementations should follow the Closed -> Open -> Half-Open -> Closed
@@ -45,7 +58,7 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			done, err := cb.Allow()
 			if err != nil {
-				writeCircuitOpenError(w, r)
+				writeCircuitOpenError(w, r, cb)
 				return
 			}
 
@@ -76,7 +89,18 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 // messages to "internal server error". For a circuit breaker, "service
 // unavailable" is the correct client-facing message — it indicates a
 // deliberate protective action, not a bug.
-func writeCircuitOpenError(w http.ResponseWriter, r *http.Request) {
+//
+// If the policy implements CircuitBreakerRetryAfter, the Retry-After header
+// is set per RFC 7231 Section 7.1.3.
+func writeCircuitOpenError(w http.ResponseWriter, r *http.Request, cb CircuitBreakerPolicy) {
+	// Set Retry-After if the policy provides it.
+	if ra, ok := cb.(CircuitBreakerRetryAfter); ok {
+		if d := ra.RetryAfter(); d > 0 {
+			secs := int(math.Ceil(d.Seconds()))
+			w.Header().Set("Retry-After", strconv.Itoa(secs))
+		}
+	}
+
 	body := map[string]any{
 		"code":    string(errcode.ErrCircuitOpen),
 		"message": "service unavailable",

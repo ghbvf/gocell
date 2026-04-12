@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,6 +142,50 @@ func TestCircuitBreaker_HandlerError4xx_ReportsTrue(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	require.NotNil(t, cb.doneSuccess, "done callback must be invoked")
 	assert.True(t, *cb.doneSuccess, "4xx is a client error, not a server failure")
+}
+
+// mockBreakerWithRetryAfter implements both CircuitBreakerPolicy and
+// CircuitBreakerRetryAfter for testing the Retry-After header.
+type mockBreakerWithRetryAfter struct {
+	mockBreaker
+	retryAfter time.Duration
+}
+
+func (m *mockBreakerWithRetryAfter) RetryAfter() time.Duration {
+	return m.retryAfter
+}
+
+func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
+	cb := &mockBreakerWithRetryAfter{
+		mockBreaker: mockBreaker{allowErr: errors.New("circuit open")},
+		retryAfter:  30 * time.Second,
+	}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, "30", rec.Header().Get("Retry-After"),
+		"Retry-After must reflect the circuit breaker timeout")
+}
+
+func TestCircuitBreaker_Open_NoRetryAfterWithoutInterface(t *testing.T) {
+	cb := &mockBreaker{allowErr: errors.New("circuit open")}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Empty(t, rec.Header().Get("Retry-After"),
+		"Retry-After must not be set when policy does not implement CircuitBreakerRetryAfter")
 }
 
 func TestCircuitBreaker_NilBreaker_Panics(t *testing.T) {

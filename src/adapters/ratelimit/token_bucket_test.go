@@ -66,10 +66,11 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 	l.Allow("stale-ip-2")
 	assert.Equal(t, 2, l.Len(), "should have 2 entries")
 
-	// Wait for stale + cleanup cycle.
-	time.Sleep(200 * time.Millisecond)
-
-	assert.Equal(t, 0, l.Len(), "stale entries should be cleaned up")
+	// Use Eventually to tolerate slow CI: poll until stale entries are cleaned
+	// up, with a generous total timeout (2s) to avoid flakiness.
+	require.Eventually(t, func() bool {
+		return l.Len() == 0
+	}, 2*time.Second, 25*time.Millisecond, "stale entries should be cleaned up")
 }
 
 func TestLimiter_ConcurrentAccess(t *testing.T) {

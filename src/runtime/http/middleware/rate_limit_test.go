@@ -138,6 +138,24 @@ func TestRateLimit_FallbackRemoteAddr(t *testing.T) {
 	assert.NotEmpty(t, limiter.keys[0])
 }
 
+func TestRateLimit_FallbackRemoteAddr_StripsPort(t *testing.T) {
+	limiter := &mockLimiter{allowAll: true}
+	handler := RateLimit(limiter)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.168.1.100:54321"
+	// No RealIP in context; falls back to RemoteAddr with port stripped.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, limiter.keys, 1)
+	assert.Equal(t, "192.168.1.100", limiter.keys[0],
+		"port must be stripped from RemoteAddr so same IP shares one bucket")
+}
+
 func TestComputeRetryAfter_NonWindowedLimiter(t *testing.T) {
 	limiter := &mockLimiter{}
 	assert.Equal(t, 1, computeRetryAfter(limiter))

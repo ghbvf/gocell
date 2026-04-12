@@ -55,13 +55,15 @@ func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 	_, err := a.Allow()
 	require.Error(t, err, "breaker must be open")
 
-	// Wait for timeout → half-open.
-	time.Sleep(150 * time.Millisecond)
-
-	done, err := a.Allow()
-	assert.NoError(t, err, "breaker must transition to half-open after timeout")
-	assert.NotNil(t, done)
-	done(true) // successful probe
+	// Poll until the breaker transitions to half-open (generous timeout for slow CI).
+	require.Eventually(t, func() bool {
+		done, err := a.Allow()
+		if err != nil {
+			return false
+		}
+		done(true) // successful probe
+		return true
+	}, 2*time.Second, 25*time.Millisecond, "breaker must transition to half-open after timeout")
 }
 
 func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
@@ -76,17 +78,19 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 		done(false)
 	}
 
-	// Wait for half-open.
-	time.Sleep(150 * time.Millisecond)
-
-	// Successful probe in half-open.
-	done, err := a.Allow()
-	require.NoError(t, err)
-	done(true)
+	// Poll until half-open, then send successful probe.
+	require.Eventually(t, func() bool {
+		done, err := a.Allow()
+		if err != nil {
+			return false
+		}
+		done(true) // successful probe → close
+		return true
+	}, 2*time.Second, 25*time.Millisecond, "breaker must reach half-open")
 
 	// Should be back to closed — multiple requests allowed.
 	for i := 0; i < 3; i++ {
-		done, err = a.Allow()
+		done, err := a.Allow()
 		assert.NoError(t, err, "breaker must be closed after half-open success (attempt %d)", i)
 		if done != nil {
 			done(true)
@@ -111,13 +115,28 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	}
 	require.Contains(t, transitions, "closed→open")
 
-	// Wait for half-open: open → half-open
-	time.Sleep(150 * time.Millisecond)
-	done, _ := a.Allow()
-	done(true) // successful probe → half-open → closed
+	// Poll until half-open → closed transition completes.
+	require.Eventually(t, func() bool {
+		done, err := a.Allow()
+		if err != nil {
+			return false
+		}
+		done(true) // successful probe → half-open → closed
+		return true
+	}, 2*time.Second, 25*time.Millisecond, "breaker must reach half-open for callback test")
 
 	assert.Contains(t, transitions, "open→half-open")
 	assert.Contains(t, transitions, "half-open→closed")
+}
+
+func TestAdapter_RetryAfter_CustomTimeout(t *testing.T) {
+	a := New(Config{Name: "test-retry", Timeout: 30 * time.Second})
+	assert.Equal(t, 30*time.Second, a.RetryAfter())
+}
+
+func TestAdapter_RetryAfter_DefaultTimeout(t *testing.T) {
+	a := New(Config{Name: "test-retry-default"})
+	assert.Equal(t, 60*time.Second, a.RetryAfter(), "default timeout is 60s")
 }
 
 func TestAdapter_CustomReadyToTrip(t *testing.T) {

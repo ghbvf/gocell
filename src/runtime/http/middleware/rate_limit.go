@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -65,5 +66,11 @@ func clientIP(r *http.Request) string {
 	if ip, ok := ctxkeys.RealIPFrom(r.Context()); ok && ip != "" {
 		return ip
 	}
-	return r.RemoteAddr
+	// Strip port from RemoteAddr (e.g. "192.168.1.1:54321" → "192.168.1.1")
+	// so that connections from the same IP share one rate bucket.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr // already host-only or unparseable
+	}
+	return host
 }

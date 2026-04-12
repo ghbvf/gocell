@@ -42,10 +42,14 @@ type Config struct {
 	OnStateChange func(name string, from, to gobreaker.State)
 }
 
+// Compile-time check: Adapter implements CircuitBreakerRetryAfter.
+var _ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
+
 // Adapter wraps sony/gobreaker's TwoStepCircuitBreaker to implement
-// middleware.CircuitBreakerPolicy.
+// middleware.CircuitBreakerPolicy and middleware.CircuitBreakerRetryAfter.
 type Adapter struct {
-	cb *gobreaker.TwoStepCircuitBreaker[struct{}]
+	cb      *gobreaker.TwoStepCircuitBreaker[struct{}]
+	timeout time.Duration
 }
 
 // New creates a gobreaker-backed circuit breaker adapter.
@@ -58,8 +62,13 @@ func New(cfg Config) *Adapter {
 		ReadyToTrip:   cfg.ReadyToTrip,
 		OnStateChange: cfg.OnStateChange,
 	}
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second // gobreaker default
+	}
 	return &Adapter{
-		cb: gobreaker.NewTwoStepCircuitBreaker[struct{}](st),
+		cb:      gobreaker.NewTwoStepCircuitBreaker[struct{}](st),
+		timeout: timeout,
 	}
 }
 
@@ -78,6 +87,13 @@ func (a *Adapter) Allow() (func(success bool), error) {
 			done(errServerFailure)
 		}
 	}, nil
+}
+
+// RetryAfter returns the open-state timeout — the duration until the circuit
+// may transition to half-open and accept probe requests. The middleware uses
+// this to set the Retry-After header on 503 responses (RFC 7231 Section 7.1.3).
+func (a *Adapter) RetryAfter() time.Duration {
+	return a.timeout
 }
 
 // State returns the current state of the circuit breaker.
