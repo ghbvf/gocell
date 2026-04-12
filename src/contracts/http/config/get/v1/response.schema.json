@@ -1,5 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.get.v1.response",
-  "type": "object"
+  "description": "Single entry: {data: ConfigEntry}. List: {data: [...], nextCursor, hasMore}.",
+  "type": "object",
+  "properties": {
+    "data": {},
+    "nextCursor": { "type": "string" },
+    "hasMore": { "type": "boolean" }
+  },
+  "required": ["data"]
 }

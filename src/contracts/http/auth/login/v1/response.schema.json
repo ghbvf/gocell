@@ -1,5 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.auth.login.v1.response",
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "accessToken": { "type": "string" },
+        "refreshToken": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["accessToken", "refreshToken", "expiresAt"]
+    }
+  },
+  "required": ["data"]
 }
