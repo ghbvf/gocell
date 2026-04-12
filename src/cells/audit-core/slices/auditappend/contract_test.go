@@ -26,17 +26,26 @@ func TestEventSessionCreatedV1Subscribe(t *testing.T) {
 
 func TestEventSessionRevokedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	_ = contracttest.LoadByID(t, root, "event.session.revoked.v1")
+	c := contracttest.LoadByID(t, root, "event.session.revoked.v1")
+
+	c.ValidatePayload(t, []byte(`{"session_id":"sess-1","user_id":"usr-1"}`))
+	c.MustRejectPayload(t, []byte(`{"session_id":"s"}`))
 }
 
 func TestEventUserCreatedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	_ = contracttest.LoadByID(t, root, "event.user.created.v1")
+	c := contracttest.LoadByID(t, root, "event.user.created.v1")
+
+	c.ValidatePayload(t, []byte(`{"user_id":"usr-1","username":"alice"}`))
+	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
 }
 
 func TestEventUserLockedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	_ = contracttest.LoadByID(t, root, "event.user.locked.v1")
+	c := contracttest.LoadByID(t, root, "event.user.locked.v1")
+
+	c.ValidatePayload(t, []byte(`{"user_id":"usr-1"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
 }
 
 func TestEventConfigChangedV1Subscribe(t *testing.T) {
@@ -44,6 +53,7 @@ func TestEventConfigChangedV1Subscribe(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
 
 	c.ValidatePayload(t, []byte(`{"action":"created","key":"k","value":"v","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"action":"created"}`))
 }
 
 func TestEventConfigRollbackV1Subscribe(t *testing.T) {
@@ -51,4 +61,5 @@ func TestEventConfigRollbackV1Subscribe(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.rollback.v1")
 
 	c.ValidatePayload(t, []byte(`{"action":"rollback","key":"k","target_version":1,"new_version":2}`))
+	c.MustRejectPayload(t, []byte(`{"action":"rollback","key":"k"}`))
 }

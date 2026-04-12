@@ -17,5 +17,10 @@ func TestHttpDeviceRegisterV1Serve(t *testing.T) {
 
 func TestEventDeviceRegisteredV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	_ = contracttest.LoadByID(t, root, "event.device-registered.v1")
+	c := contracttest.LoadByID(t, root, "event.device-registered.v1")
+
+	c.ValidatePayload(t, []byte(`{"id":"d-1","name":"sensor-01","status":"registered"}`))
+	c.ValidateHeaders(t, []byte(`{"event_id":"evt-dr-1"}`))
+	c.MustRejectPayload(t, []byte(`{"id":"d-1"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }

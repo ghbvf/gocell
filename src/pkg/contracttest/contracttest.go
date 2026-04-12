@@ -174,6 +174,9 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	fullPath := filepath.Join(dir, filename)
+	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(dir)) {
+		t.Fatalf("contracttest: schema path %q escapes contract directory", filename)
+	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)

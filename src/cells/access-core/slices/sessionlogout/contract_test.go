@@ -13,4 +13,6 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	// Schema validation: payload requires session_id + user_id, headers requires event_id.
 	c.ValidatePayload(t, []byte(`{"session_id":"sess-1","user_id":"usr-1"}`))
 	c.ValidateHeaders(t, []byte(`{"event_id":"evt-789"}`))
+	c.MustRejectPayload(t, []byte(`{"session_id":"s"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }

@@ -12,4 +12,6 @@ func TestEventConfigChangedV1Subscribe(t *testing.T) {
 
 	c.ValidatePayload(t, []byte(`{"action":"updated","key":"app.name","value":"newval","version":2}`))
 	c.ValidateHeaders(t, []byte(`{"event_id":"evt-sub-1"}`))
+	c.MustRejectPayload(t, []byte(`{"action":"updated"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }
