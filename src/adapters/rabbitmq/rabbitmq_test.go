@@ -3453,6 +3453,12 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	mock2 := newMockConnection()
 	proceedDial := make(chan struct{})
 
+	// Guard against goroutine leak: if the test fails before close(proceedDial),
+	// the reconnect loop stays blocked. sync.Once prevents double-close panic.
+	var closeOnce sync.Once
+	closeProceed := func() { closeOnce.Do(func() { close(proceedDial) }) }
+	t.Cleanup(closeProceed)
+
 	dialFunc := func(url string) (AMQPConnection, error) {
 		mu.Lock()
 		dialCount++
@@ -3502,10 +3508,12 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	// Health() should return error during reconnecting state.
 	healthErr := conn.Health()
 	require.Error(t, healthErr, "Health() must return error while reconnecting")
-	assert.Contains(t, healthErr.Error(), "ERR_ADAPTER_AMQP_CONNECT")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(healthErr, &ecErr), "Health() error should wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterAMQPConnect, ecErr.Code)
 
 	// Unblock the dial — reconnect succeeds.
-	close(proceedDial)
+	closeProceed()
 
 	// Health() should recover.
 	require.Eventually(t, func() bool {
@@ -3576,7 +3584,9 @@ func TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion(t *testing
 		"permanent error should stop immediately on first reconnect attempt, not retry up to MaxReconnectAttempts")
 
 	// Verify error code is ConnectPermanent, not ReconnectExhausted.
-	waitErr := conn.WaitConnected(context.Background())
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	waitErr := conn.WaitConnected(waitCtx)
 	require.Error(t, waitErr)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")

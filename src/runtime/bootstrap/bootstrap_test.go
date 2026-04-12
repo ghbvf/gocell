@@ -451,7 +451,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func() error {
 			if unhealthy.Load() {
-				return errors.New("connection lost")
+				return fmt.Errorf("connection lost")
 			}
 			return nil
 		}),
