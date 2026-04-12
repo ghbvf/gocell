@@ -400,9 +400,9 @@ flowchart LR
 `core-bundle` 当前装配代码存在明显老化:
 
 - 没给 `access-core / config-core / audit-core` 注入 `outboxWriter`
-- 仍在给 `access-core` 传已弃用的 `WithSigningKey(...)`
 
-而三者当前都要求更严格的初始化条件，意味着默认入口和 Cell 现状之间已经不完全匹配。
+注: `WithSigningKey` 已在 PR#83 中删除，core-bundle 改为注入 `WithJWTIssuer` + `WithJWTVerifier`。
+dev 模式使用临时密钥对，real 模式通过 `auth.LoadKeySetFromEnv()` 从环境变量加载稳定密钥。
 
 ### 8.3 回滚链路不完整
 

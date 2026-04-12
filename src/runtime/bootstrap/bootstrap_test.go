@@ -169,6 +169,27 @@ func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
 	return nil
 }
 
+func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
+	// When a cell implements EventRegistrar but no subscriber is configured,
+	// bootstrap must fail at startup instead of silently skipping all subscriptions.
+	asm := assembly.New(assembly.Config{ID: "test-no-sub"})
+	ec := newEventCell("needs-sub", nil) // registers a handler
+	require.NoError(t, asm.Register(ec))
+
+	eb := eventbus.New()
+	b := New(
+		WithAssembly(asm),
+		WithPublisher(eb),
+		// WithSubscriber intentionally omitted.
+		WithHTTPAddr("127.0.0.1:0"),
+	)
+
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "EventRegistrar")
+	assert.Contains(t, err.Error(), "no subscriber")
+}
+
 func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	// S3-03: When RegisterSubscriptions fails, Run must rollback previously
 	// started components (assembly) and return an error wrapping the cause.

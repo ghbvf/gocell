@@ -32,18 +32,37 @@ func envOrDefault(key, fallback string) []byte {
 }
 
 func main() {
+	// Determine adapter mode early — it controls key loading strategy.
+	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
+
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	// RSA key pair for JWT signing/verification.
-	// Production: use auth.LoadKeySetFromEnv() which reads from env vars and
-	// supports key rotation via GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	slog.Warn("using ephemeral RSA key pair; all issued JWTs will be invalidated on restart — set GOCELL_JWT_PRIVATE_KEY/GOCELL_JWT_PUBLIC_KEY for production")
-	keySet, err := auth.NewKeySet(privKey, pubKey)
-	if err != nil {
-		slog.Error("failed to create key set", "error", err)
-		os.Exit(1)
+	// Two paths:
+	//   real  → LoadKeySetFromEnv: stable keys from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY,
+	//           fail-fast if missing, supports rotation via GOCELL_JWT_PREV_PUBLIC_KEY.
+	//   dev   → MustGenerateTestKeyPair: ephemeral per-process key pair,
+	//           tokens are invalidated on restart. Suitable for local development only.
+	var keySet *auth.KeySet
+	if adapterMode == "real" {
+		var err error
+		keySet, err = auth.LoadKeySetFromEnv()
+		if err != nil {
+			slog.Error("failed to load JWT keys from env — set GOCELL_JWT_PRIVATE_KEY and GOCELL_JWT_PUBLIC_KEY",
+				"error", err)
+			os.Exit(1)
+		}
+	} else {
+		privKey, pubKey := auth.MustGenerateTestKeyPair()
+		slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
+		var err error
+		keySet, err = auth.NewKeySet(privKey, pubKey)
+		if err != nil {
+			slog.Error("failed to create key set", "error", err)
+			os.Exit(1)
+		}
 	}
+
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", 15*time.Minute)
 	if err != nil {
 		slog.Error("failed to create JWT issuer", "error", err)
@@ -54,9 +73,6 @@ func main() {
 		slog.Error("failed to create JWT verifier", "error", err)
 		os.Exit(1)
 	}
-
-	// Determine adapter mode: "real" for production adapters, default for in-memory.
-	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
 
 	// Create shared event bus (in-memory by default).
 	// When GOCELL_ADAPTER_MODE=real, a real message broker adapter would replace
