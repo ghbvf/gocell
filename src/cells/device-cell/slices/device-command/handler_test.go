@@ -1,6 +1,7 @@
 package devicecommand
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -8,19 +9,22 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
 func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
-	svc := NewService(cmdRepo, devRepo, slog.Default())
+	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	svc := NewService(cmdRepo, devRepo, codec, slog.Default())
 
 	_ = devRepo.Create(context.Background(), &domain.Device{
 		ID: "dev-1", Name: "sensor-a", Status: "online",
@@ -96,27 +100,49 @@ func TestHandleEnqueue(t *testing.T) {
 	}
 }
 
+func TestHandleListPending_InvalidLimit(t *testing.T) {
+	h, _, _ := setupCommandHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=abc", nil)
+	req.SetPathValue("id", "dev-1")
+	h.HandleListPending(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
+func TestHandleListPending_ExceedsMaxLimit(t *testing.T) {
+	h, _, _ := setupCommandHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=501", nil)
+	req.SetPathValue("id", "dev-1")
+	h.HandleListPending(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
 func TestHandleListPending(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceID   string
 		seedCmds   int
 		wantStatus int
-		wantTotal  int
+		wantLen    int
 	}{
 		{
 			name:       "returns pending commands",
 			deviceID:   "dev-1",
 			seedCmds:   2,
 			wantStatus: http.StatusOK,
-			wantTotal:  2,
+			wantLen:    2,
 		},
 		{
 			name:       "no pending returns empty list",
 			deviceID:   "dev-1",
 			seedCmds:   0,
 			wantStatus: http.StatusOK,
-			wantTotal:  0,
+			wantLen:    0,
 		},
 		{
 			name:       "non-existent device returns 404",
@@ -146,9 +172,65 @@ func TestHandleListPending(t *testing.T) {
 			if tc.wantStatus == http.StatusOK {
 				var resp map[string]any
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-				assert.Equal(t, float64(tc.wantTotal), resp["total"])
+				data, ok := resp["data"].([]any)
+				require.True(t, ok, "response should have data array")
+				assert.Len(t, data, tc.wantLen)
+				assert.Equal(t, false, resp["hasMore"])
 			}
 		})
+	}
+}
+
+func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
+	h, _, cmdRepo := setupCommandHandler()
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 7; i++ {
+		require.NoError(t, cmdRepo.Create(ctx, &domain.Command{
+			ID:        "cmd-" + string(rune('a'+i)),
+			DeviceID:  "dev-1",
+			Payload:   "p",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		}))
+	}
+
+	var allIDs []string
+	cursor := ""
+
+	for page := 0; page < 10; page++ {
+		url := "/devices/dev-1/commands?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.SetPathValue("id", "dev-1")
+		h.HandleListPending(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		data := resp["data"].([]any)
+		for _, item := range data {
+			m := item.(map[string]any)
+			allIDs = append(allIDs, m["id"].(string))
+		}
+
+		hasMore := resp["hasMore"].(bool)
+		if !hasMore {
+			break
+		}
+		cursor = resp["nextCursor"].(string)
+		require.NotEmpty(t, cursor)
+	}
+
+	// All 7 commands collected, no duplicates
+	assert.Len(t, allIDs, 7)
+	seen := make(map[string]bool)
+	for _, id := range allIDs {
+		assert.False(t, seen[id], "duplicate ID: %s", id)
+		seen[id] = true
 	}
 }
 

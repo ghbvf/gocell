@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,36 +121,26 @@ func TestAuditRepository_Query_WithFilters(t *testing.T) {
 		To:        now,
 	}
 
-	entries, err := repo.Query(context.Background(), filters)
+	params := query.ListParams{
+		Limit: 50,
+		Sort: []query.SortColumn{
+			{Name: "timestamp", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+
+	entries, err := repo.Query(context.Background(), filters, params)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "ae-1", entries[0].ID)
 
-	// Verify the query contained filter clauses.
+	// Verify the query contained filter clauses and keyset ordering.
 	require.Len(t, db.queryCalls, 1)
 	assert.Contains(t, db.queryCalls[0].sql, "event_type = $1")
 	assert.Contains(t, db.queryCalls[0].sql, "actor_id = $2")
 	assert.Contains(t, db.queryCalls[0].sql, "timestamp >= $3")
 	assert.Contains(t, db.queryCalls[0].sql, "timestamp <= $4")
-}
-
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		input int
-		want  string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{9, "9"},
-		{10, "10"},
-		{42, "42"},
-		{100, "100"},
-		{1000, "1000"},
-	}
-
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, itoa(tt.input))
-	}
+	assert.Contains(t, db.queryCalls[0].sql, "ORDER BY timestamp DESC, id ASC")
 }
 
 // --- mocks ---

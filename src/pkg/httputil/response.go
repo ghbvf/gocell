@@ -188,6 +188,8 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrZeroTestMatch:      http.StatusNotFound,
 
 	// --- 400 Bad Request ---
+	errcode.ErrCursorInvalid:             http.StatusBadRequest,
+	errcode.ErrPageSizeExceeded:          http.StatusBadRequest,
 	errcode.ErrValidationFailed:          http.StatusBadRequest,
 	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
 	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
@@ -203,6 +205,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrConfigInvalidInput:        http.StatusBadRequest,
 	errcode.ErrConfigPublishInvalidInput: http.StatusBadRequest,
 	errcode.ErrFlagInvalidInput:          http.StatusBadRequest,
+	errcode.ErrInvalidTimeFormat:         http.StatusBadRequest,
 
 	// --- 401 Unauthorized ---
 	errcode.ErrAuthUnauthorized:      http.StatusUnauthorized,

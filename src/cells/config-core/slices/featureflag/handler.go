@@ -1,6 +1,7 @@
 package featureflag
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -16,15 +17,25 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// HandleList handles GET / — returns all feature flags.
+// HandleList handles GET / — returns paginated feature flags.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	flags, err := h.svc.List(r.Context())
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": flags, "total": len(flags)})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }
 
 // HandleGet handles GET /{key} — returns a single feature flag.

@@ -4,6 +4,8 @@ package domain
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Device represents an IoT device aggregate.
@@ -36,6 +38,6 @@ type DeviceRepository interface {
 // CommandRepository abstracts command persistence.
 type CommandRepository interface {
 	Create(ctx context.Context, cmd *Command) error
-	ListPending(ctx context.Context, deviceID string) ([]*Command, error)
+	ListPending(ctx context.Context, deviceID string, params query.ListParams) ([]*Command, error)
 	Ack(ctx context.Context, deviceID, cmdID string) error
 }

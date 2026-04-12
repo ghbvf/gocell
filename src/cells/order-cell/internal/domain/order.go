@@ -4,6 +4,8 @@ package domain
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Order represents a todo-order aggregate.
@@ -18,5 +20,5 @@ type Order struct {
 type OrderRepository interface {
 	Create(ctx context.Context, order *Order) error
 	GetByID(ctx context.Context, id string) (*Order, error)
-	List(ctx context.Context) ([]*Order, error)
+	List(ctx context.Context, params query.ListParams) ([]*Order, error)
 }

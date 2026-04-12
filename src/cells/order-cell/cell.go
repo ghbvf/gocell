@@ -14,6 +14,7 @@ import (
 	orderquery "github.com/ghbvf/gocell/cells/order-cell/slices/order-query"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Compile-time interface checks.
@@ -21,6 +22,11 @@ var (
 	_ cell.Cell          = (*OrderCell)(nil)
 	_ cell.HTTPRegistrar = (*OrderCell)(nil)
 )
+
+// WithCursorCodec sets the cursor codec for pagination.
+func WithCursorCodec(c *query.CursorCodec) Option {
+	return func(oc *OrderCell) { oc.cursorCodec = c }
+}
 
 // Option configures an OrderCell.
 type Option func(*OrderCell)
@@ -43,9 +49,10 @@ func WithLogger(l *slog.Logger) Option {
 // OrderCell is the order-cell Cell implementation.
 type OrderCell struct {
 	*cell.BaseCell
-	repo      domain.OrderRepository
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo        domain.OrderRepository
+	publisher   outbox.Publisher
+	cursorCodec *query.CursorCodec
+	logger      *slog.Logger
 
 	createHandler *ordercreate.Handler
 	queryHandler  *orderquery.Handler
@@ -94,8 +101,19 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.createHandler = ordercreate.NewHandler(createSvc)
 	c.AddSlice(cell.NewBaseSlice("order-create", "order-cell", cell.L2))
 
+	// Default cursor codec for pagination if not injected.
+	if c.cursorCodec == nil {
+		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-ORDER-CELL-key-32b!!"))
+		if err != nil {
+			return err
+		}
+		c.cursorCodec = codec
+		c.logger.Warn("order-cell: using default cursor codec (demo mode)")
+	}
+
 	// order-query slice
-	querySvc := orderquery.NewService(c.repo, c.logger)
+	querySvc := orderquery.NewService(c.repo, c.cursorCodec, c.logger)
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("order-query", "order-cell", cell.L0))
 

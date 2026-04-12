@@ -16,6 +16,7 @@ import (
 
 	devicecell "github.com/ghbvf/gocell/cells/device-cell"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -29,9 +30,17 @@ func main() {
 	// In-memory event bus for demo mode.
 	eb := eventbus.New()
 
+	// Cursor codec for pagination (demo mode).
+	cursorCodec, err := query.NewCursorCodec([]byte("iot-device-cursor-key-32-bytes!!"))
+	if err != nil {
+		logger.Error("failed to create cursor codec", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	// Create the device cell with in-memory defaults.
 	dc := devicecell.NewDeviceCell(
 		devicecell.WithPublisher(eb),
+		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)
 

@@ -1,6 +1,7 @@
 package configread
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -29,13 +30,23 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entry})
 }
 
-// HandleList handles GET / — returns all config entries.
+// HandleList handles GET /?limit=N&cursor=TOKEN — returns paginated config entries.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	entries, err := h.svc.List(r.Context())
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entries, "total": len(entries)})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }

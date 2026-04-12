@@ -18,6 +18,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -109,8 +110,27 @@ func main() {
 		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
 	}
 
+	// Cursor codecs for pagination — per-cell isolation prevents cross-cell cursor reuse.
+	auditCursorCodec, err := query.NewCursorCodec(
+		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key32!"),
+	)
+	if err != nil {
+		slog.Error("failed to create audit cursor codec", "error", err)
+		os.Exit(1)
+	}
+	configCursorCodec, err := query.NewCursorCodec(
+		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key-32b!"),
+	)
+	if err != nil {
+		slog.Error("failed to create config cursor codec", "error", err)
+		os.Exit(1)
+	}
+
 	// Common options.
-	configOpts = append(configOpts, configcore.WithPublisher(eb))
+	configOpts = append(configOpts,
+		configcore.WithPublisher(eb),
+		configcore.WithCursorCodec(configCursorCodec),
+	)
 	accessOpts = append(accessOpts,
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -119,6 +139,7 @@ func main() {
 	auditOpts = append(auditOpts,
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
+		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
 	// Create cells.

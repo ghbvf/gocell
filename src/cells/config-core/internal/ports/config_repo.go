@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // ConfigRepository persists and retrieves ConfigEntry and ConfigVersion records.
@@ -13,7 +14,7 @@ type ConfigRepository interface {
 	GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error)
 	Update(ctx context.Context, entry *domain.ConfigEntry) error
 	Delete(ctx context.Context, key string) error
-	List(ctx context.Context) ([]*domain.ConfigEntry, error)
+	List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error)
 	PublishVersion(ctx context.Context, version *domain.ConfigVersion) error
 	GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error)
 }

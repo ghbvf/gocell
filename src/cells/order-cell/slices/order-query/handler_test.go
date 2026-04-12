@@ -1,17 +1,21 @@
 package orderquery
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
@@ -19,7 +23,8 @@ func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 	for _, o := range orders {
 		_ = repo.Create(context.Background(), o)
 	}
-	svc := NewService(repo, slog.Default())
+	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	svc := NewService(repo, codec, slog.Default())
 	return NewHandler(svc), repo
 }
 
@@ -73,41 +78,151 @@ func TestHandleGet_ResponseBody(t *testing.T) {
 	assert.Contains(t, body, `"item":"laptop"`)
 }
 
-func TestHandleList(t *testing.T) {
-	tests := []struct {
-		name       string
-		seed       []*domain.Order
-		wantStatus int
-		wantTotal  string
-	}{
-		{
-			name:       "empty list returns 200",
-			seed:       nil,
-			wantStatus: http.StatusOK,
-			wantTotal:  `"total":0`,
-		},
-		{
-			name: "populated list returns 200",
-			seed: []*domain.Order{
-				{ID: "ord-a", Item: "a", Status: "pending"},
-				{ID: "ord-b", Item: "b", Status: "pending"},
-			},
-			wantStatus: http.StatusOK,
-			wantTotal:  `"total":2`,
-		},
+func TestHandleList_Default(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var seed []*domain.Order
+	for i := 0; i < 3; i++ {
+		seed = append(seed, &domain.Order{
+			ID:        "ord-" + string(rune('a'+i)),
+			Item:      "item",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+	h, _ := newTestHandler(seed...)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
+
+	h.HandleList(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `"hasMore"`)
+	assert.Contains(t, body, `"data"`)
+}
+
+func TestHandleList_WithLimit(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var seed []*domain.Order
+	for i := 0; i < 10; i++ {
+		seed = append(seed, &domain.Order{
+			ID:        "ord-" + string(rune('a'+i)),
+			Item:      "item",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+	h, _ := newTestHandler(seed...)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=2", nil)
+
+	h.HandleList(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	data := resp["data"].([]any)
+	assert.Len(t, data, 2)
+	assert.Equal(t, true, resp["hasMore"])
+	assert.NotEmpty(t, resp["nextCursor"])
+}
+
+func TestHandleList_InvalidLimit(t *testing.T) {
+	h, _ := newTestHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=abc", nil)
+
+	h.HandleList(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
+func TestHandleList_ExceedsMaxLimit(t *testing.T) {
+	h, _ := newTestHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=501", nil)
+
+	h.HandleList(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
+func TestHandleList_InvalidCursor(t *testing.T) {
+	h, _ := newTestHandler(&domain.Order{ID: "ord-1", Item: "x", Status: "pending"})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?cursor=garbage", nil)
+
+	h.HandleList(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_CURSOR_INVALID")
+}
+
+func TestHandleList_Empty(t *testing.T) {
+	h, _ := newTestHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
+
+	h.HandleList(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	data := resp["data"].([]any)
+	assert.Empty(t, data)
+	assert.Equal(t, false, resp["hasMore"])
+}
+
+func TestHandleList_Pagination_FullTraversal(t *testing.T) {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var seed []*domain.Order
+	for i := 0; i < 7; i++ {
+		seed = append(seed, &domain.Order{
+			ID:        "ord-" + string(rune('a'+i)),
+			Item:      "item",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+	h, _ := newTestHandler(seed...)
+
+	var allIDs []string
+	cursor := ""
+
+	for page := 0; page < 10; page++ {
+		url := "/api/v1/orders?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+
+		h.HandleList(rec, req)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		data := resp["data"].([]any)
+		for _, item := range data {
+			m := item.(map[string]any)
+			allIDs = append(allIDs, m["id"].(string))
+		}
+
+		hasMore := resp["hasMore"].(bool)
+		if !hasMore {
+			break
+		}
+		cursor = resp["nextCursor"].(string)
+		require.NotEmpty(t, cursor)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h, _ := newTestHandler(tt.seed...)
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/", nil)
-
-			h.HandleList(rec, req)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-			assert.Contains(t, rec.Body.String(), tt.wantTotal)
-		})
+	// All 7 items collected, no duplicates
+	assert.Len(t, allIDs, 7)
+	seen := make(map[string]bool)
+	for _, id := range allIDs {
+		assert.False(t, seen[id], "duplicate ID: %s", id)
+		seen[id] = true
 	}
 }

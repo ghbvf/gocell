@@ -1,6 +1,7 @@
 package orderquery
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -29,16 +30,23 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": order})
 }
 
-// HandleList handles GET /api/v1/orders.
+// HandleList handles GET /api/v1/orders?limit=N&cursor=TOKEN.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	orders, err := h.svc.List(r.Context())
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":  orders,
-		"total": len(orders),
-	})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }

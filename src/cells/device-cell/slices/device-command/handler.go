@@ -1,6 +1,7 @@
 package devicecommand
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -47,21 +48,28 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// HandleListPending handles GET /api/v1/devices/{id}/commands.
+// HandleListPending handles GET /api/v1/devices/{id}/commands?limit=N&cursor=TOKEN.
 // Devices poll this endpoint to retrieve pending commands (L4 latent model).
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	cmds, err := h.svc.ListPending(r.Context(), deviceID)
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.ListPending(r.Context(), deviceID, pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":  cmds,
-		"total": len(cmds),
-	})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.

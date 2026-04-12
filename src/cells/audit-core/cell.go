@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Compile-time interface checks.
@@ -58,6 +59,11 @@ func WithHMACKey(key []byte) Option {
 	return func(c *AuditCore) { c.hmacKey = key }
 }
 
+// WithCursorCodec sets the cursor codec for pagination.
+func WithCursorCodec(codec *query.CursorCodec) Option {
+	return func(c *AuditCore) { c.cursorCodec = codec }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -74,13 +80,14 @@ type AuditCore struct {
 	archiveStore ports.ArchiveStore
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 	hmacKey      []byte
 
 	// Slice services.
-	appendSvc  *auditappend.Service
-	verifySvc  *auditverify.Service
-	archiveSvc *auditarchive.Service
+	appendSvc    *auditappend.Service
+	verifySvc    *auditverify.Service
+	archiveSvc   *auditarchive.Service
 	queryHandler *auditquery.Handler
 }
 
@@ -151,11 +158,31 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.archiveSvc = auditarchive.NewService()
 	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L1))
 
+	// Default cursor codec for pagination if not injected.
+	if err := c.initCursorCodec(); err != nil {
+		return err
+	}
+
 	// audit-query
-	querySvc := auditquery.NewService(c.auditRepo, c.logger)
+	querySvc := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger)
 	c.queryHandler = auditquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
 
+	return nil
+}
+
+// initCursorCodec initialises the cursor codec with a demo key if not injected.
+func (c *AuditCore) initCursorCodec() error {
+	if c.cursorCodec != nil {
+		return nil
+	}
+	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
+	if err != nil {
+		return err
+	}
+	c.cursorCodec = codec
+	slog.Warn("audit-core: using default cursor codec (demo mode)")
 	return nil
 }
 

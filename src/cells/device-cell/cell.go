@@ -15,6 +15,7 @@ import (
 	devicestatus "github.com/ghbvf/gocell/cells/device-cell/slices/device-status"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Compile-time interface checks.
@@ -41,6 +42,11 @@ func WithPublisher(p outbox.Publisher) Option {
 	return func(c *DeviceCell) { c.publisher = p }
 }
 
+// WithCursorCodec sets the cursor codec for pagination.
+func WithCursorCodec(c *query.CursorCodec) Option {
+	return func(dc *DeviceCell) { dc.cursorCodec = c }
+}
+
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
@@ -52,6 +58,7 @@ type DeviceCell struct {
 	deviceRepo  domain.DeviceRepository
 	commandRepo domain.CommandRepository
 	publisher   outbox.Publisher
+	cursorCodec *query.CursorCodec
 	logger      *slog.Logger
 
 	registerHandler *deviceregister.Handler
@@ -105,8 +112,19 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("device-register", "device-cell", cell.L4))
 
+	// Default cursor codec for pagination if not injected.
+	if c.cursorCodec == nil {
+		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
+		if err != nil {
+			return err
+		}
+		c.cursorCodec = codec
+		c.logger.Warn("device-cell: using default cursor codec (demo mode)")
+	}
+
 	// device-command slice
-	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.logger)
+	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger)
 	c.commandHandler = devicecommand.NewHandler(commandSvc)
 	c.AddSlice(cell.NewBaseSlice("device-command", "device-cell", cell.L4))
 
