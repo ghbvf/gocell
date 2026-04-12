@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,5 +150,41 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	for _, id := range allIDs {
 		assert.False(t, seen[id], "duplicate ID: %s", id)
 		seen[id] = true
+	}
+}
+
+func TestHandleQuery_InvalidCursor(t *testing.T) {
+	codec := testCodec()
+
+	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
+	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
+	crossContextToken, _ := codec.Encode(query.Cursor{
+		Values:  []any{"v1", "v2"},
+		Scope:   query.SortScope(wrongSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	})
+
+	tests := []struct {
+		name   string
+		cursor string
+	}{
+		{"garbage token", "not-a-valid-cursor!!!"},
+		{"missing scope and context", missingFieldsToken},
+		{"cross-context replay", crossContextToken},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := mem.NewAuditRepository()
+			svc := NewService(repo, testCodec(), slog.Default())
+			h := NewHandler(svc)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor="+tc.cursor, nil)
+			h.HandleQuery(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
+		})
 	}
 }

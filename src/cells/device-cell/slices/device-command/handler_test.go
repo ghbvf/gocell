@@ -234,6 +234,40 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 	}
 }
 
+func TestHandleListPending_InvalidCursor(t *testing.T) {
+	codec := testCodec()
+
+	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
+	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
+	crossContextToken, _ := codec.Encode(query.Cursor{
+		Values:  []any{"v1", "v2"},
+		Scope:   query.SortScope(wrongSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	})
+
+	tests := []struct {
+		name   string
+		cursor string
+	}{
+		{"garbage token", "not-a-valid-cursor!!!"},
+		{"missing scope and context", missingFieldsToken},
+		{"cross-context replay", crossContextToken},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := setupCommandHandler()
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?cursor="+tc.cursor, nil)
+			req.SetPathValue("id", "dev-1")
+			h.HandleListPending(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
+		})
+	}
+}
+
 func TestHandleAck(t *testing.T) {
 	tests := []struct {
 		name       string

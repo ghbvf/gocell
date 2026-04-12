@@ -1,8 +1,8 @@
 package featureflag
 
 import (
+	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -17,18 +17,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
+
 func setupHandler() (http.Handler, *mem.FlagRepository) {
+	h, r, _ := setupHandlerWithCodec()
+	return h, r
+}
+
+func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
 	repo := mem.NewFlagRepository()
-	key := make([]byte, 32)
-	_, _ = rand.Read(key)
-	codec, _ := query.NewCursorCodec(key)
+	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
 	svc := NewService(repo, codec, slog.Default())
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.HandleList)
 	mux.HandleFunc("GET /{key}", h.HandleGet)
 	mux.HandleFunc("POST /{key}/evaluate", h.HandleEvaluate)
-	return mux, repo
+	return mux, repo, codec
 }
 
 func TestHandler_HandleList(t *testing.T) {
@@ -188,5 +193,38 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	for _, id := range allIDs {
 		assert.False(t, seen[id], "duplicate ID: %s", id)
 		seen[id] = true
+	}
+}
+
+func TestHandler_HandleList_InvalidCursor(t *testing.T) {
+	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
+
+	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
+	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
+	crossContextToken, _ := codec.Encode(query.Cursor{
+		Values:  []any{"v1", "v2"},
+		Scope:   query.SortScope(wrongSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	})
+
+	tests := []struct {
+		name   string
+		cursor string
+	}{
+		{"garbage token", "not-a-valid-cursor!!!"},
+		{"missing scope and context", missingFieldsToken},
+		{"cross-context replay", crossContextToken},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, _ := setupHandler()
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/?cursor="+tc.cursor, nil)
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
+		})
 	}
 }
