@@ -41,6 +41,9 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 		if err != nil {
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
+		if err := query.ValidateCursorScope(cur, auditSort); err != nil {
+			return query.PageResult[*domain.AuditEntry]{}, err
+		}
 		cursorValues = cur.Values
 	}
 
@@ -55,7 +58,7 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 		return query.PageResult[*domain.AuditEntry]{}, fmt.Errorf("audit-query: query: %w", err)
 	}
 
-	return query.BuildPageResult(entries, pageReq.Limit, s.codec, func(e *domain.AuditEntry) []any {
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, auditSort, func(e *domain.AuditEntry) []any {
 		return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
 	})
 }

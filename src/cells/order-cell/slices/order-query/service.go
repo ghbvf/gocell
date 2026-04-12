@@ -47,6 +47,9 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		if err != nil {
 			return query.PageResult[*domain.Order]{}, err
 		}
+		if err := query.ValidateCursorScope(cur, orderSort); err != nil {
+			return query.PageResult[*domain.Order]{}, err
+		}
 		cursorValues = cur.Values
 	}
 
@@ -61,7 +64,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.Order]{}, err
 	}
 
-	return query.BuildPageResult(orders, pageReq.Limit, s.codec, func(o *domain.Order) []any {
+	return query.BuildPageResult(orders, pageReq.Limit, s.codec, orderSort, func(o *domain.Order) []any {
 		return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
 	})
 }

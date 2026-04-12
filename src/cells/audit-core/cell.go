@@ -160,7 +160,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// Default cursor codec for pagination if not injected.
 	if c.cursorCodec == nil {
-		codec, err := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
 		if err != nil {
 			return err
 		}

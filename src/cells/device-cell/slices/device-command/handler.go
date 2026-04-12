@@ -1,6 +1,7 @@
 package devicecommand
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -54,6 +55,10 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 
 	pageReq, err := httputil.ParsePageRequest(r)
 	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}

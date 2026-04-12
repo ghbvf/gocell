@@ -64,10 +64,13 @@ type PageResult[T any] struct {
 // for N+1 hasMore detection), trims to the requested limit, and encodes the
 // cursor for the next page from the last visible item.
 //
+// sort defines the sort columns; the generated cursor embeds a sort scope
+// fingerprint so cursors cannot be reused across different sort definitions.
+//
 // extractCursor is called on the last item to extract the keyset values for
 // the next-page cursor. It must return values corresponding 1:1 to the sort
 // columns used in the query.
-func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, extractCursor func(T) []any) (PageResult[T], error) {
+func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []SortColumn, extractCursor func(T) []any) (PageResult[T], error) {
 	hasMore := len(items) > limit
 	if hasMore {
 		items = items[:limit]
@@ -79,7 +82,7 @@ func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, extractCur
 
 	if hasMore && len(items) > 0 {
 		last := items[len(items)-1]
-		cur := Cursor{Values: extractCursor(last)}
+		cur := Cursor{Values: extractCursor(last), Scope: SortScope(sort)}
 		token, err := codec.Encode(cur)
 		if err != nil {
 			return PageResult[T]{}, err

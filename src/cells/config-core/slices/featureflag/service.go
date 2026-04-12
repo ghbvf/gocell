@@ -60,6 +60,9 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		if err != nil {
 			return query.PageResult[*domain.FeatureFlag]{}, err
 		}
+		if err := query.ValidateCursorScope(cur, flagSort); err != nil {
+			return query.PageResult[*domain.FeatureFlag]{}, err
+		}
 		cursorValues = cur.Values
 	}
 
@@ -74,7 +77,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.FeatureFlag]{}, fmt.Errorf("feature-flag: list: %w", err)
 	}
 
-	return query.BuildPageResult(flags, pageReq.Limit, s.codec, func(f *domain.FeatureFlag) []any {
+	return query.BuildPageResult(flags, pageReq.Limit, s.codec, flagSort, func(f *domain.FeatureFlag) []any {
 		return []any{f.Key, f.ID}
 	})
 }

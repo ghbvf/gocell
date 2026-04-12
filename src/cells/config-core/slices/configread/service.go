@@ -52,6 +52,9 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		if err != nil {
 			return query.PageResult[*domain.ConfigEntry]{}, err
 		}
+		if err := query.ValidateCursorScope(cur, configSort); err != nil {
+			return query.PageResult[*domain.ConfigEntry]{}, err
+		}
 		cursorValues = cur.Values
 	}
 
@@ -66,7 +69,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.ConfigEntry]{}, fmt.Errorf("config-read: list: %w", err)
 	}
 
-	return query.BuildPageResult(entries, pageReq.Limit, s.codec, func(e *domain.ConfigEntry) []any {
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, configSort, func(e *domain.ConfigEntry) []any {
 		return []any{e.Key, e.ID}
 	})
 }

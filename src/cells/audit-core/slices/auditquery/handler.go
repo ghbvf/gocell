@@ -1,6 +1,7 @@
 package auditquery
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -48,6 +49,10 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 
 	pageReq, err := httputil.ParsePageRequest(r)
 	if err != nil {
+		slog.Warn("pagination: request validation failed",
+			slog.String("error", err.Error()),
+			slog.String("path", r.URL.Path),
+		)
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}

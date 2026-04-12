@@ -114,8 +114,8 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// Default cursor codec for pagination if not injected.
 	if c.cursorCodec == nil {
-		// Demo mode: use a deterministic key. Production should inject via WithCursorCodec.
-		codec, err := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
 		if err != nil {
 			return err
 		}

@@ -172,3 +172,99 @@ func TestCursorCodec_RoundTrip_EmptyValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, decoded.Values)
 }
+
+// --- SortScope tests ---
+
+func TestSortScope_Deterministic(t *testing.T) {
+	cols := []SortColumn{
+		{Name: "created_at", Direction: SortDESC},
+		{Name: "id", Direction: SortASC},
+	}
+	assert.Equal(t, SortScope(cols), SortScope(cols))
+	assert.Len(t, SortScope(cols), 16)
+}
+
+func TestSortScope_DifferentColumnsProduceDifferentScope(t *testing.T) {
+	a := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
+	b := []SortColumn{{Name: "key", Direction: SortASC}, {Name: "id", Direction: SortASC}}
+	assert.NotEqual(t, SortScope(a), SortScope(b))
+}
+
+// --- ValidateCursorScope tests ---
+
+func TestValidateCursorScope_Mismatch(t *testing.T) {
+	sortA := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
+	sortB := []SortColumn{{Name: "key", Direction: SortASC}, {Name: "id", Direction: SortASC}}
+	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA)}
+	err := ValidateCursorScope(cur, sortB)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "scope mismatch")
+}
+
+func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
+	sort := []SortColumn{{Name: "id", Direction: SortASC}}
+	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sort)}
+	err := ValidateCursorScope(cur, sort)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expected 1")
+}
+
+func TestValidateCursorScope_Valid(t *testing.T) {
+	sort := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
+	cur := Cursor{Values: []any{"2026-01-01T00:00:00Z", "id-1"}, Scope: SortScope(sort)}
+	assert.NoError(t, ValidateCursorScope(cur, sort))
+}
+
+// --- Key rotation tests ---
+
+func TestCursorCodec_KeyRotation(t *testing.T) {
+	keyOld := bytes.Repeat([]byte("o"), 32)
+	keyNew := bytes.Repeat([]byte("n"), 32)
+
+	// Sign with old key.
+	codecOld, err := NewCursorCodec(keyOld)
+	require.NoError(t, err)
+	token, err := codecOld.Encode(Cursor{Values: []any{"val"}})
+	require.NoError(t, err)
+
+	// New codec with key rotation: current=new, previous=old.
+	codecRotated, err := NewCursorCodec(keyNew, keyOld)
+	require.NoError(t, err)
+
+	// Should verify with the previous key.
+	decoded, err := codecRotated.Decode(token)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"val"}, decoded.Values)
+
+	// Encode with new codec uses new key.
+	newToken, err := codecRotated.Encode(Cursor{Values: []any{"new-val"}})
+	require.NoError(t, err)
+
+	// Old codec can't verify new token.
+	_, err = codecOld.Decode(newToken)
+	assert.Error(t, err)
+}
+
+func TestCursorCodec_NewRequiresPreviousKeyMinLength(t *testing.T) {
+	current := bytes.Repeat([]byte("c"), 32)
+	shortPrev := bytes.Repeat([]byte("p"), 16)
+
+	_, err := NewCursorCodec(current, shortPrev)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "previous cursor HMAC key")
+}
+
+func TestCursorCodec_RoundTrip_WithScope(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	sort := []SortColumn{{Name: "created_at", Direction: SortDESC}, {Name: "id", Direction: SortASC}}
+	cur := Cursor{Values: []any{"2026-01-01T00:00:00Z", "id-1"}, Scope: SortScope(sort)}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	decoded, err := codec.Decode(token)
+	require.NoError(t, err)
+	assert.Equal(t, cur.Scope, decoded.Scope)
+	assert.Equal(t, cur.Values, decoded.Values)
+}
