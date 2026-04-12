@@ -173,6 +173,40 @@ func TestCursorCodec_RoundTrip_EmptyValues(t *testing.T) {
 	assert.Empty(t, decoded.Values)
 }
 
+func TestCursorCodec_RoundTrip_DotInPayload(t *testing.T) {
+	// Verify that '.' characters in cursor values don't confuse
+	// the LastIndexByte separator logic (signature hex never contains '.').
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	cur := Cursor{Values: []any{"domain.name.v1", "event.type.created"}}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	decoded, err := codec.Decode(token)
+	require.NoError(t, err)
+	assert.Equal(t, "domain.name.v1", decoded.Values[0])
+	assert.Equal(t, "event.type.created", decoded.Values[1])
+}
+
+func TestCursorCodec_CrossCellRejection(t *testing.T) {
+	// Cursors signed by one cell's codec must be rejected by a different cell's codec.
+	// This validates the per-cell unique demo key isolation.
+	cellA, err := NewCursorCodec([]byte("gocell-demo-ORDER-CELL-key-32b!!"))
+	require.NoError(t, err)
+	cellB, err := NewCursorCodec([]byte("gocell-demo-CONFIG-CORE-key-32!!"))
+	require.NoError(t, err)
+
+	token, err := cellA.Encode(Cursor{Values: []any{"val"}, Scope: "scope-a"})
+	require.NoError(t, err)
+
+	_, err = cellB.Decode(token)
+	assert.Error(t, err)
+	var ecErr *errcode.Error
+	assert.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
 // --- SortScope tests ---
 
 func TestSortScope_Deterministic(t *testing.T) {
