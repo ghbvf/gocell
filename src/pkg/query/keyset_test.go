@@ -193,7 +193,7 @@ func TestKeyset_CursorValueCountMismatch(t *testing.T) {
 		},
 	}
 	err := AppendKeyset(b, params)
-	assert.Error(t, err)
+	requireCursorInvalid(t, err, "cursor has 1 values but 2 sort columns")
 }
 
 func TestKeyset_FullQuery(t *testing.T) {

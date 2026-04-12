@@ -152,7 +152,7 @@ func CompareAny(a, b any) (int, error) {
 		}
 	}
 
-	return 0, cursorInvalid("invalid cursor value")
+	return 0, cursorInvalid("unsupported cursor value types")
 }
 
 // normalizeNumeric converts int to float64 for uniform numeric comparison.
@@ -168,7 +168,7 @@ func normalizeNumeric(v any) any {
 func parseTimeString(s string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return time.Time{}, cursorInvalid("invalid cursor value")
+		return time.Time{}, cursorInvalid("invalid time format in cursor value")
 	}
 	return t, nil
 }

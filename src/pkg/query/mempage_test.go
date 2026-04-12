@@ -71,6 +71,7 @@ func cmpFloat(a, b float64) int {
 
 // requireCursorInvalidMsg asserts the error is a standardized cursor error
 // with unified message and the expected reason in details.
+// NOTE: the string literal must match query.cursorInvalidMsg (unexported).
 func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
 	t.Helper()
 	var ecErr *errcode.Error
@@ -418,13 +419,13 @@ func TestCompareAny_Error(t *testing.T) {
 		a, b       any
 		wantReason string
 	}{
-		{"nil vs string", nil, "x", "invalid cursor value"},
-		{"string vs nil", "x", nil, "invalid cursor value"},
-		{"bool vs bool", true, false, "invalid cursor value"},
-		{"float64 vs string", 1.0, "str", "invalid cursor value"},
-		{"float64 vs time", 1.0, time.Now(), "invalid cursor value"},
-		{"time vs invalid string", time.Now(), "not-a-time", "invalid cursor value"},
-		{"invalid string vs time", "not-a-time", time.Now(), "invalid cursor value"},
+		{"nil vs string", nil, "x", "unsupported cursor value types"},
+		{"string vs nil", "x", nil, "unsupported cursor value types"},
+		{"bool vs bool", true, false, "unsupported cursor value types"},
+		{"float64 vs string", 1.0, "str", "unsupported cursor value types"},
+		{"float64 vs time", 1.0, time.Now(), "unsupported cursor value types"},
+		{"time vs invalid string", time.Now(), "not-a-time", "invalid time format in cursor value"},
+		{"invalid string vs time", "not-a-time", time.Now(), "invalid time format in cursor value"},
 	}
 
 	for _, tt := range tests {

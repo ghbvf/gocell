@@ -43,9 +43,8 @@ func AppendKeyset(b *Builder, params ListParams) error {
 
 	if params.CursorValues != nil {
 		if len(params.CursorValues) != len(params.Sort) {
-			return errcode.New(errcode.ErrCursorInvalid,
-				fmt.Sprintf("keyset: cursor has %d values but %d sort columns",
-					len(params.CursorValues), len(params.Sort)))
+			return cursorInvalid(fmt.Sprintf("cursor has %d values but %d sort columns",
+				len(params.CursorValues), len(params.Sort)))
 		}
 		if err := appendKeysetWhere(b, params.Sort, params.CursorValues); err != nil {
 			return err
