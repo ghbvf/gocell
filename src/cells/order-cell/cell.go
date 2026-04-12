@@ -98,15 +98,19 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"order-cell durable mode requires both outboxWriter and txRunner")
+	}
+	if (c.outboxWriter != nil || c.txRunner != nil) && c.repo == nil {
+		return errcode.New(errcode.ErrValidationFailed,
+			"order-cell durable mode requires explicit repository injection")
+	}
+
 	// Default to in-memory repository if none injected.
 	if c.repo == nil {
 		c.repo = mem.NewOrderRepository()
 		c.logger.Info("order-cell: using in-memory repository (demo mode)")
-	}
-
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"order-cell durable mode requires both outboxWriter and txRunner")
 	}
 
 	if c.publisher == nil && c.outboxWriter == nil {
