@@ -19,8 +19,8 @@ const minCursorKeyBytes = 32
 // Values correspond 1:1 with the SortColumns of the query.
 type Cursor struct {
 	Values  []any  `json:"v"`
-	Scope   string `json:"s,omitempty"` // hex hash of sort column definition
-	Context string `json:"c,omitempty"` // query context fingerprint (path + filters)
+	Scope   string `json:"s"` // hex hash of sort column definition (mandatory)
+	Context string `json:"c"` // query context fingerprint (mandatory)
 }
 
 // CursorCodec encodes and decodes cursors with HMAC-SHA256 tamper protection.

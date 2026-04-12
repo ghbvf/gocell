@@ -170,8 +170,9 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 		{Name: "id", Direction: query.SortASC},
 	}
 	cur := query.Cursor{
-		Values: []any{"some-key", "some-id"},
-		Scope:  query.SortScope(differentSort),
+		Values:  []any{"some-key", "some-id"},
+		Scope:   query.SortScope(differentSort),
+		Context: query.QueryContext("endpoint", "order-query"),
 	}
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
