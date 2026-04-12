@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -100,49 +99,8 @@ func (r *CommandRepository) ListPending(_ context.Context, deviceID string, para
 		}
 	}
 
-	sortCommands(filtered, params.Sort)
-	return applyCommandCursor(filtered, params), nil
-}
-
-// sortCommands sorts commands in-place by the given sort columns.
-func sortCommands(cmds []*domain.Command, cols []query.SortColumn) {
-	if len(cols) == 0 {
-		return
-	}
-	slices.SortFunc(cmds, func(a, b *domain.Command) int {
-		for _, col := range cols {
-			v := compareCommandField(a, b, col.Name)
-			if col.Direction == query.SortDESC {
-				v = -v
-			}
-			if v != 0 {
-				return v
-			}
-		}
-		return 0
-	})
-}
-
-// applyCommandCursor skips rows until past the cursor position, then limits.
-func applyCommandCursor(cmds []*domain.Command, params query.ListParams) []*domain.Command {
-	start := 0
-	if params.CursorValues != nil {
-		for i, cmd := range cmds {
-			if commandAfterCursor(cmd, params.Sort, params.CursorValues) {
-				start = i
-				break
-			}
-			if i == len(cmds)-1 {
-				start = len(cmds) // cursor past all rows
-			}
-		}
-	}
-
-	end := start + params.FetchLimit()
-	if end > len(cmds) {
-		end = len(cmds)
-	}
-	return cmds[start:end]
+	query.Sort(filtered, params.Sort, compareCommandField)
+	return query.ApplyCursor(filtered, params, commandFieldValue), nil
 }
 
 // compareCommandField compares a single field of two commands.
@@ -163,36 +121,11 @@ func compareCommandField(a, b *domain.Command, field string) int {
 	}
 }
 
-// commandAfterCursor returns true if the command is strictly after the cursor
-// position according to the sort columns and their directions.
-func commandAfterCursor(cmd *domain.Command, cols []query.SortColumn, cursorValues []any) bool {
-	for level := 0; level < len(cols); level++ {
-		val := commandFieldValue(cmd, cols[level].Name)
-		curVal := cursorValues[level]
-		c := compareAny(val, curVal)
-
-		if level < len(cols)-1 {
-			if c != 0 {
-				if cols[level].Direction == query.SortDESC {
-					return c < 0
-				}
-				return c > 0
-			}
-			continue
-		}
-		// Last column: strict inequality.
-		if cols[level].Direction == query.SortDESC {
-			return c < 0
-		}
-		return c > 0
-	}
-	return false
-}
-
+// commandFieldValue extracts a cursor-comparable value from a command.
 func commandFieldValue(cmd *domain.Command, field string) any {
 	switch field {
 	case "created_at":
-		return cmd.CreatedAt.Format(time.RFC3339Nano)
+		return cmd.CreatedAt
 	case "id":
 		return cmd.ID
 	case "device_id":
@@ -204,21 +137,6 @@ func commandFieldValue(cmd *domain.Command, field string) any {
 	default:
 		return ""
 	}
-}
-
-// compareAny compares two values that are either string or float64.
-func compareAny(a, b any) int {
-	aStr, aOk := a.(string)
-	bStr, bOk := b.(string)
-	if aOk && bOk {
-		return cmp.Compare(aStr, bStr)
-	}
-	aFloat, aOk := a.(float64)
-	bFloat, bOk := b.(float64)
-	if aOk && bOk {
-		return cmp.Compare(aFloat, bFloat)
-	}
-	panic(fmt.Sprintf("compareAny: unsupported type combination %T vs %T", a, b))
 }
 
 // Ack marks a command as acknowledged.

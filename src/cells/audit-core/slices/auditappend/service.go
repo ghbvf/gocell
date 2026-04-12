@@ -87,7 +87,12 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	var payload struct {
 		UserID string `json:"user_id"`
 	}
-	_ = json.Unmarshal(entry.Payload, &payload)
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+		s.logger.Warn("audit-append: failed to extract actor from payload",
+			slog.Any("error", err),
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
+	}
 
 	actorID := payload.UserID
 	if actorID == "" {

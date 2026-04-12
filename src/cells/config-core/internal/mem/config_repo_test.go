@@ -2,6 +2,8 @@ package mem
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -479,4 +481,56 @@ func TestConfigRepository_PublishVersion_And_GetVersion(t *testing.T) {
 		_, err := repo.GetVersion(ctx, "cfg-1", 99)
 		require.Error(t, err)
 	})
+}
+
+// TestConfigRepository_ConcurrentCRUDAndList verifies that concurrent
+// CRUD and List calls do not race. Run with -race to verify.
+func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
+	repo := NewConfigRepository()
+	ctx := context.Background()
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				now := time.Now()
+				_ = repo.Create(ctx, &domain.ConfigEntry{
+					ID:        fmt.Sprintf("id-w%d-i%d", id, i),
+					Key:       fmt.Sprintf("key-w%d-i%d", id, i),
+					Value:     "val",
+					Version:   1,
+					CreatedAt: now,
+					UpdatedAt: now,
+				})
+			}
+		}(w)
+	}
+
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort: []query.SortColumn{
+					{Name: "key", Direction: query.SortASC},
+					{Name: "id", Direction: query.SortASC},
+				},
+			}
+			for range iterations {
+				_, _ = repo.List(ctx, params)
+				_, _ = repo.GetByKey(ctx, "key-w0-i0")
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
 }

@@ -2,6 +2,8 @@ package mem
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -303,4 +305,51 @@ func TestFlagRepository_List_Empty(t *testing.T) {
 	result, err := repo.List(context.Background(), params)
 	require.NoError(t, err)
 	assert.Empty(t, result)
+}
+
+// TestFlagRepository_ConcurrentCRUDAndList verifies that concurrent
+// CRUD and List calls do not race. Run with -race to verify.
+func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
+	repo := NewFlagRepository()
+	ctx := context.Background()
+
+	const writers = 5
+	const readers = 10
+	const iterations = 50
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range iterations {
+				_ = repo.Create(ctx, &domain.FeatureFlag{
+					ID:  fmt.Sprintf("id-w%d-i%d", id, i),
+					Key: fmt.Sprintf("flag-w%d-i%d", id, i),
+				})
+			}
+		}(w)
+	}
+
+	for r := range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			params := query.ListParams{
+				Limit: 10,
+				Sort: []query.SortColumn{
+					{Name: "key", Direction: query.SortASC},
+					{Name: "id", Direction: query.SortASC},
+				},
+			}
+			for range iterations {
+				_, _ = repo.List(ctx, params)
+				_, _ = repo.GetByKey(ctx, "flag-w0-i0")
+			}
+			_ = r
+		}()
+	}
+
+	wg.Wait()
 }

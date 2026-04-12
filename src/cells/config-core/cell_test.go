@@ -2,6 +2,8 @@ package configcore
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -177,4 +179,41 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
+}
+
+func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Seed enough config entries to produce a nextCursor.
+	for i := range 3 {
+		body := fmt.Sprintf(`{"key":"cfg-%d","value":"val-%d"}`, i, i)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
+	}
+
+	// Get config-read page with limit=1 to obtain a cursor.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var configPage struct {
+		NextCursor string `json:"nextCursor"`
+		HasMore    bool   `json:"hasMore"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&configPage))
+	require.True(t, configPage.HasMore, "need hasMore to get a cursor")
+	require.NotEmpty(t, configPage.NextCursor)
+
+	// Use config-read cursor on feature-flag list endpoint — must be rejected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet,
+		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"config-read cursor must be rejected by feature-flag endpoint")
 }

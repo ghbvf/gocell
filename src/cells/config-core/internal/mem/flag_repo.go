@@ -3,8 +3,6 @@ package mem
 import (
 	"cmp"
 	"context"
-	"fmt"
-	"slices"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
@@ -12,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
-
 
 // Compile-time check.
 var _ ports.FlagRepository = (*FlagRepository)(nil)
@@ -79,49 +76,8 @@ func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*do
 		all = append(all, &clone)
 	}
 
-	sortFlags(all, params.Sort)
-	return applyFlagCursor(all, params), nil
-}
-
-// sortFlags sorts feature flags in-place by the given sort columns.
-func sortFlags(flags []*domain.FeatureFlag, cols []query.SortColumn) {
-	if len(cols) == 0 {
-		return
-	}
-	slices.SortFunc(flags, func(a, b *domain.FeatureFlag) int {
-		for _, col := range cols {
-			v := compareFlagField(a, b, col.Name)
-			if col.Direction == query.SortDESC {
-				v = -v
-			}
-			if v != 0 {
-				return v
-			}
-		}
-		return 0
-	})
-}
-
-// applyFlagCursor skips rows until past the cursor position, then limits.
-func applyFlagCursor(flags []*domain.FeatureFlag, params query.ListParams) []*domain.FeatureFlag {
-	start := 0
-	if params.CursorValues != nil {
-		for i, f := range flags {
-			if flagAfterCursor(f, params.Sort, params.CursorValues) {
-				start = i
-				break
-			}
-			if i == len(flags)-1 {
-				start = len(flags) // cursor past all rows
-			}
-		}
-	}
-
-	end := start + params.FetchLimit()
-	if end > len(flags) {
-		end = len(flags)
-	}
-	return flags[start:end]
+	query.Sort(all, params.Sort, compareFlagField)
+	return query.ApplyCursor(all, params, flagFieldValue), nil
 }
 
 // compareFlagField compares a single field of two feature flags.
@@ -136,32 +92,7 @@ func compareFlagField(a, b *domain.FeatureFlag, field string) int {
 	}
 }
 
-// flagAfterCursor returns true if the flag is strictly after the cursor
-// position according to the sort columns and their directions.
-func flagAfterCursor(f *domain.FeatureFlag, cols []query.SortColumn, cursorValues []any) bool {
-	for level := 0; level < len(cols); level++ {
-		val := flagFieldValue(f, cols[level].Name)
-		curVal := cursorValues[level]
-		c := compareFlagAny(val, curVal)
-
-		if level < len(cols)-1 {
-			if c != 0 {
-				if cols[level].Direction == query.SortDESC {
-					return c < 0
-				}
-				return c > 0
-			}
-			continue
-		}
-		// Last column: strict inequality.
-		if cols[level].Direction == query.SortDESC {
-			return c < 0
-		}
-		return c > 0
-	}
-	return false
-}
-
+// flagFieldValue extracts a cursor-comparable value from a feature flag.
 func flagFieldValue(f *domain.FeatureFlag, field string) any {
 	switch field {
 	case "key":
@@ -171,19 +102,4 @@ func flagFieldValue(f *domain.FeatureFlag, field string) any {
 	default:
 		return ""
 	}
-}
-
-// compareFlagAny compares two values that are either string or float64.
-func compareFlagAny(a, b any) int {
-	aStr, aOk := a.(string)
-	bStr, bOk := b.(string)
-	if aOk && bOk {
-		return cmp.Compare(aStr, bStr)
-	}
-	aFloat, aOk := a.(float64)
-	bFloat, bOk := b.(float64)
-	if aOk && bOk {
-		return cmp.Compare(aFloat, bFloat)
-	}
-	panic(fmt.Sprintf("compareFlagAny: unsupported type combination %T vs %T", a, b))
 }
