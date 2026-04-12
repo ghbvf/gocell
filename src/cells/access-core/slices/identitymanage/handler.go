@@ -113,6 +113,8 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	// JSON merge patch: only fields present in the JSON body are updated.
+	// Patchable fields: name, email, status. Other fields are silently ignored.
+	// Uses DecodeJSON (not strict) because map targets accept any key by design.
 	var raw map[string]json.RawMessage
 	if err := httputil.DecodeJSON(r, &raw); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
