@@ -174,11 +174,62 @@ func TestRealIP(t *testing.T) {
 			wantIP:         "2001:db8::1",
 		},
 		{
-			name:           "invalid proxy string: never matches real IP",
+			name:           "invalid proxy string: warned and skipped, XFF ignored",
 			trustedProxies: []string{"not-an-ip"},
 			xff:            "10.0.0.1",
 			remoteAddr:     "192.168.1.1:12345",
 			wantIP:         "192.168.1.1",
+		},
+
+		// --- XFF token validation (F1) ---
+		{
+			name:           "XFF: garbage token skipped, falls back to RemoteAddr",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "garbage-value",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "10.0.0.1",
+		},
+		{
+			name:           "XFF: token with port stripped",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.50:8080",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "203.0.113.50",
+		},
+		{
+			name:           "XFF: bracketed IPv6 normalized",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "[2001:db8::1]",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "2001:db8::1",
+		},
+		{
+			name:           "XFF: mixed valid and garbage, rightmost valid untrusted returned",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.1, garbage, 10.0.0.2",
+			remoteAddr:     "10.0.0.3:12345",
+			wantIP:         "203.0.113.1",
+		},
+		{
+			name:           "XFF: all entries garbage, falls back to RemoteAddr",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "foo, bar, baz",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "10.0.0.1",
+		},
+		{
+			name:           "X-Real-Ip: garbage token, falls back to RemoteAddr",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xri:            "not-a-valid-ip",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "10.0.0.1",
+		},
+		{
+			name:           "X-Real-Ip: valid IP accepted",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xri:            "203.0.113.50",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "203.0.113.50",
 		},
 	}
 

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -27,8 +28,10 @@ func newProxyChecker(proxies []string) *proxyChecker {
 			// Store canonical form so "::1" and "0:0:0:0:0:0:0:1" match.
 			pc.exact[parsed.String()] = true
 		} else {
-			// Not a valid IP or CIDR — store as-is (will never match a real IP).
-			pc.exact[p] = true
+			// Not a valid IP or CIDR — skip with warning.
+			// ref: gin-gonic/gin — SetTrustedProxies returns error on invalid entries
+			slog.Warn("trusted proxy entry is not a valid IP or CIDR, skipping",
+				slog.String("entry", p))
 		}
 	}
 	return pc
@@ -93,10 +96,13 @@ func extractIP(r *http.Request, checker *proxyChecker) string {
 
 	// Prefer X-Forwarded-For, scanning right-to-left.
 	// The rightmost untrusted IP is the client.
+	//
+	// ref: gin-gonic/gin — XFF tokens validated with ParseIP
+	// ref: labstack/echo — XFF tokens validated, invalid skipped
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
 		for i := len(parts) - 1; i >= 0; i-- {
-			ip := strings.TrimSpace(parts[i])
+			ip := normalizeIPToken(strings.TrimSpace(parts[i]))
 			if ip == "" {
 				continue
 			}
@@ -104,18 +110,50 @@ func extractIP(r *http.Request, checker *proxyChecker) string {
 				return ip
 			}
 		}
-		// All IPs in XFF are trusted — return leftmost as the client.
-		if first := strings.TrimSpace(parts[0]); first != "" {
-			return first
+		// All valid IPs in XFF are trusted — return leftmost valid as the client.
+		for _, part := range parts {
+			if ip := normalizeIPToken(strings.TrimSpace(part)); ip != "" {
+				return ip
+			}
 		}
 	}
 
 	// Fall back to X-Real-Ip.
 	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-		return strings.TrimSpace(xri)
+		if ip := normalizeIPToken(strings.TrimSpace(xri)); ip != "" {
+			return ip
+		}
 	}
 
 	return remoteHost
+}
+
+// normalizeIPToken validates and normalizes an IP string from a header value.
+// Handles bare IPs, bracketed IPv6 ("[::1]"), and host:port ("10.0.0.1:8080").
+// Returns the canonical IP string, or "" if the token is not a valid IP.
+func normalizeIPToken(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	// Strip IPv6 brackets: "[::1]" → "::1"
+	if len(raw) > 2 && raw[0] == '[' && raw[len(raw)-1] == ']' {
+		raw = raw[1 : len(raw)-1]
+	}
+
+	// Try direct parse first (most common case).
+	if ip := net.ParseIP(raw); ip != nil {
+		return ip.String()
+	}
+
+	// Try host:port split (e.g. "10.0.0.1:8080" or "[::1]:443").
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+
+	return ""
 }
 
 func remoteAddrHost(addr string) string {
