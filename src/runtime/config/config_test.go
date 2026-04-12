@@ -335,6 +335,9 @@ func TestConfig_ConcurrentGetAndReload(t *testing.T) {
 					var dest map[string]any
 					_ = cfg.Scan(&dest)
 				}
+				if j%5 == 0 {
+					_ = cfg.(Snapshotter).Snapshot()
+				}
 				_ = id // prevent unused variable warning
 			}
 		}(i)

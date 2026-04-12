@@ -141,6 +141,8 @@ type ConfigChangeEvent struct {
 // via type assertion and calls OnConfigReload after each successful config
 // file reload that produces at least one change.
 //
+// Consistency: L0 LocalOnly — in-process notification, no external side effects.
+//
 // OnConfigReload MUST NOT block for extended periods. If a cell needs to
 // perform long-running reconfiguration, it should spawn a goroutine.
 // Errors are logged but do not halt other cells' reload callbacks

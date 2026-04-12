@@ -245,10 +245,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Inject config into assembly dependencies.
-	cfgMap := make(map[string]any)
-	for _, k := range cfg.Keys() {
-		cfgMap[k] = cfg.Get(k)
-	}
+	cfgMap := snapshotConfig(cfg)
 
 	if err := asm.StartWithConfig(ctx, cfgMap); err != nil {
 		return rollback(fmt.Errorf("bootstrap: assembly start: %w", err))

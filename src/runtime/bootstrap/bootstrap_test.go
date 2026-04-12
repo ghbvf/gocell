@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -393,8 +394,9 @@ type reloaderCell struct {
 	mu        sync.Mutex
 	events    []cell.ConfigChangeEvent
 	callOrder *[]string // shared slice to track call order across cells
-	err       error     // configurable error to return
-	doPanic   bool      // if true, panic instead of returning
+	err        error     // configurable error to return
+	doPanic    bool      // if true, panic instead of returning
+	panicCount atomic.Int32
 }
 
 func newReloaderCell(id string) *reloaderCell {
@@ -408,6 +410,7 @@ func newReloaderCell(id string) *reloaderCell {
 
 func (c *reloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
 	if c.doPanic {
+		c.panicCount.Add(1)
 		panic("intentional test panic in OnConfigReload")
 	}
 	c.mu.Lock()
@@ -584,8 +587,10 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	// Modify config — cell will panic.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
-	// Give watcher time to fire and recover from panic.
-	time.Sleep(500 * time.Millisecond)
+	// Wait for panic to fire and be recovered.
+	require.Eventually(t, func() bool {
+		return rc.panicCount.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected OnConfigReload panic to fire")
 
 	// Bootstrap should still be running after the panic.
 	cancel()
