@@ -188,5 +188,5 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "scope mismatch")
+	assert.Equal(t, "sort scope mismatch", ecErr.Details["reason"])
 }
