@@ -1,5 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.auth.user.delete.v1.request",
-  "type": "object"
+  "description": "DELETE carries no JSON fields. The user ID is supplied by the HTTP path parameter.",
+  "type": "object",
+  "maxProperties": 0,
+  "additionalProperties": false
 }

@@ -102,6 +102,24 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	}
 }
 
+func TestOrderCell_DefaultInit_UsesSafePublisherFallback(t *testing.T) {
+	c := NewOrderCell()
+	require.NoError(t, c.Init(context.Background(), newTestDeps()))
+	assert.NotNil(t, c.publisher, "default init should install a safe publisher fallback")
+
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"safe-default"}`))
+	req.Header.Set("Content-Type", "application/json")
+
+	assert.NotPanics(t, func() {
+		r.ServeHTTP(rec, req)
+	})
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
 func TestOrderCell_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

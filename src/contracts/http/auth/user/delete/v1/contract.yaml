@@ -7,5 +7,10 @@ endpoints:
   server: access-core
   clients:
     - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/auth/users/{id}
+    successStatus: 204
+    noContent: true
 schemaRefs:
   request: request.schema.json

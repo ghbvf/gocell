@@ -99,6 +99,36 @@ func TestContractMetaHTTPRoundTrip(t *testing.T) {
 	assert.NotContains(t, string(data), "deliverySemantics")
 }
 
+func TestContractMetaHTTPTransportRoundTrip(t *testing.T) {
+	orig := ContractMeta{
+		ID:               "http.auth.user.delete.v1",
+		Kind:             "http",
+		OwnerCell:        "access-core",
+		ConsistencyLevel: "L1",
+		Lifecycle:        "active",
+		Endpoints: EndpointsMeta{
+			Server:  "access-core",
+			Clients: []string{"edge-bff"},
+			HTTP: &HTTPTransportMeta{
+				Method:        "DELETE",
+				Path:          "/api/v1/auth/users/{userId}",
+				SuccessStatus: 204,
+				NoContent:     true,
+			},
+		},
+		SchemaRefs: SchemaRefsMeta{
+			Request: "request.schema.json",
+		},
+	}
+	data, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "http:")
+	assert.Contains(t, string(data), "method: DELETE")
+	assert.Contains(t, string(data), "path: /api/v1/auth/users/{userId}")
+	assert.Contains(t, string(data), "successStatus: 204")
+	assert.Contains(t, string(data), "noContent: true")
+}
+
 func TestContractMetaEventRoundTrip(t *testing.T) {
 	replayable := true
 	orig := ContractMeta{
@@ -270,25 +300,40 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 			name: "http only",
 			meta: EndpointsMeta{Server: "cell-a", Clients: []string{"cell-b"}},
 			present: []string{"server", "clients"},
+			absent:  []string{"http", "publisher", "subscribers", "handler", "invokers", "provider", "readers"},
+		},
+		{
+			name: "http with transport",
+			meta: EndpointsMeta{
+				Server:  "cell-a",
+				Clients: []string{"cell-b"},
+				HTTP: &HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/test",
+					SuccessStatus: 200,
+					NoContent:     false,
+				},
+			},
+			present: []string{"server", "clients", "http", "method", "path", "successStatus", "noContent"},
 			absent:  []string{"publisher", "subscribers", "handler", "invokers", "provider", "readers"},
 		},
 		{
 			name: "event only",
 			meta: EndpointsMeta{Publisher: "cell-a", Subscribers: []string{"cell-b"}},
 			present: []string{"publisher", "subscribers"},
-			absent:  []string{"server", "clients", "handler", "invokers", "provider", "readers"},
+			absent:  []string{"server", "clients", "http", "handler", "invokers", "provider", "readers"},
 		},
 		{
 			name: "command only",
 			meta: EndpointsMeta{Handler: "cell-a", Invokers: []string{"cell-b"}},
 			present: []string{"handler", "invokers"},
-			absent:  []string{"server", "clients", "publisher", "subscribers", "provider", "readers"},
+			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "provider", "readers"},
 		},
 		{
 			name: "projection only",
 			meta: EndpointsMeta{Provider: "cell-a", Readers: []string{"cell-b"}},
 			present: []string{"provider", "readers"},
-			absent:  []string{"server", "clients", "publisher", "subscribers", "handler", "invokers"},
+			absent:  []string{"server", "clients", "http", "publisher", "subscribers", "handler", "invokers"},
 		},
 	}
 

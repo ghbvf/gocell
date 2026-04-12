@@ -1074,6 +1074,36 @@ schemaRefs:
 	assert.Equal(t, "extra.json", c.SchemaRefs.Extra["custom"])
 }
 
+func TestParseFS_HTTPTransportMetadata(t *testing.T) {
+	fs := fstest.MapFS{
+		"contracts/http/auth/user/delete/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.user.delete.v1
+kind: http
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/auth/users/{userId}
+    successStatus: 204
+    noContent: true
+schemaRefs:
+  request: request.schema.json
+`)},
+	}
+	p := NewParser(".")
+	pm, err := p.ParseFS(fs)
+	require.NoError(t, err)
+	c := pm.Contracts["http.auth.user.delete.v1"]
+	require.NotNil(t, c)
+	require.NotNil(t, c.Endpoints.HTTP)
+	assert.Equal(t, "DELETE", c.Endpoints.HTTP.Method)
+	assert.Equal(t, "/api/v1/auth/users/{userId}", c.Endpoints.HTTP.Path)
+	assert.Equal(t, 204, c.Endpoints.HTTP.SuccessStatus)
+	assert.True(t, c.Endpoints.HTTP.NoContent)
+}
+
 func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
 	tests := []struct {
 		name string

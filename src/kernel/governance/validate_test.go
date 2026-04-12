@@ -2710,6 +2710,116 @@ func TestFMT12(t *testing.T) {
 	}
 }
 
+// --- FMT-13: migrated HTTP transport metadata must be complete and consistent ---
+
+func TestFMT13(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+		wantField string
+	}{
+		{
+			name:      "legacy http contract without transport metadata is allowed",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "complete migrated http contract is allowed",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "POST",
+					Path:          "/api/v1/auth/login",
+					SuccessStatus: 200,
+					NoContent:     false,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantCount: 0,
+		},
+		{
+			name: "migrated http contract requires all transport fields",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:    "POST",
+					NoContent: false,
+				}
+			},
+			wantCount: 2,
+		},
+		{
+			name: "transport metadata is only valid on http contracts",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.session.created.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "POST",
+					Path:          "/api/v1/should-not-exist",
+					SuccessStatus: 202,
+					NoContent:     false,
+				}
+			},
+			wantCount: 1,
+			wantField: "endpoints.http",
+		},
+		{
+			name: "noContent forbids a response schema",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "DELETE",
+					Path:          "/api/v1/auth/users/{userId}",
+					SuccessStatus: 204,
+					NoContent:     true,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantCount: 1,
+			wantField: "schemaRefs.response",
+		},
+		{
+			name: "noContent requires 204",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "DELETE",
+					Path:          "/api/v1/auth/users/{userId}",
+					SuccessStatus: 200,
+					NoContent:     true,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
+			},
+			wantCount: 1,
+			wantField: "endpoints.http.noContent",
+		},
+		{
+			name: "204 requires noContent true",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "DELETE",
+					Path:          "/api/v1/auth/users/{userId}",
+					SuccessStatus: 204,
+					NoContent:     false,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
+			},
+			wantCount: 1,
+			wantField: "endpoints.http.noContent",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT13(), "FMT-13")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+			}
+			if tt.wantField != "" && len(got) > 0 {
+				assert.Equal(t, tt.wantField, got[0].Field)
+			}
+		})
+	}
+}
+
 // --- TOPO-07: actor maxConsistencyLevel constraint for consumers ---
 
 func TestTOPO07(t *testing.T) {
