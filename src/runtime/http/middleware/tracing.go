@@ -36,6 +36,7 @@ func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 				var wrapped http.ResponseWriter
 				state, wrapped = NewRecorder(w)
 				w = wrapped
+				ctx = WithRecorderState(ctx, state)
 			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))

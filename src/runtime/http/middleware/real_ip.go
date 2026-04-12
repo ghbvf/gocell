@@ -23,6 +23,7 @@ type proxyChecker struct {
 func newProxyChecker(proxies []string) *proxyChecker {
 	pc := &proxyChecker{exact: make(map[string]bool, len(proxies))}
 	for _, p := range proxies {
+		p = strings.TrimSpace(p)
 		if _, cidr, err := net.ParseCIDR(p); err == nil {
 			pc.cidrs = append(pc.cidrs, cidr)
 		} else if parsed := net.ParseIP(p); parsed != nil {

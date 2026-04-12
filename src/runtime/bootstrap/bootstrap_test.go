@@ -95,6 +95,15 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not-valid")
 	assert.Contains(t, err.Error(), "trusted proxy")
+
+	// Verify rollback: assembly was started at Step 3-4, then stopped by
+	// rollback after Step 5 (router.NewE) failed. After rollback, cells
+	// report "unhealthy" because Stop has been called.
+	health := asm.Health()
+	for id, status := range health {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback stopped the assembly", id)
+	}
 }
 
 func TestNew_WithConfig(t *testing.T) {
