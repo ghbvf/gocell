@@ -163,9 +163,9 @@ func (c *config) Reload(yamlPath string, envPrefix string) error {
 	c.mu.Lock()
 	c.data = newData
 	c.raw = newRaw
+	c.generation.Add(1)
 	c.mu.Unlock()
 
-	c.generation.Add(1)
 	return nil
 }
 

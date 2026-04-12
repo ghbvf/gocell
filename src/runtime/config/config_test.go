@@ -357,6 +357,52 @@ func TestSnapshot_SliceIsolation(t *testing.T) {
 	assert.Equal(t, "alpha", origTags[0], "snapshot mutation must not corrupt original config")
 }
 
+func TestDeepCloneValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+	}{
+		{"nil", nil},
+		{"string", "hello"},
+		{"int", 42},
+		{"float64", 3.14},
+		{"bool", true},
+		{"empty_slice", []any{}},
+		{"empty_map", map[string]any{}},
+		{"slice", []any{"a", "b", "c"}},
+		{"nested_map", map[string]any{"a": map[string]any{"b": 1}}},
+		{"deeply_nested", map[string]any{
+			"l1": []any{
+				map[string]any{"l2": []any{1, 2, 3}},
+			},
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DeepCloneValue(tt.input)
+			assert.Equal(t, tt.input, got)
+
+			// Verify mutation isolation for mutable types.
+			switch v := got.(type) {
+			case []any:
+				if len(v) > 0 {
+					v[0] = "MUTATED"
+					if orig, ok := tt.input.([]any); ok && len(orig) > 0 {
+						assert.NotEqual(t, "MUTATED", orig[0], "mutation leaked to original")
+					}
+				}
+			case map[string]any:
+				v["__injected"] = true
+				if orig, ok := tt.input.(map[string]any); ok {
+					_, found := orig["__injected"]
+					assert.False(t, found, "mutation leaked to original")
+				}
+			}
+		})
+	}
+}
+
 func TestSnapshot_NestedMapIsolation(t *testing.T) {
 	dir := t.TempDir()
 	yamlFile := filepath.Join(dir, "config.yaml")
