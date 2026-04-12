@@ -9,10 +9,11 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// Compile-time checks: otelSpan implements both tracing.Span and tracing.SpanRecorder.
+// Compile-time checks: otelSpan implements tracing.Span, SpanRecorder, and SpanRenamer.
 var (
 	_ tracing.Span         = (*otelSpan)(nil)
 	_ tracing.SpanRecorder = (*otelSpan)(nil)
+	_ tracing.SpanRenamer  = (*otelSpan)(nil)
 )
 
 // otelSpan wraps an OTel trace.Span to implement the tracing.Span interface.
@@ -66,4 +67,9 @@ func (s *otelSpan) TraceID() string {
 // SpanID returns the span identifier.
 func (s *otelSpan) SpanID() string {
 	return s.inner.SpanContext().SpanID().String()
+}
+
+// SetName updates the span's display name.
+func (s *otelSpan) SetName(name string) {
+	s.inner.SetName(name)
 }

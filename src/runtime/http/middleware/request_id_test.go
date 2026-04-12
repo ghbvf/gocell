@@ -73,6 +73,53 @@ func TestRequestID_RejectsControlChars(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 }
 
+func TestRequestID_BridgesCorrelationID(t *testing.T) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		corrID, ok := ctxkeys.CorrelationIDFrom(r.Context())
+		assert.True(t, ok, "CorrelationID must be present in context")
+		assert.Equal(t, "upstream-req-123", corrID,
+			"incoming request ID must be bridged to CorrelationID")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "upstream-req-123")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+}
+
+func TestRequestID_CorrelationID_MatchesGenerated(t *testing.T) {
+	var gotReqID, gotCorrID string
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReqID, _ = ctxkeys.RequestIDFrom(r.Context())
+		gotCorrID, _ = ctxkeys.CorrelationIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.NotEmpty(t, gotReqID)
+	assert.Equal(t, gotReqID, gotCorrID,
+		"when no incoming request ID, generated ID must be used as both RequestID and CorrelationID")
+}
+
+func TestRequestID_CorrelationID_InvalidHeader(t *testing.T) {
+	var gotReqID, gotCorrID string
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReqID, _ = ctxkeys.RequestIDFrom(r.Context())
+		gotCorrID, _ = ctxkeys.CorrelationIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Request-Id", "evil\nfake-log")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Len(t, gotReqID, 36, "should have generated UUID")
+	assert.Equal(t, gotReqID, gotCorrID,
+		"CorrelationID must match the newly generated RequestID")
+}
+
 func TestRequestID_UniquenessAcrossRequests(t *testing.T) {
 	ids := make(map[string]bool)
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

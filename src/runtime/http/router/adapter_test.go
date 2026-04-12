@@ -6,12 +6,40 @@ import (
 	"testing"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestWithBodyLimit(t *testing.T) {
 	r := New(WithBodyLimit(1024))
 	assert.Equal(t, int64(1024), r.bodyLimit)
+}
+
+func TestWithTrustedProxies(t *testing.T) {
+	proxies := []string{"10.0.0.0/8", "192.168.1.1"}
+	r := New(WithTrustedProxies(proxies))
+	assert.Equal(t, proxies, r.trustedProxies)
+}
+
+func TestWithTrustedProxies_Integration(t *testing.T) {
+	r := New(WithTrustedProxies([]string{"10.0.0.0/8"}))
+
+	var gotIP string
+	r.Handle("GET /check-ip", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ip, _ := ctxkeys.RealIPFrom(req.Context())
+		gotIP = ip
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/check-ip", nil)
+	req.RemoteAddr = "10.0.0.5:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "203.0.113.50", gotIP,
+		"WithTrustedProxies must pass CIDR proxies to RealIP middleware")
 }
 
 func TestRouter_Handler(t *testing.T) {

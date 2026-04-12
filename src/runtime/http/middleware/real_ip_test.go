@@ -18,6 +18,7 @@ func TestRealIP(t *testing.T) {
 		remoteAddr     string
 		wantIP         string
 	}{
+		// --- Exact IP trust ---
 		{
 			name:           "trusted proxy: XFF single",
 			trustedProxies: []string{"192.168.1.1"},
@@ -26,11 +27,12 @@ func TestRealIP(t *testing.T) {
 			wantIP:         "10.0.0.1",
 		},
 		{
-			name:           "trusted proxy: XFF chain (first entry)",
+			name:           "trusted proxy: XFF chain — rightmost untrusted",
 			trustedProxies: []string{"192.168.1.1"},
 			xff:            "10.0.0.1, 172.16.0.1, 192.168.1.1",
 			remoteAddr:     "192.168.1.1:12345",
-			wantIP:         "10.0.0.1",
+			// Right-to-left: 192.168.1.1 trusted, 172.16.0.1 NOT trusted → return it
+			wantIP: "172.16.0.1",
 		},
 		{
 			name:           "trusted proxy: X-Real-Ip when no XFF",
@@ -87,6 +89,80 @@ func TestRealIP(t *testing.T) {
 			xff:        "10.0.0.1",
 			remoteAddr: "192.168.1.1:12345",
 			wantIP:     "192.168.1.1",
+		},
+
+		// --- CIDR trust ---
+		{
+			name:           "CIDR: 10.0.0.0/8 matches",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.50",
+			remoteAddr:     "10.255.0.1:12345",
+			wantIP:         "203.0.113.50",
+		},
+		{
+			name:           "CIDR: 172.16.0.0/12 matches",
+			trustedProxies: []string{"172.16.0.0/12"},
+			xff:            "198.51.100.1",
+			remoteAddr:     "172.20.5.3:443",
+			wantIP:         "198.51.100.1",
+		},
+		{
+			name:           "CIDR: no match — use RemoteAddr",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.50",
+			remoteAddr:     "192.168.1.1:12345",
+			wantIP:         "192.168.1.1",
+		},
+		{
+			name:           "CIDR: mixed exact and CIDR",
+			trustedProxies: []string{"192.168.1.1", "10.0.0.0/8"},
+			xff:            "203.0.113.50",
+			remoteAddr:     "10.0.0.5:12345",
+			wantIP:         "203.0.113.50",
+		},
+		{
+			name:           "CIDR: IPv6",
+			trustedProxies: []string{"fd00::/8"},
+			xff:            "2001:db8::1",
+			remoteAddr:     "[fd00::5]:12345",
+			wantIP:         "2001:db8::1",
+		},
+
+		// --- Right-to-left XFF scanning ---
+		{
+			name:           "right-to-left: first untrusted from right",
+			trustedProxies: []string{"10.0.0.0/8", "192.168.1.1"},
+			xff:            "203.0.113.50, 10.0.0.1, 10.0.0.2",
+			remoteAddr:     "192.168.1.1:12345",
+			wantIP:         "203.0.113.50",
+		},
+		{
+			name:           "right-to-left: all trusted except client",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "198.51.100.1, 10.0.0.1, 10.0.0.2",
+			remoteAddr:     "10.0.0.3:12345",
+			wantIP:         "198.51.100.1",
+		},
+		{
+			name:           "right-to-left: all entries trusted (spoof attempt) — return leftmost",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "10.0.0.100, 10.0.0.1",
+			remoteAddr:     "10.0.0.3:12345",
+			wantIP:         "10.0.0.100",
+		},
+		{
+			name:           "right-to-left: single entry XFF",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.1",
+			remoteAddr:     "10.0.0.1:12345",
+			wantIP:         "203.0.113.1",
+		},
+		{
+			name:           "right-to-left: empty entries in XFF are skipped",
+			trustedProxies: []string{"10.0.0.0/8"},
+			xff:            "203.0.113.1, , 10.0.0.1",
+			remoteAddr:     "10.0.0.3:12345",
+			wantIP:         "203.0.113.1",
 		},
 	}
 

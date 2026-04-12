@@ -31,7 +31,7 @@ func NewCollector(cfg CollectorConfig) (*Collector, error) {
 		return nil, errcode.New(ErrAdapterPromConfig, "prometheus: CellID is required")
 	}
 
-	labels := []string{"method", "path", "status", "cell"}
+	labels := []string{"method", "route", "status", "cell"}
 
 	requests := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: cfg.Namespace,
@@ -64,10 +64,11 @@ func NewCollector(cfg CollectorConfig) (*Collector, error) {
 }
 
 // RecordRequest records a completed HTTP request with the given labels.
-func (c *Collector) RecordRequest(method, path string, status int, durationSeconds float64) {
+// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual path.
+func (c *Collector) RecordRequest(method, route string, status int, durationSeconds float64) {
 	lbls := prom.Labels{
 		"method": method,
-		"path":   path,
+		"route":  route,
 		"status": strconv.Itoa(status),
 		"cell":   c.cellID,
 	}

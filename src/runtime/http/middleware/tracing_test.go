@@ -1,13 +1,17 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTracing_CreatesSpan(t *testing.T) {
@@ -64,4 +68,125 @@ func TestTracing_UniqueSpanIDs(t *testing.T) {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 	}
+}
+
+// --- Chi-integrated tests for span renaming ---
+
+// spySpan records attributes and name changes for testing.
+type spySpan struct {
+	mu    sync.Mutex
+	name  string
+	attrs map[string]any
+}
+
+func (s *spySpan) End()                  {}
+func (s *spySpan) TraceID() string       { return "spy-trace" }
+func (s *spySpan) SpanID() string        { return "spy-span" }
+func (s *spySpan) SetName(name string)   { s.mu.Lock(); s.name = name; s.mu.Unlock() }
+func (s *spySpan) SetAttribute(key string, val any) {
+	s.mu.Lock()
+	s.attrs[key] = val
+	s.mu.Unlock()
+}
+
+func (s *spySpan) Name() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.name
+}
+
+func (s *spySpan) Attr(key string) any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attrs[key]
+}
+
+// spyTracer returns spySpans that record name changes and attributes.
+type spyTracer struct {
+	mu    sync.Mutex
+	spans []*spySpan
+}
+
+func (st *spyTracer) Start(ctx context.Context, name string) (context.Context, tracing.Span) {
+	span := &spySpan{name: name, attrs: make(map[string]any)}
+	st.mu.Lock()
+	st.spans = append(st.spans, span)
+	st.mu.Unlock()
+	ctx = ctxkeys.WithTraceID(ctx, "spy-trace")
+	ctx = ctxkeys.WithSpanID(ctx, "spy-span")
+	return ctx, span
+}
+
+func (st *spyTracer) Spans() []*spySpan {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	result := make([]*spySpan, len(st.spans))
+	copy(result, st.spans)
+	return result
+}
+
+func TestTracing_SpanRenamedToRoutePattern(t *testing.T) {
+	spy := &spyTracer{}
+
+	r := chi.NewRouter()
+	r.Use(Tracing(spy))
+	r.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Hit with different IDs — all spans should be renamed to the route pattern.
+	for _, id := range []string{"1", "42", "abc"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users/"+id, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+
+	spans := spy.Spans()
+	require.Len(t, spans, 3)
+	for _, s := range spans {
+		assert.Equal(t, "GET /api/v1/users/{id}", s.Name(),
+			"span name must use route pattern, not actual path")
+		assert.Equal(t, "/api/v1/users/{id}", s.Attr("http.route"),
+			"http.route attribute must be the route pattern")
+	}
+}
+
+func TestTracing_UnmatchedRouteSpanName(t *testing.T) {
+	spy := &spyTracer{}
+
+	r := chi.NewRouter()
+	r.Use(Tracing(spy))
+	r.Get("/exists", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/random-404-path", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "GET unmatched", spans[0].Name(),
+		"unmatched route span must use sentinel name")
+	assert.Equal(t, "unmatched", spans[0].Attr("http.route"))
+}
+
+func TestTracing_HttpRouteAttribute(t *testing.T) {
+	spy := &spyTracer{}
+
+	r := chi.NewRouter()
+	r.Use(Tracing(spy))
+	r.Get("/api/v1/orders/{orderID}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/999", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "/api/v1/orders/{orderID}", spans[0].Attr("http.route"))
+	assert.Equal(t, 201, spans[0].Attr("http.status_code"))
 }
