@@ -1,77 +1,32 @@
 package featureflag
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-// Contract: http.config.flags.v1 — GET / returns paginated list, POST /{key}/evaluate returns {data: result}.
-func TestHttpConfigFlagsV1Serve(t *testing.T) {
-	handler, repo := setupHandler()
-	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
-		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
-	}))
+func TestHttpConfigFlagsListV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")
 
-	t.Run("list", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		handler.ServeHTTP(w, req)
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"hasMore":false}`))
+	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
+}
 
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Contains(t, resp, "data", "contract requires data array")
-		assert.Contains(t, resp, "hasMore", "contract requires hasMore field")
-	})
+func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.flags.get.v1")
 
-	t.Run("get single", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/dark-mode", nil)
-		handler.ServeHTTP(w, req)
+	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}}`))
+	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+}
 
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Contains(t, resp, "data", "contract requires data envelope")
-	})
+func TestHttpConfigFlagsEvaluateV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.flags.evaluate.v1")
 
-	t.Run("evaluate", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate",
-			strings.NewReader(`{"subject":"user-1"}`))
-		req.Header.Set("Content-Type", "application/json")
-		handler.ServeHTTP(w, req)
-
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Contains(t, resp, "data", "contract requires data envelope")
-	})
-
-	t.Run("error envelope", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate",
-			strings.NewReader(`{bad json`))
-		req.Header.Set("Content-Type", "application/json")
-		handler.ServeHTTP(w, req)
-
-		require.Equal(t, http.StatusBadRequest, w.Code)
-		var resp struct {
-			Error struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.NotEmpty(t, resp.Error.Code, "contract requires error.code")
-		assert.NotEmpty(t, resp.Error.Message, "contract requires error.message")
-	})
+	c.ValidateRequest(t, []byte(`{"subject":"user-123"}`))
+	c.ValidateResponse(t, []byte(`{"data":{"key":"dark-mode","enabled":true}}`))
+	c.MustRejectRequest(t, []byte(`{"subject":"x","extra":"bad"}`))
 }

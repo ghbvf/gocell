@@ -1,0 +1,11 @@
+id: http.test.valid.v1
+kind: http
+ownerCell: test-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: test-cell
+  clients: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

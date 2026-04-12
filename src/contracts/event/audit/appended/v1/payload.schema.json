@@ -6,5 +6,6 @@
     "audit_entry_id": { "type": "string" },
     "event_type": { "type": "string" }
   },
-  "required": ["audit_entry_id", "event_type"]
+  "required": ["audit_entry_id", "event_type"],
+  "additionalProperties": false
 }

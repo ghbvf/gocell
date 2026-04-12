@@ -5,7 +5,19 @@ contractUsages:
     role: publish
   - contract: event.user.locked.v1
     role: publish
-  - contract: http.auth.me.v1
+  - contract: http.auth.user.create.v1
+    role: serve
+  - contract: http.auth.user.get.v1
+    role: serve
+  - contract: http.auth.user.update.v1
+    role: serve
+  - contract: http.auth.user.patch.v1
+    role: serve
+  - contract: http.auth.user.delete.v1
+    role: serve
+  - contract: http.auth.user.lock.v1
+    role: serve
+  - contract: http.auth.user.unlock.v1
     role: serve
 verify:
   unit:
@@ -13,5 +25,11 @@ verify:
   contract:
     - contract.event.user.created.v1.publish
     - contract.event.user.locked.v1.publish
-    - contract.http.auth.me.v1.serve
+    - contract.http.auth.user.create.v1.serve
+    - contract.http.auth.user.get.v1.serve
+    - contract.http.auth.user.update.v1.serve
+    - contract.http.auth.user.patch.v1.serve
+    - contract.http.auth.user.delete.v1.serve
+    - contract.http.auth.user.lock.v1.serve
+    - contract.http.auth.user.unlock.v1.serve
   waivers: []

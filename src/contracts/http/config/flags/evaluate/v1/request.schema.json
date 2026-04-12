@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.evaluate.v1.request",
+  "type": "object",
+  "properties": {
+    "subject": { "type": "string" }
+  },
+  "required": ["subject"],
+  "additionalProperties": false
+}

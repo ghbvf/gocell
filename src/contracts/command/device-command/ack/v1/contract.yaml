@@ -1,0 +1,11 @@
+id: command.device-command.ack.v1
+kind: command
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  handler: device-cell
+  invokers: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

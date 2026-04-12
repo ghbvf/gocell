@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.order.get.v1.request",
+  "description": "GET endpoint — no request body. ID is passed via path parameter.",
+  "type": "object",
+  "additionalProperties": false
+}

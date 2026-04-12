@@ -1,11 +1,17 @@
 id: feature-flag
 belongsToCell: config-core
 contractUsages:
-  - contract: http.config.flags.v1
+  - contract: http.config.flags.list.v1
+    role: serve
+  - contract: http.config.flags.get.v1
+    role: serve
+  - contract: http.config.flags.evaluate.v1
     role: serve
 verify:
   unit:
     - unit.feature-flag.service
   contract:
-    - contract.http.config.flags.v1.serve
+    - contract.http.config.flags.list.v1.serve
+    - contract.http.config.flags.get.v1.serve
+    - contract.http.config.flags.evaluate.v1.serve
   waivers: []

@@ -44,7 +44,7 @@ curl -X POST http://localhost:8082/api/v1/orders \
 Response (201):
 
 ```json
-{"id":"ord-...","item":"test","status":"pending"}
+{"data":{"id":"ord-...","item":"test","status":"pending"}}
 ```
 
 ### List all orders
@@ -56,7 +56,7 @@ curl http://localhost:8082/api/v1/orders
 Response (200):
 
 ```json
-{"data":[...],"total":1}
+{"data":[...],"nextCursor":"...","hasMore":false}
 ```
 
 ### Get order by ID

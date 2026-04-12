@@ -7,5 +7,6 @@
     "first_invalid_index": { "type": "integer" },
     "entries_checked": { "type": "integer" }
   },
-  "required": ["valid", "first_invalid_index", "entries_checked"]
+  "required": ["valid", "first_invalid_index", "entries_checked"],
+  "additionalProperties": false
 }

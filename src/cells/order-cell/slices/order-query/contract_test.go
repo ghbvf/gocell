@@ -1,45 +1,23 @@
 package orderquery
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-// Contract: http.order.v1 — GET /{id} returns {data: Order}, GET / returns paginated list.
-func TestHttpOrderV1Serve(t *testing.T) {
-	now := time.Now()
-	h, _ := newTestHandler(&domain.Order{
-		ID: "ord-1", Item: "widget", Status: "pending", CreatedAt: now,
-	})
+func TestHttpOrderGetV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.order.get.v1")
 
-	t.Run("get single", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/ord-1", nil)
-		req.SetPathValue("id", "ord-1")
-		h.HandleGet(w, req)
+	c.ValidateResponse(t, []byte(`{"data":{"id":"o-1","item":"widget","status":"pending","createdAt":"2026-01-01T00:00:00Z"}}`))
+	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+}
 
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Contains(t, resp, "data", "contract requires data envelope")
-	})
+func TestHttpOrderListV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.order.list.v1")
 
-	t.Run("list", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		h.HandleList(w, req)
-
-		require.Equal(t, http.StatusOK, w.Code)
-		var resp map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Contains(t, resp, "data", "contract requires data array")
-		assert.Contains(t, resp, "hasMore", "contract requires hasMore field")
-	})
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"o-1","item":"widget","status":"pending","createdAt":"2026-01-01T00:00:00Z"}],"hasMore":false}`))
+	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
 }

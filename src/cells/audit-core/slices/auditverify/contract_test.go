@@ -1,19 +1,17 @@
 package auditverify
 
 import (
-	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-// Contract: event.audit.integrity-verified.v1 — verify publishes {valid, first_invalid_index, entries_checked}.
 func TestEventAuditIntegrityVerifiedV1Publish(t *testing.T) {
-	svc, _ := newTestService()
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.audit.integrity-verified.v1")
 
-	result, err := svc.VerifyChain(context.Background(), 0, 100)
-	require.NoError(t, err)
-	assert.True(t, result.Valid, "contract: empty chain should verify as valid")
-	assert.Equal(t, 0, result.EntriesChecked)
+	c.ValidatePayload(t, []byte(`{"valid":true,"first_invalid_index":0,"entries_checked":100}`))
+	c.ValidateHeaders(t, []byte(`{"event_id":"evt-iv-1"}`))
+	c.MustRejectPayload(t, []byte(`{"valid":true}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }

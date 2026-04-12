@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.test.valid.v1.request",
+  "type": "object",
+  "properties": {
+    "username": { "type": "string", "minLength": 1 },
+    "email": { "type": "string", "format": "email" }
+  },
+  "required": ["username", "email"],
+  "additionalProperties": false
+}

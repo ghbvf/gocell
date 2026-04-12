@@ -8,5 +8,6 @@
     "status": { "type": "string" },
     "lastSeen": { "type": "string", "format": "date-time" }
   },
-  "required": ["id", "name", "status"]
+  "required": ["id", "name", "status"],
+  "additionalProperties": false
 }

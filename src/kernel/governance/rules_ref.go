@@ -267,6 +267,7 @@ func (v *Validator) validateREF12() []ValidationResult {
 			{"schemaRefs.request", c.SchemaRefs.Request},
 			{"schemaRefs.response", c.SchemaRefs.Response},
 			{"schemaRefs.payload", c.SchemaRefs.Payload},
+			{"schemaRefs.headers", c.SchemaRefs.Headers},
 		}
 		for key, val := range c.SchemaRefs.Extra {
 			refs = append(refs, refEntry{

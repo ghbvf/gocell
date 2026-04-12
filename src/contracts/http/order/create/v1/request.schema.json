@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.order.create.v1.request",
+  "type": "object",
+  "properties": {
+    "item": { "type": "string" }
+  },
+  "required": ["item"],
+  "additionalProperties": false
+}

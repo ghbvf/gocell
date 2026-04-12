@@ -1,0 +1,11 @@
+id: http.config.flags.list.v1
+kind: http
+ownerCell: config-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: config-core
+  clients: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

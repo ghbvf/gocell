@@ -8,5 +8,6 @@
     "status": { "type": "string" },
     "createdAt": { "type": "string", "format": "date-time" }
   },
-  "required": ["id", "item", "status"]
+  "required": ["id", "item", "status"],
+  "additionalProperties": false
 }

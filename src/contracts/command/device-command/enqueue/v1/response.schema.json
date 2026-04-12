@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "command.device-command.enqueue.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "payload": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "deviceId", "payload", "status"]
+    }
+  },
+  "required": ["data"]
+}
