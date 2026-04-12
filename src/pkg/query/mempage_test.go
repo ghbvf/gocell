@@ -71,13 +71,12 @@ func cmpFloat(a, b float64) int {
 
 // requireCursorInvalidMsg asserts the error is a standardized cursor error
 // with unified message and the expected reason in details.
-// NOTE: the string literal must match query.cursorInvalidMsg (unexported).
 func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
 	t.Helper()
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	assert.Equal(t, "invalid cursor; restart from first page", ecErr.Message,
+	assert.Equal(t, query.TestCursorInvalidMsg, ecErr.Message,
 		"client-facing message must be stable across all cursor errors")
 	assert.Equal(t, wantReason, ecErr.Details["reason"])
 }

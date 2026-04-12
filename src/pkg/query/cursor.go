@@ -161,22 +161,26 @@ func QueryContext(pairs ...string) string {
 const cursorInvalidMsg = "invalid cursor; restart from first page"
 
 // cursorInvalid returns a standardized cursor error with a stable client-facing
-// message and diagnostic reason in the details field.
+// message and diagnostic reason in the details field. The reason is also set as
+// InternalMessage so it appears in server-side logs via Error().
 func cursorInvalid(reason string) *errcode.Error {
 	return errcode.WithDetails(
-		errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
+		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		map[string]any{"reason": reason})
 }
 
 // cursorInvalidExtra returns a standardized cursor error with extra diagnostic
 // key-value pairs merged into the details alongside the reason.
+// The "reason" key is set after merging extra, so callers cannot accidentally
+// overwrite it.
 func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
-	details := map[string]any{"reason": reason}
+	details := make(map[string]any, len(extra)+1)
 	for k, v := range extra {
 		details[k] = v
 	}
+	details["reason"] = reason // set last — cannot be overwritten by extra
 	return errcode.WithDetails(
-		errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
+		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		details)
 }
 
