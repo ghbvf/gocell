@@ -165,6 +165,7 @@ func testPublishSubscribeMultiple(t *testing.T, features Features, constructor P
 		mu        sync.Mutex
 		collected []outbox.Entry
 		done      = make(chan struct{})
+		closeOnce sync.Once
 	)
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -178,11 +179,7 @@ func testPublishSubscribeMultiple(t *testing.T, features Features, constructor P
 			count := len(collected)
 			mu.Unlock()
 			if count >= n {
-				select {
-				case <-done:
-				default:
-					close(done)
-				}
+				closeOnce.Do(func() { close(done) })
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
@@ -238,6 +235,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 		mu        sync.Mutex
 		collected []outbox.Entry
 		done      = make(chan struct{})
+		closeOnce sync.Once
 	)
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -251,11 +249,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 			count := len(collected)
 			mu.Unlock()
 			if count >= n {
-				select {
-				case <-done:
-				default:
-					close(done)
-				}
+				closeOnce.Do(func() { close(done) })
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
@@ -444,8 +438,11 @@ func testDispositionRequeue(t *testing.T, features Features, constructor PubSubC
 	ctx := context.Background()
 	topic := TestTopic(t)
 
-	var callCount atomic.Int32
-	done := make(chan struct{})
+	var (
+		callCount atomic.Int32
+		done      = make(chan struct{})
+		closeOnce sync.Once
+	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -463,11 +460,7 @@ func testDispositionRequeue(t *testing.T, features Features, constructor PubSubC
 				}
 			}
 			// Second call: ack.
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+			closeOnce.Do(func() { close(done) })
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
@@ -543,8 +536,11 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 	ctx := context.Background()
 	topic := TestTopic(t)
 
-	var callCount atomic.Int32
-	done := make(chan struct{})
+	var (
+		callCount atomic.Int32
+		done      = make(chan struct{})
+		closeOnce sync.Once
+	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -558,11 +554,7 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 				// Return zero-value HandleResult (invalid Disposition).
 				return outbox.HandleResult{}
 			}
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+			closeOnce.Do(func() { close(done) })
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
@@ -596,8 +588,11 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 	ctx := context.Background()
 	topic := TestTopic(t)
 
-	var callCount atomic.Int32
-	done := make(chan struct{})
+	var (
+		callCount atomic.Int32
+		done      = make(chan struct{})
+		closeOnce sync.Once
+	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -613,11 +608,7 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 		_ = sub.Subscribe(subCtx, topic, func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			callCount.Add(1)
 			res := handler(ctx, entry)
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+			closeOnce.Do(func() { close(done) })
 			return res
 		})
 	}()
@@ -939,6 +930,9 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 		mu        sync.Mutex
 		collected []outbox.Entry
 		done      = make(chan struct{})
+		closeOnce sync.Once
+		pubErrs   []error
+		pubMu     sync.Mutex
 	)
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
@@ -952,27 +946,33 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 			count := len(collected)
 			mu.Unlock()
 			if count >= n {
-				select {
-				case <-done:
-				default:
-					close(done)
-				}
+				closeOnce.Do(func() { close(done) })
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 	time.Sleep(subscribeInitDelay)
 
-	// Publish concurrently.
+	// Publish concurrently — collect errors safely (t.Fatal from goroutine is illegal).
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
 		go func(seq int) {
 			defer wg.Done()
-			assertNoError(t, pub.Publish(ctx, topic, testPayload(seq)))
+			if err := pub.Publish(ctx, topic, testPayload(seq)); err != nil {
+				pubMu.Lock()
+				pubErrs = append(pubErrs, err)
+				pubMu.Unlock()
+			}
 		}(i)
 	}
 	wg.Wait()
+	for _, err := range pubErrs {
+		t.Errorf("concurrent publish error: %v", err)
+	}
+	if len(pubErrs) > 0 {
+		t.FailNow()
+	}
 
 	select {
 	case <-done:

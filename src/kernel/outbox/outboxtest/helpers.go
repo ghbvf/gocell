@@ -88,6 +88,7 @@ func CollectN(
 		mu        sync.Mutex
 		collected []outbox.Entry
 		done      = make(chan struct{})
+		closeOnce sync.Once
 	)
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -100,11 +101,7 @@ func CollectN(
 		mu.Unlock()
 
 		if count >= n {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+			closeOnce.Do(func() { close(done) })
 		}
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
