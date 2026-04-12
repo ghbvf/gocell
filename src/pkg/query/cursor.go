@@ -71,17 +71,17 @@ func (c *CursorCodec) Encode(cur Cursor) (string, error) {
 // Returns ErrCursorInvalid on any failure (tamper, format, etc.).
 func (c *CursorCodec) Decode(token string) (Cursor, error) {
 	if token == "" {
-		return Cursor{}, errcode.New(errcode.ErrCursorInvalid, "cursor token is empty")
+		return Cursor{}, cursorInvalid("cursor token is empty")
 	}
 
 	raw, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil {
-		return Cursor{}, errcode.New(errcode.ErrCursorInvalid, "cursor: invalid base64 encoding")
+		return Cursor{}, cursorInvalid("invalid base64 encoding")
 	}
 
 	dotIdx := bytes.LastIndexByte(raw, '.')
 	if dotIdx < 0 || dotIdx >= len(raw)-1 {
-		return Cursor{}, errcode.New(errcode.ErrCursorInvalid, "cursor: missing signature separator")
+		return Cursor{}, cursorInvalid("missing signature separator")
 	}
 
 	payload := raw[:dotIdx]
@@ -102,12 +102,12 @@ func (c *CursorCodec) Decode(token string) (Cursor, error) {
 		}
 	}
 	if !verified {
-		return Cursor{}, errcode.New(errcode.ErrCursorInvalid, "cursor: signature verification failed")
+		return Cursor{}, cursorInvalid("signature verification failed")
 	}
 
 	var cur Cursor
 	if err := json.Unmarshal(payload, &cur); err != nil {
-		return Cursor{}, errcode.New(errcode.ErrCursorInvalid, "cursor: invalid payload")
+		return Cursor{}, cursorInvalid("invalid payload")
 	}
 
 	return cur, nil
@@ -157,35 +157,47 @@ func QueryContext(pairs ...string) string {
 // so they appear in the response "details" field without polluting "message".
 const cursorInvalidMsg = "invalid cursor; restart from first page"
 
+// cursorInvalid returns a standardized cursor error with a stable client-facing
+// message and diagnostic reason in the details field.
+func cursorInvalid(reason string) *errcode.Error {
+	return errcode.WithDetails(
+		errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
+		map[string]any{"reason": reason})
+}
+
+// cursorInvalidExtra returns a standardized cursor error with extra diagnostic
+// key-value pairs merged into the details alongside the reason.
+func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
+	details := map[string]any{"reason": reason}
+	for k, v := range extra {
+		details[k] = v
+	}
+	return errcode.WithDetails(
+		errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
+		details)
+}
+
 // ValidateCursorScope checks that the decoded cursor carries the expected sort
 // scope and query context, and that the value count matches. Both fields are
 // mandatory on both sides — empty scope/context is rejected regardless of
 // whether it comes from the cursor or from the caller.
 func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
 	if cur.Scope == "" {
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
-			map[string]any{"reason": "sort scope is required"})
+		return cursorInvalid("sort scope is required")
 	}
 	if expected := SortScope(sort); cur.Scope != expected {
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
-			map[string]any{"reason": "sort scope mismatch", "got": cur.Scope, "want": expected})
+		return cursorInvalidExtra("sort scope mismatch",
+			map[string]any{"got": cur.Scope, "want": expected})
 	}
 	if cur.Context == "" {
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
-			map[string]any{"reason": "query context is required"})
+		return cursorInvalid("query context is required")
 	}
 	if cur.Context != queryCtx {
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
-			map[string]any{"reason": "query context mismatch", "got": cur.Context, "want": queryCtx})
+		return cursorInvalidExtra("query context mismatch",
+			map[string]any{"got": cur.Context, "want": queryCtx})
 	}
 	if len(cur.Values) != len(sort) {
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrCursorInvalid, cursorInvalidMsg),
-			map[string]any{"reason": fmt.Sprintf("has %d values but expected %d sort columns", len(cur.Values), len(sort))})
+		return cursorInvalid(fmt.Sprintf("has %d values but expected %d sort columns", len(cur.Values), len(sort)))
 	}
 	return nil
 }
