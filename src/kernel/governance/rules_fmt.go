@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
@@ -396,132 +397,132 @@ func (v *Validator) validateFMT12() []ValidationResult {
 	return results
 }
 
+// codeFMT13 is the rule code for HTTP transport metadata validation.
+const codeFMT13 = "FMT-13"
+
 // validateFMT13 checks optional HTTP transport metadata on migrated HTTP contracts.
 // Legacy HTTP contracts may omit endpoints.http entirely, but once present it must
 // be internally consistent and must not conflict with no-content semantics.
 func (v *Validator) validateFMT13() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		httpMeta := c.Endpoints.HTTP
-		if httpMeta == nil {
+		if c.Endpoints.HTTP == nil {
 			continue
 		}
-
-		if cell.ContractKind(c.Kind) != cell.ContractHTTP {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http",
-				Message:   fmt.Sprintf("contract %q can only declare endpoints.http when kind is http", c.ID),
-			})
-			continue
-		}
-
-		if httpMeta.Method == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.method",
-				Message:   fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present", c.ID),
-			})
-		} else if !validHTTPMethods[strings.ToUpper(httpMeta.Method)] {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.method",
-				Message:   fmt.Sprintf("http contract %q method %q is not supported", c.ID, httpMeta.Method),
-			})
-		}
-
-		if httpMeta.Path == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.path",
-				Message:   fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present", c.ID),
-			})
-		} else if !strings.HasPrefix(httpMeta.Path, "/") {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.path",
-				Message:   fmt.Sprintf("http contract %q path %q must start with '/'", c.ID, httpMeta.Path),
-			})
-		}
-
-		if httpMeta.SuccessStatus == 0 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.successStatus",
-				Message:   fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present", c.ID),
-			})
-		} else if httpMeta.SuccessStatus < 200 || httpMeta.SuccessStatus > 299 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.successStatus",
-				Message:   fmt.Sprintf("http contract %q successStatus %d must be a 2xx code", c.ID, httpMeta.SuccessStatus),
-			})
-		}
-
-		if httpMeta.NoContent {
-			if httpMeta.SuccessStatus != 0 && httpMeta.SuccessStatus != 204 {
-				results = append(results, ValidationResult{
-					Code:      "FMT-13",
-					Severity:  SeverityError,
-					IssueType: IssueMismatch,
-					File:      contractFile(c.ID),
-					Field:     "endpoints.http.noContent",
-					Message:   fmt.Sprintf("http contract %q with noContent=true must use successStatus 204", c.ID),
-				})
-			}
-			if c.SchemaRefs.Response != "" {
-				results = append(results, ValidationResult{
-					Code:      "FMT-13",
-					Severity:  SeverityError,
-					IssueType: IssueForbidden,
-					File:      contractFile(c.ID),
-					Field:     "schemaRefs.response",
-					Message:   fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
-				})
-			}
-		} else if httpMeta.SuccessStatus == 204 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityError,
-				IssueType: IssueMismatch,
-				File:      contractFile(c.ID),
-				Field:     "endpoints.http.noContent",
-				Message:   fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
-			})
-		}
-
-		// Advisory: noContent=false without schemaRefs.response is likely incomplete.
-		if !httpMeta.NoContent && c.SchemaRefs.Response == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-13",
-				Severity:  SeverityWarning,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "schemaRefs.response",
-				Message:   fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
-			})
-		}
+		results = append(results, v.validateFMT13ForContract(c)...)
 	}
+	return results
+}
+
+// validateFMT13ForContract validates a single contract's HTTP transport metadata.
+func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []ValidationResult {
+	httpMeta := c.Endpoints.HTTP
+	file := contractFile(c.ID)
+
+	if cell.ContractKind(c.Kind) != cell.ContractHTTP {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
+			File: file, Field: "endpoints.http",
+			Message: fmt.Sprintf("contract %q can only declare endpoints.http when kind is http", c.ID),
+		}}
+	}
+
+	var results []ValidationResult
+	results = append(results, v.validateFMT13Method(c, httpMeta, file)...)
+	results = append(results, v.validateFMT13Path(c, httpMeta, file)...)
+	results = append(results, v.validateFMT13Status(c, httpMeta, file)...)
+	results = append(results, v.validateFMT13NoContent(c, httpMeta, file)...)
+	return results
+}
+
+func (v *Validator) validateFMT13Method(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	if h.Method == "" {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
+			File: file, Field: "endpoints.http.method",
+			Message: fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present", c.ID),
+		}}
+	}
+	if !validHTTPMethods[strings.ToUpper(h.Method)] {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
+			File: file, Field: "endpoints.http.method",
+			Message: fmt.Sprintf("http contract %q method %q is not supported", c.ID, h.Method),
+		}}
+	}
+	return nil
+}
+
+func (v *Validator) validateFMT13Path(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	if h.Path == "" {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
+			File: file, Field: "endpoints.http.path",
+			Message: fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present", c.ID),
+		}}
+	}
+	if !strings.HasPrefix(h.Path, "/") {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
+			File: file, Field: "endpoints.http.path",
+			Message: fmt.Sprintf("http contract %q path %q must start with '/'", c.ID, h.Path),
+		}}
+	}
+	return nil
+}
+
+func (v *Validator) validateFMT13Status(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	if h.SuccessStatus == 0 {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
+			File: file, Field: "endpoints.http.successStatus",
+			Message: fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present", c.ID),
+		}}
+	}
+	if h.SuccessStatus < 200 || h.SuccessStatus > 299 {
+		return []ValidationResult{{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
+			File: file, Field: "endpoints.http.successStatus",
+			Message: fmt.Sprintf("http contract %q successStatus %d must be a 2xx code", c.ID, h.SuccessStatus),
+		}}
+	}
+	return nil
+}
+
+func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	var results []ValidationResult
+
+	if h.NoContent {
+		if h.SuccessStatus != 0 && h.SuccessStatus != 204 {
+			results = append(results, ValidationResult{
+				Code: codeFMT13, Severity: SeverityError, IssueType: IssueMismatch,
+				File: file, Field: "endpoints.http.noContent",
+				Message: fmt.Sprintf("http contract %q with noContent=true must use successStatus 204", c.ID),
+			})
+		}
+		if c.SchemaRefs.Response != "" {
+			results = append(results, ValidationResult{
+				Code: codeFMT13, Severity: SeverityError, IssueType: IssueForbidden,
+				File: file, Field: "schemaRefs.response",
+				Message: fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
+			})
+		}
+	} else if h.SuccessStatus == 204 {
+		results = append(results, ValidationResult{
+			Code: codeFMT13, Severity: SeverityError, IssueType: IssueMismatch,
+			File: file, Field: "endpoints.http.noContent",
+			Message: fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
+		})
+	}
+
+	// Advisory: noContent=false without schemaRefs.response is likely incomplete.
+	if !h.NoContent && c.SchemaRefs.Response == "" {
+		results = append(results, ValidationResult{
+			Code: codeFMT13, Severity: SeverityWarning, IssueType: IssueRequired,
+			File: file, Field: "schemaRefs.response",
+			Message: fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
+		})
+	}
+
 	return results
 }

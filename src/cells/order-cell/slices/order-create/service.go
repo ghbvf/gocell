@@ -72,35 +72,43 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 	}
 
 	if s.outboxWriter != nil {
-		entry, err := s.buildOrderCreatedEntry(order)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.runInTx(ctx, func(txCtx context.Context) error {
-			if err := s.repo.Create(txCtx, order); err != nil {
-				return fmt.Errorf("order-create: persist: %w", err)
-			}
-			if err := s.outboxWriter.Write(txCtx, entry); err != nil {
-				return fmt.Errorf("order-create: write outbox: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return nil, err
-		}
+		return s.createDurable(ctx, order)
+	}
+	return s.createDemo(ctx, order)
+}
 
-		s.logger.Info("order-create: outbox entry written",
-			slog.String("order_id", order.ID),
-			slog.String("entry_id", entry.ID),
-			slog.String("topic", entry.RoutingTopic()),
-		)
-		return order, nil
+// createDurable persists the order and writes an outbox entry atomically.
+func (s *Service) createDurable(ctx context.Context, order *domain.Order) (*domain.Order, error) {
+	entry, err := s.buildOrderCreatedEntry(order)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Create(txCtx, order); err != nil {
+			return fmt.Errorf("order-create: persist: %w", err)
+		}
+		if err := s.outboxWriter.Write(txCtx, entry); err != nil {
+			return fmt.Errorf("order-create: write outbox: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
+	s.logger.Info("order-create: outbox entry written",
+		slog.String("order_id", order.ID),
+		slog.String("entry_id", entry.ID),
+		slog.String("topic", entry.RoutingTopic()),
+	)
+	return order, nil
+}
+
+// createDemo persists the order and publishes directly (best-effort, no transactional guarantee).
+func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.Order, error) {
 	if err := s.repo.Create(ctx, order); err != nil {
 		return nil, fmt.Errorf("order-create: persist: %w", err)
 	}
 
-	// Demo mode fallback: publish directly without transactional guarantees.
 	payload, err := json.Marshal(order)
 	if err != nil {
 		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
