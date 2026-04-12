@@ -57,6 +57,21 @@ func TestHandleRegister(t *testing.T) {
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "unknown field returns 400",
+			body:       `{"name":"x","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+			checkBody: func(t *testing.T, body []byte) {
+				var resp struct {
+					Error struct {
+						Details map[string]any `json:"details"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "unknown field", resp.Error.Details["reason"])
+				assert.Equal(t, "extra", resp.Error.Details["field"])
+			},
+		},
 	}
 
 	for _, tc := range tests {

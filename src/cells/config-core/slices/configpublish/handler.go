@@ -36,7 +36,7 @@ func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Version int `json:"version"`
 	}
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

@@ -40,6 +40,23 @@ type SpanRecorder interface {
 	SetStatus(isError bool, description string)
 }
 
+// SpanRenamer is an optional interface that Span implementations may support
+// for updating the span name after creation. This is used by HTTP middleware
+// to rename spans from the initial "{method} {path}" to the low-cardinality
+// "{method} {routePattern}" after routing completes.
+type SpanRenamer interface {
+	// SetName updates the span's display name.
+	SetName(name string)
+}
+
+// SpanSetName renames the span if it implements SpanRenamer.
+// Spans that do not support renaming are silently skipped.
+func SpanSetName(s Span, name string) {
+	if r, ok := s.(SpanRenamer); ok {
+		r.SetName(name)
+	}
+}
+
 // SpanRecordError records an error on the span if it implements SpanRecorder.
 // Spans that do not support error recording are silently skipped.
 func SpanRecordError(s Span, err error) {
@@ -62,6 +79,12 @@ type Tracer interface {
 	// carries the span and its trace/span IDs.
 	Start(ctx context.Context, name string) (context.Context, Span)
 }
+
+// Compile-time checks: simpleSpan implements Span and SpanRenamer.
+var (
+	_ Span        = (*simpleSpan)(nil)
+	_ SpanRenamer = (*simpleSpan)(nil)
+)
 
 // simpleTracer is a lightweight Tracer that generates random IDs.
 type simpleTracer struct {
@@ -113,6 +136,9 @@ func (s *simpleSpan) SetAttribute(key string, value any) {
 
 func (s *simpleSpan) TraceID() string { return s.traceID }
 func (s *simpleSpan) SpanID() string  { return s.spanID }
+
+// SetName updates the span's display name.
+func (s *simpleSpan) SetName(name string) { s.name = name }
 
 // generateID creates a random hex-encoded ID of the given byte length.
 func generateID(byteLen int) string {

@@ -28,6 +28,7 @@
 | CLEANUP-01/02 + RMQ-75-01/03/04 清理 | PR#83 ✅ | 删除 WithEventBus/WithSigningKey deprecated wrapper + flaky RMQ test → require.Eventually + bootstrap EventRegistrar invariant |
 | Outbox BatchWriter 性能优化 | PR#84 ✅ | strings.Builder 预分配 + strconv.AppendInt，batch insert 内存分配降低 ~99% |
 | 测试覆盖率 85.8% → 90.6% | PR#85 ✅ | 16 cell/runtime/adapter/cmd 测试文件，1823 行纯测试代码，零源码变更 |
+| RMQ-75-02/05 运维加固 — 补充测试 | PR#88 ✅ | Health 中间状态 + permanent 优先级 + 多 checker + 动态状态切换 4 个新测试；生产示例 deferred → P3-DEFER-03 (blocked on Batch 5) |
 
 ## 进行中
 
@@ -179,15 +180,17 @@
 | ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
 | ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
 | ~~RMQ-75-01~~ | `adapters/rabbitmq/rabbitmq_test.go` | ~~Flaky test: time.Sleep → require.Eventually~~ PR#83 ✅ | ~~15min~~ |
-| RMQ-75-02 | `adapters/rabbitmq/connection.go` | `MaxReconnectAttempts` 配置缺失，无限重连无上界（运维保底） | 1h |
+| ~~RMQ-75-02~~ | `adapters/rabbitmq/connection.go` | ~~`MaxReconnectAttempts` 配置缺失，无限重连无上界（运维保底）~~ PR#80 实现 + PR#88 补充测试 ✅ | ~~1h~~ |
 | ~~RMQ-75-03~~ | `adapters/rabbitmq/connection.go` | ~~命名改善~~ PR#83 验证已合入 | ~~15min~~ |
 | ~~RMQ-75-04~~ | `adapters/rabbitmq/connection.go` | ~~WaitConnected godoc~~ PR#83 验证已合入 | ~~15min~~ |
-| RMQ-75-05 | `runtime/bootstrap/bootstrap.go` | `RegisterChecker("rabbitmq", conn.Health)` 未接入 readiness — permanent error 后 Pod 继续接流量 | 30min |
+| ~~RMQ-75-05~~ | `runtime/bootstrap/bootstrap.go` | ~~`RegisterChecker("rabbitmq", conn.Health)` 未接入 readiness — permanent error 后 Pod 继续接流量~~ PR#83 基础 + PR#88 补充测试 ✅ | ~~30min~~ |
 | P3-DEFER-01 | `adapters/rabbitmq/consumer_base.go`, `connection.go` | safeDelay 与 backoffDelay 核心逻辑重复（bits.Len64 overflow guard），应提取到 pkg/backoff | 2h |
 | P3-DEFER-02 | `adapters/rabbitmq/consumer_base.go` | ClaimFailOpen `*bool` 不符合 Go 习惯，应改为 enum (`ClaimFailMode`) | 1h |
-| P3-DEFER-03 | `examples/` | 新 API 无示例演示 — PR#83 已迁移 sso-bff/iot-device/todo-order 到 WithPublisher+WithSubscriber；剩余 WithHealthChecker、NewConsumerBase(Claimer)、MaxReconnectAttempts 示例 | 1h |
+| P3-DEFER-03 | `examples/` | 新 API 无示例演示 — PR#83 已迁移 sso-bff/iot-device/todo-order 到 WithPublisher+WithSubscriber；剩余 WithHealthChecker + MaxReconnectAttempts + NewConsumerBase(Claimer) 生产接线示例。**blocked on Batch 5 (WM-17 + ER-ARCH-02)**：当前 Publisher/Subscriber API 签名与示例不匹配，且 EventRouter 无 ConsumerGroup 支持，写了也不可用 | 1h（Batch 5 后） |
 | P3-DEFER-04 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go` | Receipt 定义在 outbox 包造成 idempotency→outbox 耦合，考虑移到 idempotency 包 | 3h（C3 kernel 接口） |
 | P3-DEFER-05 | `adapters/rabbitmq/connection.go` | Health() 在 reconnecting 和 terminal 状态下返回相同 error code，运维无法区分 | 3h（C3 状态机设计） |
+| RMQ-RACE-01 | `adapters/rabbitmq/connection.go:322-328` | WaitConnected handoff 竞态窗口 — reconnectLoop 在 drainChannelPool (323) 和 mu.Lock (326) 之间存在 gap，WaitConnected 可读到旧已关闭 channel 返回假成功。影响：Subscriber 抖动重试（自愈），不丢消息。修复：将 connected channel 置换提到 drainChannelPool 之前，或 WaitConnected 唤醒后复核 conn 状态 | 1h（C2，改并发语义需 -race 验证） |
+| SEC-READYZ-01 | `runtime/http/health/health.go`, `runtime/http/router/router.go`, `runtime/auth/middleware.go` | /readyz 暴露依赖拓扑 — ReadyzHandler 返回具名 dependencies（如 "rabbitmq"/"postgres"），挂在主 listener 且 auth 白名单跳过认证。公网部署可被匿名枚举。修复方向：admin listener 分离 或 public /readyz 只返回聚合状态 | 2h（C3，需设计 admin listener 或分级响应） |
 
 ### winmdm Accept P1
 
@@ -455,8 +458,8 @@
 |------|------|------|--------|
 | A | ~~0-B2 RL-01~08 Outbox Relay 三阶段重写~~ | — | PR#82 ✅ |
 | A | ~~Phase 3: Checker 清理 + Receipt 加固~~ | — | PR#80 ✅ |
-| A | ~~RMQ-75-01/03/04~~ + RMQ-75-02 MaxReconnectAttempts | 1h | 01/03/04 由 PR#83 ✅ 完成；剩余 02 无限重连无上界 |
-| A | RMQ-75-05 readiness 接 rabbitmq Health() | 30min | `RegisterChecker("rabbitmq", conn.Health)` — 提前自 Batch 6 |
+| A | ~~RMQ-75-01/03/04~~ + ~~RMQ-75-02~~ MaxReconnectAttempts | ~~1h~~ | 01/03/04 由 PR#83 ✅；02 由 PR#80 实现 + PR#88 补充测试 ✅ |
+| A | ~~RMQ-75-05~~ readiness 接 rabbitmq Health() | ~~30min~~ | PR#83 基础 + PR#88 补充测试 ✅ |
 | B | HR-02 metrics 基数爆炸修复 (PROM-01) | 2h | route pattern 元数据替代 r.URL.Path |
 | B | HR-01/03/04 HTTP 产品化收尾 | 4h | RealIP 决策 + RequestID bridge + tracing 决策 |
 | B | 0-H SF-01~04 DecodeJSONStrict | 3h | 严格模式 + handler 迁移 |
@@ -539,7 +542,7 @@ Week 1:
 Week 2:
   Day 1:   Batch 2 (架构修复: Phase 1 + Phase 2 + B-03) ✅ 已完成
   Day 2-3: Batch 3 (Tier 0 收尾: Relay ✅ + Phase 3 ✅ + RMQ cleanup ✅ + HTTP 产品化)
-           ┊ 剩余: RMQ-75-02 + HR-01~04 + SF-01~04 + handler 改造
+           ┊ 剩余: ~~RMQ-75-02~~ ✅ PR#88 + HR-01~04 + SF-01~04 + handler 改造
   Day 4-5: Batch 4 (WM-1 ✅ + WM-2 ✅ + 游标分页 + 配置热更新)
            ┊ 释放 ~3d 容量（WM-1 + WM-2 + Relay + Phase 3 + CLEANUP 提前完成）
 

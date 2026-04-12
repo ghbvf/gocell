@@ -16,7 +16,8 @@ const headerRequestID = "X-Request-Id"
 
 // RequestID reads the request ID from the X-Request-Id header, or generates a
 // new UUID v4 if absent. The ID is stored in the request context via
-// ctxkeys.RequestID and echoed back in the response header.
+// ctxkeys.RequestID and bridged to ctxkeys.CorrelationID for cross-service
+// tracing correlation. The ID is echoed back in the response header.
 const maxRequestIDLen = 128
 
 func RequestID(next http.Handler) http.Handler {
@@ -27,6 +28,7 @@ func RequestID(next http.Handler) http.Handler {
 		}
 		w.Header().Set(headerRequestID, id)
 		ctx := ctxkeys.WithRequestID(r.Context(), id)
+		ctx = ctxkeys.WithCorrelationID(ctx, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

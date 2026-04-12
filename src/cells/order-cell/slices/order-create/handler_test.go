@@ -2,6 +2,7 @@ package ordercreate
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,11 @@ func TestHandleCreate(t *testing.T) {
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "unknown field returns 400",
+			body:       `{"item":"x","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -81,8 +87,15 @@ func TestHandleCreate_ResponseBody(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, rec.Code)
 
-	body := rec.Body.String()
-	assert.Contains(t, body, `"item":"laptop"`)
-	assert.Contains(t, body, `"status":"pending"`)
-	assert.Contains(t, body, `"id"`)
+	var resp struct {
+		Data struct {
+			ID     string `json:"id"`
+			Item   string `json:"item"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Data.ID)
+	assert.Equal(t, "laptop", resp.Data.Item)
+	assert.Equal(t, "pending", resp.Data.Status)
 }

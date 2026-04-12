@@ -40,6 +40,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	// In-memory event bus (publisher + subscriber).
+	// Production RabbitMQ wiring: see P3-DEFER-03 (blocked on Batch 5: WM-17 + ER-ARCH-02).
 	eb := eventbus.New()
 
 	// RSA key pair for JWT signing/verification (development only).

@@ -28,7 +28,8 @@ func Metrics(collector metrics.Collector) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 
 			safeObserve(func() {
-				collector.RecordRequest(r.Method, r.URL.Path, state.Status(), time.Since(start).Seconds())
+				route := RoutePatternFromCtx(r.Context())
+				collector.RecordRequest(r.Method, route, state.Status(), time.Since(start).Seconds())
 			})
 		})
 	}

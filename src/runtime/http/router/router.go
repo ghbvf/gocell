@@ -54,6 +54,18 @@ func WithBodyLimit(maxBytes int64) Option {
 	}
 }
 
+// WithTrustedProxies configures the set of trusted proxy IPs/CIDRs for
+// X-Forwarded-For header processing. Supports both exact IPs ("192.168.1.1")
+// and CIDR notation ("10.0.0.0/8"). When nil (default), no proxy is trusted
+// and RemoteAddr is always used.
+//
+// ref: gin-gonic/gin — SetTrustedProxies([]string) with CIDR support
+func WithTrustedProxies(proxies []string) Option {
+	return func(r *Router) {
+		r.trustedProxies = proxies
+	}
+}
+
 // Router wraps chi.Mux and implements kernel/cell.RouteMux.
 type Router struct {
 	mux              *chi.Mux
@@ -61,6 +73,7 @@ type Router struct {
 	metricsCollector metrics.Collector
 	metricsHandler   http.Handler
 	bodyLimit        int64
+	trustedProxies   []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -86,7 +99,7 @@ func New(opts ...Option) *Router {
 	// Recovery after them so panic-recovered 500s are observable.
 	r.mux.Use(
 		middleware.RequestID,
-		middleware.RealIP(nil),
+		middleware.RealIP(r.trustedProxies),
 		middleware.Recorder,
 		middleware.AccessLog,
 	)

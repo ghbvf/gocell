@@ -175,10 +175,14 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 	require.Equal(t, http.StatusCreated, createRec.Code)
 
 	// Extract the ID from the create response.
-	var createResp map[string]any
+	var createResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
 	require.NoError(t, json.NewDecoder(createRec.Body).Decode(&createResp))
-	orderID, ok := createResp["id"].(string)
-	require.True(t, ok, "response should contain string id")
+	orderID := createResp.Data.ID
+	require.NotEmpty(t, orderID, "response should contain data.id")
 
 	// GET the created order by its actual ID.
 	rec := httptest.NewRecorder()
