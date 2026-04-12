@@ -70,6 +70,96 @@ func TestNewWatcher_InvalidPath(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestWatcher_AtomicReplace_RenameCreate simulates Kubernetes ConfigMap atomic
+// replace: rename old file, then create a new file with the same name.
+func TestWatcher_AtomicReplace_RenameCreate(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(file, []byte("key: v1"), 0o644))
+
+	w, err := NewWatcher(file)
+	require.NoError(t, err)
+	defer func() { _ = w.Close() }()
+
+	var called atomic.Int32
+	w.OnChange(func(_ WatchEvent) { called.Add(1) })
+	w.Start()
+
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher not ready")
+	}
+
+	// Atomic replace: rename → create.
+	require.NoError(t, os.Rename(file, file+".bak"))
+	require.NoError(t, os.WriteFile(file, []byte("key: v2"), 0o644))
+
+	assert.Eventually(t, func() bool {
+		return called.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected callback after atomic rename+create")
+}
+
+// TestWatcher_AtomicReplace_RemoveRecreate verifies that remove followed by
+// recreate still fires the callback (common in container orchestrators).
+func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(file, []byte("key: v1"), 0o644))
+
+	w, err := NewWatcher(file)
+	require.NoError(t, err)
+	defer func() { _ = w.Close() }()
+
+	var called atomic.Int32
+	w.OnChange(func(_ WatchEvent) { called.Add(1) })
+	w.Start()
+
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher not ready")
+	}
+
+	// Remove + recreate.
+	require.NoError(t, os.Remove(file))
+	require.NoError(t, os.WriteFile(file, []byte("key: v2"), 0o644))
+
+	assert.Eventually(t, func() bool {
+		return called.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "expected callback after remove+recreate")
+}
+
+// TestWatcher_IgnoresUnrelatedFiles verifies that changes to other files in
+// the same directory do NOT fire the callback.
+func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	other := filepath.Join(dir, "other.yaml")
+	require.NoError(t, os.WriteFile(file, []byte("key: v1"), 0o644))
+
+	w, err := NewWatcher(file)
+	require.NoError(t, err)
+	defer func() { _ = w.Close() }()
+
+	var called atomic.Int32
+	w.OnChange(func(_ WatchEvent) { called.Add(1) })
+	w.Start()
+
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher not ready")
+	}
+
+	// Write to an unrelated file.
+	require.NoError(t, os.WriteFile(other, []byte("unrelated: true"), 0o644))
+
+	// Give enough time for a spurious event to be delivered.
+	time.Sleep(500 * time.Millisecond)
+	assert.Equal(t, int32(0), called.Load(), "unrelated file change must not fire callback")
+}
+
 func TestWatcher_StartWithContext(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")

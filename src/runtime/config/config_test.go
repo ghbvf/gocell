@@ -188,6 +188,37 @@ func TestConfig_SetNested_OverwriteNonMap(t *testing.T) {
 	assert.Equal(t, "nested-val", cfg.Get("flat.deep"))
 }
 
+func TestConfig_Generation(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: val1\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	gen, ok := cfg.(Generationer)
+	require.True(t, ok, "config must implement Generationer")
+
+	// Initial generation is 0.
+	assert.Equal(t, int64(0), gen.Generation())
+
+	// Successful reload increments generation.
+	c := cfg.(*config)
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: val2\n"), 0o644))
+	require.NoError(t, c.Reload(yamlFile, ""))
+	assert.Equal(t, int64(1), gen.Generation())
+
+	// Second reload increments again.
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: val3\n"), 0o644))
+	require.NoError(t, c.Reload(yamlFile, ""))
+	assert.Equal(t, int64(2), gen.Generation())
+
+	// Failed reload does NOT increment.
+	err = c.Reload("/nonexistent/path.yaml", "")
+	require.Error(t, err)
+	assert.Equal(t, int64(2), gen.Generation(), "failed reload must not increment generation")
+}
+
 func TestDiff(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -303,6 +334,52 @@ func TestConfig_Snapshot(t *testing.T) {
 	// Mutations to the snapshot should not affect the config.
 	snap["a"] = 999
 	assert.Equal(t, 1, cfg.Get("a"))
+}
+
+func TestSnapshot_SliceIsolation(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("tags:\n  - alpha\n  - beta\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	snap := cfg.(Snapshotter).Snapshot()
+
+	// Mutate the slice in the snapshot.
+	tags, ok := snap["tags"].([]any)
+	require.True(t, ok, "tags should be []any")
+	tags[0] = "CORRUPTED"
+
+	// Original config must be unaffected.
+	origTags, ok := cfg.Get("tags").([]any)
+	require.True(t, ok)
+	assert.Equal(t, "alpha", origTags[0], "snapshot mutation must not corrupt original config")
+}
+
+func TestSnapshot_NestedMapIsolation(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("matrix:\n  - name: a\n    val: 1\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	snap := cfg.(Snapshotter).Snapshot()
+
+	// Mutate a nested map inside a list element in the snapshot.
+	matrix, ok := snap["matrix"].([]any)
+	require.True(t, ok)
+	elem, ok := matrix[0].(map[string]any)
+	require.True(t, ok)
+	elem["name"] = "CORRUPTED"
+
+	// Original config must be unaffected.
+	origMatrix, ok := cfg.Get("matrix").([]any)
+	require.True(t, ok)
+	origElem, ok := origMatrix[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "a", origElem["name"], "snapshot nested map mutation must not corrupt original config")
 }
 
 // TestConfig_ConcurrentGetAndReload verifies that concurrent Get() and Reload()

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -250,7 +251,14 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := asm.StartWithConfig(ctx, cfgMap); err != nil {
 		return rollback(fmt.Errorf("bootstrap: assembly start: %w", err))
 	}
+	// assemblyStopped guards against config reload callbacks firing after
+	// the assembly has been stopped during shutdown. Without this, the LIFO
+	// teardown order (assembly.Stop before watcher.Close) creates a window
+	// where the watcher can dispatch callbacks to already-stopped cells.
+	var assemblyStopped atomic.Bool
+
 	teardowns = append(teardowns, func(c context.Context) error {
+		assemblyStopped.Store(true)
 		return asm.Stop(c)
 	})
 
@@ -259,6 +267,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if cfgWatcher != nil {
 		yamlPath, envPrefix := b.configPath, b.envPrefix
 		cfgWatcher.OnChange(func(evt config.WatchEvent) {
+			if assemblyStopped.Load() {
+				return
+			}
+
 			rc, ok := cfg.(config.Reloader)
 			if !ok {
 				return
@@ -279,6 +291,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				return
 			}
 
+			// Read config generation for tracking drift between config and cells.
+			var gen int64
+			if g, ok := cfg.(config.Generationer); ok {
+				gen = g.Generation()
+			}
+
 			for _, id := range asm.CellIDs() {
 				c := asm.Cell(id)
 				cr, ok := c.(cell.ConfigReloader)
@@ -288,10 +306,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				// Clone per cell to guarantee isolation: a misbehaving handler
 				// cannot mutate slices/map seen by subsequent handlers.
 				event := cell.ConfigChangeEvent{
-					Added:   cloneStrings(added),
-					Updated: cloneStrings(updated),
-					Removed: cloneStrings(removed),
-					Config:  cloneMap(newSnap),
+					Added:      cloneStrings(added),
+					Updated:    cloneStrings(updated),
+					Removed:    cloneStrings(removed),
+					Config:     cloneMap(newSnap),
+					Generation: gen,
 				}
 				func() {
 					defer func() {
@@ -305,7 +324,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 					}()
 					if err := cr.OnConfigReload(event); err != nil {
 						slog.Error("bootstrap: config reload callback failed",
-							slog.String("cell", id), slog.Any("error", err))
+							slog.String("cell", id),
+							slog.Any("error", err),
+							slog.Int64("config_generation", gen))
 					}
 				}()
 			}
@@ -477,16 +498,16 @@ func cloneStrings(src []string) []string {
 	return dst
 }
 
-// cloneMap returns a shallow copy of a map[string]any.
-// Leaf values in a flattened config are primitives (string, int, bool),
-// so a single-level copy provides effective isolation.
+// cloneMap returns a deep copy of a map[string]any. Values that are slices
+// or nested maps are recursively cloned so that mutations by one consumer
+// cannot affect another.
 func cloneMap(src map[string]any) map[string]any {
 	if src == nil {
 		return nil
 	}
 	dst := make(map[string]any, len(src))
 	for k, v := range src {
-		dst[k] = v
+		dst[k] = config.DeepCloneValue(v)
 	}
 	return dst
 }

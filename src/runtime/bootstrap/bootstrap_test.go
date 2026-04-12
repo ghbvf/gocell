@@ -930,6 +930,13 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	// This triggers the watcher but Diff(val2, val2) = empty, so no callback.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
+	// Stabilization delay: give the watcher time to process the no-diff event
+	// before writing different content. Without this, on macOS kqueue the two
+	// writes can be coalesced into a single event, or the second event can be
+	// lost entirely — causing the test to flake.
+	// ref: fsnotify eventSeparator pattern (50ms); we use 200ms for CI margin.
+	time.Sleep(200 * time.Millisecond)
+
 	// Third: write different content — proves the watcher is still alive
 	// after the no-diff reload.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
@@ -1031,4 +1038,159 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("shutdown timeout")
 	}
+}
+
+// TestBootstrap_ShutdownNoPostStopReload verifies that no config reload
+// callbacks fire after assembly.Stop() completes during shutdown.
+func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-shutdown-race"})
+	rc := newReloaderCell("shutdown-race-cell")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Trigger shutdown.
+	cancel()
+
+	// Wait for shutdown to complete.
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+
+	countBefore := rc.eventCount()
+
+	// Write config AFTER shutdown — should NOT trigger a callback.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_post_stop\n"), 0o644))
+
+	// Brief wait to give any spurious callback time to fire.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, countBefore, rc.eventCount(),
+		"no config reload callback should fire after shutdown")
+}
+
+// TestBootstrap_ConfigReload_GenerationTracking verifies that the Generation
+// field in ConfigChangeEvent is populated correctly.
+func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-generation"})
+	rc := newReloaderCell("gen-cell")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// First change.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	evt := rc.lastEvent()
+	require.NotNil(t, evt)
+	assert.Equal(t, int64(1), evt.Generation, "first reload should have generation 1")
+
+	// Second change.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 2
+	}, 3*time.Second, 50*time.Millisecond)
+
+	evt = rc.lastEvent()
+	require.NotNil(t, evt)
+	assert.Equal(t, int64(2), evt.Generation, "second reload should have generation 2")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+func TestCloneMap_DeepIsolation_Slices(t *testing.T) {
+	src := map[string]any{
+		"tags": []any{"alpha", "beta"},
+		"key":  "val",
+	}
+	dst := cloneMap(src)
+
+	// Mutate dst slice.
+	dst["tags"].([]any)[0] = "CORRUPTED"
+
+	// src must be unaffected.
+	assert.Equal(t, "alpha", src["tags"].([]any)[0],
+		"cloneMap must deep-copy slices; mutating dst corrupted src")
+}
+
+func TestCloneMap_DeepIsolation_NestedMap(t *testing.T) {
+	src := map[string]any{
+		"db": map[string]any{
+			"host": "localhost",
+			"port": 5432,
+		},
+	}
+	dst := cloneMap(src)
+
+	// Mutate nested map in dst.
+	dst["db"].(map[string]any)["host"] = "CORRUPTED"
+
+	// src must be unaffected.
+	assert.Equal(t, "localhost", src["db"].(map[string]any)["host"],
+		"cloneMap must deep-copy nested maps; mutating dst corrupted src")
 }

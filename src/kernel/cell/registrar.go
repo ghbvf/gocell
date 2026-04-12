@@ -130,10 +130,14 @@ type ConfigChangeEvent struct {
 	Updated []string
 	// Removed contains keys present in the old config but absent in the new.
 	Removed []string
-	// Config is a defensive copy of the reloaded config snapshot, isolated per
+	// Config is a deep copy of the reloaded config snapshot, isolated per
 	// cell (same type as Dependencies.Config). Mutating it has no effect on
 	// other cells or the framework.
 	Config map[string]any
+	// Generation is the monotonically increasing reload counter from the config
+	// subsystem. Starts at 0 (initial load); increments by 1 on each successful
+	// Reload. Cells can compare with their last-seen generation to detect drift.
+	Generation int64
 }
 
 // ConfigReloader is optionally implemented by Cells that need to react to

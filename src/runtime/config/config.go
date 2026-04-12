@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -44,11 +45,19 @@ type Snapshotter interface {
 	Snapshot() map[string]any
 }
 
+// Generationer is an optional interface for configs that track a monotonically
+// increasing reload generation. Generation starts at 0 (initial load) and
+// increments by 1 on each successful Reload. Failed reloads do not increment.
+type Generationer interface {
+	Generation() int64
+}
+
 // config is the default in-memory implementation of Config.
 type config struct {
-	mu   sync.RWMutex
-	data map[string]any
-	raw  map[string]any // original structured data for Scan
+	mu         sync.RWMutex
+	data       map[string]any
+	raw        map[string]any // original structured data for Scan
+	generation atomic.Int64
 }
 
 // Load reads a YAML file and overlays environment variable overrides.
@@ -114,20 +123,28 @@ func (c *config) Keys() []string {
 	return keys
 }
 
-// Snapshot returns an atomic point-in-time copy of the flat config data.
+// Snapshot returns an atomic point-in-time deep copy of the flat config data.
 // The read lock is held for the entire copy operation, ensuring consistency.
+// Returned values are deep copies — mutating them does not affect the config.
 func (c *config) Snapshot() map[string]any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	snap := make(map[string]any, len(c.data))
 	for k, v := range c.data {
-		snap[k] = v
+		snap[k] = DeepCloneValue(v)
 	}
 	return snap
 }
 
+// Generation returns the current reload generation. Starts at 0 (initial load)
+// and increments by 1 on each successful Reload.
+func (c *config) Generation() int64 {
+	return c.generation.Load()
+}
+
 // Reload re-reads the YAML file and overlays environment variables.
-// Thread-safe for use from watcher callbacks.
+// Thread-safe for use from watcher callbacks. On success, increments the
+// generation counter.
 func (c *config) Reload(yamlPath string, envPrefix string) error {
 	newData := make(map[string]any)
 	newRaw := make(map[string]any)
@@ -147,6 +164,8 @@ func (c *config) Reload(yamlPath string, envPrefix string) error {
 	c.data = newData
 	c.raw = newRaw
 	c.mu.Unlock()
+
+	c.generation.Add(1)
 	return nil
 }
 
@@ -197,6 +216,28 @@ func applyEnv(prefix string, data map[string]any, raw map[string]any) {
 		data[key] = v
 		// Also set in raw for Scan to pick up.
 		setNested(raw, strings.Split(key, "."), v)
+	}
+}
+
+// DeepCloneValue recursively deep-copies a config value. It handles the types
+// produced by YAML unmarshalling: map[string]any, []any, and primitives
+// (string, int, float64, bool) which are immutable and returned as-is.
+func DeepCloneValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		cp := make(map[string]any, len(val))
+		for k, elem := range val {
+			cp[k] = DeepCloneValue(elem)
+		}
+		return cp
+	case []any:
+		cp := make([]any, len(val))
+		for i, elem := range val {
+			cp[i] = DeepCloneValue(elem)
+		}
+		return cp
+	default:
+		return v
 	}
 }
 
