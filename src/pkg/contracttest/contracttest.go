@@ -179,13 +179,14 @@ func (c *Contract) ValidateHTTPResponseRecorder(t testing.TB, recorder *httptest
 	if recorder.Code != c.HTTP.SuccessStatus {
 		t.Errorf("contracttest: expected HTTP status %d, got %d", c.HTTP.SuccessStatus, recorder.Code)
 	}
-	body := bytes.TrimSpace(recorder.Body.Bytes())
+	body := recorder.Body.Bytes()
 	if c.HTTP.NoContent {
 		if len(body) != 0 {
 			t.Errorf("contracttest: expected empty body for no-content contract %q, got %s", c.ID, string(body))
 		}
 		return
 	}
+	body = bytes.TrimSpace(body)
 	if len(body) == 0 {
 		if c.responseSchema != nil {
 			t.Errorf("contracttest: expected response body for contract %q", c.ID)

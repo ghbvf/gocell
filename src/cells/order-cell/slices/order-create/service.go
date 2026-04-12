@@ -59,6 +59,10 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 	if item == "" {
 		return nil, errcode.New(errcode.ErrValidationFailed, "item must not be empty")
 	}
+	if (s.outboxWriter == nil) != (s.txRunner == nil) {
+		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+			"order-create durable mode requires both outboxWriter and txRunner")
+	}
 
 	order := &domain.Order{
 		ID:        "ord" + "-" + uuid.NewString(),

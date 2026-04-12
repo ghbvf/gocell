@@ -172,6 +172,38 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	assert.Empty(t, pub.calls, "failure on durable path must not fall back to direct publish")
 }
 
+func TestService_Create_RejectsHalfConfiguredDurablePath(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "writer without tx manager",
+			opts: []Option{WithOutboxWriter(&recordingWriter{})},
+		},
+		{
+			name: "tx manager without writer",
+			opts: []Option{WithTxManager(&stubTxRunner{})},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := mem.NewOrderRepository()
+			pub := &recordingPublisher{}
+			svc := NewService(repo, pub, slog.Default(), tt.opts...)
+
+			order, err := svc.Create(context.Background(), "misconfigured")
+			require.Error(t, err)
+			assert.Nil(t, order)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+			assert.Empty(t, pub.calls)
+		})
+	}
+}
+
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	svc := NewService(repo, noopPublisher{}, slog.Default())

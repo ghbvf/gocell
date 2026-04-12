@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -33,11 +34,13 @@ func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 
 var _ persistence.TxRunner = contractTxRunner{}
 
-func newContractHandler() (*Handler, *contractWriter) {
+func newContractHandler() (http.Handler, *contractWriter) {
 	repo := mem.NewOrderRepository()
 	writer := &contractWriter{}
 	svc := NewService(repo, stubPublisher{}, slog.Default(), WithOutboxWriter(writer), WithTxManager(contractTxRunner{}))
-	return NewHandler(svc), writer
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
+	return mux, writer
 }
 
 func TestHttpOrderCreateV1Serve(t *testing.T) {
@@ -51,7 +54,7 @@ func TestHttpOrderCreateV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleCreate(rec, req)
+	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
@@ -64,7 +67,7 @@ func TestEventOrderCreatedV1Publish(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(httpContract.HTTP.Method, httpContract.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleCreate(rec, req)
+	h.ServeHTTP(rec, req)
 	httpContract.ValidateHTTPResponseRecorder(t, rec)
 
 	if len(writer.entries) != 1 {
