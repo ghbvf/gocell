@@ -11,11 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-)
-
-const (
-	// listLimit is the safety-net row limit for unbounded queries.
-	listLimit = 1000
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // DBTX abstracts the database operations needed by ConfigRepository.
@@ -136,12 +132,17 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// List retrieves all config entries with a safety-net LIMIT.
-func (r *ConfigRepository) List(ctx context.Context) ([]*domain.ConfigEntry, error) {
-	const query = `SELECT id, key, value, version, created_at, updated_at
-		FROM config_entries ORDER BY key LIMIT 1000`
+// List retrieves config entries with keyset cursor pagination.
+func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
+	b := query.NewBuilder()
+	b.Append("SELECT id, key, value, version, created_at, updated_at FROM config_entries WHERE 1=1")
 
-	rows, err := r.db.Query(ctx, query)
+	if err := query.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
+	}
+
+	sql, args := b.Build()
+	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: list failed", err)
 	}

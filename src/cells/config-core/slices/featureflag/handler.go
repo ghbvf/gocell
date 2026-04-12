@@ -16,15 +16,25 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// HandleList handles GET / — returns all feature flags.
+// HandleList handles GET / — returns paginated feature flags.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	flags, err := h.svc.List(r.Context())
+	pageReq, err := httputil.ParsePageRequest(r)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": flags, "total": len(flags)})
+	result, err := h.svc.List(r.Context(), pageReq)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"data":       result.Items,
+		"nextCursor": result.NextCursor,
+		"hasMore":    result.HasMore,
+	})
 }
 
 // HandleGet handles GET /{key} — returns a single feature flag.

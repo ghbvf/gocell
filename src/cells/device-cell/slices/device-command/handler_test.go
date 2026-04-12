@@ -1,6 +1,7 @@
 package devicecommand
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -14,13 +15,15 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
 func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
-	svc := NewService(cmdRepo, devRepo, slog.Default())
+	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	svc := NewService(cmdRepo, devRepo, codec, slog.Default())
 
 	_ = devRepo.Create(context.Background(), &domain.Device{
 		ID: "dev-1", Name: "sensor-a", Status: "online",
@@ -102,21 +105,21 @@ func TestHandleListPending(t *testing.T) {
 		deviceID   string
 		seedCmds   int
 		wantStatus int
-		wantTotal  int
+		wantLen    int
 	}{
 		{
 			name:       "returns pending commands",
 			deviceID:   "dev-1",
 			seedCmds:   2,
 			wantStatus: http.StatusOK,
-			wantTotal:  2,
+			wantLen:    2,
 		},
 		{
 			name:       "no pending returns empty list",
 			deviceID:   "dev-1",
 			seedCmds:   0,
 			wantStatus: http.StatusOK,
-			wantTotal:  0,
+			wantLen:    0,
 		},
 		{
 			name:       "non-existent device returns 404",
@@ -146,7 +149,10 @@ func TestHandleListPending(t *testing.T) {
 			if tc.wantStatus == http.StatusOK {
 				var resp map[string]any
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-				assert.Equal(t, float64(tc.wantTotal), resp["total"])
+				data, ok := resp["data"].([]any)
+				require.True(t, ok, "response should have data array")
+				assert.Len(t, data, tc.wantLen)
+				assert.Equal(t, false, resp["hasMore"])
 			}
 		})
 	}

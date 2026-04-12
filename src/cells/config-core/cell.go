@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Compile-time interface checks.
@@ -54,6 +55,11 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *ConfigCore) { c.outboxWriter = w }
 }
 
+// WithCursorCodec sets the cursor codec for pagination.
+func WithCursorCodec(codec *query.CursorCodec) Option {
+	return func(c *ConfigCore) { c.cursorCodec = codec }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -70,6 +76,7 @@ type ConfigCore struct {
 	flagRepo     ports.FlagRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
 	// Slice services and handlers.
@@ -120,8 +127,18 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("config-write", "config-core", cell.L2))
 
+	// Default cursor codec for pagination if not injected.
+	if c.cursorCodec == nil {
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+		if err != nil {
+			return err
+		}
+		c.cursorCodec = codec
+		c.logger.Warn("config-core: using default cursor codec (demo mode)")
+	}
+
 	// config-read slice
-	readSvc := configread.NewService(c.configRepo, c.logger)
+	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger)
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
@@ -139,7 +156,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
 
 	// feature-flag slice
-	flagSvc := featureflag.NewService(c.flagRepo, c.logger)
+	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger)
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
 

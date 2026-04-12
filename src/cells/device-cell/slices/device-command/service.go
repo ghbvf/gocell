@@ -12,21 +12,30 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/google/uuid"
 )
+
+// pendingSort defines the default sort for pending command listings (FIFO).
+var pendingSort = []query.SortColumn{
+	{Name: "created_at", Direction: "ASC"},
+	{Name: "id", Direction: "ASC"},
+}
 
 // Service handles device command business logic.
 type Service struct {
 	cmdRepo    domain.CommandRepository
 	deviceRepo domain.DeviceRepository
+	codec      *query.CursorCodec
 	logger     *slog.Logger
 }
 
 // NewService creates a device-command Service.
-func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, logger *slog.Logger) *Service {
+func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
 	return &Service{
 		cmdRepo:    cmdRepo,
 		deviceRepo: deviceRepo,
+		codec:      codec,
 		logger:     logger,
 	}
 }
@@ -61,19 +70,68 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, payload string) (*domai
 	return cmd, nil
 }
 
-// ListPending returns all pending commands for the given device.
+// ListPending returns a paginated page of pending commands for the given device.
+// Sort: created_at ASC, id ASC (FIFO -- oldest pending commands first).
 // This is the poll endpoint used by devices in the L4 latent model.
-func (s *Service) ListPending(ctx context.Context, deviceID string) ([]*domain.Command, error) {
+func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq query.PageRequest) (query.PageResult[*domain.Command], error) {
 	// Verify device exists.
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
-		return nil, fmt.Errorf("device-command: lookup device: %w", err)
+		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: lookup device: %w", err)
 	}
 
-	cmds, err := s.cmdRepo.ListPending(ctx, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("device-command: list pending: %w", err)
+	pageReq.Normalize()
+
+	var cursorValues []any
+	if pageReq.Cursor != "" {
+		cur, err := s.codec.Decode(pageReq.Cursor)
+		if err != nil {
+			return query.PageResult[*domain.Command]{}, err
+		}
+		cursorValues = cur.Values
 	}
-	return cmds, nil
+
+	params := query.ListParams{
+		Limit:        pageReq.Limit,
+		CursorValues: cursorValues,
+		Sort:         pendingSort,
+	}
+
+	cmds, err := s.cmdRepo.ListPending(ctx, deviceID, params)
+	if err != nil {
+		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: list pending: %w", err)
+	}
+
+	return s.buildResult(cmds, pageReq.Limit)
+}
+
+func (s *Service) buildResult(items []*domain.Command, limit int) (query.PageResult[*domain.Command], error) {
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+
+	var result query.PageResult[*domain.Command]
+	result.Items = items
+	result.HasMore = hasMore
+
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		cur := query.Cursor{Values: []any{
+			last.CreatedAt.Format(time.RFC3339Nano),
+			last.ID,
+		}}
+		token, err := s.codec.Encode(cur)
+		if err != nil {
+			return query.PageResult[*domain.Command]{}, err
+		}
+		result.NextCursor = token
+	}
+
+	if result.Items == nil {
+		result.Items = []*domain.Command{}
+	}
+
+	return result, nil
 }
 
 // Ack acknowledges that a device has executed a command.

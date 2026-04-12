@@ -2,6 +2,7 @@ package featureflag
 
 import (
 	"context"
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,13 +11,17 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupHandler() (http.Handler, *mem.FlagRepository) {
 	repo := mem.NewFlagRepository()
-	svc := NewService(repo, slog.Default())
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	codec, _ := query.NewCursorCodec(key)
+	svc := NewService(repo, codec, slog.Default())
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.HandleList)
@@ -37,7 +42,7 @@ func TestHandler_HandleList(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
-	assert.Contains(t, w.Body.String(), "\"total\":1")
+	assert.Contains(t, w.Body.String(), "\"hasMore\"")
 }
 
 func TestHandler_HandleGet_Found(t *testing.T) {
@@ -112,6 +117,6 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
-	// Service returns ErrFlagNotFound → 404.
+	// Service returns ErrFlagNotFound -> 404.
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }

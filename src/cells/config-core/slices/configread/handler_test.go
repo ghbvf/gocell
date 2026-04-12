@@ -10,13 +10,15 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
-	svc := NewService(repo, slog.Default())
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+	svc := NewService(repo, codec, slog.Default())
 	mux := http.NewServeMux()
 	h := NewHandler(svc)
 	mux.HandleFunc("GET /{key}", h.HandleGet)
@@ -67,7 +69,8 @@ func TestHandler_HandleList_OK(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "\"total\":2")
+	assert.Contains(t, w.Body.String(), "\"data\":")
+	assert.Contains(t, w.Body.String(), "\"hasMore\":")
 }
 
 func TestHandler_HandleList_Empty(t *testing.T) {
@@ -78,5 +81,6 @@ func TestHandler_HandleList_Empty(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "\"total\":0")
+	assert.Contains(t, w.Body.String(), "\"data\":")
+	assert.Contains(t, w.Body.String(), "\"hasMore\":false")
 }

@@ -29,16 +29,23 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": order})
 }
 
-// HandleList handles GET /api/v1/orders.
+// HandleList handles GET /api/v1/orders?limit=N&cursor=TOKEN.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	orders, err := h.svc.List(r.Context())
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":  orders,
-		"total": len(orders),
+		"data":       result.Items,
+		"nextCursor": result.NextCursor,
+		"hasMore":    result.HasMore,
 	})
 }

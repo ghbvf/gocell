@@ -78,6 +78,10 @@ const (
 	ErrArchiveMarshal    Code = "ERR_ARCHIVE_MARSHAL"
 	ErrNotImplemented    Code = "ERR_NOT_IMPLEMENTED"
 
+	// Pagination error codes.
+	ErrCursorInvalid    Code = "ERR_CURSOR_INVALID"
+	ErrPageSizeExceeded Code = "ERR_PAGE_SIZE_EXCEEDED"
+
 	// WebSocket runtime error codes.
 	ErrWSConnNotFound   Code = "ERR_WS_CONN_NOT_FOUND"
 	ErrWSAlreadyStarted Code = "ERR_WS_ALREADY_STARTED"

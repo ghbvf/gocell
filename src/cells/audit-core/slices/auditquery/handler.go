@@ -23,7 +23,7 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // HandleQuery handles GET /api/v1/audit/entries.
-// Query parameters: eventType, actorId, from, to (RFC3339).
+// Query parameters: eventType, actorId, from, to (RFC3339), limit, cursor.
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	filters := ports.AuditFilters{
 		EventType: r.URL.Query().Get("eventType"),
@@ -49,14 +49,21 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		filters.To = t
 	}
 
-	entries, err := h.svc.Query(r.Context(), filters)
+	pageReq, err := httputil.ParsePageRequest(r)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	result, err := h.svc.Query(r.Context(), filters, pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":  entries,
-		"total": len(entries),
+		"data":       result.Items,
+		"nextCursor": result.NextCursor,
+		"hasMore":    result.HasMore,
 	})
 }

@@ -2,13 +2,16 @@ package mem
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 func TestOrderRepository_Create(t *testing.T) {
@@ -125,6 +128,11 @@ func TestOrderRepository_GetByID_ReturnsCopy(t *testing.T) {
 	assert.Equal(t, "item", got2.Item, "should return a copy, not internal pointer")
 }
 
+var defaultSort = []query.SortColumn{
+	{Name: "created_at", Direction: "DESC"},
+	{Name: "id", Direction: "ASC"},
+}
+
 func TestOrderRepository_List(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -153,9 +161,96 @@ func TestOrderRepository_List(t *testing.T) {
 				tt.setup(repo)
 			}
 
-			orders, err := repo.List(context.Background())
+			params := query.ListParams{Limit: 100, Sort: defaultSort}
+			orders, err := repo.List(context.Background(), params)
 			require.NoError(t, err)
 			assert.Len(t, orders, tt.wantCount)
 		})
 	}
+}
+
+func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
+	repo := NewOrderRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		_ = repo.Create(context.Background(), &domain.Order{
+			ID:        fmt.Sprintf("ord-%02d", i),
+			Item:      fmt.Sprintf("item-%d", i),
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+
+	params := query.ListParams{
+		Limit: 3,
+		Sort:  defaultSort,
+	}
+	orders, err := repo.List(context.Background(), params)
+	require.NoError(t, err)
+	// FetchLimit = 3+1 = 4
+	assert.Len(t, orders, 4)
+	// DESC by created_at: newest first (ord-09, ord-08, ord-07, ord-06)
+	assert.Equal(t, "ord-09", orders[0].ID)
+	assert.Equal(t, "ord-08", orders[1].ID)
+}
+
+func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
+	repo := NewOrderRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 10; i++ {
+		_ = repo.Create(context.Background(), &domain.Order{
+			ID:        fmt.Sprintf("ord-%02d", i),
+			Item:      fmt.Sprintf("item-%d", i),
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+
+	// Simulate cursor after ord-07 (created_at = base+7h)
+	cursorTime := base.Add(7 * time.Hour).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        3,
+		CursorValues: []any{cursorTime, "ord-07"},
+		Sort:         defaultSort,
+	}
+	orders, err := repo.List(context.Background(), params)
+	require.NoError(t, err)
+	// After ord-07 (DESC): ord-06, ord-05, ord-04, ord-03 (4 = limit+1)
+	assert.Len(t, orders, 4)
+	assert.Equal(t, "ord-06", orders[0].ID)
+	assert.Equal(t, "ord-05", orders[1].ID)
+}
+
+func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
+	repo := NewOrderRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		_ = repo.Create(context.Background(), &domain.Order{
+			ID:        fmt.Sprintf("ord-%02d", i),
+			Item:      fmt.Sprintf("item-%d", i),
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+
+	// Cursor after ord-01 (DESC): only ord-00 left
+	cursorTime := base.Add(1 * time.Hour).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        3,
+		CursorValues: []any{cursorTime, "ord-01"},
+		Sort:         defaultSort,
+	}
+	orders, err := repo.List(context.Background(), params)
+	require.NoError(t, err)
+	// Only 1 item left, less than FetchLimit(4) → last page
+	assert.Len(t, orders, 1)
+	assert.Equal(t, "ord-00", orders[0].ID)
+}
+
+func TestOrderRepository_ListPaged_Empty(t *testing.T) {
+	repo := NewOrderRepository()
+	params := query.ListParams{Limit: 10, Sort: defaultSort}
+	orders, err := repo.List(context.Background(), params)
+	require.NoError(t, err)
+	assert.Empty(t, orders)
 }

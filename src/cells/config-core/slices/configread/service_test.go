@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,8 @@ import (
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	logger := slog.Default()
-	return NewService(repo, logger), repo
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+	return NewService(repo, codec, logger), repo
 }
 
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {
@@ -78,9 +80,9 @@ func TestService_List(t *testing.T) {
 				seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 			}
 
-			entries, err := svc.List(context.Background())
+			result, err := svc.List(context.Background(), query.PageRequest{})
 			require.NoError(t, err)
-			assert.Len(t, entries, tt.wantLen)
+			assert.Len(t, result.Items, tt.wantLen)
 		})
 	}
 }

@@ -7,9 +7,16 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// defaultCmdSort is the default sort used in tests (FIFO).
+var defaultCmdSort = []query.SortColumn{
+	{Name: "created_at", Direction: "ASC"},
+	{Name: "id", Direction: "ASC"},
+}
 
 // ---------------------------------------------------------------------------
 // DeviceRepository
@@ -184,6 +191,8 @@ func TestCommandRepository_ListPending(t *testing.T) {
 	_ = repo.Create(ctx, &domain.Command{ID: "c3", DeviceID: "dev-1", Payload: "c", Status: "acked"})
 	_ = repo.Create(ctx, &domain.Command{ID: "c4", DeviceID: "dev-2", Payload: "d", Status: "pending"})
 
+	params := query.ListParams{Limit: 100, Sort: defaultCmdSort}
+
 	tests := []struct {
 		name     string
 		deviceID string
@@ -196,7 +205,7 @@ func TestCommandRepository_ListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmds, err := repo.ListPending(ctx, tc.deviceID)
+			cmds, err := repo.ListPending(ctx, tc.deviceID, params)
 			require.NoError(t, err)
 			assert.Len(t, cmds, tc.wantLen)
 		})
@@ -290,7 +299,7 @@ func TestCommandRepository_Ack_SetsAckedAt(t *testing.T) {
 	after := time.Now()
 
 	// Verify status changed and AckedAt set.
-	cmds, _ := repo.ListPending(ctx, "dev-1")
+	cmds, _ := repo.ListPending(ctx, "dev-1", query.ListParams{Limit: 100, Sort: defaultCmdSort})
 	assert.Empty(t, cmds, "acked command should not appear in pending list")
 
 	// Access the internal state to verify AckedAt.

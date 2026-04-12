@@ -8,18 +8,27 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// configSort defines the default sort for config listings.
+var configSort = []query.SortColumn{
+	{Name: "key", Direction: "ASC"},
+	{Name: "id", Direction: "ASC"},
+}
 
 // Service implements config read business logic.
 type Service struct {
 	repo   ports.ConfigRepository
+	codec  *query.CursorCodec
 	logger *slog.Logger
 }
 
 // NewService creates a config-read Service.
-func NewService(repo ports.ConfigRepository, logger *slog.Logger) *Service {
+func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
 	return &Service{
 		repo:   repo,
+		codec:  codec,
 		logger: logger,
 	}
 }
@@ -33,11 +42,56 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry
 	return entry, nil
 }
 
-// List returns all config entries.
-func (s *Service) List(ctx context.Context) ([]*domain.ConfigEntry, error) {
-	entries, err := s.repo.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("config-read: list: %w", err)
+// List returns a paginated page of config entries.
+func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.ConfigEntry], error) {
+	pageReq.Normalize()
+
+	var cursorValues []any
+	if pageReq.Cursor != "" {
+		cur, err := s.codec.Decode(pageReq.Cursor)
+		if err != nil {
+			return query.PageResult[*domain.ConfigEntry]{}, err
+		}
+		cursorValues = cur.Values
 	}
-	return entries, nil
+
+	params := query.ListParams{
+		Limit:        pageReq.Limit,
+		CursorValues: cursorValues,
+		Sort:         configSort,
+	}
+
+	entries, err := s.repo.List(ctx, params)
+	if err != nil {
+		return query.PageResult[*domain.ConfigEntry]{}, fmt.Errorf("config-read: list: %w", err)
+	}
+
+	return s.buildResult(entries, pageReq.Limit)
+}
+
+func (s *Service) buildResult(items []*domain.ConfigEntry, limit int) (query.PageResult[*domain.ConfigEntry], error) {
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+
+	var result query.PageResult[*domain.ConfigEntry]
+	result.Items = items
+	result.HasMore = hasMore
+
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		cur := query.Cursor{Values: []any{last.Key, last.ID}}
+		token, err := s.codec.Encode(cur)
+		if err != nil {
+			return query.PageResult[*domain.ConfigEntry]{}, err
+		}
+		result.NextCursor = token
+	}
+
+	if result.Items == nil {
+		result.Items = []*domain.ConfigEntry{}
+	}
+
+	return result, nil
 }

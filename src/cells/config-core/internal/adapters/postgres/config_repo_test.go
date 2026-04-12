@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,15 +138,22 @@ func TestConfigRepository_List(t *testing.T) {
 	}
 	repo := NewConfigRepository(db)
 
-	entries, err := repo.List(context.Background())
+	params := query.ListParams{
+		Limit: 50,
+		Sort: []query.SortColumn{
+			{Name: "key", Direction: "ASC"},
+			{Name: "id", Direction: "ASC"},
+		},
+	}
+	entries, err := repo.List(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "a.key", entries[0].Key)
 	assert.Equal(t, "b.key", entries[1].Key)
 
-	// Verify LIMIT 1000 safety net.
+	// Verify keyset pagination LIMIT.
 	require.Len(t, db.queryCalls, 1)
-	assert.Contains(t, db.queryCalls[0].sql, "LIMIT 1000")
+	assert.Contains(t, db.queryCalls[0].sql, "LIMIT")
 }
 
 func TestConfigRepository_PublishVersion(t *testing.T) {

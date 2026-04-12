@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 const (
@@ -107,39 +108,21 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 	return scanAuditEntries(rows)
 }
 
-// Query retrieves audit entries matching the given filters.
-func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters) ([]*domain.AuditEntry, error) {
-	// Build dynamic query with parameterized conditions.
-	query := `SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
-		FROM audit_entries WHERE 1=1`
+// Query retrieves audit entries matching the given filters with keyset pagination.
+func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters, params query.ListParams) ([]*domain.AuditEntry, error) {
+	b := query.NewBuilder()
+	b.Append("SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash FROM audit_entries WHERE 1=1")
+	b.AppendIf(filters.EventType != "", "AND event_type = ", filters.EventType)
+	b.AppendIf(filters.ActorID != "", "AND actor_id = ", filters.ActorID)
+	b.AppendIf(!filters.From.IsZero(), "AND timestamp >= ", filters.From)
+	b.AppendIf(!filters.To.IsZero(), "AND timestamp <= ", filters.To)
 
-	var args []any
-	argIdx := 1
-
-	if filters.EventType != "" {
-		query += ` AND event_type = $` + itoa(argIdx)
-		args = append(args, filters.EventType)
-		argIdx++
-	}
-	if filters.ActorID != "" {
-		query += ` AND actor_id = $` + itoa(argIdx)
-		args = append(args, filters.ActorID)
-		argIdx++
-	}
-	if !filters.From.IsZero() {
-		query += ` AND timestamp >= $` + itoa(argIdx)
-		args = append(args, filters.From)
-		argIdx++
-	}
-	if !filters.To.IsZero() {
-		query += ` AND timestamp <= $` + itoa(argIdx)
-		args = append(args, filters.To)
-		argIdx++
+	if err := query.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: keyset failed", err)
 	}
 
-	query += ` ORDER BY timestamp LIMIT ` + itoa(listLimit)
-
-	rows, err := r.db.Query(ctx, query, args...)
+	sql, args := b.Build()
+	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: query failed", err)
 	}

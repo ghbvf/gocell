@@ -2,11 +2,13 @@ package featureflag
 
 import (
 	"context"
+	"crypto/rand"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +16,10 @@ import (
 func newTestService() (*Service, *mem.FlagRepository) {
 	repo := mem.NewFlagRepository()
 	logger := slog.Default()
-	return NewService(repo, logger), repo
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	codec, _ := query.NewCursorCodec(key)
+	return NewService(repo, codec, logger), repo
 }
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, enabled bool, pct int) {
@@ -59,9 +64,10 @@ func TestService_List(t *testing.T) {
 	seedFlag(t, repo, "f1", domain.FlagBoolean, true, 0)
 	seedFlag(t, repo, "f2", domain.FlagPercentage, true, 50)
 
-	flags, err := svc.List(context.Background())
+	result, err := svc.List(context.Background(), query.PageRequest{Limit: 50})
 	require.NoError(t, err)
-	assert.Len(t, flags, 2)
+	assert.Len(t, result.Items, 2)
+	assert.False(t, result.HasMore)
 }
 
 func TestService_Evaluate(t *testing.T) {

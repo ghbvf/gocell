@@ -1,20 +1,27 @@
 package devicecommand
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func testCodec() *query.CursorCodec {
+	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	return codec
+}
+
 func newTestService() (*Service, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
-	return NewService(cmdRepo, devRepo, slog.Default()), devRepo, cmdRepo
+	return NewService(cmdRepo, devRepo, testCodec(), slog.Default()), devRepo, cmdRepo
 }
 
 func seedDevice(repo *mem.DeviceRepository, id, name string) {
@@ -106,12 +113,12 @@ func TestService_ListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmds, err := svc.ListPending(ctx, tc.deviceID)
+			result, err := svc.ListPending(ctx, tc.deviceID, query.PageRequest{})
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Len(t, cmds, tc.wantLen)
+				assert.Len(t, result.Items, tc.wantLen)
 			}
 		})
 	}
@@ -186,16 +193,16 @@ func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {
 	require.NoError(t, err)
 
 	// List pending should include the command.
-	pending, err := svc.ListPending(ctx, "dev-1")
+	result, err := svc.ListPending(ctx, "dev-1", query.PageRequest{})
 	require.NoError(t, err)
-	assert.Len(t, pending, 1)
-	assert.Equal(t, cmd.ID, pending[0].ID)
+	assert.Len(t, result.Items, 1)
+	assert.Equal(t, cmd.ID, result.Items[0].ID)
 
 	// Ack
 	require.NoError(t, svc.Ack(ctx, "dev-1", cmd.ID))
 
 	// List pending should be empty after ack.
-	pending, err = svc.ListPending(ctx, "dev-1")
+	result, err = svc.ListPending(ctx, "dev-1", query.PageRequest{})
 	require.NoError(t, err)
-	assert.Empty(t, pending)
+	assert.Empty(t, result.Items)
 }

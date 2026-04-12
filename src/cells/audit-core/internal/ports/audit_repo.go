@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // AuditFilters constrains audit log queries.
@@ -20,5 +21,5 @@ type AuditFilters struct {
 type AuditRepository interface {
 	Append(ctx context.Context, entry *domain.AuditEntry) error
 	GetRange(ctx context.Context, from, to int) ([]*domain.AuditEntry, error)
-	Query(ctx context.Context, filters AuditFilters) ([]*domain.AuditEntry, error)
+	Query(ctx context.Context, filters AuditFilters, params query.ListParams) ([]*domain.AuditEntry, error)
 }

@@ -14,7 +14,7 @@ import (
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default())
 	h := NewHandler(svc)
 
 	tests := []struct {
