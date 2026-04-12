@@ -122,12 +122,7 @@ func CompareAny(a, b any) (int, error) {
 			return cmp.Compare(av, bv), nil
 		}
 		if bt, ok := b.(time.Time); ok {
-			at, err := time.Parse(time.RFC3339Nano, av)
-			if err != nil {
-				return 0, errcode.New(errcode.ErrCursorInvalid,
-					fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", av, err))
-			}
-			return at.Compare(bt), nil
+			return compareStringWithTime(av, bt)
 		}
 	case float64:
 		if bv, ok := b.(float64); ok {
@@ -138,15 +133,30 @@ func CompareAny(a, b any) (int, error) {
 			return av.Compare(bt), nil
 		}
 		if bs, ok := b.(string); ok {
-			bt, err := time.Parse(time.RFC3339Nano, bs)
-			if err != nil {
-				return 0, errcode.New(errcode.ErrCursorInvalid,
-					fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", bs, err))
-			}
-			return av.Compare(bt), nil
+			return compareTimeWithString(av, bs)
 		}
 	}
 
 	return 0, errcode.New(errcode.ErrCursorInvalid,
 		fmt.Sprintf("unsupported cursor value type combination %T vs %T", a, b))
+}
+
+// compareStringWithTime parses s as RFC3339Nano and compares with t.
+func compareStringWithTime(s string, t time.Time) (int, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0, errcode.New(errcode.ErrCursorInvalid,
+			fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", s, err))
+	}
+	return parsed.Compare(t), nil
+}
+
+// compareTimeWithString parses s as RFC3339Nano and compares t with the result.
+func compareTimeWithString(t time.Time, s string) (int, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0, errcode.New(errcode.ErrCursorInvalid,
+			fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", s, err))
+	}
+	return t.Compare(parsed), nil
 }
