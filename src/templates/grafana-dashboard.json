@@ -81,12 +81,12 @@
       },
       "targets": [
         {
-          "expr": "gocell_outbox_pending_messages{cell=\"${cell_id}\"}",
-          "legendFormat": "pending messages",
+          "expr": "sum(gocell_outbox_batch_size_count{cell=\"${cell_id}\"}) - sum(gocell_outbox_relayed_total{cell=\"${cell_id}\"})",
+          "legendFormat": "pending estimate",
           "refId": "A"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\"}[5m])",
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"published\"}[5m])",
           "legendFormat": "relay rate (msg/s)",
           "refId": "B"
         }
@@ -255,7 +255,7 @@
       },
       "targets": [
         {
-          "expr": "gocell_dlq_messages_total{cell=\"${cell_id}\"}",
+          "expr": "gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}",
           "legendFormat": "DLQ messages",
           "refId": "A"
         }
