@@ -3,6 +3,7 @@ package mem
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
@@ -77,7 +78,11 @@ func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*do
 	}
 
 	query.Sort(all, params.Sort, compareFlagField)
-	return query.ApplyCursor(all, params, flagFieldValue)
+	result, err := query.ApplyCursor(all, params, flagFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("flag-repo: list: %w", err)
+	}
+	return result, nil
 }
 
 // compareFlagField compares a single field of two feature flags.

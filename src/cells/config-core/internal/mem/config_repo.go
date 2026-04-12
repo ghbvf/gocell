@@ -5,6 +5,7 @@ package mem
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
@@ -93,7 +94,11 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 	}
 
 	query.Sort(all, params.Sort, compareConfigField)
-	return query.ApplyCursor(all, params, configFieldValue)
+	result, err := query.ApplyCursor(all, params, configFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("config-repo: list: %w", err)
+	}
+	return result, nil
 }
 
 // compareConfigField compares a single field of two config entries.

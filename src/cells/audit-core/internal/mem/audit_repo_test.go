@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -421,6 +422,7 @@ func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
 		}(w)
 	}
 
+	var readErrors atomic.Int64
 	for r := range readers {
 		wg.Add(1)
 		go func() {
@@ -433,7 +435,17 @@ func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
 				},
 			}
 			for range iterations {
-				_, _ = repo.Query(ctx, ports.AuditFilters{}, params)
+				items, err := repo.Query(ctx, ports.AuditFilters{}, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: results must be DESC-sorted by timestamp.
+				for j := 1; j < len(items); j++ {
+					if items[j].Timestamp.After(items[j-1].Timestamp) {
+						t.Errorf("query results not DESC-sorted by timestamp")
+					}
+				}
 				_, _ = repo.GetRange(ctx, 0, 10)
 				_ = repo.Len()
 			}
@@ -443,4 +455,5 @@ func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
 
 	wg.Wait()
 	assert.Equal(t, writers*iterations, repo.Len())
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

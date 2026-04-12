@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -460,6 +461,7 @@ func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 		}(w)
 	}
 
+	var readErrors atomic.Int64
 	for r := range readers {
 		wg.Add(1)
 		go func() {
@@ -472,12 +474,24 @@ func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 				},
 			}
 			for range iterations {
-				_, _ = repo.List(ctx, params)
-				_, _ = repo.GetByID(ctx, "ord-w0-i0")
+				items, err := repo.List(ctx, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: no duplicate IDs in a page.
+				seen := make(map[string]bool, len(items))
+				for _, o := range items {
+					if seen[o.ID] {
+						t.Errorf("duplicate order ID in list results: %s", o.ID)
+					}
+					seen[o.ID] = true
+				}
 			}
 			_ = r
 		}()
 	}
 
 	wg.Wait()
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

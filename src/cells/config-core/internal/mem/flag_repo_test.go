@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -332,6 +333,7 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 		}(w)
 	}
 
+	var readErrors atomic.Int64
 	for r := range readers {
 		wg.Add(1)
 		go func() {
@@ -344,12 +346,22 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 				},
 			}
 			for range iterations {
-				_, _ = repo.List(ctx, params)
-				_, _ = repo.GetByKey(ctx, "flag-w0-i0")
+				items, err := repo.List(ctx, params)
+				if err != nil {
+					readErrors.Add(1)
+					continue
+				}
+				// Semantic invariant: results sorted by key.
+				for j := 1; j < len(items); j++ {
+					if items[j].Key < items[j-1].Key {
+						t.Errorf("flag list not sorted: %s < %s", items[j].Key, items[j-1].Key)
+					}
+				}
 			}
 			_ = r
 		}()
 	}
 
 	wg.Wait()
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

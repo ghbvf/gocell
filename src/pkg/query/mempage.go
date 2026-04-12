@@ -172,8 +172,7 @@ func normalizeNumeric(v any) any {
 func parseTimeString(s string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return time.Time{}, errcode.New(errcode.ErrCursorInvalid,
-			fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", s, err))
+		return time.Time{}, errcode.New(errcode.ErrCursorInvalid, "invalid cursor value")
 	}
 	return t, nil
 }

@@ -4,6 +4,7 @@ package mem
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
@@ -63,7 +64,11 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 
 	filtered := filterEntries(r.entries, filters)
 	query.Sort(filtered, params.Sort, compareAuditField)
-	return query.ApplyCursor(filtered, params, auditFieldValue)
+	result, err := query.ApplyCursor(filtered, params, auditFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("audit-repo: query: %w", err)
+	}
+	return result, nil
 }
 
 // filterEntries returns clones of entries matching the given filters.

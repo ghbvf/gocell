@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -578,6 +579,7 @@ func TestCommandRepository_ConcurrentCreateAndListPending(t *testing.T) {
 		}(w)
 	}
 
+	var readErrors atomic.Int64
 	for r := range readers {
 		wg.Add(1)
 		go func() {
@@ -587,11 +589,15 @@ func TestCommandRepository_ConcurrentCreateAndListPending(t *testing.T) {
 				Sort:  defaultCmdSort,
 			}
 			for range iterations {
-				_, _ = repo.ListPending(ctx, "dev-1", params)
+				_, err := repo.ListPending(ctx, "dev-1", params)
+				if err != nil {
+					readErrors.Add(1)
+				}
 			}
 			_ = r
 		}()
 	}
 
 	wg.Wait()
+	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

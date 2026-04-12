@@ -70,7 +70,11 @@ func (r *OrderRepository) List(_ context.Context, params query.ListParams) ([]*d
 	}
 
 	query.Sort(all, params.Sort, compareOrderField)
-	return query.ApplyCursor(all, params, orderFieldValue)
+	result, err := query.ApplyCursor(all, params, orderFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("order-repo: list: %w", err)
+	}
+	return result, nil
 }
 
 // compareOrderField compares a single field of two orders.
