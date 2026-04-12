@@ -69,6 +69,18 @@ func cmpFloat(a, b float64) int {
 	return 0
 }
 
+// requireCursorInvalidMsg asserts the error is a standardized cursor error
+// with unified message and the expected reason in details.
+func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
+	t.Helper()
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, query.TestCursorInvalidMsg, ecErr.Message,
+		"client-facing message must be stable across all cursor errors")
+	assert.Equal(t, wantReason, ecErr.Details["reason"])
+}
+
 // --- Sort tests ---
 
 func TestSort_SingleColumn_ASC(t *testing.T) {
@@ -321,10 +333,7 @@ func TestApplyCursor_EmptySortWithCursor_ReturnsError(t *testing.T) {
 		Sort:         []query.SortColumn{},
 	}
 	_, err := query.ApplyCursor(items, params, testFieldValue)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalidMsg(t, err, "cursor values present but no sort columns defined")
 }
 
 func TestApplyCursor_MismatchedCursorValuesLength_ReturnsError(t *testing.T) {
@@ -339,10 +348,7 @@ func TestApplyCursor_MismatchedCursorValuesLength_ReturnsError(t *testing.T) {
 	}
 
 	_, err := query.ApplyCursor(items, params, testFieldValue)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalidMsg(t, err, "cursor values count 1 does not match sort columns count 2")
 }
 
 // --- CompareAny tests (table-driven) ---
@@ -408,23 +414,23 @@ func TestCompareAny(t *testing.T) {
 
 func TestCompareAny_Error(t *testing.T) {
 	tests := []struct {
-		name string
-		a, b any
+		name       string
+		a, b       any
+		wantReason string
 	}{
-		{"nil vs string", nil, "x"},
-		{"string vs nil", "x", nil},
-		{"bool vs bool", true, false},
-		{"float64 vs string", 1.0, "str"},
-		{"float64 vs time", 1.0, time.Now()},
+		{"nil vs string", nil, "x", "unsupported cursor value types"},
+		{"string vs nil", "x", nil, "unsupported cursor value types"},
+		{"bool vs bool", true, false, "unsupported cursor value types"},
+		{"float64 vs string", 1.0, "str", "unsupported cursor value types"},
+		{"float64 vs time", 1.0, time.Now(), "unsupported cursor value types"},
+		{"time vs invalid string", time.Now(), "not-a-time", "invalid time format in cursor value"},
+		{"invalid string vs time", "not-a-time", time.Now(), "invalid time format in cursor value"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := query.CompareAny(tt.a, tt.b)
-			require.Error(t, err)
-			var ecErr *errcode.Error
-			require.ErrorAs(t, err, &ecErr)
-			assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+			requireCursorInvalidMsg(t, err, tt.wantReason)
 		})
 	}
 }

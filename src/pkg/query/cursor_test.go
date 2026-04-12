@@ -2,8 +2,10 @@ package query
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
-	"errors"
+	"encoding/hex"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -82,6 +84,22 @@ func TestCursorCodec_RoundTrip_NumericTypes(t *testing.T) {
 	assert.InDelta(t, 3.14, decoded.Values[1].(float64), 0.001)
 }
 
+func TestCursorCodec_Encode_MarshalFailure(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	// Cursor.Values is []any — a func value is not JSON-serializable.
+	// Encode failure is a server-side error (ErrInternal, not ErrCursorInvalid)
+	// because the client sent no cursor; the server failed to build nextCursor.
+	cur := Cursor{Values: []any{func() {}}}
+	_, err = codec.Encode(cur)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+	assert.Equal(t, "cursor: marshal failed", ecErr.Message)
+	assert.NotNil(t, ecErr.Cause, "must preserve underlying json.Marshal error for diagnosis")
+}
+
 func TestCursorCodec_Decode_TamperedPayload(t *testing.T) {
 	codec, err := NewCursorCodec(testKey())
 	require.NoError(t, err)
@@ -95,10 +113,7 @@ func TestCursorCodec_Decode_TamperedPayload(t *testing.T) {
 	tampered := base64.RawURLEncoding.EncodeToString(raw)
 
 	_, err = codec.Decode(tampered)
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "signature verification failed")
 }
 
 func TestCursorCodec_Decode_TamperedSignature(t *testing.T) {
@@ -116,10 +131,7 @@ func TestCursorCodec_Decode_TamperedSignature(t *testing.T) {
 	tampered := base64.RawURLEncoding.EncodeToString(raw)
 
 	_, err = codec.Decode(tampered)
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "signature verification failed")
 }
 
 func TestCursorCodec_Decode_InvalidBase64(t *testing.T) {
@@ -127,10 +139,41 @@ func TestCursorCodec_Decode_InvalidBase64(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = codec.Decode("not-valid-base64!!!")
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "invalid base64 encoding")
+}
+
+func TestCursorCodec_Decode_MissingSeparator(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	// Valid base64 but no '.' separator inside.
+	raw := []byte("nodothere")
+	token := base64.RawURLEncoding.EncodeToString(raw)
+
+	_, err = codec.Decode(token)
+	requireCursorInvalid(t, err, "missing signature separator")
+}
+
+func TestCursorCodec_Decode_InvalidPayload(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	// Construct a properly signed token with invalid JSON payload.
+	payload := []byte("not-valid-json{{{")
+	mac := hmac.New(sha256.New, testKey())
+	mac.Write(payload)
+	sum := mac.Sum(nil)
+	sig := make([]byte, hex.EncodedLen(len(sum)))
+	hex.Encode(sig, sum)
+
+	raw := make([]byte, 0, len(payload)+1+len(sig))
+	raw = append(raw, payload...)
+	raw = append(raw, '.')
+	raw = append(raw, sig...)
+	token := base64.RawURLEncoding.EncodeToString(raw)
+
+	_, err = codec.Decode(token)
+	requireCursorInvalid(t, err, "invalid payload")
 }
 
 func TestCursorCodec_Decode_EmptyToken(t *testing.T) {
@@ -138,10 +181,7 @@ func TestCursorCodec_Decode_EmptyToken(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = codec.Decode("")
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "cursor token is empty")
 }
 
 func TestCursorCodec_DifferentKeysReject(t *testing.T) {
@@ -154,10 +194,7 @@ func TestCursorCodec_DifferentKeysReject(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = codecB.Decode(token)
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "signature verification failed")
 }
 
 func TestCursorCodec_RoundTrip_EmptyValues(t *testing.T) {
@@ -201,10 +238,7 @@ func TestCursorCodec_CrossCellRejection(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = cellB.Decode(token)
-	assert.Error(t, err)
-	var ecErr *errcode.Error
-	assert.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	requireCursorInvalid(t, err, "signature verification failed")
 }
 
 // --- SortScope tests ---
@@ -245,6 +279,12 @@ func TestValidateCursorScope_Mismatch(t *testing.T) {
 	cur := Cursor{Values: []any{"v1", "v2"}, Scope: SortScope(sortA), Context: qctx}
 	err := ValidateCursorScope(cur, sortB, qctx)
 	requireCursorInvalid(t, err, "sort scope mismatch")
+
+	// Assert got/want diagnostics from cursorInvalidExtra.
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, SortScope(sortA), ecErr.Details["got"])
+	assert.Equal(t, SortScope(sortB), ecErr.Details["want"])
 }
 
 func TestValidateCursorScope_ValueCountMismatch(t *testing.T) {
@@ -293,6 +333,12 @@ func TestValidateCursorScope_ContextMismatch(t *testing.T) {
 	cur := Cursor{Values: []any{"v1"}, Scope: SortScope(sort), Context: ctxA}
 	err := ValidateCursorScope(cur, sort, ctxB)
 	requireCursorInvalid(t, err, "query context mismatch")
+
+	// Assert got/want diagnostics from cursorInvalidExtra.
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, ctxA, ecErr.Details["got"])
+	assert.Equal(t, ctxB, ecErr.Details["want"])
 }
 
 func TestValidateCursorScope_ContextMatch(t *testing.T) {

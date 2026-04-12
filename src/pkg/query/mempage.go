@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // CompareFunc compares a single named field of two entities, returning -1/0/+1.
@@ -50,13 +48,11 @@ func Sort[T any](items []T, cols []SortColumn, compareField CompareFunc[T]) {
 func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) ([]T, error) {
 	if params.CursorValues != nil {
 		if len(params.Sort) == 0 {
-			return nil, errcode.New(errcode.ErrCursorInvalid,
-				"cursor values present but no sort columns defined")
+			return nil, cursorInvalid("cursor values present but no sort columns defined")
 		}
 		if len(params.CursorValues) != len(params.Sort) {
-			return nil, errcode.New(errcode.ErrCursorInvalid,
-				fmt.Sprintf("cursor values count %d does not match sort columns count %d",
-					len(params.CursorValues), len(params.Sort)))
+			return nil, cursorInvalid(fmt.Sprintf("cursor values count %d does not match sort columns count %d",
+				len(params.CursorValues), len(params.Sort)))
 		}
 	}
 
@@ -156,7 +152,7 @@ func CompareAny(a, b any) (int, error) {
 		}
 	}
 
-	return 0, errcode.New(errcode.ErrCursorInvalid, "invalid cursor value")
+	return 0, cursorInvalid("unsupported cursor value types")
 }
 
 // normalizeNumeric converts int to float64 for uniform numeric comparison.
@@ -172,7 +168,7 @@ func normalizeNumeric(v any) any {
 func parseTimeString(s string) (time.Time, error) {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return time.Time{}, errcode.New(errcode.ErrCursorInvalid, "invalid cursor value")
+		return time.Time{}, cursorInvalid("invalid time format in cursor value")
 	}
 	return t, nil
 }
