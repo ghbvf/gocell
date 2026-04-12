@@ -198,8 +198,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 1.5a: Create config watcher (if config file provided).
-	// The OnChange callback is registered later (Step 4.5) after assembly is
-	// started, so the callback can safely reference `asm`.
+	// The watcher is created here but NOT started until Step 4.5, after the
+	// OnChange callback is registered. This prevents a startup window where
+	// file events are consumed but no callback is bound to handle them.
 	var cfgWatcher *config.Watcher
 	if b.configPath != "" {
 		w, err := config.NewWatcher(b.configPath)
@@ -207,7 +208,6 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			slog.Warn("bootstrap: config watcher not available", slog.Any("error", err))
 		} else {
 			cfgWatcher = w
-			cfgWatcher.Start()
 			teardowns = append(teardowns, func(_ context.Context) error {
 				return cfgWatcher.Close()
 			})
@@ -279,18 +279,19 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				return
 			}
 
-			event := cell.ConfigChangeEvent{
-				Added:   added,
-				Updated: updated,
-				Removed: removed,
-				Config:  newSnap,
-			}
-
 			for _, id := range asm.CellIDs() {
 				c := asm.Cell(id)
 				cr, ok := c.(cell.ConfigReloader)
 				if !ok {
 					continue
+				}
+				// Clone per cell to guarantee isolation: a misbehaving handler
+				// cannot mutate slices/map seen by subsequent handlers.
+				event := cell.ConfigChangeEvent{
+					Added:   cloneStrings(added),
+					Updated: cloneStrings(updated),
+					Removed: cloneStrings(removed),
+					Config:  cloneMap(newSnap),
 				}
 				func() {
 					defer func() {
@@ -309,6 +310,8 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				}()
 			}
 		})
+		// Start after OnChange is bound so no events are consumed without a handler.
+		cfgWatcher.Start()
 	}
 
 	// Step 5: Build router with health handler.
@@ -461,6 +464,31 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// cloneStrings returns a shallow copy of a string slice.
+// If src is nil, returns nil (preserving the nil vs empty distinction).
+func cloneStrings(src []string) []string {
+	if src == nil {
+		return nil
+	}
+	dst := make([]string, len(src))
+	copy(dst, src)
+	return dst
+}
+
+// cloneMap returns a shallow copy of a map[string]any.
+// Leaf values in a flattened config are primitives (string, int, bool),
+// so a single-level copy provides effective isolation.
+func cloneMap(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // snapshotConfig builds an atomic point-in-time copy of the config.

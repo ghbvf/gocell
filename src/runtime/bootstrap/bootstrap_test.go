@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -398,16 +399,35 @@ func TestSnapshotConfig_WithSnapshotter(t *testing.T) {
 	assert.Equal(t, "two", snap["b"])
 }
 
+// plainConfig implements config.Config but NOT config.Snapshotter,
+// exercising the snapshotConfig fallback path (Keys+Get iteration).
+type plainConfig struct {
+	data map[string]any
+}
+
+func (c *plainConfig) Get(key string) any        { return c.data[key] }
+func (c *plainConfig) Scan(_ interface{}) error   { return nil }
+func (c *plainConfig) Keys() []string {
+	keys := make([]string, 0, len(c.data))
+	for k := range c.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func TestSnapshotConfig_Fallback(t *testing.T) {
-	// NewFromMap does NOT implement Snapshotter, so snapshotConfig
-	// should use the Keys()+Get() fallback path.
-	cfg := config.NewFromMap(map[string]any{
-		"x": map[string]any{"y": 42},
-		"z": "hello",
-	})
+	// plainConfig does NOT implement Snapshotter, so snapshotConfig
+	// must use the Keys()+Get() fallback path.
+	cfg := &plainConfig{data: map[string]any{"a": 1, "b": "two"}}
+
+	// Verify it does NOT implement Snapshotter.
+	_, ok := config.Config(cfg).(config.Snapshotter)
+	assert.False(t, ok, "plainConfig must not implement Snapshotter")
+
 	snap := snapshotConfig(cfg)
-	assert.Equal(t, 42, snap["x.y"])
-	assert.Equal(t, "hello", snap["z"])
+	assert.Equal(t, 1, snap["a"])
+	assert.Equal(t, "two", snap["b"])
 }
 
 // ---------------------------------------------------------------------------
@@ -784,12 +804,12 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 		return rc.eventCount() >= 1
 	}, 3*time.Second, 50*time.Millisecond, "expected first config change to fire callback")
 
-	// Second: write back original content — triggers watcher + reload, but
-	// the next reload produces val1→val1 = no diff, so no second callback.
-	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+	// Second: re-write the SAME content that config currently has (val2).
+	// This triggers the watcher but Diff(val2, val2) = empty, so no callback.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 
-	// Third: write different content again — this proves the watcher is still
-	// alive and processing events after the no-diff reload.
+	// Third: write different content — proves the watcher is still alive
+	// after the no-diff reload.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 2
@@ -797,6 +817,90 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 
 	// Exactly 2 callbacks: the no-diff reload in the middle was correctly skipped.
 	assert.Equal(t, 2, rc.eventCount(), "no-diff reload should not trigger callback")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
+}
+
+// mutatingReloaderCell modifies the event to test isolation between cells.
+type mutatingReloaderCell struct {
+	*cell.BaseCell
+	called atomic.Int32
+}
+
+func newMutatingReloaderCell(id string) *mutatingReloaderCell {
+	return &mutatingReloaderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *mutatingReloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
+	c.called.Add(1)
+	// Attempt to corrupt shared state.
+	if len(event.Added) > 0 {
+		event.Added[0] = "CORRUPTED"
+	}
+	event.Config["INJECTED"] = "malicious"
+	delete(event.Config, "key")
+	return nil
+}
+
+func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-isolation"})
+	mutator := newMutatingReloaderCell("mutator")
+	observer := newReloaderCell("observer")
+	// Register mutator first — it tries to corrupt the event.
+	require.NoError(t, asm.Register(mutator))
+	require.NoError(t, asm.Register(observer))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Trigger config change that adds a new key.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\nnew_key: added\n"), 0o644))
+
+	// Wait for both cells to be called.
+	require.Eventually(t, func() bool {
+		return observer.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	// Observer should see clean data despite mutator's corruption attempt.
+	evt := observer.lastEvent()
+	require.NotNil(t, evt)
+	assert.Contains(t, evt.Added, "new_key", "Added should contain original key, not CORRUPTED")
+	assert.Contains(t, evt.Config, "key", "Config should still have 'key' despite delete attempt")
+	assert.NotContains(t, evt.Config, "INJECTED", "Config should not have mutator's injected key")
 
 	cancel()
 	select {
