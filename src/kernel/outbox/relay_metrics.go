@@ -43,7 +43,7 @@ type RelayCollector interface {
 // Used when metrics collection is disabled (nil Metrics in RelayConfig).
 type NoopRelayCollector struct{}
 
-func (NoopRelayCollector) RecordPollCycle(_ PollCycleResult) {}
-func (NoopRelayCollector) RecordBatchSize(_ int)             {}
-func (NoopRelayCollector) RecordReclaim(_ int64)             {}
-func (NoopRelayCollector) RecordCleanup(_, _ int64)          {}
+func (NoopRelayCollector) RecordPollCycle(_ PollCycleResult) { /* no-op: metrics disabled */ }
+func (NoopRelayCollector) RecordBatchSize(_ int)             { /* no-op: metrics disabled */ }
+func (NoopRelayCollector) RecordReclaim(_ int64)             { /* no-op: metrics disabled */ }
+func (NoopRelayCollector) RecordCleanup(_, _ int64)          { /* no-op: metrics disabled */ }

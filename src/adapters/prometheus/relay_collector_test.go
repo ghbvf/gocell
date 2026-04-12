@@ -46,38 +46,19 @@ func TestRelayCollector_RecordPollCycle(t *testing.T) {
 	families, err := registry.Gather()
 	require.NoError(t, err)
 
-	var foundRelayed, foundDuration bool
-	for _, f := range families {
-		switch f.GetName() {
-		case "gocell_outbox_relayed_total":
-			foundRelayed = true
-			// Should have metrics for published(3), retried(1), skipped(1).
-			// dead=0, so no metric emitted for dead.
-			metricCount := len(f.GetMetric())
-			assert.Equal(t, 3, metricCount,
-				"should have 3 label combinations (published, retried, skipped; dead=0 is skipped)")
-			// Verify published counter value.
-			for _, m := range f.GetMetric() {
-				labels := metricLabels(m)
-				if labels["outcome"] == "published" {
-					assert.Equal(t, 3.0, m.GetCounter().GetValue())
-				}
-				if labels["outcome"] == "retried" {
-					assert.Equal(t, 1.0, m.GetCounter().GetValue())
-				}
-				if labels["outcome"] == "skipped" {
-					assert.Equal(t, 1.0, m.GetCounter().GetValue())
-				}
-			}
-		case "gocell_outbox_poll_duration_seconds":
-			foundDuration = true
-			// 4 phases: claim, publish, write_back, total.
-			assert.Equal(t, 4, len(f.GetMetric()),
-				"should have 4 phase label combinations")
-		}
-	}
-	assert.True(t, foundRelayed, "should have relayed_total counter")
-	assert.True(t, foundDuration, "should have poll_duration_seconds histogram")
+	relayed := findFamily(families, "gocell_outbox_relayed_total")
+	require.NotNil(t, relayed, "should have relayed_total counter")
+	// 3 label combos: published(3), retried(1), skipped(1). dead=0 is skipped.
+	assert.Equal(t, 3, len(relayed.GetMetric()),
+		"should have 3 label combinations (published, retried, skipped; dead=0 is skipped)")
+	assertCounterValue(t, relayed, "outcome", "published", 3.0)
+	assertCounterValue(t, relayed, "outcome", "retried", 1.0)
+	assertCounterValue(t, relayed, "outcome", "skipped", 1.0)
+
+	duration := findFamily(families, "gocell_outbox_poll_duration_seconds")
+	require.NotNil(t, duration, "should have poll_duration_seconds histogram")
+	assert.Equal(t, 4, len(duration.GetMetric()),
+		"should have 4 phase label combinations")
 }
 
 func TestRelayCollector_RecordPollCycle_AllZero(t *testing.T) {
@@ -276,4 +257,28 @@ func metricLabels(m *prom_dto.Metric) map[string]string {
 		labels[lp.GetName()] = lp.GetValue()
 	}
 	return labels
+}
+
+// findFamily returns the metric family with the given name, or nil.
+func findFamily(families []*prom_dto.MetricFamily, name string) *prom_dto.MetricFamily {
+	for _, f := range families {
+		if f.GetName() == name {
+			return f
+		}
+	}
+	return nil
+}
+
+// assertCounterValue asserts that the metric family contains a counter with
+// the given label key=value and the expected counter value.
+func assertCounterValue(t *testing.T, family *prom_dto.MetricFamily, labelKey, labelValue string, expected float64) {
+	t.Helper()
+	for _, m := range family.GetMetric() {
+		if metricLabels(m)[labelKey] == labelValue {
+			assert.Equal(t, expected, m.GetCounter().GetValue(),
+				"counter %s=%s", labelKey, labelValue)
+			return
+		}
+	}
+	t.Errorf("no metric found with %s=%s", labelKey, labelValue)
 }
