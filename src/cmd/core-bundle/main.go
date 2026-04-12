@@ -31,36 +31,28 @@ func envOrDefault(key, fallback string) []byte {
 	return []byte(fallback)
 }
 
+// loadKeySet returns a KeySet based on the adapter mode.
+// In "real" mode, keys are loaded from environment variables (fail-fast if missing).
+// In dev mode (default), an ephemeral RSA key pair is generated per process.
+func loadKeySet(adapterMode string) (*auth.KeySet, error) {
+	if adapterMode == "real" {
+		return auth.LoadKeySetFromEnv()
+	}
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
+	return auth.NewKeySet(privKey, pubKey)
+}
+
 func main() {
 	// Determine adapter mode early — it controls key loading strategy.
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
 
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
-	// RSA key pair for JWT signing/verification.
-	// Two paths:
-	//   real  → LoadKeySetFromEnv: stable keys from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY,
-	//           fail-fast if missing, supports rotation via GOCELL_JWT_PREV_PUBLIC_KEY.
-	//   dev   → MustGenerateTestKeyPair: ephemeral per-process key pair,
-	//           tokens are invalidated on restart. Suitable for local development only.
-	var keySet *auth.KeySet
-	if adapterMode == "real" {
-		var err error
-		keySet, err = auth.LoadKeySetFromEnv()
-		if err != nil {
-			slog.Error("failed to load JWT keys from env — set GOCELL_JWT_PRIVATE_KEY and GOCELL_JWT_PUBLIC_KEY",
-				"error", err)
-			os.Exit(1)
-		}
-	} else {
-		privKey, pubKey := auth.MustGenerateTestKeyPair()
-		slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
-		var err error
-		keySet, err = auth.NewKeySet(privKey, pubKey)
-		if err != nil {
-			slog.Error("failed to create key set", "error", err)
-			os.Exit(1)
-		}
+	keySet, err := loadKeySet(adapterMode)
+	if err != nil {
+		slog.Error("failed to load JWT key set", "error", err)
+		os.Exit(1)
 	}
 
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", 15*time.Minute)
