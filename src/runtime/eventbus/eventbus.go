@@ -154,6 +154,9 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler 
 }
 
 // Close terminates all subscriber goroutines and prevents new publishes.
+// Safety: Close holds mu.Lock() for the full channel-closing loop, while
+// Publish holds mu.RLock() while sending to subscriber channels. That lock
+// ordering prevents Publish from sending to a closed subscriber channel.
 func (b *InMemoryEventBus) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

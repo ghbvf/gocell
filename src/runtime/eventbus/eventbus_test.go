@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -200,6 +201,63 @@ func TestClose_Idempotent(t *testing.T) {
 	bus := New()
 	assert.NoError(t, bus.Close())
 	assert.NoError(t, bus.Close())
+}
+
+func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
+	bus := New(WithBufferSize(32))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "race.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		return len(bus.subs["race.topic"]) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	var stop atomic.Bool
+	var publishStarted atomic.Int32
+	panicCh := make(chan any, 1)
+	var publishers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		publishers.Add(1)
+		go func(workerID int) {
+			defer publishers.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					select {
+					case panicCh <- fmt.Sprintf("publisher %d panicked: %v", workerID, r):
+					default:
+					}
+				}
+			}()
+
+			for !stop.Load() {
+				publishStarted.CompareAndSwap(0, 1)
+				_ = bus.Publish(context.Background(), "race.topic", []byte("payload"))
+			}
+		}(i)
+	}
+
+	require.Eventually(t, func() bool {
+		return publishStarted.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, bus.Close())
+	stop.Store(true)
+	publishers.Wait()
+	cancel()
+	<-done
+
+	select {
+	case panicValue := <-panicCh:
+		t.Fatalf("publish panicked during concurrent close: %v", panicValue)
+	default:
+	}
 }
 
 func TestSubscribe_ClosedBus(t *testing.T) {
