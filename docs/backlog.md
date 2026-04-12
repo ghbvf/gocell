@@ -132,8 +132,8 @@
 | ER-P2-02 | `kernel/cell/celltest/eventrouter.go` | ~~stubEventRouter 重复 → 提取到 celltest~~ PR#76 ✅ | ~~30min~~ |
 | ER-P2-03 | `runtime/eventrouter/router.go`, `runtime/bootstrap/bootstrap.go` | Running() 是一次性信号，无持续 health check 集成（OPS-3 readiness 探针可复用） | 1h |
 | ER-P2-04 | `runtime/bootstrap/bootstrap_test.go` | ~~缺 Router 正路径集成测试~~ PR#76 ✅ | ~~1h~~ |
-| CLEANUP-01 | `runtime/bootstrap/bootstrap.go` | 删除 `WithEventBus` deprecated wrapper，调用方改用 `WithPublisher` + `WithSubscriber` | 30min |
-| CLEANUP-02 | `cells/access-core/cell.go` | 删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier` | 1h |
+| ~~CLEANUP-01~~ | `runtime/bootstrap/bootstrap.go` | ~~删除 `WithEventBus` deprecated wrapper，调用方改用 `WithPublisher` + `WithSubscriber`~~ | PR#83 ✅ |
+| ~~CLEANUP-02~~ | `cells/access-core/cell.go` | ~~删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier`~~ | PR#83 ✅ |
 | ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
 | ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
 | RMQ-75-01 | `adapters/rabbitmq/rabbitmq_test.go:717` | Flaky test: `time.Sleep(20ms)` 等待 terminal state，CI 高负载下不稳定 → 改 `require.Eventually` | 15min |
@@ -188,6 +188,8 @@
 | RL-SUB-01 | Subscriber 入站 ID 校验未提升到共享边界 — broker 直发/DLQ 回放携带低熵 ID 仍可污染幂等状态；需在 subscriber 入站路径统一验证（discovered via PR#82 review P1-3） | 2h | — |
 | RL-METRICS-01 | Relay Prometheus 指标 — published/retried/dead_lettered/skipped 计数器，需 Collector 接口注入避免 adapters→prometheus 直依赖（discovered via PR#82） | 2h | PR#81 WM-2-F3 同批 |
 | P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
+| CMD-MODE-01 | core-bundle `GOCELL_ADAPTER_MODE` 错误值静默回退 dev — 当 real adapter 真正接入时升级为 fail-fast（当前 warn 可见性已足够）(discovered via PR#83 review) | 30min | real adapter 接入时 |
+| CMD-REFACTOR-01 | core-bundle 组装逻辑提取到可 import 的 `cmd/core-bundle/app` 包 — 使 assembly 集成 smoke 可测（当前 package main 不可被外部 import）(discovered via PR#83 review) | 3h（C2-C3） | — |
 | P2-T-02 | J-audit-login-trail e2e 测试 | 2h | — |
 
 ---
