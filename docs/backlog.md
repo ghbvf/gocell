@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。历史完成记录已归档至 `docs/reviews/archive/202604111438-backlog-full-history.md`。
-> 更新日期: 2026-04-12（PR#79-82 合并后更新）
+> 更新日期: 2026-04-12（PR#79-85 合并后更新 + 跨框架 GAP 分析集成）
 
 ---
 
@@ -25,16 +25,20 @@
 | Phase 3: Checker 清理 + Receipt 加固 + RMQ-75 fixes | PR#80 ✅ | legacy Checker 删除 + sync.Once + LeaseTTL 校验 + RMQ-75 部分修复 |
 | WM-2 密钥轮换 — JWT kid + HMAC key ring | PR#81 ✅ | kid 轮换 + HMAC key ring + KeySet API |
 | 0-B2 Outbox Relay 三阶段重写 | PR#82 ✅ | claim→publish→writeBack + reclaimStale/DLQ + schema 003 (id→TEXT, status/attempts/dead_at) + wire envelope + sanitizeError |
+| CLEANUP-01/02 + RMQ-75-01/03/04 清理 | PR#83 ✅ | 删除 WithEventBus/WithSigningKey deprecated wrapper + flaky RMQ test → require.Eventually + bootstrap EventRegistrar invariant |
+| Outbox BatchWriter 性能优化 | PR#84 ✅ | strings.Builder 预分配 + strconv.AppendInt，batch insert 内存分配降低 ~99% |
+| 测试覆盖率 85.8% → 90.6% | PR#85 ✅ | 16 cell/runtime/adapter/cmd 测试文件，1823 行纯测试代码，零源码变更 |
 
 ## 进行中
 
 （暂无）
 
-### PR 队列（跨框架分析后修订，PR#70-77 已全部合并）
+### PR 队列（跨框架分析后修订，PR#70-85 已全部合并）
 
 > 2026-04-11 跨框架分析结论: 对比 7 个主流框架后，识别出 2 个架构根因。
 > 修订: R-3 废弃（被 Phase 2 EventRouter 取代）、R-5 废弃（合入 Phase 2 Cell 迁移）。
 > 分析文档: `docs/reviews/20260411-architecture-root-cause-analysis.md`, `docs/reviews/20260411-cross-framework-architecture-analysis.md`
+> 2026-04-12 跨框架 GAP 分析裁决: 14 个 GAP 中 4 个为 v1.0 硬化（GAP-3/4/9/10 → Batch 5），5 个 defer v1.1，5 个 reject/v2+。详见下方 `跨框架 GAP 分析裁决` 节。
 
 **架构修复（跨框架分析产出，取代部分 PR-Rollout）**
 
@@ -99,6 +103,44 @@
 
 ---
 
+## 跨框架 GAP 分析裁决
+
+> 来源: 2026-04-12 六角色审查，对标 Kratos/go-zero/Watermill/fx/Temporal/Encore 共 14 个 GAP
+> 分析文档: `docs/reviews/20260411-cross-framework-architecture-analysis.md`, `docs/reviews/20260411-gocell-full-capability-six-role-analysis.md`
+> 裁决原则: GAP 按"硬化已有骨架"vs"全新能力"vs"工具链"vs"超出框架边界"四类分流
+> 关键发现: 14 项中多数不是"全新缺口"，而是"已有骨架待产品化/硬化"或不属于框架边界
+
+### v1.0 硬化 — 合入 Batch 5（4 项，不新增范围，打通已有骨架）
+
+| GAP | 能力 | 新任务 ID | 预估 | 已有骨架 | 缺什么 |
+|-----|------|----------|------|---------|--------|
+| GAP-9 | CorrelationID 全链路传播 | **CID-01** | 4h | `pkg/ctxkeys` WithCorrelationID + logging.go 提取 trace_id | access_log.go/consumer_base.go 未传播；Entry.Metadata 未写入 trace context |
+| GAP-3 | Rate limiter 激活 | **RL-WIRE-01** | 0.5d | `runtime/http/middleware/rate_limit.go` RateLimiter 接口 + middleware + 测试 | 未接入 router.go 默认链；缺具体 adapter |
+| GAP-10 | Lifecycle hooks | = **WM-17**（已计划） | 1d | Cell Init/Start/Stop 状态机 | 无 hook 注册机制（BeforeStart/AfterStart/BeforeStop/AfterStop） |
+| GAP-4 | HTTP→event metadata 桥接 | **META-BRIDGE-01** | 2h | Outbox Entry.Metadata map；HTTP context keys | ctx→Entry.Metadata 自动注入缺失。仅 HTTP↔event 部分，通用跨协议抽象 defer v1.1 |
+
+### v1.1 工具链/辅助能力 — defer（5 项）
+
+| GAP | 能力 | 预估 | 前置条件 | 说明 |
+|-----|------|------|---------|------|
+| GAP-7 | Scheduler/cron | 1d spike | WM-17 lifecycle hooks | PeriodicWorker 仅固定间隔；cron 表达式 + 分布式锁为 v1.1 runtime/scheduler |
+| GAP-11 | Architecture dependency graph | 1d | archtest (PR#73) | 工具链非运行时；可视化 Cell/Contract 依赖 |
+| GAP-13 | Auto API docs / OpenAPI | 2d | HR-02 route 元数据 | 工具链非运行时；需 route 元数据稳定 |
+| GAP-6 | Singleflight + cache | 1d | — | pkg/helper 级别，非核心运行时 |
+| GAP-5 | Adaptive load shedding | 1.5d | WM-33b + RL-WIRE-01 | 需 limiter/breaker 先稳定后再评估 |
+
+### 不纳入框架 — reject/v2+（5 项）
+
+| GAP | 能力 | 裁决 | 理由 |
+|-----|------|------|------|
+| GAP-1 | gRPC 双协议 | v2+ | 当前无第二协议实际需求；与 WM-31 (0/6 reject) 同类 |
+| GAP-2 | 服务发现 | v2+ | K8s Service 已覆盖；与 WM-28 (0/6 reject) 相同结论 |
+| GAP-8 | CQRS 组件 | reject | L2/L3 最终一致模式已充分；框架级 CQRS 为过度抽象 |
+| GAP-12 | Saga 补偿 | reject | 与 WM-29 (0/6 reject) 相同结论 |
+| GAP-14 | 本地 Dashboard | reject | ROI 不确定；/healthz + /readyz + logs + traces 已覆盖 |
+
+---
+
 ## P1 — v1.0 强烈建议
 
 ### Tier 0 收尾
@@ -126,7 +168,7 @@
 | R1C2-F03 | `runtime/worker/worker.go` | WorkerGroup.Start 首个失败不取消其余 worker | 2h |
 | ~~F-OB-01~~ | `kernel/outbox/outbox.go` | ~~无批量写支持~~ PR#79 ✅ | ~~2h~~ |
 | TX-NIL-01 | `cells/*/service.go` | txRunner nil-safe 未文档化 | 1h |
-| OTEL-COV-01 | `adapters/otel/` | 覆盖率 67.3%（PR#72 删除了依赖内部 API 的旧测试后回升，但仍 < 80%；成功路径需 gRPC OTLP endpoint，需 testcontainers 集成测试） | 2h |
+| OTEL-COV-01 | `adapters/otel/` | 覆盖率已提升（PR#85 补 tracer_init_test.go insecure/secure 路径）；成功路径仍需 gRPC OTLP endpoint testcontainers 集成测试 | 1h |
 | SUB-SETUP-01 | `kernel/outbox`, `cells/*/cell.go` | RegisterSubscriptions 用 100ms 启发式区分 setup 失败与正常阻塞消费。**已被 Phase 2 EventRouter 解决**——Router.Run() 同步返回 setup error，消除启发式 | ~~4h~~ → Phase 2 |
 | ER-P2-01 | `runtime/eventrouter/router.go` | ~~Close() 正常关停缺 elapsed 日志~~ PR#76 ✅ | ~~15min~~ |
 | ER-P2-02 | `kernel/cell/celltest/eventrouter.go` | ~~stubEventRouter 重复 → 提取到 celltest~~ PR#76 ✅ | ~~30min~~ |
@@ -136,14 +178,14 @@
 | ~~CLEANUP-02~~ | `cells/access-core/cell.go` | ~~删除 `WithSigningKey` + `signingKey` backward compat 字段，统一用 `WithJWTIssuer`/`WithJWTVerifier`~~ | PR#83 ✅ |
 | ER-ARCH-01 | `runtime/eventrouter/router.go`, `kernel/outbox/outbox.go` | **Readiness heuristic**: Router startup detection 仍用 time.After(500ms)，RabbitMQ Subscribe 的 topology setup (Qos+Declare+Bind+Consume) 可能超过此超时。彻底修复需 Subscriber 接口拆分 Setup()+Run()，**C4 架构级**。当前 500ms 对本地 broker 足够（InMemory 即时，RabbitMQ local declare < 50ms），仅跨网络集群场景才会触发 | **v1.1** |
 | ER-ARCH-02 | `kernel/cell/registrar.go`, `runtime/eventrouter/router.go` | **Competing consumers**: EventRouter.AddHandler 只有 topic+handler，无 consumer group identity。audit-core + config-core 都订阅 event.config.changed.v1，RabbitMQ 下退化为 competing consumers 而非 fan-out。方案：`AddHandler(topic, handler, ...HandlerOption)` + `WithConsumerGroup(cg)`，**C3** | **Batch 5**（与 WM-17 lifecycle hooks 同期改 kernel/cell 接口），2h |
-| RMQ-75-01 | `adapters/rabbitmq/rabbitmq_test.go:717` | Flaky test: `time.Sleep(20ms)` 等待 terminal state，CI 高负载下不稳定 → 改 `require.Eventually` | 15min |
+| ~~RMQ-75-01~~ | `adapters/rabbitmq/rabbitmq_test.go` | ~~Flaky test: time.Sleep → require.Eventually~~ PR#83 ✅ | ~~15min~~ |
 | RMQ-75-02 | `adapters/rabbitmq/connection.go` | `MaxReconnectAttempts` 配置缺失，无限重连无上界（运维保底） | 1h |
-| RMQ-75-03 | `adapters/rabbitmq/connection.go` | 命名改善：`failed→terminalCh`, `safeExp→maxSafeShift`, `permanentDialKeywords→permanentDialSubstrings` | 15min |
-| RMQ-75-04 | `adapters/rabbitmq/connection.go` | `WaitConnected` godoc 缺调用方指引（permanent vs transient 区分） | 15min |
+| ~~RMQ-75-03~~ | `adapters/rabbitmq/connection.go` | ~~命名改善~~ PR#83 验证已合入 | ~~15min~~ |
+| ~~RMQ-75-04~~ | `adapters/rabbitmq/connection.go` | ~~WaitConnected godoc~~ PR#83 验证已合入 | ~~15min~~ |
 | RMQ-75-05 | `runtime/bootstrap/bootstrap.go` | `RegisterChecker("rabbitmq", conn.Health)` 未接入 readiness — permanent error 后 Pod 继续接流量 | 30min |
 | P3-DEFER-01 | `adapters/rabbitmq/consumer_base.go`, `connection.go` | safeDelay 与 backoffDelay 核心逻辑重复（bits.Len64 overflow guard），应提取到 pkg/backoff | 2h |
 | P3-DEFER-02 | `adapters/rabbitmq/consumer_base.go` | ClaimFailOpen `*bool` 不符合 Go 习惯，应改为 enum (`ClaimFailMode`) | 1h |
-| P3-DEFER-03 | `examples/` | 新 API（WithHealthChecker、NewConsumerBase(Claimer)、MaxReconnectAttempts）无示例项目演示 | 2h |
+| P3-DEFER-03 | `examples/` | 新 API 无示例演示 — PR#83 已迁移 sso-bff/iot-device/todo-order 到 WithPublisher+WithSubscriber；剩余 WithHealthChecker、NewConsumerBase(Claimer)、MaxReconnectAttempts 示例 | 1h |
 | P3-DEFER-04 | `kernel/idempotency/idempotency.go`, `kernel/outbox/outbox.go` | Receipt 定义在 outbox 包造成 idempotency→outbox 耦合，考虑移到 idempotency 包 | 3h（C3 kernel 接口） |
 | P3-DEFER-05 | `adapters/rabbitmq/connection.go` | Health() 在 reconnecting 和 terminal 状态下返回相同 error code，运维无法区分 | 3h（C3 状态机设计） |
 
@@ -167,7 +209,7 @@
 
 | # | 问题 | 建议 |
 |---|------|------|
-| OPS-2 | 日志缺 trace_id 关联 — AccessLog/ConsumerBase 无 trace_id | 随 WM-10 一并补充 |
+| OPS-2 | 日志缺 trace_id 关联 — AccessLog/ConsumerBase 无 trace_id | → **CID-01** (Batch 5, GAP-9 硬化) |
 | OPS-3 | readiness 探针未接 adapter — postgres/redis/rabbitmq 不报告健康状态 | rabbitmq 提前至 Batch 3（RMQ-75-05）；postgres/redis 在 Batch 6 补 Health() + 注册 |
 
 ### Tech Debt P1
@@ -179,14 +221,14 @@
 | ~~SOL-B-05~~ | ~~bootstrap 统一包装 subscriber/middleware~~ | ~~3h~~ | **废弃 → Phase 2 EventRouter 取代** |
 | SOL-B-01 | Claimer lease 续租 — handler/retryLoop 超 LeaseTTL 后 Commit stale，需 Receipt.Renew 或后台续租（参考 distlock.go renewLoop） | 4h（C3，改 kernel 接口） | R-4 |
 | ~~SOL-B-02~~ | ~~`idempotency → outbox` 依赖方向反转 — Receipt 移到 idempotency 包~~ | ~~3h~~ | PR#80 ✅ |
-| SOL-B-06 | `claimWithRetry` / `retryLoop` 的指数退避在超大重试次数下仍可能先发生 `time.Duration` 溢出；需改为饱和计算并补极值边界测试 | 1h | — |
+| ~~SOL-B-06~~ | ~~指数退避溢出~~ PR#83 验证: 7 个 table-driven 边界测试已覆盖 | ~~1h~~ | 已关闭 |
 | ~~P4-TD-03~~ | ~~`IssueTestToken` HS256 死代码（测试陷阱）~~ | ~~30min~~ | PR#81 ✅ (移到 helpers_test.go，删除 HS256 分支) |
 | P4-TD-04 | order-cell 声明 L2 但无 outboxWriter enforce — order-create/service.go:50-71 + device-register/service.go:50-71 直接 Publish 违反 outbox 规则 | 2h | — |
 | P4-TD-05 | 缺少 outbox 全链路 3-container 集成测试 | 2h | — |
 | RL-INT-01 | Relay 真实 PostgreSQL 集成测试 — testcontainers 覆盖 retry/dead/reclaimStale 落库状态（discovered via PR#82 review P2-4） | 2h | — |
 | RL-MIG-01 | Migration 003 索引创建不是 online-safe — `CREATE INDEX` 在热表上持锁；拆分为独立在线迁移 `004_outbox_pending_idx_online.sql`（discovered via PR#82 review P1-2） | 1h | — |
 | RL-SUB-01 | Subscriber 入站 ID 校验未提升到共享边界 — broker 直发/DLQ 回放携带低熵 ID 仍可污染幂等状态；需在 subscriber 入站路径统一验证（discovered via PR#82 review P1-3） | 2h | — |
-| RL-METRICS-01 | Relay Prometheus 指标 — published/retried/dead_lettered/skipped 计数器，需 Collector 接口注入避免 adapters→prometheus 直依赖（discovered via PR#82） | 2h | PR#81 WM-2-F3 同批 |
+| RL-METRICS-01 | Relay Prometheus 指标 — published/retried/dead_lettered/skipped 计数器，需 Collector 接口注入避免 adapters→prometheus 直依赖（discovered via PR#82） | 2h | **→ Batch 5 轨道 A**（从 Tech Debt P1 提升，与 WM-33b/RL-WIRE-01 韧性主题同期） |
 | P3-TD-10 | Session refresh TOCTOU 竞态 | 4h（高风险） | — |
 | CMD-MODE-01 | core-bundle `GOCELL_ADAPTER_MODE` 错误值静默回退 dev — 当 real adapter 真正接入时升级为 fail-fast（当前 warn 可见性已足够）(discovered via PR#83 review) | 30min | real adapter 接入时 |
 | CMD-REFACTOR-01 | core-bundle 组装逻辑提取到可 import 的 `cmd/core-bundle/app` 包 — 使 assembly 集成 smoke 可测（当前 package main 不可被外部 import）(discovered via PR#83 review) | 3h（C2-C3） | — |
@@ -299,6 +341,18 @@
 | AL-02 | distlock.go 续期 goroutine 属于 runtime | 拆出通用 distlock 接口 |
 | AL-04 | runtime/auth 直接 import golang-jwt | 评估是否值得拆 |
 
+### 跨框架 GAP — v1.1 待评估
+
+> 来源: GAP 分析裁决（见下方 `跨框架 GAP 分析裁决` 节）
+
+| GAP | 能力 | 预估 | 前置条件 | 对应已有子模块 |
+|-----|------|------|---------|---------------|
+| GAP-7 | Scheduler/cron — 定时任务 | 1d spike | WM-17 lifecycle hooks 稳定 | runtime/scheduler（仅 PeriodicWorker 固定间隔） |
+| GAP-11 | Architecture dependency graph — 依赖图生成 | 1d | archtest (PR#73) 稳定 | — (`cmd/gocell graph`) |
+| GAP-13 | Auto API docs / OpenAPI — 自动 API 文档 | 2d | HR-02 route 元数据稳定 | — (`cmd/gocell openapi`) |
+| GAP-6 | Singleflight + cache helper — 防击穿 | 1d | — | — (`pkg/cache` 或 `pkg/singleflight`) |
+| GAP-5 | Adaptive load shedding — 自适应降载 | 1.5d | WM-33b 熔断器 + RL-WIRE-01 limiter 稳定 | — |
+
 ### 架构风险
 
 | ID | 问题 | 归属 PR | 状态 |
@@ -331,6 +385,11 @@
 |---|------|------|------|
 | WM-28 | 服务发现 Registry | 0/6 | K8s Service 已提供服务发现。框架内置 Registry 是过早抽象。与 WM-23（单体→微服务）绑定评估：若 WM-23 提升优先级，需同步评估 |
 | WM-29 | Saga 补偿 — 跨 Cell 分布式事务补偿链 | 0/6 | GoCell L2 outbox + L3 WorkflowEventual 最终一致模式已覆盖设计范围。Saga 引入补偿事务管理和分布式状态，显著增加 kernel/ 复杂度。等有真实多步补偿场景再引入 |
+| GAP-1 | gRPC 双协议 — 双协议支持 | 0/6 | 跨框架 GAP 分析。当前无第二协议实际需求。与 WM-31 (0/6 reject) 同类 |
+| GAP-2 | 服务发现 — Service Discovery | 0/6 | 跨框架 GAP 分析。K8s Service 已覆盖。与 WM-28 (0/6 reject) 相同结论 |
+| GAP-8 | CQRS 组件 — 框架级 CQRS 抽象 | 0/6 | 跨框架 GAP 分析。L2/L3 最终一致模式已充分 |
+| GAP-12 | Saga 补偿 — 分布式事务补偿链 | 0/6 | 跨框架 GAP 分析。与 WM-29 (0/6 reject) 相同结论 |
+| GAP-14 | 本地 Dashboard — 开发者本地仪表盘 | 0/6 | 跨框架 GAP 分析。ROI 不确定；/healthz + /readyz + logs + traces 已覆盖 |
 
 ---
 
@@ -394,9 +453,9 @@
 
 | 轨道 | 任务 | 预估 | 交付物 |
 |------|------|------|--------|
-| A | 0-B2 RL-01~08 Outbox Relay 三阶段重写 | 1.5d | claim→publish→writeBack + 8 场景测试 |
-| A | **Phase 3: Checker 清理 + Receipt 加固** | 3h | 删 legacy + sync.Once + LeaseTTL 校验 |
-| A | RMQ-75-01~04 PR#75 review 收尾 | 1.5h | flaky test + MaxReconnectAttempts + 命名 + godoc（搭 Phase 3 同包改动） |
+| A | ~~0-B2 RL-01~08 Outbox Relay 三阶段重写~~ | — | PR#82 ✅ |
+| A | ~~Phase 3: Checker 清理 + Receipt 加固~~ | — | PR#80 ✅ |
+| A | ~~RMQ-75-01/03/04~~ + RMQ-75-02 MaxReconnectAttempts | 1h | 01/03/04 由 PR#83 ✅ 完成；剩余 02 无限重连无上界 |
 | A | RMQ-75-05 readiness 接 rabbitmq Health() | 30min | `RegisterChecker("rabbitmq", conn.Health)` — 提前自 Batch 6 |
 | B | HR-02 metrics 基数爆炸修复 (PROM-01) | 2h | route pattern 元数据替代 r.URL.Path |
 | B | HR-01/03/04 HTTP 产品化收尾 | 4h | RealIP 决策 + RequestID bridge + tracing 决策 |
@@ -413,12 +472,12 @@
 ### Batch 4: P1 功能 — 安全 + 查询（2d，Batch 3 后或并行后期）
 
 > 安全席位要求 CSRF + 密钥轮换尽早；DX 要求游标分页尽早。
-> 可与 Batch 3 后期部分并行。WM-1 已提前完成。
+> 可与 Batch 3 后期部分并行。WM-1 (PR#77 ✅) + WM-2 (PR#81 ✅) 已提前完成，释放 ~3d 容量。
 
 | 轨道 | 任务 | 预估 | 交付物 |
 |------|------|------|--------|
 | A | ~~WM-1 CSRF 中间件~~ | — | PR#77 ✅ |
-| A | WM-2 密钥轮换（JWT kid + HMAC，范围限定） | 2d | `runtime/auth` KeyRotator + kid 支持 |
+| A | ~~WM-2 密钥轮换（JWT kid + HMAC，范围限定）~~ | — | PR#81 ✅ |
 | B | WM-6 游标分页 | 1.5d | `pkg/query` KeysetPagination + HMAC cursor |
 | B | WM-34 配置热更新回调 | 1d | `runtime/config` Cell 级 OnConfigReload |
 
@@ -426,22 +485,29 @@
 **测试策略**: CSRF table-driven；cursor HMAC 签名验证 + 边界条件；key rotation 并发测试
 **DX 增益**: 分页从 O(n) → O(log n)；配置变更无需重启
 
-### Batch 5: P1 功能 — 事件 + 生命周期（1.5d，Batch 3 后）
+### Batch 5: P1 功能 — 事件 + 生命周期 + **GAP 硬化**（2.5d，Batch 3 后）
 
 > 测试席位强调 WM-20 TestPubSub 是测试基础设施投资（ROI 最高之一）。
 > 架构师要求 WM-17 必须用可选接口，不改 Cell 核心方法。
+> GAP 硬化: GAP-9 (CorrelationID) + GAP-3 (rate limiter 激活) + GAP-4 (metadata 桥接) + GAP-10 (= WM-17) 合入本 batch。
+> 这些不是全新能力——ctxkeys/rate_limit.go/Entry.Metadata 骨架已存在，需"打通"而非"新建"。
 
 | 轨道 | 任务 | 预估 | 交付物 |
 |------|------|------|--------|
 | A | WM-20 TestPubSub 认证测试套件 | 1.5d | `kernel/outbox/outboxtest/` 标准 Publisher/Subscriber 套件 |
 | A | WM-33b 熔断器 | 0.5d | `adapters/` sony/gobreaker 包装 |
-| B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop） | 1d | `kernel/cell` 可选接口（type assertion） |
+| A | **RL-WIRE-01** Rate limiter 激活 + adapter（GAP-3 硬化） | 0.5d | rate_limit.go → router.go 默认链 optional slot + `golang.org/x/time/rate` adapter；与 WM-33b 同 PR |
+| A | **RL-METRICS-01** Relay Prometheus 指标 | 2h | published/retried/dead_lettered/skipped 计数器；Collector 接口注入避免 adapters→prometheus 直依赖。从 Tech Debt P1 提升 |
+| B | WM-17 生命周期钩子（BeforeStart/AfterStart/BeforeStop/AfterStop）（= GAP-10） | 1d | `kernel/cell` 可选接口（type assertion） |
 | B | WM-15 L4 队列状态机 | 1.5d | `kernel/outbox` 合入 0-B2，状态 enum + 超时检测 |
 | B | ER-ARCH-02 EventRouter ConsumerGroup 支持 | 2h | `AddHandler(...HandlerOption)` + `WithConsumerGroup`，修复 competing consumers |
+| B | **CID-01** CorrelationID 全链路传播（GAP-9 硬化） | 4h | access_log.go + consumer_base.go 补 trace_id/correlation_id；升级 OPS-2 |
+| B | **META-BRIDGE-01** HTTP→event metadata 桥接（GAP-4 硬化） | 2h | ctx trace_id/request_id/correlation_id → Entry.Metadata 自动注入；与 CID-01 同 PR。仅 HTTP↔event 部分，通用跨协议抽象 defer v1.1 |
 
 **安全底线**: 熔断器防级联故障；AfterStop 清理敏感资源
 **测试策略**: TestPubSub 标准套件 12 场景；lifecycle hooks 回归验证（不注册钩子时行为不变）
 **运维增益**: OPS-3 readiness 探针可通过 AfterStart 注册；adapter 健康检查
+**可观测增益**: HTTP→event 全链路 correlation_id/trace_id 可追踪（GAP-9）；rate limiter 激活提供流控基础（GAP-3）
 **DX 增益**: Cell 开发有标准事件测试模板；启动流程清晰可调试
 
 ### Batch 6: Review Findings + Tech Debt（2d）
@@ -461,10 +527,10 @@
 | ~~P4-TD-03 IssueTestToken 死代码~~ | ~~30min~~ | PR#81 ✅ |
 | OPS-3 readiness 探针接 postgres/redis | 2h | 实现 Health() + 注册 HealthChecker（rabbitmq 已提前至 Batch 3） |
 | OPS-4 优雅关闭 drain 期 | 1h | bootstrap shutdown |
-| CI-01 integration job 补 tests/integration/ | 30min | .github/workflows/ci.yml:101-102 只跑 ./adapters/...，漏掉 src/tests/integration/ (discovered via PR#79 review) |
-| OB-UUID-01 cells evt-<uuid> 与 Writer UUID 校验冲突 | 2h | cells 生成 `evt-<uuid>` 前缀 ID，但 outbox_writer.go 只接受 canonical UUID；需统一 ID 生成策略或放宽校验 (discovered via PR#79 review) |
+| ~~CLEANUP-01 WithEventBus 删除~~ | ~~30min~~ | PR#83 ✅ |
+| ~~CLEANUP-02 WithSigningKey 删除~~ | ~~1h~~ | PR#83 ✅ |
 
-### 总时间线（修订后，+6 个 Batch）
+### 总时间线（修订后，+GAP 硬化集成）
 
 ```
 Week 1:
@@ -472,12 +538,14 @@ Week 1:
 
 Week 2:
   Day 1:   Batch 2 (架构修复: Phase 1 + Phase 2 + B-03) ✅ 已完成
-  Day 2-3: Batch 3 (Tier 0 收尾: Phase 3 + Relay + HTTP + handler)
-  Day 4-5: Batch 4 (CSRF + 密钥轮换 + 游标分页 + 配置热更新)
-           ┊ Batch 5 部分并行启动 (WM-17 lifecycle hooks 无前置依赖)
+  Day 2-3: Batch 3 (Tier 0 收尾: Relay ✅ + Phase 3 ✅ + RMQ cleanup ✅ + HTTP 产品化)
+           ┊ 剩余: RMQ-75-02 + HR-01~04 + SF-01~04 + handler 改造
+  Day 4-5: Batch 4 (WM-1 ✅ + WM-2 ✅ + 游标分页 + 配置热更新)
+           ┊ 释放 ~3d 容量（WM-1 + WM-2 + Relay + Phase 3 + CLEANUP 提前完成）
 
 Week 3:
-  Day 1-2: Batch 5 (TestPubSub + 熔断器 + L4 状态机)
+  Day 1-3: Batch 5 (TestPubSub + 熔断器 + lifecycle + GAP 硬化)
+           ┊ GAP 硬化: CID-01 + RL-WIRE-01 + META-BRIDGE-01
   Day 3-4: Batch 6 (Review Findings + Tech Debt)
   Day 5:   → v1.0 Release Candidate
 
@@ -493,5 +561,5 @@ Week 3:
 | **Batch 2 后** ✅ | **事件消费架构对齐行业标准**: 100ms 竞态消除、PermanentError 全栈生效、goroutine 有监管 | **L2: 可监控** |
 | Batch 3 后 | 依赖可预测：outbox 不丢消息，metrics 有意义，legacy 清理完成 | L2.5: 可运维 |
 | Batch 4 后 | 开发效率提升：分页 O(1)，配置热更新，密钥可轮换 | L3: 可自愈 |
-| Batch 5 后 | 事件系统有标准测试，生命周期清晰，熔断防护 | L3.5: 可保证 |
+| Batch 5 后 | 事件系统有标准测试，生命周期清晰，熔断防护，**全链路 correlation 可追踪 + rate limiter 激活** | L3.5: 可保证 |
 | Batch 6 后 | 所有已知 bug 修复，Tech Debt 收敛 | L4: 生产就绪 |
