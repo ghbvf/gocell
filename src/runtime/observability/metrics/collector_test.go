@@ -45,3 +45,31 @@ func TestInMemoryCollector_Snapshot(t *testing.T) {
 
 // Verify interface compliance at compile time.
 var _ Collector = (*InMemoryCollector)(nil)
+
+func TestStatusString(t *testing.T) {
+	tests := []struct {
+		status   int
+		expected string
+	}{
+		{http.StatusOK, "200"},
+		{http.StatusCreated, "201"},
+		{http.StatusAccepted, "202"},
+		{http.StatusNoContent, "204"},
+		{http.StatusBadRequest, "400"},
+		{http.StatusUnauthorized, "401"},
+		{http.StatusForbidden, "403"},
+		{http.StatusNotFound, "404"},
+		{http.StatusConflict, "409"},
+		{http.StatusTooManyRequests, "429"},
+		{http.StatusInternalServerError, "500"},
+		{http.StatusServiceUnavailable, "503"},
+		{100, "100"},
+		{418, "418"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			assert.Equal(t, tt.expected, statusString(tt.status))
+		})
+	}
+}
