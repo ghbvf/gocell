@@ -582,18 +582,29 @@ func TestMetrics_Records429And503(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Rate-limited request → 429 must be recorded in metrics.
+	// Request 1: Rate-limited → 429 must be recorded in metrics.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/biz", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 
+	// Request 2: Allow through RL, hit open CB → 503 must be recorded.
+	limiter.allow = true
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/biz", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
 	snap := mc.Snapshot()
-	found429 := false
+	found429, found503 := false, false
 	for key, count := range snap.RequestCounts {
 		if strings.Contains(key, "429") && count > 0 {
 			found429 = true
 		}
+		if strings.Contains(key, "503") && count > 0 {
+			found503 = true
+		}
 	}
 	assert.True(t, found429, "metrics must record 429 responses from rate limiter")
+	assert.True(t, found503, "metrics must record 503 responses from circuit breaker")
 }

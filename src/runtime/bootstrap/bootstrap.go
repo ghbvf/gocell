@@ -268,7 +268,6 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Middleware like ratelimit.Limiter owns background goroutines; if injected
 	// via bootstrap convenience options, bootstrap takes ownership of Close.
 	for _, cl := range b.closers {
-		cl := cl // capture loop variable
 		teardowns = append(teardowns, func(_ context.Context) error {
 			return cl.Close()
 		})
