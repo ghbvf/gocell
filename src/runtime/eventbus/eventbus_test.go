@@ -211,13 +211,14 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	go func() {
 		done <- bus.Subscribe(ctx, "race.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}, "")
 	}()
 
 	require.Eventually(t, func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
-		return len(bus.subs["race.topic"]) == 1
+		gs := bus.groupSubs["race.topic"][""]
+		return gs != nil && len(gs.subs) == 1
 	}, time.Second, 10*time.Millisecond)
 
 	var stop atomic.Bool
@@ -238,6 +239,9 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 			}()
 
 			for !stop.Load() {
+				// CAS ensures exactly one 0→1 transition; the Eventually check
+				// below only needs proof that at least one publisher is actively
+				// calling Publish before we race Close against them.
 				publishStarted.CompareAndSwap(0, 1)
 				_ = bus.Publish(context.Background(), "race.topic", []byte("payload"))
 			}

@@ -1,6 +1,9 @@
 package bootstrap
 
-import "sync"
+import (
+	"log/slog"
+	"sync"
+)
 
 // reloadGate prevents new config reload callbacks from entering once shutdown
 // begins and exposes a drained signal for in-flight callbacks.
@@ -33,6 +36,7 @@ func (g *reloadGate) Leave() {
 	defer g.mu.Unlock()
 
 	if g.inFlight == 0 {
+		slog.Debug("reloadGate: Leave called with no in-flight reloads (unbalanced TryEnter/Leave)")
 		return
 	}
 
