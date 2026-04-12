@@ -470,10 +470,15 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
 		)
-		r.config.Metrics.RecordPollCycle(
-			stats.published, stats.retried, stats.dead, stats.skipped,
-			claimDur, pubDur, wbDur,
-		)
+		r.config.Metrics.RecordPollCycle(outbox.PollCycleResult{
+			Published:    stats.published,
+			Retried:      stats.retried,
+			Dead:         stats.dead,
+			Skipped:      stats.skipped,
+			ClaimDur:     claimDur,
+			PublishDur:   pubDur,
+			WriteBackDur: wbDur,
+		})
 	}
 
 	return wbErr
@@ -696,8 +701,8 @@ func (r *OutboxRelay) reclaimStale(ctx context.Context) error {
 		slog.Warn("outbox relay: reclaimed stale entries",
 			slog.Int64("count", ct.RowsAffected()),
 		)
+		r.config.Metrics.RecordReclaim(ct.RowsAffected())
 	}
-	r.config.Metrics.RecordReclaim(ct.RowsAffected())
 	return nil
 }
 

@@ -2,8 +2,18 @@ package outbox
 
 import "time"
 
+// PollCycleResult captures the outcome of a single relay poll cycle.
+// Used by RelayCollector.RecordPollCycle to avoid a long parameter list
+// and to support future extensions without breaking the interface.
+type PollCycleResult struct {
+	Published, Retried, Dead, Skipped int
+	ClaimDur, PublishDur, WriteBackDur time.Duration
+}
+
 // RelayCollector records outbox relay operational metrics.
 // Implementations must be safe for concurrent use.
+// Zero counts are valid inputs; implementations should handle them gracefully
+// (e.g. skip counter increments for zero values).
 //
 // The interface is intentionally in kernel/outbox (not runtime/) so that
 // adapters/postgres can depend on it without pulling in runtime/ packages.
@@ -14,7 +24,7 @@ import "time"
 type RelayCollector interface {
 	// RecordPollCycle records a completed poll cycle with outcome counts and
 	// per-phase durations. Called once per pollOnce invocation after writeBack.
-	RecordPollCycle(published, retried, dead, skipped int, claimDur, publishDur, writeBackDur time.Duration)
+	RecordPollCycle(result PollCycleResult)
 
 	// RecordBatchSize records the number of entries claimed in a poll cycle.
 	// Called even when the batch is empty (size=0) to capture idle cycles.
@@ -33,7 +43,7 @@ type RelayCollector interface {
 // Used when metrics collection is disabled (nil Metrics in RelayConfig).
 type NoopRelayCollector struct{}
 
-func (NoopRelayCollector) RecordPollCycle(_, _, _, _ int, _, _, _ time.Duration) {}
-func (NoopRelayCollector) RecordBatchSize(_ int)                                {}
-func (NoopRelayCollector) RecordReclaim(_ int64)                                {}
-func (NoopRelayCollector) RecordCleanup(_, _ int64)                             {}
+func (NoopRelayCollector) RecordPollCycle(_ PollCycleResult) {}
+func (NoopRelayCollector) RecordBatchSize(_ int)             {}
+func (NoopRelayCollector) RecordReclaim(_ int64)             {}
+func (NoopRelayCollector) RecordCleanup(_, _ int64)          {}

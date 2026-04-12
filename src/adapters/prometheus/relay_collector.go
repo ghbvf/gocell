@@ -4,7 +4,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
-	"time"
 )
 
 // Compile-time check: RelayCollector implements outbox.RelayCollector.
@@ -55,6 +54,9 @@ func (c *RelayCollectorConfig) defaults() {
 
 // RelayCollector implements outbox.RelayCollector using Prometheus metrics.
 //
+// All metrics use dynamic labels (no ConstLabels) for consistency and to
+// support multiple cells sharing a single registry without conflicts.
+//
 // Registered metrics:
 //   - gocell_outbox_relayed_total        (counter, labels: cell, outcome)
 //   - gocell_outbox_poll_duration_seconds (histogram, labels: cell, phase)
@@ -67,8 +69,8 @@ type RelayCollector struct {
 
 	relayed      *prom.CounterVec
 	pollDuration *prom.HistogramVec
-	batchSize    prom.Histogram
-	reclaimed    prom.Counter
+	batchSize    *prom.HistogramVec
+	reclaimed    *prom.CounterVec
 	cleaned      *prom.CounterVec
 }
 
@@ -97,22 +99,20 @@ func NewRelayCollector(cfg RelayCollectorConfig) (*RelayCollector, error) {
 		Buckets:   cfg.PollBuckets,
 	}, []string{"cell", "phase"})
 
-	batchSize := prom.NewHistogram(prom.HistogramOpts{
-		Namespace:   cfg.Namespace,
-		Subsystem:   "outbox",
-		Name:        "batch_size",
-		Help:        "Number of entries claimed per relay poll cycle.",
-		Buckets:     cfg.BatchBuckets,
-		ConstLabels: prom.Labels{"cell": cfg.CellID},
-	})
+	batchSize := prom.NewHistogramVec(prom.HistogramOpts{
+		Namespace: cfg.Namespace,
+		Subsystem: "outbox",
+		Name:      "batch_size",
+		Help:      "Number of entries claimed per relay poll cycle.",
+		Buckets:   cfg.BatchBuckets,
+	}, []string{"cell"})
 
-	reclaimed := prom.NewCounter(prom.CounterOpts{
-		Namespace:   cfg.Namespace,
-		Subsystem:   "outbox",
-		Name:        "reclaimed_total",
-		Help:        "Total number of stale entries reclaimed by the relay.",
-		ConstLabels: prom.Labels{"cell": cfg.CellID},
-	})
+	reclaimed := prom.NewCounterVec(prom.CounterOpts{
+		Namespace: cfg.Namespace,
+		Subsystem: "outbox",
+		Name:      "reclaimed_total",
+		Help:      "Total number of stale entries reclaimed by the relay.",
+	}, []string{"cell"})
 
 	cleaned := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: cfg.Namespace,
@@ -139,37 +139,37 @@ func NewRelayCollector(cfg RelayCollectorConfig) (*RelayCollector, error) {
 }
 
 // RecordPollCycle records a completed poll cycle.
-func (c *RelayCollector) RecordPollCycle(published, retried, dead, skipped int, claimDur, publishDur, writeBackDur time.Duration) {
+func (c *RelayCollector) RecordPollCycle(r outbox.PollCycleResult) {
 	cell := c.cellID
 
-	if published > 0 {
-		c.relayed.With(prom.Labels{"cell": cell, "outcome": "published"}).Add(float64(published))
+	if r.Published > 0 {
+		c.relayed.With(prom.Labels{"cell": cell, "outcome": "published"}).Add(float64(r.Published))
 	}
-	if retried > 0 {
-		c.relayed.With(prom.Labels{"cell": cell, "outcome": "retried"}).Add(float64(retried))
+	if r.Retried > 0 {
+		c.relayed.With(prom.Labels{"cell": cell, "outcome": "retried"}).Add(float64(r.Retried))
 	}
-	if dead > 0 {
-		c.relayed.With(prom.Labels{"cell": cell, "outcome": "dead"}).Add(float64(dead))
+	if r.Dead > 0 {
+		c.relayed.With(prom.Labels{"cell": cell, "outcome": "dead"}).Add(float64(r.Dead))
 	}
-	if skipped > 0 {
-		c.relayed.With(prom.Labels{"cell": cell, "outcome": "skipped"}).Add(float64(skipped))
+	if r.Skipped > 0 {
+		c.relayed.With(prom.Labels{"cell": cell, "outcome": "skipped"}).Add(float64(r.Skipped))
 	}
 
-	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "claim"}).Observe(claimDur.Seconds())
-	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "publish"}).Observe(publishDur.Seconds())
-	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "write_back"}).Observe(writeBackDur.Seconds())
-	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "total"}).Observe((claimDur + publishDur + writeBackDur).Seconds())
+	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "claim"}).Observe(r.ClaimDur.Seconds())
+	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "publish"}).Observe(r.PublishDur.Seconds())
+	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "write_back"}).Observe(r.WriteBackDur.Seconds())
+	c.pollDuration.With(prom.Labels{"cell": cell, "phase": "total"}).Observe((r.ClaimDur + r.PublishDur + r.WriteBackDur).Seconds())
 }
 
 // RecordBatchSize records the number of entries claimed.
 func (c *RelayCollector) RecordBatchSize(size int) {
-	c.batchSize.Observe(float64(size))
+	c.batchSize.With(prom.Labels{"cell": c.cellID}).Observe(float64(size))
 }
 
 // RecordReclaim records stale entries reclaimed.
 func (c *RelayCollector) RecordReclaim(count int64) {
 	if count > 0 {
-		c.reclaimed.Add(float64(count))
+		c.reclaimed.With(prom.Labels{"cell": c.cellID}).Add(float64(count))
 	}
 }
 
@@ -182,9 +182,4 @@ func (c *RelayCollector) RecordCleanup(publishedDeleted, deadDeleted int64) {
 	if deadDeleted > 0 {
 		c.cleaned.With(prom.Labels{"cell": cell, "status": "dead"}).Add(float64(deadDeleted))
 	}
-}
-
-// Registry returns the Prometheus registry, primarily for testing.
-func (c *RelayCollector) Registry() *prom.Registry {
-	return c.registry
 }

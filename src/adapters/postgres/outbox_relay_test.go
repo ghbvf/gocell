@@ -893,28 +893,20 @@ func (p *mockPublisher) Publish(_ context.Context, topic string, payload []byte)
 
 type mockRelayCollector struct {
 	mu             sync.Mutex
-	pollCycles     []mockPollCycle
+	pollCycles     []outbox.PollCycleResult
 	batchSizes     []int
 	reclaimCounts  []int64
 	cleanupCalls   []mockCleanupCall
-}
-
-type mockPollCycle struct {
-	published, retried, dead, skipped int
-	claimDur, publishDur, writeBackDur time.Duration
 }
 
 type mockCleanupCall struct {
 	publishedDeleted, deadDeleted int64
 }
 
-func (m *mockRelayCollector) RecordPollCycle(published, retried, dead, skipped int, claimDur, publishDur, writeBackDur time.Duration) {
+func (m *mockRelayCollector) RecordPollCycle(r outbox.PollCycleResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pollCycles = append(m.pollCycles, mockPollCycle{
-		published: published, retried: retried, dead: dead, skipped: skipped,
-		claimDur: claimDur, publishDur: publishDur, writeBackDur: writeBackDur,
-	})
+	m.pollCycles = append(m.pollCycles, r)
 }
 
 func (m *mockRelayCollector) RecordBatchSize(size int) {
@@ -966,13 +958,13 @@ func TestRelay_ThreePhase_Success_RecordsMetrics(t *testing.T) {
 
 	// Poll cycle recorded with correct counts.
 	require.Len(t, mc.pollCycles, 1)
-	assert.Equal(t, 2, mc.pollCycles[0].published)
-	assert.Equal(t, 0, mc.pollCycles[0].retried)
-	assert.Equal(t, 0, mc.pollCycles[0].dead)
-	assert.Equal(t, 0, mc.pollCycles[0].skipped)
-	assert.Greater(t, mc.pollCycles[0].claimDur, time.Duration(0))
-	assert.Greater(t, mc.pollCycles[0].publishDur, time.Duration(0))
-	assert.Greater(t, mc.pollCycles[0].writeBackDur, time.Duration(0))
+	assert.Equal(t, 2, mc.pollCycles[0].Published)
+	assert.Equal(t, 0, mc.pollCycles[0].Retried)
+	assert.Equal(t, 0, mc.pollCycles[0].Dead)
+	assert.Equal(t, 0, mc.pollCycles[0].Skipped)
+	assert.Greater(t, mc.pollCycles[0].ClaimDur, time.Duration(0))
+	assert.Greater(t, mc.pollCycles[0].PublishDur, time.Duration(0))
+	assert.Greater(t, mc.pollCycles[0].WriteBackDur, time.Duration(0))
 }
 
 func TestRelay_EmptyBatch_RecordsBatchSizeZero(t *testing.T) {

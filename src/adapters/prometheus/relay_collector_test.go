@@ -38,8 +38,10 @@ func TestRelayCollector_RecordPollCycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	c.RecordPollCycle(3, 1, 0, 1,
-		10*time.Millisecond, 50*time.Millisecond, 5*time.Millisecond)
+	c.RecordPollCycle(outbox.PollCycleResult{
+		Published: 3, Retried: 1, Dead: 0, Skipped: 1,
+		ClaimDur: 10 * time.Millisecond, PublishDur: 50 * time.Millisecond, WriteBackDur: 5 * time.Millisecond,
+	})
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -78,6 +80,26 @@ func TestRelayCollector_RecordPollCycle(t *testing.T) {
 	assert.True(t, foundDuration, "should have poll_duration_seconds histogram")
 }
 
+func TestRelayCollector_RecordPollCycle_AllZero(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordPollCycle(outbox.PollCycleResult{})
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_relayed_total" {
+			t.Fatal("all-zero PollCycleResult should not emit any relayed_total counters")
+		}
+	}
+}
+
 func TestRelayCollector_RecordBatchSize(t *testing.T) {
 	registry := prom.NewRegistry()
 	c, err := NewRelayCollector(RelayCollectorConfig{
@@ -100,6 +122,9 @@ func TestRelayCollector_RecordBatchSize(t *testing.T) {
 			require.Len(t, f.GetMetric(), 1)
 			h := f.GetMetric()[0].GetHistogram()
 			assert.Equal(t, uint64(3), h.GetSampleCount())
+			// Verify cell label is dynamic (not ConstLabels).
+			labels := metricLabels(f.GetMetric()[0])
+			assert.Equal(t, "test-cell", labels["cell"])
 		}
 	}
 	assert.True(t, found, "should have batch_size histogram")
@@ -125,6 +150,9 @@ func TestRelayCollector_RecordReclaim(t *testing.T) {
 			found = true
 			require.Len(t, f.GetMetric(), 1)
 			assert.Equal(t, 5.0, f.GetMetric()[0].GetCounter().GetValue())
+			// Verify cell label is dynamic (not ConstLabels).
+			labels := metricLabels(f.GetMetric()[0])
+			assert.Equal(t, "test-cell", labels["cell"])
 		}
 	}
 	assert.True(t, found, "should have reclaimed_total counter")
@@ -174,7 +202,11 @@ func TestRelayCollector_RecordCleanup_ZeroSkipped(t *testing.T) {
 }
 
 func TestRelayCollector_ConcurrentSafety(t *testing.T) {
-	c, err := NewRelayCollector(RelayCollectorConfig{CellID: "test-cell"})
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -182,7 +214,12 @@ func TestRelayCollector_ConcurrentSafety(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c.RecordPollCycle(1, 0, 0, 0, time.Millisecond, time.Millisecond, time.Millisecond)
+			c.RecordPollCycle(outbox.PollCycleResult{
+				Published: 1,
+				ClaimDur:  time.Millisecond,
+				PublishDur: time.Millisecond,
+				WriteBackDur: time.Millisecond,
+			})
 			c.RecordBatchSize(10)
 			c.RecordReclaim(1)
 			c.RecordCleanup(1, 0)
@@ -190,7 +227,7 @@ func TestRelayCollector_ConcurrentSafety(t *testing.T) {
 	}
 	wg.Wait()
 
-	families, err := c.registry.Gather()
+	families, err := registry.Gather()
 	require.NoError(t, err)
 
 	for _, f := range families {
