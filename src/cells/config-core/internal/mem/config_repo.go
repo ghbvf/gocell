@@ -5,8 +5,8 @@ package mem
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -99,7 +99,7 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 	slices.SortFunc(all, func(a, b *domain.ConfigEntry) int {
 		for _, col := range params.Sort {
 			v := compareConfigField(a, b, col.Name)
-			if strings.ToUpper(col.Direction) == "DESC" {
+			if col.Direction == query.SortDESC {
 				v = -v
 			}
 			if v != 0 {
@@ -160,7 +160,7 @@ func configAfterCursor(e *domain.ConfigEntry, cols []query.SortColumn, cursorVal
 
 		if level < len(cols)-1 {
 			if c != 0 {
-				if strings.ToUpper(cols[level].Direction) == "DESC" {
+				if cols[level].Direction == query.SortDESC {
 					return c < 0
 				}
 				return c > 0
@@ -168,7 +168,7 @@ func configAfterCursor(e *domain.ConfigEntry, cols []query.SortColumn, cursorVal
 			continue
 		}
 		// Last column: strict inequality.
-		if strings.ToUpper(cols[level].Direction) == "DESC" {
+		if cols[level].Direction == query.SortDESC {
 			return c < 0
 		}
 		return c > 0
@@ -207,7 +207,7 @@ func configCompareAny(a, b any) int {
 	if aOk && bOk {
 		return cmp.Compare(aFloat, bFloat)
 	}
-	return 0
+	panic(fmt.Sprintf("configCompareAny: unsupported type combination %T vs %T", a, b))
 }
 
 func (r *ConfigRepository) PublishVersion(_ context.Context, version *domain.ConfigVersion) error {

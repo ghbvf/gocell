@@ -3,6 +3,7 @@ package featureflag
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -119,4 +120,51 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 
 	// Service returns ErrFlagNotFound -> 404.
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
+	handler, repo := setupHandler()
+	keys := []string{"flag-a", "flag-b", "flag-c", "flag-d", "flag-e", "flag-f", "flag-g"}
+	for _, k := range keys {
+		require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
+			ID: "ff-" + k, Key: k, Type: domain.FlagBoolean, Enabled: true,
+		}))
+	}
+
+	var allIDs []string
+	cursor := ""
+
+	for page := 0; page < 10; page++ {
+		url := "/?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		handler.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		data := resp["data"].([]any)
+		for _, item := range data {
+			m := item.(map[string]any)
+			allIDs = append(allIDs, m["ID"].(string))
+		}
+
+		hasMore := resp["hasMore"].(bool)
+		if !hasMore {
+			break
+		}
+		cursor = resp["nextCursor"].(string)
+		require.NotEmpty(t, cursor)
+	}
+
+	// All 7 items collected, no duplicates
+	assert.Len(t, allIDs, 7)
+	seen := make(map[string]bool)
+	for _, id := range allIDs {
+		assert.False(t, seen[id], "duplicate ID: %s", id)
+		seen[id] = true
+	}
 }

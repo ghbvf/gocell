@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
@@ -93,7 +92,7 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 				case "id":
 					c = cmp.Compare(a.ID, b.ID)
 				}
-				if strings.ToUpper(col.Direction) == "DESC" {
+				if col.Direction == query.SortDESC {
 					c = -c
 				}
 				if c != 0 {

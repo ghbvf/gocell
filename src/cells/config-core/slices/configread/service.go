@@ -13,8 +13,8 @@ import (
 
 // configSort defines the default sort for config listings.
 var configSort = []query.SortColumn{
-	{Name: "key", Direction: "ASC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "key", Direction: query.SortASC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // Service implements config read business logic.
@@ -66,32 +66,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.ConfigEntry]{}, fmt.Errorf("config-read: list: %w", err)
 	}
 
-	return s.buildResult(entries, pageReq.Limit)
-}
-
-func (s *Service) buildResult(items []*domain.ConfigEntry, limit int) (query.PageResult[*domain.ConfigEntry], error) {
-	hasMore := len(items) > limit
-	if hasMore {
-		items = items[:limit]
-	}
-
-	var result query.PageResult[*domain.ConfigEntry]
-	result.Items = items
-	result.HasMore = hasMore
-
-	if hasMore && len(items) > 0 {
-		last := items[len(items)-1]
-		cur := query.Cursor{Values: []any{last.Key, last.ID}}
-		token, err := s.codec.Encode(cur)
-		if err != nil {
-			return query.PageResult[*domain.ConfigEntry]{}, err
-		}
-		result.NextCursor = token
-	}
-
-	if result.Items == nil {
-		result.Items = []*domain.ConfigEntry{}
-	}
-
-	return result, nil
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, func(e *domain.ConfigEntry) []any {
+		return []any{e.Key, e.ID}
+	})
 }

@@ -15,8 +15,8 @@ import (
 
 // auditSort defines the default sort for audit listings: newest first.
 var auditSort = []query.SortColumn{
-	{Name: "timestamp", Direction: "DESC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "timestamp", Direction: query.SortDESC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // Service implements audit query business logic.
@@ -55,35 +55,7 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 		return query.PageResult[*domain.AuditEntry]{}, fmt.Errorf("audit-query: query: %w", err)
 	}
 
-	return s.buildResult(entries, pageReq.Limit)
-}
-
-func (s *Service) buildResult(items []*domain.AuditEntry, limit int) (query.PageResult[*domain.AuditEntry], error) {
-	hasMore := len(items) > limit
-	if hasMore {
-		items = items[:limit]
-	}
-
-	var result query.PageResult[*domain.AuditEntry]
-	result.Items = items
-	result.HasMore = hasMore
-
-	if hasMore && len(items) > 0 {
-		last := items[len(items)-1]
-		cur := query.Cursor{Values: []any{
-			last.Timestamp.Format(time.RFC3339Nano),
-			last.ID,
-		}}
-		token, err := s.codec.Encode(cur)
-		if err != nil {
-			return query.PageResult[*domain.AuditEntry]{}, err
-		}
-		result.NextCursor = token
-	}
-
-	if result.Items == nil {
-		result.Items = []*domain.AuditEntry{}
-	}
-
-	return result, nil
+	return query.BuildPageResult(entries, pageReq.Limit, s.codec, func(e *domain.AuditEntry) []any {
+		return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
+	})
 }

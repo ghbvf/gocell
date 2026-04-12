@@ -205,6 +205,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrConfigInvalidInput:        http.StatusBadRequest,
 	errcode.ErrConfigPublishInvalidInput: http.StatusBadRequest,
 	errcode.ErrFlagInvalidInput:          http.StatusBadRequest,
+	errcode.ErrInvalidTimeFormat:         http.StatusBadRequest,
 
 	// --- 401 Unauthorized ---
 	errcode.ErrAuthUnauthorized:      http.StatusUnauthorized,

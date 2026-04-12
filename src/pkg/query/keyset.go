@@ -2,10 +2,14 @@ package query
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// validColumnName matches safe SQL column identifiers.
+var validColumnName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
 // AppendKeyset appends keyset pagination clauses (WHERE + ORDER BY + LIMIT)
 // to a Builder. It integrates with any existing WHERE conditions via AND.
@@ -16,9 +20,25 @@ import (
 //   - Mixed direction columns: compound OR
 //
 // LIMIT is set to params.FetchLimit() (Limit+1) for N+1 hasMore detection.
+//
+// Callers should ensure a composite index exists on the sort columns in the
+// specified directions (e.g. CREATE INDEX idx ON table (col1 DESC, col2 ASC))
+// for efficient keyset pagination. Without such an index, the database will
+// perform a full table sort on every page request.
 func AppendKeyset(b *Builder, params ListParams) error {
 	if len(params.Sort) == 0 {
 		return errcode.New(errcode.ErrValidationFailed, "keyset: at least one sort column is required")
+	}
+
+	for _, col := range params.Sort {
+		if !validColumnName.MatchString(col.Name) {
+			return errcode.New(errcode.ErrValidationFailed,
+				fmt.Sprintf("keyset: invalid column name %q", col.Name))
+		}
+		if col.Direction != SortASC && col.Direction != SortDESC {
+			return errcode.New(errcode.ErrValidationFailed,
+				fmt.Sprintf("keyset: invalid direction %q, must be ASC or DESC", col.Direction))
+		}
 	}
 
 	if params.CursorValues != nil {
@@ -43,9 +63,9 @@ func sameDirection(cols []SortColumn) bool {
 	if len(cols) <= 1 {
 		return true
 	}
-	dir := strings.ToUpper(cols[0].Direction)
+	dir := cols[0].Direction
 	for _, c := range cols[1:] {
-		if strings.ToUpper(c.Direction) != dir {
+		if c.Direction != dir {
 			return false
 		}
 	}
@@ -53,8 +73,8 @@ func sameDirection(cols []SortColumn) bool {
 }
 
 // directionOp returns ">" for ASC, "<" for DESC.
-func directionOp(dir string) string {
-	if strings.ToUpper(dir) == "DESC" {
+func directionOp(dir SortDir) string {
+	if dir == SortDESC {
 		return "<"
 	}
 	return ">"
@@ -124,7 +144,7 @@ func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
 func appendOrderBy(b *Builder, cols []SortColumn) {
 	parts := make([]string, len(cols))
 	for i, c := range cols {
-		parts[i] = c.Name + " " + strings.ToUpper(c.Direction)
+		parts[i] = c.Name + " " + string(c.Direction)
 	}
 	b.Append("ORDER BY " + strings.Join(parts, ", "))
 }

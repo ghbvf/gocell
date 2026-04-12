@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -76,7 +75,7 @@ func (r *OrderRepository) List(_ context.Context, params query.ListParams) ([]*d
 	slices.SortFunc(all, func(a, b *domain.Order) int {
 		for _, col := range params.Sort {
 			v := compareOrderField(a, b, col.Name)
-			if strings.ToUpper(col.Direction) == "DESC" {
+			if col.Direction == query.SortDESC {
 				v = -v
 			}
 			if v != 0 {
@@ -133,7 +132,7 @@ func orderAfterCursor(o *domain.Order, cols []query.SortColumn, cursorValues []a
 
 		if level < len(cols)-1 {
 			if c != 0 {
-				if strings.ToUpper(cols[level].Direction) == "DESC" {
+				if cols[level].Direction == query.SortDESC {
 					return c < 0
 				}
 				return c > 0
@@ -141,7 +140,7 @@ func orderAfterCursor(o *domain.Order, cols []query.SortColumn, cursorValues []a
 			continue
 		}
 		// Last column: strict inequality.
-		if strings.ToUpper(cols[level].Direction) == "DESC" {
+		if cols[level].Direction == query.SortDESC {
 			return c < 0
 		}
 		return c > 0
@@ -176,5 +175,5 @@ func compareAny(a, b any) int {
 	if aOk && bOk {
 		return cmp.Compare(aFloat, bFloat)
 	}
-	return 0
+	panic(fmt.Sprintf("compareAny: unsupported type combination %T vs %T", a, b))
 }

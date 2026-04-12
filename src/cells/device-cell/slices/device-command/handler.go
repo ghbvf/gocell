@@ -64,11 +64,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":       result.Items,
-		"nextCursor": result.NextCursor,
-		"hasMore":    result.HasMore,
-	})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.

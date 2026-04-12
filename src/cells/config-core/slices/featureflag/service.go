@@ -15,8 +15,8 @@ import (
 
 // flagSort defines the default sort for flag listings.
 var flagSort = []query.SortColumn{
-	{Name: "key", Direction: "ASC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "key", Direction: query.SortASC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // EvaluateResult holds the result of a flag evaluation.
@@ -74,37 +74,9 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 		return query.PageResult[*domain.FeatureFlag]{}, fmt.Errorf("feature-flag: list: %w", err)
 	}
 
-	return s.buildResult(flags, pageReq.Limit)
-}
-
-func (s *Service) buildResult(items []*domain.FeatureFlag, limit int) (query.PageResult[*domain.FeatureFlag], error) {
-	hasMore := len(items) > limit
-	if hasMore {
-		items = items[:limit]
-	}
-
-	var result query.PageResult[*domain.FeatureFlag]
-	result.Items = items
-	result.HasMore = hasMore
-
-	if hasMore && len(items) > 0 {
-		last := items[len(items)-1]
-		cur := query.Cursor{Values: []any{
-			last.Key,
-			last.ID,
-		}}
-		token, err := s.codec.Encode(cur)
-		if err != nil {
-			return query.PageResult[*domain.FeatureFlag]{}, err
-		}
-		result.NextCursor = token
-	}
-
-	if result.Items == nil {
-		result.Items = []*domain.FeatureFlag{}
-	}
-
-	return result, nil
+	return query.BuildPageResult(flags, pageReq.Limit, s.codec, func(f *domain.FeatureFlag) []any {
+		return []any{f.Key, f.ID}
+	})
 }
 
 // Evaluate checks if a flag is enabled for the given subject.

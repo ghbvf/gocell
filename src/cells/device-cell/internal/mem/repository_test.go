@@ -14,8 +14,8 @@ import (
 
 // defaultCmdSort is the default sort used in tests (FIFO).
 var defaultCmdSort = []query.SortColumn{
-	{Name: "created_at", Direction: "ASC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "created_at", Direction: query.SortASC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // ---------------------------------------------------------------------------

@@ -141,8 +141,8 @@ func TestConfigRepository_List(t *testing.T) {
 	params := query.ListParams{
 		Limit: 50,
 		Sort: []query.SortColumn{
-			{Name: "key", Direction: "ASC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "key", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
 		},
 	}
 	entries, err := repo.List(context.Background(), params)

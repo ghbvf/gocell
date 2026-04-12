@@ -12,7 +12,7 @@ func TestKeyset_OrderBy_Single(t *testing.T) {
 	b.Append("SELECT * FROM t WHERE 1=1")
 	params := ListParams{
 		Limit: 10,
-		Sort:  []SortColumn{{Name: "created_at", Direction: "DESC"}},
+		Sort:  []SortColumn{{Name: "created_at", Direction: SortDESC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	sql, _ := b.Build()
@@ -25,8 +25,8 @@ func TestKeyset_OrderBy_Multi(t *testing.T) {
 	params := ListParams{
 		Limit: 10,
 		Sort: []SortColumn{
-			{Name: "created_at", Direction: "DESC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "created_at", Direction: SortDESC},
+			{Name: "id", Direction: SortASC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -40,7 +40,7 @@ func TestKeyset_Where_NoCursor(t *testing.T) {
 	params := ListParams{
 		Limit:        10,
 		CursorValues: nil,
-		Sort:         []SortColumn{{Name: "id", Direction: "ASC"}},
+		Sort:         []SortColumn{{Name: "id", Direction: SortASC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	sql, args := b.Build()
@@ -56,7 +56,7 @@ func TestKeyset_Where_SingleColumn_ASC(t *testing.T) {
 	params := ListParams{
 		Limit:        10,
 		CursorValues: []any{"abc"},
-		Sort:         []SortColumn{{Name: "id", Direction: "ASC"}},
+		Sort:         []SortColumn{{Name: "id", Direction: SortASC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	sql, args := b.Build()
@@ -70,7 +70,7 @@ func TestKeyset_Where_SingleColumn_DESC(t *testing.T) {
 	params := ListParams{
 		Limit:        10,
 		CursorValues: []any{"2026-01-01T00:00:00Z"},
-		Sort:         []SortColumn{{Name: "created_at", Direction: "DESC"}},
+		Sort:         []SortColumn{{Name: "created_at", Direction: SortDESC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	sql, args := b.Build()
@@ -85,8 +85,8 @@ func TestKeyset_Where_SameDir_Tuple(t *testing.T) {
 		Limit:        10,
 		CursorValues: []any{"2026-01-01T00:00:00Z", "id-99"},
 		Sort: []SortColumn{
-			{Name: "created_at", Direction: "DESC"},
-			{Name: "id", Direction: "DESC"},
+			{Name: "created_at", Direction: SortDESC},
+			{Name: "id", Direction: SortDESC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -103,8 +103,8 @@ func TestKeyset_Where_SameDir_ASC_Tuple(t *testing.T) {
 		Limit:        10,
 		CursorValues: []any{"alpha", "id-01"},
 		Sort: []SortColumn{
-			{Name: "key", Direction: "ASC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "key", Direction: SortASC},
+			{Name: "id", Direction: SortASC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -121,8 +121,8 @@ func TestKeyset_Where_MixedDir_CompoundOR(t *testing.T) {
 		Limit:        10,
 		CursorValues: []any{"2026-01-01T00:00:00Z", "id-42"},
 		Sort: []SortColumn{
-			{Name: "created_at", Direction: "DESC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "created_at", Direction: SortDESC},
+			{Name: "id", Direction: SortASC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -141,9 +141,9 @@ func TestKeyset_Where_ThreeColumns_Mixed(t *testing.T) {
 		Limit:        5,
 		CursorValues: []any{"a", "b", "c"},
 		Sort: []SortColumn{
-			{Name: "x", Direction: "DESC"},
-			{Name: "y", Direction: "ASC"},
-			{Name: "z", Direction: "DESC"},
+			{Name: "x", Direction: SortDESC},
+			{Name: "y", Direction: SortASC},
+			{Name: "z", Direction: SortDESC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -159,7 +159,7 @@ func TestKeyset_IntegratesWithExistingWhere(t *testing.T) {
 	params := ListParams{
 		Limit:        20,
 		CursorValues: []any{"id-5"},
-		Sort:         []SortColumn{{Name: "id", Direction: "ASC"}},
+		Sort:         []SortColumn{{Name: "id", Direction: SortASC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	sql, args := b.Build()
@@ -174,7 +174,7 @@ func TestKeyset_SetsLimitPlusOne(t *testing.T) {
 	b.Append("SELECT * FROM t WHERE 1=1")
 	params := ListParams{
 		Limit: 25,
-		Sort:  []SortColumn{{Name: "id", Direction: "ASC"}},
+		Sort:  []SortColumn{{Name: "id", Direction: SortASC}},
 	}
 	require.NoError(t, AppendKeyset(b, params))
 	_, args := b.Build()
@@ -188,8 +188,8 @@ func TestKeyset_CursorValueCountMismatch(t *testing.T) {
 		Limit:        10,
 		CursorValues: []any{"only-one"},
 		Sort: []SortColumn{
-			{Name: "a", Direction: "ASC"},
-			{Name: "b", Direction: "ASC"},
+			{Name: "a", Direction: SortASC},
+			{Name: "b", Direction: SortASC},
 		},
 	}
 	err := AppendKeyset(b, params)
@@ -206,8 +206,8 @@ func TestKeyset_FullQuery(t *testing.T) {
 		Limit:        10,
 		CursorValues: []any{"2026-01-01T00:00:00Z", "id-100"},
 		Sort: []SortColumn{
-			{Name: "created_at", Direction: "DESC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "created_at", Direction: SortDESC},
+			{Name: "id", Direction: SortASC},
 		},
 	}
 	require.NoError(t, AppendKeyset(b, params))
@@ -228,4 +228,28 @@ func TestKeyset_EmptySort(t *testing.T) {
 	params := ListParams{Limit: 10, Sort: nil}
 	err := AppendKeyset(b, params)
 	assert.Error(t, err)
+}
+
+func TestKeyset_InvalidColumnName(t *testing.T) {
+	b := NewBuilder()
+	b.Append("SELECT * FROM t WHERE 1=1")
+	params := ListParams{
+		Limit: 10,
+		Sort:  []SortColumn{{Name: "Robert'; DROP TABLE students;--", Direction: SortASC}},
+	}
+	err := AppendKeyset(b, params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid column name")
+}
+
+func TestKeyset_InvalidDirection(t *testing.T) {
+	b := NewBuilder()
+	b.Append("SELECT * FROM t WHERE 1=1")
+	params := ListParams{
+		Limit: 10,
+		Sort:  []SortColumn{{Name: "id", Direction: SortDir("RANDOM")}},
+	}
+	err := AppendKeyset(b, params)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid direction")
 }

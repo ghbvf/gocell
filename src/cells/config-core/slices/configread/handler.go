@@ -43,9 +43,5 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":       result.Items,
-		"nextCursor": result.NextCursor,
-		"hasMore":    result.HasMore,
-	})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }

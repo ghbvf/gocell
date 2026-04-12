@@ -18,8 +18,8 @@ import (
 
 // pendingSort defines the default sort for pending command listings (FIFO).
 var pendingSort = []query.SortColumn{
-	{Name: "created_at", Direction: "ASC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "created_at", Direction: query.SortASC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 // Service handles device command business logic.
@@ -101,37 +101,9 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: list pending: %w", err)
 	}
 
-	return s.buildResult(cmds, pageReq.Limit)
-}
-
-func (s *Service) buildResult(items []*domain.Command, limit int) (query.PageResult[*domain.Command], error) {
-	hasMore := len(items) > limit
-	if hasMore {
-		items = items[:limit]
-	}
-
-	var result query.PageResult[*domain.Command]
-	result.Items = items
-	result.HasMore = hasMore
-
-	if hasMore && len(items) > 0 {
-		last := items[len(items)-1]
-		cur := query.Cursor{Values: []any{
-			last.CreatedAt.Format(time.RFC3339Nano),
-			last.ID,
-		}}
-		token, err := s.codec.Encode(cur)
-		if err != nil {
-			return query.PageResult[*domain.Command]{}, err
-		}
-		result.NextCursor = token
-	}
-
-	if result.Items == nil {
-		result.Items = []*domain.Command{}
-	}
-
-	return result, nil
+	return query.BuildPageResult(cmds, pageReq.Limit, s.codec, func(c *domain.Command) []any {
+		return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
+	})
 }
 
 // Ack acknowledges that a device has executed a command.

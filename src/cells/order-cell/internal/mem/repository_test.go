@@ -129,8 +129,8 @@ func TestOrderRepository_GetByID_ReturnsCopy(t *testing.T) {
 }
 
 var defaultSort = []query.SortColumn{
-	{Name: "created_at", Direction: "DESC"},
-	{Name: "id", Direction: "ASC"},
+	{Name: "created_at", Direction: query.SortDESC},
+	{Name: "id", Direction: query.SortASC},
 }
 
 func TestOrderRepository_List(t *testing.T) {

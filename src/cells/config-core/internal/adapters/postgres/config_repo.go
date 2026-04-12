@@ -133,6 +133,7 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 }
 
 // List retrieves config entries with keyset cursor pagination.
+// Requires composite index: CREATE INDEX idx_config_entries_key_id ON config_entries (key ASC, id ASC)
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	b := query.NewBuilder()
 	b.Append("SELECT id, key, value, version, created_at, updated_at FROM config_entries WHERE 1=1")

@@ -7,6 +7,16 @@ const (
 	MaxPageSize = 500
 )
 
+// SortDir represents a sort direction.
+type SortDir string
+
+const (
+	// SortASC sorts ascending.
+	SortASC SortDir = "ASC"
+	// SortDESC sorts descending.
+	SortDESC SortDir = "DESC"
+)
+
 // PageRequest holds pagination parameters parsed from an HTTP request.
 type PageRequest struct {
 	Limit  int    // requested page size
@@ -26,8 +36,8 @@ func (p *PageRequest) Normalize() {
 
 // SortColumn defines a column used in keyset ordering.
 type SortColumn struct {
-	Name      string // SQL column name, e.g. "created_at"
-	Direction string // "ASC" or "DESC"
+	Name      string  // SQL column name — must be a trusted identifier, never user input
+	Direction SortDir // SortASC or SortDESC
 }
 
 // ListParams holds pagination parameters for repository list operations.
@@ -48,4 +58,39 @@ type PageResult[T any] struct {
 	Items      []T    `json:"data"`
 	NextCursor string `json:"nextCursor,omitempty"`
 	HasMore    bool   `json:"hasMore"`
+}
+
+// BuildPageResult processes raw query results (which may contain limit+1 rows
+// for N+1 hasMore detection), trims to the requested limit, and encodes the
+// cursor for the next page from the last visible item.
+//
+// extractCursor is called on the last item to extract the keyset values for
+// the next-page cursor. It must return values corresponding 1:1 to the sort
+// columns used in the query.
+func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, extractCursor func(T) []any) (PageResult[T], error) {
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+
+	var result PageResult[T]
+	result.Items = items
+	result.HasMore = hasMore
+
+	if hasMore && len(items) > 0 {
+		last := items[len(items)-1]
+		cur := Cursor{Values: extractCursor(last)}
+		token, err := codec.Encode(cur)
+		if err != nil {
+			return PageResult[T]{}, err
+		}
+		result.NextCursor = token
+	}
+
+	if result.Items == nil {
+		// Ensure JSON serializes as [] not null.
+		result.Items = make([]T, 0)
+	}
+
+	return result, nil
 }

@@ -5,11 +5,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
-)
-
-const (
-	errInvalidTimeFormat = "ERR_VALIDATION_INVALID_TIME_FORMAT"
 )
 
 // Handler provides HTTP endpoints for audit queries.
@@ -33,7 +30,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
 		t, err := time.Parse(time.RFC3339, fromStr)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest, errInvalidTimeFormat,
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, string(errcode.ErrInvalidTimeFormat),
 				"invalid 'from' parameter: expected RFC3339 format")
 			return
 		}
@@ -42,7 +39,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if toStr := r.URL.Query().Get("to"); toStr != "" {
 		t, err := time.Parse(time.RFC3339, toStr)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest, errInvalidTimeFormat,
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest, string(errcode.ErrInvalidTimeFormat),
 				"invalid 'to' parameter: expected RFC3339 format")
 			return
 		}
@@ -61,9 +58,5 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data":       result.Items,
-		"nextCursor": result.NextCursor,
-		"hasMore":    result.HasMore,
-	})
+	httputil.WriteJSON(w, http.StatusOK, result)
 }

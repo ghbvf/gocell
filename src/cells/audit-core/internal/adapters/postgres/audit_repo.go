@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// listLimit is the safety-net row limit for unbounded queries.
-	listLimit = 1000
+	// getRangeLimit is the safety-net row limit for unbounded queries.
+	getRangeLimit = 1000
 )
 
 // DBTX abstracts the database operations needed by AuditRepository.
@@ -90,8 +90,8 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 	}
 
 	limit := to - from
-	if limit > listLimit {
-		limit = listLimit
+	if limit > getRangeLimit {
+		limit = getRangeLimit
 	}
 
 	const query = `SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
@@ -109,6 +109,7 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 }
 
 // Query retrieves audit entries matching the given filters with keyset pagination.
+// Requires composite index: CREATE INDEX idx_audit_entries_ts_id ON audit_entries (timestamp DESC, id ASC)
 func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters, params query.ListParams) ([]*domain.AuditEntry, error) {
 	b := query.NewBuilder()
 	b.Append("SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash FROM audit_entries WHERE 1=1")
@@ -148,12 +149,4 @@ func scanAuditEntries(rows Rows) ([]*domain.AuditEntry, error) {
 		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: rows error", err)
 	}
 	return entries, nil
-}
-
-// itoa converts an int to string without importing strconv for this minimal usage.
-func itoa(n int) string {
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	return itoa(n/10) + string(rune('0'+n%10))
 }

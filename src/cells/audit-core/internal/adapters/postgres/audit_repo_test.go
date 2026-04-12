@@ -124,8 +124,8 @@ func TestAuditRepository_Query_WithFilters(t *testing.T) {
 	params := query.ListParams{
 		Limit: 50,
 		Sort: []query.SortColumn{
-			{Name: "timestamp", Direction: "DESC"},
-			{Name: "id", Direction: "ASC"},
+			{Name: "timestamp", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
 		},
 	}
 
@@ -141,25 +141,6 @@ func TestAuditRepository_Query_WithFilters(t *testing.T) {
 	assert.Contains(t, db.queryCalls[0].sql, "timestamp >= $3")
 	assert.Contains(t, db.queryCalls[0].sql, "timestamp <= $4")
 	assert.Contains(t, db.queryCalls[0].sql, "ORDER BY timestamp DESC, id ASC")
-}
-
-func TestItoa(t *testing.T) {
-	tests := []struct {
-		input int
-		want  string
-	}{
-		{0, "0"},
-		{1, "1"},
-		{9, "9"},
-		{10, "10"},
-		{42, "42"},
-		{100, "100"},
-		{1000, "1000"},
-	}
-
-	for _, tt := range tests {
-		assert.Equal(t, tt.want, itoa(tt.input))
-	}
 }
 
 // --- mocks ---

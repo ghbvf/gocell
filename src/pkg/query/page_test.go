@@ -1,9 +1,11 @@
 package query
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPageRequest_Normalize_Default(t *testing.T) {
@@ -57,4 +59,58 @@ func TestListParams_FetchLimit(t *testing.T) {
 func TestListParams_FetchLimit_One(t *testing.T) {
 	lp := ListParams{Limit: 1}
 	assert.Equal(t, 2, lp.FetchLimit())
+}
+
+func TestPageRequest_Normalize_ExactMax(t *testing.T) {
+	pr := PageRequest{Limit: MaxPageSize}
+	pr.Normalize()
+	assert.Equal(t, MaxPageSize, pr.Limit)
+}
+
+func TestBuildPageResult_HasMore(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	items := []string{"a", "b", "c", "d"} // 4 items, limit=3 → hasMore
+	result, err := BuildPageResult(items, 3, codec, func(s string) []any {
+		return []any{s}
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 3)
+	assert.True(t, result.HasMore)
+	assert.NotEmpty(t, result.NextCursor)
+}
+
+func TestBuildPageResult_LastPage(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	items := []string{"a", "b"} // 2 items, limit=3 → no more
+	result, err := BuildPageResult(items, 3, codec, func(s string) []any {
+		return []any{s}
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2)
+	assert.False(t, result.HasMore)
+	assert.Empty(t, result.NextCursor)
+}
+
+func TestBuildPageResult_Empty(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	var items []string
+	result, err := BuildPageResult(items, 10, codec, func(s string) []any {
+		return []any{s}
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Items)
+	assert.NotNil(t, result.Items) // must be [] not null
+	assert.False(t, result.HasMore)
+}
+
+func TestBuildPageResult_ExactLimit(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	items := []string{"a", "b", "c"} // 3 items, limit=3 → no more (exactly limit, not limit+1)
+	result, err := BuildPageResult(items, 3, codec, func(s string) []any {
+		return []any{s}
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 3)
+	assert.False(t, result.HasMore)
+	assert.Empty(t, result.NextCursor)
 }

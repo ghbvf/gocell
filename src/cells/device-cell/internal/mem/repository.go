@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -105,7 +104,7 @@ func (r *CommandRepository) ListPending(_ context.Context, deviceID string, para
 	slices.SortFunc(filtered, func(a, b *domain.Command) int {
 		for _, col := range params.Sort {
 			v := compareCommandField(a, b, col.Name)
-			if strings.ToUpper(col.Direction) == "DESC" {
+			if col.Direction == query.SortDESC {
 				v = -v
 			}
 			if v != 0 {
@@ -164,7 +163,7 @@ func commandAfterCursor(cmd *domain.Command, cols []query.SortColumn, cursorValu
 
 		if level < len(cols)-1 {
 			if c != 0 {
-				if strings.ToUpper(cols[level].Direction) == "DESC" {
+				if cols[level].Direction == query.SortDESC {
 					return c < 0
 				}
 				return c > 0
@@ -172,7 +171,7 @@ func commandAfterCursor(cmd *domain.Command, cols []query.SortColumn, cursorValu
 			continue
 		}
 		// Last column: strict inequality.
-		if strings.ToUpper(cols[level].Direction) == "DESC" {
+		if cols[level].Direction == query.SortDESC {
 			return c < 0
 		}
 		return c > 0
@@ -209,7 +208,7 @@ func compareAny(a, b any) int {
 	if aOk && bOk {
 		return cmp.Compare(aFloat, bFloat)
 	}
-	return 0
+	panic(fmt.Sprintf("compareAny: unsupported type combination %T vs %T", a, b))
 }
 
 // Ack marks a command as acknowledged.

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,6 +156,59 @@ func TestHandleListPending(t *testing.T) {
 				assert.Equal(t, false, resp["hasMore"])
 			}
 		})
+	}
+}
+
+func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
+	h, _, cmdRepo := setupCommandHandler()
+	ctx := context.Background()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 7; i++ {
+		require.NoError(t, cmdRepo.Create(ctx, &domain.Command{
+			ID:        "cmd-" + string(rune('a'+i)),
+			DeviceID:  "dev-1",
+			Payload:   "p",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		}))
+	}
+
+	var allIDs []string
+	cursor := ""
+
+	for page := 0; page < 10; page++ {
+		url := "/devices/dev-1/commands?limit=3"
+		if cursor != "" {
+			url += "&cursor=" + cursor
+		}
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, url, nil)
+		req.SetPathValue("id", "dev-1")
+		h.HandleListPending(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		data := resp["data"].([]any)
+		for _, item := range data {
+			m := item.(map[string]any)
+			allIDs = append(allIDs, m["id"].(string))
+		}
+
+		hasMore := resp["hasMore"].(bool)
+		if !hasMore {
+			break
+		}
+		cursor = resp["nextCursor"].(string)
+		require.NotEmpty(t, cursor)
+	}
+
+	// All 7 commands collected, no duplicates
+	assert.Len(t, allIDs, 7)
+	seen := make(map[string]bool)
+	for _, id := range allIDs {
+		assert.False(t, seen[id], "duplicate ID: %s", id)
+		seen[id] = true
 	}
 }
 
