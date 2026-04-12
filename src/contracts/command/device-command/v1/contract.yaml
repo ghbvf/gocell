@@ -6,6 +6,9 @@ lifecycle: active
 endpoints:
   handler: device-cell
   invokers: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
 description: >
   L4 command primitive: commands are enqueued by the server and polled by
   devices on their own schedule. The device acknowledges execution via an

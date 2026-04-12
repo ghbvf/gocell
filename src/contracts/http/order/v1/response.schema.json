@@ -2,5 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.order.v1.response",
   "type": "object",
-  "description": "Placeholder — to be defined when response format is specified"
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "item": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "item", "status"]
+    }
+  },
+  "required": ["data"]
 }

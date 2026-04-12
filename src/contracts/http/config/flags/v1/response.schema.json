@@ -1,6 +1,42 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.flags.v1.response",
+  "description": "Single flag: {data: FeatureFlag}. List: {data: [...], nextCursor, hasMore}. Evaluate: {data: EvalResult}.",
   "type": "object",
-  "description": "Placeholder schema — to be defined when implementing the endpoint"
+  "properties": {
+    "data": {
+      "description": "FeatureFlag object, array of flags, or evaluation result."
+    },
+    "nextCursor": { "type": "string" },
+    "hasMore": { "type": "boolean" }
+  },
+  "required": ["data"],
+  "oneOf": [
+    {
+      "description": "Single flag or evaluation result (GET /{key}, POST /{key}/evaluate)",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "ID": { "type": "string" },
+            "Key": { "type": "string" },
+            "Type": { "type": "string" },
+            "Enabled": { "type": "boolean" },
+            "RolloutPercentage": { "type": "integer" }
+          }
+        }
+      }
+    },
+    {
+      "description": "Paginated list response (GET /)",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": { "type": "object" }
+        },
+        "hasMore": { "type": "boolean" }
+      },
+      "required": ["data", "hasMore"]
+    }
+  ]
 }

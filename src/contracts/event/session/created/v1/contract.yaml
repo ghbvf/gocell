@@ -7,6 +7,9 @@ endpoints:
   publisher: access-core
   subscribers:
     - audit-core
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
 replayable: true
 idempotencyKey: event_id
 deliverySemantics: at-least-once

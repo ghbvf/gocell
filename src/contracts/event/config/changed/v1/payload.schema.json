@@ -1,5 +1,37 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "event.config.changed.v1.payload",
-  "type": "object"
+  "type": "object",
+  "required": ["action", "key"],
+  "properties": {
+    "action": { "type": "string", "enum": ["created", "updated", "deleted", "published"] },
+    "key": { "type": "string" }
+  },
+  "oneOf": [
+    {
+      "description": "created/updated: includes value and version",
+      "properties": {
+        "action": { "enum": ["created", "updated"] },
+        "value": { "type": "string" },
+        "version": { "type": "integer" }
+      },
+      "required": ["action", "key", "value", "version"]
+    },
+    {
+      "description": "deleted: key only",
+      "properties": {
+        "action": { "const": "deleted" }
+      },
+      "required": ["action", "key"]
+    },
+    {
+      "description": "published: includes config_id and version (no value)",
+      "properties": {
+        "action": { "const": "published" },
+        "config_id": { "type": "string" },
+        "version": { "type": "integer" }
+      },
+      "required": ["action", "key", "config_id", "version"]
+    }
+  ]
 }

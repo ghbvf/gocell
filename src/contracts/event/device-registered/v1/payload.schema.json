@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.device-registered.v1.payload",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "status": { "type": "string" },
+    "lastSeen": { "type": "string", "format": "date-time" }
+  },
+  "required": ["id", "name", "status"]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.config.rollback.v1.payload",
+  "type": "object",
+  "properties": {
+    "action": { "type": "string", "const": "rollback" },
+    "key": { "type": "string" },
+    "target_version": { "type": "integer" },
+    "new_version": { "type": "integer" }
+  },
+  "required": ["action", "key", "target_version", "new_version"]
+}

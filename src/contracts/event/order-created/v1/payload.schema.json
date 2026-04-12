@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.order-created.v1.payload",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string" },
+    "item": { "type": "string" },
+    "status": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "required": ["id", "item", "status"]
+}

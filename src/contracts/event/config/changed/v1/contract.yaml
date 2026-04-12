@@ -9,6 +9,9 @@ endpoints:
     - access-core
     - audit-core
     - config-core
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
 replayable: false
 idempotencyKey: event_id
 deliverySemantics: at-least-once

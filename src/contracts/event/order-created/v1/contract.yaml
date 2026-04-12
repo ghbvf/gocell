@@ -6,6 +6,9 @@ lifecycle: active
 endpoints:
   publisher: order-cell
   subscribers: []
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
 replayable: true
 idempotencyKey: order-created:{event_id}
 deliverySemantics: at-least-once

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "event.session.created.v1.headers",
+  "title": "event.session.revoked.v1.headers",
   "type": "object",
   "description": "Event envelope headers. event_id is the idempotency key declared in contract.yaml; it is carried in outbox.Entry.ID at the transport level.",
   "properties": {

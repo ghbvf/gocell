@@ -2,5 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.auth.me.v1.response",
   "type": "object",
-  "description": "Placeholder schema — to be defined when implementing the endpoint"
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "username", "email", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "required": ["data"]
 }

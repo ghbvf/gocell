@@ -6,6 +6,9 @@ lifecycle: active
 endpoints:
   publisher: device-cell
   subscribers: []
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
 replayable: true
 idempotencyKey: device-registered:{event_id}
 deliverySemantics: at-least-once

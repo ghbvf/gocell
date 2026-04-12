@@ -1,10 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "event.session.created.v1.payload",
+  "title": "event.user.locked.v1.payload",
   "type": "object",
   "properties": {
-    "session_id": { "type": "string" },
     "user_id": { "type": "string" }
   },
-  "required": ["session_id", "user_id"]
+  "required": ["user_id"]
 }

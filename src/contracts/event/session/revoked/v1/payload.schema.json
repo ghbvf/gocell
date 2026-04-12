@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "event.session.created.v1.payload",
+  "title": "event.session.revoked.v1.payload",
   "type": "object",
   "properties": {
     "session_id": { "type": "string" },
