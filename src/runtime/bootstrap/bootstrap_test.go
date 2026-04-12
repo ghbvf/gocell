@@ -344,6 +344,9 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 }
 
 func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
 	asm := assembly.New(assembly.Config{ID: "test-router-context"})
 	got := make(chan map[string]string, 1)
 	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
@@ -361,7 +364,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	b := New(
 		WithAssembly(asm),
 		WithSubscriber(sub),
-		WithHTTPAddr("127.0.0.1:0"),
+		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -378,10 +381,15 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		t.Fatal("timed out waiting for restored consumer context")
 	}
 
-	// Let the event router pass its startup timeout and transition to running
-	// before canceling the root context; otherwise bootstrap exits during the
-	// startup phase with context.Canceled.
-	time.Sleep(time.Second)
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	cancel()
 	select {
