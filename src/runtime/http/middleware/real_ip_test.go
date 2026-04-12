@@ -164,6 +164,22 @@ func TestRealIP(t *testing.T) {
 			remoteAddr:     "10.0.0.3:12345",
 			wantIP:         "203.0.113.1",
 		},
+
+		// --- IPv6 normalization ---
+		{
+			name:           "IPv6 normalization: expanded form matches compact",
+			trustedProxies: []string{"::1"},
+			xff:            "2001:db8::1",
+			remoteAddr:     "[0:0:0:0:0:0:0:1]:12345",
+			wantIP:         "2001:db8::1",
+		},
+		{
+			name:           "invalid proxy string: never matches real IP",
+			trustedProxies: []string{"not-an-ip"},
+			xff:            "10.0.0.1",
+			remoteAddr:     "192.168.1.1:12345",
+			wantIP:         "192.168.1.1",
+		},
 	}
 
 	for _, tt := range tests {

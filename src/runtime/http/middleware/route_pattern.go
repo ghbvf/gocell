@@ -17,6 +17,15 @@ const UnmatchedRoute = "unmatched"
 // Must be called AFTER next.ServeHTTP() — chi only populates RoutePattern
 // during routing.
 //
+// ADR: This function introduces a direct chi dependency into the middleware
+// package. This is a deliberate trade-off: chi.RouteContext is a shared
+// pointer set by the router before middleware executes, so the pattern is
+// only accessible through chi's context key. Moving this to router/ would
+// require an extra context key round-trip (router injects, middleware reads)
+// with no real decoupling benefit — the middleware package already lives
+// under runtime/http/ which is chi-specific. If GoCell ever swaps routers,
+// this single accessor is the only file that needs updating.
+//
 // Returns UnmatchedRoute when no chi routing context exists or the pattern
 // is empty (404 / unmatched requests).
 //

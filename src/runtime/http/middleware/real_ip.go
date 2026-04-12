@@ -23,7 +23,11 @@ func newProxyChecker(proxies []string) *proxyChecker {
 	for _, p := range proxies {
 		if _, cidr, err := net.ParseCIDR(p); err == nil {
 			pc.cidrs = append(pc.cidrs, cidr)
+		} else if parsed := net.ParseIP(p); parsed != nil {
+			// Store canonical form so "::1" and "0:0:0:0:0:0:0:1" match.
+			pc.exact[parsed.String()] = true
 		} else {
+			// Not a valid IP or CIDR — store as-is (will never match a real IP).
 			pc.exact[p] = true
 		}
 	}
@@ -35,12 +39,15 @@ func (pc *proxyChecker) empty() bool {
 }
 
 func (pc *proxyChecker) isTrusted(ip string) bool {
-	if pc.exact[ip] {
-		return true
-	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
-		return false
+		// Not a valid IP — check raw string (handles edge case of
+		// invalid entries stored via newProxyChecker fallback path).
+		return pc.exact[ip]
+	}
+	// Canonical form lookup matches how newProxyChecker stores IPs.
+	if pc.exact[parsed.String()] {
+		return true
 	}
 	for _, cidr := range pc.cidrs {
 		if cidr.Contains(parsed) {
