@@ -100,6 +100,6 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
-	// Service returns a domain error for missing flag.
-	assert.True(t, w.Code >= 400, "expected error status code, got %d", w.Code)
+	// Service returns ErrFlagNotFound → 404.
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }

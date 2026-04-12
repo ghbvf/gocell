@@ -79,7 +79,7 @@ func TestHandler_HandleCreate_EmptyKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestHandler_HandleUpdate_OK(t *testing.T) {
@@ -109,7 +109,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
@@ -145,7 +145,7 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/missing", nil)
 	handler.ServeHTTP(w, req)
 
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- outbox/tx service tests ---

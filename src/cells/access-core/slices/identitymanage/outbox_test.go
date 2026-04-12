@@ -140,7 +140,7 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/no-such-id/lock", nil)
 	r.ServeHTTP(w, req)
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestHandler_Unlock_NotFound(t *testing.T) {
@@ -148,7 +148,7 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/no-such-id/unlock", nil)
 	r.ServeHTTP(w, req)
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 // --- outbox/tx service tests ---

@@ -73,7 +73,7 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/missing/publish", nil)
 	handler.ServeHTTP(w, req)
 
-	assert.True(t, w.Code >= 400)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestHandler_HandleRollback_OK(t *testing.T) {
