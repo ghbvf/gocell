@@ -84,6 +84,16 @@ func TestCursorCodec_RoundTrip_NumericTypes(t *testing.T) {
 	assert.InDelta(t, 3.14, decoded.Values[1].(float64), 0.001)
 }
 
+func TestCursorCodec_Encode_MarshalFailure(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	// Cursor.Values is []any — a func value is not JSON-serializable.
+	cur := Cursor{Values: []any{func() {}}}
+	_, err = codec.Encode(cur)
+	requireCursorInvalid(t, err, "marshal failed")
+}
+
 func TestCursorCodec_Decode_TamperedPayload(t *testing.T) {
 	codec, err := NewCursorCodec(testKey())
 	require.NoError(t, err)

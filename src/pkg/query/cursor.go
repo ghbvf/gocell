@@ -55,7 +55,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 func (c *CursorCodec) Encode(cur Cursor) (string, error) {
 	payload, err := json.Marshal(cur)
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrCursorInvalid, "cursor: marshal failed", err)
+		return "", cursorInvalid("marshal failed")
 	}
 
 	sig := c.signWith(c.current, payload)
