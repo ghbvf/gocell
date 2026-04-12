@@ -24,7 +24,7 @@ type createRequest struct {
 // HandleCreate handles POST /api/v1/orders.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
@@ -36,8 +36,10 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"id":     order.ID,
-		"item":   order.Item,
-		"status": order.Status,
+		"data": map[string]any{
+			"id":     order.ID,
+			"item":   order.Item,
+			"status": order.Status,
+		},
 	})
 }

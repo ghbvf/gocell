@@ -4,6 +4,31 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - Decode 严格化 + 回归锁定
+
+> PR: #89
+> Scope: SF-01/SF-02/SF-03/SF-04/HT-01/HT-02
+
+### Breaking
+
+- **pkg/httputil**: All struct-targeting handlers now use `DecodeJSONStrict`, which rejects unknown JSON fields with HTTP 400. Clients sending extra fields will receive:
+  ```json
+  {"error": {"code": "ERR_VALIDATION_FAILED", "message": "invalid request body", "details": {"reason": "unknown field", "field": "<name>"}}}
+  ```
+  Affected endpoints: POST /devices, POST /devices/{id}/commands, POST /orders, POST /sessions/login, POST /sessions/refresh, POST /identities, PUT /identities/{id}, PUT /configs/{key}, POST /configs, POST /configs/{key}/rollback, POST /flags/{key}/evaluate.
+
+- **pkg/httputil**: `WriteDecodeError` now includes `details` in 4xx responses (previously always `{}`). This surfaces the error reason (empty body, malformed JSON, type mismatch, unknown field) to API clients.
+
+### Added
+
+- **pkg/httputil**: `DecodeJSONStrict(r *http.Request, dst any) error` — strict JSON decoder that rejects unknown fields via `json.Decoder.DisallowUnknownFields()`. Map destinations are unaffected.
+- **pkg/httputil**: `classifyDecodeError` now detects unknown field errors and returns `ErrValidationFailed` with `{"reason": "unknown field", "field": "<name>"}`.
+
+### Design
+
+- ref: gin-gonic/gin `binding/json.go` — adopted `DisallowUnknownFields` approach; diverged from global toggle to per-call `DecodeJSONStrict` function for granular migration.
+- `identitymanage.handlePatch` (JSON merge patch) intentionally kept on `DecodeJSON` — map targets accept any key by design.
+
 ## [Unreleased] - PR-Cleanup: Kernel 架构整理
 
 > PR: #79

@@ -21,7 +21,7 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

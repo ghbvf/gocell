@@ -66,6 +66,11 @@ func TestHandleLogin(t *testing.T) {
 			body:       `{"username":"alice","password":"wrong"}`,
 			wantStatus: http.StatusUnauthorized,
 		},
+		{
+			name:       "unknown field returns 400",
+			body:       `{"username":"alice","password":"correct-pass","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tc := range tests {

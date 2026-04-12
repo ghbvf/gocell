@@ -436,6 +436,92 @@ func TestWriteDecodeError_Contract(t *testing.T) {
 	}
 }
 
+func TestWriteDecodeError_Details(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantStatus  int
+		wantCode    string
+		wantDetails map[string]any
+	}{
+		{
+			name: "4xx with details passes through",
+			err: errcode.WithDetails(
+				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
+				map[string]any{"reason": "empty body"},
+			),
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "ERR_VALIDATION_FAILED",
+			wantDetails: map[string]any{"reason": "empty body"},
+		},
+		{
+			name:        "4xx without details returns empty object",
+			err:         errcode.New(errcode.ErrValidationFailed, "bad json"),
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "ERR_VALIDATION_FAILED",
+			wantDetails: map[string]any{},
+		},
+		{
+			name: "unknown field includes field name",
+			err: errcode.WithDetails(
+				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
+				map[string]any{"reason": "unknown field", "field": "foo"},
+			),
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "ERR_VALIDATION_FAILED",
+			wantDetails: map[string]any{"reason": "unknown field", "field": "foo"},
+		},
+		{
+			name: "413 with details passes through",
+			err: errcode.WithDetails(
+				errcode.New(errcode.ErrBodyTooLarge, "request body too large"),
+				map[string]any{"maxBytes": float64(1048576)},
+			),
+			wantStatus:  http.StatusRequestEntityTooLarge,
+			wantCode:    "ERR_BODY_TOO_LARGE",
+			wantDetails: map[string]any{"maxBytes": float64(1048576)},
+		},
+		{
+			name: "5xx details masked",
+			err: errcode.WithDetails(
+				errcode.New(errcode.ErrInternal, "db pool exhausted"),
+				map[string]any{"host": "db-3"},
+			),
+			wantStatus:  http.StatusInternalServerError,
+			wantCode:    "ERR_INTERNAL",
+			wantDetails: map[string]any{},
+		},
+		{
+			name:        "non-errcode error returns empty details",
+			err:         errors.New("some decode error"),
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "ERR_VALIDATION_FAILED",
+			wantDetails: map[string]any{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			WriteDecodeError(context.Background(), rec, tt.err)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+			errObj := body["error"].(map[string]any)
+			assert.Equal(t, tt.wantCode, errObj["code"])
+
+			details, ok := errObj["details"].(map[string]any)
+			if !ok {
+				details = map[string]any{}
+			}
+			assert.Equal(t, tt.wantDetails, details)
+		})
+	}
+}
+
 func TestWriteDecodeError_PassesCtx(t *testing.T) {
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-decode-456")
 	rec := httptest.NewRecorder()
@@ -607,6 +693,19 @@ func TestWriteDomainError_EncodeFail(t *testing.T) {
 	w := newBrokenWriter()
 	assert.NotPanics(t, func() {
 		WriteDomainError(context.Background(), w, errcode.New(errcode.ErrCellNotFound, "not found"))
+	})
+}
+
+func TestWriteDecodeError_EncodeFail(t *testing.T) {
+	w := newBrokenWriter()
+	// errcode path → writeErrcodeError → broken encoder
+	assert.NotPanics(t, func() {
+		WriteDecodeError(context.Background(), w, errcode.New(errcode.ErrValidationFailed, "bad"))
+	})
+	// non-errcode path → WriteError → broken encoder
+	w2 := newBrokenWriter()
+	assert.NotPanics(t, func() {
+		WriteDecodeError(context.Background(), w2, errors.New("raw error"))
 	})
 }
 

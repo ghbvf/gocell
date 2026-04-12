@@ -93,6 +93,18 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestHandler_HandleRollback_UnknownField(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"version":1,"extra":"y"}`
+	req := httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandler_HandleRollback_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 

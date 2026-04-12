@@ -22,7 +22,7 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

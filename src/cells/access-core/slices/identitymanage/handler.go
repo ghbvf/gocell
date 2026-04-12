@@ -61,7 +61,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
@@ -92,7 +92,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
 	}
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
@@ -113,6 +113,8 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	// JSON merge patch: only fields present in the JSON body are updated.
+	// Patchable fields: name, email, status. Other fields are silently ignored.
+	// Uses DecodeJSON (not strict) because map targets accept any key by design.
 	var raw map[string]json.RawMessage
 	if err := httputil.DecodeJSON(r, &raw); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)

@@ -12,6 +12,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const msgInternalServerError = "internal server error"
+
 // WriteJSON writes v as a JSON response with the given HTTP status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -32,12 +34,12 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // accidental information leakage through this low-level function.
 func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	msg := message
-	if status >= 500 && message != "internal server error" {
+	if status >= 500 && message != msgInternalServerError {
 		slog.Error("write error (5xx)",
 			slog.String("code", code),
 			slog.String("message", message),
 		)
-		msg = "internal server error"
+		msg = msgInternalServerError
 	}
 
 	errBody := map[string]any{
@@ -60,17 +62,21 @@ func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, me
 
 // WriteDecodeError writes the HTTP error response for a DecodeJSON failure.
 // It maps the errcode embedded in the error to the correct HTTP status via
-// mapCodeToStatus, preserving each handler's existing external contract:
-//   - ErrValidationFailed  → 400
+// MapCodeToStatus, preserving each handler's existing external contract:
+//   - ErrValidationFailed  → 400 (with details: reason, field, etc.)
 //   - ErrBodyTooLarge      → 413
-//   - ErrInternal          → 500
+//   - ErrInternal          → 500 (details stripped)
+//
+// For 4xx responses, any details attached to the errcode.Error (e.g. "reason",
+// "field") are included in the response so clients can distinguish error causes.
+// For 5xx responses, details are stripped to prevent information leakage.
 func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		WriteError(ctx, w, MapCodeToStatus(ecErr.Code), string(ecErr.Code), ecErr.Message)
+		writeErrcodeError(ctx, w, "decode error", ecErr)
 		return
 	}
-	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), "invalid request body")
+	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), msgInvalidRequestBody)
 }
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
@@ -82,57 +88,7 @@ func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		status := MapCodeToStatus(ecErr.Code)
-		details := ecErr.Details
-		if details == nil {
-			details = map[string]any{}
-		}
-
-		msg := ecErr.Message
-		if status >= 500 {
-			// Never expose internal details in 5xx responses.
-			logAttrs := []any{
-				slog.String("code", string(ecErr.Code)),
-				slog.String("message", ecErr.Message),
-			}
-			if ecErr.InternalMessage != "" {
-				logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
-			}
-			if ecErr.Cause != nil {
-				logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
-			}
-			// Include request correlation context so this log can be matched
-			// to the request_id returned in the error response.
-			if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-				logAttrs = append(logAttrs, slog.String("request_id", reqID))
-			}
-			if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
-				logAttrs = append(logAttrs, slog.String("trace_id", traceID))
-			}
-			if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
-				logAttrs = append(logAttrs, slog.String("span_id", spanID))
-			}
-			slog.Error("domain error (5xx)", logAttrs...)
-			msg = "internal server error"
-			details = map[string]any{}
-		}
-
-		errBody := map[string]any{
-			"code":    string(ecErr.Code),
-			"message": msg,
-			"details": details,
-		}
-		if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-			errBody["request_id"] = reqID
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		if encErr := json.NewEncoder(w).Encode(map[string]any{
-			"error": errBody,
-		}); encErr != nil {
-			slog.Error("httputil: encode domain error response", slog.Any("error", encErr))
-		}
+		writeErrcodeError(ctx, w, "domain error", ecErr)
 		return
 	}
 
@@ -145,7 +101,67 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 		logAttrs = append(logAttrs, slog.String("trace_id", traceID))
 	}
 	slog.Error("unhandled error", logAttrs...)
-	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
+	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), msgInternalServerError)
+}
+
+// writeErrcodeError is the shared implementation for WriteDecodeError and
+// WriteDomainError when the error is an *errcode.Error. It handles:
+//   - Status mapping via MapCodeToStatus
+//   - 4xx: details pass-through, original message
+//   - 5xx: details stripped, message masked, structured logging with
+//     cause/internal/request_id/trace_id/span_id per observability.md
+func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string, ecErr *errcode.Error) {
+	status := MapCodeToStatus(ecErr.Code)
+	details := ecErr.Details
+	if details == nil {
+		details = map[string]any{}
+	}
+
+	msg := ecErr.Message
+	if status >= 500 {
+		// Never expose internal details in 5xx responses.
+		// Log structured fields per observability.md:
+		// "Error 级别必须含完整 error + 关联业务字段"
+		logAttrs := []any{
+			slog.String("code", string(ecErr.Code)),
+			slog.String("message", ecErr.Message),
+		}
+		if ecErr.InternalMessage != "" {
+			logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+		}
+		if ecErr.Cause != nil {
+			logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+		}
+		if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+			logAttrs = append(logAttrs, slog.String("request_id", reqID))
+		}
+		if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+			logAttrs = append(logAttrs, slog.String("trace_id", traceID))
+		}
+		if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
+			logAttrs = append(logAttrs, slog.String("span_id", spanID))
+		}
+		slog.Error(label+" (5xx)", logAttrs...)
+		msg = msgInternalServerError
+		details = map[string]any{}
+	}
+
+	errBody := map[string]any{
+		"code":    string(ecErr.Code),
+		"message": msg,
+		"details": details,
+	}
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		errBody["request_id"] = reqID
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if encErr := json.NewEncoder(w).Encode(map[string]any{
+		"error": errBody,
+	}); encErr != nil {
+		slog.Error("httputil: encode error response", slog.Any("error", encErr))
+	}
 }
 
 // codeToStatus maps known error codes to HTTP status codes.
@@ -204,10 +220,10 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrCSRFOriginDenied: http.StatusForbidden,
 
 	// --- 409 Conflict ---
-	errcode.ErrAuthUserDuplicate:  http.StatusConflict,
-	errcode.ErrConfigDuplicate:    http.StatusConflict,
+	errcode.ErrAuthUserDuplicate:   http.StatusConflict,
+	errcode.ErrConfigDuplicate:     http.StatusConflict,
 	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
-	errcode.ErrFlagDuplicate:      http.StatusConflict,
+	errcode.ErrFlagDuplicate:       http.StatusConflict,
 
 	// --- 429 Too Many Requests ---
 	errcode.ErrRateLimited: http.StatusTooManyRequests,
@@ -216,9 +232,9 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
 
 	// --- 503 Service Unavailable ---
-	errcode.ErrWSHubStopping:  http.StatusServiceUnavailable,
+	errcode.ErrWSHubStopping:   http.StatusServiceUnavailable,
 	errcode.ErrWSHubNotRunning: http.StatusServiceUnavailable,
-	errcode.ErrWSMaxConns:     http.StatusServiceUnavailable,
+	errcode.ErrWSMaxConns:      http.StatusServiceUnavailable,
 
 	// --- 500 Internal Server Error ---
 	errcode.ErrInternal:          http.StatusInternalServerError,
@@ -229,11 +245,11 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
 	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
 	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
-	errcode.ErrAuditRepoQuery:   http.StatusInternalServerError,
-	errcode.ErrConfigRepoQuery:  http.StatusInternalServerError,
-	errcode.ErrAuthKeyMissing:   http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStarted: http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStopped: http.StatusInternalServerError,
+	errcode.ErrAuditRepoQuery:    http.StatusInternalServerError,
+	errcode.ErrConfigRepoQuery:   http.StatusInternalServerError,
+	errcode.ErrAuthKeyMissing:    http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStarted:  http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStopped:  http.StatusInternalServerError,
 
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,

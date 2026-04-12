@@ -160,6 +160,117 @@ func TestDecodeJSON_MaxBytesExceeded(t *testing.T) {
 	assert.Equal(t, errcode.ErrBodyTooLarge, ecErr.Code)
 }
 
+func TestDecodeJSONStrict(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		dst        func() any
+		wantCode   errcode.Code
+		wantReason string
+		wantField  string // expected details["field"] for unknown field errors
+	}{
+		{
+			name:     "valid struct",
+			body:     `{"name":"test"}`,
+			dst:      func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode: "", // no error
+		},
+		{
+			name:       "unknown field rejected",
+			body:       `{"name":"test","extra":"val"}`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "unknown field",
+			wantField:  "extra",
+		},
+		{
+			name:       "multiple unknown fields rejects first",
+			body:       `{"name":"test","alpha":"a","beta":"b"}`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "unknown field",
+			wantField:  "alpha",
+		},
+		{
+			name:       "empty body",
+			body:       "",
+			dst:        func() any { return &struct{}{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "empty body",
+		},
+		{
+			name:       "malformed JSON",
+			body:       `{invalid`,
+			dst:        func() any { return &struct{}{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "malformed JSON",
+		},
+		{
+			name:       "type mismatch",
+			body:       `{"count":"notanumber"}`,
+			dst:        func() any { return &struct{ Count int `json:"count"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "type mismatch",
+		},
+		{
+			name:       "trailing content",
+			body:       `{"name":"test"}garbage`,
+			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			wantCode:   errcode.ErrValidationFailed,
+			wantReason: "trailing content after JSON value",
+		},
+		{
+			name:     "map target: unknown fields accepted",
+			body:     `{"any":"field","extra":"ok"}`,
+			dst:      func() any { return &map[string]json.RawMessage{} },
+			wantCode: "", // maps accept any field, even in strict mode
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
+			r.Header.Set("Content-Type", "application/json")
+
+			dst := tt.dst()
+			err := DecodeJSONStrict(r, dst)
+
+			if tt.wantCode == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr), "error should be *errcode.Error")
+			assert.Equal(t, tt.wantCode, ecErr.Code)
+			if tt.wantReason != "" {
+				assert.Equal(t, tt.wantReason, ecErr.Details["reason"])
+			}
+			if tt.wantField != "" {
+				assert.Equal(t, tt.wantField, ecErr.Details["field"])
+			}
+		})
+	}
+}
+
+func TestDecodeJSONStrict_MaxBytesExceeded(t *testing.T) {
+	bigBody := `{"data":"` + strings.Repeat("x", 1024) + `"}`
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(bigBody))
+	r.Header.Set("Content-Type", "application/json")
+	r.Body = http.MaxBytesReader(httptest.NewRecorder(), r.Body, 10)
+
+	var dst struct {
+		Data string `json:"data"`
+	}
+	err := DecodeJSONStrict(r, &dst)
+
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error should be *errcode.Error")
+	assert.Equal(t, errcode.ErrBodyTooLarge, ecErr.Code)
+}
+
 func TestDecodeJSON_MaxBytesExceeded_TrailingContent(t *testing.T) {
 	// Scenario: first JSON value fits within the limit, but the trailing
 	// content check (second dec.Decode) reads past it and hits MaxBytesReader.

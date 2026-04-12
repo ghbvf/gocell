@@ -80,6 +80,18 @@ func TestHandler_HandleEvaluate_OK(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "dark-mode")
 }
 
+func TestHandler_HandleEvaluate_UnknownField(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"subject":"user-1","extra":"y"}`
+	req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandler_HandleEvaluate_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 

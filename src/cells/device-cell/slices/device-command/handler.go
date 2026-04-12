@@ -26,7 +26,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
 	var req enqueueRequest
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

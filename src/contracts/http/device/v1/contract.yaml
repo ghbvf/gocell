@@ -6,3 +6,6 @@ lifecycle: active
 endpoints:
   server: device-cell
   clients: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
