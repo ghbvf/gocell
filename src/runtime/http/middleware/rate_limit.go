@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -38,7 +39,7 @@ func RateLimit(limiter RateLimiter) func(http.Handler) http.Handler {
 			if !limiter.Allow(ip) {
 				retryAfter := computeRetryAfter(limiter)
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, "ERR_RATE_LIMITED", "too many requests")
+				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, string(errcode.ErrRateLimited), "too many requests")
 				return
 			}
 			next.ServeHTTP(w, r)

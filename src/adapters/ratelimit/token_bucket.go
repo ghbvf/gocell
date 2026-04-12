@@ -94,9 +94,11 @@ func (l *Limiter) Window() (time.Duration, int) {
 	return time.Second, int(l.rate)
 }
 
-// Close stops the background cleanup goroutine.
-func (l *Limiter) Close() {
+// Close stops the background cleanup goroutine. It implements io.Closer so
+// callers can integrate it into managed shutdown sequences.
+func (l *Limiter) Close() error {
 	l.stopOnce.Do(func() { close(l.stopCh) })
+	return nil
 }
 
 // Len returns the number of tracked keys. Exported for testing.

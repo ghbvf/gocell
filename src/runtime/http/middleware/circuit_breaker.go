@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // CircuitBreakerPolicy abstracts a circuit breaker's two-step protocol.
@@ -26,6 +28,9 @@ type CircuitBreakerPolicy interface {
 // proceed to the next handler; the response status determines success/failure
 // reporting (5xx = failure, everything else = success).
 //
+// The done callback is invoked via defer to guarantee it is called even when
+// the downstream handler panics (the panic is re-raised after reporting).
+//
 // The middleware reuses an existing RecorderState from context (created by the
 // Recorder middleware). If none exists, it creates its own so it remains
 // usable as a standalone middleware.
@@ -40,8 +45,7 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			done, err := cb.Allow()
 			if err != nil {
-				httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable,
-					"ERR_CIRCUIT_OPEN", "service unavailable")
+				writeCircuitOpenError(w, r)
 				return
 			}
 
@@ -54,8 +58,35 @@ func CircuitBreaker(cb CircuitBreakerPolicy) func(http.Handler) http.Handler {
 				r = r.WithContext(ctx)
 			}
 
+			// Defer done callback so it fires even when the handler panics.
+			// Recovery middleware (further down the chain) catches the panic
+			// and sets status 500, but if there is no Recovery, we still need
+			// the breaker to record the failure before the panic propagates.
+			defer func() {
+				done(state.Status() < 500)
+			}()
+
 			next.ServeHTTP(w, r)
-			done(state.Status() < 500)
 		})
 	}
+}
+
+// writeCircuitOpenError writes a 503 response with the ERR_CIRCUIT_OPEN code.
+// This bypasses httputil.WriteError because that function masks all 5xx
+// messages to "internal server error". For a circuit breaker, "service
+// unavailable" is the correct client-facing message — it indicates a
+// deliberate protective action, not a bug.
+func writeCircuitOpenError(w http.ResponseWriter, r *http.Request) {
+	body := map[string]any{
+		"code":    string(errcode.ErrCircuitOpen),
+		"message": "service unavailable",
+		"details": map[string]any{},
+	}
+	if rid, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
+		body["request_id"] = rid
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": body})
 }

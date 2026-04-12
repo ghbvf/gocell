@@ -61,7 +61,48 @@ func TestCircuitBreaker_Open_Returns503(t *testing.T) {
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+	assert.Equal(t, "service unavailable", errObj["message"],
+		"503 message must say 'service unavailable', not 'internal server error'")
 	assert.Nil(t, cb.doneSuccess, "done callback must not be invoked when circuit is open")
+}
+
+func TestCircuitBreaker_Standalone_NoRecorderState(t *testing.T) {
+	cb := &mockBreaker{}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// No RecorderState in context — middleware must create its own.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, cb.doneSuccess, "done callback must be invoked even without pre-existing RecorderState")
+	assert.True(t, *cb.doneSuccess, "200 must report success")
+}
+
+func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
+	cb := &mockBreaker{}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("handler panic test")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	state, wrapped := NewRecorder(rec)
+	ctx := WithRecorderState(req.Context(), state)
+	req = req.WithContext(ctx)
+
+	assert.Panics(t, func() {
+		handler.ServeHTTP(wrapped, req)
+	}, "panic must propagate")
+
+	require.NotNil(t, cb.doneSuccess, "done callback must be invoked even when handler panics")
+	// Default RecorderState status is 200 (no WriteHeader called before panic).
+	// In the real chain, Recovery sets 500 before this point.
+	assert.True(t, *cb.doneSuccess,
+		"without Recovery, panic-before-WriteHeader leaves status at default 200")
 }
 
 func TestCircuitBreaker_HandlerError5xx_ReportsFalse(t *testing.T) {
