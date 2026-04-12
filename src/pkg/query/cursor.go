@@ -156,11 +156,13 @@ func QueryContext(pairs ...string) string {
 // scope and query context, and that the value count matches. Scope and context
 // are mandatory — cursors missing either field are rejected.
 func ValidateCursorScope(cur Cursor, sort []SortColumn, queryCtx string) error {
-	if cur.Scope != SortScope(sort) {
-		return errcode.New(errcode.ErrCursorInvalid, "cursor: sort scope mismatch")
+	if expected := SortScope(sort); cur.Scope != expected {
+		return errcode.New(errcode.ErrCursorInvalid,
+			fmt.Sprintf("cursor: sort scope mismatch (got %q, want %q)", cur.Scope, expected))
 	}
 	if cur.Context != queryCtx {
-		return errcode.New(errcode.ErrCursorInvalid, "cursor: query context mismatch")
+		return errcode.New(errcode.ErrCursorInvalid,
+			fmt.Sprintf("cursor: query context mismatch (got %q, want %q)", cur.Context, queryCtx))
 	}
 	if len(cur.Values) != len(sort) {
 		return errcode.New(errcode.ErrCursorInvalid,

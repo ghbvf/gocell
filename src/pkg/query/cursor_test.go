@@ -259,6 +259,8 @@ func TestValidateCursorScope_MissingScope(t *testing.T) {
 	err := ValidateCursorScope(cur, sort, qctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "scope mismatch")
+	assert.Contains(t, err.Error(), `got ""`)  // empty scope shown in diagnostic
+	assert.Contains(t, err.Error(), "want")
 }
 
 func TestValidateCursorScope_MissingContext(t *testing.T) {
@@ -268,6 +270,8 @@ func TestValidateCursorScope_MissingContext(t *testing.T) {
 	err := ValidateCursorScope(cur, sort, qctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "context mismatch")
+	assert.Contains(t, err.Error(), `got ""`) // empty context shown in diagnostic
+	assert.Contains(t, err.Error(), "want")
 }
 
 func TestValidateCursorScope_BothMissing(t *testing.T) {
