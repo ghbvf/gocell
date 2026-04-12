@@ -82,6 +82,30 @@ func TestHandler_HandleCreate_EmptyKey(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandler_HandleCreate_UnknownField(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"key":"app.name","value":"gocell","extra":"y"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_HandleUpdate_UnknownField(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"value":"new","extra":"y"}`
+	req := httptest.NewRequest(http.MethodPut, "/k", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestHandler_HandleUpdate_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()

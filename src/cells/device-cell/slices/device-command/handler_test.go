@@ -71,6 +71,12 @@ func TestHandleEnqueue(t *testing.T) {
 			body:       `{"payload":"reboot"}`,
 			wantStatus: http.StatusNotFound,
 		},
+		{
+			name:       "unknown field returns 400",
+			deviceID:   "dev-1",
+			body:       `{"payload":"reboot","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tc := range tests {

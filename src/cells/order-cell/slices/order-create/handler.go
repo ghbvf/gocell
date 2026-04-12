@@ -24,7 +24,7 @@ type createRequest struct {
 // HandleCreate handles POST /api/v1/orders.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

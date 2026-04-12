@@ -71,6 +71,11 @@ func TestHandleRefresh(t *testing.T) {
 			body:       `{"refreshToken":"not.a.jwt"}`,
 			wantStatus: http.StatusUnauthorized,
 		},
+		{
+			name:       "unknown field returns 400",
+			body:       `{"refreshToken":"not.a.jwt","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tc := range tests {

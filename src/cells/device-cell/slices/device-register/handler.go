@@ -24,7 +24,7 @@ type registerRequest struct {
 // HandleRegister handles POST /api/v1/devices.
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := httputil.DecodeJSON(r, &req); err != nil {
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}

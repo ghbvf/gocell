@@ -54,6 +54,11 @@ func TestHandleCreate(t *testing.T) {
 			body:       `{}`,
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "unknown field returns 400",
+			body:       `{"item":"x","extra":"y"}`,
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {

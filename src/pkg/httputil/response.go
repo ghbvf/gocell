@@ -60,14 +60,49 @@ func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, me
 
 // WriteDecodeError writes the HTTP error response for a DecodeJSON failure.
 // It maps the errcode embedded in the error to the correct HTTP status via
-// mapCodeToStatus, preserving each handler's existing external contract:
-//   - ErrValidationFailed  → 400
+// MapCodeToStatus, preserving each handler's existing external contract:
+//   - ErrValidationFailed  → 400 (with details: reason, field, etc.)
 //   - ErrBodyTooLarge      → 413
-//   - ErrInternal          → 500
+//   - ErrInternal          → 500 (details stripped)
+//
+// For 4xx responses, any details attached to the errcode.Error (e.g. "reason",
+// "field") are included in the response so clients can distinguish error causes.
+// For 5xx responses, details are stripped to prevent information leakage.
 func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 	var ecErr *errcode.Error
 	if errors.As(err, &ecErr) {
-		WriteError(ctx, w, MapCodeToStatus(ecErr.Code), string(ecErr.Code), ecErr.Message)
+		status := MapCodeToStatus(ecErr.Code)
+
+		details := map[string]any{}
+		if status < 500 && len(ecErr.Details) > 0 {
+			details = ecErr.Details
+		}
+
+		msg := ecErr.Message
+		if status >= 500 {
+			slog.Error("decode error (5xx)",
+				slog.String("code", string(ecErr.Code)),
+				slog.String("message", ecErr.Message),
+			)
+			msg = "internal server error"
+		}
+
+		errBody := map[string]any{
+			"code":    string(ecErr.Code),
+			"message": msg,
+			"details": details,
+		}
+		if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+			errBody["request_id"] = reqID
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		if encErr := json.NewEncoder(w).Encode(map[string]any{
+			"error": errBody,
+		}); encErr != nil {
+			slog.Error("httputil: encode decode error response", slog.Any("error", encErr))
+		}
 		return
 	}
 	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), "invalid request body")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -22,7 +23,25 @@ import (
 //   - body too large       -> ErrBodyTooLarge
 //   - other                -> ErrInternal (details not exposed)
 func DecodeJSON(r *http.Request, dst any) error {
+	return decodeJSON(r, dst, false)
+}
+
+// DecodeJSONStrict is like DecodeJSON but rejects unknown fields.
+// When the destination is a struct, any JSON key that does not match
+// a non-ignored exported field causes a 400 error with details:
+//
+//	{"reason": "unknown field", "field": "<name>"}
+//
+// Map destinations are unaffected — they accept any key regardless.
+func DecodeJSONStrict(r *http.Request, dst any) error {
+	return decodeJSON(r, dst, true)
+}
+
+func decodeJSON(r *http.Request, dst any, strict bool) error {
 	dec := json.NewDecoder(r.Body)
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(dst); err != nil {
 		return classifyDecodeError(err)
 	}
@@ -70,6 +89,15 @@ func classifyDecodeError(err error) *errcode.Error {
 			return errcode.WithDetails(
 				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 				map[string]any{"reason": "type mismatch", "field": typeErr.Field},
+			)
+		}
+		// DisallowUnknownFields produces: json: unknown field "fieldName"
+		if msg := err.Error(); strings.HasPrefix(msg, "json: unknown field") {
+			field := strings.TrimPrefix(msg, `json: unknown field `)
+			field = strings.Trim(field, `"`)
+			return errcode.WithDetails(
+				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
+				map[string]any{"reason": "unknown field", "field": field},
 			)
 		}
 		return errcode.Wrap(errcode.ErrInternal, "internal server error", err)
