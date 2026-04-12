@@ -696,6 +696,19 @@ func TestWriteDomainError_EncodeFail(t *testing.T) {
 	})
 }
 
+func TestWriteDecodeError_EncodeFail(t *testing.T) {
+	w := newBrokenWriter()
+	// errcode path → writeErrcodeError → broken encoder
+	assert.NotPanics(t, func() {
+		WriteDecodeError(context.Background(), w, errcode.New(errcode.ErrValidationFailed, "bad"))
+	})
+	// non-errcode path → WriteError → broken encoder
+	w2 := newBrokenWriter()
+	assert.NotPanics(t, func() {
+		WriteDecodeError(context.Background(), w2, errors.New("raw error"))
+	})
+}
+
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
 // extracts every Code constant, and verifies it has an entry in codeToStatus.
 // This fails loudly when a new errcode.Code is added without registering an

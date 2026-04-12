@@ -12,6 +12,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const msgInternalServerError = "internal server error"
+
 // WriteJSON writes v as a JSON response with the given HTTP status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -32,12 +34,12 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // accidental information leakage through this low-level function.
 func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	msg := message
-	if status >= 500 && message != "internal server error" {
+	if status >= 500 && message != msgInternalServerError {
 		slog.Error("write error (5xx)",
 			slog.String("code", code),
 			slog.String("message", message),
 		)
-		msg = "internal server error"
+		msg = msgInternalServerError
 	}
 
 	errBody := map[string]any{
@@ -74,7 +76,7 @@ func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 		writeErrcodeError(ctx, w, "decode error", ecErr)
 		return
 	}
-	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), "invalid request body")
+	WriteError(ctx, w, http.StatusBadRequest, string(errcode.ErrValidationFailed), msgInvalidRequestBody)
 }
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
@@ -99,7 +101,7 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 		logAttrs = append(logAttrs, slog.String("trace_id", traceID))
 	}
 	slog.Error("unhandled error", logAttrs...)
-	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), "internal server error")
+	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), msgInternalServerError)
 }
 
 // writeErrcodeError is the shared implementation for WriteDecodeError and
@@ -140,7 +142,7 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 			logAttrs = append(logAttrs, slog.String("span_id", spanID))
 		}
 		slog.Error(label+" (5xx)", logAttrs...)
-		msg = "internal server error"
+		msg = msgInternalServerError
 		details = map[string]any{}
 	}
 
