@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.test.valid.v1.payload",
+  "type": "object",
+  "properties": {
+    "key": { "type": "string" },
+    "value": { "type": "string" }
+  },
+  "required": ["key", "value"]
+}

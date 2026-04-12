@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.test.valid.v1.headers",
+  "type": "object",
+  "properties": {
+    "event_id": { "type": "string", "minLength": 1 }
+  },
+  "required": ["event_id"]
+}

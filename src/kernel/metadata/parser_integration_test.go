@@ -59,14 +59,26 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
 	}
 
-	// --- Contracts: at least the 12 original contracts (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.Contracts), 12, "expected at least 12 contracts")
-	assert.LessOrEqual(t, len(pm.Contracts), 18, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
+	// --- Contracts: at least the 26 contracts after per-operation split (upper bound catches over-parse) ---
+	assert.GreaterOrEqual(t, len(pm.Contracts), 26, "expected at least 26 contracts after per-operation split")
+	assert.LessOrEqual(t, len(pm.Contracts), 35, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
+		"http.auth.refresh.v1",
 		"http.config.get.v1",
-		"http.auth.me.v1",
-		"http.config.flags.v1",
+		"http.auth.user.create.v1",
+		"http.auth.user.get.v1",
+		"http.config.flags.list.v1",
+		"http.config.flags.get.v1",
+		"http.config.flags.evaluate.v1",
+		"http.device.register.v1",
+		"http.device.status.v1",
+		"http.order.create.v1",
+		"http.order.get.v1",
+		"http.order.list.v1",
+		"command.device-command.enqueue.v1",
+		"command.device-command.list.v1",
+		"command.device-command.ack.v1",
 		"event.session.created.v1",
 		"event.audit.appended.v1",
 		"event.config.changed.v1",

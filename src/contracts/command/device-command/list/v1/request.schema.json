@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "command.device-command.list.v1.request",
+  "type": "object"
+}

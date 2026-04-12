@@ -350,7 +350,7 @@ func TestCreateContract_Conflict(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	opts := ContractOpts{ID: "http.auth.me.v1", Kind: "http", OwnerCell: "access-core"}
+	opts := ContractOpts{ID: "http.auth.user.create.v1", Kind: "http", OwnerCell: "access-core"}
 	require.NoError(t, s.CreateContract(opts))
 
 	err := s.CreateContract(opts)

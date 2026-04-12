@@ -1,0 +1,11 @@
+id: http.device.status.v1
+kind: http
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: device-cell
+  clients: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

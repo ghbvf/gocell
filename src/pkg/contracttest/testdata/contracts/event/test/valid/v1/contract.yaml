@@ -1,0 +1,15 @@
+id: event.test.valid.v1
+kind: event
+ownerCell: test-cell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: test-cell
+  subscribers:
+    - other-cell
+replayable: false
+idempotencyKey: event_id
+deliverySemantics: at-least-once
+schemaRefs:
+  payload: payload.schema.json
+  headers: headers.schema.json

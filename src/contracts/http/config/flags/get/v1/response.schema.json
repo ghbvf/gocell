@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.get.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "type": { "type": "string", "enum": ["boolean", "percentage"] },
+        "enabled": { "type": "boolean" },
+        "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
+      "required": ["id", "key", "type", "enabled", "rolloutPercentage"]
+    }
+  },
+  "required": ["data"]
+}

@@ -1,0 +1,12 @@
+id: http.auth.user.delete.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

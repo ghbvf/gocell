@@ -1,0 +1,11 @@
+id: http.test.missing-schema.v1
+kind: http
+ownerCell: test-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: test-cell
+  clients: []
+schemaRefs:
+  request: nonexistent.schema.json
+  response: response.schema.json

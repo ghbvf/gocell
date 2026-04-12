@@ -115,13 +115,14 @@ type EndpointsMeta struct {
 }
 
 // SchemaRefsMeta holds JSON Schema file references relative to the contract directory.
-// Known keys are request, response, payload; additional string-valued keys are
-// captured in Extra to stay compatible with contract.schema.json's
+// Known keys are request, response, payload, headers; additional string-valued keys
+// are captured in Extra to stay compatible with contract.schema.json's
 // additionalProperties: {"type":"string"}.
 type SchemaRefsMeta struct {
 	Request  string            `yaml:"request,omitempty"`
 	Response string            `yaml:"response,omitempty"`
 	Payload  string            `yaml:"payload,omitempty"`
+	Headers  string            `yaml:"headers,omitempty"`
 	Extra    map[string]string `yaml:",inline"`
 }
 
