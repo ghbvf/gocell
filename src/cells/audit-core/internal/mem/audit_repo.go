@@ -62,9 +62,15 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// 1. Filter
-	var filtered []*domain.AuditEntry
-	for _, e := range r.entries {
+	filtered := filterEntries(r.entries, filters)
+	sortAuditEntries(filtered, params.Sort)
+	return applyAuditCursor(filtered, params), nil
+}
+
+// filterEntries returns clones of entries matching the given filters.
+func filterEntries(entries []*domain.AuditEntry, filters ports.AuditFilters) []*domain.AuditEntry {
+	var out []*domain.AuditEntry
+	for _, e := range entries {
 		if filters.EventType != "" && e.EventType != filters.EventType {
 			continue
 		}
@@ -78,37 +84,43 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 			continue
 		}
 		clone := *e
-		filtered = append(filtered, &clone)
+		out = append(out, &clone)
 	}
+	return out
+}
 
-	// 2. Sort
-	if len(params.Sort) > 0 {
-		slices.SortFunc(filtered, func(a, b *domain.AuditEntry) int {
-			for _, col := range params.Sort {
-				var c int
-				switch col.Name {
-				case "timestamp":
-					c = a.Timestamp.Compare(b.Timestamp)
-				case "id":
-					c = cmp.Compare(a.ID, b.ID)
-				}
-				if col.Direction == query.SortDESC {
-					c = -c
-				}
-				if c != 0 {
-					return c
-				}
+// sortAuditEntries sorts entries in-place by the given sort columns.
+func sortAuditEntries(entries []*domain.AuditEntry, cols []query.SortColumn) {
+	if len(cols) == 0 {
+		return
+	}
+	slices.SortFunc(entries, func(a, b *domain.AuditEntry) int {
+		for _, col := range cols {
+			var c int
+			switch col.Name {
+			case "timestamp":
+				c = a.Timestamp.Compare(b.Timestamp)
+			case "id":
+				c = cmp.Compare(a.ID, b.ID)
 			}
-			return 0
-		})
-	}
+			if col.Direction == query.SortDESC {
+				c = -c
+			}
+			if c != 0 {
+				return c
+			}
+		}
+		return 0
+	})
+}
 
-	// 3. Apply cursor (skip entries at or before the cursor position)
+// applyAuditCursor skips entries at or before the cursor position, then limits.
+func applyAuditCursor(entries []*domain.AuditEntry, params query.ListParams) []*domain.AuditEntry {
 	if len(params.CursorValues) >= 2 {
 		cursorTS, _ := params.CursorValues[0].(string)
 		cursorID, _ := params.CursorValues[1].(string)
 		var after []*domain.AuditEntry
-		for _, e := range filtered {
+		for _, e := range entries {
 			ts := e.Timestamp.Format("2006-01-02T15:04:05.999999999Z07:00")
 			// Sort is timestamp DESC, id ASC: skip while (ts > cursorTS) or (ts == cursorTS && id <= cursorID)
 			if ts > cursorTS {
@@ -119,16 +131,14 @@ func (r *AuditRepository) Query(_ context.Context, filters ports.AuditFilters, p
 			}
 			after = append(after, e)
 		}
-		filtered = after
+		entries = after
 	}
 
-	// 4. Limit
 	limit := params.FetchLimit()
-	if limit > 0 && len(filtered) > limit {
-		filtered = filtered[:limit]
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
 	}
-
-	return filtered, nil
+	return entries
 }
 
 // Len returns the number of entries (for testing).

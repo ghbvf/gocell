@@ -71,9 +71,17 @@ func (r *OrderRepository) List(_ context.Context, params query.ListParams) ([]*d
 		all = append(all, &cp)
 	}
 
-	// Sort by params.Sort columns.
-	slices.SortFunc(all, func(a, b *domain.Order) int {
-		for _, col := range params.Sort {
+	sortOrders(all, params.Sort)
+	return applyOrderCursor(all, params), nil
+}
+
+// sortOrders sorts orders in-place by the given sort columns.
+func sortOrders(orders []*domain.Order, cols []query.SortColumn) {
+	if len(cols) == 0 {
+		return
+	}
+	slices.SortFunc(orders, func(a, b *domain.Order) int {
+		for _, col := range cols {
 			v := compareOrderField(a, b, col.Name)
 			if col.Direction == query.SortDESC {
 				v = -v
@@ -84,26 +92,28 @@ func (r *OrderRepository) List(_ context.Context, params query.ListParams) ([]*d
 		}
 		return 0
 	})
+}
 
-	// Apply cursor filter: skip rows until we pass the cursor position.
+// applyOrderCursor skips rows until past the cursor position, then limits.
+func applyOrderCursor(orders []*domain.Order, params query.ListParams) []*domain.Order {
 	start := 0
 	if params.CursorValues != nil {
-		for i, o := range all {
+		for i, o := range orders {
 			if orderAfterCursor(o, params.Sort, params.CursorValues) {
 				start = i
 				break
 			}
-			if i == len(all)-1 {
-				start = len(all) // cursor past all rows
+			if i == len(orders)-1 {
+				start = len(orders) // cursor past all rows
 			}
 		}
 	}
 
 	end := start + params.FetchLimit()
-	if end > len(all) {
-		end = len(all)
+	if end > len(orders) {
+		end = len(orders)
 	}
-	return all[start:end], nil
+	return orders[start:end]
 }
 
 // compareOrderField compares a single field of two orders.

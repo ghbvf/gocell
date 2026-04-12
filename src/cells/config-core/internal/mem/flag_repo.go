@@ -79,9 +79,17 @@ func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*do
 		all = append(all, &clone)
 	}
 
-	// Sort by params.Sort columns.
-	slices.SortFunc(all, func(a, b *domain.FeatureFlag) int {
-		for _, col := range params.Sort {
+	sortFlags(all, params.Sort)
+	return applyFlagCursor(all, params), nil
+}
+
+// sortFlags sorts feature flags in-place by the given sort columns.
+func sortFlags(flags []*domain.FeatureFlag, cols []query.SortColumn) {
+	if len(cols) == 0 {
+		return
+	}
+	slices.SortFunc(flags, func(a, b *domain.FeatureFlag) int {
+		for _, col := range cols {
 			v := compareFlagField(a, b, col.Name)
 			if col.Direction == query.SortDESC {
 				v = -v
@@ -92,26 +100,28 @@ func (r *FlagRepository) List(_ context.Context, params query.ListParams) ([]*do
 		}
 		return 0
 	})
+}
 
-	// Apply cursor filter: skip rows until we pass the cursor position.
+// applyFlagCursor skips rows until past the cursor position, then limits.
+func applyFlagCursor(flags []*domain.FeatureFlag, params query.ListParams) []*domain.FeatureFlag {
 	start := 0
 	if params.CursorValues != nil {
-		for i, f := range all {
+		for i, f := range flags {
 			if flagAfterCursor(f, params.Sort, params.CursorValues) {
 				start = i
 				break
 			}
-			if i == len(all)-1 {
-				start = len(all) // cursor past all rows
+			if i == len(flags)-1 {
+				start = len(flags) // cursor past all rows
 			}
 		}
 	}
 
 	end := start + params.FetchLimit()
-	if end > len(all) {
-		end = len(all)
+	if end > len(flags) {
+		end = len(flags)
 	}
-	return all[start:end], nil
+	return flags[start:end]
 }
 
 // compareFlagField compares a single field of two feature flags.

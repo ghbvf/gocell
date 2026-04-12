@@ -159,14 +159,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L1))
 
 	// Default cursor codec for pagination if not injected.
-	if c.cursorCodec == nil {
-		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
-		codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
-		if err != nil {
-			return err
-		}
-		c.cursorCodec = codec
-		slog.Warn("audit-core: using default cursor codec (demo mode)")
+	if err := c.initCursorCodec(); err != nil {
+		return err
 	}
 
 	// audit-query
@@ -174,6 +168,21 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.queryHandler = auditquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
 
+	return nil
+}
+
+// initCursorCodec initialises the cursor codec with a demo key if not injected.
+func (c *AuditCore) initCursorCodec() error {
+	if c.cursorCodec != nil {
+		return nil
+	}
+	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
+	if err != nil {
+		return err
+	}
+	c.cursorCodec = codec
+	slog.Warn("audit-core: using default cursor codec (demo mode)")
 	return nil
 }
 

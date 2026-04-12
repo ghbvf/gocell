@@ -95,9 +95,17 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 		all = append(all, &clone)
 	}
 
-	// Sort by params.Sort columns.
-	slices.SortFunc(all, func(a, b *domain.ConfigEntry) int {
-		for _, col := range params.Sort {
+	sortConfigEntries(all, params.Sort)
+	return applyConfigCursor(all, params), nil
+}
+
+// sortConfigEntries sorts config entries in-place by the given sort columns.
+func sortConfigEntries(entries []*domain.ConfigEntry, cols []query.SortColumn) {
+	if len(cols) == 0 {
+		return
+	}
+	slices.SortFunc(entries, func(a, b *domain.ConfigEntry) int {
+		for _, col := range cols {
 			v := compareConfigField(a, b, col.Name)
 			if col.Direction == query.SortDESC {
 				v = -v
@@ -108,26 +116,28 @@ func (r *ConfigRepository) List(_ context.Context, params query.ListParams) ([]*
 		}
 		return 0
 	})
+}
 
-	// Apply cursor filter: skip rows until we pass the cursor position.
+// applyConfigCursor skips rows until past the cursor position, then limits.
+func applyConfigCursor(entries []*domain.ConfigEntry, params query.ListParams) []*domain.ConfigEntry {
 	start := 0
 	if params.CursorValues != nil {
-		for i, e := range all {
+		for i, e := range entries {
 			if configAfterCursor(e, params.Sort, params.CursorValues) {
 				start = i
 				break
 			}
-			if i == len(all)-1 {
-				start = len(all) // cursor past all rows
+			if i == len(entries)-1 {
+				start = len(entries) // cursor past all rows
 			}
 		}
 	}
 
 	end := start + params.FetchLimit()
-	if end > len(all) {
-		end = len(all)
+	if end > len(entries) {
+		end = len(entries)
 	}
-	return all[start:end], nil
+	return entries[start:end]
 }
 
 // compareConfigField compares a single field of two config entries.

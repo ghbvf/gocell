@@ -100,9 +100,17 @@ func (r *CommandRepository) ListPending(_ context.Context, deviceID string, para
 		}
 	}
 
-	// Sort by params.Sort columns.
-	slices.SortFunc(filtered, func(a, b *domain.Command) int {
-		for _, col := range params.Sort {
+	sortCommands(filtered, params.Sort)
+	return applyCommandCursor(filtered, params), nil
+}
+
+// sortCommands sorts commands in-place by the given sort columns.
+func sortCommands(cmds []*domain.Command, cols []query.SortColumn) {
+	if len(cols) == 0 {
+		return
+	}
+	slices.SortFunc(cmds, func(a, b *domain.Command) int {
+		for _, col := range cols {
 			v := compareCommandField(a, b, col.Name)
 			if col.Direction == query.SortDESC {
 				v = -v
@@ -113,26 +121,28 @@ func (r *CommandRepository) ListPending(_ context.Context, deviceID string, para
 		}
 		return 0
 	})
+}
 
-	// Apply cursor filter: skip rows until we pass the cursor position.
+// applyCommandCursor skips rows until past the cursor position, then limits.
+func applyCommandCursor(cmds []*domain.Command, params query.ListParams) []*domain.Command {
 	start := 0
 	if params.CursorValues != nil {
-		for i, cmd := range filtered {
+		for i, cmd := range cmds {
 			if commandAfterCursor(cmd, params.Sort, params.CursorValues) {
 				start = i
 				break
 			}
-			if i == len(filtered)-1 {
-				start = len(filtered) // cursor past all rows
+			if i == len(cmds)-1 {
+				start = len(cmds) // cursor past all rows
 			}
 		}
 	}
 
 	end := start + params.FetchLimit()
-	if end > len(filtered) {
-		end = len(filtered)
+	if end > len(cmds) {
+		end = len(cmds)
 	}
-	return filtered[start:end], nil
+	return cmds[start:end]
 }
 
 // compareCommandField compares a single field of two commands.
