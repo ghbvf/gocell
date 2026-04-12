@@ -39,7 +39,30 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// In-memory event bus (publisher + subscriber).
+	// --- Production mode (RabbitMQ) ---
+	// Replace the in-memory event bus below with a real RabbitMQ connection:
+	//
+	//   import "github.com/ghbvf/gocell/adapters/rabbitmq"
+	//
+	//   conn, err := rabbitmq.NewConnection(rabbitmq.Config{
+	//       URL:                  os.Getenv("AMQP_URL"),
+	//       MaxReconnectAttempts: 30, // ~15min retry with default 30s max backoff
+	//   })
+	//   if err != nil { logger.Error("rabbitmq", slog.Any("error", err)); os.Exit(1) }
+	//   defer conn.Close()
+	//
+	//   pub := rabbitmq.NewPublisher(conn, rabbitmq.PublisherConfig{Exchange: "gocell"})
+	//   sub := rabbitmq.NewSubscriber(conn, rabbitmq.SubscriberConfig{Exchange: "gocell"})
+	//
+	// Then pass pub/sub and a health checker to bootstrap:
+	//
+	//   app := bootstrap.New(
+	//       bootstrap.WithPublisher(pub), bootstrap.WithSubscriber(sub),
+	//       bootstrap.WithHealthChecker("rabbitmq", conn.Health), // wires /readyz
+	//       ...
+	//   )
+
+	// In-memory event bus (publisher + subscriber) — development mode.
 	eb := eventbus.New()
 
 	// RSA key pair for JWT signing/verification (development only).
