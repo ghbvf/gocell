@@ -302,4 +302,28 @@ func TestCompareAny_UnsupportedType_Panics(t *testing.T) {
 	assert.Panics(t, func() {
 		query.CompareAny(true, false)
 	})
+	assert.Panics(t, func() {
+		query.CompareAny(1.0, "str")
+	})
+	assert.Panics(t, func() {
+		query.CompareAny(1.0, time.Now())
+	})
+}
+
+func TestApplyCursor_MismatchedCursorValuesLength_Panics(t *testing.T) {
+	items := []testItem{{ID: "a"}, {ID: "b"}}
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"a"}, // 1 value but 2 sort columns
+		Sort: []query.SortColumn{
+			{Name: "id", Direction: query.SortASC},
+			{Name: "name", Direction: query.SortASC},
+		},
+	}
+
+	// ApplyCursor does not validate length — this is enforced upstream by
+	// ValidateCursorScope. If bypass occurs, it panics with index out of range.
+	assert.Panics(t, func() {
+		query.ApplyCursor(items, params, testFieldValue)
+	})
 }

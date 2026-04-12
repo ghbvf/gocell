@@ -83,6 +83,12 @@ func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValu
 // It handles cross-type comparison between time.Time and RFC3339Nano strings,
 // which occurs when fieldValue returns time.Time but cursor values are strings
 // from JSON decode.
+//
+// Supported type pairs: string↔string, float64↔float64, time.Time↔time.Time,
+// time.Time↔string (parsed as RFC3339Nano). All other combinations panic.
+// This is safe because inputs come from HMAC-validated cursor values (JSON
+// decode produces only string/float64) and FieldFunc callbacks (returning
+// string/float64/time.Time).
 func CompareAny(a, b any) int {
 	// Fast path: both same concrete type.
 	switch av := a.(type) {
