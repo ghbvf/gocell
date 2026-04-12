@@ -802,6 +802,8 @@ func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Tim
 		)
 	}
 
-	r.config.Metrics.RecordCleanup(totalPublished, totalDead)
+	if totalPublished > 0 || totalDead > 0 {
+		r.config.Metrics.RecordCleanup(totalPublished, totalDead)
+	}
 	return nil
 }

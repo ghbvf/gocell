@@ -19,6 +19,9 @@ type safeRelayCollector struct {
 	inner outbox.RelayCollector
 }
 
+// Compile-time interface check.
+var _ outbox.RelayCollector = (*safeRelayCollector)(nil)
+
 func (s *safeRelayCollector) RecordPollCycle(r outbox.PollCycleResult) {
 	s.safeCall(func() { s.inner.RecordPollCycle(r) })
 }
