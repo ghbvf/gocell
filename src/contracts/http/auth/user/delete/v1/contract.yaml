@@ -9,4 +9,3 @@ endpoints:
     - edge-bff
 schemaRefs:
   request: request.schema.json
-  response: response.schema.json

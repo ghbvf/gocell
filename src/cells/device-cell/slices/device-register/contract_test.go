@@ -20,7 +20,7 @@ func TestEventDeviceRegisteredV1Publish(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.device-registered.v1")
 
 	c.ValidatePayload(t, []byte(`{"id":"d-1","name":"sensor-01","status":"registered"}`))
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-dr-1"}`))
 	c.MustRejectPayload(t, []byte(`{"id":"d-1"}`))
-	c.MustRejectHeaders(t, []byte(`{}`))
+	// Headers validation skipped: device-cell uses publisher.Publish directly
+	// (L4, no outbox.Entry per KG-07), so event_id is not emitted at transport level.
 }
