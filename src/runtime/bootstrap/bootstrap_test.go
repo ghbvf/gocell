@@ -572,8 +572,8 @@ type plainConfig struct {
 	data map[string]any
 }
 
-func (c *plainConfig) Get(key string) any        { return c.data[key] }
-func (c *plainConfig) Scan(_ interface{}) error   { return nil }
+func (c *plainConfig) Get(key string) any       { return c.data[key] }
+func (c *plainConfig) Scan(_ interface{}) error { return nil }
 func (c *plainConfig) Keys() []string {
 	keys := make([]string, 0, len(c.data))
 	for k := range c.data {
@@ -604,9 +604,9 @@ func TestSnapshotConfig_Fallback(t *testing.T) {
 // reloaderCell is a Cell that implements cell.ConfigReloader for testing.
 type reloaderCell struct {
 	*cell.BaseCell
-	mu        sync.Mutex
-	events    []cell.ConfigChangeEvent
-	callOrder *[]string // shared slice to track call order across cells
+	mu         sync.Mutex
+	events     []cell.ConfigChangeEvent
+	callOrder  *[]string // shared slice to track call order across cells
 	err        error     // configurable error to return
 	doPanic    bool      // if true, panic instead of returning
 	panicCount atomic.Int32
@@ -685,7 +685,7 @@ func (w *blockingStopWorker) Stop(_ context.Context) error {
 	}
 	<-w.releaseStop
 	return nil
-	}
+}
 
 func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
 	return &slowReloaderCell{
