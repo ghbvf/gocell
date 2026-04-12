@@ -17,8 +17,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -309,21 +307,21 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := asm.StartWithConfig(ctx, cfgMap); err != nil {
 		return rollback(fmt.Errorf("bootstrap: assembly start: %w", err))
 	}
-	// assemblyStopped + reloadWG together ensure clean shutdown of the reload
-	// pipeline. The guard prevents new callbacks from entering after shutdown
-	// begins; the WaitGroup drains any in-flight callback that passed the
-	// guard before assemblyStopped was set. Teardown sequence:
-	//   1. assemblyStopped.Store(true) — stop new callbacks
-	//   2. reloadWG.Wait()             — drain in-flight callbacks
-	//   3. asm.Stop(c)                 — safe: no concurrent OnConfigReload
+	// reloads ensures shutdown follows a strict gate-before-drain order:
+	//   1. reject new callbacks,
+	//   2. wait for in-flight callbacks to leave,
+	//   3. stop the assembly.
 	//
 	// ref: net/http Server.Shutdown — stop accepting + drain active + close.
-	var assemblyStopped atomic.Bool
-	var reloadWG sync.WaitGroup
+	reloads := newReloadGate()
 
 	teardowns = append(teardowns, func(c context.Context) error {
-		assemblyStopped.Store(true)
-		reloadWG.Wait()
+		drained := reloads.BeginShutdown()
+		select {
+		case <-drained:
+		case <-c.Done():
+			return c.Err()
+		}
 		return asm.Stop(c)
 	})
 
@@ -332,16 +330,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if cfgWatcher != nil {
 		yamlPath, envPrefix := b.configPath, b.envPrefix
 		cfgWatcher.OnChange(func(evt config.WatchEvent) {
-			if assemblyStopped.Load() {
+			if !reloads.TryEnter() {
+				slog.Warn("bootstrap: config reload rejected during shutdown",
+					slog.String("path", evt.Path))
 				return
 			}
-			reloadWG.Add(1)
-			defer reloadWG.Done()
-			// Double-check after Add: if shutdown raced between the Load above
-			// and Add, we must not proceed.
-			if assemblyStopped.Load() {
-				return
-			}
+			defer reloads.Leave()
 
 			rc, ok := cfg.(config.Reloader)
 			if !ok {
@@ -554,6 +548,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 
 	// Step 10: Orderly shutdown.
 	slog.Info("bootstrap: initiating graceful shutdown")
+	reloads.BeginShutdown()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
 

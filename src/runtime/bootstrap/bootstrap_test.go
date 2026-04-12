@@ -572,8 +572,8 @@ type plainConfig struct {
 	data map[string]any
 }
 
-func (c *plainConfig) Get(key string) any        { return c.data[key] }
-func (c *plainConfig) Scan(_ interface{}) error   { return nil }
+func (c *plainConfig) Get(key string) any       { return c.data[key] }
+func (c *plainConfig) Scan(_ interface{}) error { return nil }
 func (c *plainConfig) Keys() []string {
 	keys := make([]string, 0, len(c.data))
 	for k := range c.data {
@@ -604,9 +604,9 @@ func TestSnapshotConfig_Fallback(t *testing.T) {
 // reloaderCell is a Cell that implements cell.ConfigReloader for testing.
 type reloaderCell struct {
 	*cell.BaseCell
-	mu        sync.Mutex
-	events    []cell.ConfigChangeEvent
-	callOrder *[]string // shared slice to track call order across cells
+	mu         sync.Mutex
+	events     []cell.ConfigChangeEvent
+	callOrder  *[]string // shared slice to track call order across cells
 	err        error     // configurable error to return
 	doPanic    bool      // if true, panic instead of returning
 	panicCount atomic.Int32
@@ -658,6 +658,33 @@ type slowReloaderCell struct {
 	delay     time.Duration
 	called    atomic.Int32
 	completed atomic.Int32
+}
+
+type blockingStopWorker struct {
+	stopStarted chan struct{}
+	releaseStop chan struct{}
+}
+
+func newBlockingStopWorker() *blockingStopWorker {
+	return &blockingStopWorker{
+		stopStarted: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+}
+
+func (w *blockingStopWorker) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (w *blockingStopWorker) Stop(_ context.Context) error {
+	select {
+	case <-w.stopStarted:
+	default:
+		close(w.stopStarted)
+	}
+	<-w.releaseStop
+	return nil
 }
 
 func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
@@ -1225,6 +1252,71 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, countBefore, rc.eventCount(),
 		"no config reload callback should fire after shutdown")
+}
+
+// TestBootstrap_ShutdownRejectsReloadDuringDrain verifies that shutdown starts
+// rejecting new reload callbacks before earlier teardown steps (such as worker
+// shutdown) have finished.
+func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val1\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-shutdown-drain-reject"})
+	rc := newReloaderCell("shutdown-drain-cell")
+	require.NoError(t, asm.Register(rc))
+
+	blocker := newBlockingStopWorker()
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithWorkers(blocker),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond)
+
+	cancel()
+
+	select {
+	case <-blocker.stopStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not reach worker stop")
+	}
+
+	countBefore := rc.eventCount()
+	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_during_shutdown\n"), 0o644))
+
+	assert.Never(t, func() bool {
+		return rc.eventCount() > countBefore
+	}, 500*time.Millisecond, 20*time.Millisecond,
+		"shutdown must reject config reloads once graceful shutdown begins")
+
+	close(blocker.releaseStop)
+
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown timeout")
+	}
 }
 
 // TestBootstrap_ConfigReload_GenerationTracking verifies that the Generation
