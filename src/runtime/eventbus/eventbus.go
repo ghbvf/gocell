@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -54,8 +55,10 @@ type subscription struct {
 //   - empty consumerGroup: broadcast to every subscriber (backward compatible)
 type InMemoryEventBus struct {
 	mu            sync.RWMutex
-	// groupSubs: topic → consumerGroup → []*subscription
-	// Empty consumerGroup ("" key) entries are broadcast individually.
+	// groupSubs: topic → consumerGroup → *groupState
+	// Each groupState holds the subscriber list and an atomic round-robin
+	// counter for competing dispatch. Empty consumerGroup ("" key) entries
+	// are broadcast individually.
 	groupSubs     map[string]map[string]*groupState
 	bufSize       int
 	closed        bool
@@ -66,7 +69,7 @@ type InMemoryEventBus struct {
 // groupState tracks subscribers and round-robin index for a consumer group.
 type groupState struct {
 	subs  []*subscription
-	rrIdx uint64 // round-robin index for competing dispatch
+	rrIdx atomic.Uint64 // round-robin index for competing dispatch (atomic: accessed under RLock)
 }
 
 // Option configures the InMemoryEventBus.
@@ -134,8 +137,8 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 			}
 		} else {
 			// Named group → round-robin to one subscriber (competing).
-			idx := gs.rrIdx % uint64(len(gs.subs))
-			gs.rrIdx++
+			rrVal := gs.rrIdx.Add(1) - 1 // atomic increment, use previous value
+			idx := rrVal % uint64(len(gs.subs))
 			sub := gs.subs[idx]
 			select {
 			case sub.ch <- entry:
@@ -254,6 +257,8 @@ func (b *InMemoryEventBus) DrainDeadLetters() []DeadLetter {
 }
 
 // removeSub removes a specific subscription from the group's subscriber list.
+// If the group becomes empty after removal, the groupState entry is pruned
+// from the map to prevent unbounded growth.
 func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscription) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -268,6 +273,13 @@ func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscr
 	for i, s := range gs.subs {
 		if s == target {
 			gs.subs = append(gs.subs[:i], gs.subs[i+1:]...)
+			// Prune empty groupState to prevent map growth.
+			if len(gs.subs) == 0 {
+				delete(groups, consumerGroup)
+				if len(groups) == 0 {
+					delete(b.groupSubs, topic)
+				}
+			}
 			return
 		}
 	}
