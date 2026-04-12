@@ -1,4 +1,4 @@
-package outboxtest_test
+package eventbus_test
 
 import (
 	"testing"
@@ -8,8 +8,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// TestInMemoryEventBus_Conformance is the TDD anchor: it runs the full
-// conformance suite against InMemoryEventBus, proving the test helpers work.
+// TestInMemoryEventBus_Conformance runs the full outboxtest conformance suite
+// against InMemoryEventBus, proving the test helpers work.
 func TestInMemoryEventBus_Conformance(t *testing.T) {
 	outboxtest.TestPubSub(t, outboxtest.Features{
 		GuaranteedOrder:   true,
