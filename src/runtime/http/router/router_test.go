@@ -430,3 +430,181 @@ func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
 		"metrics must record panic request as 500 even with tracing in chain")
 }
+
+// --- Rate limiter wiring ---
+
+// routerTestLimiter is a minimal RateLimiter for router integration tests.
+type routerTestLimiter struct {
+	allow bool
+	keys  []string
+}
+
+func (l *routerTestLimiter) Allow(key string) bool {
+	l.keys = append(l.keys, key)
+	return l.allow
+}
+
+func TestWithRateLimiter_InDefaultChain(t *testing.T) {
+	limiter := &routerTestLimiter{allow: true}
+	r := New(WithRateLimiter(limiter))
+	r.Handle("/rl-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rl-test", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, limiter.keys, "rate limiter must be invoked in default chain")
+}
+
+func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
+	limiter := &routerTestLimiter{allow: false}
+	r := New(WithRateLimiter(limiter))
+	r.Handle("/rl-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called when rate limited")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rl-reject", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_RATE_LIMITED", errObj["code"])
+}
+
+// --- Circuit breaker wiring ---
+
+// routerTestBreaker is a minimal CircuitBreakerPolicy for router integration tests.
+type routerTestBreaker struct {
+	allowErr error
+	called   bool
+}
+
+func (b *routerTestBreaker) Allow() (func(bool), error) {
+	b.called = true
+	if b.allowErr != nil {
+		return nil, b.allowErr
+	}
+	return func(bool) {}, nil
+}
+
+func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
+	breaker := &routerTestBreaker{}
+	r := New(WithCircuitBreaker(breaker))
+	r.Handle("/cb-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/cb-test", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, breaker.called, "circuit breaker must be invoked in default chain")
+}
+
+func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("circuit breaker is open")}
+	r := New(WithCircuitBreaker(breaker))
+	r.Handle("/cb-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called when circuit is open")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/cb-reject", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+}
+
+// --- Infra endpoints bypass RL/CB ---
+
+func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	hh := health.New(asm)
+	limiter := &routerTestLimiter{allow: false} // reject ALL business traffic
+	r := New(WithHealthHandler(hh), WithRateLimiter(limiter))
+
+	// /healthz must bypass rate limiter and return 200.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"/healthz must be reachable even when rate limiter rejects all traffic")
+}
+
+func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	hh := health.New(asm)
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")} // reject ALL
+	r := New(WithHealthHandler(hh), WithCircuitBreaker(breaker))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"/readyz must be reachable even when circuit breaker is open")
+}
+
+func TestMetrics_Records429And503(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	limiter := &routerTestLimiter{allow: false}
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
+	r := New(
+		WithMetricsCollector(mc),
+		WithRateLimiter(limiter),
+		WithCircuitBreaker(breaker),
+	)
+	r.Handle("/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Request 1: Rate-limited → 429 must be recorded in metrics.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/biz", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	// Request 2: Allow through RL, hit open CB → 503 must be recorded.
+	limiter.allow = true
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/biz", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	snap := mc.Snapshot()
+	found429, found503 := false, false
+	for key, count := range snap.RequestCounts {
+		if strings.Contains(key, "429") && count > 0 {
+			found429 = true
+		}
+		if strings.Contains(key, "503") && count > 0 {
+			found503 = true
+		}
+	}
+	assert.True(t, found429, "metrics must record 429 responses from rate limiter")
+	assert.True(t, found503, "metrics must record 503 responses from circuit breaker")
+}

@@ -2,11 +2,13 @@ package middleware
 
 import (
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -38,7 +40,7 @@ func RateLimit(limiter RateLimiter) func(http.Handler) http.Handler {
 			if !limiter.Allow(ip) {
 				retryAfter := computeRetryAfter(limiter)
 				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, "ERR_RATE_LIMITED", "too many requests")
+				httputil.WriteError(r.Context(), w, http.StatusTooManyRequests, string(errcode.ErrRateLimited), "too many requests")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -64,5 +66,11 @@ func clientIP(r *http.Request) string {
 	if ip, ok := ctxkeys.RealIPFrom(r.Context()); ok && ip != "" {
 		return ip
 	}
-	return r.RemoteAddr
+	// Strip port from RemoteAddr (e.g. "192.168.1.1:54321" → "192.168.1.1")
+	// so that connections from the same IP share one rate bucket.
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr // already host-only or unparseable
+	}
+	return host
 }

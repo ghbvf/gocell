@@ -83,6 +83,9 @@ const (
 	ErrPageSizeExceeded   Code = "ERR_PAGE_SIZE_EXCEEDED"
 	ErrInvalidTimeFormat  Code = "ERR_INVALID_TIME_FORMAT"
 
+	// Resilience middleware error codes.
+	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
+
 	// WebSocket runtime error codes.
 	ErrWSConnNotFound   Code = "ERR_WS_CONN_NOT_FOUND"
 	ErrWSAlreadyStarted Code = "ERR_WS_ALREADY_STARTED"
