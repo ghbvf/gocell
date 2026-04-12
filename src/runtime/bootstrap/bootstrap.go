@@ -405,7 +405,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	if sub != nil {
-		evtRouter := eventrouter.New(sub)
+		evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
+			Inner:      sub,
+			Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+		})
 		for _, id := range asm.CellIDs() {
 			c := asm.Cell(id)
 			if er, ok := c.(cell.EventRegistrar); ok {

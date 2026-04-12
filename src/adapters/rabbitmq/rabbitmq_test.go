@@ -1,10 +1,12 @@
 package rabbitmq
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/bits"
 	"net"
 	"sync"
@@ -17,7 +19,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	logctx "github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
 // --- Mock AMQP Channel ---
@@ -2104,6 +2108,128 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	res = capturedHandler(context.Background(), entry)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.False(t, handlerCalled, "duplicate should be skipped by ConsumerBase middleware")
+}
+
+func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &sequenceClaimer{responses: []claimResponse{{
+		state:   idempotency.ClaimAcquired,
+		receipt: receipt,
+	}}}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "integration-group",
+	})
+
+	var capturedHandler outbox.EntryHandler
+	innerSub := &stubSubscriber{
+		onSubscribe: func(_ context.Context, _ string, h outbox.EntryHandler) error {
+			capturedHandler = h
+			return nil
+		},
+	}
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner: innerSub,
+		Middleware: []outbox.TopicHandlerMiddleware{
+			outbox.ObservabilityContextMiddleware(),
+			cb.AsMiddleware(),
+		},
+	}
+
+	observed := make(map[string]string)
+	handler := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		observed["request_id"], _ = ctxkeys.RequestIDFrom(ctx)
+		observed["correlation_id"], _ = ctxkeys.CorrelationIDFrom(ctx)
+		observed["trace_id"], _ = ctxkeys.TraceIDFrom(ctx)
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}
+
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedHandler)
+
+	entry := outbox.Entry{
+		ID:        "evt-context-001",
+		EventType: "events.test",
+		Metadata: map[string]string{
+			"request_id":     "req-rmq-1",
+			"correlation_id": "corr-rmq-1",
+			"trace_id":       "trace-rmq-1",
+		},
+	}
+
+	res := capturedHandler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, res.Disposition)
+	assert.Equal(t, "req-rmq-1", observed["request_id"])
+	assert.Equal(t, "corr-rmq-1", observed["correlation_id"])
+	assert.Equal(t, "trace-rmq-1", observed["trace_id"])
+}
+
+func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(logctx.NewHandler(logctx.Options{
+		Level:  slog.LevelDebug,
+		Format: logctx.FormatJSON,
+		Writer: &buf,
+	}))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	receipt := &mockReceipt{}
+	claimer := &sequenceClaimer{responses: []claimResponse{{
+		state:   idempotency.ClaimAcquired,
+		receipt: receipt,
+	}}}
+
+	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "integration-group",
+	})
+
+	var capturedHandler outbox.EntryHandler
+	innerSub := &stubSubscriber{
+		onSubscribe: func(_ context.Context, _ string, h outbox.EntryHandler) error {
+			capturedHandler = h
+			return nil
+		},
+	}
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner: innerSub,
+		Middleware: []outbox.TopicHandlerMiddleware{
+			outbox.ObservabilityContextMiddleware(),
+			cb.AsMiddleware(),
+		},
+	}
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         outbox.NewPermanentError(errors.New("corrupted payload")),
+		}
+	}
+
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	assert.NoError(t, err)
+	require.NotNil(t, capturedHandler)
+
+	res := capturedHandler(context.Background(), outbox.Entry{
+		ID:        "evt-log-001",
+		EventType: "events.test",
+		Metadata: map[string]string{
+			"request_id":     "req-log-1",
+			"correlation_id": "corr-log-1",
+			"trace_id":       "trace-log-1",
+		},
+	})
+	assert.Equal(t, outbox.DispositionReject, res.Disposition)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "trace-log-1", logEntry["trace_id"])
+	assert.Equal(t, "req-log-1", logEntry["request_id"])
+	assert.Equal(t, "corr-log-1", logEntry["correlation_id"])
 }
 
 // stubSubscriber is a minimal Subscriber for integration tests.

@@ -29,7 +29,17 @@ type Entry struct {
 	Topic         string // broker routing key; falls back to EventType if empty
 	Payload       []byte
 	CreatedAt     time.Time
-	Metadata      map[string]string // optional metadata (ref: Watermill Message.Metadata)
+	// Metadata carries optional message metadata (ref: Watermill Message.Metadata).
+	//
+	// Reserved observability keys:
+	//   - trace_id
+	//   - request_id
+	//   - correlation_id
+	//
+	// Writer-side bridges may fill missing reserved keys from context before
+	// persistence. Consumer-side middleware may restore those keys back into
+	// handler context. Explicit non-empty metadata values win over bridge values.
+	Metadata map[string]string
 }
 
 // RoutingTopic returns the broker routing key for the entry.
