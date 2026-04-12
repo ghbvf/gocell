@@ -41,6 +41,35 @@ func TestMergeObservabilityMetadata_PreservesExplicitValues(t *testing.T) {
 	assert.Equal(t, "corr-from-ctx", got["correlation_id"])
 }
 
+func TestMergeObservabilityMetadata_FillsMissingOrEmptyReservedKeys(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-from-ctx")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-from-ctx")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-from-ctx")
+
+	got := MergeObservabilityMetadata(ctx, map[string]string{
+		"request_id":     "",
+		"correlation_id": "corr-explicit",
+		"source":         "worker",
+	})
+
+	require.NotNil(t, got)
+	assert.Equal(t, "req-from-ctx", got["request_id"])
+	assert.Equal(t, "corr-explicit", got["correlation_id"])
+	assert.Equal(t, "trace-from-ctx", got["trace_id"])
+	assert.Equal(t, "worker", got["source"])
+}
+
+func TestMergeObservabilityMetadata_NoObservabilityValuesReturnsOriginalMetadata(t *testing.T) {
+	assert.Nil(t, MergeObservabilityMetadata(context.Background(), nil))
+
+	metadata := map[string]string{"source": "worker"}
+	got := MergeObservabilityMetadata(context.Background(), metadata)
+	require.NotNil(t, got)
+	assert.Equal(t, metadata, got)
+	assert.Equal(t, "worker", got["source"])
+}
+
 func TestContextWithObservabilityMetadata_RestoresWhitelistedValues(t *testing.T) {
 	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
 		"request_id":     "req-456",
@@ -63,6 +92,42 @@ func TestContextWithObservabilityMetadata_RestoresWhitelistedValues(t *testing.T
 
 	_, ok = ctxkeys.SpanIDFrom(ctx)
 	assert.False(t, ok, "span_id must not be restored across the async boundary")
+}
+
+func TestContextWithObservabilityMetadata_PreservesExistingContextValues(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-existing")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-existing")
+
+	ctx = ContextWithObservabilityMetadata(ctx, map[string]string{
+		"request_id":     "req-from-metadata",
+		"correlation_id": "corr-from-metadata",
+		"trace_id":       "trace-from-metadata",
+	})
+
+	requestID, ok := ctxkeys.RequestIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "req-existing", requestID)
+
+	correlationID, ok := ctxkeys.CorrelationIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "corr-from-metadata", correlationID)
+
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "trace-existing", traceID)
+}
+
+func TestContextWithObservabilityMetadata_NilMetadataNoOp(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-existing")
+
+	restored := ContextWithObservabilityMetadata(ctx, nil)
+	requestID, ok := ctxkeys.RequestIDFrom(restored)
+	require.True(t, ok)
+	assert.Equal(t, "req-existing", requestID)
+	_, ok = ctxkeys.TraceIDFrom(restored)
+	assert.False(t, ok)
 }
 
 func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {

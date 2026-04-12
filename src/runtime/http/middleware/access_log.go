@@ -9,7 +9,8 @@ import (
 )
 
 // AccessLog logs structured request/response information via slog.Info.
-// Fields: method, path, route, status, duration_ms, request_id, trace_id.
+// Fields: method, path, route, status, duration_ms, request_id,
+// correlation_id, trace_id.
 //
 // ref: go-zero rest/handler/loghandler.go — structured request logging with trace context
 //

@@ -24,6 +24,8 @@ import (
 	logctx "github.com/ghbvf/gocell/runtime/observability/logging"
 )
 
+type testContextKey string
+
 // --- Mock AMQP Channel ---
 
 type mockChannel struct {
@@ -2859,6 +2861,116 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 			Body:        entryBytes,
 		}, "test.topic", handler)
 	})
+}
+
+func TestProcessDelivery_RestoresObservabilityContextForHandler(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{
+		ID:        "evt-ctx-restore",
+		EventType: "test.restore",
+		Metadata: map[string]string{
+			"request_id":     "req-sub-1",
+			"correlation_id": "corr-sub-1",
+			"trace_id":       "trace-sub-1",
+		},
+	}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	const sentinelKey testContextKey = "sentinel"
+	parentCtx, cancel := context.WithCancel(context.WithValue(context.Background(), sentinelKey, "parent-value"))
+	cancel()
+
+	observed := make(map[string]string)
+	var observedSentinel string
+	var observedErr error
+	handler := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		observed["request_id"], _ = ctxkeys.RequestIDFrom(ctx)
+		observed["correlation_id"], _ = ctxkeys.CorrelationIDFrom(ctx)
+		observed["trace_id"], _ = ctxkeys.TraceIDFrom(ctx)
+		observedSentinel, _ = ctx.Value(sentinelKey).(string)
+		observedErr = ctx.Err()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(parentCtx, ch, amqp.Delivery{
+		DeliveryTag: 5,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	assert.Equal(t, "req-sub-1", observed["request_id"])
+	assert.Equal(t, "corr-sub-1", observed["correlation_id"])
+	assert.Equal(t, "trace-sub-1", observed["trace_id"])
+	assert.Equal(t, "parent-value", observedSentinel)
+	assert.ErrorIs(t, observedErr, context.Canceled)
+	ch.mu.Lock()
+	assert.True(t, ch.ackCalled)
+	ch.mu.Unlock()
+}
+
+func TestProcessDelivery_LogsRestoredObservabilityContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(logctx.NewHandler(logctx.Options{
+		Level:  slog.LevelDebug,
+		Format: logctx.FormatJSON,
+		Writer: &buf,
+	}))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	entry := outbox.Entry{
+		ID:        "evt-log-restore",
+		EventType: "test.restore",
+		Metadata: map[string]string{
+			"request_id":     "req-log-1",
+			"correlation_id": "corr-log-1",
+			"trace_id":       "trace-log-1",
+		},
+	}
+	entryBytes, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("transient subscriber failure"),
+		}
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 6,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	output := buf.String()
+	assert.Contains(t, output, "\"request_id\":\"req-log-1\"")
+	assert.Contains(t, output, "\"correlation_id\":\"corr-log-1\"")
+	assert.Contains(t, output, "\"trace_id\":\"trace-log-1\"")
+	assert.Contains(t, output, "handler reported error")
 }
 
 func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {

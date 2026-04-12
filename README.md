@@ -262,6 +262,10 @@ This scope is intentionally limited to GoCell-internal HTTP -> outbox ->
 consumer continuity. Inbound `traceparent` / `b3` extraction remains a separate
 work item (`TRACE-PROP-01`).
 
+Framework-emitted consumer logs pick up these fields when the process uses
+GoCell's context-aware slog handler. This branch does not make plain slog JSON
+handlers automatically extract `request_id`, `correlation_id`, or `trace_id`.
+
 ## Using in Your Project
 
 ```bash

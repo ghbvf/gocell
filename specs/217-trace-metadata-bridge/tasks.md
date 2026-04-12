@@ -17,9 +17,9 @@
 - [x] T12 Run `go build ./...` and `go test ./... -count=1`.
 - [x] T13 Update public docs and backlog status notes.
 - [x] T14 Commit, push, and create PR against `develop`.
-- [ ] T15 Launch six-seat review and aggregate findings.
-- [ ] T16 Read PR comments and CI state.
-- [ ] T17 Use the fix flow to repair all `C1` and `C2` findings, then re-run validation.
+- [x] T15 Launch six-seat review and aggregate findings.
+- [x] T16 Read PR comments and CI state.
+- [x] T17 Use the fix flow to repair in-scope `C1` and `C2` findings, then re-run validation.
 
 ## Dependencies
 

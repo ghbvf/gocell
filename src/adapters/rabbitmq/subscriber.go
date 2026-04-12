@@ -411,9 +411,10 @@ func (s *Subscriber) processDelivery(
 		entry.Metadata = make(map[string]string)
 	}
 	entry.Metadata["topic"] = topic
+	deliveryCtx := outbox.ContextWithObservabilityMetadata(ctx, entry.Metadata)
 
 	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
-	res := handler(ctx, entry)
+	res := handler(deliveryCtx, entry)
 
 	// Execute broker-level disposition.
 	var brokerErr error
@@ -421,7 +422,7 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionAck:
 		brokerErr = ch.Ack(delivery.DeliveryTag, false)
 		if brokerErr != nil {
-			slog.Error("rabbitmq: ack failed",
+			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: ack failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
@@ -429,7 +430,7 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionReject:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
 		if brokerErr != nil {
-			slog.Error("rabbitmq: nack(reject) failed",
+			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
@@ -437,13 +438,13 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionRequeue:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
 		if brokerErr != nil {
-			slog.Error("rabbitmq: nack(requeue) failed",
+			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: nack(requeue) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
 	default:
-		slog.Error("rabbitmq: unknown disposition, nacking with requeue",
+		logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()))
@@ -452,14 +453,14 @@ func (s *Subscriber) processDelivery(
 
 	// Log handler-level error if present (separate from broker error).
 	if res.Err != nil {
-		slog.Warn("rabbitmq: handler reported error",
+		logAttrsWithContext(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()),
 			slog.String("error", res.Err.Error()))
 	}
 
-	s.settleReceipt(ctx, res, topic, entry.ID, brokerErr)
+	s.settleReceipt(deliveryCtx, res, topic, entry.ID, brokerErr)
 }
 
 // settleReceipt commits or releases the idempotency receipt after the broker
@@ -479,7 +480,7 @@ func (s *Subscriber) settleReceipt(
 
 	if brokerErr != nil {
 		if relErr := res.Receipt.Release(rctx); relErr != nil {
-			slog.Error("rabbitmq: receipt release failed after broker error",
+			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt release failed after broker error",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", relErr.Error()))
@@ -490,7 +491,7 @@ func (s *Subscriber) settleReceipt(
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if err := res.Receipt.Commit(rctx); err != nil {
-			slog.Error("rabbitmq: receipt commit failed",
+			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt commit failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
@@ -498,12 +499,16 @@ func (s *Subscriber) settleReceipt(
 	default:
 		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
 		if err := res.Receipt.Release(rctx); err != nil {
-			slog.Error("rabbitmq: receipt release failed",
+			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt release failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
 		}
 	}
+}
+
+func logAttrsWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
+	slog.LogAttrs(ctx, level, msg, attrs...)
 }
 
 // Close terminates all active subscriptions and waits for in-flight messages.

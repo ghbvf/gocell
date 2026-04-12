@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/adapters/redis"
@@ -23,6 +24,10 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+type queueInspector interface {
+	QueueInspect(name string) (amqp.Queue, error)
+}
 
 // ---------------------------------------------------------------------------
 // Container helpers (inlined because per-adapter helpers are unexported)
@@ -122,6 +127,36 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 		}
 	}
 	return client, cleanup
+}
+
+func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName string, subErrCh <-chan error, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-subErrCh:
+			require.NoError(t, err, "subscriber exited before becoming ready")
+			t.Fatal("subscriber exited before becoming ready")
+		default:
+		}
+
+		ch, err := conn.AcquireChannel()
+		require.NoError(t, err, "AcquireChannel should succeed while waiting for subscriber readiness")
+
+		inspector, ok := ch.(queueInspector)
+		require.True(t, ok, "AMQPChannel should support QueueInspect in integration tests")
+
+		queue, inspectErr := inspector.QueueInspect(queueName)
+		_ = ch.Close()
+		if inspectErr == nil && queue.Consumers > 0 {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)
 }
 
 // ---------------------------------------------------------------------------
@@ -235,20 +270,34 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Step 5: Start the subscriber BEFORE the relay so it is ready to
 	//         receive messages when the relay publishes.
 	// ---------------------------------------------------------------
-	received := make(chan outbox.Entry, 1)
+	type observedDelivery struct {
+		entry         outbox.Entry
+		requestID     string
+		correlationID string
+		traceID       string
+	}
+
+	received := make(chan observedDelivery, 1)
 	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer subCancel()
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			received <- e
+		subErrCh <- sub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
+			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
+			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
+			received <- observedDelivery{
+				entry:         e,
+				requestID:     requestID,
+				correlationID: correlationID,
+				traceID:       traceID,
+			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "fullchain-test")
 	}()
 
-	// Brief pause to let the subscriber bind its queue.
-	time.Sleep(500 * time.Millisecond)
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.queue", subErrCh, 5*time.Second)
 
 	// ---------------------------------------------------------------
 	// Step 6: Start the OutboxRelay in a background goroutine.
@@ -264,10 +313,16 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 7: Wait for the subscriber to receive the message.
 	// ---------------------------------------------------------------
-	var got outbox.Entry
+	var got observedDelivery
 	select {
 	case got = <-received:
 		// Success — message received.
+	case err := <-subErrCh:
+		require.NoError(t, err, "subscriber exited before receiving the message")
+		t.Fatal("subscriber exited before receiving the message")
+	case err := <-relayErrCh:
+		require.NoError(t, err, "relay exited before publishing the message")
+		t.Fatal("relay exited before publishing the message")
 	case <-time.After(20 * time.Second):
 		t.Fatal("timed out waiting for message from subscriber")
 	}
@@ -275,37 +330,44 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 8: Verify received message payload matches the original.
 	// ---------------------------------------------------------------
-	assert.Equal(t, entryID, got.ID, "event ID should match")
-	assert.Equal(t, "order-42", got.AggregateID, "aggregate ID should match")
-	assert.Equal(t, "order", got.AggregateType, "aggregate type should match")
-	assert.Equal(t, topic, got.EventType, "event type should match")
+	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+	assert.Equal(t, "order-42", got.entry.AggregateID, "aggregate ID should match")
+	assert.Equal(t, "order", got.entry.AggregateType, "aggregate type should match")
+	assert.Equal(t, topic, got.entry.EventType, "event type should match")
 	assert.JSONEq(t,
 		`{"orderId":"order-42","status":"created"}`,
-		string(got.Payload),
+		string(got.entry.Payload),
 		"payload should match original business event")
 
 	// The relay serialises the full outbox.Entry as the AMQP body, so
 	// metadata round-trips through JSON. The outbox writer should inject
 	// observability metadata from context before persistence, and the
-	// subscriber also injects a "topic" key.
-	assert.Equal(t, "integration-test", got.Metadata["source"],
+	// subscriber should restore those values into the consumer handler context.
+	assert.Equal(t, "integration-test", got.entry.Metadata["source"],
 		"business metadata should be preserved")
-	assert.Equal(t, "req-full-chain-001", got.Metadata["request_id"],
+	assert.Equal(t, "req-full-chain-001", got.entry.Metadata["request_id"],
 		"request_id should be injected from context")
-	assert.Equal(t, "corr-full-chain-001", got.Metadata["correlation_id"],
+	assert.Equal(t, "corr-full-chain-001", got.entry.Metadata["correlation_id"],
 		"correlation_id should be injected from context")
-	assert.Equal(t, "trace-full-chain-001", got.Metadata["trace_id"],
+	assert.Equal(t, "trace-full-chain-001", got.entry.Metadata["trace_id"],
 		"trace_id should survive the full chain")
+	assert.Equal(t, "req-full-chain-001", got.requestID,
+		"request_id should be restored into consumer handler context")
+	assert.Equal(t, "corr-full-chain-001", got.correlationID,
+		"correlation_id should be restored into consumer handler context")
+	assert.Equal(t, "trace-full-chain-001", got.traceID,
+		"trace_id should be restored into consumer handler context")
 
 	// ---------------------------------------------------------------
 	// Step 9: Verify the relay marked the outbox entry as published.
 	// ---------------------------------------------------------------
-	// Give the relay a moment to commit the UPDATE after publishing.
-	time.Sleep(500 * time.Millisecond)
-
-	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, "published", status, "outbox entry should have status='published' after relay")
+	require.Eventually(t, func() bool {
+		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
+		if queryErr != nil {
+			return false
+		}
+		return status == "published"
+	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
 
 	// ---------------------------------------------------------------
 	// Step 10: Verify idempotency semantics with IdempotencyClaimer.

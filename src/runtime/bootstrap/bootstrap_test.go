@@ -314,6 +314,9 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 
 func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	// Cell registers a handler → Router starts → bootstrap serves → ctx cancel → clean shutdown.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
 	asm := assembly.New(assembly.Config{ID: "test-router-ok"})
 	ec := newEventCell("ok-cell", nil) // nil error → registers 1 handler
 	require.NoError(t, asm.Register(ec))
@@ -323,7 +326,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
-		WithHTTPAddr("127.0.0.1:0"),
+		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -331,8 +334,16 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	// Give bootstrap time to start (Router + HTTP).
-	time.Sleep(time.Second)
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
 	cancel()
 
 	select {
