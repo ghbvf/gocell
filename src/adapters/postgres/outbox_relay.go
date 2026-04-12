@@ -237,6 +237,9 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 	if cfg.Metrics == nil {
 		cfg.Metrics = outbox.NoopRelayCollector{}
 	}
+	// Wrap in safe adapter: collector panics must not crash relay goroutines.
+	// ref: runtime/http/middleware/safe_observe.go — same pattern for HTTP metrics.
+	cfg.Metrics = &safeRelayCollector{inner: cfg.Metrics}
 
 	// Guard: ClaimTTL must exceed 2x PollInterval to prevent reclaimStale
 	// from reclaiming entries still being processed.

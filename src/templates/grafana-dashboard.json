@@ -65,8 +65,8 @@
       }
     },
     {
-      "title": "Outbox Relay Lag (Messages Pending)",
-      "description": "Number of messages pending in the outbox relay. High values indicate the relay is falling behind.",
+      "title": "Outbox Relay Throughput",
+      "description": "Relay processing rates by outcome. Shows published, retried, and dead-lettered message rates.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -81,14 +81,19 @@
       },
       "targets": [
         {
-          "expr": "sum(gocell_outbox_batch_size_sum{cell=\"${cell_id}\"}) - sum(gocell_outbox_relayed_total{cell=\"${cell_id}\"})",
-          "legendFormat": "throughput deficit",
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"published\"}[5m])",
+          "legendFormat": "published (msg/s)",
           "refId": "A"
         },
         {
-          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"published\"}[5m])",
-          "legendFormat": "relay rate (msg/s)",
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"retried\"}[5m])",
+          "legendFormat": "retried (msg/s)",
           "refId": "B"
+        },
+        {
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m])",
+          "legendFormat": "dead (msg/s)",
+          "refId": "C"
         }
       ],
       "fieldConfig": {
@@ -239,8 +244,8 @@
       }
     },
     {
-      "title": "Dead Letter Queue (DLQ) Count",
-      "description": "Messages routed to the dead letter queue. Non-zero values require investigation.",
+      "title": "Dead-Letter Event Volume",
+      "description": "Rate of messages entering the dead-letter state. Non-zero rates require investigation. Includes pollOnce failures only; reclaimStale dead transitions are tracked separately via gocell_outbox_reclaimed_total.",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -255,9 +260,14 @@
       },
       "targets": [
         {
-          "expr": "gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}",
-          "legendFormat": "DLQ messages",
+          "expr": "increase(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m])",
+          "legendFormat": "dead events (5m)",
           "refId": "A"
+        },
+        {
+          "expr": "increase(gocell_outbox_reclaimed_total{cell=\"${cell_id}\"}[5m])",
+          "legendFormat": "reclaimed (5m, may include dead)",
+          "refId": "B"
         }
       ],
       "fieldConfig": {
