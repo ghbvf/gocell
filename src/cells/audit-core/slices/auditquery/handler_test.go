@@ -71,6 +71,32 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	}
 }
 
+func TestHandleQuery_InvalidLimit(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	svc := NewService(repo, testCodec(), slog.Default())
+	h := NewHandler(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=abc", nil)
+	h.HandleQuery(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
+func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	svc := NewService(repo, testCodec(), slog.Default())
+	h := NewHandler(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
+	h.HandleQuery(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc := NewService(repo, testCodec(), slog.Default())

@@ -254,3 +254,155 @@ func TestOrderRepository_ListPaged_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, orders)
 }
+
+func TestOrderRepository_ListPaged_SortByItem(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "banana", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "apple", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "cherry", Status: "pending", CreatedAt: now})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "item", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 3)
+	assert.Equal(t, "apple", orders[0].Item)
+	assert.Equal(t, "banana", orders[1].Item)
+	assert.Equal(t, "cherry", orders[2].Item)
+}
+
+func TestOrderRepository_ListPaged_SortByStatus(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", Status: "pending", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", Status: "confirmed", CreatedAt: now})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "status", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 2)
+	assert.Equal(t, "confirmed", orders[0].Status)
+	assert.Equal(t, "pending", orders[1].Status)
+}
+
+func TestOrderRepository_ListPaged_UnknownField(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: now})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort:  []query.SortColumn{{Name: "unknown", Direction: query.SortASC}},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	assert.Len(t, orders, 2)
+}
+
+func TestOrderRepository_ListPaged_CursorPastEnd(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base})
+
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{base.Add(-24 * time.Hour).Format(time.RFC3339Nano), "000"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	assert.Empty(t, orders)
+}
+
+func TestOrderRepository_ListPaged_SortByItemDESC(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "apple", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "cherry", CreatedAt: now})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "item", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 2)
+	assert.Equal(t, "cherry", orders[0].Item)
+	assert.Equal(t, "apple", orders[1].Item)
+}
+
+func TestOrderRepository_ListPaged_CursorItemField(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "apple", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "banana", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "cherry", CreatedAt: now})
+
+	// Cursor after "banana", ASC -> only cherry
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"banana", "2"},
+		Sort: []query.SortColumn{
+			{Name: "item", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	assert.Equal(t, "cherry", orders[0].Item)
+}
+
+func TestOrderRepository_ListPaged_CursorStatusField(t *testing.T) {
+	repo := NewOrderRepository()
+	ctx := context.Background()
+	now := time.Now()
+
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", Status: "confirmed", CreatedAt: now})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", Status: "pending", CreatedAt: now})
+
+	// Cursor after "confirmed", ASC -> only pending
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"confirmed", "1"},
+		Sort: []query.SortColumn{
+			{Name: "status", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	orders, err := repo.List(ctx, params)
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	assert.Equal(t, "pending", orders[0].Status)
+}

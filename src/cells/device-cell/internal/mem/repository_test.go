@@ -311,3 +311,215 @@ func TestCommandRepository_Ack_SetsAckedAt(t *testing.T) {
 	require.NotNil(t, cmd.AckedAt)
 	assert.True(t, !cmd.AckedAt.Before(before) && !cmd.AckedAt.After(after))
 }
+
+func TestCommandRepository_ListPending_SortByPayload(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Now()
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "reboot", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "firmware-update", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c3", DeviceID: "dev-1", Payload: "shutdown", Status: "pending", CreatedAt: base,
+	})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "payload", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	require.Len(t, cmds, 3)
+	assert.Equal(t, "firmware-update", cmds[0].Payload)
+	assert.Equal(t, "reboot", cmds[1].Payload)
+	assert.Equal(t, "shutdown", cmds[2].Payload)
+}
+
+func TestCommandRepository_ListPending_SortByStatus(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Now()
+
+	// All pending (since ListPending filters), but we test the compareCommandField "status" branch
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending", CreatedAt: base,
+	})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "status", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	assert.Len(t, cmds, 2)
+}
+
+func TestCommandRepository_ListPending_SortByDeviceID(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Now()
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending", CreatedAt: base,
+	})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "device_id", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	assert.Len(t, cmds, 2)
+}
+
+func TestCommandRepository_ListPending_UnknownField(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending",
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending",
+	})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort:  []query.SortColumn{{Name: "unknown", Direction: query.SortASC}},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	assert.Len(t, cmds, 2)
+}
+
+func TestCommandRepository_ListPending_CursorPastEnd(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
+	})
+
+	// Cursor with time far in the future (ASC order) -> past all items
+	farFuture := base.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{farFuture, "zzz"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	assert.Empty(t, cmds)
+}
+
+func TestCommandRepository_ListPending_CursorPayloadField(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Now()
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "apple", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "banana", Status: "pending", CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c3", DeviceID: "dev-1", Payload: "cherry", Status: "pending", CreatedAt: base,
+	})
+
+	// Cursor after "banana", ASC -> only cherry
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{"banana", "c2"},
+		Sort: []query.SortColumn{
+			{Name: "payload", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	require.Len(t, cmds, 1)
+	assert.Equal(t, "cherry", cmds[0].Payload)
+}
+
+func TestCommandRepository_ListPending_SortDESC(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending",
+		CreatedAt: base,
+	})
+	_ = repo.Create(ctx, &domain.Command{
+		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending",
+		CreatedAt: base.Add(time.Hour),
+	})
+
+	params := query.ListParams{
+		Limit: 10,
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	require.Len(t, cmds, 2)
+	assert.Equal(t, "c2", cmds[0].ID) // newest first
+	assert.Equal(t, "c1", cmds[1].ID)
+}
+
+func TestCommandRepository_ListPending_CursorDESC(t *testing.T) {
+	ctx := context.Background()
+	repo := NewCommandRepository()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	for i := 0; i < 3; i++ {
+		_ = repo.Create(ctx, &domain.Command{
+			ID:        "c" + string(rune('1'+i)),
+			DeviceID:  "dev-1",
+			Payload:   "p",
+			Status:    "pending",
+			CreatedAt: base.Add(time.Duration(i) * time.Hour),
+		})
+	}
+
+	// DESC: c3, c2, c1. Cursor after c2.
+	cursorTime := base.Add(time.Hour).Format(time.RFC3339Nano)
+	params := query.ListParams{
+		Limit:        10,
+		CursorValues: []any{cursorTime, "c2"},
+		Sort: []query.SortColumn{
+			{Name: "created_at", Direction: query.SortDESC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	cmds, err := repo.ListPending(ctx, "dev-1", params)
+	require.NoError(t, err)
+	require.Len(t, cmds, 1)
+	assert.Equal(t, "c1", cmds[0].ID)
+}

@@ -100,6 +100,28 @@ func TestHandleEnqueue(t *testing.T) {
 	}
 }
 
+func TestHandleListPending_InvalidLimit(t *testing.T) {
+	h, _, _ := setupCommandHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=abc", nil)
+	req.SetPathValue("id", "dev-1")
+	h.HandleListPending(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
+func TestHandleListPending_ExceedsMaxLimit(t *testing.T) {
+	h, _, _ := setupCommandHandler()
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=501", nil)
+	req.SetPathValue("id", "dev-1")
+	h.HandleListPending(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
 func TestHandleListPending(t *testing.T) {
 	tests := []struct {
 		name       string

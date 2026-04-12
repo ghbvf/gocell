@@ -122,6 +122,28 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestHandler_HandleList_InvalidLimit(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/?limit=abc", nil)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
+func TestHandler_HandleList_ExceedsMaxLimit(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/?limit=501", nil)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+}
+
 func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	handler, repo := setupHandler()
 	keys := []string{"flag-a", "flag-b", "flag-c", "flag-d", "flag-e", "flag-f", "flag-g"}

@@ -127,6 +127,17 @@ func TestHandleList_WithLimit(t *testing.T) {
 	assert.NotEmpty(t, resp["nextCursor"])
 }
 
+func TestHandleList_InvalidLimit(t *testing.T) {
+	h, _ := newTestHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=abc", nil)
+
+	h.HandleList(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_VALIDATION_FAILED")
+}
+
 func TestHandleList_ExceedsMaxLimit(t *testing.T) {
 	h, _ := newTestHandler()
 	rec := httptest.NewRecorder()
