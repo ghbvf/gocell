@@ -125,26 +125,22 @@ func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValu
 // time.Time↔time.Time, time.Time↔string (parsed as RFC3339Nano).
 // All other combinations return ErrCursorInvalid.
 func CompareAny(a, b any) (int, error) {
+	a, b = normalizeNumeric(a), normalizeNumeric(b)
+
 	switch av := a.(type) {
 	case string:
 		if bv, ok := b.(string); ok {
 			return cmp.Compare(av, bv), nil
 		}
 		if bt, ok := b.(time.Time); ok {
-			return compareStringWithTime(av, bt)
+			at, err := parseTimeString(av)
+			if err != nil {
+				return 0, err
+			}
+			return at.Compare(bt), nil
 		}
 	case float64:
 		if bv, ok := b.(float64); ok {
-			return cmp.Compare(av, bv), nil
-		}
-		if bv, ok := b.(int); ok {
-			return cmp.Compare(av, float64(bv)), nil
-		}
-	case int:
-		if bv, ok := b.(float64); ok {
-			return cmp.Compare(float64(av), bv), nil
-		}
-		if bv, ok := b.(int); ok {
 			return cmp.Compare(av, bv), nil
 		}
 	case time.Time:
@@ -152,29 +148,32 @@ func CompareAny(a, b any) (int, error) {
 			return av.Compare(bt), nil
 		}
 		if bs, ok := b.(string); ok {
-			return compareTimeWithString(av, bs)
+			bt, err := parseTimeString(bs)
+			if err != nil {
+				return 0, err
+			}
+			return av.Compare(bt), nil
 		}
 	}
 
 	return 0, errcode.New(errcode.ErrCursorInvalid, "invalid cursor value")
 }
 
-// compareStringWithTime parses s as RFC3339Nano and compares with t.
-func compareStringWithTime(s string, t time.Time) (int, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return 0, errcode.New(errcode.ErrCursorInvalid,
-			fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", s, err))
+// normalizeNumeric converts int to float64 for uniform numeric comparison.
+// JSON decode produces float64, but Go struct fields often use int.
+func normalizeNumeric(v any) any {
+	if i, ok := v.(int); ok {
+		return float64(i)
 	}
-	return parsed.Compare(t), nil
+	return v
 }
 
-// compareTimeWithString parses s as RFC3339Nano and compares t with the result.
-func compareTimeWithString(t time.Time, s string) (int, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, s)
+// parseTimeString parses s as RFC3339Nano, returning ErrCursorInvalid on failure.
+func parseTimeString(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
-		return 0, errcode.New(errcode.ErrCursorInvalid,
+		return time.Time{}, errcode.New(errcode.ErrCursorInvalid,
 			fmt.Sprintf("cannot parse cursor value %q as timestamp: %v", s, err))
 	}
-	return t.Compare(parsed), nil
+	return t, nil
 }

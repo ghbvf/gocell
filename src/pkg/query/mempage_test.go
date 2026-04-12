@@ -69,13 +69,6 @@ func cmpFloat(a, b float64) int {
 	return 0
 }
 
-func mustCompare(t *testing.T, a, b any) int {
-	t.Helper()
-	v, err := query.CompareAny(a, b)
-	require.NoError(t, err)
-	return v
-}
-
 // --- Sort tests ---
 
 func TestSort_SingleColumn_ASC(t *testing.T) {
@@ -352,87 +345,86 @@ func TestApplyCursor_MismatchedCursorValuesLength_ReturnsError(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
-// --- CompareAny tests ---
+// --- CompareAny tests (table-driven) ---
 
-func TestCompareAny_StringVsString(t *testing.T) {
-	assert.Equal(t, -1, mustCompare(t, "a", "b"))
-	assert.Equal(t, 0, mustCompare(t, "x", "x"))
-	assert.Equal(t, 1, mustCompare(t, "z", "a"))
-}
-
-func TestCompareAny_Float64VsFloat64(t *testing.T) {
-	assert.Equal(t, -1, mustCompare(t, 1.0, 2.0))
-	assert.Equal(t, 0, mustCompare(t, 3.14, 3.14))
-	assert.Equal(t, 1, mustCompare(t, 9.9, 1.1))
-}
-
-func TestCompareAny_TimeVsTime(t *testing.T) {
-	t1 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	t2 := t1.Add(time.Nanosecond)
-
-	assert.Equal(t, -1, mustCompare(t, t1, t2))
-	assert.Equal(t, 0, mustCompare(t, t1, t1))
-	assert.Equal(t, 1, mustCompare(t, t2, t1))
-}
-
-func TestCompareAny_TimeVsString(t *testing.T) {
+func TestCompareAny(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 12, 0, 0, 100, time.UTC)
-	s := t1.Format(time.RFC3339Nano)
+	t2 := time.Date(2026, 6, 15, 8, 30, 0, 500, time.UTC)
 
-	// time.Time vs string(RFC3339Nano) — should compare equal
-	assert.Equal(t, 0, mustCompare(t, t1, s))
+	tests := []struct {
+		name string
+		a, b any
+		want int
+	}{
+		// string vs string
+		{"string < string", "a", "b", -1},
+		{"string == string", "x", "x", 0},
+		{"string > string", "z", "a", 1},
 
-	// time.Time earlier than string
-	earlier := t1.Add(-time.Second)
-	assert.Equal(t, -1, mustCompare(t, earlier, s))
+		// float64 vs float64
+		{"float64 < float64", 1.0, 2.0, -1},
+		{"float64 == float64", 3.14, 3.14, 0},
+		{"float64 > float64", 9.9, 1.1, 1},
 
-	// time.Time later than string
-	later := t1.Add(time.Second)
-	assert.Equal(t, 1, mustCompare(t, later, s))
+		// time vs time
+		{"time < time", t1, t1.Add(time.Nanosecond), -1},
+		{"time == time", t1, t1, 0},
+		{"time > time", t1.Add(time.Nanosecond), t1, 1},
+
+		// time vs string (cross-type)
+		{"time == string", t1, t1.Format(time.RFC3339Nano), 0},
+		{"time < string", t1.Add(-time.Second), t1.Format(time.RFC3339Nano), -1},
+		{"time > string", t1.Add(time.Second), t1.Format(time.RFC3339Nano), 1},
+
+		// string vs time (cross-type, reverse)
+		{"string == time", t2.Format(time.RFC3339Nano), t2, 0},
+		{"string < time", t2.Format(time.RFC3339Nano), t2.Add(time.Second), -1},
+		{"string > time", t2.Format(time.RFC3339Nano), t2.Add(-time.Second), 1},
+
+		// int vs float64 (normalized)
+		{"int < float64", 1, 2.0, -1},
+		{"int == float64", 3, 3.0, 0},
+		{"int > float64", 5, 2.0, 1},
+
+		// float64 vs int (normalized)
+		{"float64 < int", 1.0, 2, -1},
+		{"float64 == int", 3.0, 3, 0},
+		{"float64 > int", 5.0, 2, 1},
+
+		// int vs int (both normalized to float64)
+		{"int < int", 1, 2, -1},
+		{"int == int", 3, 3, 0},
+		{"int > int", 5, 2, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := query.CompareAny(tt.a, tt.b)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
-func TestCompareAny_StringVsTime(t *testing.T) {
-	t1 := time.Date(2026, 6, 15, 8, 30, 0, 500, time.UTC)
-	s := t1.Format(time.RFC3339Nano)
+func TestCompareAny_Error(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b any
+	}{
+		{"nil vs string", nil, "x"},
+		{"string vs nil", "x", nil},
+		{"bool vs bool", true, false},
+		{"float64 vs string", 1.0, "str"},
+		{"float64 vs time", 1.0, time.Now()},
+	}
 
-	assert.Equal(t, 0, mustCompare(t, s, t1))
-	assert.Equal(t, -1, mustCompare(t, s, t1.Add(time.Second)))
-	assert.Equal(t, 1, mustCompare(t, s, t1.Add(-time.Second)))
-}
-
-func TestCompareAny_IntVsFloat64(t *testing.T) {
-	assert.Equal(t, -1, mustCompare(t, 1, 2.0))
-	assert.Equal(t, 0, mustCompare(t, 3, 3.0))
-	assert.Equal(t, 1, mustCompare(t, 5, 2.0))
-}
-
-func TestCompareAny_Float64VsInt(t *testing.T) {
-	assert.Equal(t, -1, mustCompare(t, 1.0, 2))
-	assert.Equal(t, 0, mustCompare(t, 3.0, 3))
-	assert.Equal(t, 1, mustCompare(t, 5.0, 2))
-}
-
-func TestCompareAny_IntVsInt(t *testing.T) {
-	assert.Equal(t, -1, mustCompare(t, 1, 2))
-	assert.Equal(t, 0, mustCompare(t, 3, 3))
-	assert.Equal(t, 1, mustCompare(t, 5, 2))
-}
-
-func TestCompareAny_NilValue_ReturnsError(t *testing.T) {
-	_, err := query.CompareAny(nil, "x")
-	require.Error(t, err)
-
-	_, err = query.CompareAny("x", nil)
-	require.Error(t, err)
-}
-
-func TestCompareAny_UnsupportedType_ReturnsError(t *testing.T) {
-	_, err := query.CompareAny(true, false)
-	require.Error(t, err)
-
-	_, err = query.CompareAny(1.0, "str")
-	require.Error(t, err)
-
-	_, err = query.CompareAny(1.0, time.Now())
-	require.Error(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := query.CompareAny(tt.a, tt.b)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+		})
+	}
 }
