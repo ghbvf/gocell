@@ -93,18 +93,35 @@ type Router struct {
 }
 
 // New creates a Router with default middleware and optional configuration.
+// It panics if the configuration is invalid (e.g. bad trusted proxy entries).
+// Use NewE for an error-returning variant suitable for managed startup
+// sequences like Bootstrap.Run where rollback must be possible.
 //
 // Default middleware chain (applied in order):
 //
 //	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → Recovery → SecurityHeaders → BodyLimit
 //
-// Recorder creates the shared RecorderState at the chain head. Tracing sits
-// after Recorder (reusing its RecorderState) and before AccessLog (so trace_id
-// is available in log output). AccessLog and Metrics sit outside Recovery so
-// their post-ServeHTTP code always executes — even when Recovery catches a
-// panic and writes a 500 response. This ensures panic requests are visible in
-// both logs and metrics.
+// Infrastructure endpoints (/healthz, /readyz, /metrics) are registered after
+// the default middleware chain, so they are subject to the same observability
+// pipeline (tracing, access logging, metrics). This is intentional — probe
+// traffic is observable by default. To exclude probes from tracing, callers
+// can mount them on a separate chi.Mux without the default chain.
 func New(opts ...Option) *Router {
+	r, err := NewE(opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return r
+}
+
+// NewE creates a Router with default middleware and optional configuration.
+// Unlike New, it returns an error instead of panicking on invalid
+// configuration, making it suitable for Bootstrap.Run and other managed
+// startup sequences where rollback of already-started components is required.
+//
+// ref: gin-gonic/gin — SetTrustedProxies returns error at config time
+// ref: uber-go/fx — startup failures return error, trigger rollback
+func NewE(opts ...Option) (*Router, error) {
 	r := &Router{
 		mux:       chi.NewRouter(),
 		bodyLimit: middleware.DefaultBodyLimit,
@@ -121,7 +138,7 @@ func New(opts ...Option) *Router {
 	if len(r.trustedProxies) > 0 {
 		checker, err := middleware.ValidateTrustedProxies(r.trustedProxies)
 		if err != nil {
-			panic(fmt.Sprintf("router: invalid trusted proxy configuration: %v", err))
+			return nil, fmt.Errorf("router: invalid trusted proxy configuration: %w", err)
 		}
 		realIPMW = middleware.RealIPFromChecker(checker)
 	} else {
@@ -175,7 +192,7 @@ func New(opts ...Option) *Router {
 		}
 	}
 
-	return r
+	return r, nil
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.

@@ -283,22 +283,31 @@ func TestDefaultMiddlewareApplied(t *testing.T) {
 
 // --- Trusted proxy fail-fast validation ---
 
+func TestNewE_InvalidTrustedProxies_ReturnsError(t *testing.T) {
+	r, err := NewE(WithTrustedProxies([]string{"not-an-ip"}))
+	require.Error(t, err)
+	assert.Nil(t, r)
+	assert.Contains(t, err.Error(), "not-an-ip")
+	assert.Contains(t, err.Error(), "router")
+}
+
+func TestNewE_ValidTrustedProxies(t *testing.T) {
+	r, err := NewE(WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
+	require.NoError(t, err)
+	assert.NotNil(t, r)
+}
+
+func TestNewE_NilTrustedProxies(t *testing.T) {
+	r, err := NewE(WithTrustedProxies(nil))
+	require.NoError(t, err)
+	assert.NotNil(t, r)
+}
+
 func TestNew_InvalidTrustedProxies_Panics(t *testing.T) {
+	// New is the panic-wrapper over NewE — convenience for non-bootstrap callers.
 	assert.Panics(t, func() {
 		New(WithTrustedProxies([]string{"not-an-ip"}))
 	}, "router.New must panic when trusted proxies contain an invalid entry")
-}
-
-func TestNew_ValidTrustedProxies_NoPanic(t *testing.T) {
-	assert.NotPanics(t, func() {
-		New(WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
-	})
-}
-
-func TestNew_NilTrustedProxies_NoPanic(t *testing.T) {
-	assert.NotPanics(t, func() {
-		New(WithTrustedProxies(nil))
-	})
 }
 
 func TestNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {

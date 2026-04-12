@@ -12,7 +12,12 @@ import (
 // SpanRenamer). The http.route attribute carries the low-cardinality route
 // pattern for OTel semantic conventions compliance.
 //
+// Span status follows the otelhttp convention: 5xx responses mark the span
+// as error with the status text as description; 4xx and below leave the
+// span status unset (the status code attribute is always recorded).
+//
 // ref: otelchi — extracts chi RoutePattern for span name after routing
+// ref: otelhttp handler.go — span status set for 5xx, unset for 4xx
 // ref: OTel semantic conventions — http.route must be low-cardinality template
 //
 // When a RecorderState exists in the context (created by the Recorder
@@ -39,7 +44,14 @@ func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 			route := RoutePatternFromCtx(r.Context())
 			tracing.SpanSetName(span, r.Method+" "+route)
 			span.SetAttribute("http.route", route)
-			span.SetAttribute("http.status_code", state.Status())
+
+			status := state.Status()
+			span.SetAttribute("http.status_code", status)
+
+			// 5xx → error span; 4xx and below → unset (otelhttp convention).
+			if status >= 500 {
+				tracing.SpanSetStatus(span, true, http.StatusText(status))
+			}
 		})
 	}
 }

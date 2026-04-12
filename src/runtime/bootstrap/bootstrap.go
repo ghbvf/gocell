@@ -362,12 +362,20 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 5: Build router with health handler.
+	// Use NewE (error-returning) so that configuration errors (e.g. invalid
+	// trusted proxies) enter the rollback path instead of panicking past
+	// already-started components (assembly, config watcher, pub/sub).
+	//
+	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh := health.New(asm)
 	for _, hc := range b.healthCheckers {
 		hh.RegisterChecker(hc.name, health.Checker(hc.fn))
 	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
-	rtr := router.New(routerOpts...)
+	rtr, err := router.NewE(routerOpts...)
+	if err != nil {
+		return rollback(fmt.Errorf("bootstrap: %w", err))
+	}
 
 	// Step 5 continued: Register HTTP routes for cells implementing HTTPRegistrar.
 	for _, id := range asm.CellIDs() {

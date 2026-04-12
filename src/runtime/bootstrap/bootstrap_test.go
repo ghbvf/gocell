@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,6 +75,26 @@ func TestNew_WithTracer(t *testing.T) {
 	b := New(WithTracer(tracer))
 	// WithTracer forwards to router options, so routerOpts should contain one entry.
 	assert.Len(t, b.routerOpts, 1)
+}
+
+func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
+	// Invalid trusted proxies must return error (not panic), allowing
+	// Bootstrap.Run to roll back already-started components.
+	asm := assembly.New(assembly.Config{ID: "test-proxy-err"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not-valid")
+	assert.Contains(t, err.Error(), "trusted proxy")
 }
 
 func TestNew_WithConfig(t *testing.T) {
