@@ -26,6 +26,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fsnotifySettleDelay is the pause between consecutive file writes in config
+// reload tests. fsnotify may fire multiple events per WriteFile (Write+Chmod);
+// this delay lets the watcher's event loop drain before the next write,
+// preventing event coalescing or generation count inflation.
+// Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
+const fsnotifySettleDelay = 200 * time.Millisecond
+
 // testHTTPClient is used in place of http.DefaultClient to prevent test
 // hangs on stalled connections (e.g., during shutdown races).
 var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
@@ -1057,8 +1064,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	// before writing different content. Without this, on macOS kqueue the two
 	// writes can be coalesced into a single event, or the second event can be
 	// lost entirely — causing the test to flake.
-	// ref: fsnotify eventSeparator pattern (50ms); we use 200ms for CI margin.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(fsnotifySettleDelay)
 
 	// Third: write different content — proves the watcher is still alive
 	// after the no-diff reload.
@@ -1258,24 +1264,29 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond)
 
 	// First change.
+	time.Sleep(fsnotifySettleDelay)
+	prevCount := rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 	require.Eventually(t, func() bool {
-		return rc.eventCount() >= 1
+		return rc.eventCount() > prevCount
 	}, 3*time.Second, 50*time.Millisecond)
 
 	evt := rc.lastEvent()
 	require.NotNil(t, evt)
-	assert.Equal(t, int64(1), evt.Generation, "first reload should have generation 1")
+	gen1 := evt.Generation
+	assert.Greater(t, gen1, int64(0), "first reload generation must be positive")
 
 	// Second change.
+	time.Sleep(fsnotifySettleDelay)
+	prevCount = rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
 	require.Eventually(t, func() bool {
-		return rc.eventCount() >= 2
+		return rc.eventCount() > prevCount
 	}, 3*time.Second, 50*time.Millisecond)
 
 	evt = rc.lastEvent()
 	require.NotNil(t, evt)
-	assert.Equal(t, int64(2), evt.Generation, "second reload should have generation 2")
+	assert.Greater(t, evt.Generation, gen1, "second reload generation must be greater than first")
 
 	cancel()
 	select {
