@@ -27,7 +27,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -coverprofile=coverage.out ./... -count=1 -timeout 5m
+        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
 
       - name: Validate metadata
         run: go run ./cmd/gocell validate
@@ -66,6 +66,8 @@ jobs:
           go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
           awk '
             /coverage: \[no statements\]/ { next }
+            /outboxtest/ { next }
+            /celltest/ { next }
             /coverage:/ {
               cov = $0
               sub(/^.*coverage: /, "", cov)
