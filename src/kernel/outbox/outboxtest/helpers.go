@@ -215,7 +215,6 @@ type pubSubHarness struct {
 	T       *testing.T
 	Pub     outbox.Publisher
 	Sub     outbox.Subscriber
-	Ctx     context.Context
 	Topic   string
 	done    chan struct{}
 	once    sync.Once
@@ -231,7 +230,6 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 		T:       t,
 		Pub:     pub,
 		Sub:     sub,
-		Ctx:     context.Background(),
 		Topic:   TestTopic(t),
 		done:    make(chan struct{}),
 		subDone: make(chan struct{}),
@@ -239,15 +237,15 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 }
 
 // subscribe launches a Subscribe goroutine with the given handler and waits
-// for registration. The handler receives a subCtx derived from the harness.
+// for registration.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
-	subCtx, cancel := context.WithCancel(h.Ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
 	go func() {
 		defer close(h.subDone)
-		_ = h.Sub.Subscribe(subCtx, h.Topic, handler)
+		_ = h.Sub.Subscribe(ctx, h.Topic, handler)
 	}()
 	time.Sleep(subscribeInitDelay)
 }
@@ -255,7 +253,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 // publishAndWait publishes payload and blocks until signalDone or timeout.
 func (h *pubSubHarness) publishAndWait(payload []byte) {
 	h.T.Helper()
-	assertNoError(h.T, h.Pub.Publish(h.Ctx, h.Topic, payload))
+	assertNoError(h.T, h.Pub.Publish(context.Background(), h.Topic, payload))
 	select {
 	case <-h.done:
 	case <-time.After(defaultTimeout):

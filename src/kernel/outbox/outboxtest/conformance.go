@@ -15,6 +15,15 @@ import (
 // defaultTimeout is the base timeout for subscribe/collect operations.
 const defaultTimeout = 10 * time.Second
 
+// Skip message constants to avoid SonarCloud string duplication warnings.
+const (
+	skipNoReject  = "implementation does not support reject"
+	skipNoReceipt = "implementation does not support receipt"
+)
+
+// testEntryID is the canonical entry ID used in pure-function tests.
+const testEntryID = "test-1"
+
 // subscribeInitDelay is the time to wait after launching a Subscribe goroutine
 // for the subscription to register internally. This is a fixed constant;
 // adapter implementations with slower initialization should use a wrapper
@@ -333,7 +342,7 @@ func testDispositionRequeue(t *testing.T, features Features, constructor PubSubC
 
 func testDispositionReject(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.SupportsReject {
-		t.Skip("implementation does not support reject")
+		t.Skip(skipNoReject)
 	}
 
 	h := newHarness(t, constructor)
@@ -383,7 +392,7 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 
 func testPermanentErrorCausesReject(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.SupportsReject {
-		t.Skip("implementation does not support reject")
+		t.Skip(skipNoReject)
 	}
 
 	h := newHarness(t, constructor)
@@ -410,7 +419,7 @@ func testWrapLegacyHandlerSuccess(t *testing.T) {
 	legacy := func(_ context.Context, _ outbox.Entry) error { return nil }
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: "test-1"})
+	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionAck, res.Disposition)
 	assertTrue(t, res.Err == nil, "expected nil error")
 }
@@ -421,7 +430,7 @@ func testWrapLegacyHandlerTransientError(t *testing.T) {
 	}
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: "test-1"})
+	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionRequeue, res.Disposition)
 	assertTrue(t, res.Err != nil, "expected non-nil error")
 }
@@ -432,7 +441,7 @@ func testWrapLegacyHandlerPermanentError(t *testing.T) {
 	}
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: "test-1"})
+	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionReject, res.Disposition)
 	assertTrue(t, res.Err != nil, "expected non-nil error")
 
@@ -446,7 +455,7 @@ func testWrapLegacyHandlerPermanentError(t *testing.T) {
 
 func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.SupportsReceipt {
-		t.Skip("implementation does not support receipt")
+		t.Skip(skipNoReceipt)
 	}
 
 	h := newHarness(t, constructor)
@@ -466,10 +475,10 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 
 func testReceiptReleasedOnReject(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.SupportsReceipt {
-		t.Skip("implementation does not support receipt")
+		t.Skip(skipNoReceipt)
 	}
 	if !features.SupportsReject {
-		t.Skip("implementation does not support reject")
+		t.Skip(skipNoReject)
 	}
 
 	h := newHarness(t, constructor)
@@ -493,7 +502,7 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 
 func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor PubSubConstructor) {
 	if !features.SupportsReceipt {
-		t.Skip("implementation does not support receipt")
+		t.Skip(skipNoReceipt)
 	}
 	if !features.SupportsRequeue {
 		t.Skip("implementation does not support requeue")
