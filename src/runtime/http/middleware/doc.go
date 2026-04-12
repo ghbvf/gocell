@@ -11,6 +11,7 @@
 //   - SecurityHeaders: sets secure default HTTP headers
 //   - BodyLimit: enforces a maximum request body size
 //   - RateLimit: token-bucket rate limiting per client IP
+//   - CircuitBreaker: three-state circuit breaker for upstream protection
 //   - CSRF: validates request origin via Sec-Fetch-Site, Origin, and Referer headers
 //   - CookieSession: BFF cookie session with signed JWT encapsulation
 //

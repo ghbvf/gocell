@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -98,6 +99,27 @@ func WithRouterOptions(opts ...router.Option) Option {
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
+	}
+}
+
+// WithRateLimiter enables per-IP rate limiting for HTTP requests. The limiter
+// is forwarded to the router's middleware chain via router.WithRateLimiter.
+//
+// ref: go-zero — rate limiting configuration at app level
+func WithRateLimiter(rl middleware.RateLimiter) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
+	}
+}
+
+// WithCircuitBreaker enables circuit breaker protection for HTTP requests.
+// The breaker is forwarded to the router's middleware chain via
+// router.WithCircuitBreaker.
+//
+// ref: go-zero — resilience middleware configuration at app level
+func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
 	}
 }
 

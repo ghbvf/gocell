@@ -235,6 +235,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
 
 	// --- 503 Service Unavailable ---
+	errcode.ErrCircuitOpen:     http.StatusServiceUnavailable,
 	errcode.ErrWSHubStopping:   http.StatusServiceUnavailable,
 	errcode.ErrWSHubNotRunning: http.StatusServiceUnavailable,
 	errcode.ErrWSMaxConns:      http.StatusServiceUnavailable,

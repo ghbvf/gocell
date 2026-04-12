@@ -430,3 +430,100 @@ func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
 		"metrics must record panic request as 500 even with tracing in chain")
 }
+
+// --- Rate limiter wiring ---
+
+// routerTestLimiter is a minimal RateLimiter for router integration tests.
+type routerTestLimiter struct {
+	allow bool
+	keys  []string
+}
+
+func (l *routerTestLimiter) Allow(key string) bool {
+	l.keys = append(l.keys, key)
+	return l.allow
+}
+
+func TestWithRateLimiter_InDefaultChain(t *testing.T) {
+	limiter := &routerTestLimiter{allow: true}
+	r := New(WithRateLimiter(limiter))
+	r.Handle("/rl-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rl-test", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEmpty(t, limiter.keys, "rate limiter must be invoked in default chain")
+}
+
+func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
+	limiter := &routerTestLimiter{allow: false}
+	r := New(WithRateLimiter(limiter))
+	r.Handle("/rl-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called when rate limited")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/rl-reject", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_RATE_LIMITED", errObj["code"])
+}
+
+// --- Circuit breaker wiring ---
+
+// routerTestBreaker is a minimal CircuitBreakerPolicy for router integration tests.
+type routerTestBreaker struct {
+	allowErr error
+	called   bool
+}
+
+func (b *routerTestBreaker) Allow() (func(bool), error) {
+	b.called = true
+	if b.allowErr != nil {
+		return nil, b.allowErr
+	}
+	return func(bool) {}, nil
+}
+
+func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
+	breaker := &routerTestBreaker{}
+	r := New(WithCircuitBreaker(breaker))
+	r.Handle("/cb-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/cb-test", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, breaker.called, "circuit breaker must be invoked in default chain")
+}
+
+func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("circuit breaker is open")}
+	r := New(WithCircuitBreaker(breaker))
+	r.Handle("/cb-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called when circuit is open")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/cb-reject", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+}

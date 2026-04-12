@@ -69,6 +69,37 @@ func WithTracer(t tracing.Tracer) Option {
 	}
 }
 
+// WithRateLimiter enables per-IP rate limiting in the default middleware chain.
+// When provided, the rate limiter is placed after AccessLog (so rejected
+// requests are logged) and before Metrics (so rejections are counted).
+// Requests that exceed the rate are rejected with 429 Too Many Requests.
+//
+// The RateLimiter interface is defined in runtime/http/middleware. Use
+// adapters/ratelimit.New() for a token-bucket implementation.
+//
+// ref: go-zero — rate limiting as default middleware when configured
+func WithRateLimiter(rl middleware.RateLimiter) Option {
+	return func(r *Router) {
+		r.rateLimiter = rl
+	}
+}
+
+// WithCircuitBreaker enables a circuit breaker in the default middleware chain.
+// When provided, the circuit breaker is placed after the rate limiter and
+// before Metrics, protecting downstream handlers from cascade failures.
+// When the circuit opens, requests are rejected with 503 Service Unavailable.
+//
+// The CircuitBreakerPolicy interface is defined in runtime/http/middleware.
+// Use adapters/circuitbreaker.New() for a sony/gobreaker implementation.
+//
+// ref: go-zero — circuit breaker as default middleware when configured
+// ref: go-kit/kit circuitbreaker — middleware wrapping pattern
+func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
+	return func(r *Router) {
+		r.circuitBreaker = cb
+	}
+}
+
 // WithTrustedProxies configures the set of trusted proxy IPs/CIDRs for
 // X-Forwarded-For header processing. Supports both exact IPs ("192.168.1.1")
 // and CIDR notation ("10.0.0.0/8"). When nil (default), no proxy is trusted
@@ -88,6 +119,8 @@ type Router struct {
 	metricsCollector metrics.Collector
 	metricsHandler   http.Handler
 	tracer           tracing.Tracer
+	rateLimiter      middleware.RateLimiter
+	circuitBreaker   middleware.CircuitBreakerPolicy
 	bodyLimit        int64
 	trustedProxies   []string
 }
@@ -99,7 +132,7 @@ type Router struct {
 //
 // Default middleware chain (applied in order):
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → Recovery → SecurityHeaders → BodyLimit
+//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [RateLimit] → [CircuitBreaker] → [Metrics] → Recovery → SecurityHeaders → BodyLimit
 //
 // Infrastructure endpoints (/healthz, /readyz, /metrics) are registered after
 // the default middleware chain, so they are subject to the same observability
@@ -160,6 +193,18 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 
 	r.mux.Use(middleware.AccessLog)
+
+	// Rate limiter (if configured) — after AccessLog so rejected requests
+	// are logged, after RealIP so the limiter sees the real client IP.
+	if r.rateLimiter != nil {
+		r.mux.Use(middleware.RateLimit(r.rateLimiter))
+	}
+
+	// Circuit breaker (if configured) — after RateLimit (rate-limited
+	// requests don't count toward breaker failures), before Recovery.
+	if r.circuitBreaker != nil {
+		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
+	}
 
 	// Metrics (if configured) — must be before Recovery so panic
 	// requests are recorded as status 500.
