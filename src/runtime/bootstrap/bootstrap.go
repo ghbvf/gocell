@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -87,6 +88,16 @@ func WithSubscriber(s outbox.Subscriber) Option {
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, opts...)
+	}
+}
+
+// WithTracer enables distributed tracing for HTTP requests. The tracer is
+// forwarded to the router's middleware chain via router.WithTracer.
+//
+// ref: go-zero — observability configuration at app level
+func WithTracer(t tracing.Tracer) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
 	}
 }
 

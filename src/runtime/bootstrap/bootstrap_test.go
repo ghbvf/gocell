@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,6 +67,13 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
+}
+
+func TestNew_WithTracer(t *testing.T) {
+	tracer := tracing.NewTracer("bootstrap-test")
+	b := New(WithTracer(tracer))
+	// WithTracer forwards to router options, so routerOpts should contain one entry.
+	assert.Len(t, b.routerOpts, 1)
 }
 
 func TestNew_WithConfig(t *testing.T) {

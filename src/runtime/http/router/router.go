@@ -9,6 +9,7 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -17,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // Compile-time check: Router implements cell.RouteMux.
@@ -54,6 +56,19 @@ func WithBodyLimit(maxBytes int64) Option {
 	}
 }
 
+// WithTracer enables distributed tracing middleware using the given Tracer.
+// When provided, each request gets a trace span with trace_id and span_id
+// propagated through context. The tracing middleware is placed after Recorder
+// and before AccessLog so trace IDs appear in access logs.
+//
+// ref: go-zero — observability wired by default when configured
+// ref: otelchi — chi middleware for OpenTelemetry trace propagation
+func WithTracer(t tracing.Tracer) Option {
+	return func(r *Router) {
+		r.tracer = t
+	}
+}
+
 // WithTrustedProxies configures the set of trusted proxy IPs/CIDRs for
 // X-Forwarded-For header processing. Supports both exact IPs ("192.168.1.1")
 // and CIDR notation ("10.0.0.0/8"). When nil (default), no proxy is trusted
@@ -72,6 +87,7 @@ type Router struct {
 	healthHandler    *health.Handler
 	metricsCollector metrics.Collector
 	metricsHandler   http.Handler
+	tracer           tracing.Tracer
 	bodyLimit        int64
 	trustedProxies   []string
 }
@@ -80,12 +96,14 @@ type Router struct {
 //
 // Default middleware chain (applied in order):
 //
-//	RequestID → RealIP → Recorder → AccessLog → [Metrics] → Recovery → SecurityHeaders → BodyLimit
+//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → Recovery → SecurityHeaders → BodyLimit
 //
-// Recorder creates the shared RecorderState at the chain head. AccessLog and
-// Metrics sit outside Recovery so their post-ServeHTTP code always executes —
-// even when Recovery catches a panic and writes a 500 response. This ensures
-// panic requests are visible in both logs and metrics.
+// Recorder creates the shared RecorderState at the chain head. Tracing sits
+// after Recorder (reusing its RecorderState) and before AccessLog (so trace_id
+// is available in log output). AccessLog and Metrics sit outside Recovery so
+// their post-ServeHTTP code always executes — even when Recovery catches a
+// panic and writes a 500 response. This ensures panic requests are visible in
+// both logs and metrics.
 func New(opts ...Option) *Router {
 	r := &Router{
 		mux:       chi.NewRouter(),
@@ -95,14 +113,31 @@ func New(opts ...Option) *Router {
 		o(r)
 	}
 
+	// Fail-fast: reject invalid trusted proxy configuration at construction
+	// time rather than silently misconfiguring IP extraction at request time.
+	//
+	// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
+	if len(r.trustedProxies) > 0 {
+		if err := middleware.ValidateTrustedProxies(r.trustedProxies); err != nil {
+			panic(fmt.Sprintf("router: invalid trusted proxy configuration: %v", err))
+		}
+	}
+
 	// Default middleware chain — Recorder before AccessLog/Metrics,
 	// Recovery after them so panic-recovered 500s are observable.
 	r.mux.Use(
 		middleware.RequestID,
 		middleware.RealIP(r.trustedProxies),
 		middleware.Recorder,
-		middleware.AccessLog,
 	)
+
+	// Tracing (if configured) — after Recorder so it reuses RecorderState,
+	// before AccessLog so trace_id is available in log output.
+	if r.tracer != nil {
+		r.mux.Use(middleware.Tracing(r.tracer))
+	}
+
+	r.mux.Use(middleware.AccessLog)
 
 	// Metrics (if configured) — must be before Recovery so panic
 	// requests are recorded as status 500.

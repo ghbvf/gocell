@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRealIP(t *testing.T) {
@@ -256,4 +257,72 @@ func TestRealIP(t *testing.T) {
 			assert.Equal(t, tt.wantIP, gotIP)
 		})
 	}
+}
+
+func TestNewProxyCheckerStrict(t *testing.T) {
+	tests := []struct {
+		name    string
+		proxies []string
+		wantErr string // substring expected in error; empty = no error
+	}{
+		{
+			name:    "valid IP accepted",
+			proxies: []string{"192.168.1.1"},
+		},
+		{
+			name:    "valid CIDR accepted",
+			proxies: []string{"10.0.0.0/8"},
+		},
+		{
+			name:    "mixed valid IP and CIDR accepted",
+			proxies: []string{"192.168.1.1", "10.0.0.0/8", "fd00::/8"},
+		},
+		{
+			name:    "nil proxies accepted",
+			proxies: nil,
+		},
+		{
+			name:    "empty slice accepted",
+			proxies: []string{},
+		},
+		{
+			name:    "invalid entry rejected",
+			proxies: []string{"not-an-ip"},
+			wantErr: "not-an-ip",
+		},
+		{
+			name:    "valid and invalid mixed: error on invalid",
+			proxies: []string{"192.168.1.1", "garbage"},
+			wantErr: "garbage",
+		},
+		{
+			name:    "invalid CIDR mask rejected",
+			proxies: []string{"192.168.1.0/33"},
+			wantErr: "192.168.1.0/33",
+		},
+		{
+			name:    "empty string entry rejected",
+			proxies: []string{""},
+			wantErr: "empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pc, err := newProxyCheckerStrict(tt.proxies)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Nil(t, pc)
+			} else {
+				require.NoError(t, err)
+				assert.NotNil(t, pc)
+			}
+		})
+	}
+}
+
+func TestValidateTrustedProxies(t *testing.T) {
+	assert.NoError(t, ValidateTrustedProxies(nil))
+	assert.NoError(t, ValidateTrustedProxies([]string{"10.0.0.0/8", "192.168.1.1"}))
+	assert.Error(t, ValidateTrustedProxies([]string{"bad-entry"}))
 }

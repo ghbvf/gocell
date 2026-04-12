@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -35,6 +36,38 @@ func newProxyChecker(proxies []string) *proxyChecker {
 		}
 	}
 	return pc
+}
+
+// newProxyCheckerStrict is like newProxyChecker but returns an error for any
+// entry that is not a valid IP address or CIDR notation. Used at configuration
+// time (router construction) for fail-fast validation.
+//
+// ref: gin-gonic/gin — SetTrustedProxies returns error on invalid entries
+func newProxyCheckerStrict(proxies []string) (*proxyChecker, error) {
+	pc := &proxyChecker{exact: make(map[string]bool, len(proxies))}
+	for _, p := range proxies {
+		if p == "" {
+			return nil, fmt.Errorf("trusted proxy entry is empty")
+		}
+		if _, cidr, err := net.ParseCIDR(p); err == nil {
+			pc.cidrs = append(pc.cidrs, cidr)
+		} else if parsed := net.ParseIP(p); parsed != nil {
+			pc.exact[parsed.String()] = true
+		} else {
+			return nil, fmt.Errorf("trusted proxy %q is not a valid IP or CIDR", p)
+		}
+	}
+	return pc, nil
+}
+
+// ValidateTrustedProxies checks that every entry in proxies is a valid IP
+// address or CIDR notation. Returns a descriptive error for the first invalid
+// entry. Used by router.New() for fail-fast validation at construction time.
+//
+// ref: gin-gonic/gin — SetTrustedProxies validates eagerly at config time
+func ValidateTrustedProxies(proxies []string) error {
+	_, err := newProxyCheckerStrict(proxies)
+	return err
 }
 
 func (pc *proxyChecker) empty() bool {
