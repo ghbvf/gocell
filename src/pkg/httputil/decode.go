@@ -27,11 +27,12 @@ func DecodeJSON(r *http.Request, dst any) error {
 }
 
 // DecodeJSONStrict is like DecodeJSON but rejects unknown fields.
+// All errors documented on DecodeJSON apply, plus the unknown field error:
+//
+//   - unknown field → ErrValidationFailed, details: {"reason": "unknown field", "field": ...}
+//
 // When the destination is a struct, any JSON key that does not match
-// a non-ignored exported field causes a 400 error with details:
-//
-//	{"reason": "unknown field", "field": "<name>"}
-//
+// a non-ignored exported field causes a 400 error.
 // Map destinations are unaffected — they accept any key regardless.
 func DecodeJSONStrict(r *http.Request, dst any) error {
 	return decodeJSON(r, dst, true)

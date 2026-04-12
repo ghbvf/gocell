@@ -36,8 +36,10 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"id":     order.ID,
-		"item":   order.Item,
-		"status": order.Status,
+		"data": map[string]any{
+			"id":     order.ID,
+			"item":   order.Item,
+			"status": order.Status,
+		},
 	})
 }

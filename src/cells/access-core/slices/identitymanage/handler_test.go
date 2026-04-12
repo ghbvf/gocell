@@ -112,6 +112,32 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
+	r := setup()
+
+	// Create a user first
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+
+	// PATCH with unknown field should succeed (merge patch accepts any key)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code, "PATCH uses DecodeJSON (not strict); unknown fields must be accepted for merge patch semantics")
+}
+
 func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	r := setup()
 

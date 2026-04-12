@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased] - Decode 严格化 + 回归锁定
 
-> PR: #87 (pending)
+> PR: #89
 > Scope: SF-01/SF-02/SF-03/SF-04/HT-01/HT-02
 
 ### Breaking
