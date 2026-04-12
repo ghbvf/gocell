@@ -7,6 +7,11 @@ endpoints:
   server: access-core
   clients:
     - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/users
+    successStatus: 201
+    noContent: false
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

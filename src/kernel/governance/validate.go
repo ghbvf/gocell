@@ -37,7 +37,7 @@ const (
 
 // ValidationResult represents a single validation finding.
 type ValidationResult struct {
-	Code      string    // e.g., "REF-01", "TOPO-03"
+	Code      string // e.g., "REF-01", "TOPO-03"
 	Severity  Severity
 	IssueType IssueType
 	File      string // YAML file path
@@ -48,10 +48,10 @@ type ValidationResult struct {
 // Validator runs all validation rules against a parsed project.
 type Validator struct {
 	project    *metadata.ProjectMeta
-	root       string                   // project root for file existence checks
-	now        func() time.Time         // clock function (injectable for tests)
-	fileExists func(path string) bool   // file existence check (injectable for tests)
-	actorSet   map[string]bool          // pre-built set of external actor IDs
+	root       string                 // project root for file existence checks
+	now        func() time.Time       // clock function (injectable for tests)
+	fileExists func(path string) bool // file existence check (injectable for tests)
+	actorSet   map[string]bool        // pre-built set of external actor IDs
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -134,6 +134,7 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT10()...)
 	results = append(results, v.validateFMT11()...)
 	results = append(results, v.validateFMT12()...)
+	results = append(results, v.validateFMT13()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)

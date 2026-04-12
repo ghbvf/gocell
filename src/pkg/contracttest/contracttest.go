@@ -16,8 +16,10 @@
 package contracttest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,11 +37,20 @@ type Contract struct {
 	OwnerCell        string
 	ConsistencyLevel string
 	Dir              string // absolute path to the contract version directory
+	HTTP             *HTTPTransport
 
 	requestSchema  *jsonschema.Schema
 	responseSchema *jsonschema.Schema
 	payloadSchema  *jsonschema.Schema
 	headersSchema  *jsonschema.Schema
+}
+
+// HTTPTransport holds optional transport metadata for migrated HTTP contracts.
+type HTTPTransport struct {
+	Method        string
+	Path          string
+	SuccessStatus int
+	NoContent     bool
 }
 
 // contractYAML is a local struct for parsing contract.yaml without
@@ -49,7 +60,19 @@ type contractYAML struct {
 	Kind             string         `yaml:"kind"`
 	OwnerCell        string         `yaml:"ownerCell"`
 	ConsistencyLevel string         `yaml:"consistencyLevel"`
+	Endpoints        endpointsYAML  `yaml:"endpoints"`
 	SchemaRefs       schemaRefsYAML `yaml:"schemaRefs"`
+}
+
+type endpointsYAML struct {
+	HTTP *httpTransportYAML `yaml:"http,omitempty"`
+}
+
+type httpTransportYAML struct {
+	Method        string `yaml:"method"`
+	Path          string `yaml:"path"`
+	SuccessStatus int    `yaml:"successStatus"`
+	NoContent     bool   `yaml:"noContent"`
 }
 
 type schemaRefsYAML struct {
@@ -95,6 +118,7 @@ func Load(t testing.TB, contractDir string) *Contract {
 		OwnerCell:        cy.OwnerCell,
 		ConsistencyLevel: cy.ConsistencyLevel,
 		Dir:              contractDir,
+		HTTP:             newHTTPTransport(cy.Endpoints.HTTP),
 	}
 
 	c.requestSchema = compileSchemaFile(t, contractDir, cy.SchemaRefs.Request)
@@ -138,6 +162,38 @@ func (c *Contract) ValidatePayload(t testing.TB, jsonData []byte) {
 func (c *Contract) ValidateHeaders(t testing.TB, jsonData []byte) {
 	t.Helper()
 	validateJSON(t, c.headersSchema, jsonData, "headers")
+}
+
+// ValidateHTTPResponseRecorder validates an HTTP provider response against the
+// migrated transport metadata and, when applicable, the response schema.
+func (c *Contract) ValidateHTTPResponseRecorder(t testing.TB, recorder *httptest.ResponseRecorder) {
+	t.Helper()
+	if c.HTTP == nil {
+		t.Errorf("contracttest: contract %q has no endpoints.http metadata", c.ID)
+		return
+	}
+	if recorder == nil {
+		t.Errorf("contracttest: ValidateHTTPResponseRecorder: nil recorder")
+		return
+	}
+	if recorder.Code != c.HTTP.SuccessStatus {
+		t.Errorf("contracttest: expected HTTP status %d, got %d", c.HTTP.SuccessStatus, recorder.Code)
+	}
+	body := recorder.Body.Bytes()
+	if c.HTTP.NoContent {
+		if len(body) != 0 {
+			t.Errorf("contracttest: expected empty body for no-content contract %q, got %s", c.ID, string(body))
+		}
+		return
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		if c.responseSchema != nil {
+			t.Errorf("contracttest: expected response body for contract %q", c.ID)
+		}
+		return
+	}
+	c.ValidateResponse(t, body)
 }
 
 // MustRejectRequest asserts that jsonData is rejected by the request schema.
@@ -259,4 +315,16 @@ func formatValidationErrorDetail(ve *jsonschema.ValidationError, indent string) 
 		sb.WriteString(formatValidationErrorDetail(cause, indent+"  "))
 	}
 	return sb.String()
+}
+
+func newHTTPTransport(meta *httpTransportYAML) *HTTPTransport {
+	if meta == nil {
+		return nil
+	}
+	return &HTTPTransport{
+		Method:        meta.Method,
+		Path:          meta.Path,
+		SuccessStatus: meta.SuccessStatus,
+		NoContent:     meta.NoContent,
+	}
 }

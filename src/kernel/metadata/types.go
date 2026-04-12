@@ -4,13 +4,13 @@ package metadata
 
 // CellMeta maps to cells/{id}/cell.yaml.
 type CellMeta struct {
-	ID               string        `yaml:"id"`
-	Type             string        `yaml:"type"`             // "core"|"edge"|"support"
-	ConsistencyLevel string        `yaml:"consistencyLevel"` // "L0"-"L4"
-	Owner            OwnerMeta     `yaml:"owner"`
-	Schema           SchemaMeta    `yaml:"schema"`
+	ID               string         `yaml:"id"`
+	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
+	ConsistencyLevel string         `yaml:"consistencyLevel"` // "L0"-"L4"
+	Owner            OwnerMeta      `yaml:"owner"`
+	Schema           SchemaMeta     `yaml:"schema"`
 	Verify           CellVerifyMeta `yaml:"verify"`
-	L0Dependencies   []L0DepMeta   `yaml:"l0Dependencies"`
+	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
 }
 
 // OwnerMeta identifies the team responsible for a Cell or Journey.
@@ -68,10 +68,10 @@ type WaiverMeta struct {
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
 	ID                string         `yaml:"id"`
-	Kind              string         `yaml:"kind"`                        // http|event|command|projection
+	Kind              string         `yaml:"kind"` // http|event|command|projection
 	OwnerCell         string         `yaml:"ownerCell"`
 	ConsistencyLevel  string         `yaml:"consistencyLevel"`
-	Lifecycle         string         `yaml:"lifecycle"`                   // draft|active|deprecated
+	Lifecycle         string         `yaml:"lifecycle"` // draft|active|deprecated
 	Endpoints         EndpointsMeta  `yaml:"endpoints"`
 	SchemaRefs        SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
 	Replayable        *bool          `yaml:"replayable,omitempty"`
@@ -101,8 +101,9 @@ func (c *ContractMeta) ProviderEndpoint() string {
 // Only the fields relevant to the contract's Kind are populated.
 type EndpointsMeta struct {
 	// HTTP
-	Server  string   `yaml:"server,omitempty"`
-	Clients []string `yaml:"clients,omitempty"`
+	Server  string             `yaml:"server,omitempty"`
+	Clients []string           `yaml:"clients,omitempty"`
+	HTTP    *HTTPTransportMeta `yaml:"http,omitempty"`
 	// Event
 	Publisher   string   `yaml:"publisher,omitempty"`
 	Subscribers []string `yaml:"subscribers,omitempty"`
@@ -112,6 +113,15 @@ type EndpointsMeta struct {
 	// Projection
 	Provider string   `yaml:"provider,omitempty"`
 	Readers  []string `yaml:"readers,omitempty"`
+}
+
+// HTTPTransportMeta holds transport-level details for migrated HTTP contracts.
+// It is optional so legacy HTTP contracts can remain schema-only until migrated.
+type HTTPTransportMeta struct {
+	Method        string `yaml:"method"`
+	Path          string `yaml:"path"`
+	SuccessStatus int    `yaml:"successStatus"`
+	NoContent     bool   `yaml:"noContent"`
 }
 
 // SchemaRefsMeta holds JSON Schema file references relative to the contract directory.
@@ -139,7 +149,7 @@ type JourneyMeta struct {
 // PassCriterion is a single acceptance criterion within a Journey.
 type PassCriterion struct {
 	Text     string `yaml:"text"`
-	Mode     string `yaml:"mode"`               // "auto"|"manual"
+	Mode     string `yaml:"mode"` // "auto"|"manual"
 	CheckRef string `yaml:"checkRef,omitempty"`
 }
 

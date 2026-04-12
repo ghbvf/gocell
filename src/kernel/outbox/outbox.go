@@ -41,9 +41,12 @@ func (e Entry) RoutingTopic() string {
 	return e.EventType
 }
 
-// Validate checks that required fields (Topic or EventType, and Payload) are
-// present. Writers SHOULD call Validate before persisting. (F-OB-03)
+// Validate checks that required fields (ID, Topic or EventType, and Payload)
+// are present. Writers SHOULD call Validate before persisting. (F-OB-03)
 func (e Entry) Validate() error {
+	if e.ID == "" {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing ID")
+	}
 	if e.RoutingTopic() == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing topic (Topic and EventType are both empty)")
 	}
