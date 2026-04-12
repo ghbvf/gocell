@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项（PR#67-91）归档至 `docs/reviews/archive/202604121800-backlog-pre-restructure.md`。
-> 更新日期: 2026-04-13（PR#99-101 状态更新 + PR#101 review findings 登记）
+> 更新日期: 2026-04-13（PR#99-108 状态更新 + PR#104/105 review findings 登记）
 > Batch 1-4: ✅ 全部完成（PR#67-91，25 个 PR）
 
 ---
@@ -28,13 +28,14 @@
 
 | 轨道 | PR | 任务 | 工时 |
 |------|-----|------|------|
-| A | 韧性 | WM-33b(熔断器) + RL-WIRE-01(rate limiter激活) | 1d |
+| A | ~~韧性~~ | ~~WM-33b(熔断器) + RL-WIRE-01(rate limiter激活)~~ ✅ PR#104 | ✅ done |
 | A | 测试基础设施 | ~~WM-20 TestPubSub 认证套件~~ ✅ PR#93 | 1.5d |
 | A | 可观测 | RL-METRICS-01 Relay Prometheus 指标 | 2h |
 | B | 事件模型 | ~~WM-15 L4 队列状态机~~ ✅ PR#93 | 1.5d |
 | B | 事件路由 | ER-ARCH-02 ConsumerGroup 支持 | 2h |
-| B | 链路追踪 | CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入) | 5h |
+| B | ~~链路追踪~~ | ~~CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入)~~ ✅ PR#108 | ✅ done |
 | B | ~~config 契约收口~~ | ~~CFG-CONTRACT-01/02~~ ✅ PR#98 schema 填充 + PR#101 additionalProperties 加固 + contract_test 验证 | ✅ done |
+| **⚠ A** | **🔴 auth 装配缺口** | **AUTH-WIRE-01(P0 阻塞)**: router/bootstrap 无 `WithAuthMiddleware` 接入位，默认装配不把鉴权接入敏感路由。auth middleware 存在(`runtime/auth/middleware.go:27`)但从未实例化；`DefaultPublicEndpoints` 写 `/api/v1/auth/login` 而真实登录路由是 `/api/v1/access/sessions/login`（路径错位）。结果：匿名请求可直达 users CRUD、session delete、config create/update/delete/publish/rollback。修复: (1) router+bootstrap 添加 `WithAuthMiddleware` Option (2) 默认链接入 auth (3) 修正公开路径白名单 (4) 集成测试断言 401 | 1d | `runtime/http/router/router.go` + `runtime/bootstrap/bootstrap.go` + `runtime/auth/middleware.go` + `cells/access-core/cell.go` **(P0, discovered via PR#104 集成态复核)** |
 | B | **trace propagation** | **TRACE-PROP-01**: 补 inbound HTTP header extract（W3C traceparent/b3），tracer.Start 前先 extract 上游 context。当前默认每次开根 span，跨服务 trace_id 不连续 | 3h |
 
 ---
@@ -45,7 +46,7 @@
 
 | PR | 任务合并 | 工时 | 文件 |
 |----|----------|------|------|
-| 运维健康体系 | OPS-3(pg/redis Health) + OPS-4(drain期) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz隔离) + CFG-P2-01(watcher readyz) + READYZ-ROOT + R97-02(debounce) + R97-F1(symlink-pivot) + **BOOT-PANIC-01(bootstrap panic漏口: duplicate checker校验+registrar safe-call)** + **BOOT-OPTION-01(WithRouterOptions覆盖框架能力: 拒绝冲突option或固定优先级)** + **INFRA-EXPOSE-01(infra端点过度暴露: /metrics opt-in + health公开/内部分离或独立mux)** | 14h | `runtime/http/health/` + `runtime/bootstrap/` + `router/` + `config/` + `auth/middleware.go` **(+3 P1 from PR#96 复核)** |
+| 运维健康体系 | OPS-3(pg/redis Health) + OPS-4(drain期) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz隔离) + CFG-P2-01(watcher readyz) + READYZ-ROOT + R97-02(debounce) + R97-F1(symlink-pivot) + **BOOT-PANIC-01(bootstrap panic漏口: duplicate checker校验+registrar safe-call)** + **BOOT-OPTION-01(WithRouterOptions覆盖框架能力: 拒绝冲突option或固定优先级)** + **INFRA-EXPOSE-01(infra端点过度暴露: /metrics opt-in + health公开/内部分离或独立mux)** + **WATCHER-HEALTH-01(watcher初始化失败静默降级: `NewWatcher` 失败仅 warn 继续启动，readyz 不含 watcher 状态，服务报 ready 但后续配置变更永不生效。修: watcher 注册为 readyz checker 或启动失败时 fail-fast)** (P2, discovered via PR#104 集成态复核) | 15h | `runtime/http/health/` + `runtime/bootstrap/` + `runtime/config/watcher.go` + `router/` + `config/` + `auth/middleware.go` **(+3 P1 from PR#96 复核 + 1 P2 from PR#104 复核)** |
 | ~~runtime 竞态修复~~ | ~~R1C2-F01(eventbus 并发回归测试 + Close/Publish 锁序注释) + R1C2-F03(已验证: WorkerGroup cancel-on-error 已覆盖) + R97-R3-01(reload gate 替换 WaitGroup Add-after-Wait 窗口)~~ | ✅ done | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
 | RabbitMQ 连接正确性 | RMQ-RACE-01(WaitConnected竞态) + P3-DEFER-05(Health状态区分) | 4h | `adapters/rabbitmq/connection.go` |
 | kernel outbox 清理 | P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) | 4h | `kernel/outbox/` + `kernel/idempotency/` |
@@ -78,6 +79,8 @@
 | **DELETE 无 body 语义闭环** | **DELETE-NOCONTENT-01**: delete contract request.schema.json 补 description + additionalProperties:false；contract_test 改为 handler 语义测试（断言 204 + body 长度 0 + 无 JSON envelope）。中期 contract 模型补 method/path/successStatus/noContent 一等元数据（→ CONTRACT-META-01） | 1.5h | `contracts/http/auth/user/delete/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` **(P2, discovered via PR#101 二轮复核)** |
 | bootstrap tracing 集成测试 | **BOOT-TEST-01**: bootstrap 业务路由 tracing 集成断言 + router panic→Recovery→Tracing error span 联通测试 | 2h | `runtime/bootstrap/bootstrap_test.go` + `router/router_test.go` **(P2, PR#96 复核)** |
 | bootstrap 次要清理 | **BOOT-MINOR-01**: `router.New` panic(err.Error())→panic(err) 保留 error 链 + access_log 输出 real_ip 字段 | 1h | `runtime/http/router/router.go` + `middleware/access_log.go` **(P2, PR#96 复核)** |
+| **HTTP operation model 收口** | **CONTRACT-OP-01(P1)**: config-read slice 声明 1 个 contract(`http.config.get.v1`)但注册 2 个路由(GET list + GET single)；config-write/config-publish/session-logout 有真实 HTTP 路由但 slice 元数据只声明 event contract，缺 HTTP serve contract。response.schema.json 用 oneOf 混合单资源/列表。影响版本治理和 contract discoverability。与 CONTRACT-META-01(v1.1) 关联但可先修 slice 元数据 | 4h | `cells/config-core/slices/*/slice.yaml` + `contracts/http/config/` + `cells/access-core/slices/sessionlogout/slice.yaml` **(P1, discovered via PR#104 集成态复核)** |
+| **contract test 假阳性** | **CONTRACT-TEST-02(P1)**: `contracttest` helper 只验证"手写 JSON 过 schema"，不验证真实 handler/outbox 输出，已出现测试绿但语义漂移。三类症状: (1) user delete contract_test 只加载不校验 204/no-body (2) access-core outbox_test 只断言 EventType 不验证 event_id (3) device-register contract 样例写 `registered` 但真实实现返回 `online`。根因解释了 EVT-HDR-RESTORE/DELETE-NOCONTENT-01 为何测试体系仍显示"覆盖完成" | 5h | `pkg/contracttest/` + `cells/*/contract_test.go` + `cells/device-cell/slices/deviceregister/` **(P1, discovered via PR#104 集成态复核)** |
 | ~~session event_id 闭环~~ | ~~EVT-SESSION-01~~ ✅ PR#101: sessionlogin contract_test 验证 payload + headers event_id + MustReject | ✅ done | — |
 
 ---
@@ -136,6 +139,8 @@
 | L4 构造函数纯化 | L4-PURE-01: `NewCommandEntry` 调用 `time.Now()`，kernel 构造函数应接受 `now time.Time` 参数保持纯函数 (PR#93 review) | 0.5h |
 | L4 重试 API | L4-RETRY-01: 缺少 `ResetForRetry` 函数，adapter 手动重置 `Status=Pending` 绕过状态机不变量 (PR#93 review) | 1h |
 | Flag repo 并发测试 | FLAG-RACE-01: FlagRepository 并发测试只校验读侧排序，缺 writerErrors 计数断言（对比 config_repo_test.go 已有完整模式）(PR#94 review) | 0.5h |
+| CB 接口去耦 | **CB-IFACE-01**: `CircuitBreakerPolicy.Allow()` 签名直接映射 gobreaker TwoStep，替代方案需二次适配。V2 考虑拆为 `Allow() error` + `Report(success bool)` 或泛化 (PR#104 review F1.2, C3) | 2h |
+| CB adapter 封装 | **CB-ENCAP-01**: `Config.ReadyToTrip` 暴露 `gobreaker.Counts`、`OnStateChange` 暴露 `gobreaker.State`、`Adapter.State()` 返回 `gobreaker.State`。adapter 用户需 import gobreaker。可定义本地类型映射 (PR#104 review F5.2+F5.3, C1) | 1h |
 
 ---
 
@@ -243,12 +248,12 @@
 | Batch | PR 数 | 工时 | 并行度 | 前置 | 里程碑 |
 |-------|-------|------|--------|------|--------|
 | 5A | 7 → ✅ 全部完成 | ~~39h~~ → ✅ done | — | — | CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT ✅ PR#98+101, HTTP-SEC ✅ PR#96, BATCH3 ✅ PR#96+99, OBS-WIRE ✅ PR#96 |
-| 5B | 6 → 剩 5 | ~5d | 2 轨道 | 5A | CFG-CONTRACT ✅ PR#101，剩 韧性+可观测+事件路由+trace |
-| 6A | 4+1 | ~24h | 5/5 | 5B | 生产级可靠性 + L4 API 收敛 |
-| 6B | 15 → 剩 8 | ~~24.5h~~ → ~16h | 8/8 | 6A(RMQ) | 6 项 ✅ PR#101, +2 新增(DELETE-NOCONTENT + EVT-HDR-RESTORE) |
+| 5B | 8 → 剩 4 | ~6d | 2 轨道 | 5A | CFG-CONTRACT ✅ PR#101，韧性 ✅ PR#104，CID-01 ✅ PR#108，**+AUTH-WIRE-01(P0 阻塞)**，剩 auth+可观测+事件路由+trace |
+| 6A | 4+1 | ~25h | 5/5 | 5B | 生产级可靠性 + L4 API 收敛 + WATCHER-HEALTH-01 |
+| 6B | 17 → 剩 10 | ~~24.5h~~ → ~25h | 10/10 | 6A(RMQ) | 6 项 ✅ PR#101, +2 新增(DELETE-NOCONTENT + EVT-HDR-RESTORE) + CONTRACT-OP-01 + CONTRACT-TEST-02 |
 | 6C | 4 | ~5d | 2 轨道 | 6A(Receipt) | P1 功能补全 (BFF+SecureCookie) |
 | 7 | 6 | ~16h | 5+tag | 6全完 | **v1.0 RC → v1.0** |
-| 8 | 14 | ~54h | 14/14 | v1.0 | P2 偿债 |
+| 8 | 16 | ~57h | 16/16 | v1.0 | P2 偿债 (+CB-IFACE-01 + CB-ENCAP-01 from PR#104) |
 
 ```
 Week 1:  Batch 5A 近完成（CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT ✅ PR#98+101）
