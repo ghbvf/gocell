@@ -203,7 +203,7 @@ func (e *CommandEntry) DeadlineFor(phase TimeoutPhase) time.Time {
 
 // Validate checks that required fields are present, status is valid, and
 // timeouts are non-negative.
-func (e CommandEntry) Validate() error {
+func (e *CommandEntry) Validate() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing ID")
 	}
@@ -237,6 +237,8 @@ func (e CommandEntry) Validate() error {
 
 // CommandWriter persists L4 command entries within a transaction.
 type CommandWriter interface {
+	// WriteCommand persists a command entry atomically with business state.
+	// Consistency: L4 (DeviceLatent).
 	WriteCommand(ctx context.Context, entry CommandEntry) error
 }
 
@@ -255,5 +257,7 @@ type CommandReader interface {
 // before persisting. Implementations SHOULD use optimistic locking
 // (e.g., WHERE status = $from) to prevent concurrent transitions.
 type CommandStateAdvancer interface {
+	// AdvanceStatus atomically transitions a command from one status to another.
+	// Consistency: L4 (DeviceLatent).
 	AdvanceStatus(ctx context.Context, id string, from, to CommandStatus) error
 }

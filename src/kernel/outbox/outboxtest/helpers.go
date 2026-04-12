@@ -2,6 +2,8 @@ package outboxtest
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -9,22 +11,25 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
 )
 
 // TestTopic returns a unique topic name scoped to the given test.
 // Prevents cross-test interference when implementations share state.
 func TestTopic(t *testing.T) string {
 	t.Helper()
-	short := uuid.NewString()[:8]
-	return fmt.Sprintf("test-%s-%s", t.Name(), short)
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("outboxtest: crypto/rand failed: %v", err)
+	}
+	return fmt.Sprintf("test-%s-%s", t.Name(), hex.EncodeToString(b))
 }
 
 // NewEntry creates a valid Entry with a unique ID for testing.
 func NewEntry(topic string, payload []byte) outbox.Entry {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
 	return outbox.Entry{
-		ID:        "evt-" + uuid.NewString(),
+		ID:        "evt-" + hex.EncodeToString(b),
 		EventType: topic,
 		Topic:     topic,
 		Payload:   payload,
@@ -52,8 +57,9 @@ func PublishN(t *testing.T, ctx context.Context, pub outbox.Publisher, topic str
 	for i := range n {
 		payload := testPayload(i)
 		entry := NewEntry(topic, payload)
-		err := pub.Publish(ctx, topic, payload)
-		assert.NoError(t, err, "publish message %d", i)
+		if err := pub.Publish(ctx, topic, payload); err != nil {
+			t.Fatalf("publish message %d: %v", i, err)
+		}
 		entries = append(entries, entry)
 	}
 	return entries
@@ -105,7 +111,7 @@ func CollectN(
 	}()
 
 	// Wait for subscription to register (InMemoryEventBus needs a brief delay).
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(subscribeInitDelay)
 
 	select {
 	case <-done:
@@ -124,64 +130,90 @@ func CollectN(
 	return collected
 }
 
-// collectWithHandler subscribes and collects entries using a custom handler.
-// Returns after either n entries are collected or timeout elapses.
-func collectWithHandler(
-	t *testing.T,
-	ctx context.Context,
-	sub outbox.Subscriber,
-	topic string,
-	n int,
-	timeout time.Duration,
-	handler outbox.EntryHandler,
-) []outbox.Entry {
+// ---------------------------------------------------------------------------
+// Internal assertion helpers — stdlib only, no testify in kernel/ non-test files
+// ---------------------------------------------------------------------------
+
+func assertNoError(t *testing.T, err error, msgAndArgs ...any) {
 	t.Helper()
-
-	var (
-		mu        sync.Mutex
-		collected []outbox.Entry
-		done      = make(chan struct{})
-	)
-
-	subCtx, cancel := context.WithCancel(ctx)
-	t.Cleanup(cancel)
-
-	wrappedHandler := func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-		res := handler(ctx, entry)
-
-		mu.Lock()
-		collected = append(collected, entry)
-		count := len(collected)
-		mu.Unlock()
-
-		if count >= n {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+	if err != nil {
+		if len(msgAndArgs) > 0 {
+			t.Fatalf("unexpected error: %v — %s", err, fmt.Sprint(msgAndArgs...))
 		}
-		return res
+		t.Fatalf("unexpected error: %v", err)
 	}
+}
 
-	subDone := make(chan struct{})
-	go func() {
-		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, wrappedHandler)
+func assertEqual(t *testing.T, want, got any, msgAndArgs ...any) {
+	t.Helper()
+	if fmt.Sprintf("%v", want) != fmt.Sprintf("%v", got) {
+		suffix := ""
+		if len(msgAndArgs) > 0 {
+			suffix = " — " + fmt.Sprint(msgAndArgs...)
+		}
+		t.Fatalf("want %v, got %v%s", want, got, suffix)
+	}
+}
+
+func assertBytesEqual(t *testing.T, want, got []byte, msgAndArgs ...any) {
+	t.Helper()
+	if string(want) != string(got) {
+		suffix := ""
+		if len(msgAndArgs) > 0 {
+			suffix = " — " + fmt.Sprint(msgAndArgs...)
+		}
+		t.Fatalf("want %q, got %q%s", want, got, suffix)
+	}
+}
+
+func assertTrue(t *testing.T, condition bool, msgAndArgs ...any) {
+	t.Helper()
+	if !condition {
+		if len(msgAndArgs) > 0 {
+			t.Fatalf("expected true: %s", fmt.Sprint(msgAndArgs...))
+		}
+		t.Fatal("expected true")
+	}
+}
+
+func assertFalse(t *testing.T, condition bool, msgAndArgs ...any) {
+	t.Helper()
+	if condition {
+		if len(msgAndArgs) > 0 {
+			t.Fatalf("expected false: %s", fmt.Sprint(msgAndArgs...))
+		}
+		t.Fatal("expected false")
+	}
+}
+
+func assertLen(t *testing.T, length, want int, msgAndArgs ...any) {
+	t.Helper()
+	if length != want {
+		if len(msgAndArgs) > 0 {
+			t.Fatalf("want length %d, got %d — %s", want, length, fmt.Sprint(msgAndArgs...))
+		}
+		t.Fatalf("want length %d, got %d", want, length)
+	}
+}
+
+func assertEventually(t *testing.T, condition func() bool, timeout, poll time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(poll)
+	}
+	t.Fatalf("condition not met within %v: %s", timeout, msg)
+}
+
+func assertNotPanics(t *testing.T, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("unexpected panic: %v", r)
+		}
 	}()
-
-	time.Sleep(20 * time.Millisecond)
-
-	select {
-	case <-done:
-	case <-time.After(timeout):
-		// Not a fatal error for this helper — caller decides.
-	}
-
-	cancel()
-	<-subDone
-
-	mu.Lock()
-	defer mu.Unlock()
-	return collected
+	f()
 }

@@ -415,3 +415,58 @@ func (m *mockCommandStateAdvancer) AdvanceStatus(_ context.Context, _ string, _,
 }
 
 var _ CommandStateAdvancer = (*mockCommandStateAdvancer)(nil)
+
+// ---------------------------------------------------------------------------
+// Edge case tests (review findings F5, F11)
+// ---------------------------------------------------------------------------
+
+func TestCanTransitionTo_ZeroValueFrom(t *testing.T) {
+	// Zero-value CommandStatus(0) must not transition to anything.
+	allStatuses := []CommandStatus{
+		CommandPending, CommandSent, CommandDelivered,
+		CommandSucceeded, CommandFailed, CommandExpired, CommandCanceled,
+	}
+	for _, to := range allStatuses {
+		assert.False(t, CommandStatus(0).CanTransitionTo(to),
+			"zero-value CommandStatus must not transition to %s", to)
+	}
+}
+
+func TestDeadlineFor_ZeroPhase(t *testing.T) {
+	entry := CommandEntry{
+		ID:        "cmd-1",
+		CreatedAt: time.Now(),
+		Timeouts:  CommandTimeouts{OverallDeadline: 1 * time.Hour},
+	}
+	assert.True(t, entry.DeadlineFor(TimeoutPhase(0)).IsZero(),
+		"zero-value TimeoutPhase must return zero Time")
+}
+
+func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
+	base := CommandEntry{
+		ID:          "cmd-1",
+		DeviceID:    "dev-1",
+		CommandType: "reboot",
+		Payload:     []byte(`{}`),
+		Status:      CommandPending,
+		CreatedAt:   time.Now(),
+	}
+
+	tests := []struct {
+		name     string
+		timeouts CommandTimeouts
+	}{
+		{"negative ScheduleToSend", CommandTimeouts{ScheduleToSend: -1 * time.Second}},
+		{"negative SendToComplete", CommandTimeouts{SendToComplete: -1 * time.Second}},
+		{"negative OverallDeadline", CommandTimeouts{OverallDeadline: -1 * time.Second}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := base
+			entry.Timeouts = tt.timeouts
+			err := entry.Validate()
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+		})
+	}
+}
