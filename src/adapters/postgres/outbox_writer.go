@@ -144,10 +144,14 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry, globalOffset int) error {
 	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status
 	var sb strings.Builder
+	// Pre-allocate buffer to avoid reallocations during string building.
+	// Approximate size: 150 bytes for header + (entries * ~54 bytes per value tuple).
+	sb.Grow(150 + len(entries)*(cols*6+3))
 	sb.WriteString(`INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
 		VALUES `)
 
+	var numBuf [32]byte
 	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
 		metadata, err := json.Marshal(e.Metadata)
@@ -171,7 +175,8 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 				sb.WriteString(", ")
 			}
 			sb.WriteString("$")
-			sb.WriteString(strconv.Itoa(base + j + 1))
+			res := strconv.AppendInt(numBuf[:0], int64(base+j+1), 10)
+			sb.Write(res)
 		}
 		sb.WriteString(")")
 
