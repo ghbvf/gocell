@@ -2,8 +2,6 @@ package oidc
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,11 +14,6 @@ import (
 // mockOIDCServer returns a test server that mimics OIDC discovery endpoints.
 func mockOIDCServer(t *testing.T) *httptest.Server {
 	t.Helper()
-
-	// Generate a temporary RSA key for JWKS.
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	_ = key // We need it for JWKS but go-oidc only requires the metadata and a reachable JWKS endpoint.
 
 	mux := http.NewServeMux()
 	var issuer string

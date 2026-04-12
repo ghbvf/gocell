@@ -9,9 +9,8 @@ import (
 )
 
 func TestNewTracer_Insecure(t *testing.T) {
-	// NewTracer with Insecure flag — exercises the insecure branch in tracer.go.
-	// This will attempt to create an OTLP exporter to a non-existent endpoint,
-	// but the exporter creation itself succeeds (connection is lazy).
+	// Insecure flag exercises the WithInsecure branch. The OTLP exporter
+	// uses lazy dialing so no real connection to 127.0.0.1:4317 is made.
 	tracer, shutdown, err := NewTracer(context.Background(), TracerConfig{
 		ServiceName:      "test-svc",
 		ExporterEndpoint: "127.0.0.1:4317",
@@ -23,12 +22,10 @@ func TestNewTracer_Insecure(t *testing.T) {
 	require.NotNil(t, shutdown)
 
 	// Start a span to verify the tracer works.
-	ctx, span := tracer.Start(context.Background(), "test-op")
+	_, span := tracer.Start(context.Background(), "test-op")
 	assert.NotNil(t, span)
-	_ = ctx
 	span.End()
 
-	// Shutdown.
 	assert.NoError(t, shutdown(context.Background()))
 }
 

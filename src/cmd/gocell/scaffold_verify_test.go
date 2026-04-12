@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/verify"
@@ -133,35 +132,37 @@ func TestRunGenerateAssembly_MissingID(t *testing.T) {
 }
 
 func TestRunGenerateAssembly_WithModule(t *testing.T) {
-	// generateAssembly with a valid --id and --module runs metadata parse.
-	// It will fail at metadata parse since we're not in a proper project root,
-	// but this covers more of the function path.
+	// generateAssembly with a valid --id and --module exercises the full code
+	// path up to the point where project metadata or assembly lookup fails.
 	err := runGenerate([]string{"assembly", "--id=test", "--module=example.com/test"})
 	require.Error(t, err)
-	// Error should come from metadata parse or project root detection.
-	assert.True(t, strings.Contains(err.Error(), "metadata parse") ||
-		strings.Contains(err.Error(), "project root") ||
-		strings.Contains(err.Error(), "cannot find") ||
-		strings.Contains(err.Error(), "generate entrypoint") ||
-		strings.Contains(err.Error(), "assembly"),
-		"unexpected error: %v", err)
+	assert.Regexp(t, `metadata parse|project root|cannot find|generate entrypoint|assembly`,
+		err.Error(), "error should originate from the generate-assembly pipeline")
 }
 
 func TestRunVerifySlice_ValidID(t *testing.T) {
-	// Run with a valid-looking ID against the real project.
 	err := runVerify([]string{"slice", "--id=access-core/identitymanage"})
-	// May pass or fail depending on test state; we're covering the code path.
-	_ = err
+	// verifySlice either passes or returns a verify error — never panics.
+	if err != nil {
+		assert.Contains(t, err.Error(), "verify slice",
+			"error should come from the verify pipeline, not a crash")
+	}
 }
 
 func TestRunVerifyCell_ValidID(t *testing.T) {
 	err := runVerify([]string{"cell", "--id=access-core"})
-	_ = err
+	if err != nil {
+		assert.Contains(t, err.Error(), "verify cell",
+			"error should come from the verify pipeline, not a crash")
+	}
 }
 
 func TestRunVerifyJourney_ValidID(t *testing.T) {
 	err := runVerify([]string{"journey", "--id=J-user-onboarding"})
-	_ = err
+	if err != nil {
+		assert.Contains(t, err.Error(), "verify journey",
+			"error should come from the verify pipeline, not a crash")
+	}
 }
 
 func TestReadModule_ValidGoMod(t *testing.T) {

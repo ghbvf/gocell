@@ -58,7 +58,16 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
 
-	time.Sleep(500 * time.Millisecond)
+	// Wait for HTTP server to become ready instead of sleeping.
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return true
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 	cancel()
 
 	select {
