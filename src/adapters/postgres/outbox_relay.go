@@ -124,6 +124,10 @@ type RelayConfig struct {
 	// cleanup. Separate from RetentionPeriod to give operators more time
 	// to investigate and manually retry failed entries. Default 30 days.
 	DeadRetentionPeriod time.Duration
+	// Metrics is the relay metrics collector for Prometheus integration.
+	// If nil, a NoopRelayCollector is used (zero overhead).
+	// ref: Temporal client.Options{MetricsHandler} — inject-at-construction pattern
+	Metrics outbox.RelayCollector
 }
 
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.
@@ -230,6 +234,12 @@ func NewOutboxRelay(db relayDB, pub outbox.Publisher, cfg RelayConfig) *OutboxRe
 	if cfg.DeadRetentionPeriod <= 0 {
 		cfg.DeadRetentionPeriod = defaults.DeadRetentionPeriod
 	}
+	if cfg.Metrics == nil {
+		cfg.Metrics = outbox.NoopRelayCollector{}
+	}
+	// Wrap in safe adapter: collector panics must not crash relay goroutines.
+	// ref: runtime/http/middleware/safe_observe.go — same pattern for HTTP metrics.
+	cfg.Metrics = &safeRelayCollector{inner: cfg.Metrics}
 
 	// Guard: ClaimTTL must exceed 2x PollInterval to prevent reclaimStale
 	// from reclaiming entries still being processed.
@@ -427,6 +437,10 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Record batch size even for empty batches (captures idle cycles).
+	r.config.Metrics.RecordBatchSize(len(entries))
+
 	if len(entries) == 0 {
 		return nil
 	}
@@ -444,10 +458,12 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 	}
 
 	// Phase 3: WriteBack (short tx)
+	wbStart := time.Now()
 	stats, wbErr := r.writeBack(ctx, results)
+	wbDur := time.Since(wbStart)
 
-	// Log only after writeBack completes — if commit fails, stats are
-	// rolled back and logging them would be misleading.
+	// Log and record metrics only after writeBack completes — if commit
+	// fails, stats are rolled back and recording them would be misleading.
 	if wbErr == nil {
 		slog.Info("outbox relay: poll complete",
 			slog.Int("published", stats.published),
@@ -457,6 +473,15 @@ func (r *OutboxRelay) pollOnce(ctx context.Context) error {
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
 		)
+		r.config.Metrics.RecordPollCycle(outbox.PollCycleResult{
+			Published:    stats.published,
+			Retried:      stats.retried,
+			Dead:         stats.dead,
+			Skipped:      stats.skipped,
+			ClaimDur:     claimDur,
+			PublishDur:   pubDur,
+			WriteBackDur: wbDur,
+		})
 	}
 
 	return wbErr
@@ -679,6 +704,7 @@ func (r *OutboxRelay) reclaimStale(ctx context.Context) error {
 		slog.Warn("outbox relay: reclaimed stale entries",
 			slog.Int64("count", ct.RowsAffected()),
 		)
+		r.config.Metrics.RecordReclaim(ct.RowsAffected())
 	}
 	return nil
 }
@@ -776,5 +802,13 @@ func (r *OutboxRelay) deletePublishedBefore(ctx context.Context, before time.Tim
 		)
 	}
 
+	// NOTE: If an intermediate batch exec fails above, this function returns
+	// early and RecordCleanup is not called — already-deleted rows are not
+	// counted. This is intentionally conservative: under-counting cleanup is
+	// safer than over-counting. If more precise cleanup metrics are needed,
+	// consider accumulating inside the loop and reporting on each iteration.
+	if totalPublished > 0 || totalDead > 0 {
+		r.config.Metrics.RecordCleanup(totalPublished, totalDead)
+	}
 	return nil
 }

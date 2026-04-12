@@ -886,3 +886,158 @@ func (p *mockPublisher) Publish(_ context.Context, topic string, payload []byte)
 	p.published = append(p.published, publishCall{topic: topic, payload: payload})
 	return nil
 }
+
+// ---------------------------------------------------------------------------
+// Mock RelayCollector for metrics tests
+// ---------------------------------------------------------------------------
+
+type mockRelayCollector struct {
+	mu             sync.Mutex
+	pollCycles     []outbox.PollCycleResult
+	batchSizes     []int
+	reclaimCounts  []int64
+	cleanupCalls   []mockCleanupCall
+}
+
+type mockCleanupCall struct {
+	publishedDeleted, deadDeleted int64
+}
+
+func (m *mockRelayCollector) RecordPollCycle(r outbox.PollCycleResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pollCycles = append(m.pollCycles, r)
+}
+
+func (m *mockRelayCollector) RecordBatchSize(size int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batchSizes = append(m.batchSizes, size)
+}
+
+func (m *mockRelayCollector) RecordReclaim(count int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reclaimCounts = append(m.reclaimCounts, count)
+}
+
+func (m *mockRelayCollector) RecordCleanup(publishedDeleted, deadDeleted int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupCalls = append(m.cleanupCalls, mockCleanupCall{
+		publishedDeleted: publishedDeleted, deadDeleted: deadDeleted,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Metrics integration tests (RL-METRICS-01)
+// ---------------------------------------------------------------------------
+
+func TestRelay_ThreePhase_Success_RecordsMetrics(t *testing.T) {
+	e1 := makeRelayEntry("e-m1", "order.created", 0)
+	e2 := makeRelayEntry("e-m2", "order.updated", 0)
+
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: []mockRowData{
+			makeMockRowData(e1),
+			makeMockRowData(e2),
+		}},
+	}
+	pub := &mockPublisher{}
+	mc := &mockRelayCollector{}
+	cfg := DefaultRelayConfig()
+	cfg.Metrics = mc
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	err := relay.pollOnce(context.Background())
+	require.NoError(t, err)
+
+	// Batch size recorded (2 entries).
+	require.Len(t, mc.batchSizes, 1)
+	assert.Equal(t, 2, mc.batchSizes[0])
+
+	// Poll cycle recorded with correct counts.
+	require.Len(t, mc.pollCycles, 1)
+	assert.Equal(t, 2, mc.pollCycles[0].Published)
+	assert.Equal(t, 0, mc.pollCycles[0].Retried)
+	assert.Equal(t, 0, mc.pollCycles[0].Dead)
+	assert.Equal(t, 0, mc.pollCycles[0].Skipped)
+	assert.GreaterOrEqual(t, mc.pollCycles[0].ClaimDur, time.Duration(0))
+	assert.GreaterOrEqual(t, mc.pollCycles[0].PublishDur, time.Duration(0))
+	assert.GreaterOrEqual(t, mc.pollCycles[0].WriteBackDur, time.Duration(0))
+}
+
+func TestRelay_EmptyBatch_RecordsBatchSizeZero(t *testing.T) {
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: nil}, // empty
+	}
+	pub := &mockPublisher{}
+	mc := &mockRelayCollector{}
+	cfg := DefaultRelayConfig()
+	cfg.Metrics = mc
+	relay := NewOutboxRelay(db, pub, cfg)
+
+	err := relay.pollOnce(context.Background())
+	require.NoError(t, err)
+
+	// Batch size 0 recorded.
+	require.Len(t, mc.batchSizes, 1)
+	assert.Equal(t, 0, mc.batchSizes[0])
+
+	// No poll cycle recorded for empty batch.
+	assert.Empty(t, mc.pollCycles)
+}
+
+func TestRelay_ReclaimStale_RecordsMetrics(t *testing.T) {
+	db := &mockDBTX{
+		execResult: pgconn.NewCommandTag("UPDATE 3"),
+	}
+	mc := &mockRelayCollector{}
+	cfg := DefaultRelayConfig()
+	cfg.Metrics = mc
+	relay := NewOutboxRelay(db, &mockPublisher{}, cfg)
+
+	err := relay.reclaimStale(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, mc.reclaimCounts, 1)
+	assert.Equal(t, int64(3), mc.reclaimCounts[0])
+}
+
+func TestRelay_DeletePublishedBefore_RecordsCleanupMetrics(t *testing.T) {
+	db := &mockDBTX{}
+	mc := &mockRelayCollector{}
+	cfg := DefaultRelayConfig()
+	cfg.Metrics = mc
+	relay := NewOutboxRelay(db, &mockPublisher{}, cfg)
+
+	cutoff := time.Now().Add(-72 * time.Hour)
+	err := relay.deletePublishedBefore(context.Background(), cutoff)
+	require.NoError(t, err)
+
+	require.Len(t, mc.cleanupCalls, 1)
+	// With default mock returning UPDATE 1, totalPublished=1 and totalDead=1.
+	assert.Equal(t, int64(1), mc.cleanupCalls[0].publishedDeleted)
+	assert.Equal(t, int64(1), mc.cleanupCalls[0].deadDeleted)
+}
+
+func TestRelay_NilMetrics_UsesNoop(t *testing.T) {
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: []mockRowData{
+			makeMockRowData(makeRelayEntry("e-noop", "test.event", 0)),
+		}},
+	}
+	pub := &mockPublisher{}
+	// Explicitly pass nil Metrics — must not panic.
+	relay := NewOutboxRelay(db, pub, RelayConfig{})
+
+	err := relay.pollOnce(context.Background())
+	assert.NoError(t, err, "pollOnce with nil Metrics (noop) must not panic")
+
+	err = relay.reclaimStale(context.Background())
+	assert.NoError(t, err, "reclaimStale with nil Metrics (noop) must not panic")
+
+	cutoff := time.Now().Add(-72 * time.Hour)
+	err = relay.deletePublishedBefore(context.Background(), cutoff)
+	assert.NoError(t, err, "deletePublishedBefore with nil Metrics (noop) must not panic")
+}

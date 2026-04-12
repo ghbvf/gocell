@@ -1,0 +1,284 @@
+package prometheus
+
+import (
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+	prom "github.com/prometheus/client_golang/prometheus"
+	prom_dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRelayCollector_ImplementsInterface(t *testing.T) {
+	var _ outbox.RelayCollector = (*RelayCollector)(nil)
+}
+
+func TestNewRelayCollector_MissingCellID(t *testing.T) {
+	_, err := NewRelayCollector(RelayCollectorConfig{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CellID")
+}
+
+func TestNewRelayCollector_DefaultConfig(t *testing.T) {
+	c, err := NewRelayCollector(RelayCollectorConfig{CellID: "test-cell"})
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	assert.Equal(t, "test-cell", c.cellID)
+	assert.NotNil(t, c.registry)
+}
+
+func TestRelayCollector_RecordPollCycle(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordPollCycle(outbox.PollCycleResult{
+		Published: 3, Retried: 1, Dead: 0, Skipped: 1,
+		ClaimDur: 10 * time.Millisecond, PublishDur: 50 * time.Millisecond, WriteBackDur: 5 * time.Millisecond,
+	})
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	relayed := findFamily(families, "gocell_outbox_relayed_total")
+	require.NotNil(t, relayed, "should have relayed_total counter")
+	// 3 label combos: published(3), retried(1), skipped(1). dead=0 is skipped.
+	assert.Equal(t, 3, len(relayed.GetMetric()),
+		"should have 3 label combinations (published, retried, skipped; dead=0 is skipped)")
+	assertCounterValue(t, relayed, "outcome", "published", 3.0)
+	assertCounterValue(t, relayed, "outcome", "retried", 1.0)
+	assertCounterValue(t, relayed, "outcome", "skipped", 1.0)
+
+	duration := findFamily(families, "gocell_outbox_poll_duration_seconds")
+	require.NotNil(t, duration, "should have poll_duration_seconds histogram")
+	assert.Equal(t, 4, len(duration.GetMetric()),
+		"should have 4 phase label combinations")
+}
+
+func TestRelayCollector_RecordPollCycle_AllZero(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordPollCycle(outbox.PollCycleResult{})
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_relayed_total" {
+			t.Fatal("all-zero PollCycleResult should not emit any relayed_total counters")
+		}
+	}
+}
+
+func TestRelayCollector_RecordBatchSize(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordBatchSize(0)
+	c.RecordBatchSize(50)
+	c.RecordBatchSize(100)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_batch_size" {
+			found = true
+			require.Len(t, f.GetMetric(), 1)
+			h := f.GetMetric()[0].GetHistogram()
+			assert.Equal(t, uint64(3), h.GetSampleCount())
+			// Verify cell label is dynamic (not ConstLabels).
+			labels := metricLabels(f.GetMetric()[0])
+			assert.Equal(t, "test-cell", labels["cell"])
+		}
+	}
+	assert.True(t, found, "should have batch_size histogram")
+}
+
+func TestRelayCollector_RecordReclaim(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordReclaim(0) // no-op
+	c.RecordReclaim(5)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_reclaimed_total" {
+			found = true
+			require.Len(t, f.GetMetric(), 1)
+			assert.Equal(t, 5.0, f.GetMetric()[0].GetCounter().GetValue())
+			// Verify cell label is dynamic (not ConstLabels).
+			labels := metricLabels(f.GetMetric()[0])
+			assert.Equal(t, "test-cell", labels["cell"])
+		}
+	}
+	assert.True(t, found, "should have reclaimed_total counter")
+}
+
+func TestRelayCollector_RecordCleanup(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordCleanup(100, 3)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_cleaned_total" {
+			found = true
+			assert.Equal(t, 2, len(f.GetMetric()),
+				"should have 2 status label combinations (published, dead)")
+		}
+	}
+	assert.True(t, found, "should have cleaned_total counter")
+}
+
+func TestRelayCollector_RecordCleanup_ZeroSkipped(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	c.RecordCleanup(0, 0) // both zero, no metrics emitted
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		assert.NotEqual(t, "gocell_outbox_cleaned_total", f.GetName(),
+			"zero cleanup should not emit any cleaned_total metrics")
+	}
+}
+
+func TestRelayCollector_ConcurrentSafety(t *testing.T) {
+	registry := prom.NewRegistry()
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.RecordPollCycle(outbox.PollCycleResult{
+				Published: 1,
+				ClaimDur:  time.Millisecond,
+				PublishDur: time.Millisecond,
+				WriteBackDur: time.Millisecond,
+			})
+			c.RecordBatchSize(10)
+			c.RecordReclaim(1)
+			c.RecordCleanup(1, 0)
+		}()
+	}
+	wg.Wait()
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	for _, f := range families {
+		if f.GetName() == "gocell_outbox_reclaimed_total" {
+			assert.Equal(t, 100.0, f.GetMetric()[0].GetCounter().GetValue())
+		}
+	}
+}
+
+func TestRelayCollector_CustomBuckets(t *testing.T) {
+	registry := prom.NewRegistry()
+	pollBuckets := []float64{0.001, 0.01, 0.1}
+	batchBuckets := []float64{1, 10, 100}
+
+	c, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:       "test-cell",
+		Registry:     registry,
+		PollBuckets:  pollBuckets,
+		BatchBuckets: batchBuckets,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, c)
+}
+
+func TestRelayCollector_DuplicateRegister_Error(t *testing.T) {
+	registry := prom.NewRegistry()
+	_, err := NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.NoError(t, err)
+
+	// Second registration on the same registry should fail.
+	_, err = NewRelayCollector(RelayCollectorConfig{
+		CellID:   "test-cell",
+		Registry: registry,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registration")
+}
+
+// metricLabels extracts label name→value from a gathered Prometheus metric.
+func metricLabels(m *prom_dto.Metric) map[string]string {
+	labels := make(map[string]string)
+	for _, lp := range m.GetLabel() {
+		labels[lp.GetName()] = lp.GetValue()
+	}
+	return labels
+}
+
+// findFamily returns the metric family with the given name, or nil.
+func findFamily(families []*prom_dto.MetricFamily, name string) *prom_dto.MetricFamily {
+	for _, f := range families {
+		if f.GetName() == name {
+			return f
+		}
+	}
+	return nil
+}
+
+// assertCounterValue asserts that the metric family contains a counter with
+// the given label key=value and the expected counter value.
+func assertCounterValue(t *testing.T, family *prom_dto.MetricFamily, labelKey, labelValue string, expected float64) {
+	t.Helper()
+	for _, m := range family.GetMetric() {
+		if metricLabels(m)[labelKey] == labelValue {
+			assert.Equal(t, expected, m.GetCounter().GetValue(),
+				"counter %s=%s", labelKey, labelValue)
+			return
+		}
+	}
+	t.Errorf("no metric found with %s=%s", labelKey, labelValue)
+}
