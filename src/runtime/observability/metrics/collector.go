@@ -23,7 +23,7 @@ type Collector interface {
 
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	// Key is "method path status".
+	// Key is "method route status" (e.g. "GET /api/v1/users/{id} 200").
 	RequestCounts    map[string]int64
 	DurationSumsMs   map[string]int64
 }
