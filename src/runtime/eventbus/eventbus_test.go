@@ -221,6 +221,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 
 	var stop atomic.Bool
+	var publishStarted atomic.Int32
 	panicCh := make(chan any, 1)
 	var publishers sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -237,12 +238,15 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 			}()
 
 			for !stop.Load() {
+				publishStarted.CompareAndSwap(0, 1)
 				_ = bus.Publish(context.Background(), "race.topic", []byte("payload"))
 			}
 		}(i)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return publishStarted.Load() == 1
+	}, time.Second, 10*time.Millisecond)
 	require.NoError(t, bus.Close())
 	stop.Store(true)
 	publishers.Wait()

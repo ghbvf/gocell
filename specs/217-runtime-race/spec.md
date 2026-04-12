@@ -40,4 +40,10 @@ The remaining real implementation gap is `runtime/bootstrap`: config reload shut
 2. Reload drain logic is covered by deterministic unit tests, not just timing-dependent integration behavior.
 3. Concurrent `Publish` and `Close` on the in-memory event bus are covered by a regression test and do not panic under `go test -race`.
 4. The worker item is explicitly revalidated against current behavior so the backlog row does not claim an unfixed bug.
-5. `go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap` passes.
+5. `cd src && go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap` passes.
+
+## Shutdown Contract
+
+- Graceful shutdown closes the reload admission gate before teardown begins.
+- In-flight reload callbacks are allowed to finish until `shutdownTimeout` expires.
+- If reload drain does not finish before the shutdown context expires, `Run` returns the timeout error and later teardown steps are not guaranteed to run.

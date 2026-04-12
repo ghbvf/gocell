@@ -11,8 +11,8 @@
 - [x] T004 Implement the internal bootstrap reload gate using channel-plus-select drain signaling.
 - [x] T005 Replace the bootstrap `reloadWG` shutdown coordination with the new gate.
 - [x] T006 Add an explicit eventbus lock-order comment so the concurrency guarantee is maintained by future edits.
-- [x] T007 Run targeted package tests and race tests for `runtime/eventbus`, `runtime/worker`, and `runtime/bootstrap`.
-- [x] T008 Run `go build ./...`.
+- [x] T007 Run targeted package tests and race tests for `runtime/eventbus`, `runtime/worker`, and `runtime/bootstrap` from `src/`.
+- [x] T008 Run `go build ./...` from `src/`.
 - [x] T009 Update `docs/backlog.md` to reflect the closure state of the runtime race row.
 - [ ] T010 Create the PR and launch six-role review after verification passes.
 

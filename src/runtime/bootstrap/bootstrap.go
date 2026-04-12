@@ -285,6 +285,8 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		yamlPath, envPrefix := b.configPath, b.envPrefix
 		cfgWatcher.OnChange(func(evt config.WatchEvent) {
 			if !reloads.TryEnter() {
+				slog.Warn("bootstrap: config reload rejected during shutdown",
+					slog.String("path", evt.Path))
 				return
 			}
 			defer reloads.Leave()
@@ -500,6 +502,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 
 	// Step 10: Orderly shutdown.
 	slog.Info("bootstrap: initiating graceful shutdown")
+	reloads.BeginShutdown()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
 
