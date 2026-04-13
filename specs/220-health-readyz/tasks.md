@@ -44,10 +44,10 @@
 
 ### Wave 5 — PR And Review Loop
 
-- [ ] T20 Commit, push, and create the PR against `develop`.
-- [ ] T21 Launch six-seat review on the PR.
-- [ ] T22 Read PR comments and CI status.
-- [ ] T23 Use the fix flow to repair in-scope `C1` and `C2` findings, then re-run validation.
+- [x] T20 Commit, push, and create the PR against `develop`.
+- [x] T21 Launch six-seat review on the PR.
+- [x] T22 Read PR comments and CI status.
+- [x] T23 Use the fix flow to repair in-scope `C1` and `C2` findings, then re-run validation.
 
 ## Dependencies
 
