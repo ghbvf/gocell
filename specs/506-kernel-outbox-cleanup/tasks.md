@@ -16,8 +16,8 @@
 - [x] T009 Run touched cell/example tests and `go build ./...` from `src/`.
 - [x] T010 Update `docs/backlog.md` to reflect closure of the outbox cleanup row.
 - [x] T011 Create the PR with the plan/research context in the description.
-- [ ] T012 Launch six-seat review and collect findings.
-- [ ] T013 Check PR comments + CI, then use the fix workflow on confirmed C1/C2 findings.
+- [x] T012 Launch six-seat review and collect findings.
+- [x] T013 Check PR comments + CI, then use the fix workflow on confirmed C1/C2 findings.
 
 ## Execution Order
 

@@ -164,39 +164,47 @@ type Publisher interface {
 }
 
 // NoopOutboxWriter is an explicit outbox writer sink for tests and demos.
-// It satisfies both Writer and BatchWriter while intentionally discarding
-// entries instead of persisting them.
+// It validates entries like a real writer, then discards them instead of
+// persisting anything. It is not a production durability mechanism.
 type NoopOutboxWriter struct{}
 
-// Write discards the entry and returns nil.
-func (NoopOutboxWriter) Write(context.Context, Entry) error { return nil }
+// Write validates the entry, discards it, and returns nil.
+func (NoopOutboxWriter) Write(_ context.Context, entry Entry) error {
+	return entry.Validate()
+}
 
-// WriteBatch discards all entries and returns nil.
-func (NoopOutboxWriter) WriteBatch(context.Context, []Entry) error { return nil }
+// WriteBatch validates all entries, discards them, and returns nil.
+func (NoopOutboxWriter) WriteBatch(_ context.Context, entries []Entry) error {
+	for i, entry := range entries {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("outbox: noop writer entry[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
 
 var _ BatchWriter = NoopOutboxWriter{}
 
-type discardPublisherMarker interface {
-	isDiscardPublisher()
-}
-
 // DiscardPublisher is an explicit publisher sink for tests and demos.
-// Callers that need to preserve "skipped publish" semantics can detect it via
-// IsDiscardPublisher instead of treating Publish(nil) as a real delivery.
+// Unlike NoopOutboxWriter, it affects direct-publish flows rather than durable
+// outbox writes. Callers that need to preserve "skipped publish" semantics can
+// detect it via IsDiscardPublisher instead of treating Publish(nil) as a real
+// delivery. It is an explicit opt-in sink, not a default runtime fallback.
 type DiscardPublisher struct{}
 
 // Publish discards the payload and returns nil.
 func (DiscardPublisher) Publish(context.Context, string, []byte) error { return nil }
 
-func (DiscardPublisher) isDiscardPublisher() {}
+var _ Publisher = DiscardPublisher{}
 
 // IsDiscardPublisher reports whether p is the explicit discard sink.
 func IsDiscardPublisher(p Publisher) bool {
-	if p == nil {
+	switch p.(type) {
+	case DiscardPublisher, *DiscardPublisher:
+		return true
+	default:
 		return false
 	}
-	_, ok := p.(discardPublisherMarker)
-	return ok
 }
 
 // ---------------------------------------------------------------------------

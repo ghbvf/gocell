@@ -107,7 +107,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 func TestOrderCell_DefaultInit_UsesSafePublisherFallback(t *testing.T) {
 	c := NewOrderCell()
 	require.NoError(t, c.Init(context.Background(), newTestDeps()))
-	assert.True(t, outbox.IsDiscardPublisher(c.publisher))
+	assert.Nil(t, c.publisher)
 
 	r := router.New()
 	c.RegisterRoutes(r)

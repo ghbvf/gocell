@@ -37,10 +37,23 @@ func TestNoopOutboxWriter_Write(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestNoopOutboxWriter_WriteRejectsInvalidEntry(t *testing.T) {
+	writer := NoopOutboxWriter{}
+	err := writer.Write(context.Background(), Entry{})
+	assert.Error(t, err)
+}
+
 func TestNoopOutboxWriter_WriteBatch(t *testing.T) {
 	writer := NoopOutboxWriter{}
 	err := WriteBatchFallback(context.Background(), writer, []Entry{validEntry("noop-1"), validEntry("noop-2")})
 	assert.NoError(t, err)
+}
+
+func TestNoopOutboxWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
+	writer := NoopOutboxWriter{}
+	err := writer.WriteBatch(context.Background(), []Entry{validEntry("noop-1"), {}})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "entry[1]")
 }
 
 func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {

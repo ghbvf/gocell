@@ -2346,17 +2346,17 @@ func (r *mockReceipt) Release(ctx context.Context) error {
 	return r.releaseErr
 }
 
-var _ outbox.Receipt = (*mockReceipt)(nil)
+var _ idempotency.Receipt = (*mockReceipt)(nil)
 
 type mockClaimer struct {
 	mu     sync.Mutex
 	state  idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err    error
 	claims []string
 }
 
-func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.claims = append(c.claims, key)
@@ -2517,11 +2517,11 @@ type sequenceClaimer struct {
 
 type claimResponse struct {
 	state   idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err     error
 }
 
-func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idx := c.callCount

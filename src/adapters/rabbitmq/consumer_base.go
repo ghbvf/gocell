@@ -228,7 +228,7 @@ func (cb *ConsumerBase) claimWithRetry(
 	topic string,
 	entry outbox.Entry,
 	idempotencyKey string,
-) (idempotency.ClaimState, outbox.Receipt, error) {
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	var lastErr error
 
 	for attempt := 0; attempt < cb.config.ClaimRetryCount; attempt++ {
@@ -279,7 +279,7 @@ func (cb *ConsumerBase) handleClaimState(
 	entry outbox.Entry,
 	handler outbox.EntryHandler,
 	state idempotency.ClaimState,
-	receipt outbox.Receipt,
+	receipt idempotency.Receipt,
 ) outbox.HandleResult {
 	switch state {
 	case idempotency.ClaimDone:
@@ -307,7 +307,7 @@ func (cb *ConsumerBase) handleClaimState(
 }
 
 // requeueResult constructs a Requeue HandleResult with the given error and receipt.
-func requeueResult(err error, receipt outbox.Receipt) outbox.HandleResult {
+func requeueResult(err error, receipt idempotency.Receipt) outbox.HandleResult {
 	return outbox.HandleResult{
 		Disposition: outbox.DispositionRequeue,
 		Err:         err,
@@ -323,7 +323,7 @@ func (cb *ConsumerBase) retryLoop(
 	topic string,
 	entry outbox.Entry,
 	handler outbox.EntryHandler,
-	receipt outbox.Receipt,
+	receipt idempotency.Receipt,
 ) outbox.HandleResult {
 	var lastResult outbox.HandleResult
 	for attempt := range cb.config.RetryCount {

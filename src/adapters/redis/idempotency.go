@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -103,7 +102,7 @@ return 0
 `
 
 // Claim attempts to acquire a processing lease for the given key.
-func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	if leaseTTL <= 0 {
 		leaseTTL = idempotency.DefaultLeaseTTL
 	}
@@ -153,7 +152,7 @@ func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, do
 	}
 }
 
-// redisReceipt implements outbox.Receipt for the two-phase idempotency model.
+// redisReceipt implements idempotency.Receipt for the two-phase idempotency model.
 type redisReceipt struct {
 	rdb      cmdable
 	leaseKey string
@@ -169,7 +168,7 @@ type redisReceipt struct {
 }
 
 // Compile-time interface check.
-var _ outbox.Receipt = (*redisReceipt)(nil)
+var _ idempotency.Receipt = (*redisReceipt)(nil)
 
 // Commit marks the key as permanently done and removes the lease.
 // Repeat calls after a successful Commit are no-ops (return nil).
