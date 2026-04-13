@@ -413,6 +413,190 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	_ = sub.Close()
 }
 
+// TestIntegration_OutboxFullChain_NoTrace validates that the outbox pipeline
+// correctly handles the absence of trace context. When the originating HTTP
+// handler has request_id and correlation_id but NO trace_id (e.g. tracing
+// disabled or non-HTTP origin), those two IDs should still round-trip while
+// trace_id remains absent from both entry metadata and consumer context.
+//
+// Satisfies acceptance criterion AC-5: "tracing disabled / non-HTTP context".
+//
+// Infrastructure: PostgreSQL + RabbitMQ (2 testcontainers, no Redis needed).
+func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-no-trace-001")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-no-trace-001")
+	// Deliberately NOT setting trace_id — simulates tracing-disabled context.
+
+	// ---------------------------------------------------------------
+	// Step 1: Start containers.
+	// ---------------------------------------------------------------
+	pool, pgCleanup := setupPostgresContainer(t)
+	defer pgCleanup()
+
+	rmqConn, rmqCleanup := setupRabbitMQContainer(t)
+	defer rmqCleanup()
+
+	// ---------------------------------------------------------------
+	// Step 2: Run migrations.
+	// ---------------------------------------------------------------
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
+	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
+
+	// ---------------------------------------------------------------
+	// Step 3: Build components.
+	// ---------------------------------------------------------------
+	txm := postgres.NewTxManager(pool)
+	writer := postgres.NewOutboxWriter()
+	pub := rabbitmq.NewPublisher(rmqConn)
+	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
+		QueueName:       "outbox.fullchain.notrace.queue",
+		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	relayCfg := postgres.DefaultRelayConfig()
+	relayCfg.PollInterval = 200 * time.Millisecond
+	relayCfg.BatchSize = 10
+	relay := postgres.NewOutboxRelay(pool.DB(), pub, relayCfg)
+
+	// ---------------------------------------------------------------
+	// Step 4: Business write + outbox write.
+	// ---------------------------------------------------------------
+	entryID := uuid.New().String()
+	topic := "test.outbox.fullchain.notrace"
+	entry := outbox.Entry{
+		ID:            entryID,
+		AggregateID:   "order-notrace-42",
+		AggregateType: "order",
+		EventType:     topic,
+		Payload:       []byte(`{"orderId":"order-notrace-42","status":"created"}`),
+		Metadata:      map[string]string{"source": "no-trace-test"},
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	_, err := pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
+		id   TEXT PRIMARY KEY,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err, "create test_orders table")
+
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		tx, ok := postgres.TxFromContext(txCtx)
+		if !ok {
+			t.Fatal("transaction must be in context")
+		}
+		if _, execErr := tx.Exec(txCtx,
+			"INSERT INTO test_orders (id, data) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			"order-notrace-42", "no-trace-test",
+		); execErr != nil {
+			return execErr
+		}
+		return writer.Write(txCtx, entry)
+	})
+	require.NoError(t, err, "business + outbox write should succeed")
+
+	// ---------------------------------------------------------------
+	// Step 5: Start subscriber, then relay.
+	// ---------------------------------------------------------------
+	type observedDelivery struct {
+		entry         outbox.Entry
+		requestID     string
+		correlationID string
+		traceID       string
+		traceOK       bool
+	}
+
+	received := make(chan observedDelivery, 1)
+	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer subCancel()
+
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- sub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
+			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
+			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)
+			received <- observedDelivery{
+				entry:         e,
+				requestID:     requestID,
+				correlationID: correlationID,
+				traceID:       traceID,
+				traceOK:       traceOK,
+			}
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "fullchain-notrace-test")
+	}()
+
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.notrace.queue", subErrCh, 5*time.Second)
+
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	defer relayCancel()
+
+	relayErrCh := make(chan error, 1)
+	go func() {
+		relayErrCh <- relay.Start(relayCtx)
+	}()
+
+	// ---------------------------------------------------------------
+	// Step 6: Wait for the subscriber to receive the message.
+	// ---------------------------------------------------------------
+	var got observedDelivery
+	select {
+	case got = <-received:
+		// Success.
+	case err := <-subErrCh:
+		require.NoError(t, err, "subscriber exited before receiving the message")
+		t.Fatal("subscriber exited before receiving the message")
+	case err := <-relayErrCh:
+		require.NoError(t, err, "relay exited before publishing the message")
+		t.Fatal("relay exited before publishing the message")
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for message from subscriber")
+	}
+
+	// ---------------------------------------------------------------
+	// Step 7: Verify observability metadata — request_id and
+	//         correlation_id survive; trace_id is absent.
+	// ---------------------------------------------------------------
+	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+
+	// Business metadata preserved.
+	assert.Equal(t, "no-trace-test", got.entry.Metadata["source"],
+		"business metadata should be preserved")
+
+	// request_id and correlation_id should round-trip in entry metadata.
+	assert.Equal(t, "req-no-trace-001", got.entry.Metadata["request_id"],
+		"request_id should be injected from context")
+	assert.Equal(t, "corr-no-trace-001", got.entry.Metadata["correlation_id"],
+		"correlation_id should be injected from context")
+
+	// trace_id should NOT be present in metadata (was never in context).
+	traceVal, tracePresent := got.entry.Metadata["trace_id"]
+	assert.True(t, !tracePresent || traceVal == "",
+		"trace_id should be absent or empty in metadata when not in originating context, got %q", traceVal)
+
+	// request_id and correlation_id should be restored into consumer context.
+	assert.Equal(t, "req-no-trace-001", got.requestID,
+		"request_id should be restored into consumer handler context")
+	assert.Equal(t, "corr-no-trace-001", got.correlationID,
+		"correlation_id should be restored into consumer handler context")
+
+	// trace_id should be empty in consumer context.
+	assert.Empty(t, got.traceID,
+		"trace_id should be empty in consumer handler context when not in originating context")
+
+	// ---------------------------------------------------------------
+	// Cleanup.
+	// ---------------------------------------------------------------
+	relayCancel()
+	_ = relay.Stop(ctx)
+	subCancel()
+	_ = sub.Close()
+}
+
 // TestIntegration_OutboxWriteRelayMockPublisher is a lighter variant that
 // validates the write-relay chain (postgres only) with a mock publisher,
 // avoiding the need for RabbitMQ and Redis containers.
