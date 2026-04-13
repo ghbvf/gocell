@@ -14,8 +14,8 @@ import (
 var DefaultPublicEndpoints = []string{
 	"/healthz",
 	"/readyz",
-	"/api/v1/auth/login",
-	"/api/v1/auth/callback",
+	"/api/v1/access/sessions/login",
+	"/api/v1/access/sessions/refresh",
 }
 
 // AuthMiddleware extracts a Bearer token from the Authorization header,

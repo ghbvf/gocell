@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -607,4 +608,122 @@ func TestMetrics_Records429And503(t *testing.T) {
 	}
 	assert.True(t, found429, "metrics must record 429 responses from rate limiter")
 	assert.True(t, found503, "metrics must record 503 responses from circuit breaker")
+}
+
+// --- Auth middleware wiring ---
+
+// routerTestVerifier is a minimal TokenVerifier for router integration tests.
+type routerTestVerifier struct {
+	claims auth.Claims
+	err    error
+}
+
+func (v *routerTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+	return v.claims, v.err
+}
+
+func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
+	verifier := &routerTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	r := New(WithAuthMiddleware(verifier, nil))
+	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called without auth token")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+}
+
+func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
+	verifier := &routerTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	r := New(WithAuthMiddleware(verifier, nil))
+
+	var gotSubject string
+	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		claims, ok := auth.ClaimsFrom(req.Context())
+		assert.True(t, ok, "claims must be in context")
+		gotSubject = claims.Subject
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "user-1", gotSubject)
+}
+
+func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
+	verifier := &routerTestVerifier{
+		err: fmt.Errorf("should not be called"),
+	}
+	publicPaths := []string{"/api/v1/access/sessions/login"}
+	r := New(WithAuthMiddleware(verifier, publicPaths))
+
+	r.Handle("/api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"public endpoint must be accessible without auth token")
+}
+
+func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
+	// Auth middleware is on mux (business routes). Infra endpoints (/healthz, /readyz)
+	// are on outerMux and naturally bypass mux-level auth.
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	hh := health.New(asm)
+	verifier := &routerTestVerifier{
+		err: fmt.Errorf("should not be called for infra"),
+	}
+	r := New(WithHealthHandler(hh), WithAuthMiddleware(verifier, nil))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"/healthz must be reachable without auth token (infra on outerMux)")
+}
+
+func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {
+	// Rate limiter rejects all traffic. Auth middleware is also configured.
+	// We expect 429 (not 401), proving RL runs before auth in the chain.
+	limiter := &routerTestLimiter{allow: false}
+	verifier := &routerTestVerifier{
+		err: fmt.Errorf("should not be called"),
+	}
+	r := New(WithRateLimiter(limiter), WithAuthMiddleware(verifier, nil))
+	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"rate limiter must run before auth middleware — expect 429, not 401")
 }

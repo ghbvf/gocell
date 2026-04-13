@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -1595,4 +1596,146 @@ func TestCloneMap_DeepIsolation_NestedMap(t *testing.T) {
 	// src must be unaffected.
 	assert.Equal(t, "localhost", src["db"].(map[string]any)["host"],
 		"cloneMap must deep-copy nested maps; mutating dst corrupted src")
+}
+
+// --- Auth middleware wiring via bootstrap ---
+
+// httpCell is a test Cell that implements HTTPRegistrar to register a business route.
+type httpCell struct {
+	*cell.BaseCell
+}
+
+func newHTTPCell(id string) *httpCell {
+	return &httpCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
+	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}))
+	mux.Handle("POST /api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+	}))
+}
+
+// bootstrapTestVerifier is a minimal TokenVerifier for bootstrap tests.
+type bootstrapTestVerifier struct {
+	claims auth.Claims
+	err    error
+}
+
+func (v *bootstrapTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+	return v.claims, v.err
+}
+
+func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-auth-401"})
+	hc := newHTTPCell("auth-test-cell")
+	require.NoError(t, asm.Register(hc))
+
+	verifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithAuthMiddleware(verifier, nil),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// Protected route without token → 401.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"business route without auth token must return 401")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-auth-public"})
+	hc := newHTTPCell("auth-public-cell")
+	require.NoError(t, asm.Register(hc))
+
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not verify for public route"),
+	}
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithAuthMiddleware(verifier, nil), // uses DefaultPublicEndpoints
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// Public login route without token → should pass auth.
+	resp, err := testHTTPClient.Post(
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr),
+		"application/json", nil,
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"public login endpoint must be accessible without auth token")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
 }

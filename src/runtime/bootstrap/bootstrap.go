@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
@@ -132,6 +133,27 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 		if cl, ok := cb.(io.Closer); ok {
 			b.closers = append(b.closers, cl)
 		}
+	}
+}
+
+// WithAuthMiddleware enables authentication for HTTP business routes. The
+// verifier is forwarded to the router's middleware chain via
+// router.WithAuthMiddleware.
+//
+// publicEndpoints specifies paths that bypass authentication. If nil,
+// auth.DefaultPublicEndpoints is used (includes /healthz, /readyz, and the
+// standard login/refresh paths). Callers should include their login endpoint
+// if it differs from the default.
+//
+// Infra endpoints (/healthz, /readyz, /metrics) are registered on the router's
+// outer mux and naturally bypass business-route middleware, so they do not need
+// to be listed in publicEndpoints.
+//
+// ref: go-kratos/kratos — auth middleware at service level
+// ref: go-zero — per-route WithJwt() opt-in auth
+func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithAuthMiddleware(verifier, publicEndpoints))
 	}
 }
 
