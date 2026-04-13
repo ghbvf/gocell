@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -100,6 +101,28 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 	}
 }
 
+// WithAuthMiddleware enables authentication in the default middleware chain.
+// When provided, the auth middleware is placed after CircuitBreaker and before
+// BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
+// Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
+// affected — they bypass business-route middleware entirely.
+//
+// publicEndpoints specifies paths that bypass authentication. If nil,
+// auth.DefaultPublicEndpoints is used. Callers should include their login and
+// token refresh endpoints.
+//
+// ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
+// ref: go-zero — per-route WithJwt() opt-in auth
+func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
+	if verifier == nil {
+		panic("router: WithAuthMiddleware requires a non-nil TokenVerifier")
+	}
+	return func(r *Router) {
+		r.authVerifier = verifier
+		r.authPublicEndpoints = publicEndpoints
+	}
+}
+
 // WithTrustedProxies configures the set of trusted proxy IPs/CIDRs for
 // X-Forwarded-For header processing. Supports both exact IPs ("192.168.1.1")
 // and CIDR notation ("10.0.0.0/8"). When nil (default), no proxy is trusted
@@ -128,10 +151,12 @@ type Router struct {
 	metricsCollector metrics.Collector
 	metricsHandler   http.Handler
 	tracer           tracing.Tracer
-	rateLimiter      middleware.RateLimiter
-	circuitBreaker   middleware.CircuitBreakerPolicy
-	bodyLimit        int64
-	trustedProxies   []string
+	rateLimiter         middleware.RateLimiter
+	circuitBreaker      middleware.CircuitBreakerPolicy
+	authVerifier        auth.TokenVerifier
+	authPublicEndpoints []string
+	bodyLimit           int64
+	trustedProxies      []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -139,14 +164,17 @@ type Router struct {
 // Use NewE for an error-returning variant suitable for managed startup
 // sequences like Bootstrap.Run where rollback must be possible.
 //
-// Default middleware chain for business routes (applied in order):
+// The request chain is split across two chi.Mux instances:
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → [RateLimit] → [CircuitBreaker] → Recovery → SecurityHeaders → BodyLimit
+//	outerMux: RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → Recovery → SecurityHeaders
+//	  ├── infra routes: /healthz, /readyz, /metrics (bypass RL/CB/Auth)
+//	  └── Mount("/", mux)
+//	       mux: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → business routes
 //
-// Infrastructure endpoints (/healthz, /readyz, /metrics) are registered in a
-// separate group that shares the observability stack (RequestID through Metrics)
-// but bypasses RateLimit and CircuitBreaker. This prevents overload protection
-// from short-circuiting health probes and metric scrapes.
+// Infrastructure endpoints are registered on outerMux and get shared
+// observability + Recovery + SecurityHeaders but bypass RateLimit,
+// CircuitBreaker, and Auth. This prevents overload/auth protection from
+// short-circuiting health probes and metric scrapes.
 //
 // ref: go-zero rest/engine.go — management endpoints on separate handler chain
 // ref: Kratos transport/http — middleware split between server and business
@@ -231,15 +259,18 @@ func NewE(opts ...Option) (*Router, error) {
 		}
 	}
 
-	// --- Phase 2: mux — business routes with RL/CB ---
+	// --- Phase 2: mux — business routes with RL/CB/Auth ---
 	// Cells register routes on mux via Handle/Route/Mount/Group/With.
-	// Business chain: [RateLimit] → [CircuitBreaker] → BodyLimit → handler.
+	// Business chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
 	// Recovery + SecurityHeaders already applied by outerMux.
 	if r.rateLimiter != nil {
 		r.mux.Use(middleware.RateLimit(r.rateLimiter))
 	}
 	if r.circuitBreaker != nil {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
+	}
+	if r.authVerifier != nil {
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 

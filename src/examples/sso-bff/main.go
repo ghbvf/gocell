@@ -125,10 +125,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Public endpoints — login and refresh accessible without JWT.
+	publicEndpoints := []string{
+		"/api/v1/access/sessions/login",
+		"/api/v1/access/sessions/refresh",
+	}
+
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
+		bootstrap.WithAuthMiddleware(jwtVerifier, publicEndpoints),
 	)
 
 	logger.Info("sso-bff: starting on :8081",
