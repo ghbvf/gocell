@@ -56,7 +56,7 @@
 | Watcher 状态面 + 连接池指标 | **R97-F3**(Generation observedGeneration 状态面，拆 desired vs applied，需健康端点集成；**依赖 Health/Readyz PR**) + **OPS-5**(PG/Redis/RabbitMQ 连接池指标，从 B8 合入) | 4h | `runtime/config/` + `adapters/postgres/` + `adapters/redis/` + `adapters/rabbitmq/` |
 | ~~runtime 竞态修复~~ | ~~R1C2-F01(eventbus 并发回归测试 + Close/Publish 锁序注释) + R1C2-F03(已验证: WorkerGroup cancel-on-error 已覆盖) + R97-R3-01(reload gate 替换 WaitGroup Add-after-Wait 窗口)~~ ✅ PR#107 | ✅ done | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
 | RabbitMQ 连接正确性 | RMQ-RACE-01(WaitConnected竞态) + P3-DEFER-05(Health状态区分) | 4h | `adapters/rabbitmq/connection.go` |
-| kernel outbox 清理 | P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) + **DISCARD-PUB-01**(discardPublisher 提升到 `kernel/outbox.DiscardPublisher`) | 4.5h | `kernel/outbox/` + `kernel/idempotency/` + `cells/order-cell/cell.go` |
+| ~~kernel outbox 清理~~ | ~~P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) + **DISCARD-PUB-01**(discardPublisher 提升到 `kernel/outbox.DiscardPublisher`)~~ ✅ PR#113 | ✅ done | `kernel/outbox/` + `kernel/idempotency/` + `cells/order-cell/cell.go` |
 | **L4 API 收敛** | **L4-API-01**: Validate 改名 ValidateNew（create-only 语义）+ AdvanceCommand 统一 timestamps/attempt 副作用 + CommandStateAdvancer 暴露完整迁移契约 + **L4-PURE-01**(构造函数 `time.Now()`→参数注入) + **L4-RETRY-01**(`ResetForRetry` 补缺，禁止 adapter 绕过状态机) | 5.5h | `kernel/outbox/l4.go` **(P1, discovered via PR#93 六席位复核; L4-PURE/RETRY 从 B8 合入)** |
 
 ---
