@@ -39,7 +39,7 @@
 |--------------------|--------|----------------------|----------------------------------|
 | `/healthz`         | GET    | `200 OK`             | Process is alive                 |
 | `/readyz`          | GET    | `200 OK`             | Ready to accept traffic; aggregate status only |
-| `/readyz?verbose`  | GET    | `200` + JSON details | Per-dependency health status     |
+| `/readyz?verbose`  | GET    | `200` + JSON details | Cell and dependency breakdown    |
 
 `/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
 
@@ -51,6 +51,20 @@ curl -sf http://{host}:{port}/healthz
 
 # Detailed readiness check
 curl -sf http://{host}:{port}/readyz?verbose | jq .
+```
+
+Example verbose response:
+
+```json
+{
+   "status": "healthy",
+   "cells": {
+      "access-core": "healthy"
+   },
+   "dependencies": {
+      "config-watcher": "healthy"
+   }
+}
 ```
 
 ---

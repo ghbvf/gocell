@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -245,6 +246,36 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	assert.Equal(t, "healthy", deps["db"])
+}
+
+func TestReadyzVerboseQueryParsing(t *testing.T) {
+	tests := []struct {
+		name      string
+		rawQuery  string
+		wantValue bool
+	}{
+		{name: "absent", rawQuery: "", wantValue: false},
+		{name: "bare flag", rawQuery: "verbose", wantValue: true},
+		{name: "one", rawQuery: "verbose=1", wantValue: true},
+		{name: "true", rawQuery: "verbose=true", wantValue: true},
+		{name: "false", rawQuery: "verbose=false", wantValue: false},
+		{name: "yes not supported", rawQuery: "verbose=yes", wantValue: false},
+		{name: "unknown not supported", rawQuery: "verbose=debug", wantValue: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+			if tt.rawQuery != "" {
+				req.URL.RawQuery = tt.rawQuery
+				req.URL.ForceQuery = tt.rawQuery == "verbose"
+				if tt.rawQuery == "verbose" {
+					req.URL.RawQuery = url.Values{"verbose": []string{""}}.Encode()
+				}
+			}
+			assert.Equal(t, tt.wantValue, readyzVerbose(req))
+		})
+	}
 }
 
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {

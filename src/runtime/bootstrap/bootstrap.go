@@ -39,6 +39,11 @@ type Option func(*Bootstrap)
 
 var newConfigWatcher = config.NewWatcher
 
+const (
+	configWatcherCheckerName = "config-watcher"
+	eventRouterCheckerName   = "eventrouter"
+)
+
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
@@ -174,9 +179,10 @@ func WithListener(ln net.Listener) Option {
 	}
 }
 
-// WithHealthChecker registers a named readiness checker that will be
-// included in /readyz responses. Use this to wire adapter health probes
-// (e.g., conn.Health for RabbitMQ) without bootstrap depending on adapter types.
+// WithHealthChecker registers a named readiness checker that contributes to
+// aggregate /readyz and appears in `/readyz?verbose` responses. Use this to
+// wire adapter health probes (e.g., conn.Health for RabbitMQ) without
+// bootstrap depending on adapter types.
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
 func WithHealthChecker(name string, fn func() error) Option {
@@ -444,11 +450,24 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh := health.New(asm)
+	registeredCheckerNames := make(map[string]struct{}, len(b.healthCheckers)+2)
+	registerHealthChecker := func(name string, fn func() error) error {
+		if _, exists := registeredCheckerNames[name]; exists {
+			return fmt.Errorf("bootstrap: duplicate health checker %q", name)
+		}
+		hh.RegisterChecker(name, health.Checker(fn))
+		registeredCheckerNames[name] = struct{}{}
+		return nil
+	}
 	for _, hc := range b.healthCheckers {
-		hh.RegisterChecker(hc.name, health.Checker(hc.fn))
+		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
+			return rollback(err)
+		}
 	}
 	if cfgWatcher != nil {
-		hh.RegisterChecker("config-watcher", cfgWatcher.Health)
+		if err := registerHealthChecker(configWatcherCheckerName, cfgWatcher.Health); err != nil {
+			return rollback(err)
+		}
 	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
 	rtr, err := router.NewE(routerOpts...)
@@ -501,7 +520,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			}
 		}
 		if evtRouter.HandlerCount() > 0 {
-			hh.RegisterChecker("eventrouter", evtRouter.Health)
+			if err := registerHealthChecker(eventRouterCheckerName, evtRouter.Health); err != nil {
+				return rollback(err)
+			}
 			slog.Info("bootstrap: starting event router",
 				slog.Int("handler_count", evtRouter.HandlerCount()))
 			routerErrCh = make(chan error, 1)

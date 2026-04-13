@@ -762,17 +762,25 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose=true", addr))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "verbose readyz output must contain dependencies")
-	assert.Equal(t, "healthy", deps["config-watcher"])
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return false
+		}
+		deps, ok := body["dependencies"].(map[string]any)
+		if !ok {
+			return false
+		}
+		return deps[configWatcherCheckerName] == "healthy"
+	}, 3*time.Second, 50*time.Millisecond, "config watcher did not become ready in time")
 
 	cancel()
 	select {
@@ -809,6 +817,29 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config watcher")
 	assert.Contains(t, err.Error(), "watcher init failed")
+}
+
+func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	asm := assembly.New(assembly.Config{ID: "test-reserved-health-checker"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithHealthChecker("config-watcher", func() error { return nil }),
+		WithShutdownTimeout(time.Second),
+	)
+
+	require.NotPanics(t, func() {
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate health checker")
+		assert.Contains(t, err.Error(), "config-watcher")
+	})
 }
 
 func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {

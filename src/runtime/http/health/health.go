@@ -1,6 +1,6 @@
 // Package health provides /healthz (liveness) and /readyz (readiness) HTTP
-// endpoints that aggregate kernel/assembly health status and custom readiness
-// checkers.
+// endpoints. /readyz returns aggregate readiness by default and only exposes
+// detailed cell and dependency breakdown in verbose mode.
 package health
 
 import (
@@ -63,12 +63,18 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // dependency breakdown is returned only when the request enables verbose mode.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		verbose := readyzVerbose(r)
 		cellHealth := h.assembly.Health()
 
-		cells := make(map[string]string, len(cellHealth))
+		var cells map[string]string
+		if verbose {
+			cells = make(map[string]string, len(cellHealth))
+		}
 		allHealthy := true
 		for id, hs := range cellHealth {
-			cells[id] = hs.Status
+			if verbose {
+				cells[id] = hs.Status
+			}
 			if hs.Status != "healthy" {
 				allHealthy = false
 			}
@@ -81,13 +87,20 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		}
 		h.mu.RUnlock()
 
-		dependencies := make(map[string]string, len(checkersCopy))
+		var dependencies map[string]string
+		if verbose {
+			dependencies = make(map[string]string, len(checkersCopy))
+		}
 		for name, fn := range checkersCopy {
 			if err := fn(); err != nil {
-				dependencies[name] = "unhealthy"
+				if verbose {
+					dependencies[name] = "unhealthy"
+				}
 				allHealthy = false
 			} else {
-				dependencies[name] = "healthy"
+				if verbose {
+					dependencies[name] = "healthy"
+				}
 			}
 		}
 
@@ -101,7 +114,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		response := map[string]any{
 			"status": status,
 		}
-		if readyzVerbose(r) {
+		if verbose {
 			response["cells"] = cells
 			response["dependencies"] = dependencies
 		}
@@ -121,7 +134,7 @@ func readyzVerbose(r *http.Request) bool {
 	for _, value := range values {
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {
-		case "", "1", "true", "yes", "y", "on":
+		case "", "1", "true":
 			return true
 		}
 	}
