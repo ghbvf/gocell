@@ -1705,7 +1705,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(verifier, nil), // uses DefaultPublicEndpoints
+		WithAuthMiddleware(verifier, []string{"/api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

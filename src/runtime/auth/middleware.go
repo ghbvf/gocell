@@ -10,16 +10,16 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-// DefaultPublicEndpoints is the default set of business-route paths that do
-// not require authentication. Infra endpoints (/healthz, /readyz, /metrics)
-// bypass auth via the router's outerMux architecture and are not listed here.
+// DefaultPublicEndpoints is intentionally empty. Public route policy must be
+// declared at the composition root (main.go / bootstrap call site), not in
+// runtime/auth. Callers pass explicit publicEndpoints to WithAuthMiddleware.
 //
-// The slice is read at AuthMiddleware construction time; later mutations have
-// no effect on already-constructed middleware instances.
-var DefaultPublicEndpoints = []string{
-	"/api/v1/access/sessions/login",
-	"/api/v1/access/sessions/refresh",
-}
+// Infra endpoints (/healthz, /readyz, /metrics) bypass auth via the router's
+// outerMux architecture and do not need to be listed here.
+//
+// ref: go-kratos/kratos — public bypass via selector at composition layer
+// ref: go-zero — JWT opt-in per route group, no hidden runtime defaults
+var DefaultPublicEndpoints = []string{}
 
 // AuthMiddleware extracts a Bearer token from the Authorization header,
 // verifies it using the provided TokenVerifier, and stores the resulting

@@ -166,10 +166,18 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Public endpoints declared at composition root — not in runtime/auth defaults.
+	// Only login and refresh are accessible without a valid JWT.
+	publicEndpoints := []string{
+		"/api/v1/access/sessions/login",
+		"/api/v1/access/sessions/refresh",
+	}
+
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithAuthMiddleware(jwtVerifier, publicEndpoints),
 	)
 
 	if err := app.Run(ctx); err != nil {
