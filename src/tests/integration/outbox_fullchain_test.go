@@ -655,8 +655,15 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	case msg := <-mock.messages:
 		assert.Equal(t, "mock.created", msg.topic, "topic should match event type")
 
-		// The relay marshals the full outbox.Entry as JSON.
-		var relayed outbox.Entry
+		// The relay serializes via outboxMessage where Payload is json.RawMessage
+		// (embedded as a raw JSON object, not base64). Use a matching struct.
+		var relayed struct {
+			ID            string          `json:"id"`
+			AggregateID   string          `json:"aggregateId"`
+			AggregateType string          `json:"aggregateType"`
+			EventType     string          `json:"eventType"`
+			Payload       json.RawMessage `json:"payload"`
+		}
 		require.NoError(t, json.Unmarshal(msg.payload, &relayed), "payload should be valid JSON")
 		assert.Equal(t, entryID, relayed.ID, "relayed entry ID should match")
 		assert.Equal(t, "agg-mock-1", relayed.AggregateID)
@@ -667,12 +674,11 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	}
 
 	// Verify the entry was marked as published.
-	time.Sleep(300 * time.Millisecond)
-
 	var pubStatus string
-	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
-	require.NoError(t, err)
-	assert.Equal(t, "published", pubStatus, "outbox entry should have status='published' after relay")
+	require.Eventually(t, func() bool {
+		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
+		return queryErr == nil && pubStatus == "published"
+	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
 
 	relayCancel()
 	_ = relay.Stop(ctx)
