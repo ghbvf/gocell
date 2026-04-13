@@ -1,6 +1,7 @@
 package ordercreate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -255,6 +256,19 @@ func TestService_Create_DemoNilPublisher(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, order)
 	assert.Equal(t, "nil-pub", order.Item)
+}
+
+func TestService_Create_DemoDiscardPublisherLogsSkip(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	svc := NewService(repo, outbox.DiscardPublisher{}, logger)
+
+	order, err := svc.Create(context.Background(), "discard-pub")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Contains(t, logs.String(), "skipping direct publish")
+	assert.NotContains(t, logs.String(), "event published")
 }
 
 func TestService_Create_DemoRepoFailure(t *testing.T) {

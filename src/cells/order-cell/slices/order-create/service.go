@@ -122,6 +122,13 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return order, nil
 	}
 
+	if outbox.IsDiscardPublisher(s.publisher) {
+		s.logger.Warn("order-create: publisher configured to discard, skipping direct publish",
+			slog.String("order_id", order.ID),
+		)
+		return order, nil
+	}
+
 	if err := s.publisher.Publish(ctx, TopicOrderCreated, payload); err != nil {
 		s.logger.Error("order-create: publish event failed",
 			slog.String("order_id", order.ID),

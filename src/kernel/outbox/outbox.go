@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -162,6 +163,42 @@ type Publisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
 }
 
+// NoopOutboxWriter is an explicit outbox writer sink for tests and demos.
+// It satisfies both Writer and BatchWriter while intentionally discarding
+// entries instead of persisting them.
+type NoopOutboxWriter struct{}
+
+// Write discards the entry and returns nil.
+func (NoopOutboxWriter) Write(context.Context, Entry) error { return nil }
+
+// WriteBatch discards all entries and returns nil.
+func (NoopOutboxWriter) WriteBatch(context.Context, []Entry) error { return nil }
+
+var _ BatchWriter = NoopOutboxWriter{}
+
+type discardPublisherMarker interface {
+	isDiscardPublisher()
+}
+
+// DiscardPublisher is an explicit publisher sink for tests and demos.
+// Callers that need to preserve "skipped publish" semantics can detect it via
+// IsDiscardPublisher instead of treating Publish(nil) as a real delivery.
+type DiscardPublisher struct{}
+
+// Publish discards the payload and returns nil.
+func (DiscardPublisher) Publish(context.Context, string, []byte) error { return nil }
+
+func (DiscardPublisher) isDiscardPublisher() {}
+
+// IsDiscardPublisher reports whether p is the explicit discard sink.
+func IsDiscardPublisher(p Publisher) bool {
+	if p == nil {
+		return false
+	}
+	_, ok := p.(discardPublisherMarker)
+	return ok
+}
+
 // ---------------------------------------------------------------------------
 // Disposition / Receipt / HandleResult — Solution B types
 // ---------------------------------------------------------------------------
@@ -207,25 +244,10 @@ func (d Disposition) String() string {
 	}
 }
 
-// Receipt represents a claimable idempotency token attached to a single
-// message processing attempt. The broker-layer (Subscriber) manages the
-// Receipt lifecycle AFTER executing the broker Ack/Nack:
-//
-//   - DispositionAck    + broker Ack success  → Receipt.Commit()
-//   - DispositionReject + broker Nack success → Receipt.Release()  (allows DLQ replay)
-//   - DispositionRequeue + broker Nack success → Receipt.Release()
-//   - Any broker Ack/Nack failure             → Receipt.Release()
-//
-// Callers MUST use context.WithoutCancel for Receipt operations to ensure
-// idempotency state is persisted even during graceful shutdown.
-type Receipt interface {
-	// Commit marks the idempotency key as permanently done.
-	// Only called after DispositionAck + successful broker Ack.
-	Commit(ctx context.Context) error
-	// Release removes the processing lease so redelivery can re-enter.
-	// Called for Reject (allows DLQ replay), Requeue, and broker errors.
-	Release(ctx context.Context) error
-}
+// Receipt is kept as a package alias while canonical ownership now lives in
+// kernel/idempotency. Commit/Release describe the consumer-side claim
+// lifecycle rather than publisher behavior.
+type Receipt = idempotency.Receipt
 
 // HandleResult carries the business handler's processing outcome.
 // The Subscriber inspects Disposition to decide Ack/Nack, then calls

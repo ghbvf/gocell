@@ -31,6 +31,27 @@ func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byt
 
 var _ Publisher = (*mockPublisher)(nil)
 
+func TestNoopOutboxWriter_Write(t *testing.T) {
+	writer := NoopOutboxWriter{}
+	err := writer.Write(context.Background(), validEntry("noop"))
+	assert.NoError(t, err)
+}
+
+func TestNoopOutboxWriter_WriteBatch(t *testing.T) {
+	writer := NoopOutboxWriter{}
+	err := WriteBatchFallback(context.Background(), writer, []Entry{validEntry("noop-1"), validEntry("noop-2")})
+	assert.NoError(t, err)
+}
+
+func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
+	var publisher Publisher = DiscardPublisher{}
+	err := publisher.Publish(context.Background(), "orders.created", []byte(`{"ok":true}`))
+	assert.NoError(t, err)
+	assert.True(t, IsDiscardPublisher(publisher))
+	assert.False(t, IsDiscardPublisher(&mockPublisher{}))
+	assert.False(t, IsDiscardPublisher(nil))
+}
+
 type mockSubscriber struct{}
 
 func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler, _ string) error {

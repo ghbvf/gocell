@@ -18,18 +18,13 @@ import (
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
-// noopWriter is a no-op outbox.Writer for testing.
-type noopWriter struct{}
-
-func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 func newTestCell() *AuditCore {
 	return NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopOutboxWriter{}),
 	)
 }
 
@@ -95,7 +90,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopOutboxWriter{}),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{

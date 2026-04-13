@@ -27,13 +27,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// noopWriter satisfies outbox.Writer for development mode.
-// L2+ Cells require an outbox writer for fail-fast validation;
-// this no-op implementation skips transactional outbox persistence.
-type noopWriter struct{}
-
-func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -65,7 +58,7 @@ func main() {
 	}
 
 	// Shared noop outbox writer for all L2+ Cells.
-	var nw outbox.Writer = noopWriter{}
+	var nw outbox.Writer = outbox.NoopOutboxWriter{}
 
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(

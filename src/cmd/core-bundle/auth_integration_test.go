@@ -22,11 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopOutboxWriter satisfies outbox.Writer for test mode.
-type noopOutboxWriter struct{}
-
-func (noopOutboxWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 // TestAuthWiring_RealAssembly_ProtectedRoutes401 boots a real assembly
@@ -51,7 +46,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, err)
 
 	eb := eventbus.New()
-	var nw outbox.Writer = noopOutboxWriter{}
+	var nw outbox.Writer = outbox.NoopOutboxWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)

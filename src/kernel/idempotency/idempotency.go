@@ -5,8 +5,6 @@ package idempotency
 import (
 	"context"
 	"time"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // DefaultTTL is the standard idempotency key TTL per the EventBus specification.
@@ -16,6 +14,18 @@ const DefaultTTL = 24 * time.Hour
 // If a consumer crashes mid-processing, the lease expires after this duration,
 // allowing another consumer to re-claim the message.
 const DefaultLeaseTTL = 5 * time.Minute
+
+// Receipt represents the lifecycle handle for a single acquired idempotency
+// lease. It is canonical to the consumer-side idempotency flow:
+// Claim acquires a lease, then the caller Commits it after broker Ack or
+// Releases it after Reject/Requeue.
+//
+// Callers MUST use context.WithoutCancel for Receipt operations to ensure the
+// idempotency state is persisted even during graceful shutdown.
+type Receipt interface {
+	Commit(ctx context.Context) error
+	Release(ctx context.Context) error
+}
 
 // ---------------------------------------------------------------------------
 // ClaimState — two-phase idempotency model (Solution B)
@@ -61,5 +71,5 @@ type Claimer interface {
 	//   - (ClaimDone, nil, nil) — already processed; caller should Ack.
 	//   - (ClaimBusy, nil, nil) — another consumer is processing; caller should Requeue.
 	//   - (_, nil, err) — infrastructure error.
-	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, outbox.Receipt, error)
+	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, Receipt, error)
 }

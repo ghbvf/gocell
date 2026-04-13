@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -21,21 +20,33 @@ func TestClaimState_Values(t *testing.T) {
 
 type mockClaimer struct {
 	state   ClaimState
-	receipt outbox.Receipt
+	receipt Receipt
 	err     error
 }
 
-func (m *mockClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (ClaimState, outbox.Receipt, error) {
+type mockReceipt struct{}
+
+func (mockReceipt) Commit(context.Context) error { return nil }
+func (mockReceipt) Release(context.Context) error { return nil }
+
+var _ Receipt = mockReceipt{}
+
+func (m *mockClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (ClaimState, Receipt, error) {
 	return m.state, m.receipt, m.err
 }
 
 var _ Claimer = (*mockClaimer)(nil)
 
 func TestClaimerInterface(t *testing.T) {
-	var c Claimer = &mockClaimer{state: ClaimAcquired}
+	var c Claimer = &mockClaimer{state: ClaimAcquired, receipt: mockReceipt{}}
 	state, _, err := c.Claim(context.Background(), "test-key", DefaultLeaseTTL, DefaultTTL)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimAcquired, state)
+}
+
+func TestReceiptInterface(t *testing.T) {
+	var receipt Receipt = mockReceipt{}
+	assert.NotNil(t, receipt)
 }
 
 // --- DefaultLeaseTTL Test ---
