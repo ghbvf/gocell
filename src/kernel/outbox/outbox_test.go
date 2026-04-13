@@ -61,6 +61,7 @@ func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
 	err := publisher.Publish(context.Background(), "orders.created", []byte(`{"ok":true}`))
 	assert.NoError(t, err)
 	assert.True(t, IsDiscardPublisher(publisher))
+	assert.True(t, IsDiscardPublisher(&DiscardPublisher{}), "pointer receiver must also match")
 	assert.False(t, IsDiscardPublisher(&mockPublisher{}))
 	assert.False(t, IsDiscardPublisher(nil))
 }

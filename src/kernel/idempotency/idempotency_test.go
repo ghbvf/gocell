@@ -44,9 +44,10 @@ func TestClaimerInterface(t *testing.T) {
 	assert.Equal(t, ClaimAcquired, state)
 }
 
-func TestReceiptInterface(t *testing.T) {
+func TestReceipt_CommitRelease(t *testing.T) {
 	var receipt Receipt = mockReceipt{}
-	assert.NotNil(t, receipt)
+	assert.NoError(t, receipt.Commit(context.Background()))
+	assert.NoError(t, receipt.Release(context.Background()))
 }
 
 // --- DefaultLeaseTTL Test ---

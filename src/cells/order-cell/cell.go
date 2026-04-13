@@ -114,10 +114,7 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	if c.publisher == nil && c.outboxWriter == nil {
-		c.logger.Warn("order-cell: no publisher injected, direct publish path disabled in demo mode")
-	}
-	if outbox.IsDiscardPublisher(c.publisher) && c.outboxWriter == nil {
-		c.logger.Warn("order-cell: discard publisher injected, direct publish path disabled in demo mode")
+		c.logger.Warn("order-cell: no publisher or outbox writer injected (demo mode)")
 	}
 
 	// order-create slice

@@ -109,12 +109,6 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return nil, fmt.Errorf("order-create: persist: %w", err)
 	}
 
-	payload, err := json.Marshal(order)
-	if err != nil {
-		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
-		return order, nil // order is created, event publish is best-effort
-	}
-
 	if s.publisher == nil {
 		s.logger.Warn("order-create: publisher not configured, skipping direct publish",
 			slog.String("order_id", order.ID),
@@ -122,11 +116,10 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return order, nil
 	}
 
-	if outbox.IsDiscardPublisher(s.publisher) {
-		s.logger.Warn("order-create: publisher configured to discard, skipping direct publish",
-			slog.String("order_id", order.ID),
-		)
-		return order, nil
+	payload, err := json.Marshal(order)
+	if err != nil {
+		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
+		return order, nil // order is created, event publish is best-effort
 	}
 
 	if err := s.publisher.Publish(ctx, TopicOrderCreated, payload); err != nil {

@@ -187,13 +187,16 @@ var _ BatchWriter = NoopOutboxWriter{}
 
 // DiscardPublisher is an explicit publisher sink for tests and demos.
 // Unlike NoopOutboxWriter, it affects direct-publish flows rather than durable
-// outbox writes. Callers that need to preserve "skipped publish" semantics can
-// detect it via IsDiscardPublisher instead of treating Publish(nil) as a real
-// delivery. It is an explicit opt-in sink, not a default runtime fallback.
+// outbox writes. It is an explicit opt-in sink, not a default runtime fallback.
+//
+// Publish logs a structured warning and discards the payload.
 type DiscardPublisher struct{}
 
-// Publish discards the payload and returns nil.
-func (DiscardPublisher) Publish(context.Context, string, []byte) error { return nil }
+// Publish logs a discard warning and returns nil.
+func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error {
+	slog.Warn("outbox: discard publisher dropping message", slog.String("topic", topic))
+	return nil
+}
 
 var _ Publisher = DiscardPublisher{}
 
