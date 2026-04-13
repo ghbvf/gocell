@@ -64,6 +64,9 @@ type Router struct {
 	runningOnce    sync.Once // ensures close(r.running) is called at most once
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
+	statusMu       sync.RWMutex
+	started        bool
+	healthErr      error
 }
 
 // Compile-time interface check.
@@ -140,6 +143,7 @@ func (r *Router) Run(ctx context.Context) error {
 	r.mu.Unlock()
 
 	if len(handlers) == 0 {
+		r.markRunning()
 		r.closeRunning()
 		<-runCtx.Done()
 		return nil
@@ -171,6 +175,7 @@ func (r *Router) Run(ctx context.Context) error {
 	// Wait for setup phase: either an error arrives or startup timeout passes.
 	select {
 	case err := <-setupErr:
+		r.markHealthError(err)
 		slog.Error("eventrouter: subscription setup failed, shutting down",
 			slog.Any("error", err))
 		cancel()
@@ -178,6 +183,7 @@ func (r *Router) Run(ctx context.Context) error {
 		return err
 	case <-time.After(r.startupTimeout):
 		// No errors within timeout — all handlers are consuming.
+		r.markRunning()
 		slog.Info("eventrouter: all subscriptions started",
 			slog.Int("count", len(handlers)))
 		r.closeRunning()
@@ -191,6 +197,7 @@ func (r *Router) Run(ctx context.Context) error {
 	select {
 	case <-runCtx.Done():
 	case err := <-setupErr:
+		r.markHealthError(err)
 		slog.Error("eventrouter: subscription failed at runtime",
 			slog.Any("error", err))
 		cancel()
@@ -215,6 +222,37 @@ func (r *Router) closeRunning() {
 // should also monitor the error from Run.
 func (r *Router) Running() <-chan struct{} {
 	return r.running
+}
+
+// Health reports whether the router is ready to serve subscriptions.
+// It returns nil only after startup completes successfully and before a setup
+// or runtime failure has been recorded.
+func (r *Router) Health() error {
+	r.statusMu.RLock()
+	defer r.statusMu.RUnlock()
+	if r.healthErr != nil {
+		return r.healthErr
+	}
+	if !r.started {
+		return fmt.Errorf("eventrouter: not running")
+	}
+	return nil
+}
+
+func (r *Router) markRunning() {
+	r.statusMu.Lock()
+	defer r.statusMu.Unlock()
+	r.started = true
+	r.healthErr = nil
+}
+
+func (r *Router) markHealthError(err error) {
+	if err == nil {
+		return
+	}
+	r.statusMu.Lock()
+	defer r.statusMu.Unlock()
+	r.healthErr = err
 }
 
 // Close cancels all subscriptions and waits for goroutines to finish.

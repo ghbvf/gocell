@@ -38,8 +38,10 @@
 | Endpoint           | Method | Expected Response    | Meaning                          |
 |--------------------|--------|----------------------|----------------------------------|
 | `/healthz`         | GET    | `200 OK`             | Process is alive                 |
-| `/readyz`          | GET    | `200 OK`             | Ready to accept traffic          |
+| `/readyz`          | GET    | `200 OK`             | Ready to accept traffic; aggregate status only |
 | `/readyz?verbose`  | GET    | `200` + JSON details | Per-dependency health status     |
+
+`/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
 
 ### Health Check Verification
 

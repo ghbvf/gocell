@@ -37,6 +37,8 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
+var newConfigWatcher = config.NewWatcher
+
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
@@ -285,9 +287,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// file events are consumed but no callback is bound to handle them.
 	var cfgWatcher *config.Watcher
 	if b.configPath != "" {
-		w, err := config.NewWatcher(b.configPath)
+		w, err := newConfigWatcher(b.configPath)
 		if err != nil {
-			slog.Warn("bootstrap: config watcher not available", slog.Any("error", err))
+			return rollback(fmt.Errorf("bootstrap: config watcher: %w", err))
 		} else {
 			cfgWatcher = w
 			teardowns = append(teardowns, func(_ context.Context) error {
@@ -445,6 +447,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	for _, hc := range b.healthCheckers {
 		hh.RegisterChecker(hc.name, health.Checker(hc.fn))
 	}
+	if cfgWatcher != nil {
+		hh.RegisterChecker("config-watcher", cfgWatcher.Health)
+	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
 	rtr, err := router.NewE(routerOpts...)
 	if err != nil {
@@ -496,6 +501,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			}
 		}
 		if evtRouter.HandlerCount() > 0 {
+			hh.RegisterChecker("eventrouter", evtRouter.Health)
 			slog.Info("bootstrap: starting event router",
 				slog.Int("handler_count", evtRouter.HandlerCount()))
 			routerErrCh = make(chan error, 1)

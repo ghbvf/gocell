@@ -42,10 +42,10 @@ func TestLivezHandler(t *testing.T) {
 			wantBody:   "healthy",
 		},
 		{
-			name:       "unhealthy when not started",
+			name:       "healthy when not started",
 			startCells: false,
-			wantStatus: http.StatusServiceUnavailable,
-			wantBody:   "unhealthy",
+			wantStatus: http.StatusOK,
+			wantBody:   "healthy",
 		},
 	}
 
@@ -70,9 +70,8 @@ func TestLivezHandler(t *testing.T) {
 			var body map[string]any
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 			assert.Equal(t, tt.wantBody, body["status"])
-			checks := body["checks"].(map[string]any)
-			_, hasCellCheck := checks["cell-1"]
-			assert.True(t, hasCellCheck, "should include cell-1 in checks")
+			_, hasChecks := body["checks"]
+			assert.False(t, hasChecks, "/healthz must not expose readiness details")
 		})
 	}
 }
@@ -123,7 +122,7 @@ func TestReadyzHandler(t *testing.T) {
 			h.RegisterChecker("db", func() error { return tt.checkerErr })
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+			req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
 			h.ReadyzHandler().ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
@@ -158,7 +157,7 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	h.RegisterChecker("postgres", func() error { return fmt.Errorf("connection refused") })
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
@@ -171,6 +170,81 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	require.True(t, ok, "response must contain dependencies map")
 	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
 	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+}
+
+func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+
+	h := New(asm)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	h.LivezHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "healthy", body["status"])
+	_, hasChecks := body["checks"]
+	assert.False(t, hasChecks, "/healthz must not expose readiness details")
+	_, hasCells := body["cells"]
+	assert.False(t, hasCells, "/healthz must not expose cell readiness details")
+	_, hasDependencies := body["dependencies"]
+	assert.False(t, hasDependencies, "/healthz must not expose dependency readiness details")
+}
+
+func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("db", func() error { return nil })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "healthy", body["status"])
+	_, hasCells := body["cells"]
+	assert.False(t, hasCells, "default /readyz output must not expose cells")
+	_, hasDependencies := body["dependencies"]
+	assert.False(t, hasDependencies, "default /readyz output must not expose dependencies")
+}
+
+func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("db", func() error { return nil })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "healthy", body["status"])
+	cells, ok := body["cells"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain cells")
+	assert.Equal(t, "healthy", cells["cell-1"])
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain dependencies")
+	assert.Equal(t, "healthy", deps["db"])
 }
 
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {

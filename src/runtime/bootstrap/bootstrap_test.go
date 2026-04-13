@@ -521,8 +521,8 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
-	// GET /readyz and verify the checker appears as healthy.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	// GET /readyz?verbose and verify the checker appears as healthy.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -574,8 +574,8 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		return true
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
-	// GET /readyz and verify the checker appears as unhealthy.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	// GET /readyz?verbose and verify the checker appears as unhealthy.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -637,8 +637,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
-	// GET /readyz — one unhealthy checker should make the whole response 503.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	// GET /readyz?verbose — one unhealthy checker should make the whole response 503.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose=true", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -720,6 +720,138 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "should recover after health state restores")
 	resp.Body.Close()
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose=true", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain dependencies")
+	assert.Equal(t, "healthy", deps["config-watcher"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	originalNewConfigWatcher := newConfigWatcher
+	newConfigWatcher = func(string) (*config.Watcher, error) {
+		return nil, errors.New("watcher init failed")
+	}
+	defer func() {
+		newConfigWatcher = originalNewConfigWatcher
+	}()
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithShutdownTimeout(time.Second),
+	)
+
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config watcher")
+	assert.Contains(t, err.Error(), "watcher init failed")
+}
+
+func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-eventrouter-readyz"})
+	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
+
+	eb := eventbus.New()
+	b := New(
+		WithAssembly(asm),
+		WithPublisher(eb),
+		WithSubscriber(eb),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose=true", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain dependencies")
+	assert.Equal(t, "healthy", deps["eventrouter"])
 
 	cancel()
 	select {

@@ -103,6 +103,24 @@ func (w *Watcher) Ready() <-chan struct{} {
 	return w.ready
 }
 
+// Health reports watcher readiness for bootstrap /readyz integration.
+// A watcher is healthy only after its event loop has started and before it has
+// been closed.
+func (w *Watcher) Health() error {
+	select {
+	case <-w.done:
+		return fmt.Errorf("config: watcher closed")
+	default:
+	}
+
+	select {
+	case <-w.ready:
+		return nil
+	default:
+		return fmt.Errorf("config: watcher not started")
+	}
+}
+
 func (w *Watcher) loop() {
 	w.readyOnce.Do(func() { close(w.ready) })
 	for {

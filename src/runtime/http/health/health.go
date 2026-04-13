@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -46,38 +47,20 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 }
 
 // LivezHandler returns an http.HandlerFunc for the /healthz liveness endpoint.
-// It aggregates Health() from every registered Cell in the assembly.
+// Liveness is process-level: if the handler can serve a response, the process
+// is alive. Readiness details belong to /readyz.
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cellHealth := h.assembly.Health()
-
-		checks := make(map[string]string, len(cellHealth))
-		allHealthy := true
-		for id, hs := range cellHealth {
-			checks[id] = hs.Status
-			if hs.Status != "healthy" {
-				allHealthy = false
-			}
-		}
-
-		status := "healthy"
-		httpStatus := http.StatusOK
-		if !allHealthy {
-			status = "unhealthy"
-			httpStatus = http.StatusServiceUnavailable
-		}
-
-		writeJSON(w, httpStatus, map[string]any{
-			"status": status,
-			"checks": checks,
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "healthy",
 		})
 	}
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
 // It runs all registered readiness checkers in addition to the Cell health.
-// Cell health and dependency checkers are placed in separate JSON namespaces
-// ("cells" and "dependencies") to prevent name collisions.
+// By default it returns only aggregate readiness status. Detailed cell and
+// dependency breakdown is returned only when the request enables verbose mode.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cellHealth := h.assembly.Health()
@@ -115,12 +98,34 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			httpStatus = http.StatusServiceUnavailable
 		}
 
-		writeJSON(w, httpStatus, map[string]any{
-			"status":       status,
-			"cells":        cells,
-			"dependencies": dependencies,
-		})
+		response := map[string]any{
+			"status": status,
+		}
+		if readyzVerbose(r) {
+			response["cells"] = cells
+			response["dependencies"] = dependencies
+		}
+
+		writeJSON(w, httpStatus, response)
 	}
+}
+
+func readyzVerbose(r *http.Request) bool {
+	values, ok := r.URL.Query()["verbose"]
+	if !ok {
+		return false
+	}
+	if len(values) == 0 {
+		return true
+	}
+	for _, value := range values {
+		normalized := strings.TrimSpace(strings.ToLower(value))
+		switch normalized {
+		case "", "1", "true", "yes", "y", "on":
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {
