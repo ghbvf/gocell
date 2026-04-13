@@ -259,8 +259,9 @@ consumed, `ObservabilityContextMiddleware` (registered by bootstrap by default)
 restores those keys into the consumer handler context before business code runs.
 
 For non-bootstrap usage, compose `ObservabilityContextMiddleware` via
-`SubscriberWithMiddleware` manually. To disable the bridge entirely, pass
-`WithDisableObservabilityRestore()` to bootstrap. Inbound `traceparent` / `b3`
+`SubscriberWithMiddleware` manually. To disable **consume-side restore**, pass
+`WithDisableObservabilityRestore()` to bootstrap — the publish-side metadata
+injection in the outbox writer remains active. Inbound `traceparent` / `b3`
 extraction remains a separate work item (`TRACE-PROP-01`). Note: `span_id` is
 intentionally excluded — spans do not cross async boundaries.
 

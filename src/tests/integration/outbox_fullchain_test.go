@@ -172,10 +172,17 @@ func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName s
 //
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
+	// Publish-side context carries observability IDs that will be injected
+	// into outbox entry metadata by MergeObservabilityMetadata.
+	publishCtx := context.Background()
+	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-full-chain-001")
+	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-full-chain-001")
+	publishCtx = ctxkeys.WithTraceID(publishCtx, "trace-full-chain-001")
+
+	// Infrastructure context is clean — no obs IDs. This ensures that
+	// obs values in the consumer handler come from middleware restore,
+	// not from context inheritance.
 	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, "req-full-chain-001")
-	ctx = ctxkeys.WithCorrelationID(ctx, "corr-full-chain-001")
-	ctx = ctxkeys.WithTraceID(ctx, "trace-full-chain-001")
 
 	// ---------------------------------------------------------------
 	// Step 1: Start all three containers.
@@ -237,7 +244,8 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		// Business write.
 		tx, ok := postgres.TxFromContext(txCtx)
 		if !ok {
@@ -278,12 +286,20 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	}
 
 	received := make(chan observedDelivery, 1)
-	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	// Subscribe context is deliberately clean (no obs IDs). The only way
+	// obs values reach the handler is through ObservabilityContextMiddleware
+	// restoring them from entry.Metadata.
+	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:      sub,
+		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
@@ -423,10 +439,14 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 //
 // Infrastructure: PostgreSQL + RabbitMQ (2 testcontainers, no Redis needed).
 func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
-	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, "req-no-trace-001")
-	ctx = ctxkeys.WithCorrelationID(ctx, "corr-no-trace-001")
+	// Publish-side context: request_id + correlation_id, NO trace_id.
+	publishCtx := context.Background()
+	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-no-trace-001")
+	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-no-trace-001")
 	// Deliberately NOT setting trace_id — simulates tracing-disabled context.
+
+	// Infrastructure context is clean — no obs IDs.
+	ctx := context.Background()
 
 	// ---------------------------------------------------------------
 	// Step 1: Start containers.
@@ -483,7 +503,8 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		tx, ok := postgres.TxFromContext(txCtx)
 		if !ok {
 			t.Fatal("transaction must be in context")
@@ -510,12 +531,18 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	}
 
 	received := make(chan observedDelivery, 1)
-	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	// Subscribe context is clean — no obs IDs.
+	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:      sub,
+		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)
