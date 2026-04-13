@@ -141,9 +141,9 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 // router.WithAuthMiddleware.
 //
 // publicEndpoints specifies business-route paths that bypass authentication.
-// If nil, auth.DefaultPublicEndpoints is used (the standard login/refresh
-// paths). Callers should include their login endpoint if it differs from
-// the default.
+// If nil, no business routes are public (fail-closed). Callers must
+// explicitly list paths like login and token refresh that should be
+// accessible without a valid JWT.
 //
 // Infra endpoints (/healthz, /readyz, /metrics) are registered on the
 // router's outer mux and naturally bypass business-route middleware, so they

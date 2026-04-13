@@ -163,6 +163,19 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 			"login endpoint must not return 401 (auth must be bypassed)")
 	})
 
+	t.Run("POST_refresh_bypasses_auth", func(t *testing.T) {
+		resp, err := testHTTPClient.Post(
+			fmt.Sprintf("http://%s/api/v1/access/sessions/refresh", addr),
+			"application/json", nil,
+		)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		// Refresh with no body returns 400 (bad request), not 401.
+		// 400 proves the request passed auth and reached the handler.
+		assert.NotEqual(t, http.StatusUnauthorized, resp.StatusCode,
+			"refresh endpoint must not return 401 (auth must be bypassed)")
+	})
+
 	// --- Infra: must bypass auth ---
 	t.Run("healthz_200", func(t *testing.T) {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
