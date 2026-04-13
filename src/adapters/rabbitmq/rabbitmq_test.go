@@ -2161,7 +2161,7 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
@@ -2226,7 +2226,7 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler)
+	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 

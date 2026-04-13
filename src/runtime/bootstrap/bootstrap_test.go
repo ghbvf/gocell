@@ -227,7 +227,7 @@ func (c *contextCaptureCell) RegisterSubscriptions(r cell.EventRouter) error {
 			"trace_id":       traceID,
 		}
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}, "capture-cell")
 	return nil
 }
 
@@ -236,7 +236,7 @@ type invokeOnceSubscriber struct {
 	once  sync.Once
 }
 
-func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler) error {
+func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler, _ string) error {
 	s.once.Do(func() {
 		handler(ctx, s.entry)
 	})
