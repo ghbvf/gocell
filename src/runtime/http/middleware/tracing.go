@@ -26,9 +26,11 @@ import (
 func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := tracing.ExtractHTTPContext(r.Context(), r.Header)
+
 			// Start span with tentative name using raw path.
 			// After routing, the span is renamed to use the route pattern.
-			ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path)
+			ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
 			defer span.End()
 
 			state := RecorderStateFrom(ctx)

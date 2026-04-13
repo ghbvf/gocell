@@ -345,6 +345,28 @@ func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 	assert.NotEmpty(t, gotTraceID, "trace_id must be set in context when WithTracer is provided")
 }
 
+func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
+	tracer := tracing.NewTracer("test-router-tracer")
+	r := New(WithTracer(tracer))
+
+	var gotTraceID string
+	r.Handle("/traced-upstream", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var ok bool
+		gotTraceID, ok = ctxkeys.TraceIDFrom(req.Context())
+		require.True(t, ok)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/traced-upstream", nil)
+	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTraceID,
+		"router tracing chain should preserve upstream trace continuity")
+}
+
 func TestNoTracer_NoTraceID(t *testing.T) {
 	r := New() // no WithTracer
 

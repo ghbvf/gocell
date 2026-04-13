@@ -261,9 +261,11 @@ restores those keys into the consumer handler context before business code runs.
 For non-bootstrap usage, compose `ObservabilityContextMiddleware` via
 `SubscriberWithMiddleware` manually. To disable **consume-side restore**, pass
 `WithDisableObservabilityRestore()` to bootstrap — the publish-side metadata
-injection in the outbox writer remains active. Inbound `traceparent` / `b3`
-extraction remains a separate work item (`TRACE-PROP-01`). Note: `span_id` is
-intentionally excluded — spans do not cross async boundaries.
+injection in the outbox writer remains active. When HTTP tracing is enabled,
+GoCell now extracts inbound `traceparent` and `b3` headers before starting the
+server span so synchronous service hops preserve the same `trace_id`. Note:
+`span_id` is intentionally excluded across async boundaries — spans do not
+cross the outbox hop.
 
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON

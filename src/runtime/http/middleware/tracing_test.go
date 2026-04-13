@@ -39,6 +39,75 @@ func TestTracing_CreatesSpan(t *testing.T) {
 	assert.NotEmpty(t, spanID)
 }
 
+func TestTracing_PropagatesUpstreamTraceID(t *testing.T) {
+	tracer := tracing.NewTracer("test-tracer")
+
+	tests := []struct {
+		name         string
+		headers      map[string]string
+		wantTraceID  string
+		parentSpanID string
+	}{
+		{
+			name: "w3c traceparent",
+			headers: map[string]string{
+				"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			},
+			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
+			parentSpanID: "00f067aa0ba902b7",
+		},
+		{
+			name: "b3 single header",
+			headers: map[string]string{
+				"b3": "4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1",
+			},
+			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
+			parentSpanID: "00f067aa0ba902b7",
+		},
+		{
+			name: "b3 multi header",
+			headers: map[string]string{
+				"X-B3-TraceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+				"X-B3-SpanId":  "00f067aa0ba902b7",
+				"X-B3-Sampled": "1",
+			},
+			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
+			parentSpanID: "00f067aa0ba902b7",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotTraceID string
+			var gotSpanID string
+
+			handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var ok bool
+				gotTraceID, ok = ctxkeys.TraceIDFrom(r.Context())
+				require.True(t, ok)
+
+				gotSpanID, ok = ctxkeys.SpanIDFrom(r.Context())
+				require.True(t, ok)
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/propagated", nil)
+			for key, value := range tt.headers {
+				req.Header.Set(key, value)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantTraceID, gotTraceID,
+				"trace_id should reuse the upstream propagated trace")
+			assert.NotEqual(t, tt.parentSpanID, gotSpanID,
+				"server span must get a fresh span_id even when it inherits a trace")
+		})
+	}
+}
+
 func TestTracing_CapturesStatus(t *testing.T) {
 	tracer := tracing.NewTracer("test-tracer")
 
