@@ -411,6 +411,68 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	}
 }
 
+func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-kill-switch"})
+	got := make(chan map[string]string, 1)
+	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
+
+	sub := &invokeOnceSubscriber{entry: outbox.Entry{
+		ID:        "evt-no-restore-1",
+		EventType: "test.context",
+		Metadata: map[string]string{
+			"request_id":     "req-should-not-restore",
+			"correlation_id": "corr-should-not-restore",
+			"trace_id":       "trace-should-not-restore",
+		},
+	}}
+
+	b := New(
+		WithAssembly(asm),
+		WithSubscriber(sub),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithDisableObservabilityRestore(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	select {
+	case observed := <-got:
+		assert.Empty(t, observed["request_id"],
+			"kill switch should prevent request_id restoration")
+		assert.Empty(t, observed["correlation_id"],
+			"kill switch should prevent correlation_id restoration")
+		assert.Empty(t, observed["trace_id"],
+			"kill switch should prevent trace_id restoration")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for consumer context")
+	}
+
+	// Wait for bootstrap to finish startup (event router 500ms timeout + HTTP server).
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
 func TestBootstrap_RunContextCancel(t *testing.T) {
 	// Test that Run returns when context is cancelled immediately,
 	// even though it will fail at listen (sandbox restriction).

@@ -167,6 +167,17 @@ func WithHealthChecker(name string, fn func() error) Option {
 	}
 }
 
+// WithDisableObservabilityRestore prevents the bootstrap from registering
+// ObservabilityContextMiddleware on the event subscriber. When set, consumer
+// handlers will not have request_id/correlation_id/trace_id restored from
+// entry metadata into the handler context. This is the canonical kill switch
+// for the consume-side observability bridge.
+func WithDisableObservabilityRestore() Option {
+	return func(b *Bootstrap) {
+		b.disableObservabilityRestore = true
+	}
+}
+
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
 	name string
@@ -185,8 +196,9 @@ type Bootstrap struct {
 	routerOpts      []router.Option
 	shutdownTimeout time.Duration
 	listener        net.Listener
-	healthCheckers  []namedChecker
-	closers         []io.Closer // middleware dependencies that need shutdown
+	healthCheckers             []namedChecker
+	closers                    []io.Closer // middleware dependencies that need shutdown
+	disableObservabilityRestore bool
 }
 
 // New creates a Bootstrap with the given options.
@@ -445,9 +457,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	if sub != nil {
+		var mws []outbox.TopicHandlerMiddleware
+		if !b.disableObservabilityRestore {
+			mws = append(mws, outbox.ObservabilityContextMiddleware())
+		}
 		evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 			Inner:      sub,
-			Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+			Middleware: mws,
 		})
 		for _, id := range asm.CellIDs() {
 			c := asm.Cell(id)

@@ -110,7 +110,7 @@ func TestIsSafeID(t *testing.T) {
 		{"550e8400-e29b-41d4-a716-446655440000", true},
 		{"req.trace_id:v1/sub", true},
 		{"UPPER-case-Mix", true},
-		{"", true},
+		{"", false},
 		{"has space", false},
 		{"has\nnewline", false},
 		{`has"quote`, false},

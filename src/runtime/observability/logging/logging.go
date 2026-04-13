@@ -2,6 +2,10 @@
 // trace_id, span_id, request_id, correlation_id, and cell_id from the
 // request context.
 // Supports JSON and text output formats.
+//
+// ref: go stdlib log/slog — Handler interface + Handle(context, Record) pattern
+// Adopted: wrapping an inner slog.Handler, extracting context values in Handle.
+// Deviated: adds GoCell-specific ctxkeys (request_id, correlation_id, cell_id).
 package logging
 
 import (

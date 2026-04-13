@@ -33,11 +33,14 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// isSafeID reports whether every byte of s is in the safe set for
-// observability IDs: ASCII letters, digits, and the separators ._:/-
+// isSafeID reports whether s is non-empty and every byte is in the safe set
+// for observability IDs: ASCII letters, digits, and the separators ._:/-
 // This rejects control characters, whitespace, quotes, brackets and other
 // characters that could confuse log parsers or structured output.
 func isSafeID(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {

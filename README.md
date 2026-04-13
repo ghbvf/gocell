@@ -255,17 +255,20 @@ examples/  ← all layers
 For HTTP flows that publish through the transactional outbox, GoCell now bridges
 `request_id`, `correlation_id`, and optional `trace_id` from handler context
 into `outbox.Entry.Metadata` on the PostgreSQL write path. When the event is
-consumed via the RabbitMQ subscriber adapter, those keys are restored into the
-consumer handler context automatically before business code runs. This applies
-to all RabbitMQ-based consumers, whether started via bootstrap or directly.
+consumed, `ObservabilityContextMiddleware` (registered by bootstrap by default)
+restores those keys into the consumer handler context before business code runs.
 
-For non-RabbitMQ subscriber implementations, the `ObservabilityContextMiddleware`
-can be applied explicitly. Inbound `traceparent` / `b3` extraction remains a
-separate work item (`TRACE-PROP-01`).
+For non-bootstrap usage, compose `ObservabilityContextMiddleware` via
+`SubscriberWithMiddleware` manually. To disable the bridge entirely, pass
+`WithDisableObservabilityRestore()` to bootstrap. Inbound `traceparent` / `b3`
+extraction remains a separate work item (`TRACE-PROP-01`). Note: `span_id` is
+intentionally excluded — spans do not cross async boundaries.
 
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON
 handlers automatically extract `request_id`, `correlation_id`, or `trace_id`.
+Values restored from broker metadata are validated for safe characters and
+length before injection into context.
 
 ## Using in Your Project
 

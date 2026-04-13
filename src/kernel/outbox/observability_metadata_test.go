@@ -130,6 +130,36 @@ func TestContextWithObservabilityMetadata_NilMetadataNoOp(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestContextWithObservabilityMetadata_RejectsUnsafeValues(t *testing.T) {
+	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
+		"request_id":     "req-safe-1",
+		"correlation_id": "has spaces",
+		"trace_id":       "has\nnewline",
+	})
+
+	requestID, ok := ctxkeys.RequestIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "req-safe-1", requestID, "safe value should be restored")
+
+	_, ok = ctxkeys.CorrelationIDFrom(ctx)
+	assert.False(t, ok, "unsafe value with spaces should be rejected")
+
+	_, ok = ctxkeys.TraceIDFrom(ctx)
+	assert.False(t, ok, "unsafe value with newlines should be rejected")
+}
+
+func TestContextWithObservabilityMetadata_RejectsOverlongValues(t *testing.T) {
+	longID := make([]byte, 300)
+	for i := range longID {
+		longID[i] = 'a'
+	}
+	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
+		"request_id": string(longID),
+	})
+	_, ok := ctxkeys.RequestIDFrom(ctx)
+	assert.False(t, ok, "overlong value should be rejected")
+}
+
 func TestIsReservedMetadataKey(t *testing.T) {
 	assert.True(t, IsReservedMetadataKey("request_id"))
 	assert.True(t, IsReservedMetadataKey("correlation_id"))

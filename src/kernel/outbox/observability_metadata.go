@@ -1,5 +1,10 @@
 package outbox
 
+// ref: ThreeDotsLabs/watermill message/message.go — Metadata map[string]string propagation
+// Adopted: same key-value metadata model with whitelisted observability keys.
+// Deviated: only bridge request_id/correlation_id/trace_id (not full pass-through);
+// span_id is intentionally excluded because spans should not cross async boundaries.
+
 import (
 	"context"
 
@@ -10,18 +15,19 @@ import (
 // restored by ContextWithObservabilityMetadata. These keys are reserved —
 // business code should avoid writing to them directly. Use
 // IsReservedMetadataKey to check before setting custom metadata keys.
+//
+// Note: span_id is intentionally excluded. Spans represent a single unit of
+// work and do not survive the async boundary; the consumer should start a new
+// span linked to the originating trace_id.
 const (
 	MetadataKeyTraceID       = "trace_id"
 	MetadataKeyRequestID     = "request_id"
 	MetadataKeyCorrelationID = "correlation_id"
 )
 
-// ReservedMetadataKeys is the set of metadata keys managed by the
-// observability bridge. Business code that sets these keys directly risks
-// collision with framework-injected values. MergeObservabilityMetadata
-// preserves existing values (business wins), but downstream consumers may
-// misinterpret a business value as an observability ID.
-var ReservedMetadataKeys = map[string]struct{}{
+// reservedMetadataKeys is the set of metadata keys managed by the
+// observability bridge. Unexported to prevent external mutation.
+var reservedMetadataKeys = map[string]struct{}{
 	MetadataKeyTraceID:       {},
 	MetadataKeyRequestID:     {},
 	MetadataKeyCorrelationID: {},
@@ -29,8 +35,34 @@ var ReservedMetadataKeys = map[string]struct{}{
 
 // IsReservedMetadataKey reports whether key is reserved for observability.
 func IsReservedMetadataKey(key string) bool {
-	_, ok := ReservedMetadataKeys[key]
+	_, ok := reservedMetadataKeys[key]
 	return ok
+}
+
+// maxObservabilityIDLen is the maximum length for an observability ID restored
+// from broker metadata. Values exceeding this limit are silently dropped to
+// prevent resource exhaustion from malformed messages.
+const maxObservabilityIDLen = 256
+
+// isSafeObservabilityID checks that a metadata value contains only safe
+// characters for observability IDs: ASCII letters, digits, and ._:/-
+// This mirrors the HTTP-side isSafeID validation in the request_id middleware.
+func isSafeObservabilityID(s string) bool {
+	if len(s) == 0 || len(s) > maxObservabilityIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == ':' || c == '/' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // MergeObservabilityMetadata copies whitelisted observability values from ctx
@@ -63,7 +95,9 @@ func MergeObservabilityMetadata(ctx context.Context, metadata map[string]string)
 }
 
 // ContextWithObservabilityMetadata restores whitelisted observability values
-// from metadata into ctx. Existing non-empty context values win.
+// from metadata into ctx. Values that fail safety validation (non-ASCII,
+// control chars, excessive length) are silently dropped. Existing non-empty
+// context values win.
 func ContextWithObservabilityMetadata(ctx context.Context, metadata map[string]string) context.Context {
 	if metadata == nil {
 		return ctx
@@ -77,7 +111,8 @@ func ContextWithObservabilityMetadata(ctx context.Context, metadata map[string]s
 }
 
 // ObservabilityContextMiddleware restores observability metadata into the
-// handler context before calling the next handler.
+// handler context before calling the next handler. This is the canonical
+// injection point; the subscriber adapter does not perform restoration.
 func ObservabilityContextMiddleware() TopicHandlerMiddleware {
 	return func(_ string, next EntryHandler) EntryHandler {
 		return func(ctx context.Context, entry Entry) HandleResult {
@@ -86,7 +121,10 @@ func ObservabilityContextMiddleware() TopicHandlerMiddleware {
 	}
 }
 
+// contextValueGetter extracts a string value from context.
 type contextValueGetter func(context.Context) (string, bool)
+
+// contextValueSetter stores a string value in context.
 type contextValueSetter func(context.Context, string) context.Context
 
 func withContextMetadata(
@@ -95,7 +133,7 @@ func withContextMetadata(
 	getter contextValueGetter,
 	setter contextValueSetter,
 ) context.Context {
-	if value == "" {
+	if !isSafeObservabilityID(value) {
 		return ctx
 	}
 	if existing, ok := getter(ctx); ok && existing != "" {

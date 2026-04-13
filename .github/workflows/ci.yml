@@ -101,4 +101,4 @@ jobs:
           cache-dependency-path: src/go.sum
 
       - name: Integration tests (testcontainers)
-        run: go test -tags=integration ./adapters/... -count=1 -timeout 5m
+        run: go test -tags=integration ./adapters/... ./tests/integration/... -count=1 -timeout 10m

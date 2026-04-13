@@ -2264,22 +2264,6 @@ func (s *stubSubscriber) Close() error { return nil }
 
 var _ outbox.Subscriber = (*stubSubscriber)(nil)
 
-func TestSubscriberConfig_DisableObservabilityRestore_Default(t *testing.T) {
-	cfg := SubscriberConfig{}
-	assert.False(t, cfg.DisableObservabilityRestore,
-		"DisableObservabilityRestore should default to false (bridge enabled)")
-}
-
-func TestSubscriberConfig_DisableObservabilityRestore_Set(t *testing.T) {
-	conn, _ := newTestConnection(t)
-	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:                  "test-queue",
-		DisableObservabilityRestore: true,
-	})
-	assert.True(t, sub.config.DisableObservabilityRestore,
-		"DisableObservabilityRestore should be propagated to subscriber config")
-}
-
 // =============================================================================
 // Publisher Error Branch Tests (P1-5)
 // =============================================================================
@@ -2879,7 +2863,11 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	})
 }
 
-func TestProcessDelivery_RestoresObservabilityContextForHandler(t *testing.T) {
+// TestProcessDelivery_PassesThroughContextWithoutRestore verifies that
+// processDelivery passes the parent context to the handler as-is, without
+// restoring observability metadata. Context restoration is handled by
+// ObservabilityContextMiddleware at the middleware layer, not by the subscriber.
+func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.mu.Lock()
@@ -2925,9 +2913,11 @@ func TestProcessDelivery_RestoresObservabilityContextForHandler(t *testing.T) {
 		Body:        entryBytes,
 	}, "test.topic", handler)
 
-	assert.Equal(t, "req-sub-1", observed["request_id"])
-	assert.Equal(t, "corr-sub-1", observed["correlation_id"])
-	assert.Equal(t, "trace-sub-1", observed["trace_id"])
+	// Subscriber should NOT restore obs metadata (middleware's job).
+	assert.Empty(t, observed["request_id"], "subscriber should not restore request_id")
+	assert.Empty(t, observed["correlation_id"], "subscriber should not restore correlation_id")
+	assert.Empty(t, observed["trace_id"], "subscriber should not restore trace_id")
+	// Parent context values should pass through.
 	assert.Equal(t, "parent-value", observedSentinel)
 	assert.ErrorIs(t, observedErr, context.Canceled)
 	ch.mu.Lock()
@@ -2935,17 +2925,11 @@ func TestProcessDelivery_RestoresObservabilityContextForHandler(t *testing.T) {
 	ch.mu.Unlock()
 }
 
-func TestProcessDelivery_LogsRestoredObservabilityContext(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(logctx.NewHandler(logctx.Options{
-		Level:  slog.LevelDebug,
-		Format: logctx.FormatJSON,
-		Writer: &buf,
-	}))
-	original := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(original)
-
+// TestProcessDelivery_DoesNotRestoreObservabilityContext verifies that
+// the subscriber's processDelivery does NOT restore observability metadata
+// into the handler context. Context restoration is the responsibility of
+// ObservabilityContextMiddleware (registered via bootstrap or manually).
+func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.mu.Lock()
@@ -2958,7 +2942,7 @@ func TestProcessDelivery_LogsRestoredObservabilityContext(t *testing.T) {
 	})
 
 	entry := outbox.Entry{
-		ID:        "evt-log-restore",
+		ID:        "evt-no-restore",
 		EventType: "test.restore",
 		Metadata: map[string]string{
 			"request_id":     "req-log-1",
@@ -2969,11 +2953,11 @@ func TestProcessDelivery_LogsRestoredObservabilityContext(t *testing.T) {
 	entryBytes, err := json.Marshal(entry)
 	require.NoError(t, err)
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionRequeue,
-			Err:         errors.New("transient subscriber failure"),
-		}
+	var capturedRequestID, capturedTraceID string
+	handler := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		capturedRequestID, _ = ctxkeys.RequestIDFrom(ctx)
+		capturedTraceID, _ = ctxkeys.TraceIDFrom(ctx)
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	sub.wg.Add(1)
@@ -2982,11 +2966,10 @@ func TestProcessDelivery_LogsRestoredObservabilityContext(t *testing.T) {
 		Body:        entryBytes,
 	}, "test.topic", handler)
 
-	output := buf.String()
-	assert.Contains(t, output, "\"request_id\":\"req-log-1\"")
-	assert.Contains(t, output, "\"correlation_id\":\"corr-log-1\"")
-	assert.Contains(t, output, "\"trace_id\":\"trace-log-1\"")
-	assert.Contains(t, output, "handler reported error")
+	assert.Empty(t, capturedRequestID,
+		"processDelivery should NOT restore request_id — that is middleware's job")
+	assert.Empty(t, capturedTraceID,
+		"processDelivery should NOT restore trace_id — that is middleware's job")
 }
 
 func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
