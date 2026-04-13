@@ -99,18 +99,27 @@ func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
-func TestAuthMiddleware_PublicEndpointDefaultWhitelist(t *testing.T) {
+func TestAuthMiddleware_NilPublicEndpoints_AllPathsRequireAuth(t *testing.T) {
+	// DefaultPublicEndpoints is intentionally empty. Passing nil means no
+	// paths are public — the composition root must declare public endpoints
+	// explicitly. This is the fail-closed default.
 	verifier := &mockVerifier{err: errors.New("should not be called")}
 	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	for _, path := range DefaultPublicEndpoints {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+	// All paths should require auth when publicEndpoints is nil (empty default).
+	for _, p := range []string{
+		"/api/v1/access/sessions/login",
+		"/api/v1/access/sessions/refresh",
+		"/api/v1/data",
+	} {
+		t.Run(p, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, p, nil)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
-			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, http.StatusUnauthorized, rec.Code,
+				"nil publicEndpoints must not exempt any path from auth")
 		})
 	}
 }
@@ -148,6 +157,34 @@ func TestAuthMiddleware_EmptyPublicEndpoints_NoDefaults(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"empty publicEndpoints must not use defaults — all paths should require auth")
+}
+
+func TestAuthMiddleware_PathCleanNormalization(t *testing.T) {
+	// Auth middleware uses path.Clean on both whitelist entries and incoming
+	// request paths. This prevents bypasses via double slashes or dot segments.
+	verifier := &mockVerifier{err: errors.New("should not be called")}
+	handler := AuthMiddleware(verifier, []string{"/api/v1/login"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name   string
+		path   string
+		expect int
+	}{
+		{"exact match", "/api/v1/login", http.StatusOK},
+		{"double slash", "/api/v1//login", http.StatusOK},
+		{"dot segment", "/api/v1/./login", http.StatusOK},
+		{"non-matching", "/api/v1/data", http.StatusUnauthorized},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.Equal(t, tc.expect, rec.Code)
+		})
+	}
 }
 
 func TestAuthMiddleware_ProtectedEndpointNoToken(t *testing.T) {
