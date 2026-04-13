@@ -45,7 +45,7 @@
 
 ### Chosen design
 
-Add an HTTP extraction helper in `runtime/observability/tracing` and call it at the top of `middleware.Tracing` before `tracer.Start`.
+Add an HTTP extraction helper in `runtime/http/middleware` and call it at the top of `middleware.Tracing` before `tracer.Start`.
 
 ### Why this shape
 
@@ -56,8 +56,8 @@ Add an HTTP extraction helper in `runtime/observability/tracing` and call it at 
 
 ### Concrete decisions
 
-1. Add `ExtractHTTPContext(ctx, header)` in `src/runtime/observability/tracing/`
-2. Use a composite propagator with W3C Trace Context as primary and B3 as fallback
+1. Add an internal HTTP extraction helper in `src/runtime/http/middleware/`
+2. Use W3C Trace Context as primary and B3 only as a fallback
 3. When extraction yields a valid remote span context, mirror the extracted trace ID into `ctxkeys` so the simple tracer preserves continuity too
 4. Keep invalid or absent headers as a safe no-op so the current root-span fallback remains intact
 5. Do not change response or API contracts
@@ -88,7 +88,7 @@ Add failing tests that prove the current gap:
 
 ## File-Level Task List
 
-- [ ] Add tracing extraction helper with table-driven tests in `src/runtime/observability/tracing/`
+- [ ] Add tracing extraction helper with table-driven tests in `src/runtime/http/middleware/`
 - [ ] Update `src/runtime/http/middleware/tracing.go` to extract before `tracer.Start`
 - [ ] Extend middleware tests for W3C and B3 propagation
 - [ ] Extend router integration tests to prove end-to-end ingress extraction
@@ -103,14 +103,16 @@ Add failing tests that prove the current gap:
 Run at minimum:
 
 ```bash
-go test ./src/runtime/observability/tracing/... ./src/runtime/http/middleware/... ./src/runtime/http/router/...
-go build ./src/...
+cd src
+go test ./runtime/http/middleware ./runtime/http/router ./adapters/otel
+go build ./...
 ```
 
 If the implementation changes OTel adapter behavior or shared tracing utilities, expand to:
 
 ```bash
-go test ./src/adapters/otel/...
+cd src
+go test ./adapters/otel/...
 ```
 
 ## Expected PR Outcome

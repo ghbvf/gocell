@@ -1,4 +1,4 @@
-package tracing
+package middleware
 
 import (
 	"net/http"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExtractHTTPContext(t *testing.T) {
+func TestExtractTraceContext(t *testing.T) {
 	tests := []struct {
 		name         string
 		headers      map[string]string
@@ -51,6 +51,32 @@ func TestExtractHTTPContext(t *testing.T) {
 			wantSpanSet:  true,
 		},
 		{
+			name: "valid traceparent wins over conflicting b3",
+			headers: map[string]string{
+				"traceparent":  "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+				"X-B3-TraceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"X-B3-SpanId":  "bbbbbbbbbbbbbbbb",
+				"X-B3-Sampled": "1",
+			},
+			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
+			wantSpanID:   "00f067aa0ba902b7",
+			wantTraceSet: true,
+			wantSpanSet:  true,
+		},
+		{
+			name: "invalid traceparent falls back to b3",
+			headers: map[string]string{
+				"traceparent":  "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
+				"X-B3-TraceId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				"X-B3-SpanId":  "bbbbbbbbbbbbbbbb",
+				"X-B3-Sampled": "1",
+			},
+			wantTraceID:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			wantSpanID:   "bbbbbbbbbbbbbbbb",
+			wantTraceSet: true,
+			wantSpanSet:  true,
+		},
+		{
 			name: "invalid traceparent ignored",
 			headers: map[string]string{
 				"traceparent": "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
@@ -67,7 +93,7 @@ func TestExtractHTTPContext(t *testing.T) {
 				header.Set(key, value)
 			}
 
-			ctx := ExtractHTTPContext(t.Context(), header)
+			ctx := extractTraceContext(t.Context(), header)
 
 			traceID, traceOK := ctxkeys.TraceIDFrom(ctx)
 			spanID, spanOK := ctxkeys.SpanIDFrom(ctx)

@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,73 +39,61 @@ func TestTracing_CreatesSpan(t *testing.T) {
 	assert.NotEmpty(t, spanID)
 }
 
-func TestTracing_PropagatesUpstreamTraceID(t *testing.T) {
+func TestTracing_UsesUpstreamTraceparent(t *testing.T) {
 	tracer := tracing.NewTracer("test-tracer")
 
-	tests := []struct {
-		name         string
-		headers      map[string]string
-		wantTraceID  string
-		parentSpanID string
-	}{
-		{
-			name: "w3c traceparent",
-			headers: map[string]string{
-				"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-			},
-			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			parentSpanID: "00f067aa0ba902b7",
-		},
-		{
-			name: "b3 single header",
-			headers: map[string]string{
-				"b3": "4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1",
-			},
-			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			parentSpanID: "00f067aa0ba902b7",
-		},
-		{
-			name: "b3 multi header",
-			headers: map[string]string{
-				"X-B3-TraceId": "4bf92f3577b34da6a3ce929d0e0e4736",
-				"X-B3-SpanId":  "00f067aa0ba902b7",
-				"X-B3-Sampled": "1",
-			},
-			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			parentSpanID: "00f067aa0ba902b7",
-		},
-	}
+	var gotTraceID string
+	var gotSpanID string
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var gotTraceID string
-			var gotSpanID string
+	handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		gotTraceID, ok = ctxkeys.TraceIDFrom(r.Context())
+		require.True(t, ok)
 
-			handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var ok bool
-				gotTraceID, ok = ctxkeys.TraceIDFrom(r.Context())
-				require.True(t, ok)
+		gotSpanID, ok = ctxkeys.SpanIDFrom(r.Context())
+		require.True(t, ok)
+		w.WriteHeader(http.StatusOK)
+	}))
 
-				gotSpanID, ok = ctxkeys.SpanIDFrom(r.Context())
-				require.True(t, ok)
-				w.WriteHeader(http.StatusOK)
-			}))
+	req := httptest.NewRequest(http.MethodGet, "/propagated", nil)
+	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 
-			req := httptest.NewRequest(http.MethodGet, "/propagated", nil)
-			for key, value := range tt.headers {
-				req.Header.Set(key, value)
-			}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 
-			rec := httptest.NewRecorder()
-			handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTraceID,
+		"trace_id should reuse the upstream propagated trace")
+	assert.NotEqual(t, "00f067aa0ba902b7", gotSpanID,
+		"server span must get a fresh span_id even when it inherits a trace")
+}
 
-			assert.Equal(t, http.StatusOK, rec.Code)
-			assert.Equal(t, tt.wantTraceID, gotTraceID,
-				"trace_id should reuse the upstream propagated trace")
-			assert.NotEqual(t, tt.parentSpanID, gotSpanID,
-				"server span must get a fresh span_id even when it inherits a trace")
-		})
-	}
+func TestTracing_InvalidTraceHeadersStartNewRoot(t *testing.T) {
+	tracer := tracing.NewTracer("test-tracer")
+
+	var gotTraceID string
+	var gotSpanID string
+
+	handler := Tracing(tracer)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ok bool
+		gotTraceID, ok = ctxkeys.TraceIDFrom(r.Context())
+		require.True(t, ok)
+
+		gotSpanID, ok = ctxkeys.SpanIDFrom(r.Context())
+		require.True(t, ok)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/propagated", nil)
+	req.Header.Set("traceparent", "00-not-a-valid-trace-id-00f067aa0ba902b7-01")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, gotTraceID, 32)
+	assert.Len(t, gotSpanID, 16)
+	assert.NotEqual(t, "not-a-valid-trace-id", gotTraceID)
 }
 
 func TestTracing_CapturesStatus(t *testing.T) {
@@ -148,10 +136,10 @@ type spySpan struct {
 	attrs map[string]any
 }
 
-func (s *spySpan) End()                  {}
-func (s *spySpan) TraceID() string       { return "spy-trace" }
-func (s *spySpan) SpanID() string        { return "spy-span" }
-func (s *spySpan) SetName(name string)   { s.mu.Lock(); s.name = name; s.mu.Unlock() }
+func (s *spySpan) End()                {}
+func (s *spySpan) TraceID() string     { return "spy-trace" }
+func (s *spySpan) SpanID() string      { return "spy-span" }
+func (s *spySpan) SetName(name string) { s.mu.Lock(); s.name = name; s.mu.Unlock() }
 func (s *spySpan) SetAttribute(key string, val any) {
 	s.mu.Lock()
 	s.attrs[key] = val

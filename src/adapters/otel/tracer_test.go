@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	otelcodes "go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,6 +105,34 @@ func TestTracer_NestedSpansShareTraceID(t *testing.T) {
 	assert.Equal(t, parentSpan.TraceID(), childSpan.TraceID())
 }
 
+func TestTracer_StartContinuesRemoteParent(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	parentTraceID := mustTraceID(t, "4bf92f3577b34da6a3ce929d0e0e4736")
+	parentSpanID := mustSpanID(t, "00f067aa0ba902b7")
+	ctx := oteltrace.ContextWithRemoteSpanContext(context.Background(), oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    parentTraceID,
+		SpanID:     parentSpanID,
+		TraceFlags: oteltrace.FlagsSampled,
+		Remote:     true,
+	}))
+
+	ctx, span := tracer.Start(ctx, "server")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, parentTraceID.String(), span.TraceID())
+	assert.NotEqual(t, parentSpanID.String(), span.SpanID())
+
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, parentTraceID.String(), traceID)
+
+	spanID, ok := ctxkeys.SpanIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, span.SpanID(), spanID)
+}
+
 func TestNewTracer_MissingServiceName(t *testing.T) {
 	_, _, err := NewTracer(context.Background(), TracerConfig{
 		ExporterEndpoint: "localhost:4317",
@@ -138,10 +168,10 @@ func TestTracerConfig_Defaults(t *testing.T) {
 
 func TestTracerConfig_Validate(t *testing.T) {
 	// Valid cases.
-	assert.NoError(t, (&TracerConfig{}).validate())                           // zero = default
-	assert.NoError(t, (&TracerConfig{SampleRate: 0.5}).validate())            // in range
-	assert.NoError(t, (&TracerConfig{SampleRate: 1.0}).validate())            // boundary
-	assert.NoError(t, (&TracerConfig{DisableSampling: true}).validate())      // disable
+	assert.NoError(t, (&TracerConfig{}).validate())                      // zero = default
+	assert.NoError(t, (&TracerConfig{SampleRate: 0.5}).validate())       // in range
+	assert.NoError(t, (&TracerConfig{SampleRate: 1.0}).validate())       // boundary
+	assert.NoError(t, (&TracerConfig{DisableSampling: true}).validate()) // disable
 
 	// Invalid cases: out of range → error.
 	assert.Error(t, (&TracerConfig{SampleRate: -0.5}).validate())
@@ -208,4 +238,28 @@ func TestSpanHelper_NonRecorder(t *testing.T) {
 	assert.NotPanics(t, func() {
 		tracing.SpanSetStatus(span, true, "fail")
 	})
+}
+
+func mustTraceID(t *testing.T, hexValue string) oteltrace.TraceID {
+	t.Helper()
+
+	bytes, err := hex.DecodeString(hexValue)
+	require.NoError(t, err)
+	require.Len(t, bytes, len(oteltrace.TraceID{}))
+
+	var id oteltrace.TraceID
+	copy(id[:], bytes)
+	return id
+}
+
+func mustSpanID(t *testing.T, hexValue string) oteltrace.SpanID {
+	t.Helper()
+
+	bytes, err := hex.DecodeString(hexValue)
+	require.NoError(t, err)
+	require.Len(t, bytes, len(oteltrace.SpanID{}))
+
+	var id oteltrace.SpanID
+	copy(id[:], bytes)
+	return id
 }
