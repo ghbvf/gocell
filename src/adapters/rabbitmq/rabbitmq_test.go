@@ -2264,6 +2264,22 @@ func (s *stubSubscriber) Close() error { return nil }
 
 var _ outbox.Subscriber = (*stubSubscriber)(nil)
 
+func TestSubscriberConfig_DisableObservabilityRestore_Default(t *testing.T) {
+	cfg := SubscriberConfig{}
+	assert.False(t, cfg.DisableObservabilityRestore,
+		"DisableObservabilityRestore should default to false (bridge enabled)")
+}
+
+func TestSubscriberConfig_DisableObservabilityRestore_Set(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:                  "test-queue",
+		DisableObservabilityRestore: true,
+	})
+	assert.True(t, sub.config.DisableObservabilityRestore,
+		"DisableObservabilityRestore should be propagated to subscriber config")
+}
+
 // =============================================================================
 // Publisher Error Branch Tests (P1-5)
 // =============================================================================

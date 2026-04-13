@@ -130,6 +130,15 @@ func TestContextWithObservabilityMetadata_NilMetadataNoOp(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestIsReservedMetadataKey(t *testing.T) {
+	assert.True(t, IsReservedMetadataKey("request_id"))
+	assert.True(t, IsReservedMetadataKey("correlation_id"))
+	assert.True(t, IsReservedMetadataKey("trace_id"))
+	assert.False(t, IsReservedMetadataKey("source"))
+	assert.False(t, IsReservedMetadataKey("topic"))
+	assert.False(t, IsReservedMetadataKey(""))
+}
+
 func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 	mw := ObservabilityContextMiddleware()
 

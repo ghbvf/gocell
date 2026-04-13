@@ -6,11 +6,32 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
+// Observability metadata keys injected by MergeObservabilityMetadata and
+// restored by ContextWithObservabilityMetadata. These keys are reserved —
+// business code should avoid writing to them directly. Use
+// IsReservedMetadataKey to check before setting custom metadata keys.
 const (
 	MetadataKeyTraceID       = "trace_id"
 	MetadataKeyRequestID     = "request_id"
 	MetadataKeyCorrelationID = "correlation_id"
 )
+
+// ReservedMetadataKeys is the set of metadata keys managed by the
+// observability bridge. Business code that sets these keys directly risks
+// collision with framework-injected values. MergeObservabilityMetadata
+// preserves existing values (business wins), but downstream consumers may
+// misinterpret a business value as an observability ID.
+var ReservedMetadataKeys = map[string]struct{}{
+	MetadataKeyTraceID:       {},
+	MetadataKeyRequestID:     {},
+	MetadataKeyCorrelationID: {},
+}
+
+// IsReservedMetadataKey reports whether key is reserved for observability.
+func IsReservedMetadataKey(key string) bool {
+	_, ok := ReservedMetadataKeys[key]
+	return ok
+}
 
 // MergeObservabilityMetadata copies whitelisted observability values from ctx
 // into metadata. Existing non-empty metadata values win over context values.

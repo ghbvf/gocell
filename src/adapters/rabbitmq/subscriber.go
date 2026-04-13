@@ -80,6 +80,13 @@ type SubscriberConfig struct {
 	// ShutdownTimeout is how long to wait for in-flight messages during Close().
 	// Default: 30s.
 	ShutdownTimeout time.Duration
+
+	// DisableObservabilityRestore skips restoring observability metadata
+	// (request_id, correlation_id, trace_id) from entry metadata into the
+	// handler context. When true, processDelivery does not call
+	// ContextWithObservabilityMetadata. This serves as a runtime kill switch
+	// for the consume-side observability bridge.
+	DisableObservabilityRestore bool
 }
 
 func (sc *SubscriberConfig) setDefaults() {
@@ -411,7 +418,11 @@ func (s *Subscriber) processDelivery(
 		entry.Metadata = make(map[string]string)
 	}
 	entry.Metadata["topic"] = topic
-	deliveryCtx := outbox.ContextWithObservabilityMetadata(ctx, entry.Metadata)
+
+	deliveryCtx := ctx
+	if !s.config.DisableObservabilityRestore {
+		deliveryCtx = outbox.ContextWithObservabilityMetadata(ctx, entry.Metadata)
+	}
 
 	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
 	res := handler(deliveryCtx, entry)
