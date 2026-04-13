@@ -55,7 +55,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return err
 	}
 
-	metadata, err := json.Marshal(entry.Metadata)
+	metadata, err := json.Marshal(outbox.MergeObservabilityMetadata(ctx, entry.Metadata))
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
 	}
@@ -154,7 +154,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 	var numBuf [32]byte
 	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
-		metadata, err := json.Marshal(e.Metadata)
+		metadata, err := json.Marshal(outbox.MergeObservabilityMetadata(ctx, e.Metadata))
 		if err != nil {
 			return errcode.Wrap(ErrAdapterPGMarshal,
 				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)

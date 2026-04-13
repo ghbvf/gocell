@@ -73,6 +73,57 @@ func TestRequestID_RejectsControlChars(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 }
 
+func TestRequestID_RejectsUnsafeChars(t *testing.T) {
+	unsafeIDs := []string{
+		`has spaces`,
+		`has"quotes`,
+		`has{braces}`,
+		`has<angle>`,
+		"has\ttab",
+		`sql' OR '1'='1`,
+		`req-123%0Ainjected`,
+	}
+
+	for _, unsafeID := range unsafeIDs {
+		t.Run(unsafeID, func(t *testing.T) {
+			var gotID string
+			handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotID, _ = ctxkeys.RequestIDFrom(r.Context())
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("X-Request-Id", unsafeID)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Len(t, gotID, 36, "unsafe ID %q should be replaced with UUID", unsafeID)
+		})
+	}
+}
+
+func TestIsSafeID(t *testing.T) {
+	tests := []struct {
+		input string
+		safe  bool
+	}{
+		{"abc-123", true},
+		{"550e8400-e29b-41d4-a716-446655440000", true},
+		{"req.trace_id:v1/sub", true},
+		{"UPPER-case-Mix", true},
+		{"", false},
+		{"has space", false},
+		{"has\nnewline", false},
+		{`has"quote`, false},
+		{"has\x00null", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.safe, isSafeID(tt.input))
+		})
+	}
+}
+
 func TestRequestID_BridgesCorrelationID(t *testing.T) {
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		corrID, ok := ctxkeys.CorrelationIDFrom(r.Context())

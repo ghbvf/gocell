@@ -23,7 +23,7 @@ const maxRequestIDLen = 128
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(headerRequestID)
-		if id == "" || len(id) > maxRequestIDLen || containsControl(id) {
+		if id == "" || len(id) > maxRequestIDLen || !isSafeID(id) {
 			id = newUUID()
 		}
 		w.Header().Set(headerRequestID, id)
@@ -33,14 +33,26 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// containsControl reports whether s contains any ASCII control character.
-func containsControl(s string) bool {
+// isSafeID reports whether s is non-empty and every byte is in the safe set
+// for observability IDs: ASCII letters, digits, and the separators ._:/-
+// This rejects control characters, whitespace, quotes, brackets and other
+// characters that could confuse log parsers or structured output.
+func isSafeID(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
 	for i := 0; i < len(s); i++ {
-		if s[i] < 0x20 || s[i] == 0x7f {
-			return true
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= 'A' && c <= 'Z':
+		case c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == ':' || c == '/' || c == '-':
+		default:
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // newUUID generates a UUID v4 string.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -90,6 +91,38 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 	require.Len(t, tx.execCalls, 1)
 	call := tx.execCalls[0]
 	assert.Equal(t, "custom.topic.v1", call.args[4]) // topic column
+}
+
+func TestOutboxWriter_Write_InjectsObservabilityMetadataFromContext(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+
+	ctx := CtxWithTx(context.Background(), tx)
+	ctx = ctxkeys.WithRequestID(ctx, "req-123")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-123")
+
+	entry := outbox.Entry{
+		ID:        "ctx-meta-0001",
+		EventType: "order.created",
+		Payload:   []byte(`{"id":"1"}`),
+		CreatedAt: time.Now(),
+		Metadata:  map[string]string{"source": "handler"},
+	}
+
+	err := w.Write(ctx, entry)
+	require.NoError(t, err)
+	require.Len(t, tx.execCalls, 1)
+
+	metaJSON, ok := tx.execCalls[0].args[6].([]byte)
+	require.True(t, ok)
+
+	var meta map[string]string
+	require.NoError(t, json.Unmarshal(metaJSON, &meta))
+	assert.Equal(t, "handler", meta["source"])
+	assert.Equal(t, "req-123", meta["request_id"])
+	assert.Equal(t, "corr-123", meta["correlation_id"])
+	assert.Equal(t, "trace-123", meta["trace_id"])
 }
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
@@ -317,6 +350,54 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 	assert.Len(t, call.args, 18)
 	assert.Equal(t, "a1b2c3d4-e5f6-7890-abcd-ef1234567890", call.args[0])
 	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[9])
+}
+
+func TestOutboxWriter_WriteBatch_InjectsObservabilityMetadataFromContext(t *testing.T) {
+	w := NewOutboxWriter()
+	tx := &mockOutboxTx{}
+
+	ctx := CtxWithTx(context.Background(), tx)
+	ctx = ctxkeys.WithRequestID(ctx, "req-batch")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-batch")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-batch")
+
+	entries := []outbox.Entry{
+		{
+			ID:        "batch-ctx-0001",
+			Topic:     "orders.v1",
+			Payload:   []byte(`{"idx":1}`),
+			CreatedAt: time.Now(),
+		},
+		{
+			ID:        "batch-ctx-0002",
+			Topic:     "orders.v1",
+			Payload:   []byte(`{"idx":2}`),
+			CreatedAt: time.Now(),
+			Metadata: map[string]string{
+				"request_id": "req-explicit",
+			},
+		},
+	}
+
+	err := w.WriteBatch(ctx, entries)
+	require.NoError(t, err)
+	require.Len(t, tx.execCalls, 1)
+
+	firstMetaJSON, ok := tx.execCalls[0].args[6].([]byte)
+	require.True(t, ok)
+	var firstMeta map[string]string
+	require.NoError(t, json.Unmarshal(firstMetaJSON, &firstMeta))
+	assert.Equal(t, "req-batch", firstMeta["request_id"])
+	assert.Equal(t, "corr-batch", firstMeta["correlation_id"])
+	assert.Equal(t, "trace-batch", firstMeta["trace_id"])
+
+	secondMetaJSON, ok := tx.execCalls[0].args[15].([]byte)
+	require.True(t, ok)
+	var secondMeta map[string]string
+	require.NoError(t, json.Unmarshal(secondMetaJSON, &secondMeta))
+	assert.Equal(t, "req-explicit", secondMeta["request_id"])
+	assert.Equal(t, "corr-batch", secondMeta["correlation_id"])
+	assert.Equal(t, "trace-batch", secondMeta["trace_id"])
 }
 
 func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {

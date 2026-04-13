@@ -1,6 +1,11 @@
 // Package logging provides a slog.Handler that enriches log records with
-// trace_id, span_id, request_id, and cell_id from the request context.
+// trace_id, span_id, request_id, correlation_id, and cell_id from the
+// request context.
 // Supports JSON and text output formats.
+//
+// ref: go stdlib log/slog — Handler interface + Handle(context, Record) pattern
+// Adopted: wrapping an inner slog.Handler, extracting context values in Handle.
+// Deviated: adds GoCell-specific ctxkeys (request_id, correlation_id, cell_id).
 package logging
 
 import (
@@ -96,6 +101,9 @@ func extractContextAttrs(ctx context.Context) []slog.Attr {
 	}
 	if v, ok := ctxkeys.RequestIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("request_id", v))
+	}
+	if v, ok := ctxkeys.CorrelationIDFrom(ctx); ok && v != "" {
+		attrs = append(attrs, slog.String("correlation_id", v))
 	}
 	if v, ok := ctxkeys.CellIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("cell_id", v))

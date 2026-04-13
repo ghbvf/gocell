@@ -29,6 +29,7 @@ func TestAccessLog_LogsFields(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", nil)
 	// Simulate request_id already in context
 	ctx := ctxkeys.WithRequestID(req.Context(), "req-123")
+	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()
@@ -45,6 +46,7 @@ func TestAccessLog_LogsFields(t *testing.T) {
 	assert.Equal(t, float64(201), logEntry["status"])
 	assert.Contains(t, logEntry, "duration_ms")
 	assert.Equal(t, "req-123", logEntry["request_id"])
+	assert.Equal(t, "corr-123", logEntry["correlation_id"])
 }
 
 // TestAccessLog_Standalone verifies AccessLog works without Recorder middleware,

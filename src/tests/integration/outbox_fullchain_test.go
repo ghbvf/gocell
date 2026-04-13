@@ -8,11 +8,13 @@ import (
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,6 +24,10 @@ import (
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+type queueInspector interface {
+	QueueInspect(name string) (amqp.Queue, error)
+}
 
 // ---------------------------------------------------------------------------
 // Container helpers (inlined because per-adapter helpers are unexported)
@@ -123,6 +129,36 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	return client, cleanup
 }
 
+func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName string, subErrCh <-chan error, timeout time.Duration) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-subErrCh:
+			require.NoError(t, err, "subscriber exited before becoming ready")
+			t.Fatal("subscriber exited before becoming ready")
+		default:
+		}
+
+		ch, err := conn.AcquireChannel()
+		require.NoError(t, err, "AcquireChannel should succeed while waiting for subscriber readiness")
+
+		inspector, ok := ch.(queueInspector)
+		require.True(t, ok, "AMQPChannel should support QueueInspect in integration tests")
+
+		queue, inspectErr := inspector.QueueInspect(queueName)
+		_ = ch.Close()
+		if inspectErr == nil && queue.Consumers > 0 {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)
+}
+
 // ---------------------------------------------------------------------------
 // T25: TestIntegration_OutboxFullChain
 // ---------------------------------------------------------------------------
@@ -136,6 +172,16 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 //
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
+	// Publish-side context carries observability IDs that will be injected
+	// into outbox entry metadata by MergeObservabilityMetadata.
+	publishCtx := context.Background()
+	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-full-chain-001")
+	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-full-chain-001")
+	publishCtx = ctxkeys.WithTraceID(publishCtx, "trace-full-chain-001")
+
+	// Infrastructure context is clean — no obs IDs. This ensures that
+	// obs values in the consumer handler come from middleware restore,
+	// not from context inheritance.
 	ctx := context.Background()
 
 	// ---------------------------------------------------------------
@@ -187,7 +233,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		AggregateType: "order",
 		EventType:     topic,
 		Payload:       []byte(`{"orderId":"order-42","status":"created"}`),
-		Metadata:      map[string]string{"trace_id": "trace-full-chain-001"},
+		Metadata:      map[string]string{"source": "integration-test"},
 		CreatedAt:     time.Now().UTC(),
 	}
 
@@ -198,7 +244,8 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		// Business write.
 		tx, ok := postgres.TxFromContext(txCtx)
 		if !ok {
@@ -231,20 +278,42 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Step 5: Start the subscriber BEFORE the relay so it is ready to
 	//         receive messages when the relay publishes.
 	// ---------------------------------------------------------------
-	received := make(chan outbox.Entry, 1)
-	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	type observedDelivery struct {
+		entry         outbox.Entry
+		requestID     string
+		correlationID string
+		traceID       string
+	}
+
+	received := make(chan observedDelivery, 1)
+	// Subscribe context is deliberately clean (no obs IDs). The only way
+	// obs values reach the handler is through ObservabilityContextMiddleware
+	// restoring them from entry.Metadata.
+	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:      sub,
+		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			received <- e
+		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
+			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
+			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
+			received <- observedDelivery{
+				entry:         e,
+				requestID:     requestID,
+				correlationID: correlationID,
+				traceID:       traceID,
+			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "fullchain-test")
 	}()
 
-	// Brief pause to let the subscriber bind its queue.
-	time.Sleep(500 * time.Millisecond)
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.queue", subErrCh, 5*time.Second)
 
 	// ---------------------------------------------------------------
 	// Step 6: Start the OutboxRelay in a background goroutine.
@@ -260,10 +329,16 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 7: Wait for the subscriber to receive the message.
 	// ---------------------------------------------------------------
-	var got outbox.Entry
+	var got observedDelivery
 	select {
 	case got = <-received:
 		// Success — message received.
+	case err := <-subErrCh:
+		require.NoError(t, err, "subscriber exited before receiving the message")
+		t.Fatal("subscriber exited before receiving the message")
+	case err := <-relayErrCh:
+		require.NoError(t, err, "relay exited before publishing the message")
+		t.Fatal("relay exited before publishing the message")
 	case <-time.After(20 * time.Second):
 		t.Fatal("timed out waiting for message from subscriber")
 	}
@@ -271,30 +346,44 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// ---------------------------------------------------------------
 	// Step 8: Verify received message payload matches the original.
 	// ---------------------------------------------------------------
-	assert.Equal(t, entryID, got.ID, "event ID should match")
-	assert.Equal(t, "order-42", got.AggregateID, "aggregate ID should match")
-	assert.Equal(t, "order", got.AggregateType, "aggregate type should match")
-	assert.Equal(t, topic, got.EventType, "event type should match")
+	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+	assert.Equal(t, "order-42", got.entry.AggregateID, "aggregate ID should match")
+	assert.Equal(t, "order", got.entry.AggregateType, "aggregate type should match")
+	assert.Equal(t, topic, got.entry.EventType, "event type should match")
 	assert.JSONEq(t,
 		`{"orderId":"order-42","status":"created"}`,
-		string(got.Payload),
+		string(got.entry.Payload),
 		"payload should match original business event")
 
 	// The relay serialises the full outbox.Entry as the AMQP body, so
-	// Metadata round-trips through JSON.  The subscriber also injects
-	// a "topic" key — verify trace_id survived.
-	assert.Equal(t, "trace-full-chain-001", got.Metadata["trace_id"],
-		"metadata trace_id should survive the full chain")
+	// metadata round-trips through JSON. The outbox writer should inject
+	// observability metadata from context before persistence, and the
+	// subscriber should restore those values into the consumer handler context.
+	assert.Equal(t, "integration-test", got.entry.Metadata["source"],
+		"business metadata should be preserved")
+	assert.Equal(t, "req-full-chain-001", got.entry.Metadata["request_id"],
+		"request_id should be injected from context")
+	assert.Equal(t, "corr-full-chain-001", got.entry.Metadata["correlation_id"],
+		"correlation_id should be injected from context")
+	assert.Equal(t, "trace-full-chain-001", got.entry.Metadata["trace_id"],
+		"trace_id should survive the full chain")
+	assert.Equal(t, "req-full-chain-001", got.requestID,
+		"request_id should be restored into consumer handler context")
+	assert.Equal(t, "corr-full-chain-001", got.correlationID,
+		"correlation_id should be restored into consumer handler context")
+	assert.Equal(t, "trace-full-chain-001", got.traceID,
+		"trace_id should be restored into consumer handler context")
 
 	// ---------------------------------------------------------------
 	// Step 9: Verify the relay marked the outbox entry as published.
 	// ---------------------------------------------------------------
-	// Give the relay a moment to commit the UPDATE after publishing.
-	time.Sleep(500 * time.Millisecond)
-
-	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, "published", status, "outbox entry should have status='published' after relay")
+	require.Eventually(t, func() bool {
+		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&status)
+		if queryErr != nil {
+			return false
+		}
+		return status == "published"
+	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
 
 	// ---------------------------------------------------------------
 	// Step 10: Verify idempotency semantics with IdempotencyClaimer.
@@ -333,6 +422,201 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	// ---------------------------------------------------------------
 	// Cleanup: stop relay and subscriber.
+	// ---------------------------------------------------------------
+	relayCancel()
+	_ = relay.Stop(ctx)
+	subCancel()
+	_ = sub.Close()
+}
+
+// TestIntegration_OutboxFullChain_NoTrace validates that the outbox pipeline
+// correctly handles the absence of trace context. When the originating HTTP
+// handler has request_id and correlation_id but NO trace_id (e.g. tracing
+// disabled or non-HTTP origin), those two IDs should still round-trip while
+// trace_id remains absent from both entry metadata and consumer context.
+//
+// Satisfies acceptance criterion AC-5: "tracing disabled / non-HTTP context".
+//
+// Infrastructure: PostgreSQL + RabbitMQ (2 testcontainers, no Redis needed).
+func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
+	// Publish-side context: request_id + correlation_id, NO trace_id.
+	publishCtx := context.Background()
+	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-no-trace-001")
+	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-no-trace-001")
+	// Deliberately NOT setting trace_id — simulates tracing-disabled context.
+
+	// Infrastructure context is clean — no obs IDs.
+	ctx := context.Background()
+
+	// ---------------------------------------------------------------
+	// Step 1: Start containers.
+	// ---------------------------------------------------------------
+	pool, pgCleanup := setupPostgresContainer(t)
+	defer pgCleanup()
+
+	rmqConn, rmqCleanup := setupRabbitMQContainer(t)
+	defer rmqCleanup()
+
+	// ---------------------------------------------------------------
+	// Step 2: Run migrations.
+	// ---------------------------------------------------------------
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr, "NewMigrator should succeed")
+	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
+
+	// ---------------------------------------------------------------
+	// Step 3: Build components.
+	// ---------------------------------------------------------------
+	txm := postgres.NewTxManager(pool)
+	writer := postgres.NewOutboxWriter()
+	pub := rabbitmq.NewPublisher(rmqConn)
+	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
+		QueueName:       "outbox.fullchain.notrace.queue",
+		PrefetchCount:   1,
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	relayCfg := postgres.DefaultRelayConfig()
+	relayCfg.PollInterval = 200 * time.Millisecond
+	relayCfg.BatchSize = 10
+	relay := postgres.NewOutboxRelay(pool.DB(), pub, relayCfg)
+
+	// ---------------------------------------------------------------
+	// Step 4: Business write + outbox write.
+	// ---------------------------------------------------------------
+	entryID := uuid.New().String()
+	topic := "test.outbox.fullchain.notrace"
+	entry := outbox.Entry{
+		ID:            entryID,
+		AggregateID:   "order-notrace-42",
+		AggregateType: "order",
+		EventType:     topic,
+		Payload:       []byte(`{"orderId":"order-notrace-42","status":"created"}`),
+		Metadata:      map[string]string{"source": "no-trace-test"},
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	_, err := pool.DB().Exec(ctx, `CREATE TABLE IF NOT EXISTS test_orders (
+		id   TEXT PRIMARY KEY,
+		data TEXT NOT NULL
+	)`)
+	require.NoError(t, err, "create test_orders table")
+
+	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
+		tx, ok := postgres.TxFromContext(txCtx)
+		if !ok {
+			t.Fatal("transaction must be in context")
+		}
+		if _, execErr := tx.Exec(txCtx,
+			"INSERT INTO test_orders (id, data) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+			"order-notrace-42", "no-trace-test",
+		); execErr != nil {
+			return execErr
+		}
+		return writer.Write(txCtx, entry)
+	})
+	require.NoError(t, err, "business + outbox write should succeed")
+
+	// ---------------------------------------------------------------
+	// Step 5: Start subscriber, then relay.
+	// ---------------------------------------------------------------
+	type observedDelivery struct {
+		entry         outbox.Entry
+		requestID     string
+		correlationID string
+		traceID       string
+		traceOK       bool
+	}
+
+	received := make(chan observedDelivery, 1)
+	// Subscribe context is clean — no obs IDs.
+	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer subCancel()
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:      sub,
+		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+	}
+
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
+			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
+			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)
+			received <- observedDelivery{
+				entry:         e,
+				requestID:     requestID,
+				correlationID: correlationID,
+				traceID:       traceID,
+				traceOK:       traceOK,
+			}
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "fullchain-notrace-test")
+	}()
+
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.notrace.queue", subErrCh, 5*time.Second)
+
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	defer relayCancel()
+
+	relayErrCh := make(chan error, 1)
+	go func() {
+		relayErrCh <- relay.Start(relayCtx)
+	}()
+
+	// ---------------------------------------------------------------
+	// Step 6: Wait for the subscriber to receive the message.
+	// ---------------------------------------------------------------
+	var got observedDelivery
+	select {
+	case got = <-received:
+		// Success.
+	case err := <-subErrCh:
+		require.NoError(t, err, "subscriber exited before receiving the message")
+		t.Fatal("subscriber exited before receiving the message")
+	case err := <-relayErrCh:
+		require.NoError(t, err, "relay exited before publishing the message")
+		t.Fatal("relay exited before publishing the message")
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for message from subscriber")
+	}
+
+	// ---------------------------------------------------------------
+	// Step 7: Verify observability metadata — request_id and
+	//         correlation_id survive; trace_id is absent.
+	// ---------------------------------------------------------------
+	assert.Equal(t, entryID, got.entry.ID, "event ID should match")
+
+	// Business metadata preserved.
+	assert.Equal(t, "no-trace-test", got.entry.Metadata["source"],
+		"business metadata should be preserved")
+
+	// request_id and correlation_id should round-trip in entry metadata.
+	assert.Equal(t, "req-no-trace-001", got.entry.Metadata["request_id"],
+		"request_id should be injected from context")
+	assert.Equal(t, "corr-no-trace-001", got.entry.Metadata["correlation_id"],
+		"correlation_id should be injected from context")
+
+	// trace_id should NOT be present in metadata (was never in context).
+	traceVal, tracePresent := got.entry.Metadata["trace_id"]
+	assert.True(t, !tracePresent || traceVal == "",
+		"trace_id should be absent or empty in metadata when not in originating context, got %q", traceVal)
+
+	// request_id and correlation_id should be restored into consumer context.
+	assert.Equal(t, "req-no-trace-001", got.requestID,
+		"request_id should be restored into consumer handler context")
+	assert.Equal(t, "corr-no-trace-001", got.correlationID,
+		"correlation_id should be restored into consumer handler context")
+
+	// trace_id should be empty in consumer context.
+	assert.Empty(t, got.traceID,
+		"trace_id should be empty in consumer handler context when not in originating context")
+
+	// ---------------------------------------------------------------
+	// Cleanup.
 	// ---------------------------------------------------------------
 	relayCancel()
 	_ = relay.Stop(ctx)
@@ -398,8 +682,15 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	case msg := <-mock.messages:
 		assert.Equal(t, "mock.created", msg.topic, "topic should match event type")
 
-		// The relay marshals the full outbox.Entry as JSON.
-		var relayed outbox.Entry
+		// The relay serializes via outboxMessage where Payload is json.RawMessage
+		// (embedded as a raw JSON object, not base64). Use a matching struct.
+		var relayed struct {
+			ID            string          `json:"id"`
+			AggregateID   string          `json:"aggregateId"`
+			AggregateType string          `json:"aggregateType"`
+			EventType     string          `json:"eventType"`
+			Payload       json.RawMessage `json:"payload"`
+		}
 		require.NoError(t, json.Unmarshal(msg.payload, &relayed), "payload should be valid JSON")
 		assert.Equal(t, entryID, relayed.ID, "relayed entry ID should match")
 		assert.Equal(t, "agg-mock-1", relayed.AggregateID)
@@ -410,12 +701,11 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	}
 
 	// Verify the entry was marked as published.
-	time.Sleep(300 * time.Millisecond)
-
 	var pubStatus string
-	err = pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
-	require.NoError(t, err)
-	assert.Equal(t, "published", pubStatus, "outbox entry should have status='published' after relay")
+	require.Eventually(t, func() bool {
+		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
+		return queryErr == nil && pubStatus == "published"
+	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
 
 	relayCancel()
 	_ = relay.Stop(ctx)
