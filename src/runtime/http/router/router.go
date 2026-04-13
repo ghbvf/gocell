@@ -114,6 +114,9 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
+	if verifier == nil {
+		panic("router: WithAuthMiddleware requires a non-nil TokenVerifier")
+	}
 	return func(r *Router) {
 		r.authVerifier = verifier
 		r.authPublicEndpoints = publicEndpoints
@@ -161,14 +164,17 @@ type Router struct {
 // Use NewE for an error-returning variant suitable for managed startup
 // sequences like Bootstrap.Run where rollback must be possible.
 //
-// Default middleware chain for business routes (applied in order):
+// The request chain is split across two chi.Mux instances:
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → [RateLimit] → [CircuitBreaker] → [Auth] → Recovery → SecurityHeaders → BodyLimit
+//	outerMux: RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics] → Recovery → SecurityHeaders
+//	  ├── infra routes: /healthz, /readyz, /metrics (bypass RL/CB/Auth)
+//	  └── Mount("/", mux)
+//	       mux: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → business routes
 //
-// Infrastructure endpoints (/healthz, /readyz, /metrics) are registered in a
-// separate group that shares the observability stack (RequestID through Metrics)
-// but bypasses RateLimit and CircuitBreaker. This prevents overload protection
-// from short-circuiting health probes and metric scrapes.
+// Infrastructure endpoints are registered on outerMux and get shared
+// observability + Recovery + SecurityHeaders but bypass RateLimit,
+// CircuitBreaker, and Auth. This prevents overload/auth protection from
+// short-circuiting health probes and metric scrapes.
 //
 // ref: go-zero rest/engine.go — management endpoints on separate handler chain
 // ref: Kratos transport/http — middleware split between server and business

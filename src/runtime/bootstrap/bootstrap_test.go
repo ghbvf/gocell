@@ -1624,11 +1624,13 @@ func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
 
 // bootstrapTestVerifier is a minimal TokenVerifier for bootstrap tests.
 type bootstrapTestVerifier struct {
-	claims auth.Claims
-	err    error
+	claims    auth.Claims
+	err       error
+	callCount atomic.Int32
 }
 
 func (v *bootstrapTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+	v.callCount.Add(1)
 	return v.claims, v.err
 }
 
@@ -1730,6 +1732,8 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"public login endpoint must be accessible without auth token")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for public endpoint")
 
 	cancel()
 	select {

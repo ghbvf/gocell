@@ -3,17 +3,20 @@ package auth
 import (
 	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-// DefaultPublicEndpoints is the default set of paths that do not require
-// authentication.
+// DefaultPublicEndpoints is the default set of business-route paths that do
+// not require authentication. Infra endpoints (/healthz, /readyz, /metrics)
+// bypass auth via the router's outerMux architecture and are not listed here.
+//
+// The slice is read at AuthMiddleware construction time; later mutations have
+// no effect on already-constructed middleware instances.
 var DefaultPublicEndpoints = []string{
-	"/healthz",
-	"/readyz",
 	"/api/v1/access/sessions/login",
 	"/api/v1/access/sessions/refresh",
 }
@@ -23,21 +26,22 @@ var DefaultPublicEndpoints = []string{
 // Claims in the request context. On failure, it returns a 401 JSON response.
 //
 // publicEndpoints specifies paths that bypass authentication. If nil,
-// DefaultPublicEndpoints is used.
+// DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
+// matching, consistent with other security middleware in this package.
 func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.Handler) http.Handler {
-	whitelist := publicEndpoints
-	if whitelist == nil {
-		whitelist = DefaultPublicEndpoints
+	publicPaths := publicEndpoints
+	if publicPaths == nil {
+		publicPaths = DefaultPublicEndpoints
 	}
-	publicSet := make(map[string]bool, len(whitelist))
-	for _, p := range whitelist {
-		publicSet[p] = true
+	publicSet := make(map[string]bool, len(publicPaths))
+	for _, p := range publicPaths {
+		publicSet[path.Clean(p)] = true
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip authentication for whitelisted endpoints.
-			if publicSet[r.URL.Path] {
+			// Skip authentication for public endpoints.
+			if publicSet[path.Clean(r.URL.Path)] {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -50,9 +54,10 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 
 			claims, err := verifier.Verify(r.Context(), token)
 			if err != nil {
-				slog.Warn("token verification failed",
+				slog.Error("token verification failed",
 					slog.Any("error", err),
 					slog.String("path", r.URL.Path),
+					slog.String("remote_addr", r.RemoteAddr),
 				)
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 				return

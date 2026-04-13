@@ -134,6 +134,22 @@ func TestAuthMiddleware_PublicEndpointCustomWhitelist(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+func TestAuthMiddleware_EmptyPublicEndpoints_NoDefaults(t *testing.T) {
+	// Passing an explicit empty slice disables default public endpoints.
+	// Every path requires auth — nil and []string{} have different semantics.
+	verifier := &mockVerifier{err: errors.New("should not be called")}
+	handler := AuthMiddleware(verifier, []string{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Even the default login path should require auth when empty list is passed.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"empty publicEndpoints must not use defaults — all paths should require auth")
+}
+
 func TestAuthMiddleware_ProtectedEndpointNoToken(t *testing.T) {
 	verifier := &mockVerifier{}
 	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

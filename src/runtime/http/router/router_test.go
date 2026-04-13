@@ -727,3 +727,31 @@ func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
 		"rate limiter must run before auth middleware — expect 429, not 401")
 }
+
+func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
+	verifier := &routerTestVerifier{
+		err: fmt.Errorf("token expired"),
+	}
+	r := New(WithAuthMiddleware(verifier, nil))
+	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("handler should not be called with invalid token")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer expired-token")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+}
+
+func TestWithAuthMiddleware_NilVerifier_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		WithAuthMiddleware(nil, nil)
+	}, "WithAuthMiddleware must panic when verifier is nil")
+}
