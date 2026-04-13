@@ -2,7 +2,7 @@
 package query
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -15,7 +15,12 @@ type Builder struct {
 
 // NewBuilder creates an empty Builder.
 func NewBuilder() *Builder {
-	return &Builder{}
+	// Optimization: Pre-allocate slices with a small default capacity
+	// to avoid multiple reallocations during typical query construction.
+	return &Builder{
+		parts: make([]string, 0, 8),
+		args:  make([]any, 0, 8),
+	}
 }
 
 // Append adds a raw SQL fragment to the query.
@@ -28,7 +33,9 @@ func (b *Builder) Append(sql string) *Builder {
 // its value. The placeholder $N is inserted automatically.
 func (b *Builder) AppendParam(sqlPrefix string, value any) *Builder {
 	b.args = append(b.args, value)
-	placeholder := fmt.Sprintf("$%d", len(b.args))
+	// Optimization: Use strconv.Itoa instead of fmt.Sprintf to avoid reflection
+	// and unnecessary heap allocations, improving string formatting performance.
+	placeholder := "$" + strconv.Itoa(len(b.args))
 	b.parts = append(b.parts, sqlPrefix+placeholder)
 	return b
 }
@@ -64,7 +71,9 @@ func (b *Builder) SQL() string {
 // where AppendParam's single-prefix pattern is insufficient.
 func (b *Builder) NextParam(value any) string {
 	b.args = append(b.args, value)
-	return fmt.Sprintf("$%d", len(b.args))
+	// Optimization: Use strconv.Itoa instead of fmt.Sprintf to avoid reflection
+	// and unnecessary heap allocations, improving string formatting performance.
+	return "$" + strconv.Itoa(len(b.args))
 }
 
 // Reset clears the builder for reuse.
