@@ -395,6 +395,30 @@ func TestPrintTargetList(t *testing.T) {
 	printTargetList("Test", []string{"a", "b"})
 }
 
+func TestIsWithinRoot(t *testing.T) {
+	root := t.TempDir()
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"child path", filepath.Join(root, "cmd", "main.go"), true},
+		{"root itself", root, true},
+		{"parent escape", filepath.Join(root, "..", "etc", "passwd"), false},
+		{"double escape", filepath.Join(root, "..", "..", "tmp"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWithinRoot(root, tt.target)
+			if got != tt.want {
+				t.Errorf("isWithinRoot(%q, %q) = %v, want %v", root, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPrintResult(t *testing.T) {
 	// Should not panic.
 	printResult(governance.ValidationResult{

@@ -31,4 +31,4 @@ Branch: `refactor/506-kernel-outbox-cleanup`
 - 6 席位并行审查已完成，架构席位 PASS。
 - PR 行级 review comment 2 条已纳入 fix 轮处理。
 - fix 轮后的聚焦复核未发现新的 outbox/idempotency C1/C2 回归；`order-cell` 默认 nil publisher 的更大语义问题已登记到 `tech-debt.md`，不在本次 cleanup 内直接改产品行为。
-- fix 轮后执行 `cd src && go test ./...` 与 `cd src && go build ./...`，结果全绿。
+- fix 轮后执行 `go test ./...` 与 `go build ./...`，结果全绿。

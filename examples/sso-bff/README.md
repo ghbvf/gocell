@@ -12,7 +12,6 @@ All dependencies are in-memory (no external services required).
 ## Quick Start
 
 ```bash
-cd src
 go run ./examples/sso-bff
 ```
 

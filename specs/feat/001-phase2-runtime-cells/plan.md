@@ -39,7 +39,7 @@
 ### 0.4 验证
 
 ```bash
-cd src && go build ./... && go test ./... && gocell validate
+go build ./... && go test ./... && gocell validate
 ```
 
 **出口条件**: gocell validate 零 error + go build 通过 + kernel/ 测试绿色

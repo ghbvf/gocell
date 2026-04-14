@@ -27,7 +27,6 @@ This example application runs in demo mode. The reusable `order-cell` code can a
 No external dependencies required. Uses an in-memory repository and in-process event bus.
 
 ```bash
-cd src
 go run ./examples/todo-order
 ```
 

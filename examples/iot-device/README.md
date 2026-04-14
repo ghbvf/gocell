@@ -28,7 +28,6 @@ connectivity, high latency, or constrained bandwidth.
 No external dependencies required. Uses in-memory repositories and event bus.
 
 ```bash
-cd src
 go run ./examples/iot-device
 ```
 

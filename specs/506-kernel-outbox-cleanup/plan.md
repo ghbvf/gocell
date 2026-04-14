@@ -88,10 +88,10 @@ The framework already has a stable `outbox.Writer` abstraction, but no shared pl
 
 ## Validation Plan
 
-1. `cd src && go test ./kernel/outbox ./kernel/idempotency ./cells/order-cell/... ./cmd/core-bundle`
-2. `cd src && go test ./runtime/eventbus ./adapters/redis ./adapters/rabbitmq`
-3. `cd src && go test ./cells/access-core ./cells/audit-core ./cells/config-core ./examples/sso-bff`
-4. `cd src && go build ./...`
+1. `go test ./kernel/outbox ./kernel/idempotency ./cells/order-cell/... ./cmd/core-bundle`
+2. `go test ./runtime/eventbus ./adapters/redis ./adapters/rabbitmq`
+3. `go test ./cells/access-core ./cells/audit-core ./cells/config-core ./examples/sso-bff`
+4. `go build ./...`
 
 ## Review Focus
 

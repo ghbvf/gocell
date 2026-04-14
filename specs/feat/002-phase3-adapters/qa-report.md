@@ -10,7 +10,7 @@
 
 ## 1. Go Test 结果
 
-**执行**: `cd src && go test ./... -v -count=1`
+**执行**: `go test ./... -v -count=1`
 **证据**: `specs/feat/002-phase3-adapters/evidence/go-test/result.txt`
 
 | 指标 | 结果 |

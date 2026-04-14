@@ -462,7 +462,7 @@
 
 ### AC-12.1: 全量编译
 - **优先级**: P1
-- **验收标准**: `cd src && go build ./...` 零编译错误，含 cmd/core-bundle 入口
+- **验收标准**: `go build ./...` 零编译错误，含 cmd/core-bundle 入口
 - **验证方式**: [集成测试]
 - **关联任务**: T-060, T-066
 
@@ -648,7 +648,7 @@
 - **关联任务**: T-069
 
 > **手动验证操作指南（AC-NFR.2）**:
-> 1. 执行 `cd src && go mod graph | grep -v '@' | sort` 查看直接依赖列表
+> 1. 执行 `go mod graph | grep -v '@' | sort` 查看直接依赖列表
 > 2. 逐一确认每个直接依赖在以下白名单中:
 >    - `github.com/go-chi/chi/v5`
 >    - `golang.org/x/crypto`
@@ -716,7 +716,7 @@
 - **关联任务**: T-060
 
 > **手动验证操作指南（AC-CB.3）**:
-> 1. 执行 `cd src && go build -o /tmp/core-bundle ./cmd/core-bundle`
+> 1. 执行 `go build -o /tmp/core-bundle ./cmd/core-bundle`
 > 2. 准备最小配置文件 `config.yaml`（含 server.http.port、log.level、audit.hmac_key）
 > 3. 执行 `/tmp/core-bundle --config config.yaml`
 > 4. 在另一终端执行 `curl http://localhost:<port>/healthz`
