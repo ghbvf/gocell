@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -239,6 +240,7 @@ type Bootstrap struct {
 	healthCheckers             []namedChecker
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+	runOnce                    sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
@@ -276,6 +278,15 @@ func New(opts ...Option) *Bootstrap {
 //
 // If any step fails, already-started components are rolled back in reverse.
 func (b *Bootstrap) Run(ctx context.Context) error {
+	// Guard against double-Run. A second call would create duplicate
+	// teardowns and race on shared resources.
+	// ref: uber-go/fx App.Run — returns immediately if already started
+	started := false
+	b.runOnce.Do(func() { started = true })
+	if !started {
+		return fmt.Errorf("bootstrap: Run called more than once")
+	}
+
 	// Step 0: Validate inputs before any side effects.
 	// Health checker params are pure data — no reason to defer to runtime.
 	for _, hc := range b.healthCheckers {

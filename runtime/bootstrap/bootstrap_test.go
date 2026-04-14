@@ -516,6 +516,18 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	_ = err
 }
 
+func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so first Run exits quickly
+
+	b := New(WithHTTPAddr("127.0.0.1:0"))
+	_ = b.Run(ctx) // first call — may error due to cancelled ctx or sandbox
+
+	err := b.Run(ctx) // second call — must be rejected
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Run called more than once")
+}
+
 func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
