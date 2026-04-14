@@ -169,6 +169,20 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
+// WithPreShutdownDelay sets a delay between marking /readyz as 503 and
+// starting the HTTP server shutdown. This gives load balancers (e.g.,
+// Kubernetes kube-proxy) time to observe the unhealthy readiness probe
+// and stop routing new traffic before the server closes connections.
+//
+// Default is 0 (no delay). Typical Kubernetes deployments use 3-5 seconds.
+//
+// ref: Kubernetes pod shutdown — preStop + readyz unhealthy before SIGTERM
+func WithPreShutdownDelay(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.preShutdownDelay = d
+	}
+}
+
 // WithListener sets a pre-built net.Listener for the HTTP server,
 // useful in tests to avoid port conflicts.
 func WithListener(ln net.Listener) Option {
@@ -218,8 +232,9 @@ type Bootstrap struct {
 	publisher       outbox.Publisher
 	subscriber      outbox.Subscriber
 	routerOpts      []router.Option
-	shutdownTimeout time.Duration
-	listener        net.Listener
+	shutdownTimeout  time.Duration
+	preShutdownDelay time.Duration
+	listener         net.Listener
 	healthCheckers             []namedChecker
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
@@ -484,7 +499,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// cannot accidentally override it. WithHealthHandler sets r.healthHandler;
 	// the last call wins, so placing the framework handler after user options
 	// guarantees the bootstrap-managed handler is always used.
-	routerOpts := append(b.routerOpts, router.WithHealthHandler(hh))
+	// Copy to avoid mutating b.routerOpts' backing array.
+	routerOpts := make([]router.Option, len(b.routerOpts)+1)
+	copy(routerOpts, b.routerOpts)
+	routerOpts[len(b.routerOpts)] = router.WithHealthHandler(hh)
 	rtr, err := router.NewE(routerOpts...)
 	if err != nil {
 		return rollback(fmt.Errorf("bootstrap: %w", err))
@@ -630,9 +648,16 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 10: Orderly shutdown.
+	// Sequence: mark readyz unhealthy → wait for LBs to drain → close connections.
+	// ref: Kubernetes pod shutdown model
 	slog.Info("bootstrap: initiating graceful shutdown")
 	reloads.BeginShutdown()
 	hh.SetShuttingDown() // Mark readyz unhealthy so LBs drain traffic
+	if b.preShutdownDelay > 0 {
+		slog.Info("bootstrap: pre-shutdown drain delay",
+			slog.Duration("delay", b.preShutdownDelay))
+		time.Sleep(b.preShutdownDelay)
+	}
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
 

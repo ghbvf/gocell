@@ -2003,7 +2003,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 	// Poll /readyz — it should become 503.
 	deadline := time.After(5 * time.Second)
 	for {
-		resp, err := http.Get("http://" + addr + "/readyz")
+		resp, err := testHTTPClient.Get("http://" + addr + "/readyz")
 		if err != nil {
 			break // server already closed, that's fine
 		}
