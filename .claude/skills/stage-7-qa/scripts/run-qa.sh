@@ -33,7 +33,7 @@ echo ""
 
 # 1. Go test
 echo "--- Running go test ---"
-if (cd "$REPO_ROOT/src" && go test ./... -v -count=1) > "$EVIDENCE_DIR/go-test/result.txt" 2>&1; then
+if (cd "$REPO_ROOT" && go test ./... -v -count=1) > "$EVIDENCE_DIR/go-test/result.txt" 2>&1; then
   SUMMARY+=("[PASS] go test")
   echo "[PASS] go test"
 else
@@ -44,7 +44,7 @@ fi
 
 # 2. go vet
 echo "--- Running go vet ---"
-if (cd "$REPO_ROOT/src" && go vet ./...) > "$EVIDENCE_DIR/go-test/vet.txt" 2>&1; then
+if (cd "$REPO_ROOT" && go vet ./...) > "$EVIDENCE_DIR/go-test/vet.txt" 2>&1; then
   SUMMARY+=("[PASS] go vet")
   echo "[PASS] go vet"
 else

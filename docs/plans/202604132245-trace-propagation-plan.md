@@ -124,7 +124,6 @@ Add failing tests that prove the current gap:
 Full verification per CLAUDE.md (build + test all affected packages):
 
 ```bash
-cd src
 go build ./...
 go test ./runtime/http/middleware/ ./runtime/http/router/ ./adapters/otel/ ./runtime/observability/tracing/
 ```

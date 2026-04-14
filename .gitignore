@@ -42,6 +42,7 @@ worktrees/
 
 # Build output
 /gocell
+/core-bundle
 /iot-device
 /sso-bff
 /todo-order

@@ -25,7 +25,7 @@ cover:
 
 clean:
 	rm -f coverage.out
-	rm -f core-bundle
+	rm -f core-bundle gocell iot-device sso-bff todo-order
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle
@@ -44,7 +44,7 @@ down:
 
 test-integration:
 	docker compose up -d --wait
-	go test ./adapters/... -tags=integration -count=1 -v
+	go test ./adapters/... ./tests/integration/... -tags=integration -count=1 -v
 	docker compose down
 
 # ---------------------------------------------------------------------------

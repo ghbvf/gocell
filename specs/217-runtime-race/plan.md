@@ -79,8 +79,8 @@ Update `docs/backlog.md` so the runtime race row reflects what this branch actua
 ## Validation Plan
 
 1. `go test ./runtime/bootstrap ./runtime/eventbus ./runtime/worker`
-2. `cd src && go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap`
-3. `cd src && go build ./...`
+2. `go test -race ./runtime/eventbus ./runtime/worker ./runtime/bootstrap`
+3. `go build ./...`
 
 ## Risk Notes
 

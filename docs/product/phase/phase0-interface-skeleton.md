@@ -441,7 +441,7 @@ Schema 三重用途：
 ## Step 0.7 — 验证 + 构建（Day 7）
 
 ```bash
-cd src && go build ./... && go test ./... -cover
+go build ./... && go test ./... -cover
 ```
 
 全部编译通过，Gate 测试绿，覆盖率 ≥ 90%。

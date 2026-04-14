@@ -217,7 +217,6 @@ func TestIntegration_MyCellSmoke(t *testing.T) {
 
 ```bash
 docker compose up -d          # boot infrastructure
-cd src
 go test -tags integration ./adapters/postgres/... -count=1 -v
 go test -tags integration ./tests/integration/... -count=1 -v
 ```

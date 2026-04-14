@@ -550,7 +550,7 @@ Wave 4 (集成):
 
 ```bash
 # 编译
-cd src && go build ./...
+go build ./...
 
 # 单元测试 + 覆盖率
 go test ./runtime/... -cover   # >= 80%

@@ -92,6 +92,9 @@ func generateAssembly(args []string) error {
 	// The entrypoint path in assembly.yaml is relative to the project root.
 
 	entrypointPath := filepath.Join(root, entrypointRel)
+	if !isWithinRoot(root, entrypointPath) {
+		return fmt.Errorf("assembly %q build.entrypoint %q: path escapes project root", *id, entrypointRel)
+	}
 	if err := os.MkdirAll(filepath.Dir(entrypointPath), 0o755); err != nil {
 		return fmt.Errorf("create entrypoint dir: %w", err)
 	}
@@ -102,6 +105,9 @@ func generateAssembly(args []string) error {
 
 	// Boundary goes into assemblies/{id}/generated/ (generated artifacts directory).
 	generatedDir := filepath.Join(root, "assemblies", *id, "generated")
+	if !isWithinRoot(root, generatedDir) {
+		return fmt.Errorf("assembly %q: generated dir escapes project root", *id)
+	}
 	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		return fmt.Errorf("create generated dir: %w", err)
 	}

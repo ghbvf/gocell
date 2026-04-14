@@ -104,13 +104,10 @@ stages:
           pattern: "(contract|OpenAPI|contracts/)"
       command_checks:
         - args: ["go", "build", "./..."]
-          cwd: src
           desc: "go build 编译通过"
         - args: ["go", "vet", "./..."]
-          cwd: src
           desc: "go vet 静态检查通过"
         - args: ["go", "test", "./...", "-count=1"]
-          cwd: src
           desc: "go test 全量测试通过"
 
   S6:
@@ -158,7 +155,6 @@ stages:
           pattern: "(AC-\\d+|AC \\d+|验收标准)"
       command_checks:
         - args: ["go", "test", "./...", "-count=1"]
-          cwd: src
           desc: "go test 全量测试通过"
 
   S8:

@@ -20,7 +20,6 @@ The `docker-compose.yml` at the repository root defines the required services.
 ### All integration tests
 
 ```bash
-cd src
 go test -tags integration ./... -count=1 -v
 ```
 

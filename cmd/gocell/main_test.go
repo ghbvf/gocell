@@ -395,6 +395,56 @@ func TestPrintTargetList(t *testing.T) {
 	printTargetList("Test", []string{"a", "b"})
 }
 
+func TestIsWithinRoot(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a symlink inside root that points outside it.
+	outsideDir := t.TempDir()
+	symlink := filepath.Join(root, "escape-link")
+	if err := os.Symlink(outsideDir, symlink); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"child path", filepath.Join(root, "cmd", "main.go"), true},
+		{"root itself", root, true},
+		{"parent escape", filepath.Join(root, "..", "etc", "passwd"), false},
+		{"double escape", filepath.Join(root, "..", "..", "tmp"), false},
+		{"symlink escape", filepath.Join(symlink, "secret.txt"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWithinRoot(root, tt.target)
+			if got != tt.want {
+				t.Errorf("isWithinRoot(%q, %q) = %v, want %v", root, tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalExistingPrefix(t *testing.T) {
+	root := t.TempDir()
+
+	// Multi-level non-existent path: root exists, a/b/c does not.
+	deep := filepath.Join(root, "a", "b", "c")
+	got := evalExistingPrefix(deep)
+
+	// Result should start with the resolved root (handles macOS /tmp symlink).
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolved, "a", "b", "c")
+	if got != want {
+		t.Errorf("evalExistingPrefix(%q) = %q, want %q", deep, got, want)
+	}
+}
+
 func TestPrintResult(t *testing.T) {
 	// Should not panic.
 	printResult(governance.ValidationResult{
