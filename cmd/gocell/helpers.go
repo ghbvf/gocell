@@ -88,8 +88,9 @@ func formatResults(results []governance.ValidationResult) {
 }
 
 // isWithinRoot checks that target resolves to a path inside root.
-// Mirrors kernel/governance.isWithinRoot to enforce path boundaries
-// in the generate command before writing files.
+// Both sides are normalized to absolute paths, and symlinks are resolved
+// when possible, to prevent both relative-path and symlink-based bypasses.
+// SYNC: kernel/governance/helpers.go:isWithinRoot — keep in sync.
 func isWithinRoot(root, target string) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -112,7 +113,10 @@ func isWithinRoot(root, target string) bool {
 	return strings.HasPrefix(absTarget, cleanRoot) || absTarget == absRoot
 }
 
-// evalExistingPrefix resolves symlinks on the longest existing ancestor of p.
+// evalExistingPrefix resolves symlinks on the longest existing ancestor of p,
+// then appends the non-existent suffix. This handles platforms where
+// intermediate directories are symlinks (e.g., macOS /tmp → /private/tmp).
+// SYNC: kernel/governance/helpers.go:evalExistingPrefix — keep in sync.
 func evalExistingPrefix(p string) string {
 	if resolved, err := filepath.EvalSymlinks(p); err == nil {
 		return resolved

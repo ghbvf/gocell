@@ -427,6 +427,24 @@ func TestIsWithinRoot(t *testing.T) {
 	}
 }
 
+func TestEvalExistingPrefix(t *testing.T) {
+	root := t.TempDir()
+
+	// Multi-level non-existent path: root exists, a/b/c does not.
+	deep := filepath.Join(root, "a", "b", "c")
+	got := evalExistingPrefix(deep)
+
+	// Result should start with the resolved root (handles macOS /tmp symlink).
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolved, "a", "b", "c")
+	if got != want {
+		t.Errorf("evalExistingPrefix(%q) = %q, want %q", deep, got, want)
+	}
+}
+
 func TestPrintResult(t *testing.T) {
 	// Should not panic.
 	printResult(governance.ValidationResult{

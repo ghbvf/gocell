@@ -45,6 +45,18 @@
 | 11 | **Watcher 状态面 + 连接池指标** R97-F3(Generation/observedGeneration) + OPS-5(PG/Redis/RMQ 连接池指标) | 4h | `runtime/config/` + `adapters/postgres/` + `adapters/redis/` + `adapters/rabbitmq/` | 6A |
 | 12 | **RabbitMQ 连接正确性** RMQ-RACE-01(WaitConnected 竞态) + P3-DEFER-05(Health 状态区分) | 4h | `adapters/rabbitmq/connection.go` | 6A |
 
+### PR#116 Flatten 遗留修复 ✅
+
+| # | 任务 | 状态 | 来源 |
+|---|------|------|------|
+| F-1 | **GEN-BOUNDARY-01** generate 写盘前 isWithinRoot 路径边界校验 | ✅ fix/507-flatten-followup | PR#116 review P1 |
+| F-2 | **QA-CWD-01** run-qa.sh + phase-gates.yaml S5/S7 cwd:src → 根目录 | ✅ fix/507-flatten-followup | PR#116 review P1 |
+| F-3 | **DOC-CDSRC-01** 活跃文档 21 处 cd src 清扫（15 文件） | ✅ fix/507-flatten-followup | PR#116 review P1 |
+| F-4 | **TEST-SCOPE-01** Makefile test-integration 与 CI 范围对齐 | ✅ fix/507-flatten-followup | PR#116 review P1 |
+| F-5 | **SONAR-ROOT-01** Sonar 扫描范围补充根级包 | ✅ fix/507-flatten-followup | PR#116 review P2 |
+| F-6 | **ARTIFACT-ALIGN-01** 二进制产物策略对齐（gitignore/clean/assembly） | ✅ fix/507-flatten-followup | PR#116 review P2 |
+| F-7 | **BUILD-OUTDIR-01** 统一 `go build -o bin/` 输出目录，`.gitignore` 改为 `/bin/`，消除硬编码产物名 | 待定 | PR#116 review P2 |
+
 ### P2 Tech Debt
 
 | # | 任务 | 工时 | 文件 | 来源 |
@@ -55,7 +67,7 @@
 | 16 | **config-core 修正** CFG-JSON-01(json tags camelCase) + FLAG-RACE-01(并发测试) + P3-TD-12(rollback version 校验) | 3.5h | `cells/config-core/internal/domain/` | 6B |
 | 17 | **Hook 增强** WM17-F2-2(ctx 超时) + WM17-F4-3(Prometheus metrics via HookObserver 接口) | 3h | `kernel/cell/` | 6B |
 | 18 | **CB 接口+封装清理** CB-IFACE-01(Allow/Report 拆分) + CB-ENCAP-01(消除 gobreaker import) | 3h | `runtime/resilience/circuitbreaker/` | 6B |
-| 19 | **CI 增强** CI-01(integration 路径) + T1-7(golangci-lint) | 2.5h | `.github/ci.yml` | 6B |
+| 19 | **CI 增强** ✅ CI-01(integration 路径, fix/507-flatten-followup Makefile 对齐) + T1-7(golangci-lint) | 2h | `.github/ci.yml` | 6B |
 | 20 | **decode 加固** DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` | 6B |
 | 21 | **Journey 校验** F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` | 6B |
 | 22 | **DELETE 无 body** DELETE-NOCONTENT-01: 204 + body=0 语义测试 | 1.5h | `contracts/http/auth/user/delete/v1/` | 6B |
