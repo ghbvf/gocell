@@ -143,6 +143,31 @@ func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), deps))
 }
 
+func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
+	// L2 cell with neither outbox nor tx, but no publisher → error
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		// no publisher, no outbox, no tx
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher")
+}
+
+func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
+	// L2 cell, both nil, but publisher present → OK (demo mode with warning)
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.NoError(t, err)
+}
+
 func TestAccessCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

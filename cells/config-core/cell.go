@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/slices/featureflag"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -55,6 +56,11 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *ConfigCore) { c.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx persistence.TxRunner) Option {
+	return func(c *ConfigCore) { c.txRunner = tx }
+}
+
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
@@ -76,6 +82,7 @@ type ConfigCore struct {
 	flagRepo     ports.FlagRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     persistence.TxRunner
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
@@ -112,16 +119,31 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		slog.Warn("config-core: outboxWriter not injected, L2 consistency not guaranteed")
-		return errcode.New(errcode.ErrCellMissingOutbox, "config-core (L2) requires outboxWriter injection")
+	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
+	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"config-core durable mode requires both outboxWriter and txRunner")
+	}
+
+	// Demo mode: both nil → require publisher for degraded event delivery.
+	if c.outboxWriter == nil && c.txRunner == nil {
+		if c.publisher == nil {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"config-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+		}
+		if c.ConsistencyLevel() >= cell.L2 {
+			slog.Warn("config-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)")
+		}
 	}
 
 	// config-write slice
 	var writeOpts []configwrite.Option
 	if c.outboxWriter != nil {
 		writeOpts = append(writeOpts, configwrite.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		writeOpts = append(writeOpts, configwrite.WithTxManager(c.txRunner))
 	}
 	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, writeOpts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
@@ -147,6 +169,9 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	var publishOpts []configpublish.Option
 	if c.outboxWriter != nil {
 		publishOpts = append(publishOpts, configpublish.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		publishOpts = append(publishOpts, configpublish.WithTxManager(c.txRunner))
 	}
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)

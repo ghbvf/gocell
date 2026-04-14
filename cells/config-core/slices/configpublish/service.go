@@ -82,7 +82,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 	payload, _ := json.Marshal(map[string]any{
 		"action":    "published",
 		"key":       key,
-		"config_id": entry.ID,
+		"configId": entry.ID,
 		"version":   version.Version,
 	})
 
@@ -106,6 +106,10 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	if key == "" {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
 	}
+	if targetVersion < 1 {
+		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput,
+			"rollback target version must be >= 1")
+	}
 
 	entry, err := s.repo.GetByKey(ctx, key)
 	if err != nil {
@@ -124,8 +128,8 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	payload, _ := json.Marshal(map[string]any{
 		"action":         "rollback",
 		"key":            key,
-		"target_version": targetVersion,
-		"new_version":    entry.Version,
+		"targetVersion": targetVersion,
+		"newVersion":    entry.Version,
 	})
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {

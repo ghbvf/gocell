@@ -107,6 +107,7 @@ func main() {
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithOutboxWriter(nw),
+		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
 	)
