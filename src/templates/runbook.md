@@ -38,8 +38,12 @@
 | Endpoint           | Method | Expected Response    | Meaning                          |
 |--------------------|--------|----------------------|----------------------------------|
 | `/healthz`         | GET    | `200 OK`             | Process is alive                 |
-| `/readyz`          | GET    | `200 OK`             | Ready to accept traffic          |
-| `/readyz?verbose`  | GET    | `200` + JSON details | Per-dependency health status     |
+| `/readyz`          | GET    | `200 OK`             | Ready to accept traffic; aggregate status only |
+| `/readyz?verbose`  | GET    | `200` + JSON details | Cell and dependency breakdown    |
+
+`/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
+
+> **Security**: `?verbose` exposes internal cell names and dependency names (topology information). When the health port is publicly reachable, restrict `?verbose` at the ingress layer (e.g., IP allowlist or path-based rule). A future `WithVerboseToken` bootstrap option may provide application-level protection.
 
 ### Health Check Verification
 
@@ -49,6 +53,20 @@ curl -sf http://{host}:{port}/healthz
 
 # Detailed readiness check
 curl -sf http://{host}:{port}/readyz?verbose | jq .
+```
+
+Example verbose response:
+
+```json
+{
+   "status": "healthy",
+   "cells": {
+      "access-core": "healthy"
+   },
+   "dependencies": {
+      "config-watcher": "healthy"
+   }
+}
 ```
 
 ---

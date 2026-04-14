@@ -102,4 +102,7 @@ To move from demo mode to a durable L2 path, wire all of the following into the 
 ```bash
 curl http://localhost:8082/healthz
 curl http://localhost:8082/readyz
+curl http://localhost:8082/readyz?verbose
 ```
+
+`/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown.

@@ -1,4 +1,4 @@
 // Package health provides /healthz (liveness) and /readyz (readiness) HTTP
-// endpoints that aggregate kernel/assembly health status and custom readiness
-// checkers.
+// endpoints. /readyz returns aggregate readiness by default and only exposes
+// detailed cell and dependency breakdown in verbose mode.
 package health

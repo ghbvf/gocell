@@ -303,6 +303,67 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 	assert.Contains(t, err.Error(), "connection lost")
 }
 
+func TestRouter_HealthLifecycle(t *testing.T) {
+	sub := &delayedFailSubscriber{
+		delay: 600 * time.Millisecond,
+		err:   errors.New("connection lost"),
+	}
+	r := New(sub, WithStartupTimeout(100*time.Millisecond))
+	r.AddHandler("topic.a", noopHandler, "test")
+
+	require.Error(t, r.Health(), "router must be unhealthy before Run")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	select {
+	case <-r.Running():
+	case <-time.After(2 * time.Second):
+		t.Fatal("router did not become ready")
+	}
+
+	require.NoError(t, r.Health(), "router must be healthy after startup")
+
+	assert.Eventually(t, func() bool {
+		return r.Health() != nil
+	}, 2*time.Second, 20*time.Millisecond, "router must become unhealthy after runtime failure")
+
+	err := <-done
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connection lost")
+}
+
+func TestRouter_Health_AfterGracefulShutdown(t *testing.T) {
+	sub := &blockingSubscriber{}
+	r := New(sub, WithStartupTimeout(100*time.Millisecond))
+	r.AddHandler("topic.a", noopHandler, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	select {
+	case <-r.Running():
+	case <-time.After(2 * time.Second):
+		t.Fatal("router did not become ready")
+	}
+
+	require.NoError(t, r.Health(), "router must be healthy before shutdown")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("router did not shut down")
+	}
+
+	err := r.Health()
+	require.Error(t, err, "router must be unhealthy after graceful shutdown")
+	assert.Contains(t, err.Error(), "shutting down")
+}
+
 func TestRouter_Run_DoubleRun_ReturnsError(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, WithStartupTimeout(100*time.Millisecond))

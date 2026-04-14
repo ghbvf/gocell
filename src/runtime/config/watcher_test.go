@@ -181,3 +181,25 @@ func TestWatcher_StartWithContext(t *testing.T) {
 		return true
 	}, 2*time.Second, 50*time.Millisecond)
 }
+
+func TestWatcher_HealthLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(file, []byte("key: val"), 0o644))
+
+	w, err := NewWatcher(file)
+	require.NoError(t, err)
+
+	require.Error(t, w.Health(), "watcher must be unhealthy before Start")
+
+	w.Start()
+	select {
+	case <-w.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not become ready in time")
+	}
+
+	require.NoError(t, w.Health(), "watcher must be healthy after the loop starts")
+	require.NoError(t, w.Close())
+	require.Error(t, w.Health(), "watcher must be unhealthy after Close")
+}

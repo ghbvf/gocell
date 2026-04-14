@@ -1,6 +1,6 @@
 // Package health provides /healthz (liveness) and /readyz (readiness) HTTP
-// endpoints that aggregate kernel/assembly health status and custom readiness
-// checkers.
+// endpoints. /readyz returns aggregate readiness by default and only exposes
+// detailed cell and dependency breakdown in verbose mode.
 package health
 
 import (
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -46,46 +47,38 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 }
 
 // LivezHandler returns an http.HandlerFunc for the /healthz liveness endpoint.
-// It aggregates Health() from every registered Cell in the assembly.
+// Liveness is process-level: if the handler can serve a response, the process
+// is alive. Readiness details belong to /readyz.
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cellHealth := h.assembly.Health()
-
-		checks := make(map[string]string, len(cellHealth))
-		allHealthy := true
-		for id, hs := range cellHealth {
-			checks[id] = hs.Status
-			if hs.Status != "healthy" {
-				allHealthy = false
-			}
-		}
-
-		status := "healthy"
-		httpStatus := http.StatusOK
-		if !allHealthy {
-			status = "unhealthy"
-			httpStatus = http.StatusServiceUnavailable
-		}
-
-		writeJSON(w, httpStatus, map[string]any{
-			"status": status,
-			"checks": checks,
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "healthy",
 		})
 	}
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
 // It runs all registered readiness checkers in addition to the Cell health.
-// Cell health and dependency checkers are placed in separate JSON namespaces
-// ("cells" and "dependencies") to prevent name collisions.
+// By default it returns only aggregate readiness status. Detailed cell and
+// dependency breakdown is returned only when the request enables verbose mode.
+//
+// Security: verbose=true exposes internal topology (cell names, dependency
+// names). When the health port is publicly reachable, restrict ?verbose at
+// the ingress layer or enable a future WithVerboseToken bootstrap option.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		verbose := readyzVerbose(r)
 		cellHealth := h.assembly.Health()
 
-		cells := make(map[string]string, len(cellHealth))
+		var cells map[string]string
+		if verbose {
+			cells = make(map[string]string, len(cellHealth))
+		}
 		allHealthy := true
 		for id, hs := range cellHealth {
-			cells[id] = hs.Status
+			if verbose {
+				cells[id] = hs.Status
+			}
 			if hs.Status != "healthy" {
 				allHealthy = false
 			}
@@ -98,13 +91,18 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		}
 		h.mu.RUnlock()
 
-		dependencies := make(map[string]string, len(checkersCopy))
+		var dependencies map[string]string
+		if verbose {
+			dependencies = make(map[string]string, len(checkersCopy))
+		}
 		for name, fn := range checkersCopy {
+			status := "healthy"
 			if err := fn(); err != nil {
-				dependencies[name] = "unhealthy"
+				status = "unhealthy"
 				allHealthy = false
-			} else {
-				dependencies[name] = "healthy"
+			}
+			if verbose {
+				dependencies[name] = status
 			}
 		}
 
@@ -115,12 +113,36 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			httpStatus = http.StatusServiceUnavailable
 		}
 
-		writeJSON(w, httpStatus, map[string]any{
-			"status":       status,
-			"cells":        cells,
-			"dependencies": dependencies,
-		})
+		response := map[string]any{
+			"status": status,
+		}
+		if verbose {
+			response["cells"] = cells
+			response["dependencies"] = dependencies
+		}
+
+		writeJSON(w, httpStatus, response)
 	}
+}
+
+// readyzVerbose returns true when the request opts in to detailed output.
+// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
+// All other values (false, yes, debug, …) are treated as non-verbose.
+func readyzVerbose(r *http.Request) bool {
+	values, ok := r.URL.Query()["verbose"]
+	if !ok {
+		return false
+	}
+	// url.ParseQuery always yields at least [""] when the key is present,
+	// so we iterate values directly without a separate len==0 guard.
+	for _, value := range values {
+		normalized := strings.TrimSpace(strings.ToLower(value))
+		switch normalized {
+		case "", "1", "true":
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

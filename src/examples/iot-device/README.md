@@ -116,7 +116,10 @@ Response (200):
 ```bash
 curl http://localhost:8083/healthz
 curl http://localhost:8083/readyz
+curl http://localhost:8083/readyz?verbose
 ```
+
+`/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown.
 
 ## Full Walkthrough
 

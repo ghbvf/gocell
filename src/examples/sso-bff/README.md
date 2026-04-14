@@ -105,7 +105,10 @@ curl -s http://localhost:8081/api/v1/audit/entries | jq '.[] | {action: .eventTy
 ```bash
 curl -s http://localhost:8081/healthz | jq
 curl -s http://localhost:8081/readyz  | jq
+curl -s http://localhost:8081/readyz?verbose | jq
 ```
+
+`/healthz` is liveness-only. Use `/readyz?verbose` when you need the detailed cell and dependency breakdown.
 
 ## BFF Cookie Session Mode (Planned)
 

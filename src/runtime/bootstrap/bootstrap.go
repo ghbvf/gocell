@@ -37,6 +37,11 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
+const (
+	configWatcherCheckerName = "config-watcher"
+	eventRouterCheckerName   = "eventrouter"
+)
+
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
@@ -172,9 +177,10 @@ func WithListener(ln net.Listener) Option {
 	}
 }
 
-// WithHealthChecker registers a named readiness checker that will be
-// included in /readyz responses. Use this to wire adapter health probes
-// (e.g., conn.Health for RabbitMQ) without bootstrap depending on adapter types.
+// WithHealthChecker registers a named readiness checker that contributes to
+// aggregate /readyz and appears in `/readyz?verbose` responses. Use this to
+// wire adapter health probes (e.g., conn.Health for RabbitMQ) without
+// bootstrap depending on adapter types.
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
 func WithHealthChecker(name string, fn func() error) Option {
@@ -221,13 +227,19 @@ type Bootstrap struct {
 	healthCheckers             []namedChecker
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+
+	// configWatcherFactory creates a config watcher. Defaults to
+	// config.NewWatcher. Override per-instance in tests to inject failures
+	// without mutating package-level state (safe for parallel tests).
+	configWatcherFactory func(string) (*config.Watcher, error)
 }
 
 // New creates a Bootstrap with the given options.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
-		httpAddr:        ":8080",
-		shutdownTimeout: shutdown.DefaultTimeout,
+		httpAddr:             ":8080",
+		shutdownTimeout:      shutdown.DefaultTimeout,
+		configWatcherFactory: config.NewWatcher,
 	}
 	for _, o := range opts {
 		o(b)
@@ -285,9 +297,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// file events are consumed but no callback is bound to handle them.
 	var cfgWatcher *config.Watcher
 	if b.configPath != "" {
-		w, err := config.NewWatcher(b.configPath)
+		w, err := b.configWatcherFactory(b.configPath)
 		if err != nil {
-			slog.Warn("bootstrap: config watcher not available", slog.Any("error", err))
+			return rollback(fmt.Errorf("bootstrap: config watcher: %w", err))
 		} else {
 			cfgWatcher = w
 			teardowns = append(teardowns, func(_ context.Context) error {
@@ -442,8 +454,29 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh := health.New(asm)
+	// registerHealthChecker wraps hh.RegisterChecker with an error return
+	// instead of a panic on duplicate names. Since hh is local to Run() and
+	// all registrations go through this closure, the panic path in
+	// RegisterChecker is effectively unreachable — the map check here
+	// catches duplicates first and returns a rollback-safe error.
+	registeredCheckerNames := make(map[string]struct{}, len(b.healthCheckers)+2)
+	registerHealthChecker := func(name string, fn func() error) error {
+		if _, exists := registeredCheckerNames[name]; exists {
+			return fmt.Errorf("bootstrap: duplicate health checker %q", name)
+		}
+		hh.RegisterChecker(name, health.Checker(fn))
+		registeredCheckerNames[name] = struct{}{}
+		return nil
+	}
 	for _, hc := range b.healthCheckers {
-		hh.RegisterChecker(hc.name, health.Checker(hc.fn))
+		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
+			return rollback(err)
+		}
+	}
+	if cfgWatcher != nil {
+		if err := registerHealthChecker(configWatcherCheckerName, cfgWatcher.Health); err != nil {
+			return rollback(err)
+		}
 	}
 	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
 	rtr, err := router.NewE(routerOpts...)
@@ -496,6 +529,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			}
 		}
 		if evtRouter.HandlerCount() > 0 {
+			if err := registerHealthChecker(eventRouterCheckerName, evtRouter.Health); err != nil {
+				return rollback(err)
+			}
 			slog.Info("bootstrap: starting event router",
 				slog.Int("handler_count", evtRouter.HandlerCount()))
 			routerErrCh = make(chan error, 1)
