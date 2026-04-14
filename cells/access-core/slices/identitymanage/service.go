@@ -87,7 +87,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
-		s.publish(txCtx, TopicUserCreated, eventPayload)
+		if err := s.publish(txCtx, TopicUserCreated, eventPayload); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -183,7 +185,9 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 			s.logger.Error("identity-manage: failed to revoke sessions on lock",
 				slog.Any("error", err), slog.String("user_id", id))
 		}
-		s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id})
+		if err := s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id}); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -213,8 +217,11 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) {
-	data, _ := json.Marshal(payload)
+func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
+	}
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
 			ID:        "evt" + "-" + uuid.NewString(),
@@ -222,15 +229,17 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 			Payload:   data,
 		}
 		if err := s.outboxWriter.Write(ctx, entry); err != nil {
-			s.logger.Error("identity-manage: failed to write outbox entry",
-				slog.Any("error", err), slog.String("topic", topic))
+			return fmt.Errorf("identity-manage: write outbox entry: %w", err)
 		}
-		return
+		return nil
 	}
+	// Demo mode: publisher failure is logged but not propagated since
+	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, topic, data); err != nil {
-		s.logger.Error("identity-manage: failed to publish event",
+		s.logger.Warn("identity-manage: failed to publish event (demo mode)",
 			slog.Any("error", err), slog.String("topic", topic))
 	}
+	return nil
 }
 
 // runInTx executes fn in a transaction if txRunner is configured, otherwise

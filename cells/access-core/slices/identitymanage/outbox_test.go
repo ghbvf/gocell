@@ -3,6 +3,7 @@ package identitymanage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,9 +19,15 @@ import (
 
 // --- stubs ---
 
-type stubOutboxWriter struct{ entries []outbox.Entry }
+type stubOutboxWriter struct {
+	entries []outbox.Entry
+	err     error // when set, Write returns this error
+}
 
 func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
+	if s.err != nil {
+		return s.err
+	}
 	s.entries = append(s.entries, e)
 	return nil
 }
@@ -219,6 +226,40 @@ func TestService_Update_EmptyID(t *testing.T) {
 	svc := newTestService()
 	_, err := svc.Update(context.Background(), UpdateInput{})
 	assert.Error(t, err)
+}
+
+// --- #27d OUTBOX-WRITE-ERR-01: outbox.Write error must propagate ---
+
+func TestService_Create_OutboxWriteError(t *testing.T) {
+	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
+	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(ow), WithTxManager(&stubTxRunner{}))
+
+	_, err := svc.Create(context.Background(), CreateInput{
+		Username: "alice", Email: "a@b.c", Password: "hash",
+	})
+	require.Error(t, err, "Create must propagate outbox.Write error to preserve L2 atomicity")
+	assert.Contains(t, err.Error(), "outbox")
+}
+
+func TestService_Lock_OutboxWriteError(t *testing.T) {
+	repo := mem.NewUserRepository()
+	// Create user with working outbox
+	svcCreate := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(&stubOutboxWriter{}), WithTxManager(&stubTxRunner{}))
+	user, err := svcCreate.Create(context.Background(), CreateInput{
+		Username: "bob", Email: "b@c.d", Password: "hash",
+	})
+	require.NoError(t, err)
+
+	// Lock with failing outbox
+	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
+	svcLock := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(failWriter), WithTxManager(&stubTxRunner{}))
+
+	err = svcLock.Lock(context.Background(), user.ID)
+	require.Error(t, err, "Lock must propagate outbox.Write error to preserve L2 atomicity")
+	assert.Contains(t, err.Error(), "outbox")
 }
 
 // --- helpers ---

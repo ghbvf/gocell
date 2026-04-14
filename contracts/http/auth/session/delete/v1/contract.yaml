@@ -1,4 +1,4 @@
-id: http.auth.user.get.v1
+id: http.auth.session.delete.v1
 kind: http
 ownerCell: access-core
 consistencyLevel: L1
@@ -8,10 +8,9 @@ endpoints:
   clients:
     - edge-bff
   http:
-    method: GET
-    path: /api/v1/access/users/{id}
-    successStatus: 200
-    noContent: false
+    method: DELETE
+    path: /api/v1/access/sessions/{id}
+    successStatus: 204
+    noContent: true
 schemaRefs:
   request: request.schema.json
-  response: response.schema.json

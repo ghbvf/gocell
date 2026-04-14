@@ -6,6 +6,11 @@ lifecycle: active
 endpoints:
   server: access-core
   clients: []
+  http:
+    method: POST
+    path: /api/v1/access/sessions/refresh
+    successStatus: 200
+    noContent: false
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

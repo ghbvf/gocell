@@ -17,11 +17,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// Re-exported from domain for backward compatibility within this package's
+// tests and callers.
 const (
-	// TopicConfigChanged is the event topic for config changes.
-	TopicConfigChanged = "event.config.changed.v1"
-	// TopicConfigRollback is the event topic for config rollbacks.
-	TopicConfigRollback = "event.config.rollback.v1"
+	TopicConfigChanged  = domain.TopicConfigChanged
+	TopicConfigRollback = domain.TopicConfigRollback
 )
 
 // Option configures a config-publish Service.
@@ -79,18 +79,23 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		PublishedAt: &now,
 	}
 
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"action":    "published",
 		"key":       key,
 		"config_id": entry.ID,
 		"version":   version.Version,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
+	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
-		s.publishEvent(txCtx, TopicConfigChanged, payload, key)
+		if err := s.publishEvent(txCtx, TopicConfigChanged, payload, key); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -125,18 +130,23 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	entry.Version++
 	entry.UpdatedAt = time.Now()
 
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"action":         "rollback",
 		"key":            key,
 		"target_version": targetVersion,
 		"new_version":    entry.Version,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
+	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Update(txCtx, entry); err != nil {
 			return fmt.Errorf("config-publish: rollback update: %w", err)
 		}
-		s.publishEvent(txCtx, TopicConfigRollback, payload, key)
+		if err := s.publishEvent(txCtx, TopicConfigRollback, payload, key); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -156,7 +166,7 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return fn(ctx)
 }
 
-func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) {
+func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) error {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
 			ID:        "evt" + "-" + uuid.NewString(),
@@ -164,13 +174,15 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 			Payload:   payload,
 		}
 		if err := s.outboxWriter.Write(ctx, entry); err != nil {
-			s.logger.Error("config-publish: failed to write outbox entry",
-				slog.Any("error", err), slog.String("key", key))
+			return fmt.Errorf("config-publish: write outbox entry: %w", err)
 		}
-		return
+		return nil
 	}
+	// Demo mode: publisher failure is logged but not propagated since
+	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
-		s.logger.Error("config-publish: failed to publish event",
+		s.logger.Warn("config-publish: failed to publish event (demo mode)",
 			slog.Any("error", err), slog.String("key", key))
 	}
+	return nil
 }
