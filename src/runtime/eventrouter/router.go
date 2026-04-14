@@ -66,6 +66,7 @@ type Router struct {
 	wg             sync.WaitGroup
 	statusMu       sync.RWMutex
 	started        bool
+	shutdown       bool
 	healthErr      error
 }
 
@@ -196,6 +197,7 @@ func (r *Router) Run(ctx context.Context) error {
 	// Block until context cancelled or a runtime error surfaces.
 	select {
 	case <-runCtx.Done():
+		r.markShutdown()
 	case err := <-setupErr:
 		r.markHealthError(err)
 		slog.Error("eventrouter: subscription failed at runtime",
@@ -226,12 +228,16 @@ func (r *Router) Running() <-chan struct{} {
 
 // Health reports whether the router is ready to serve subscriptions.
 // It returns nil only after startup completes successfully and before a setup
-// or runtime failure has been recorded.
+// or runtime failure has been recorded. After graceful shutdown it returns a
+// distinguishable "shutting down" error.
 func (r *Router) Health() error {
 	r.statusMu.RLock()
 	defer r.statusMu.RUnlock()
 	if r.healthErr != nil {
 		return r.healthErr
+	}
+	if r.shutdown {
+		return fmt.Errorf("eventrouter: shutting down")
 	}
 	if !r.started {
 		return fmt.Errorf("eventrouter: not running")
@@ -253,6 +259,12 @@ func (r *Router) markHealthError(err error) {
 	r.statusMu.Lock()
 	defer r.statusMu.Unlock()
 	r.healthErr = err
+}
+
+func (r *Router) markShutdown() {
+	r.statusMu.Lock()
+	defer r.statusMu.Unlock()
+	r.shutdown = true
 }
 
 // Close cancels all subscriptions and waits for goroutines to finish.

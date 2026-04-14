@@ -61,6 +61,10 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // It runs all registered readiness checkers in addition to the Cell health.
 // By default it returns only aggregate readiness status. Detailed cell and
 // dependency breakdown is returned only when the request enables verbose mode.
+//
+// Security: verbose=true exposes internal topology (cell names, dependency
+// names). When the health port is publicly reachable, restrict ?verbose at
+// the ingress layer or enable a future WithVerboseToken bootstrap option.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		verbose := readyzVerbose(r)
@@ -92,15 +96,13 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			dependencies = make(map[string]string, len(checkersCopy))
 		}
 		for name, fn := range checkersCopy {
+			status := "healthy"
 			if err := fn(); err != nil {
-				if verbose {
-					dependencies[name] = "unhealthy"
-				}
+				status = "unhealthy"
 				allHealthy = false
-			} else {
-				if verbose {
-					dependencies[name] = "healthy"
-				}
+			}
+			if verbose {
+				dependencies[name] = status
 			}
 		}
 
@@ -123,14 +125,16 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	}
 }
 
+// readyzVerbose returns true when the request opts in to detailed output.
+// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
+// All other values (false, yes, debug, …) are treated as non-verbose.
 func readyzVerbose(r *http.Request) bool {
 	values, ok := r.URL.Query()["verbose"]
 	if !ok {
 		return false
 	}
-	if len(values) == 0 {
-		return true
-	}
+	// url.ParseQuery always yields at least [""] when the key is present,
+	// so we iterate values directly without a separate len==0 guard.
 	for _, value := range values {
 		normalized := strings.TrimSpace(strings.ToLower(value))
 		switch normalized {

@@ -43,6 +43,8 @@
 
 `/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
 
+> **Security**: `?verbose` exposes internal cell names and dependency names (topology information). When the health port is publicly reachable, restrict `?verbose` at the ingress layer (e.g., IP allowlist or path-based rule). A future `WithVerboseToken` bootstrap option may provide application-level protection.
+
 ### Health Check Verification
 
 ```bash

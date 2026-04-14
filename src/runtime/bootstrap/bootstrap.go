@@ -37,8 +37,6 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
-var newConfigWatcher = config.NewWatcher
-
 const (
 	configWatcherCheckerName = "config-watcher"
 	eventRouterCheckerName   = "eventrouter"
@@ -229,13 +227,19 @@ type Bootstrap struct {
 	healthCheckers             []namedChecker
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+
+	// configWatcherFactory creates a config watcher. Defaults to
+	// config.NewWatcher. Override per-instance in tests to inject failures
+	// without mutating package-level state (safe for parallel tests).
+	configWatcherFactory func(string) (*config.Watcher, error)
 }
 
 // New creates a Bootstrap with the given options.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
-		httpAddr:        ":8080",
-		shutdownTimeout: shutdown.DefaultTimeout,
+		httpAddr:             ":8080",
+		shutdownTimeout:      shutdown.DefaultTimeout,
+		configWatcherFactory: config.NewWatcher,
 	}
 	for _, o := range opts {
 		o(b)
@@ -293,7 +297,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// file events are consumed but no callback is bound to handle them.
 	var cfgWatcher *config.Watcher
 	if b.configPath != "" {
-		w, err := newConfigWatcher(b.configPath)
+		w, err := b.configWatcherFactory(b.configPath)
 		if err != nil {
 			return rollback(fmt.Errorf("bootstrap: config watcher: %w", err))
 		} else {

@@ -799,19 +799,15 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast"})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	originalNewConfigWatcher := newConfigWatcher
-	newConfigWatcher = func(string) (*config.Watcher, error) {
-		return nil, errors.New("watcher init failed")
-	}
-	defer func() {
-		newConfigWatcher = originalNewConfigWatcher
-	}()
-
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithShutdownTimeout(time.Second),
 	)
+	// Override instance-level factory to simulate init failure (safe for parallel tests).
+	b.configWatcherFactory = func(string) (*config.Watcher, error) {
+		return nil, errors.New("watcher init failed")
+	}
 
 	err := b.Run(context.Background())
 	require.Error(t, err)

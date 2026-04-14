@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -250,30 +249,27 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 
 func TestReadyzVerboseQueryParsing(t *testing.T) {
 	tests := []struct {
-		name      string
-		rawQuery  string
-		wantValue bool
+		name    string
+		url     string
+		wantVal bool
 	}{
-		{name: "absent", rawQuery: "", wantValue: false},
-		{name: "bare flag", rawQuery: "verbose", wantValue: true},
-		{name: "one", rawQuery: "verbose=1", wantValue: true},
-		{name: "true", rawQuery: "verbose=true", wantValue: true},
-		{name: "false", rawQuery: "verbose=false", wantValue: false},
-		{name: "yes not supported", rawQuery: "verbose=yes", wantValue: false},
-		{name: "unknown not supported", rawQuery: "verbose=debug", wantValue: false},
+		{name: "absent", url: "/readyz", wantVal: false},
+		{name: "bare flag", url: "/readyz?verbose", wantVal: true},
+		{name: "empty value", url: "/readyz?verbose=", wantVal: true},
+		{name: "one", url: "/readyz?verbose=1", wantVal: true},
+		{name: "true", url: "/readyz?verbose=true", wantVal: true},
+		{name: "TRUE mixed case", url: "/readyz?verbose=TRUE", wantVal: true},
+		{name: "false", url: "/readyz?verbose=false", wantVal: false},
+		{name: "zero", url: "/readyz?verbose=0", wantVal: false},
+		{name: "two", url: "/readyz?verbose=2", wantVal: false},
+		{name: "yes not supported", url: "/readyz?verbose=yes", wantVal: false},
+		{name: "unknown not supported", url: "/readyz?verbose=debug", wantVal: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-			if tt.rawQuery != "" {
-				req.URL.RawQuery = tt.rawQuery
-				req.URL.ForceQuery = tt.rawQuery == "verbose"
-				if tt.rawQuery == "verbose" {
-					req.URL.RawQuery = url.Values{"verbose": []string{""}}.Encode()
-				}
-			}
-			assert.Equal(t, tt.wantValue, readyzVerbose(req))
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			assert.Equal(t, tt.wantVal, readyzVerbose(req))
 		})
 	}
 }
