@@ -275,11 +275,31 @@ func New(opts ...Option) *Bootstrap {
 //
 // If any step fails, already-started components are rolled back in reverse.
 func (b *Bootstrap) Run(ctx context.Context) error {
+	// Step 0: Validate inputs before any side effects.
+	// Health checker params are pure data — no reason to defer to runtime.
+	for _, hc := range b.healthCheckers {
+		if hc.name == "" {
+			return fmt.Errorf("bootstrap: health checker name must not be empty")
+		}
+		if hc.fn == nil {
+			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
+		}
+	}
+
 	// Track teardown functions for rollback (LIFO order).
 	var teardowns []func(context.Context) error
 
+	// hh is declared here (not at Step 5) so the rollback closure can
+	// mark readyz unhealthy when rolling back after the HTTP server
+	// has started. Before Step 5 executes, hh remains nil and the
+	// nil check in rollback is a no-op.
+	var hh *health.Handler
+
 	rollback := func(cause error) error {
 		slog.Error("bootstrap: startup failed, rolling back", slog.Any("error", cause))
+		if hh != nil {
+			hh.SetShuttingDown()
+		}
 		rctx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 		defer cancel()
 		for i := len(teardowns) - 1; i >= 0; i-- {
@@ -464,7 +484,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// already-started components (assembly, config watcher, pub/sub).
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
-	hh := health.New(asm)
+	hh = health.New(asm)
 	// registerHealthChecker wraps hh.RegisterChecker with an error return
 	// instead of a panic on duplicate names. Since hh is local to Run() and
 	// all registrations go through this closure, the panic path in
@@ -479,13 +499,8 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		registeredCheckerNames[name] = struct{}{}
 		return nil
 	}
+	// Name/fn already validated in Step 0 (before any side effects).
 	for _, hc := range b.healthCheckers {
-		if hc.name == "" {
-			return rollback(fmt.Errorf("bootstrap: health checker name must not be empty"))
-		}
-		if hc.fn == nil {
-			return rollback(fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name))
-		}
 		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
 			return rollback(err)
 		}

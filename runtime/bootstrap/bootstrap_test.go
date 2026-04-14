@@ -621,13 +621,33 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 }
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
-	// Validation fires at Step 5 (before HTTP listen), so no listener needed.
 	b := New(
 		WithHealthChecker("", func() error { return nil }),
 	)
 	err := b.Run(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "health checker name must not be empty")
+}
+
+func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
+	// Verify that invalid health checker params are caught BEFORE any
+	// component starts (no assembly start, no config watcher, no rollback).
+	// Evidence: error returned directly (not wrapped by rollback log).
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	oldDefault := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(oldDefault)
+
+	b := New(
+		WithHealthChecker("", func() error { return nil }),
+		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
+	assert.NotContains(t, buf.String(), "rolling back",
+		"validation error must fire before any side effects — no rollback should occur")
 }
 
 func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {

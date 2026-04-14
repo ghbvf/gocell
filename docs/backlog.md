@@ -79,6 +79,7 @@
 | 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 |
 | 27b | **BOOT-RUNONCE-01** `Bootstrap.Run()` 缺 double-call 防护——加 `sync.Once` 或 `atomic` 状态标记，防止二次调用导致重复 teardown 和 assembly 重复启动 | 1h | `runtime/bootstrap/bootstrap.go` | PR#123 review S1-F2 |
 | 27c | **BOOT-COMPLEXITY-01** `Bootstrap.Run()` 认知复杂度 ~385 行，超 15 上限。考虑按 Step 拆分为私有方法（startConfig / startAssembly / startHTTP / startWorkers / shutdown） | 3h | `runtime/bootstrap/bootstrap.go` | PR#123 review S5-F3 |
+| 27d | **OBS-LOG-FIELD-POLICY** access_log 日志字段（request_id / correlation_id / trace_id / real_ip）均无独立开关或脱敏策略。需统一的字段分级治理方案（如按环境/敏感度配置输出字段集） | 2h | `runtime/http/middleware/access_log.go` | PR#123 review F3 |
 
 ---
 
