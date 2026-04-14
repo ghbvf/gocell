@@ -8,8 +8,8 @@ import (
 	"math/bits"
 	"math/rand/v2"
 	"net"
-	"strings"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +31,10 @@ const (
 )
 
 // ConnectionState represents the lifecycle state of a Connection.
+//
+// ref: wagslane/go-rabbitmq connection_manager.go — adopted explicit state tracking
+// with RWMutex protection (checkout/checkin pattern). Deviated: uses channel-close
+// signaling instead of checkout callbacks.
 type ConnectionState uint8
 
 const (
@@ -599,6 +603,9 @@ func (c *Connection) Health() error {
 		return errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
 	case StateConnecting:
 		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: never connected")
+	// StateConnected: falls through to conn.IsClosed() check below.
+	// StateTerminal: handled by permErr guard above.
+	default:
 	}
 	if conn == nil || conn.IsClosed() {
 		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
@@ -641,6 +648,12 @@ func (c *Connection) Close() error {
 
 // WaitConnected blocks until the connection is established, a permanent error
 // occurs, or ctx is cancelled.
+//
+// The re-validation loop detects stale channel references caused by concurrent
+// reconnectLoop activity (RMQ-RACE-01 fix).
+//
+// ref: go-micro broker/rabbitmq connection.go — adopted channel recreation under
+// mutex + wake-and-recheck pattern (condition variable idiom).
 //
 // Returns nil on successful connection, or an error:
 //   - ErrAdapterAMQPConnectPermanent: terminal state due to unrecoverable

@@ -285,27 +285,33 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.NoError(t, err, "publish should succeed")
 
 	// --- Verify: message appears in DLQ after retry exhaustion ---
-	// Give ConsumerBase time to exhaust retries (2 * 50ms backoff + processing).
-	time.Sleep(1 * time.Second)
+	// Poll the DLQ instead of sleeping a fixed duration (S3-F3 review fix).
+	var dlEntry outbox.Entry
+	require.Eventually(t, func() bool {
+		dlxCh, chErr := conn.AcquireChannel()
+		if chErr != nil {
+			return false
+		}
+		defer conn.ReleaseChannel(dlxCh)
 
-	dlxCh, err := conn.AcquireChannel()
-	require.NoError(t, err)
-	defer conn.ReleaseChannel(dlxCh)
+		msgs, consumeErr := dlxCh.Consume(dlxQueue, "retry-dlx-consumer", true, false, false, false, nil)
+		if consumeErr != nil {
+			return false
+		}
 
-	msgs, err := dlxCh.Consume(dlxQueue, "retry-dlx-consumer", true, false, false, false, nil)
-	require.NoError(t, err, "consume from DLQ")
+		select {
+		case msg := <-msgs:
+			return json.Unmarshal(msg.Body, &dlEntry) == nil
+		default:
+			return false
+		}
+	}, 15*time.Second, 200*time.Millisecond,
+		"message should appear in DLQ after retry exhaustion — handler called %d times", callCount.Load())
 
-	select {
-	case msg := <-msgs:
-		var dlEntry outbox.Entry
-		require.NoError(t, json.Unmarshal(msg.Body, &dlEntry))
-		assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
-		assert.JSONEq(t, `{"retry":"e2e"}`, string(dlEntry.Payload))
-		t.Logf("ConsumerBase retry e2e verified: message %s routed to DLQ after %d handler calls",
-			dlEntry.ID, callCount.Load())
-	case <-time.After(15 * time.Second):
-		t.Fatalf("timed out waiting for message in DLQ — handler was called %d times", callCount.Load())
-	}
+	assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"retry":"e2e"}`, string(dlEntry.Payload))
+	t.Logf("ConsumerBase retry e2e verified: message %s routed to DLQ after %d handler calls",
+		dlEntry.ID, callCount.Load())
 
 	// Handler should have been called RetryCount times.
 	assert.GreaterOrEqual(t, callCount.Load(), int32(2),

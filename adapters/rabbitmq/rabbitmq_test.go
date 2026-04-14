@@ -3980,12 +3980,16 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, numWaiters)
 
-	// Launch waiters.
+	// Launch waiters — exercise both WaitConnected and ConnectionStatus
+	// under concurrent state transitions to detect races (S3-F2).
 	for range numWaiters {
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			// Concurrent ConnectionStatus reads alongside WaitConnected.
+			_ = c.ConnectionStatus()
 			errs <- c.WaitConnected(ctx)
+			_ = c.ConnectionStatus()
 		})
 	}
 
