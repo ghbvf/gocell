@@ -82,10 +82,16 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 		name       string
 		opts       []Option
 		wantSlices int
+		wantErr    bool
 	}{
 		{
-			name:       "no options uses in-memory defaults",
-			opts:       nil,
+			name:    "no options fails — publisher required",
+			opts:    nil,
+			wantErr: true,
+		},
+		{
+			name:       "discard publisher opt-in succeeds",
+			opts:       []Option{WithPublisher(outbox.DiscardPublisher{})},
 			wantSlices: 2,
 		},
 		{
@@ -98,29 +104,24 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
-			require.NoError(t, c.Init(context.Background(), newTestDeps()))
-			assert.Len(t, c.OwnedSlices(), tt.wantSlices)
+			err := c.Init(context.Background(), newTestDeps())
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "publisher or outbox writer")
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, c.OwnedSlices(), tt.wantSlices)
+			}
 		})
 	}
 }
 
-func TestOrderCell_DefaultInit_UsesSafePublisherFallback(t *testing.T) {
+func TestOrderCell_DefaultInit_RequiresPublisher(t *testing.T) {
 	c := NewOrderCell()
-	require.NoError(t, c.Init(context.Background(), newTestDeps()))
-	assert.True(t, outbox.IsDiscardPublisher(c.publisher),
-		"default publisher should be DiscardPublisher")
-
-	r := router.New()
-	c.RegisterRoutes(r)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"safe-default"}`))
-	req.Header.Set("Content-Type", "application/json")
-
-	assert.NotPanics(t, func() {
-		r.ServeHTTP(rec, req)
-	})
-	assert.Equal(t, http.StatusCreated, rec.Code)
+	err := c.Init(context.Background(), newTestDeps())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher or outbox writer")
+	assert.Contains(t, err.Error(), "DiscardPublisher")
 }
 
 func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {

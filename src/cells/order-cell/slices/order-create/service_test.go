@@ -248,18 +248,22 @@ func TestService_Create_DemoPublishSuccess(t *testing.T) {
 	assert.Equal(t, TopicOrderCreated, pub.calls[0].topic)
 }
 
-func TestService_Create_DemoNilPublisher_Panics(t *testing.T) {
-	// After approach B, callers must inject a publisher (cell.go defaults to
-	// DiscardPublisher). Passing nil panics on Publish call.
+func TestService_Create_DemoNilPublisher(t *testing.T) {
+	// NewService defaults nil publisher to DiscardPublisher (constructor fallback).
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, nil, slog.Default())
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	svc := NewService(repo, nil, logger)
 
-	assert.Panics(t, func() {
-		_, _ = svc.Create(context.Background(), "nil-pub")
-	})
+	order, err := svc.Create(context.Background(), "nil-pub")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, "nil-pub", order.Item)
+	// No error logged — DiscardPublisher.Publish() returns nil.
+	assert.NotContains(t, logs.String(), "ERROR")
 }
 
-func TestService_Create_DemoDiscardPublisher_NoFakeSuccessLog(t *testing.T) {
+func TestService_Create_DemoDiscardPublisher(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
@@ -268,10 +272,11 @@ func TestService_Create_DemoDiscardPublisher_NoFakeSuccessLog(t *testing.T) {
 	order, err := svc.Create(context.Background(), "discard-pub")
 	require.NoError(t, err)
 	require.NotNil(t, order)
-	// Service no longer logs "event published" success — DiscardPublisher.Publish()
-	// handles its own slog.Warn via slog.Default().
-	assert.NotContains(t, logs.String(), "event published")
-	assert.NotContains(t, logs.String(), "skipping direct publish")
+	assert.Equal(t, "discard-pub", order.Item)
+	// Service logs no error — DiscardPublisher.Publish() returns nil.
+	// DiscardPublisher's own slog.Warn goes through slog.Default(), not
+	// the injected logger, so it does not appear in logs buffer.
+	assert.NotContains(t, logs.String(), "ERROR")
 }
 
 func TestService_Create_DemoRepoFailure(t *testing.T) {

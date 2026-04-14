@@ -42,7 +42,11 @@ type Service struct {
 }
 
 // NewService creates an order-create Service.
+// If publisher is nil, it defaults to DiscardPublisher (demo mode).
 func NewService(repo domain.OrderRepository, publisher outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	if publisher == nil {
+		publisher = outbox.DiscardPublisher{}
+	}
 	s := &Service{
 		repo:      repo,
 		publisher: publisher,

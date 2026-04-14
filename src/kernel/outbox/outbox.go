@@ -166,6 +166,13 @@ type Publisher interface {
 // NoopWriter is an explicit outbox writer sink for tests and demos.
 // It validates entries like a real writer, then discards them instead of
 // persisting anything. It is not a production durability mechanism.
+//
+// Use NoopWriter when:
+//   - Unit testing Cells that require an outbox.Writer dependency
+//   - Running demo/example code without a database
+//
+// NoopWriter still validates entries via Entry.Validate(), unlike a
+// zero-value or nil writer. This catches schema errors during development.
 type NoopWriter struct{}
 
 // Write validates the entry, discards it, and returns nil.
@@ -183,13 +190,18 @@ func (NoopWriter) WriteBatch(_ context.Context, entries []Entry) error {
 	return nil
 }
 
-var _ BatchWriter = (*NoopWriter)(nil)
+var _ BatchWriter = NoopWriter{}
 
 // DiscardPublisher is an explicit publisher sink for tests and demos.
 // Unlike NoopWriter, it affects direct-publish flows rather than durable
 // outbox writes. It is an explicit opt-in sink, not a default runtime fallback.
 //
-// Publish logs a structured warning and discards the payload.
+// Use DiscardPublisher when:
+//   - Unit testing Cells that require an outbox.Publisher dependency
+//   - Running demo/example code without a message broker
+//
+// Publish logs a structured warning via slog.Default() and discards the
+// payload. The warning ensures discard behavior is visible in logs.
 type DiscardPublisher struct{}
 
 // Publish logs a discard warning and returns nil.
@@ -198,7 +210,7 @@ func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error
 	return nil
 }
 
-var _ Publisher = (*DiscardPublisher)(nil)
+var _ Publisher = DiscardPublisher{}
 
 // IsDiscardPublisher reports whether p is the explicit discard sink.
 func IsDiscardPublisher(p Publisher) bool {
@@ -255,9 +267,9 @@ func (d Disposition) String() string {
 	}
 }
 
-// Receipt is kept as a package alias while canonical ownership now lives in
-// kernel/idempotency. Commit/Release describe the consumer-side claim
-// lifecycle rather than publisher behavior.
+// Deprecated: Use idempotency.Receipt directly. This alias will be removed
+// after all callers migrate (target: Sprint N+2, per project deprecation policy).
+// Canonical ownership now lives in kernel/idempotency.
 type Receipt = idempotency.Receipt
 
 // HandleResult carries the business handler's processing outcome.
