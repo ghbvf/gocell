@@ -77,6 +77,10 @@ func TestHandleEvent_InvalidJSON(t *testing.T) {
 	err := svc.HandleEvent(context.Background(), entry)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
+
+	// Must be PermanentError so WrapLegacyHandler routes to DLX, not retry.
+	var permErr *outbox.PermanentError
+	assert.ErrorAs(t, err, &permErr)
 }
 
 func TestTopicConstant(t *testing.T) {

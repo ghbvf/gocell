@@ -186,10 +186,10 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 
 	wg.Wait()
 
-	// With optimistic locking, at most 1 goroutine succeeds.
+	// With optimistic locking, exactly 1 goroutine succeeds.
 	// Others fail with version conflict or reuse detection.
-	assert.LessOrEqual(t, successes, int64(1),
-		"at most one concurrent refresh should succeed")
-	assert.GreaterOrEqual(t, failures, int64(goroutines-1),
+	assert.Equal(t, int64(1), successes,
+		"exactly one concurrent refresh should succeed")
+	assert.Equal(t, int64(goroutines-1), failures,
 		"remaining goroutines should fail")
 }

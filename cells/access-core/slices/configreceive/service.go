@@ -17,11 +17,22 @@ const (
 	TopicConfigChanged = "event.config.changed.v1"
 )
 
+// ConfigChangedEvent is the payload for event.config.changed.v1.
+// Matches contracts/event/config/changed/v1/payload.schema.json.
+type ConfigChangedEvent struct {
+	Action   string `json:"action"`
+	Key      string `json:"key"`
+	Value    string `json:"value,omitempty"`
+	Version  int    `json:"version,omitempty"`
+	ConfigID string `json:"config_id,omitempty"`
+}
+
 // Service consumes config change events for access-core.
 //
 // Consumer: cg-access-core-config-changed
 // Idempotency: log-only (no side effects), inherently idempotent
 // Disposition: Ack on success / Reject on permanent unmarshal error
+// DLX: broker-native via DispositionReject → Nack(requeue=false)
 type Service struct {
 	logger *slog.Logger
 }
@@ -34,16 +45,12 @@ func NewService(logger *slog.Logger) *Service {
 // HandleEvent processes a config change event. This is the callback registered
 // with the event bus subscriber via outbox.WrapLegacyHandler.
 func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
-	var event struct {
-		Action string `json:"action"`
-		Key    string `json:"key"`
-		Value  string `json:"value"`
-	}
+	var event ConfigChangedEvent
 
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
 		s.logger.Error("config-receive: failed to unmarshal event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return fmt.Errorf("config-receive: unmarshal payload: %w", err)
+		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal payload: %w", err))
 	}
 
 	switch event.Action {

@@ -92,8 +92,9 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 
 	// Optimistic lock: reject if version mismatch.
 	if session.Version != old.Version {
-		return errcode.New(errcode.ErrSessionConflict,
-			fmt.Sprintf("session version conflict: expected %d, got %d", old.Version, session.Version))
+		return errcode.Safe(errcode.ErrSessionConflict,
+			"session was modified by another request, please retry",
+			fmt.Sprintf("version conflict: expected %d, got %d", old.Version, session.Version))
 	}
 
 	// Remove old refresh-token index entry.
