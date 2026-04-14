@@ -27,7 +27,38 @@ const (
 	ErrAdapterAMQPSubscribe           errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
 	ErrAdapterAMQPConsume             errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
 	ErrAdapterAMQPReconnectExhausted  errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
+	ErrAdapterAMQPReconnecting        errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
 )
+
+// ConnectionState represents the lifecycle state of a Connection.
+type ConnectionState uint8
+
+const (
+	// StateConnecting is the initial state before the first successful connection.
+	StateConnecting ConnectionState = iota
+	// StateConnected means the connection is live and ready for use.
+	StateConnected
+	// StateDisconnected means the connection was lost and reconnection is in progress.
+	StateDisconnected
+	// StateTerminal means a permanent error was encountered; no further reconnects.
+	StateTerminal
+)
+
+// String returns a human-readable label for the connection state.
+func (s ConnectionState) String() string {
+	switch s {
+	case StateConnecting:
+		return "connecting"
+	case StateConnected:
+		return "connected"
+	case StateDisconnected:
+		return "disconnected"
+	case StateTerminal:
+		return "terminal"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
+	}
+}
 
 // isPermanentDialError returns true if the error from Dial indicates a
 // permanent condition that will not resolve by retrying.
@@ -229,6 +260,10 @@ type Connection struct {
 	// permanentErr holds the error for callers to inspect.
 	terminalCh   chan struct{}
 	permanentErr error
+
+	// state tracks the connection lifecycle for Health() and observability.
+	// Protected by mu.
+	state ConnectionState
 }
 
 // NewConnection creates a new Connection with the given config.
@@ -263,6 +298,9 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
 	}
 
+	c.mu.Lock()
+	c.state = StateConnected
+	c.mu.Unlock()
 	close(c.connected)
 	go c.reconnectLoop()
 
@@ -319,22 +357,28 @@ func (c *Connection) reconnectLoop() {
 			}
 		}
 
-		// Drain the channel pool on disconnect.
-		c.drainChannelPool()
-
-		// Create a new connected channel for waiters.
+		// RMQ-RACE-01 fix: create a new connected channel BEFORE draining
+		// the pool so that any concurrent WaitConnected callers who hold a
+		// reference to the old (closed) channel will see a different reference
+		// on re-validation and loop back to wait on the new channel.
 		c.mu.Lock()
 		c.connected = make(chan struct{})
+		c.state = StateDisconnected
 		c.mu.Unlock()
+
+		// Drain the channel pool on disconnect.
+		c.drainChannelPool()
 
 		ok, permErr := c.reconnectWithBackoff()
 		if ok {
 			c.mu.Lock()
+			c.state = StateConnected
 			close(c.connected)
 			c.mu.Unlock()
 		} else if permErr != nil {
 			// Terminal state: permanent dial error. Signal all WaitConnected callers.
 			c.mu.Lock()
+			c.state = StateTerminal
 			c.permanentErr = permErr
 			close(c.terminalCh)
 			c.mu.Unlock()
@@ -529,10 +573,18 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 	}
 }
 
-// Health checks if the connection is alive. Returns a permanent error if the
-// connection entered terminal state (e.g., credential revocation).
+// Health checks if the connection is alive. Returns a distinct error code per
+// connection state so operators can tell "never connected" from "reconnecting"
+// from "terminal".
+//
+// Error codes returned:
+//   - nil: healthy (StateConnected, live connection)
+//   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn closed unexpectedly
+//   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in progress (StateDisconnected)
+//   - ErrAdapterAMQPConnectPermanent / ErrAdapterAMQPReconnectExhausted: terminal, will not recover
 func (c *Connection) Health() error {
 	c.mu.RLock()
+	state := c.state
 	conn := c.conn
 	permErr := c.permanentErr
 	c.mu.RUnlock()
@@ -540,10 +592,25 @@ func (c *Connection) Health() error {
 	if permErr != nil {
 		return permErr
 	}
+	switch state {
+	case StateDisconnected:
+		return errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
+	case StateConnecting:
+		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: never connected")
+	}
 	if conn == nil || conn.IsClosed() {
 		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
 	}
 	return nil
+}
+
+// ConnectionStatus returns the current lifecycle state of the connection.
+// Useful for dashboards, structured logging, and operational tooling.
+func (c *Connection) ConnectionStatus() ConnectionState {
+	c.mu.RLock()
+	s := c.state
+	c.mu.RUnlock()
+	return s
 }
 
 // Close shuts down the connection and drains the channel pool.
@@ -582,21 +649,36 @@ func (c *Connection) Close() error {
 //   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel.
 //     May retry with a fresh context.
 func (c *Connection) WaitConnected(ctx context.Context) error {
-	c.mu.RLock()
-	connected := c.connected
-	terminalCh := c.terminalCh
-	c.mu.RUnlock()
-
-	select {
-	case <-connected:
-		return nil
-	case <-terminalCh:
+	for {
 		c.mu.RLock()
-		err := c.permanentErr
+		connected := c.connected
+		terminalCh := c.terminalCh
 		c.mu.RUnlock()
-		return err
-	case <-ctx.Done():
-		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
+
+		select {
+		case <-connected:
+			// RMQ-RACE-01 re-validation: the channel we selected on may be
+			// stale if reconnectLoop replaced it between our RLock and the
+			// select. Re-read under lock and verify the reference matches.
+			c.mu.RLock()
+			sameRef := (c.connected == connected)
+			permErr := c.permanentErr
+			c.mu.RUnlock()
+			if permErr != nil {
+				return permErr
+			}
+			if sameRef {
+				return nil // same channel — genuinely connected
+			}
+			continue // stale channel, loop back to re-read
+		case <-terminalCh:
+			c.mu.RLock()
+			err := c.permanentErr
+			c.mu.RUnlock()
+			return err
+		case <-ctx.Done():
+			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
+		}
 	}
 }
 

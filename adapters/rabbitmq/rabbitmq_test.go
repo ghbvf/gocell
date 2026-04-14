@@ -3756,12 +3756,13 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		return dialCount >= 2
 	}, 2*time.Second, time.Millisecond, "reconnect dial should be in progress")
 
-	// Health() should return error during reconnecting state.
+	// Health() should return error during reconnecting state with distinct code.
 	healthErr := conn.Health()
 	require.Error(t, healthErr, "Health() must return error while reconnecting")
 	var ecErr *errcode.Error
 	require.True(t, errors.As(healthErr, &ecErr), "Health() error should wrap *errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPConnect, ecErr.Code)
+	assert.Equal(t, ErrAdapterAMQPReconnecting, ecErr.Code,
+		"Health() should return ErrAdapterAMQPReconnecting during reconnect, not generic Connect")
 
 	// Unblock the dial — reconnect succeeds.
 	closeProceed()
@@ -3849,4 +3850,382 @@ func TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion(t *testing
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
+}
+
+// =============================================================================
+// RMQ-RACE-01: WaitConnected stale channel re-validation
+// =============================================================================
+
+// TestConnection_WaitConnected_StaleChannelRetry verifies that WaitConnected
+// does not return prematurely when the connected channel has been replaced.
+// Scenario: old connected channel is already closed, then replaced with a new
+// unclosed channel. WaitConnected should block on the NEW channel, not return
+// from the already-closed old one.
+func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
+	mockConn := newMockConnection()
+
+	c := &Connection{
+		config:      Config{URL: "amqp://test@localhost/"},
+		dial:        func(string) (AMQPConnection, error) { return mockConn, nil },
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   make(chan struct{}),
+		terminalCh:  make(chan struct{}),
+		state:       StateConnected,
+	}
+
+	// Simulate: old connected channel was closed (= previously connected).
+	close(c.connected)
+
+	// Replace with a new unclosed channel (= disconnect happened).
+	c.mu.Lock()
+	c.connected = make(chan struct{})
+	c.state = StateDisconnected
+	c.mu.Unlock()
+
+	// WaitConnected should NOT return immediately — the new channel is unclosed.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- c.WaitConnected(ctx)
+	}()
+
+	// Give WaitConnected time to enter select. If it returns from the old
+	// (already closed at creation) channel, it would return before timeout.
+	select {
+	case err := <-done:
+		// Should only return after ctx timeout, not prematurely.
+		assert.Error(t, err, "WaitConnected should timeout, not return from stale channel")
+		assert.Contains(t, err.Error(), "cancelled")
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("WaitConnected hung beyond test deadline")
+	}
+}
+
+// TestConnection_WaitConnected_RaceRevalidation simulates a reconnect cycle
+// during WaitConnected: a goroutine replaces the connected channel and then
+// closes the new one. WaitConnected should return nil only after the NEW
+// channel is closed.
+func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
+	mockConn := newMockConnection()
+
+	oldConnected := make(chan struct{})
+	close(oldConnected) // simulate previously connected
+
+	c := &Connection{
+		config:      Config{URL: "amqp://test@localhost/"},
+		dial:        func(string) (AMQPConnection, error) { return mockConn, nil },
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   oldConnected,
+		terminalCh:  make(chan struct{}),
+		conn:        mockConn,
+		state:       StateConnected,
+	}
+
+	newConnected := make(chan struct{})
+
+	// Goroutine simulates reconnectLoop: replace connected, then close new one.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		c.mu.Lock()
+		c.connected = newConnected
+		c.state = StateDisconnected
+		c.mu.Unlock()
+
+		time.Sleep(30 * time.Millisecond)
+		c.mu.Lock()
+		close(newConnected)
+		c.state = StateConnected
+		c.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := c.WaitConnected(ctx)
+	assert.NoError(t, err, "WaitConnected should return nil after new channel is closed")
+}
+
+// TestConnection_WaitConnected_ConcurrentDisconnectReconnect is a stress test
+// for the WaitConnected re-validation loop under concurrent reconnection cycles.
+// Multiple goroutines call WaitConnected while the main goroutine cycles through
+// disconnect/reconnect. All should eventually return nil. Run with -race.
+func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
+	mockConn := newMockConnection()
+
+	connected := make(chan struct{})
+	close(connected) // initially connected
+
+	c := &Connection{
+		config:      Config{URL: "amqp://test@localhost/"},
+		dial:        func(string) (AMQPConnection, error) { return mockConn, nil },
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   connected,
+		terminalCh:  make(chan struct{}),
+		conn:        mockConn,
+		state:       StateConnected,
+	}
+
+	const numWaiters = 10
+	const numCycles = 5
+	var wg sync.WaitGroup
+	errs := make(chan error, numWaiters)
+
+	// Launch waiters.
+	for range numWaiters {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			errs <- c.WaitConnected(ctx)
+		})
+	}
+
+	// Cycle disconnect/reconnect.
+	for range numCycles {
+		time.Sleep(2 * time.Millisecond)
+		newCh := make(chan struct{})
+		c.mu.Lock()
+		c.connected = newCh
+		c.state = StateDisconnected
+		c.mu.Unlock()
+
+		time.Sleep(2 * time.Millisecond)
+		c.mu.Lock()
+		close(newCh)
+		c.state = StateConnected
+		c.mu.Unlock()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		assert.NoError(t, err, "all waiters should succeed after reconnect")
+	}
+}
+
+// =============================================================================
+// P3-DEFER-05: Health() state distinction + ConnectionStatus()
+// =============================================================================
+
+func TestConnection_Health_StateDistinction(t *testing.T) {
+	mockConn := newMockConnection()
+
+	tests := []struct {
+		name     string
+		state    ConnectionState
+		conn     AMQPConnection
+		permErr  error
+		wantCode errcode.Code
+		wantNil  bool
+	}{
+		{
+			name:    "StateConnected with live conn",
+			state:   StateConnected,
+			conn:    mockConn,
+			wantNil: true,
+		},
+		{
+			name:     "StateConnecting never connected",
+			state:    StateConnecting,
+			conn:     nil,
+			wantCode: ErrAdapterAMQPConnect,
+		},
+		{
+			name:     "StateDisconnected reconnecting",
+			state:    StateDisconnected,
+			conn:     nil,
+			wantCode: ErrAdapterAMQPReconnecting,
+		},
+		{
+			name:     "StateTerminal permanent error",
+			state:    StateTerminal,
+			conn:     nil,
+			permErr:  errcode.New(ErrAdapterAMQPConnectPermanent, "bad creds"),
+			wantCode: ErrAdapterAMQPConnectPermanent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Connection{
+				config:       Config{URL: "amqp://test@localhost/"},
+				channelPool:  make(chan AMQPChannel, 1),
+				closeCh:      make(chan struct{}),
+				connected:    make(chan struct{}),
+				terminalCh:   make(chan struct{}),
+				state:        tt.state,
+				conn:         tt.conn,
+				permanentErr: tt.permErr,
+			}
+
+			err := c.Health()
+			if tt.wantNil {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, tt.wantCode, ecErr.Code)
+		})
+	}
+}
+
+func TestConnection_ConnectionStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ConnectionState
+		want  ConnectionState
+	}{
+		{"connecting", StateConnecting, StateConnecting},
+		{"connected", StateConnected, StateConnected},
+		{"disconnected", StateDisconnected, StateDisconnected},
+		{"terminal", StateTerminal, StateTerminal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Connection{
+				config:     Config{URL: "amqp://test@localhost/"},
+				closeCh:    make(chan struct{}),
+				connected:  make(chan struct{}),
+				terminalCh: make(chan struct{}),
+				state:      tt.state,
+			}
+			assert.Equal(t, tt.want, c.ConnectionStatus())
+		})
+	}
+}
+
+func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
+	var mu sync.Mutex
+	dialCount := 0
+	mock1 := newMockConnection()
+	mock2 := newMockConnection()
+	proceedDial := make(chan struct{})
+
+	var closeOnce sync.Once
+	closeProceed := func() { closeOnce.Do(func() { close(proceedDial) }) }
+	t.Cleanup(closeProceed)
+
+	dialFunc := func(url string) (AMQPConnection, error) {
+		mu.Lock()
+		dialCount++
+		n := dialCount
+		mu.Unlock()
+		if n == 1 {
+			return mock1, nil
+		}
+		<-proceedDial
+		return mock2, nil
+	}
+
+	conn, err := NewConnection(Config{
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
+	}, WithDialFunc(dialFunc))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Initial state: Connected.
+	assert.Equal(t, StateConnected, conn.ConnectionStatus(), "initial state should be Connected")
+
+	// Wait for reconnectLoop to register NotifyClose.
+	require.Eventually(t, func() bool {
+		mock1.mu.Lock()
+		defer mock1.mu.Unlock()
+		return mock1.notifyCloseCh != nil
+	}, time.Second, time.Millisecond)
+
+	// Trigger disconnect.
+	mock1.mu.Lock()
+	ch := mock1.notifyCloseCh
+	mock1.isClosed = true
+	mock1.mu.Unlock()
+	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
+
+	// Wait until reconnect dial is blocked — state should be Disconnected.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return dialCount >= 2
+	}, 2*time.Second, time.Millisecond)
+
+	assert.Equal(t, StateDisconnected, conn.ConnectionStatus(),
+		"state should be Disconnected during reconnect")
+
+	// Unblock reconnect.
+	closeProceed()
+
+	// State should recover to Connected.
+	require.Eventually(t, func() bool {
+		return conn.ConnectionStatus() == StateConnected
+	}, 2*time.Second, time.Millisecond)
+}
+
+func TestConnectionState_String(t *testing.T) {
+	tests := []struct {
+		state ConnectionState
+		want  string
+	}{
+		{StateConnecting, "connecting"},
+		{StateConnected, "connected"},
+		{StateDisconnected, "disconnected"},
+		{StateTerminal, "terminal"},
+		{ConnectionState(99), "unknown(99)"},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, tt.state.String())
+	}
+}
+
+// =============================================================================
+// RMQ-TEST-01: ConsumerBase retry exhaustion (unit test, no broker)
+// =============================================================================
+
+// TestConsumerBase_RetryExhaustion verifies that ConsumerBase retries a
+// transiently-failing handler up to RetryCount and then returns
+// DispositionReject. This is a unit-level test that invokes the wrapped
+// handler directly — see TestIntegration_ConsumerBaseRetry for the
+// end-to-end broker test.
+func TestConsumerBase_RetryExhaustion(t *testing.T) {
+	receipt := &mockReceipt{}
+	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb := NewConsumerBase(
+		claimer,
+		ConsumerBaseConfig{
+			ConsumerGroup:  "test-retry-group",
+			RetryCount:     2,
+			RetryBaseDelay: 10 * time.Millisecond,
+			IdempotencyTTL: time.Hour,
+		},
+	)
+
+	topic := "test.retry.unit"
+	callCount := 0
+	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		callCount++
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
+	})
+
+	entry := outbox.Entry{
+		ID:        "evt-retry-unit-001",
+		EventType: "test.retry",
+		Payload:   []byte(`{"retry":"unit"}`),
+		CreatedAt: time.Now().UTC(),
+	}
+
+	res := wrappedHandler(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, res.Disposition,
+		"exhausted retries should result in Reject disposition")
+	assert.Equal(t, 2, callCount,
+		"handler should be called exactly RetryCount times")
 }
