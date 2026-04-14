@@ -312,6 +312,9 @@ func NewCommandEntry(id, deviceID, commandType string, payload []byte, timeouts 
 // Returns an error if the transition is invalid or if a required prerequisite
 // timestamp is missing (e.g., transitioning to Delivered without SentAt).
 func AdvanceCommand(entry *CommandEntry, to CommandStatus, now time.Time) error {
+	if entry == nil {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: nil CommandEntry")
+	}
 	if err := Transition(entry.Status, to); err != nil {
 		return err
 	}
@@ -353,6 +356,9 @@ func AdvanceCommand(entry *CommandEntry, to CommandStatus, now time.Time) error 
 //   - Attempt is preserved (tracks total attempts across retries)
 //   - All other fields (ID, DeviceID, Payload, Timeouts, Metadata, CreatedAt) preserved
 func ResetForRetry(entry *CommandEntry) error {
+	if entry == nil {
+		return errcode.New(errcode.ErrValidationFailed, "outbox: nil CommandEntry")
+	}
 	switch entry.Status {
 	case CommandSent, CommandFailed:
 		// allowed

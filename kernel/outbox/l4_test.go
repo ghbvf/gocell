@@ -547,9 +547,33 @@ func TestNewCommandEntry_ExplicitTime(t *testing.T) {
 		"CreatedAt must be the injected time parameter, not wall-clock time.Now()")
 }
 
+func TestNewCommandEntry_ZeroTime_FailsValidateNew(t *testing.T) {
+	// Constructing via NewCommandEntry with zero time is accepted (no error return),
+	// but ValidateNew catches the invalid CreatedAt. This is by design: the
+	// constructor is a pure value builder; validation is a separate step.
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, time.Time{})
+	err := entry.ValidateNew()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "CreatedAt")
+}
+
 // ---------------------------------------------------------------------------
 // AdvanceCommand
 // ---------------------------------------------------------------------------
+
+func TestAdvanceCommand_NilEntry(t *testing.T) {
+	err := AdvanceCommand(nil, CommandSent, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, err.Error(), "nil")
+}
+
+func TestResetForRetry_NilEntry(t *testing.T) {
+	err := ResetForRetry(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, err.Error(), "nil")
+}
 
 func TestAdvanceCommand_PendingToSent(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
