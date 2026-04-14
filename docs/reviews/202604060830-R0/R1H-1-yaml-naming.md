@@ -3,7 +3,7 @@
 - **Auditor**: Kernel Guardian
 - **Date**: 2026-04-06
 - **Baseline**: `docs/architecture/naming-baseline.md`
-- **Scope**: All YAML metadata files under `src/`
+- **Scope**: All YAML metadata files under 项目根目录
 
 ## Files Audited
 
@@ -11,11 +11,11 @@
 |----------|-------|-------|
 | cell.yaml | 6 | access-core, audit-core, config-core, demo, device-cell, order-cell |
 | slice.yaml | 21 | (all slices across 6 cells) |
-| contract.yaml | 18 | (all contracts under src/contracts/) |
+| contract.yaml | 18 | (all contracts under contracts/) |
 | assembly.yaml | 1 | core-bundle |
 | journey YAML | 9 | J-sso-login, J-session-refresh, J-session-logout, J-user-onboarding, J-account-lockout, J-audit-login-trail, J-config-hot-reload, J-config-rollback, J-order-create |
 | status-board.yaml | 1 | journeys/status-board.yaml |
-| actors.yaml | 1 | src/actors.yaml |
+| actors.yaml | 1 | actors.yaml |
 | generated/boundary.yaml | 0 | Does not exist (OK -- no multi-assembly scenario yet) |
 | **Total** | **57** | |
 
@@ -35,12 +35,12 @@ Searched all 57 YAML files for: `cellId`, `sliceId`, `contractId`, `assemblyId`,
 
 | File | ID Value | Verdict |
 |------|----------|---------|
-| src/cells/access-core/cell.yaml | `access-core` | PASS |
-| src/cells/audit-core/cell.yaml | `audit-core` | PASS |
-| src/cells/config-core/cell.yaml | `config-core` | PASS |
-| src/cells/demo/cell.yaml | `demo` | PASS |
-| src/cells/device-cell/cell.yaml | `device-cell` | PASS |
-| src/cells/order-cell/cell.yaml | `order-cell` | PASS |
+| cells/access-core/cell.yaml | `access-core` | PASS |
+| cells/audit-core/cell.yaml | `audit-core` | PASS |
+| cells/config-core/cell.yaml | `config-core` | PASS |
+| cells/demo/cell.yaml | `demo` | PASS |
+| cells/device-cell/cell.yaml | `device-cell` | PASS |
+| cells/order-cell/cell.yaml | `order-cell` | PASS |
 
 ### Slice IDs (expect kebab-case)
 
@@ -56,7 +56,7 @@ session-login, rbac-check, session-validate, session-logout, authorization-decid
 
 | File | ID Value | Verdict |
 |------|----------|---------|
-| src/assemblies/core-bundle/assembly.yaml | `core-bundle` | PASS |
+| assemblies/core-bundle/assembly.yaml | `core-bundle` | PASS |
 
 ### Contract IDs (expect lowercase dot-separated)
 
@@ -93,7 +93,7 @@ All 9 journey IDs verified -- all match `J-{kebab-case}`. No violations.
 
 | File | ID Value | Verdict |
 |------|----------|---------|
-| src/actors.yaml | `edge-bff` | PASS |
+| actors.yaml | `edge-bff` | PASS |
 
 **Result: PASS -- all entity IDs conform to naming-baseline.md section 1.1.**
 
@@ -126,7 +126,7 @@ Spot-check of camelCase fields across files:
 
 ## Check 4: Contract Directory Structure
 
-Expected: `src/contracts/{kind}/{domain-path}/{version}/contract.yaml`
+Expected: `contracts/{kind}/{domain-path}/{version}/contract.yaml`
 
 | Contract ID | Directory Path | Match | Verdict |
 |-------------|---------------|-------|---------|

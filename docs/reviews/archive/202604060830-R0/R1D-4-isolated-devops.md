@@ -1,17 +1,17 @@
-# Independent DevOps Review: `src/adapters/oidc`
+# Independent DevOps Review: `adapters/oidc`
 
 Review date: 2026-04-06
 
 Scope reviewed:
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/config.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/provider.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/token.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/userinfo.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/errors.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/doc.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/oidc_test.go`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/integration_test.go`
+`/Users/shengming/Documents/code/gocell/adapters/oidc/config.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/provider.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/token.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/userinfo.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/errors.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/doc.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/oidc_test.go`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/integration_test.go`
 
 Verification:
 `go test ./adapters/oidc`
@@ -25,9 +25,9 @@ Verification:
 Operational impact: the adapter can keep accepting stale signing keys far longer than intended, and the configured TTL gives operators a false sense of control over cache freshness.
 
 Evidence:
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/config.go:21-24`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go:155-176`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go:226-230`
+`/Users/shengming/Documents/code/gocell/adapters/oidc/config.go:21-24`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go:155-176`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go:226-230`
 
 2. Refreshes can stampede the IdP because cache misses are not deduplicated.
 
@@ -36,8 +36,8 @@ Both `Provider.Discover()` and `Verifier.getKey()` release their locks before pe
 Operational impact: a cold start or upstream wobble can fan out into many duplicate requests, increasing latency on the auth path and putting unnecessary pressure on the provider. With the current per-client timeout model, those concurrent requests can also tie up a lot of goroutines at once.
 
 Evidence:
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/provider.go:57-66`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go:155-176`
+`/Users/shengming/Documents/code/gocell/adapters/oidc/provider.go:57-66`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go:155-176`
 
 3. The config validation path misses a required deployment guardrail for authorization-code exchange.
 
@@ -46,8 +46,8 @@ Evidence:
 Operational impact: a misconfigured deployment can reach production and fail only at runtime, which is exactly the kind of failure that should be caught by config validation or readiness checks.
 
 Evidence:
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/config.go:43-51`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/token.go:38-44`
+`/Users/shengming/Documents/code/gocell/adapters/oidc/config.go:43-51`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/token.go:38-44`
 
 4. Observability is too thin to support fast incident triage.
 
@@ -56,10 +56,10 @@ The adapter emits `Info` logs when discovery and JWKS fetches succeed, and `Warn
 Operational impact: diagnosing provider-related incidents requires inference from downstream behavior instead of direct adapter telemetry.
 
 Evidence:
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/provider.go:118-121`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go:247-249`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/token.go:59-63`,
-`/Users/shengming/Documents/code/gocell/src/adapters/oidc/userinfo.go:48-52`
+`/Users/shengming/Documents/code/gocell/adapters/oidc/provider.go:118-121`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go:247-249`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/token.go:59-63`,
+`/Users/shengming/Documents/code/gocell/adapters/oidc/userinfo.go:48-52`
 
 ## Notes
 

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S2 (Security / Permission) |
-| Scope | `src/adapters/postgres/` (~1200 LOC) + `src/cells/*/internal/adapters/postgres/` |
+| Scope | `adapters/postgres/` (~1200 LOC) + `cells/*/internal/adapters/postgres/` |
 | Review Basis Commit | `ce03ba1` (develop HEAD at review time) |
 | Date | 2026-04-06 |
 | Status | COMPLETE |
@@ -24,7 +24,7 @@ The `adapters/postgres` module comprises 9 source files (pool, tx_manager, migra
 
 **Seat:** S2 Security  
 **Category:** SQL Injection  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go`  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go`  
 **Status:** OPEN
 
 **Evidence:**
@@ -89,7 +89,7 @@ Alternatively, use `pgx.Identifier{tableName}.Sanitize()` which properly double-
 
 **Seat:** S2 Security  
 **Category:** Data Integrity / Race Condition  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go`  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go`  
 **Status:** OPEN  
 **Related:** Issue #21
 
@@ -100,7 +100,7 @@ The `doc.go` (line 14) states:
 ref: Watermill watermill-sql schema_adapter_postgresql.go -- adopted advisory locking for migration init
 ```
 
-However, **no advisory lock is present anywhere in `migrator.go`**. Grepping for `advisory`, `pg_advisory`, or `pg_try_advisory` across the entire `src/` tree returns zero matches.
+However, **no advisory lock is present anywhere in `migrator.go`**. Grepping for `advisory`, `pg_advisory`, or `pg_try_advisory` across the entire 项目根目录 tree returns zero matches.
 
 The `Up()` method (line 81-105) reads applied versions, then iterates and applies unapplied ones -- without any locking. If two instances start simultaneously:
 
@@ -132,9 +132,9 @@ func (m *Migrator) releaseLock(ctx context.Context) {
 **Seat:** S2 Security  
 **Category:** Transaction Safety / Data Integrity  
 **Affected files:**
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/tx_manager.go` lines 81, 94, 122, 137
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go` lines 297, 337
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go` line 142
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/tx_manager.go` lines 81, 94, 122, 137
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go` lines 297, 337
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go` line 142
 
 **Status:** OPEN  
 **Related:** Issue #22
@@ -180,7 +180,7 @@ Apply this pattern in all 7 rollback/savepoint-rollback sites.
 
 **Seat:** S2 Security (Data Integrity)  
 **Category:** Migration Ordering  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go` lines 196-199  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go` lines 196-199  
 **Status:** OPEN  
 **Related:** Issue #21
 
@@ -216,7 +216,7 @@ Either:
 
 **Seat:** S2 Security (Data Integrity)  
 **Category:** Outbox Relay Consistency  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go` lines 186-218  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go` lines 186-218  
 **Status:** OPEN
 
 **Evidence:**
@@ -254,7 +254,7 @@ Furthermore, a more subtle problem: the `continue` on publish failure for entry 
 
 **Seat:** S2 Security  
 **Category:** Credential Leakage  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/pool.go` lines 98-104  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/pool.go` lines 98-104  
 **Status:** OPEN
 
 **Evidence:**
@@ -290,7 +290,7 @@ if err != nil {
 
 **Seat:** S2 Security  
 **Category:** Concurrency Safety  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go` lines 74-76, 100-103  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go` lines 74-76, 100-103  
 **Status:** OPEN
 
 **Evidence:**
@@ -321,7 +321,7 @@ Protect `r.cancel` with a mutex, or initialize it in the constructor and use an 
 
 **Seat:** S2 Security  
 **Category:** SQL Construction  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/tx_manager.go` lines 112-114  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/tx_manager.go` lines 112-114  
 **Status:** OPEN
 
 **Evidence:**
@@ -343,7 +343,7 @@ Use `pgx.Identifier{spName}.Sanitize()` for consistency with best practices, or 
 
 **Seat:** S2 Security  
 **Category:** Error Handling Fragility  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go` lines 274-276  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go` lines 274-276  
 **Status:** OPEN
 
 **Evidence:**
@@ -376,7 +376,7 @@ if errors.Is(err, pgx.ErrNoRows) {
 
 **Seat:** S2 Security  
 **Category:** Denial of Service / Resource Exhaustion  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/pool.go`  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/pool.go`  
 **Status:** OPEN
 
 **Evidence:**
@@ -404,7 +404,7 @@ pgxpool does respect the caller's context deadline for Acquire, but callers shou
 
 **Seat:** S2 Security  
 **Category:** Information Leakage  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go` lines 189-193, 197-201  
+**Affected file:** `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go` lines 189-193, 197-201  
 **Status:** OPEN
 
 **Evidence:**
@@ -442,7 +442,7 @@ Wrap errors before logging to strip potential sensitive content, or add a commen
 
 **Seat:** S2 Security  
 **Category:** SQL Construction Pattern  
-**Affected file:** `/Users/shengming/Documents/code/gocell/src/cells/audit-core/internal/adapters/postgres/audit_repo.go` lines 117-146  
+**Affected file:** `/Users/shengming/Documents/code/gocell/cells/audit-core/internal/adapters/postgres/audit_repo.go` lines 117-146  
 **Status:** OPEN
 
 **Evidence:**

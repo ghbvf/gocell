@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | Reviewer | R1C-3 (multi-seat: S1 Architecture, S3 Test, S4 Ops, S5 DX) |
-| Scope | `src/runtime/config/` (~342 LOC), `src/runtime/shutdown/` (~99 LOC) |
+| Scope | `runtime/config/` (~342 LOC), `runtime/shutdown/` (~99 LOC) |
 | Baseline commit | ce03ba1 (develop HEAD) |
 | Date | 2026-04-06 |
 
@@ -13,14 +13,14 @@
 
 | File | LOC (approx) | Purpose |
 |------|-------------|---------|
-| `src/runtime/config/config.go` | 216 | Config interface, YAML+env loading, Reload, flatten/setNested |
-| `src/runtime/config/watcher.go` | 114 | fsnotify file watcher with callback dispatch |
-| `src/runtime/config/doc.go` | 14 | Package godoc |
-| `src/runtime/config/config_test.go` | 189 | Tests for Load/Scan/Keys/Reload |
-| `src/runtime/config/watcher_test.go` | 90 | Tests for Watcher lifecycle |
-| `src/runtime/shutdown/shutdown.go` | 97 | Graceful shutdown Manager with LIFO hooks |
-| `src/runtime/shutdown/shutdown_test.go` | 137 | Tests for LIFO, error continuation, signal, timeout |
-| `src/runtime/shutdown/doc.go` | 3 | Package godoc |
+| `runtime/config/config.go` | 216 | Config interface, YAML+env loading, Reload, flatten/setNested |
+| `runtime/config/watcher.go` | 114 | fsnotify file watcher with callback dispatch |
+| `runtime/config/doc.go` | 14 | Package godoc |
+| `runtime/config/config_test.go` | 189 | Tests for Load/Scan/Keys/Reload |
+| `runtime/config/watcher_test.go` | 90 | Tests for Watcher lifecycle |
+| `runtime/shutdown/shutdown.go` | 97 | Graceful shutdown Manager with LIFO hooks |
+| `runtime/shutdown/shutdown_test.go` | 137 | Tests for LIFO, error continuation, signal, timeout |
+| `runtime/shutdown/doc.go` | 3 | Package godoc |
 
 ---
 
@@ -44,7 +44,7 @@ Key strengths:
 
 ### F01 -- [S1 Architecture] P2 -- Watcher.Close() calls fsnotify.Close() on every invocation
 
-**File:** `src/runtime/config/watcher.go:105-113`
+**File:** `runtime/config/watcher.go:105-113`
 
 **Evidence:**
 ```go
@@ -82,7 +82,7 @@ func (w *Watcher) Close() error {
 
 ### F02 -- [S1 Architecture] P2 -- Close() has TOCTOU race on `done` channel
 
-**File:** `src/runtime/config/watcher.go:105-113`
+**File:** `runtime/config/watcher.go:105-113`
 
 **Evidence:**
 ```go
@@ -123,7 +123,7 @@ func (w *Watcher) Close() error {
 
 ### F03 -- [S3 Test] P1 -- No concurrent read/write test for Config
 
-**File:** `src/runtime/config/config_test.go`
+**File:** `runtime/config/config_test.go`
 
 **Evidence:** All test functions run sequentially. No test calls `Get()` from multiple goroutines while `Reload()` runs.
 
@@ -146,7 +146,7 @@ func TestConfig_ConcurrentReadReload(t *testing.T) {
 
 ### F04 -- [S3 Test] P2 -- No test for Watcher callback panic recovery
 
-**File:** `src/runtime/config/watcher_test.go`
+**File:** `runtime/config/watcher_test.go`
 
 **Evidence:** `watcher.go:83-87` has panic recovery, but no test triggers a panicking callback.
 
@@ -162,7 +162,7 @@ func TestConfig_ConcurrentReadReload(t *testing.T) {
 
 ### F05 -- [S5 DX] P2 -- Scan() does not reflect env overrides in structured output
 
-**File:** `src/runtime/config/config.go:80-93`
+**File:** `runtime/config/config.go:80-93`
 
 **Evidence:**
 ```go
@@ -190,7 +190,7 @@ The `Get()` return type also changes from `int` to `string` after env override, 
 
 ### F06 -- [S1 Architecture] P2 -- shutdown.Manager.Register is not goroutine-safe
 
-**File:** `src/runtime/shutdown/shutdown.go:48-49`
+**File:** `runtime/shutdown/shutdown.go:48-49`
 
 **Evidence:**
 ```go
@@ -211,7 +211,7 @@ func (m *Manager) Register(h Hook) {
 
 ### F07 -- [S3 Test] P2 -- shutdown.Manager timeout test does not assert DeadlineExceeded
 
-**File:** `src/runtime/shutdown/shutdown_test.go:59-70`
+**File:** `runtime/shutdown/shutdown_test.go:59-70`
 
 **Evidence:**
 ```go
@@ -238,7 +238,7 @@ func TestManager_Shutdown_Timeout(t *testing.T) {
 
 ### F08 -- [S5 DX] P2 -- Config.Get returns `any` with no type helper
 
-**File:** `src/runtime/config/config.go:24-26`
+**File:** `runtime/config/config.go:24-26`
 
 **Evidence:**
 ```go
@@ -261,7 +261,7 @@ type Config interface {
 
 ### F09 -- [S1 Architecture] P2 -- No validation hook in Reload path
 
-**File:** `src/runtime/config/config.go:109-129`
+**File:** `runtime/config/config.go:109-129`
 
 **Evidence:**
 ```go
@@ -295,7 +295,7 @@ func (c *config) Reload(yamlPath string, envPrefix string) error {
 
 ### F10 -- [S4 Ops] P2 -- No debounce on file watcher events
 
-**File:** `src/runtime/config/watcher.go:68-101`
+**File:** `runtime/config/watcher.go:68-101`
 
 **Evidence:**
 ```go
@@ -320,7 +320,7 @@ func (w *Watcher) loop() {
 
 ### F11 -- [S3 Test] P1 -- Watcher test relies on timing with `time.Sleep`
 
-**File:** `src/runtime/config/watcher_test.go:33-42`
+**File:** `runtime/config/watcher_test.go:33-42`
 
 **Evidence:**
 ```go
@@ -350,7 +350,7 @@ assert.Eventually(t, func() bool {
 
 ### F12 -- [S1 Architecture] P2 -- shutdown.runHooks returns ctx.Err() even on success
 
-**File:** `src/runtime/shutdown/shutdown.go:77-96`
+**File:** `runtime/shutdown/shutdown.go:77-96`
 
 **Evidence:**
 ```go
@@ -389,7 +389,7 @@ return nil
 
 ### F13 -- [S5 DX] P2 -- doc.go example in config uses incorrect NewFromMap key format
 
-**File:** `src/runtime/config/doc.go:12-13`
+**File:** `runtime/config/doc.go:12-13`
 
 **Evidence:**
 ```go

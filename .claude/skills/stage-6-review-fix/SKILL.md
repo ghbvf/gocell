@@ -173,7 +173,7 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S6 --branc
 |------|------|---------|
 | review-findings.md | `specs/{branch}/review-findings.md` | 6 个 Reviewer |
 | tech-debt.md | `specs/{branch}/tech-debt.md` | 总负责人 |
-| 修复后的代码 | `src/` | 开发者 |
+| 修复后的代码 | 项目根目录 | 开发者 |
 
 ## 出口条件
 

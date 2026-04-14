@@ -212,12 +212,12 @@ flowchart LR
 
 | 模块 | 范围 | 重点问题 |
 |---|---|---|
-| M1 基础内核 | `src/pkg`, `src/kernel` | 错误码、生命周期、治理、元数据真相 |
-| M2 运行时 | `src/runtime` | bootstrap、router、auth、worker、shutdown、observability |
-| M3 基础设施适配器-A | `src/adapters/postgres`, `src/adapters/redis`, `src/adapters/rabbitmq` | outbox、tx、idempotency、delivery、lock |
-| M4 基础设施适配器-B | `src/adapters/oidc`, `src/adapters/s3`, `src/adapters/websocket` | 外部协议、边界稳定性、可替换性 |
-| M5 核心 Cell 簇 | `src/cells/access-core`, `src/cells/audit-core`, `src/cells/config-core`, `src/contracts`, `src/journeys`, `src/assemblies` | 契约闭环、事件传播、一致性闭环 |
-| M6 交付层 | `src/cmd`, `src/examples`, `src/tests` | wiring、集成样例、端到端可验证性 |
+| M1 基础内核 | `pkg`, `kernel` | 错误码、生命周期、治理、元数据真相 |
+| M2 运行时 | `runtime` | bootstrap、router、auth、worker、shutdown、observability |
+| M3 基础设施适配器-A | `adapters/postgres`, `adapters/redis`, `adapters/rabbitmq` | outbox、tx、idempotency、delivery、lock |
+| M4 基础设施适配器-B | `adapters/oidc`, `adapters/s3`, `adapters/websocket` | 外部协议、边界稳定性、可替换性 |
+| M5 核心 Cell 簇 | `cells/access-core`, `cells/audit-core`, `cells/config-core`, `contracts`, `journeys`, `assemblies` | 契约闭环、事件传播、一致性闭环 |
+| M6 交付层 | `cmd`, `examples`, `tests` | wiring、集成样例、端到端可验证性 |
 
 ### 依赖生成步骤
 

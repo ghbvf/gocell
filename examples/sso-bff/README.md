@@ -149,7 +149,7 @@ tracked in the backlog. The current PR provides the middleware primitives.
 Infrastructure services are provided for future adapter-based mode:
 
 ```bash
-cd src/examples/sso-bff
+cd examples/sso-bff
 docker compose up -d
 cd ../..
 go run ./examples/sso-bff

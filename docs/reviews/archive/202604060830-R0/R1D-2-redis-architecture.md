@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Role | S1 Architecture |
-| Scope | `src/adapters/redis/` |
+| Scope | `adapters/redis/` |
 | Baseline commit | `5096d4f` |
 | Evidence base | Current source and tests only |
 
@@ -15,16 +15,16 @@ The package splits cleanly into four capabilities: `Client`, `DistLock`, `Idempo
 
 ### A-01 | P1 | `DistLock` renewal lifecycle is detached from the caller lifecycle
 
-- File: `src/adapters/redis/distlock.go:94-126`
+- File: `adapters/redis/distlock.go:94-126`
 - Evidence: `Acquire()` says renewal runs until `Release()` or caller context cancellation, but the goroutine is derived from `context.Background()` instead of the incoming `ctx`.
 - Why it matters: the adapter boundary promises lifecycle composition with the caller, but the implementation creates a hidden background process. That makes `DistLock` hard to reason about inside request-scoped or shutdown-scoped orchestration.
 - Recommendation: derive renewal from `context.WithCancel(ctx)` and keep the cancel function on the returned lock.
 
 ### A-02 | P2 | only `IdempotencyChecker` has a stable interface boundary
 
-- Files: `src/adapters/redis/idempotency.go:14-25`, `src/adapters/redis/cache.go:14-21`, `src/adapters/redis/distlock.go:64-72`
+- Files: `adapters/redis/idempotency.go:14-25`, `adapters/redis/cache.go:14-21`, `adapters/redis/distlock.go:64-72`
 - Evidence: `IdempotencyChecker` has a compile-time assertion against `kernel/idempotency.Checker`; `Cache` and `DistLock` are exported concrete types with no corresponding kernel/runtime interface.
-- Additional observation: package-level search in current `src/` shows production code consumes Redis through the idempotency interface, while `DistLock` and `Cache` have no production callsites.
+- Additional observation: package-level search in current 项目根目录 shows production code consumes Redis through the idempotency interface, while `DistLock` and `Cache` have no production callsites.
 - Why it matters: concrete exported adapters without a contract tend to accrete unstable behavior. They are hard to substitute, hard to mock outside the package, and easy to over-advertise.
 - Recommendation: either define minimal consumer-facing interfaces where these capabilities are truly part of the platform, or keep them explicitly as leaf utilities with narrow documentation and no architectural guarantees.
 

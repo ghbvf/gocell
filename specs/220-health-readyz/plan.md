@@ -80,9 +80,9 @@ Readiness is computed from three sources:
 
 Targets:
 
-1. `src/runtime/http/health/health.go`
-2. `src/runtime/http/health/health_test.go`
-3. `src/runtime/http/router/router_test.go`
+1. `runtime/http/health/health.go`
+2. `runtime/http/health/health_test.go`
+3. `runtime/http/router/router_test.go`
 
 Required outcomes:
 
@@ -94,10 +94,10 @@ Required outcomes:
 
 Targets:
 
-1. `src/runtime/config/watcher.go`
-2. `src/runtime/config/watcher_test.go`
-3. `src/runtime/eventrouter/router.go`
-4. `src/runtime/eventrouter/router_test.go`
+1. `runtime/config/watcher.go`
+2. `runtime/config/watcher_test.go`
+3. `runtime/eventrouter/router.go`
+4. `runtime/eventrouter/router_test.go`
 
 Required outcomes:
 
@@ -109,8 +109,8 @@ Required outcomes:
 
 Targets:
 
-1. `src/runtime/bootstrap/bootstrap.go`
-2. `src/runtime/bootstrap/bootstrap_test.go`
+1. `runtime/bootstrap/bootstrap.go`
+2. `runtime/bootstrap/bootstrap_test.go`
 
 Required outcomes:
 
@@ -123,7 +123,7 @@ Required outcomes:
 
 Targets:
 
-1. `src/templates/runbook.md`
+1. `templates/runbook.md`
 2. Example READMEs if needed for explicit verbose guidance
 
 Required outcomes:

@@ -1,7 +1,7 @@
 # R1H-3: Go Naming Convention Review (adapters/ + cells/ + examples/ + cmd/)
 
 Reviewer: R1H-3 Agent (Seat 5 DX/Maintainability focus)
-Scope: `src/adapters/**/*.go`, `src/cells/**/*.go`, `src/examples/**/*.go`, `src/cmd/**/*.go` (non-test)
+Scope: `adapters/**/*.go`, `cells/**/*.go`, `examples/**/*.go`, `cmd/**/*.go` (non-test)
 Baseline: `docs/architecture/naming-baseline.md`
 Date: 2026-04-06
 
@@ -15,9 +15,9 @@ This is a chi URL path parameter. While chi does not enforce casing, project con
 
 | # | File | Line | Current | Should Be |
 |---|------|------|---------|-----------|
-| 1 | `src/cells/device-cell/cell.go` | 129 | `{cmdId}` | `{cmdID}` |
-| 2 | `src/cells/device-cell/slices/device-command/handler.go` | 70 | `{cmdId}` (comment) | `{cmdID}` |
-| 3 | `src/cells/device-cell/slices/device-command/handler.go` | 73 | `chi.URLParam(r, "cmdId")` | `chi.URLParam(r, "cmdID")` |
+| 1 | `cells/device-cell/cell.go` | 129 | `{cmdId}` | `{cmdID}` |
+| 2 | `cells/device-cell/slices/device-command/handler.go` | 70 | `{cmdId}` (comment) | `{cmdID}` |
+| 3 | `cells/device-cell/slices/device-command/handler.go` | 73 | `chi.URLParam(r, "cmdId")` | `chi.URLParam(r, "cmdID")` |
 
 Severity: P2 (URL path params are external API surface but chi params are internal routing keys)
 
@@ -30,8 +30,8 @@ Per naming-baseline 2.1, JSON fields should be camelCase. However, the Go abbrev
 **Decision: NOT a violation.** JSON field `"deviceId"` follows standard JSON camelCase convention. The Go struct field `DeviceID` correctly uses `ID`, and the JSON tag maps it to `"deviceId"` which is correct. No action needed.
 
 Affected locations (all COMPLIANT):
-- `src/cells/device-cell/internal/domain/device.go:23` -- `DeviceID string \`json:"deviceId"\``
-- `src/cells/device-cell/slices/device-command/handler.go:47` -- `"deviceId": cmd.DeviceID`
+- `cells/device-cell/internal/domain/device.go:23` -- `DeviceID string \`json:"deviceId"\``
+- `cells/device-cell/slices/device-command/handler.go:47` -- `"deviceId": cmd.DeviceID`
 
 ---
 
@@ -43,18 +43,18 @@ The following use snake_case in JSON tags because they map to the OIDC/OAuth2 pr
 
 | File | Line | Tag | Reason |
 |------|------|-----|--------|
-| `src/adapters/oidc/token.go` | 18 | `json:"access_token"` | OAuth2 RFC 6749 |
-| `src/adapters/oidc/token.go` | 19 | `json:"token_type"` | OAuth2 RFC 6749 |
-| `src/adapters/oidc/token.go` | 20 | `json:"expires_in"` | OAuth2 RFC 6749 |
-| `src/adapters/oidc/token.go` | 21 | `json:"refresh_token"` | OAuth2 RFC 6749 |
-| `src/adapters/oidc/token.go` | 22 | `json:"id_token"` | OIDC Core |
-| `src/adapters/oidc/provider.go` | 20 | `json:"authorization_endpoint"` | OIDC Discovery |
-| `src/adapters/oidc/provider.go` | 21 | `json:"token_endpoint"` | OIDC Discovery |
-| `src/adapters/oidc/provider.go` | 22 | `json:"userinfo_endpoint"` | OIDC Discovery |
-| `src/adapters/oidc/provider.go` | 23 | `json:"jwks_uri"` | OIDC Discovery |
-| `src/adapters/oidc/provider.go` | 24 | `json:"scopes_supported"` | OIDC Discovery |
-| `src/adapters/oidc/provider.go` | 25 | `json:"id_token_signing_alg_values_supported"` | OIDC Discovery |
-| `src/adapters/oidc/userinfo.go` | 19 | `json:"email_verified"` | OIDC UserInfo |
+| `adapters/oidc/token.go` | 18 | `json:"access_token"` | OAuth2 RFC 6749 |
+| `adapters/oidc/token.go` | 19 | `json:"token_type"` | OAuth2 RFC 6749 |
+| `adapters/oidc/token.go` | 20 | `json:"expires_in"` | OAuth2 RFC 6749 |
+| `adapters/oidc/token.go` | 21 | `json:"refresh_token"` | OAuth2 RFC 6749 |
+| `adapters/oidc/token.go` | 22 | `json:"id_token"` | OIDC Core |
+| `adapters/oidc/provider.go` | 20 | `json:"authorization_endpoint"` | OIDC Discovery |
+| `adapters/oidc/provider.go` | 21 | `json:"token_endpoint"` | OIDC Discovery |
+| `adapters/oidc/provider.go` | 22 | `json:"userinfo_endpoint"` | OIDC Discovery |
+| `adapters/oidc/provider.go` | 23 | `json:"jwks_uri"` | OIDC Discovery |
+| `adapters/oidc/provider.go` | 24 | `json:"scopes_supported"` | OIDC Discovery |
+| `adapters/oidc/provider.go` | 25 | `json:"id_token_signing_alg_values_supported"` | OIDC Discovery |
+| `adapters/oidc/userinfo.go` | 19 | `json:"email_verified"` | OIDC UserInfo |
 
 **Status: EXEMPT** -- External protocol fields, naming-baseline 2.1 allows external protocol overrides.
 
@@ -62,7 +62,7 @@ The following use snake_case in JSON tags because they map to the OIDC/OAuth2 pr
 
 | # | File | Line | Current | Should Be |
 |---|------|------|---------|-----------|
-| 1 | `src/cells/audit-core/slices/auditappend/service.go` | 93 | `json:"user_id"` | `json:"userId"` |
+| 1 | `cells/audit-core/slices/auditappend/service.go` | 93 | `json:"user_id"` | `json:"userId"` |
 
 Severity: P2 (this struct unmarshals event payloads; the JSON field name is part of the internal event schema)
 
@@ -78,14 +78,14 @@ Event payloads use `map[string]any` with snake_case keys. Per naming-baseline 2.
 
 | # | File | Line | Key(s) |
 |---|------|------|--------|
-| 1 | `src/cells/access-core/slices/identitymanage/service.go` | 91 | `"user_id"`, `"username"` |
-| 2 | `src/cells/access-core/slices/identitymanage/service.go` | 192 | `"user_id"` |
-| 3 | `src/cells/access-core/slices/sessionlogin/service.go` | 153 | `"session_id"`, `"user_id"` |
-| 4 | `src/cells/access-core/slices/sessionlogout/service.go` | 88 | `"session_id"`, `"user_id"` |
-| 5 | `src/cells/audit-core/slices/auditappend/service.go` | 108-109 | `"audit_entry_id"`, `"event_type"` |
-| 6 | `src/cells/audit-core/slices/auditverify/service.go` | 95-96 | `"first_invalid_index"`, `"entries_checked"` |
-| 7 | `src/cells/config-core/slices/configpublish/service.go` | 92 | `"config_id"` |
-| 8 | `src/cells/config-core/slices/configpublish/service.go` | 134-135 | `"target_version"`, `"new_version"` |
+| 1 | `cells/access-core/slices/identitymanage/service.go` | 91 | `"user_id"`, `"username"` |
+| 2 | `cells/access-core/slices/identitymanage/service.go` | 192 | `"user_id"` |
+| 3 | `cells/access-core/slices/sessionlogin/service.go` | 153 | `"session_id"`, `"user_id"` |
+| 4 | `cells/access-core/slices/sessionlogout/service.go` | 88 | `"session_id"`, `"user_id"` |
+| 5 | `cells/audit-core/slices/auditappend/service.go` | 108-109 | `"audit_entry_id"`, `"event_type"` |
+| 6 | `cells/audit-core/slices/auditverify/service.go` | 95-96 | `"first_invalid_index"`, `"entries_checked"` |
+| 7 | `cells/config-core/slices/configpublish/service.go` | 92 | `"config_id"` |
+| 8 | `cells/config-core/slices/configpublish/service.go` | 134-135 | `"target_version"`, `"new_version"` |
 
 Severity: P2 (event payloads are internal, but naming-baseline says JSON should prefer camelCase)
 
@@ -97,8 +97,8 @@ Per naming-baseline 2.1: "JSON / Query / Path fields should use camelCase".
 
 | # | File | Line | Current | Should Be |
 |---|------|------|---------|-----------|
-| 1 | `src/cells/audit-core/slices/auditquery/handler.go` | 29 | `r.URL.Query().Get("event_type")` | `"eventType"` |
-| 2 | `src/cells/audit-core/slices/auditquery/handler.go` | 30 | `r.URL.Query().Get("actor_id")` | `"actorId"` |
+| 1 | `cells/audit-core/slices/auditquery/handler.go` | 29 | `r.URL.Query().Get("event_type")` | `"eventType"` |
+| 2 | `cells/audit-core/slices/auditquery/handler.go` | 30 | `r.URL.Query().Get("actor_id")` | `"actorId"` |
 
 Severity: P1 (external API surface, directly affects client integration)
 
@@ -107,11 +107,11 @@ Severity: P1 (external API surface, directly affects client integration)
 ## 5. DB Field Naming
 
 All SQL queries use snake_case for column names. Verified in:
-- `src/adapters/postgres/migrator.go` -- `version`, `applied_at`, `name`
-- `src/adapters/postgres/outbox_writer.go` -- `aggregate_id`, `aggregate_type`, `event_type`, `payload`, `metadata`
-- `src/adapters/postgres/outbox_relay.go` -- `id`, `aggregate_id`, `aggregate_type`, `event_type`, `payload`, `metadata`, `published`, `published_at`, `created_at`
-- `src/cells/config-core/internal/adapters/postgres/config_repo.go` -- `id`, `key`, `value`, `version`, `created_at`, `updated_at`, `config_id`, `published_at`
-- `src/cells/audit-core/internal/adapters/postgres/audit_repo.go` -- `id`, `event_id`, `event_type`, `actor_id`, `timestamp`, `payload`, `prev_hash`, `hash`
+- `adapters/postgres/migrator.go` -- `version`, `applied_at`, `name`
+- `adapters/postgres/outbox_writer.go` -- `aggregate_id`, `aggregate_type`, `event_type`, `payload`, `metadata`
+- `adapters/postgres/outbox_relay.go` -- `id`, `aggregate_id`, `aggregate_type`, `event_type`, `payload`, `metadata`, `published`, `published_at`, `created_at`
+- `cells/config-core/internal/adapters/postgres/config_repo.go` -- `id`, `key`, `value`, `version`, `created_at`, `updated_at`, `config_id`, `published_at`
+- `cells/audit-core/internal/adapters/postgres/audit_repo.go` -- `id`, `event_id`, `event_type`, `actor_id`, `timestamp`, `payload`, `prev_hash`, `hash`
 
 **Status: COMPLIANT** -- All DB column names use snake_case as required.
 
@@ -121,23 +121,23 @@ All SQL queries use snake_case for column names. Verified in:
 
 | # | File | Line | Variable | Status |
 |---|------|------|----------|--------|
-| 1 | `src/adapters/postgres/pool.go` | 49 | `GOCELL_PG_DSN` | COMPLIANT |
-| 2 | `src/adapters/postgres/pool.go` | 55 | `GOCELL_PG_MAX_CONNS` | COMPLIANT |
-| 3 | `src/adapters/postgres/pool.go` | 60 | `GOCELL_PG_IDLE_TIMEOUT` | COMPLIANT |
-| 4 | `src/adapters/postgres/pool.go` | 65 | `GOCELL_PG_MAX_LIFETIME` | COMPLIANT |
-| 5 | `src/cmd/core-bundle/main.go` | 33 | `GOCELL_SIGNING_KEY` | COMPLIANT |
-| 6 | `src/cmd/core-bundle/main.go` | 34 | `GOCELL_HMAC_KEY` | COMPLIANT |
-| 7 | `src/cmd/core-bundle/main.go` | 37 | `GOCELL_ADAPTER_MODE` | COMPLIANT |
-| 8 | `src/adapters/s3/client.go` | 48 | `GOCELL_S3_ENDPOINT` | COMPLIANT |
-| 9 | `src/adapters/s3/client.go` | 49 | `GOCELL_S3_REGION` | COMPLIANT |
-| 10 | `src/adapters/s3/client.go` | 50 | `GOCELL_S3_BUCKET` | COMPLIANT |
-| 11 | `src/adapters/s3/client.go` | 51 | `GOCELL_S3_ACCESS_KEY` | COMPLIANT |
-| 12 | `src/adapters/s3/client.go` | 52 | `GOCELL_S3_SECRET_KEY` | COMPLIANT |
-| 13 | `src/adapters/s3/client.go` | 53 | `GOCELL_S3_USE_PATH_STYLE` | COMPLIANT |
+| 1 | `adapters/postgres/pool.go` | 49 | `GOCELL_PG_DSN` | COMPLIANT |
+| 2 | `adapters/postgres/pool.go` | 55 | `GOCELL_PG_MAX_CONNS` | COMPLIANT |
+| 3 | `adapters/postgres/pool.go` | 60 | `GOCELL_PG_IDLE_TIMEOUT` | COMPLIANT |
+| 4 | `adapters/postgres/pool.go` | 65 | `GOCELL_PG_MAX_LIFETIME` | COMPLIANT |
+| 5 | `cmd/core-bundle/main.go` | 33 | `GOCELL_SIGNING_KEY` | COMPLIANT |
+| 6 | `cmd/core-bundle/main.go` | 34 | `GOCELL_HMAC_KEY` | COMPLIANT |
+| 7 | `cmd/core-bundle/main.go` | 37 | `GOCELL_ADAPTER_MODE` | COMPLIANT |
+| 8 | `adapters/s3/client.go` | 48 | `GOCELL_S3_ENDPOINT` | COMPLIANT |
+| 9 | `adapters/s3/client.go` | 49 | `GOCELL_S3_REGION` | COMPLIANT |
+| 10 | `adapters/s3/client.go` | 50 | `GOCELL_S3_BUCKET` | COMPLIANT |
+| 11 | `adapters/s3/client.go` | 51 | `GOCELL_S3_ACCESS_KEY` | COMPLIANT |
+| 12 | `adapters/s3/client.go` | 52 | `GOCELL_S3_SECRET_KEY` | COMPLIANT |
+| 13 | `adapters/s3/client.go` | 53 | `GOCELL_S3_USE_PATH_STYLE` | COMPLIANT |
 
 Legacy S3_* fallback variables are documented as deprecated with slog.Warn -- acceptable.
 
-**Note (test file only, out of scope):** `src/adapters/postgres/pool_test.go:123` uses `PG_INTEGRATION` (no `GOCELL_` prefix). This is a test-only gate variable, not a production config. Not counted as a violation but noted for awareness.
+**Note (test file only, out of scope):** `adapters/postgres/pool_test.go:123` uses `PG_INTEGRATION` (no `GOCELL_` prefix). This is a test-only gate variable, not a production config. Not counted as a violation but noted for awareness.
 
 **Status: COMPLIANT** -- All production env vars use `GOCELL_*` prefix with SCREAMING_SNAKE_CASE.
 
@@ -168,7 +168,7 @@ The following dual-directory pairs exist:
 | 15 | config-core | `slices/config-subscribe/` | `slices/configsubscribe/` | YES |
 | 16 | config-core | `slices/feature-flag/` | `slices/featureflag/` | YES |
 
-Evidence: `src/cells/access-core/slices/` contains both `session-login/slice.yaml` and `sessionlogin/handler.go` as separate directories. Same pattern repeats across all three core Cells.
+Evidence: `cells/access-core/slices/` contains both `session-login/slice.yaml` and `sessionlogin/handler.go` as separate directories. Same pattern repeats across all three core Cells.
 
 Severity: P1 (naming-baseline 1.4 explicitly prohibits this; section 3 lists it as a required migration item)
 
@@ -181,15 +181,15 @@ Note: `device-cell` and `order-cell` do NOT have this problem -- they use a sing
 All error codes in scope follow `ERR_*` + SCREAMING_SNAKE_CASE format.
 
 Verified across:
-- `src/adapters/postgres/errors.go` -- `ERR_ADAPTER_PG_*`
-- `src/adapters/redis/client.go` -- `ERR_ADAPTER_REDIS_*`
-- `src/adapters/rabbitmq/connection.go` -- `ERR_ADAPTER_AMQP_*`
-- `src/adapters/s3/errors.go` -- `ERR_ADAPTER_S3_*`
-- `src/adapters/websocket/errors.go` -- `ERR_ADAPTER_WS_*`
-- `src/adapters/oidc/errors.go` -- `ERR_ADAPTER_OIDC_*`
-- `src/cells/access-core/` -- `ERR_AUTH_*`
-- `src/cells/audit-core/` -- `ERR_AUDIT_*`, `ERR_NOT_IMPLEMENTED`, `ERR_ARCHIVE_*`
-- `src/cells/config-core/` -- `ERR_CONFIG_*`, `ERR_FLAG_*`
+- `adapters/postgres/errors.go` -- `ERR_ADAPTER_PG_*`
+- `adapters/redis/client.go` -- `ERR_ADAPTER_REDIS_*`
+- `adapters/rabbitmq/connection.go` -- `ERR_ADAPTER_AMQP_*`
+- `adapters/s3/errors.go` -- `ERR_ADAPTER_S3_*`
+- `adapters/websocket/errors.go` -- `ERR_ADAPTER_WS_*`
+- `adapters/oidc/errors.go` -- `ERR_ADAPTER_OIDC_*`
+- `cells/access-core/` -- `ERR_AUTH_*`
+- `cells/audit-core/` -- `ERR_AUDIT_*`, `ERR_NOT_IMPLEMENTED`, `ERR_ARCHIVE_*`
+- `cells/config-core/` -- `ERR_CONFIG_*`, `ERR_FLAG_*`
 
 **Status: COMPLIANT**
 
@@ -211,7 +211,7 @@ Verified across:
 ### Action Items
 
 **P1 (should fix):**
-1. **Query parameters**: Change `event_type` -> `eventType` and `actor_id` -> `actorId` in `src/cells/audit-core/slices/auditquery/handler.go:29-30`. Update corresponding tests in `handler_test.go`.
+1. **Query parameters**: Change `event_type` -> `eventType` and `actor_id` -> `actorId` in `cells/audit-core/slices/auditquery/handler.go:29-30`. Update corresponding tests in `handler_test.go`.
 2. **Slice dual-directory consolidation**: Merge 16 dual-directory pairs so each slice has one canonical directory. Go code and slice.yaml must coexist in the kebab-case directory. The Go package name inside a `session-login/` directory should be `sessionlogin` (Go does not allow hyphens in package names, but the *directory* should be kebab-case). This is tracked in naming-baseline section 3 as a migration item.
 
 **P2 (suggestion):**

@@ -18,7 +18,7 @@ Phase 4 scope is well-bounded: examples, documentation, templates, and tech-debt
 
 ### A-01 | P0 | [Layer Architecture] access-core still couples JWT signing to `[]byte` signingKey -- RS256 migration will be a breaking change to Cell public API
 
-**Current state**: `AccessCore` struct in `/Users/shengming/Documents/code/gocell/src/cells/access-core/cell.go:90` stores `signingKey []byte`. The `WithSigningKey(key []byte)` Option at line 62 and all three slice constructors (`sessionlogin.NewService`, `sessionrefresh.NewService`, `sessionvalidate.NewService`) accept `[]byte signingKey` as a positional parameter (e.g. `sessionlogin/service.go:88`).
+**Current state**: `AccessCore` struct in `/Users/shengming/Documents/code/gocell/cells/access-core/cell.go:90` stores `signingKey []byte`. The `WithSigningKey(key []byte)` Option at line 62 and all three slice constructors (`sessionlogin.NewService`, `sessionrefresh.NewService`, `sessionvalidate.NewService`) accept `[]byte signingKey` as a positional parameter (e.g. `sessionlogin/service.go:88`).
 
 FR-7.1 requires `NewIssuer`/`NewVerifier` to default to RS256 and fail-fast without RSA key pair. FR-7.2 requires access-core to replace HS256 references with injected `auth.JWTIssuer` + `auth.JWTVerifier`.
 
@@ -31,7 +31,7 @@ FR-7.1 requires `NewIssuer`/`NewVerifier` to default to RS256 and fail-fast with
    - `WithSigningKey([]byte)` -> deprecated, replaced by `WithJWTIssuer(auth.JWTIssuer)` + `WithJWTVerifier(auth.JWTVerifier)`
    - Slice constructors should accept `auth.TokenIssuer` interface rather than raw key material
 2. Add a migration section documenting the signature changes for downstream consumers
-3. Provide `auth.GenerateTestKeyPair()` helper in `runtime/auth/keys.go` (the file already exists at `/Users/shengming/Documents/code/gocell/src/runtime/auth/keys.go`) to simplify test migration
+3. Provide `auth.GenerateTestKeyPair()` helper in `runtime/auth/keys.go` (the file already exists at `/Users/shengming/Documents/code/gocell/runtime/auth/keys.go`) to simplify test migration
 
 ---
 
@@ -79,17 +79,17 @@ A cleaner approach: Assembly.Start should validate that all L2+ cells have outbo
 
 ### A-04 | P1 | [Dependency Direction] examples/ using root `go.mod` risks coupling example code into the main module's dependency graph
 
-**Current state**: Assumption 6 in spec.md states "示例项目使用根目录 go.mod（module 路径 github.com/ghbvf/gocell），不创建独立 module". The root `go.mod` at `/Users/shengming/Documents/code/gocell/src/go.mod` currently has no testcontainers dependency or example-specific deps.
+**Current state**: Assumption 6 in spec.md states "示例项目使用根目录 go.mod（module 路径 github.com/ghbvf/gocell），不创建独立 module". The root `go.mod` at `/Users/shengming/Documents/code/gocell/go.mod` currently has no testcontainers dependency or example-specific deps.
 
 **Issue**: When FR-6.1 adds `testcontainers-go` to `go.mod`, this dependency becomes part of the main module. Any consumer doing `go get github.com/ghbvf/gocell` will transitively pull testcontainers and its Docker dependencies. Similarly, example-specific imports (if any) pollute the core module.
 
-Additionally, the `examples/` directory is under `src/` (based on the `.gitkeep` at `src/examples/.gitkeep`), meaning example Go files will participate in `go build ./...` from the `src/` directory. This is by design (FR-10.1 requires `go build ./examples/...` to pass), but it means example compilation errors block framework CI.
+Additionally, the `examples/` directory is under 项目根目录 (based on the `.gitkeep` at `examples/.gitkeep`), meaning example Go files will participate in `go build ./...` from the 项目根目录 directory. This is by design (FR-10.1 requires `go build ./examples/...` to pass), but it means example compilation errors block framework CI.
 
 **Impact analysis**: Medium. testcontainers is a test-only dependency (build-tagged), so normal consumers won't link it, but `go.sum` will include its hashes, and `go mod tidy` will pull its transitive deps. This is a common Go module design trade-off.
 
 **Suggested fix**:
 1. Use `//go:build integration` tags on all testcontainers test files (already specified in FR-10.2) -- this mitigates the compilation impact
-2. Consider adding a top-level `//go:build ignore` or separate `go.mod` for examples (`src/examples/go.mod` with `replace` directive pointing to parent). This keeps example deps isolated. However, this complicates the developer experience (multiple modules).
+2. Consider adding a top-level `//go:build ignore` or separate `go.mod` for examples (`examples/go.mod` with `replace` directive pointing to parent). This keeps example deps isolated. However, this complicates the developer experience (multiple modules).
 3. If staying with single module: Document explicitly that `go get` consumers should use `go install` or vendoring to avoid pulling test deps. Verify that `testcontainers-go` appears only in `go.mod` `require` with `// indirect` or under test-only imports.
 
 ---

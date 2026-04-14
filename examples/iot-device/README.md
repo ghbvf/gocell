@@ -39,7 +39,7 @@ The server starts on `:8083`.
 Start infrastructure services, then run the application:
 
 ```bash
-cd src/examples/iot-device
+cd examples/iot-device
 docker compose up -d
 cd ../..
 go run ./examples/iot-device

@@ -1,8 +1,8 @@
-# Isolated Architecture Review: `src/adapters/oidc`
+# Isolated Architecture Review: `adapters/oidc`
 
 ## Summary
 
-`src/adapters/oidc` is cleanly split into discovery, token exchange, JWKS verification, and UserInfo access, and the unit tests cover the main happy paths plus a few negative cases. The package is close to production-ready structurally, but there are two security-relevant gaps and one configuration contract drift that should be fixed before treating it as a stable authentication adapter.
+`adapters/oidc` is cleanly split into discovery, token exchange, JWKS verification, and UserInfo access, and the unit tests cover the main happy paths plus a few negative cases. The package is close to production-ready structurally, but there are two security-relevant gaps and one configuration contract drift that should be fixed before treating it as a stable authentication adapter.
 
 ## Findings
 
@@ -10,9 +10,9 @@
 
 **Evidence**
 
-- `Config` exposes `JWKSCacheTTL` and documents a 1-hour default in `src/adapters/oidc/config.go:21-39`.
-- `Verifier` stores `fetchAt` and the full JWKS, but `getKey()` only checks `keyCache` and never compares the current time against `JWKSCacheTTL` in `src/adapters/oidc/verifier.go:48-55, 155-176`.
-- `fetchJWKS()` sets `v.fetchAt = time.Now()` and repopulates `keyCache`, but nothing reads `fetchAt` afterward in `src/adapters/oidc/verifier.go:226-230`.
+- `Config` exposes `JWKSCacheTTL` and documents a 1-hour default in `adapters/oidc/config.go:21-39`.
+- `Verifier` stores `fetchAt` and the full JWKS, but `getKey()` only checks `keyCache` and never compares the current time against `JWKSCacheTTL` in `adapters/oidc/verifier.go:48-55, 155-176`.
+- `fetchJWKS()` sets `v.fetchAt = time.Now()` and repopulates `keyCache`, but nothing reads `fetchAt` afterward in `adapters/oidc/verifier.go:226-230`.
 
 **Impact**
 
@@ -26,8 +26,8 @@ Make cache hits age-aware. If `time.Since(fetchAt) >= JWKSCacheTTL`, force a ref
 
 **Evidence**
 
-- `Config.Validate()` only enforces `IssuerURL` and `ClientID` in `src/adapters/oidc/config.go:45-50`.
-- `ExchangeCode()` directly uses `ClientSecret` and `RedirectURL` in the token request body in `src/adapters/oidc/token.go:38-44`.
+- `Config.Validate()` only enforces `IssuerURL` and `ClientID` in `adapters/oidc/config.go:45-50`.
+- `ExchangeCode()` directly uses `ClientSecret` and `RedirectURL` in the token request body in `adapters/oidc/token.go:38-44`.
 - The configuration guide marks `clientSecret` and `redirectURL` as required in `docs/guides/adapter-config-reference.md:84-90`.
 
 **Impact**
@@ -42,7 +42,7 @@ Validate `ClientSecret` and `RedirectURL` up front, unless the adapter is intent
 
 **Evidence**
 
-- `fetchDiscovery()` only rejects an empty `issuer` field and then caches the document in `src/adapters/oidc/provider.go:69-123`.
+- `fetchDiscovery()` only rejects an empty `issuer` field and then caches the document in `adapters/oidc/provider.go:69-123`.
 - There is no equality check between `doc.Issuer` and `Config.IssuerURL` after discovery.
 
 **Impact**
@@ -62,4 +62,4 @@ Compare the discovered issuer with the configured issuer after normalizing trail
 
 - Ran `cd /Users/shengming/Documents/code/gocell/src && /opt/homebrew/bin/go test ./adapters/oidc/... -count=1`
 - Result: passed
-- Integration stubs in `src/adapters/oidc/integration_test.go` are `t.Skip(...)`, so verification here is limited to unit tests plus source/document review.
+- Integration stubs in `adapters/oidc/integration_test.go` are `t.Skip(...)`, so verification here is limited to unit tests plus source/document review.

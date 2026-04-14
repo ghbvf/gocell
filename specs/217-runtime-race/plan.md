@@ -38,7 +38,7 @@ That sequence is a `WaitGroup` misuse window even if the callback exits immediat
 
 ### 1. Add an internal reload gate
 
-Introduce an unexported helper in `src/runtime/bootstrap/` that provides:
+Introduce an unexported helper in `runtime/bootstrap/` that provides:
 
 - `TryEnter() bool`: admit a reload callback only while shutdown has not started.
 - `Leave()`: mark callback completion.
@@ -69,11 +69,11 @@ Update `docs/backlog.md` so the runtime race row reflects what this branch actua
 
 ## Files Expected To Change
 
-- `src/runtime/bootstrap/bootstrap.go`
-- `src/runtime/bootstrap/bootstrap_test.go`
-- `src/runtime/bootstrap/reload_gate.go` (new)
-- `src/runtime/eventbus/eventbus.go`
-- `src/runtime/eventbus/eventbus_test.go`
+- `runtime/bootstrap/bootstrap.go`
+- `runtime/bootstrap/bootstrap_test.go`
+- `runtime/bootstrap/reload_gate.go` (new)
+- `runtime/eventbus/eventbus.go`
+- `runtime/eventbus/eventbus_test.go`
 - `docs/backlog.md`
 
 ## Validation Plan

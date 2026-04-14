@@ -36,7 +36,7 @@
 | 交付物 | 路径 | 状态 |
 |--------|------|------|
 | README Getting Started（5 分钟快速开始 + 30 分钟教程） | `README.md` | DELIVERED |
-| 6 个项目模板（ADR、cell-design、contract-review、runbook、postmortem、grafana-dashboard） | `src/templates/` | DELIVERED |
+| 6 个项目模板（ADR、cell-design、contract-review、runbook、postmortem、grafana-dashboard） | `templates/` | DELIVERED |
 | CI 工作流（build/test/vet/validate/integration/coverage） | `.github/workflows/ci.yml` | DELIVERED |
 
 ### 2.3 Phase 3 必须修复项（8 项 INCLUDE）
@@ -105,27 +105,27 @@ Phase 4 正式记录以下为 v1.1 延迟项：7 个 kernel 子模块（webhook/
 
 ### 新增文件（主要）
 
-- `src/examples/sso-bff/` — SSO BFF 示例（main.go + docker-compose.yml + README.md）
-- `src/examples/todo-order/` — Todo Order 示例（main.go + docker-compose.yml + README.md）
-- `src/examples/iot-device/` — IoT Device 示例（main.go + docker-compose.yml + README.md）
-- `src/templates/` — 6 个项目模板（adr.md / cell-design.md / contract-review.md / runbook.md / postmortem.md / grafana-dashboard.json）
+- `examples/sso-bff/` — SSO BFF 示例（main.go + docker-compose.yml + README.md）
+- `examples/todo-order/` — Todo Order 示例（main.go + docker-compose.yml + README.md）
+- `examples/iot-device/` — IoT Device 示例（main.go + docker-compose.yml + README.md）
+- `templates/` — 6 个项目模板（adr.md / cell-design.md / contract-review.md / runbook.md / postmortem.md / grafana-dashboard.json）
 - `.github/workflows/ci.yml` — CI 工作流
-- `src/adapters/postgres/integration_test.go` — testcontainers 集成测试
-- `src/adapters/redis/integration_test.go` — testcontainers 集成测试
-- `src/adapters/rabbitmq/integration_test.go` — testcontainers 集成测试（含 outbox 全链路）
-- `src/runtime/auth/helpers.go` — MustGenerateTestKeyPair + LoadRSAKeyPairFromPEM
+- `adapters/postgres/integration_test.go` — testcontainers 集成测试
+- `adapters/redis/integration_test.go` — testcontainers 集成测试
+- `adapters/rabbitmq/integration_test.go` — testcontainers 集成测试（含 outbox 全链路）
+- `runtime/auth/helpers.go` — MustGenerateTestKeyPair + LoadRSAKeyPairFromPEM
 
 ### 主要变更文件
 
 - `README.md` — Getting Started（5 分钟 + 30 分钟教程）
-- `src/cells/access-core/cell.go` — RS256 Option 注入（WithJWTIssuer/WithJWTVerifier）
-- `src/cells/access-core/slices/sessionlogin/` — RS256 迁移
-- `src/cells/access-core/slices/sessionvalidate/` — RS256 迁移
-- `src/cells/access-core/slices/sessionrefresh/` — RS256 迁移
-- `src/cells/audit-core/cell.go` — outboxWriter fail-fast（ERR_CELL_MISSING_OUTBOX）
-- `src/cells/config-core/cell.go` — outboxWriter fail-fast（ERR_CELL_MISSING_OUTBOX）
-- `src/adapters/s3/config.go` — GOCELL_S3_* env prefix + legacy fallback + slog.Warn
-- `src/runtime/bootstrap/bootstrap.go` — WithEventBus Deprecated 注释
+- `cells/access-core/cell.go` — RS256 Option 注入（WithJWTIssuer/WithJWTVerifier）
+- `cells/access-core/slices/sessionlogin/` — RS256 迁移
+- `cells/access-core/slices/sessionvalidate/` — RS256 迁移
+- `cells/access-core/slices/sessionrefresh/` — RS256 迁移
+- `cells/audit-core/cell.go` — outboxWriter fail-fast（ERR_CELL_MISSING_OUTBOX）
+- `cells/config-core/cell.go` — outboxWriter fail-fast（ERR_CELL_MISSING_OUTBOX）
+- `adapters/s3/config.go` — GOCELL_S3_* env prefix + legacy fallback + slog.Warn
+- `runtime/bootstrap/bootstrap.go` — WithEventBus Deprecated 注释
 
 ### kernel/ 变更
 
@@ -172,9 +172,9 @@ Phase 4 完成后 GoCell v1.0 主干功能已完整。建议下一步：
 
 | 检查项 | 状态 | 证据 |
 |--------|------|------|
-| todo-order 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/src/examples/todo-order/README.md` |
-| sso-bff 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/src/examples/sso-bff/README.md` |
-| iot-device 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/src/examples/iot-device/README.md` |
+| todo-order 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/examples/todo-order/README.md` |
+| sso-bff 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/examples/sso-bff/README.md` |
+| iot-device 示例有独立 README.md | PASS | `/Users/shengming/Documents/code/gocell/examples/iot-device/README.md` |
 | 每个示例有 docker-compose.yml | PASS | 三个示例目录均含 docker-compose.yml |
 | sso-bff README curl sequence 完整 | PARTIAL | AC-8.3 已知 gap：缺少 refresh token / me endpoint / config-event curl（P4-TD 已记录） |
 

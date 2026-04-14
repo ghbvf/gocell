@@ -4,7 +4,7 @@
 |---------------|----------------------------------------------------|
 | Reviewer      | Kernel Guardian                                    |
 | Date          | 2026-04-06                                         |
-| Scope         | `src/kernel/metadata/` (~422 LOC prod), `src/kernel/registry/` (~185 LOC prod) |
+| Scope         | `kernel/metadata/` (~422 LOC prod), `kernel/registry/` (~185 LOC prod) |
 | Test coverage | metadata 97.1%, registry 100.0%                   |
 | go vet        | Clean (no warnings)                                |
 | All tests     | PASS                                               |

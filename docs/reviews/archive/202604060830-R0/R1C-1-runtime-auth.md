@@ -3,7 +3,7 @@
 | Field | Value |
 |-------|-------|
 | Reviewer | R1C-1 (Security + Architecture + Test combined) |
-| Scope | `src/runtime/auth/` -- 569 LOC prod, 736 LOC test (11 files) |
+| Scope | `runtime/auth/` -- 569 LOC prod, 736 LOC test (11 files) |
 | Baseline commit | `ce03ba1` (develop HEAD) |
 | Date | 2026-04-06 |
 
@@ -26,7 +26,7 @@ The `runtime/auth` module provides RS256 JWT issuing/verification, HMAC-SHA256 s
 | Seat | S1 Architecture + S5 DX |
 | Severity | P1 |
 | Category | Code duplication / naming collision |
-| File | `src/runtime/auth/jwt.go:54`, `src/pkg/errcode/errcode.go:24` |
+| File | `runtime/auth/jwt.go:54`, `pkg/errcode/errcode.go:24` |
 | Status | OPEN |
 
 **Evidence:**
@@ -54,7 +54,7 @@ Two distinct Go symbols (`auth.ErrAuthUnauthorized` and `errcode.ErrAuthUnauthor
 | Seat | S2 Security |
 | Severity | P1 |
 | Category | Key management |
-| File | `src/runtime/auth/keys.go:26-36`, `src/runtime/auth/jwt.go:24-26` |
+| File | `runtime/auth/keys.go:26-36`, `runtime/auth/jwt.go:24-26` |
 | Status | OPEN |
 
 **Evidence:**
@@ -72,7 +72,7 @@ Two distinct Go symbols (`auth.ErrAuthUnauthorized` and `errcode.ErrAuthUnauthor
 | Seat | S5 DX / S2 Security |
 | Severity | P1 |
 | Category | Error handling convention violation |
-| File | `src/runtime/auth/keys.go:82,90,101,109` |
+| File | `runtime/auth/keys.go:82,90,101,109` |
 | Status | OPEN |
 
 **Evidence:**
@@ -101,7 +101,7 @@ Project convention (CLAUDE.md): "errors exposed across package boundaries must u
 | Seat | S5 DX |
 | Severity | P2 |
 | Category | Error handling |
-| File | `src/runtime/auth/middleware.go:133` |
+| File | `runtime/auth/middleware.go:133` |
 | Status | OPEN |
 
 **Evidence:**
@@ -123,7 +123,7 @@ The blank identifier discards the encoding error. Per CLAUDE.md: "Prohibit `_ = 
 | Seat | S2 Security |
 | Severity | P2 |
 | Category | Auth bypass surface |
-| File | `src/runtime/auth/middleware.go:40` |
+| File | `runtime/auth/middleware.go:40` |
 | Status | OPEN |
 
 **Evidence:**
@@ -147,7 +147,7 @@ Additionally, there is no prefix-matching support for versioned API paths (e.g.,
 | Seat | S3 Test |
 | Severity | P2 |
 | Category | Test isolation / concurrency |
-| File | `src/runtime/auth/servicetoken.go:19` |
+| File | `runtime/auth/servicetoken.go:19` |
 | Status | OPEN |
 
 **Evidence:**
@@ -169,7 +169,7 @@ This exported-scope mutable variable is overridden in tests without synchronizat
 | Seat | S2 Security |
 | Severity | P2 |
 | Category | JWT lifecycle |
-| File | `src/runtime/auth/jwt.go` (entire file) |
+| File | `runtime/auth/jwt.go` (entire file) |
 | Status | OPEN |
 
 **Evidence:**
@@ -189,7 +189,7 @@ For short-lived tokens (the `ttl` parameter controls this), revocation is less c
 | Seat | S5 DX |
 | Severity | P2 |
 | Category | Naming consistency |
-| File | `src/runtime/auth/keys.go:46` vs `src/pkg/errcode/errcode.go:37` |
+| File | `runtime/auth/keys.go:46` vs `pkg/errcode/errcode.go:37` |
 | Status | OPEN |
 
 **Evidence:**

@@ -1,7 +1,7 @@
 # R1H-2 Go Naming Convention Review
 
 Reviewer: R1H-2 (Go Naming)
-Scope: `src/pkg/**/*.go`, `src/kernel/**/*.go`, `src/runtime/**/*.go` (excluding `_test.go`)
+Scope: `pkg/**/*.go`, `kernel/**/*.go`, `runtime/**/*.go` (excluding `_test.go`)
 Baseline: `docs/architecture/naming-baseline.md` section 1.6 + section 2.2
 Commit: ce03ba1 (HEAD of develop at review time)
 Date: 2026-04-06
@@ -92,7 +92,7 @@ No violations found.
 | Seat | R1H-2 Go Naming |
 | Severity | P2 |
 | Category | Naming / banned field |
-| File | `src/kernel/assembly/gentpl/boundary.yaml.tpl:4` |
+| File | `kernel/assembly/gentpl/boundary.yaml.tpl:4` |
 | Evidence | `assemblyId: {{.AssemblyID}}` |
 | Commit | ce03ba1 |
 | Status | OPEN |

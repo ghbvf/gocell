@@ -34,7 +34,7 @@
 
 ### B1. TOPO-03 未处理通配符 `"*"` — 产生误报
 
-**文件**: `src/kernel/governance/rules_topo.go:111`  
+**文件**: `kernel/governance/rules_topo.go:111`  
 **发现者**: Correctness / Go Idioms / Architecture 三个 reviewer 独立发现
 
 ```go
@@ -49,7 +49,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### B2. VERIFY-01 把无效 waiver 当作有效覆盖
 
-**文件**: `src/kernel/governance/rules_verify.go:29-35`  
+**文件**: `kernel/governance/rules_verify.go:29-35`  
 **发现者**: Correctness reviewer
 
 当 `expiresAt` 为空字符串时，`if w.ExpiresAt != ""` 为 false，waiver 不被跳过，直接加入 `waiverSet`——被视为"永远有效"的覆盖。但 VERIFY-02 独立报告该 waiver 缺失 `expiresAt`。结果矛盾：usage "已覆盖" + waiver "已损坏"。
@@ -62,7 +62,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### B3. FMT-08 静默跳过无 `.` 的 contract ID — 漏报
 
-**文件**: `src/kernel/governance/rules_fmt.go:213`  
+**文件**: `kernel/governance/rules_fmt.go:213`  
 **发现者**: Correctness reviewer
 
 `strings.SplitN(id, ".", 2)` 对 `"nodot"` 返回 1 个元素 → `continue` 跳过。ID 为 `"http"`（kind 也是 `"http"`）的 contract 会通过 FMT-08，且没有其他规则捕获格式不合法的 contract ID。
@@ -73,7 +73,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### B4. metadata parser: 省略 `belongsToCell` 导致 map key 损坏
 
-**文件**: `src/kernel/metadata/parser.go:130-136`  
+**文件**: `kernel/metadata/parser.go:130-136`  
 **发现者**: Metadata reviewer
 
 当 slice YAML 省略 `belongsToCell` 时（JSON schema 明确允许），parser 不从目录路径推断 cell ID，导致 map key 变为 `"/sliceID"` 而非 `"cellID/sliceID"`。下游所有按 key 查找 slice 的逻辑均会失败。
@@ -84,7 +84,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### B5. `CoreAssembly.Register()` 缺 mutex — 数据竞态
 
-**文件**: `src/kernel/assembly/assembly.go:56-67`  
+**文件**: `kernel/assembly/assembly.go:56-67`  
 **发现者**: Assembly reviewer
 
 `Start()` / `Stop()` 持锁，但 `Register()` 不持锁。并发调用 Register + Start 会竞争 `a.cells`（slice）和 `a.cellMap`（map）。
@@ -95,7 +95,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### B6. `slice/verify.go` 路径遍历 — cellID 含 `..` 可逃逸
 
-**文件**: `src/kernel/slice/verify.go:62`  
+**文件**: `kernel/slice/verify.go:62`  
 **发现者**: Slice reviewer
 
 `parseSliceKey` 仅检查空值。输入 `"../../etc/session-create"` 可通过校验，被拼入 `go test ./cells/../../etc/slices/session-create/...` 路径，逃逸出 `./cells/` 目录。
@@ -108,7 +108,7 @@ if len(consumers) > 0 && !containsString(consumers, s.BelongsToCell) {
 
 ### S1. governance REF-11/REF-12 `os.Stat` 路径遍历
 
-**文件**: `src/kernel/governance/rules_ref.go:254-255`（REF-11）, `308-309`（REF-12）  
+**文件**: `kernel/governance/rules_ref.go:254-255`（REF-11）, `308-309`（REF-12）  
 **发现者**: Security reviewer
 
 `build.entrypoint` 或 `schemaRefs` 含 `../../../etc/passwd` 时，`filepath.Join(repoRoot, entrypoint)` + `os.Stat` 可探测任意路径。错误消息泄露完整路径。
@@ -127,7 +127,7 @@ if !strings.HasPrefix(cleaned, filepath.Clean(expectedRoot) + string(os.PathSepa
 
 ### S2. Nil project 导致 panic
 
-**文件**: `src/kernel/governance/validate.go:51`  
+**文件**: `kernel/governance/validate.go:51`  
 **发现者**: Security reviewer
 
 `NewValidator(nil, ".")` → 所有规则立即 nil 指针崩溃。公共 API 无保障。

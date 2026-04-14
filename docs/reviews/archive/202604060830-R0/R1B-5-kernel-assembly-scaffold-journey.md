@@ -3,7 +3,7 @@
 **Reviewer**: R1B-5 Agent (Seats 1+3+5 composite)
 **Review Basis Commit**: ce03ba1 (develop HEAD)
 **Date**: 2026-04-06
-**Scope**: `src/kernel/assembly/`, `src/kernel/scaffold/`, `src/kernel/journey/`
+**Scope**: `kernel/assembly/`, `kernel/scaffold/`, `kernel/journey/`
 
 ---
 
@@ -28,7 +28,7 @@
 | Seat | S1 (Architecture) / S3 (Test) |
 | Severity | **P0** |
 | Category | Concurrency Safety |
-| File | `src/kernel/assembly/assembly.go:166-172` |
+| File | `kernel/assembly/assembly.go:166-172` |
 | Status | OPEN |
 
 **Evidence**:
@@ -57,7 +57,7 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 | Seat | S5 (DX/Maintainability) |
 | Severity | **P1** |
 | Category | Code Duplication / Cognitive Complexity |
-| File | `src/kernel/assembly/assembly.go:83-132` and `assembly.go:176-222` |
+| File | `kernel/assembly/assembly.go:83-132` and `assembly.go:176-222` |
 | Status | OPEN |
 
 **Evidence**: `Start(ctx)` (lines 83-132) and `StartWithConfig(ctx, cfgMap)` (lines 176-222) share identical logic for state-check, init loop, start loop with rollback, and state transition. The only difference is how `deps.Config` is populated -- `make(map[string]any)` vs the provided `cfgMap`.
@@ -73,7 +73,7 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 | Seat | S1 (Architecture) |
 | Severity | **P2** |
 | Category | Error Handling |
-| File | `src/kernel/assembly/assembly.go:140-163` |
+| File | `kernel/assembly/assembly.go:140-163` |
 | Status | OPEN |
 
 **Evidence**:
@@ -103,7 +103,7 @@ Subsequent stop errors are dropped entirely -- not logged, not joined. The fx re
 | Seat | S5 (DX/Maintainability) |
 | Severity | **P2** |
 | Category | Documentation / godoc |
-| File | `src/kernel/scaffold/doc.go:1-2` and `src/kernel/scaffold/templates.go:1-9` |
+| File | `kernel/scaffold/doc.go:1-2` and `kernel/scaffold/templates.go:1-9` |
 | Status | OPEN |
 
 **Evidence**:
@@ -141,7 +141,7 @@ Both files declare package-level doc comments. Go tooling picks one arbitrarily 
 | Seat | S1 (Architecture) / S3 (Test) |
 | Severity | **P1** |
 | Category | Missing Validation |
-| File | `src/kernel/journey/catalog.go:18-35` |
+| File | `kernel/journey/catalog.go:18-35` |
 | Status | OPEN |
 
 **Evidence**: `NewCatalog` accepts a `*metadata.ProjectMeta` and indexes journeys and status-board entries, but never validates:
@@ -162,7 +162,7 @@ The Catalog is purely a query layer. However, this means broken references silen
 | Seat | S5 (DX/Maintainability) |
 | Severity | **P2** |
 | Category | Naming Convention |
-| File | `src/kernel/assembly/gentpl/boundary.yaml.tpl:4` |
+| File | `kernel/assembly/gentpl/boundary.yaml.tpl:4` |
 | Status | OPEN |
 
 **Evidence**:
@@ -185,7 +185,7 @@ The project convention states: DB fields `snake_case`, JSON/Query/Path `camelCas
 | Seat | S1 (Architecture) |
 | Severity | **P2** |
 | Category | Template / Metadata Model Alignment |
-| File | `src/kernel/scaffold/templates/cell.yaml.tpl:12` |
+| File | `kernel/scaffold/templates/cell.yaml.tpl:12` |
 | Status | OPEN |
 
 **Evidence**:
@@ -210,7 +210,7 @@ Additionally, the template does not include a `lifecycle` field. Per CLAUDE.md, 
 | Seat | S5 (DX/Maintainability) |
 | Severity | **P2** |
 | Category | Documentation / godoc |
-| File | `src/kernel/assembly/doc.go:1-3` and `src/kernel/assembly/assembly.go:1-9` |
+| File | `kernel/assembly/doc.go:1-3` and `kernel/assembly/assembly.go:1-9` |
 | Status | OPEN |
 
 **Evidence**:
@@ -249,7 +249,7 @@ Dual package comments. `doc.go` mentions "resolves Cell dependency order" but th
 | Seat | S1 (Architecture) |
 | Severity | **P2** |
 | Category | Correctness |
-| File | `src/kernel/scaffold/scaffold.go:190-225` |
+| File | `kernel/scaffold/scaffold.go:190-225` |
 | Status | OPEN |
 
 **Evidence**:
@@ -275,7 +275,7 @@ There is a time-of-check-to-time-of-use (TOCTOU) gap: another process could crea
 | Seat | S3 (Test) |
 | Severity | **P2** |
 | Category | Concurrency Safety |
-| File | `src/kernel/journey/catalog.go` (entire file) |
+| File | `kernel/journey/catalog.go` (entire file) |
 | Status | OPEN |
 
 **Evidence**: The `Catalog` struct has no mutex and its maps (`journeys`, `statusBoard`) are only written during construction via `NewCatalog`. After construction, all methods are read-only. This is safe IF the Catalog is never modified after creation, which is the current design (no mutator methods exist). However, the struct fields are exported indirectly via returned `*metadata.JourneyMeta` pointers -- callers could mutate the data.
@@ -291,7 +291,7 @@ There is a time-of-check-to-time-of-use (TOCTOU) gap: another process could crea
 | Seat | S1 (Architecture) |
 | Severity | **P1** |
 | Category | Documentation Accuracy |
-| File | `src/kernel/assembly/doc.go:2` |
+| File | `kernel/assembly/doc.go:2` |
 | Status | OPEN |
 
 **Evidence**:
@@ -315,7 +315,7 @@ There is no dependency resolution in `CoreAssembly`. The `Start` method (line 10
 | Seat | S5 (DX/Maintainability) |
 | Severity | **P2** |
 | Category | Template Completeness |
-| File | `src/kernel/scaffold/templates/journey.yaml.tpl:9-10` |
+| File | `kernel/scaffold/templates/journey.yaml.tpl:9-10` |
 | Status | OPEN |
 
 **Evidence**:

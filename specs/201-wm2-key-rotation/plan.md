@@ -5,14 +5,14 @@
 
 ## Summary
 
-Extend `src/runtime/auth/` to support JWT key rotation via kid (key identifier) headers and HMAC secret rotation via a 2-position key ring. Currently, the module uses a single RSA key pair (no kid) and a single HMAC secret (no rotation). This plan adds:
+Extend `runtime/auth/` to support JWT key rotation via kid (key identifier) headers and HMAC secret rotation via a 2-position key ring. Currently, the module uses a single RSA key pair (no kid) and a single HMAC secret (no rotation). This plan adds:
 
 1. **KeySet** — holds 1 active signing key + N verification-only keys, with kid derived from RFC 7638 SHA-256 thumbprint. Adopts Dex's 3-state lifecycle (Active → Verification-only → Pruned).
 2. **HMACKeyRing** — ordered pair of secrets `[current, previous]` with try-all-keys verification. Adopts gorilla/go-zero positional model.
 3. **Updated JWTIssuer/JWTVerifier** — issue tokens with kid header, verify by kid-based key lookup.
 4. **Updated ServiceTokenMiddleware** — verify against key ring instead of single secret.
 
-All changes are in `src/runtime/auth/`. No new dependencies, no database changes, no new contracts.
+All changes are in `runtime/auth/`. No new dependencies, no database changes, no new contracts.
 
 ## Technical Context
 
@@ -76,7 +76,7 @@ specs/201-wm2-key-rotation/
 ### Source Code (repository root)
 
 ```text
-src/runtime/auth/
+runtime/auth/
 ├── auth.go              # (existing) Claims, TokenVerifier, Authorizer interfaces — no changes
 ├── middleware.go         # (existing) AuthMiddleware, RequireRole — no changes
 ├── keys.go              # (modify) Add KeySet, VerificationKey, LoadKeySetFromEnv, kid computation
@@ -87,7 +87,7 @@ src/runtime/auth/
 └── servicetoken_test.go # (modify) Tests for key ring verification, rotation scenarios
 ```
 
-**Structure Decision**: All changes are within the existing `src/runtime/auth/` package. No new packages, directories, or files beyond what exists. The feature extends existing types and functions.
+**Structure Decision**: All changes are within the existing `runtime/auth/` package. No new packages, directories, or files beyond what exists. The feature extends existing types and functions.
 
 ## Complexity Tracking
 

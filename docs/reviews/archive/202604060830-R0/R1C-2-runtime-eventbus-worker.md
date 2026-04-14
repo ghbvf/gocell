@@ -41,7 +41,7 @@
 ### R1C2-F01 | P1 | eventbus: Close() + Subscribe() race on channel read after close
 
 - **Seat**: S1 (Architecture), S3 (Test)
-- **File**: `src/runtime/eventbus/eventbus.go:138-148`, `src/runtime/eventbus/eventbus.go:152-168`
+- **File**: `runtime/eventbus/eventbus.go:138-148`, `runtime/eventbus/eventbus.go:152-168`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -71,7 +71,7 @@ However, the real risk is subtler: if a **new message** is sent to `sub.ch` by `
 ### R1C2-F02 | P1 | eventbus: Subscribe leaks subscription from subs map on exit
 
 - **Seat**: S1 (Architecture)
-- **File**: `src/runtime/eventbus/eventbus.go:118-149`
+- **File**: `runtime/eventbus/eventbus.go:118-149`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -105,7 +105,7 @@ defer func() {
 ### R1C2-F03 | P1 | worker: WorkerGroup.Start does not cancel remaining workers on first failure
 
 - **Seat**: S1 (Architecture)
-- **File**: `src/runtime/worker/worker.go:47-72`
+- **File**: `runtime/worker/worker.go:47-72`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -140,7 +140,7 @@ Alternatively, add a `CancelOnError bool` field to `WorkerGroup` to make this op
 ### R1C2-F04 | P1 | worker: PeriodicWorker missing compile-time interface check
 
 - **Seat**: S3 (Test), S5 (DX)
-- **File**: `src/runtime/worker/periodic.go`
+- **File**: `runtime/worker/periodic.go`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -160,7 +160,7 @@ var _ Worker = (*PeriodicWorker)(nil)
 ### R1C2-F05 | P1 | worker: PeriodicWorker.Stop is not safe against double-Start
 
 - **Seat**: S1 (Architecture)
-- **File**: `src/runtime/worker/periodic.go:18-52`
+- **File**: `runtime/worker/periodic.go:18-52`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -184,7 +184,7 @@ Option (b) introduces its own race if `Stop()` is called concurrently with `Star
 ### R1C2-F06 | P1 | eventbus: handleWithRetry uses time.After without jitter
 
 - **Seat**: S5 (DX/Maintainability)
-- **File**: `src/runtime/eventbus/eventbus.go:197-231`
+- **File**: `runtime/eventbus/eventbus.go:197-231`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -206,7 +206,7 @@ Or document clearly that production implementations must add jitter.
 ### R1C2-F07 | P2 | worker: WorkerGroup does not prevent Add after Start
 
 - **Seat**: S5 (DX/Maintainability)
-- **File**: `src/runtime/worker/worker.go:38-42`
+- **File**: `runtime/worker/worker.go:38-42`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -219,7 +219,7 @@ Or document clearly that production implementations must add jitter.
 ### R1C2-F08 | P2 | eventbus: doc.go and eventbus.go have different package doc comments
 
 - **Seat**: S5 (DX)
-- **File**: `src/runtime/eventbus/doc.go:1-4`, `src/runtime/eventbus/eventbus.go:1-8`
+- **File**: `runtime/eventbus/doc.go:1-4`, `runtime/eventbus/eventbus.go:1-8`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -232,7 +232,7 @@ Or document clearly that production implementations must add jitter.
 ### R1C2-F09 | P2 | worker: doc.go and worker.go have different package doc comments
 
 - **Seat**: S5 (DX)
-- **File**: `src/runtime/worker/doc.go:1-3`, `src/runtime/worker/worker.go:1-8`
+- **File**: `runtime/worker/doc.go:1-3`, `runtime/worker/worker.go:1-8`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -245,7 +245,7 @@ Or document clearly that production implementations must add jitter.
 ### R1C2-F10 | P2 | eventbus: DeadLetterLen uses Mutex instead of RWMutex for read-only operation
 
 - **Seat**: S5 (DX/Maintainability)
-- **File**: `src/runtime/eventbus/eventbus.go:182-186`
+- **File**: `runtime/eventbus/eventbus.go:182-186`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 
@@ -258,7 +258,7 @@ Or document clearly that production implementations must add jitter.
 ### R1C2-F11 | P2 | worker: WorkerGroup error handling loses context from multiple failures
 
 - **Seat**: S5 (DX)
-- **File**: `src/runtime/worker/worker.go:53-72`
+- **File**: `runtime/worker/worker.go:53-72`
 - **Commit**: `ce03ba1`
 - **Status**: OPEN
 

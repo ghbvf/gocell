@@ -8,7 +8,7 @@
 
 ### K-01 | P1 | `DistLock` documentation and implementation disagree on the actual contract
 
-- Files: `src/adapters/redis/doc.go`, `src/adapters/redis/distlock.go`
+- Files: `adapters/redis/doc.go`, `adapters/redis/distlock.go`
 - Evidence:
   - The new docs say callers should use `Lock.FenceToken()` for correctness-critical paths.
   - The code issues a fresh token per call, not per acquisition.
@@ -18,7 +18,7 @@
 
 ### K-02 | P1 | `DistLock` renewal still ignores caller cancellation
 
-- File: `src/adapters/redis/distlock.go`
+- File: `adapters/redis/distlock.go`
 - Evidence:
   - `Acquire(ctx, ...)` still does `context.WithCancel(context.Background())`.
   - The method comment still says renewal lasts until `Release()` or context cancellation.

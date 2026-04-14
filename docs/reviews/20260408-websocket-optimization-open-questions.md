@@ -2,20 +2,20 @@
 
 > Date: 2026-04-08
 > Status: Draft
-> Scope: `src/runtime/websocket/*`, `src/adapters/websocket/*`, spec alignment, test/debt follow-up
+> Scope: `runtime/websocket/*`, `adapters/websocket/*`, spec alignment, test/debt follow-up
 > Basis: source review, existing tests, `docs/tech-debt-registry.md`
 
 ## 1. Current Baseline
 
 The WebSocket module is split into two layers:
 
-- `src/runtime/websocket/*` owns the Hub lifecycle, connection registry, ping loop, broadcast/send API, and the `Conn` abstraction.
-- `src/adapters/websocket/*` binds the runtime contract to `nhooyr.io/websocket` and exposes `UpgradeHandler`.
+- `runtime/websocket/*` owns the Hub lifecycle, connection registry, ping loop, broadcast/send API, and the `Conn` abstraction.
+- `adapters/websocket/*` binds the runtime contract to `nhooyr.io/websocket` and exposes `UpgradeHandler`.
 
 Current strengths:
 
-1. The runtime/adapter boundary is clean: runtime depends on `Conn`, not on `nhooyr.io/websocket` directly (`src/runtime/websocket/conn.go:5-27`, `src/adapters/websocket/conn.go:17-80`).
-2. The Hub lifecycle is explicitly modeled with atomic states and a single shutdown path (`src/runtime/websocket/hub.go:13-27`, `src/runtime/websocket/hub.go:140-277`).
+1. The runtime/adapter boundary is clean: runtime depends on `Conn`, not on `nhooyr.io/websocket` directly (`runtime/websocket/conn.go:5-27`, `adapters/websocket/conn.go:17-80`).
+2. The Hub lifecycle is explicitly modeled with atomic states and a single shutdown path (`runtime/websocket/hub.go:13-27`, `runtime/websocket/hub.go:140-277`).
 3. Current package tests are green: `go test ./runtime/websocket ./adapters/websocket`.
 
 Current limitation:
@@ -33,7 +33,7 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: High
 - Category: Security / Boundary
 - Evidence:
-  - `src/adapters/websocket/handler.go:34-39`
+  - `adapters/websocket/handler.go:34-39`
 - Problem:
   - When `AllowedOrigins` is empty, the handler explicitly enables `InsecureSkipVerify`, which turns the zero-value configuration into "accept all origins".
 - Recommended action:
@@ -50,8 +50,8 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Category: Product / Security / Contract
 - Evidence:
   - Spec says connections are identified by `connectionID + userID` (`specs/feat/002-phase3-adapters/spec.md:91-94`).
-  - Runtime currently indexes only by `conn.ID()` (`src/runtime/websocket/hub.go:306-316`, `src/runtime/websocket/hub.go:423-433`).
-  - Upgrade path currently generates only a random `connID` (`src/adapters/websocket/handler.go:52-57`).
+  - Runtime currently indexes only by `conn.ID()` (`runtime/websocket/hub.go:306-316`, `runtime/websocket/hub.go:423-433`).
+  - Upgrade path currently generates only a random `connID` (`adapters/websocket/handler.go:52-57`).
 - Problem:
   - The code has no built-in user/session binding model, so any auth/routing semantics must be implemented ad hoc by callers.
 - Recommended action:
@@ -66,7 +66,7 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: High
 - Category: Correctness / Resilience
 - Evidence:
-  - `readLoop` reads frames and calls `h.handler` inline on the same goroutine (`src/runtime/websocket/hub.go:452-463`).
+  - `readLoop` reads frames and calls `h.handler` inline on the same goroutine (`runtime/websocket/hub.go:452-463`).
 - Problem:
   - A slow handler blocks the only reader for that connection.
   - A panic in the handler can escape the goroutine boundary and take down the process.
@@ -83,9 +83,9 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: High
 - Category: Spec / Maintenance
 - Evidence:
-  - Code default ping timeout is `5s` (`src/runtime/websocket/hub.go:22-27`).
+  - Code default ping timeout is `5s` (`runtime/websocket/hub.go:22-27`).
   - Spec documents WebSocket pong timeout as `10s` (`specs/feat/002-phase3-adapters/spec.md:451-452`).
-  - Spec also mentions signal-first mode and subprotocol negotiation (`specs/feat/002-phase3-adapters/spec.md:91-94`), but these are not enforced or exposed in the current API (`src/runtime/websocket/hub.go:396-433`, `src/adapters/websocket/handler.go:14-25`).
+  - Spec also mentions signal-first mode and subprotocol negotiation (`specs/feat/002-phase3-adapters/spec.md:91-94`), but these are not enforced or exposed in the current API (`runtime/websocket/hub.go:396-433`, `adapters/websocket/handler.go:14-25`).
 - Problem:
   - The module has already drifted from the documented contract.
 - Recommended action:
@@ -102,8 +102,8 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Category: Protocol / Product
 - Evidence:
   - Spec requires subprotocol negotiation (`specs/feat/002-phase3-adapters/spec.md:93`).
-  - `UpgradeConfig` currently exposes only `AllowedOrigins` (`src/adapters/websocket/handler.go:14-19`).
-  - `websocket.AcceptOptions` is created but no subprotocols are configured (`src/adapters/websocket/handler.go:32-41`).
+  - `UpgradeConfig` currently exposes only `AllowedOrigins` (`adapters/websocket/handler.go:14-19`).
+  - `websocket.AcceptOptions` is created but no subprotocols are configured (`adapters/websocket/handler.go:32-41`).
 - Problem:
   - The product contract promises a capability that the adapter does not currently expose.
 - Recommended action:
@@ -117,8 +117,8 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: DX / Observability
 - Evidence:
-  - `Register` creates each connection context from `context.Background()` (`src/runtime/websocket/hub.go:313-316`).
-  - `MessageHandler` receives that derived context (`src/runtime/websocket/hub.go:452-463`).
+  - `Register` creates each connection context from `context.Background()` (`runtime/websocket/hub.go:313-316`).
+  - `MessageHandler` receives that derived context (`runtime/websocket/hub.go:452-463`).
   - Current registry already tracks this as open debt (`docs/tech-debt-registry.md:162-163`, `WS-DX-01`).
 - Problem:
   - Request ID, tracing, subject, or handshake metadata do not flow into message handling.
@@ -133,7 +133,7 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: DX / Operations
 - Evidence:
-  - Connection logs mostly emit opaque `conn_id` values (`src/runtime/websocket/hub.go:253-256`, `src/runtime/websocket/hub.go:323-329`, `src/adapters/websocket/handler.go:58-66`).
+  - Connection logs mostly emit opaque `conn_id` values (`runtime/websocket/hub.go:253-256`, `runtime/websocket/hub.go:323-329`, `adapters/websocket/handler.go:58-66`).
   - Current registry also flags missing remote-address support (`docs/tech-debt-registry.md:163-164`, `WS-DX-02`).
 - Problem:
   - Debugging live connection issues is harder than it needs to be.
@@ -148,9 +148,9 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: Correctness / Backpressure
 - Evidence:
-  - `Conn.Write` uses a hard-coded `10s` timeout (`src/adapters/websocket/conn.go:15`, `src/adapters/websocket/conn.go:63-69`).
-  - `Broadcast` logs write failures but does not evict the connection (`src/runtime/websocket/hub.go:406-419`).
-  - `Send` returns the error but leaves cleanup policy to the caller (`src/runtime/websocket/hub.go:423-433`).
+  - `Conn.Write` uses a hard-coded `10s` timeout (`adapters/websocket/conn.go:15`, `adapters/websocket/conn.go:63-69`).
+  - `Broadcast` logs write failures but does not evict the connection (`runtime/websocket/hub.go:406-419`).
+  - `Send` returns the error but leaves cleanup policy to the caller (`runtime/websocket/hub.go:423-433`).
 - Problem:
   - The system has no explicit policy for when a write-failing or timing-out connection should be removed.
 - Recommended action:
@@ -166,7 +166,7 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: Performance / Operations
 - Evidence:
-  - `Broadcast` snapshots connections and spawns one goroutine per connection before waiting for all sends to finish (`src/runtime/websocket/hub.go:398-419`).
+  - `Broadcast` snapshots connections and spawns one goroutine per connection before waiting for all sends to finish (`runtime/websocket/hub.go:398-419`).
 - Problem:
   - This is fine at small scale, but becomes expensive once connection counts grow.
 - Recommended action:
@@ -180,8 +180,8 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: Performance / Health Checking
 - Evidence:
-  - `pingAll` snapshots the map and then pings each connection sequentially (`src/runtime/websocket/hub.go:480-525`).
-  - The default ping interval is `30s` and timeout is `5s` (`src/runtime/websocket/hub.go:22-27`, `src/runtime/websocket/hub.go:47-53`).
+  - `pingAll` snapshots the map and then pings each connection sequentially (`runtime/websocket/hub.go:480-525`).
+  - The default ping interval is `30s` and timeout is `5s` (`runtime/websocket/hub.go:22-27`, `runtime/websocket/hub.go:47-53`).
 - Problem:
   - Sequential sweeps can become long-running as connection counts grow, which makes health-check cost linear in connection count.
 - Recommended action:
@@ -195,9 +195,9 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Priority: Medium
 - Category: Operations / Config
 - Evidence:
-  - External-cancel shutdown uses a hard-coded `10s` timeout (`src/runtime/websocket/hub.go:26`, `src/runtime/websocket/hub.go:178-183`).
+  - External-cancel shutdown uses a hard-coded `10s` timeout (`runtime/websocket/hub.go:26`, `runtime/websocket/hub.go:178-183`).
   - Tech-debt already tracks this (`docs/tech-debt-registry.md:159-160`, `WS-OPS-01`).
-  - Current shutdown also closes entries synchronously one by one (`src/runtime/websocket/hub.go:241-258`), with a note that high connection counts may later need concurrent close (`docs/tech-debt-registry.md:160-161`, `WS-OPS-02`).
+  - Current shutdown also closes entries synchronously one by one (`runtime/websocket/hub.go:241-258`), with a note that high connection counts may later need concurrent close (`docs/tech-debt-registry.md:160-161`, `WS-OPS-02`).
 - Problem:
   - Timeout and close strategy are currently implementation details instead of deployment knobs.
 - Recommended action:
@@ -214,13 +214,13 @@ This section captures the items that can be scheduled as concrete follow-up work
 - Category: Testing / Confidence
 - Evidence:
   - Tech-debt already lists missing `Stop + external cancel` concurrency coverage and stopped-hub send/broadcast coverage (`docs/tech-debt-registry.md:156-158`, `WS-T-01`, `WS-T-02`).
-  - Current tests cover many lifecycle cases (`src/runtime/websocket/hub_test.go:145-230`, `src/runtime/websocket/hub_test.go:424-478`, `src/runtime/websocket/hub_test.go:761-949`) but still do not verify:
+  - Current tests cover many lifecycle cases (`runtime/websocket/hub_test.go:145-230`, `runtime/websocket/hub_test.go:424-478`, `runtime/websocket/hub_test.go:761-949`) but still do not verify:
     - origin allow/deny behavior,
     - read limit rejection behavior,
     - subprotocol negotiation,
     - handler panic/blocking containment,
     - stopped-hub `Broadcast` semantics.
-  - Adapter tests still guard around local TCP availability (`src/adapters/websocket/handler_test.go:37-43`).
+  - Adapter tests still guard around local TCP availability (`adapters/websocket/handler_test.go:37-43`).
 - Recommended action:
   1. Add explicit allow/deny origin tests.
   2. Add at least one read-limit enforcement test against the real adapter.
@@ -240,7 +240,7 @@ These questions should be answered before some of the optimizations above are im
   - A generic Hub should stay minimal and avoid baking in auth, routing, and message semantics.
   - A product gateway should own identity, protocol versioning, and signal conventions.
 - Relevant evidence:
-  - The runtime API is generic (`src/runtime/websocket/conn.go:12-27`, `src/runtime/websocket/hub.go:396-433`).
+  - The runtime API is generic (`runtime/websocket/conn.go:12-27`, `runtime/websocket/hub.go:396-433`).
   - The spec is more product-opinionated (`specs/feat/002-phase3-adapters/spec.md:91-94`).
 
 ### WS-Q-02: What is the canonical connection identity model?
@@ -252,7 +252,7 @@ These questions should be answered before some of the optimizations above are im
   - `userID + deviceID + connID`
 - Relevant evidence:
   - The spec already assumes user-aware identity (`specs/feat/002-phase3-adapters/spec.md:91`).
-  - The implementation does not (`src/runtime/websocket/hub.go:306-316`, `src/adapters/websocket/handler.go:54-57`).
+  - The implementation does not (`runtime/websocket/hub.go:306-316`, `adapters/websocket/handler.go:54-57`).
 
 ### WS-Q-03: Which authentication modes must the handshake support?
 
@@ -270,7 +270,7 @@ These questions should be answered before some of the optimizations above are im
   - If yes, strict origin validation must be the default.
   - If no, the adapter can optimize for server-to-server or internal tooling clients.
 - Relevant evidence:
-  - Current zero-value origin behavior is permissive (`src/adapters/websocket/handler.go:34-39`).
+  - Current zero-value origin behavior is permissive (`adapters/websocket/handler.go:34-39`).
 
 ### WS-Q-05: Does the product need negotiated subprotocols or only one internal protocol?
 
@@ -285,7 +285,7 @@ These questions should be answered before some of the optimizations above are im
   - low thousands
   - 10k+
 - Why it matters:
-  - It directly affects whether the current broadcast, ping, and shutdown implementations are sufficient (`src/runtime/websocket/hub.go:241-258`, `src/runtime/websocket/hub.go:398-419`, `src/runtime/websocket/hub.go:480-525`).
+  - It directly affects whether the current broadcast, ping, and shutdown implementations are sufficient (`runtime/websocket/hub.go:241-258`, `runtime/websocket/hub.go:398-419`, `runtime/websocket/hub.go:480-525`).
 
 ### WS-Q-07: What outbound delivery semantics are required?
 
@@ -300,7 +300,7 @@ These questions should be answered before some of the optimizations above are im
 
 - Relevant evidence:
   - The spec says the Hub should default to lightweight refresh signals (`specs/feat/002-phase3-adapters/spec.md:92`).
-  - The runtime API accepts arbitrary `[]byte` payloads and does not enforce message shape (`src/runtime/websocket/hub.go:396-433`).
+  - The runtime API accepts arbitrary `[]byte` payloads and does not enforce message shape (`runtime/websocket/hub.go:396-433`).
 - Why it matters:
   - If signal-first is a real product invariant, the runtime should probably own part of the message envelope or publishing API.
 
@@ -311,7 +311,7 @@ These questions should be answered before some of the optimizations above are im
   - Do we need remote address, user ID, auth method, and disconnect reason in logs?
   - Do we need active-connection, ping-failure, and send-failure metrics?
 - Why it matters:
-  - It determines whether the current `Conn` interface and per-connection context are sufficient (`src/runtime/websocket/conn.go:12-27`, `src/runtime/websocket/hub.go:313-316`).
+  - It determines whether the current `Conn` interface and per-connection context are sufficient (`runtime/websocket/conn.go:12-27`, `runtime/websocket/hub.go:313-316`).
 
 ## 4. Suggested Execution Order
 

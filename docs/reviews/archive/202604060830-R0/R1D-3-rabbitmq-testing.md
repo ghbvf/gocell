@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S3 Test / QA |
-| Scope | `src/adapters/rabbitmq/` unit + integration tests |
+| Scope | `adapters/rabbitmq/` unit + integration tests |
 | Review basis commit | `5096d4f` |
 | Date | 2026-04-06 |
 | Verification mode | Unit tests executed via `/opt/homebrew/bin/go`; integration-tag suite not executed |
@@ -34,10 +34,10 @@ Observed local verification:
 ### F-01 [P0] No test proves DLQ publish failure preserves the original message
 
 **Files**:
-- `src/adapters/rabbitmq/consumer_base.go:163-173`
-- `src/adapters/rabbitmq/consumer_base.go:205-212`
-- `src/adapters/rabbitmq/rabbitmq_test.go:940-1002`
-- `src/adapters/rabbitmq/integration_test.go:147-234`
+- `adapters/rabbitmq/consumer_base.go:163-173`
+- `adapters/rabbitmq/consumer_base.go:205-212`
+- `adapters/rabbitmq/rabbitmq_test.go:940-1002`
+- `adapters/rabbitmq/integration_test.go:147-234`
 
 **Evidence**:
 
@@ -72,10 +72,10 @@ Add one unit test with a failing mock publisher and one integration-style test t
 ### F-02 [P0] No end-to-end test covers `ConsumerBase + Subscriber` shutdown/cancel interaction
 
 **Files**:
-- `src/adapters/rabbitmq/consumer_base.go:155-159`
-- `src/adapters/rabbitmq/subscriber.go:197-208`
-- `src/adapters/rabbitmq/rabbitmq_test.go:741-781`
-- `src/adapters/rabbitmq/rabbitmq_test.go:1051-1071`
+- `adapters/rabbitmq/consumer_base.go:155-159`
+- `adapters/rabbitmq/subscriber.go:197-208`
+- `adapters/rabbitmq/rabbitmq_test.go:741-781`
+- `adapters/rabbitmq/rabbitmq_test.go:1051-1071`
 
 **Evidence**:
 
@@ -112,9 +112,9 @@ Add an integration-style unit test that wires `Subscriber.processDelivery()` to 
 ### F-03 [P1] Reconnect logic is barely tested
 
 **Files**:
-- `src/adapters/rabbitmq/connection.go:187-259`
-- `src/adapters/rabbitmq/rabbitmq_test.go:315-438`
-- `src/adapters/rabbitmq/integration_test.go:236-250`
+- `adapters/rabbitmq/connection.go:187-259`
+- `adapters/rabbitmq/rabbitmq_test.go:315-438`
+- `adapters/rabbitmq/integration_test.go:236-250`
 
 **Evidence**:
 
@@ -139,8 +139,8 @@ Add mock-dial tests for disconnect and re-dial behavior, then add one real-broke
 ### F-04 [P1] Subscribe setup failure matrix is uncovered
 
 **Files**:
-- `src/adapters/rabbitmq/subscriber.go:90-123`
-- `src/adapters/rabbitmq/rabbitmq_test.go:639-848`
+- `adapters/rabbitmq/subscriber.go:90-123`
+- `adapters/rabbitmq/rabbitmq_test.go:639-848`
 
 **Evidence**:
 
@@ -166,11 +166,11 @@ Extend `mockChannel` with failure injection for each setup call and add table-dr
 ### F-05 [P2] Some tests overstate their coverage and rely on fixed sleeps
 
 **Files**:
-- `src/adapters/rabbitmq/integration_test.go:147-234`
-- `src/adapters/rabbitmq/integration_test.go:183-184`
-- `src/adapters/rabbitmq/rabbitmq_test.go:675-677`
-- `src/adapters/rabbitmq/rabbitmq_test.go:726-727`
-- `src/adapters/rabbitmq/rabbitmq_test.go:769-770`
+- `adapters/rabbitmq/integration_test.go:147-234`
+- `adapters/rabbitmq/integration_test.go:183-184`
+- `adapters/rabbitmq/rabbitmq_test.go:675-677`
+- `adapters/rabbitmq/rabbitmq_test.go:726-727`
+- `adapters/rabbitmq/rabbitmq_test.go:769-770`
 
 **Evidence**:
 

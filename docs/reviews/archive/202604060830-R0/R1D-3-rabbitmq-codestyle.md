@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S5 DX/Maintainability |
-| Scope | `src/adapters/rabbitmq/*.go` (7 files: doc.go, connection.go, publisher.go, subscriber.go, consumer_base.go, rabbitmq_test.go, integration_test.go) |
+| Scope | `adapters/rabbitmq/*.go` (7 files: doc.go, connection.go, publisher.go, subscriber.go, consumer_base.go, rabbitmq_test.go, integration_test.go) |
 | Review Basis Commit | `ce03ba1` (develop HEAD) |
 | Date | 2026-04-06 |
 

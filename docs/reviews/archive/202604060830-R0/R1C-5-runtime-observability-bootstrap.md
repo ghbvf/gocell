@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer | R1C-5 Agent (Seats 1/3/4/5 composite) |
-| Scope | `src/runtime/observability/{logging,metrics,tracing}/`, `src/runtime/bootstrap/` |
+| Scope | `runtime/observability/{logging,metrics,tracing}/`, `runtime/bootstrap/` |
 | Baseline commit | ce03ba1 (develop HEAD) |
 | Date | 2026-04-06 |
 | LOC reviewed | ~780 (bootstrap 357, logging 105, metrics 177, tracing 116, tests ~370) |
@@ -20,7 +20,7 @@ The observability and bootstrap modules form the lifecycle backbone of GoCell. T
 
 ### F-01 [Seat 5: DX/Maintainability] P1 -- bootstrap.Run() cognitive complexity exceeds limit
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/bootstrap/bootstrap.go` lines 158-356
+**File:** `/Users/shengming/Documents/code/gocell/runtime/bootstrap/bootstrap.go` lines 158-356
 
 **Evidence:** The `Run()` function is 198 lines long with 10 sequential lifecycle steps, nested closures (rollback, watcher callback), multiple select branches, and inline teardown registration. SonarCloud flags CC=57 against a limit of 15.
 
@@ -40,7 +40,7 @@ Each function returns its own teardown closures. This would reduce Run() to ~30 
 
 ### F-02 [Seat 3: Test/Regression] P1 -- No integration test for bootstrap.Run() happy path
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/bootstrap/bootstrap_test.go`
+**File:** `/Users/shengming/Documents/code/gocell/runtime/bootstrap/bootstrap_test.go`
 
 **Evidence:** The test file has 11 test functions. `TestBootstrap_RunContextCancel` (line 137) immediately cancels the context and does not assert on the result (`_ = err`). The remaining tests only exercise option setters and assembly internals -- they never test a complete Run() that successfully starts and shuts down.
 
@@ -72,7 +72,7 @@ func TestBootstrap_RunHappyPath(t *testing.T) {
 
 ### F-03 [Seat 5: DX/Maintainability] P1 -- metrics.metricsRecorder duplicates pkg/httputil.StatusRecorder
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics.go` lines 148-169
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics.go` lines 148-169
 
 **Evidence:** `metricsRecorder` (lines 148-169) implements `WriteHeader` and `Write` to capture status codes -- the exact same responsibility as `pkg/httputil.StatusRecorder` (lines 66-83 in `response.go`). The tracing middleware already uses `httputil.NewStatusRecorder`.
 
@@ -89,10 +89,10 @@ collector.RecordRequest(r.Method, r.URL.Path, rec.Status, duration)
 
 ### F-04 [Seat 1: Architecture] P1 -- Tracing middleware exists but is never wired into router or bootstrap
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/tracing/tracing.go` lines 92-108
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/http/router/router.go` lines 71-79
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/tracing/tracing.go` lines 92-108
+**File:** `/Users/shengming/Documents/code/gocell/runtime/http/router/router.go` lines 71-79
 
-**Evidence:** `tracing.Middleware(tracer)` is a fully implemented HTTP middleware (line 95). However, `router.New()` (line 62) only wires `RequestID, RealIP, Recovery, AccessLog, SecurityHeaders, BodyLimit` and optionally metrics middleware. There is no `WithTracer` option on the router. A grep for `tracing.Middleware` or `tracing.NewTracer` across all of `src/runtime/` returns zero results.
+**Evidence:** `tracing.Middleware(tracer)` is a fully implemented HTTP middleware (line 95). However, `router.New()` (line 62) only wires `RequestID, RealIP, Recovery, AccessLog, SecurityHeaders, BodyLimit` and optionally metrics middleware. There is no `WithTracer` option on the router. A grep for `tracing.Middleware` or `tracing.NewTracer` across all of `runtime/` returns zero results.
 
 **Description:** Without tracing middleware in the default chain, trace_id and span_id are never injected into the request context for production traffic. The logging handler (`contextHandler`) correctly extracts these from context, but they will always be empty. This renders the entire tracing package effectively dead in production.
 
@@ -102,7 +102,7 @@ collector.RecordRequest(r.Method, r.URL.Path, rec.Status, duration)
 
 ### F-05 [Seat 5: DX/Maintainability] P2 -- Dead code: `metricsText` function never called
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics.go` lines 173-176
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics.go` lines 173-176
 
 **Evidence:** `metricsText` is an unexported function. A project-wide grep for `metricsText` returns only its definition (line 173) and its doc comment (line 171). It is never called from any code or test.
 
@@ -114,7 +114,7 @@ collector.RecordRequest(r.Method, r.URL.Path, rec.Status, duration)
 
 ### F-06 [Seat 5: DX/Maintainability] P2 -- metrics.Handler() uses fragile Sscanf to reverse-parse composite key
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics.go` line 114
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics.go` line 114
 
 **Evidence:**
 ```go
@@ -130,7 +130,7 @@ The key format is `"METHOD /path STATUS"` (built by `metricKey` on line 47). The
 
 ### F-07 [Seat 3: Test/Regression] P2 -- metrics.Handler() JSON encoding error silenced
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics.go` line 125
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics.go` line 125
 
 **Evidence:**
 ```go
@@ -150,7 +150,7 @@ if err := json.NewEncoder(w).Encode(...); err != nil {
 
 ### F-08 [Seat 3: Test/Regression] P2 -- tracing.generateID silences rand.Read error
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/tracing/tracing.go` line 113
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/tracing/tracing.go` line 113
 
 **Evidence:**
 ```go
@@ -169,7 +169,7 @@ Or equivalently use `crypto/rand.Read` with a comment explaining the guarantee.
 
 ### F-09 [Seat 1: Architecture] P2 -- bootstrap imports runtime/eventbus concrete type in WithEventBus
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/bootstrap/bootstrap.go` lines 87-92
+**File:** `/Users/shengming/Documents/code/gocell/runtime/bootstrap/bootstrap.go` lines 87-92
 
 **Evidence:**
 ```go
@@ -185,7 +185,7 @@ This option accepts a concrete `*eventbus.InMemoryEventBus`, creating a hard cou
 
 ### F-10 [Seat 5: DX/Maintainability] P2 -- Snapshot field name DurationSumsMs stores microseconds, displays milliseconds
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics.go` lines 28, 89
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics.go` lines 28, 89
 
 **Evidence:**
 ```go
@@ -204,7 +204,7 @@ Internally, `durations` stores microseconds (line 73: `int64(durationSeconds * 1
 
 ### F-11 [Seat 1: Architecture] P2 -- router.WithMetricsCollector accepts concrete InMemoryCollector, not Collector interface
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/http/router/router.go` line 36
+**File:** `/Users/shengming/Documents/code/gocell/runtime/http/router/router.go` line 36
 
 **Evidence:**
 ```go
@@ -220,7 +220,7 @@ The `Collector` interface exists (metrics.go line 18) but `WithMetricsCollector`
 
 ### F-12 [Seat 3: Test/Regression] P2 -- logging tests do not cover WithGroup
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/logging/logging_test.go`
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/logging/logging_test.go`
 
 **Evidence:** The `contextHandler.WithGroup` method is implemented (logging.go line 84) but no test covers it. The existing tests cover `WithAttrs` (line 100) but not `WithGroup`.
 
@@ -232,7 +232,7 @@ The `Collector` interface exists (metrics.go line 18) but `WithMetricsCollector`
 
 ### F-13 [Seat 3: Test/Regression] P2 -- No concurrency test for InMemoryCollector
 
-**File:** `/Users/shengming/Documents/code/gocell/src/runtime/observability/metrics/metrics_test.go`
+**File:** `/Users/shengming/Documents/code/gocell/runtime/observability/metrics/metrics_test.go`
 
 **Evidence:** The `InMemoryCollector` uses `sync.RWMutex` with a double-check locking pattern and `atomic.Int64` (metrics.go lines 51-74), indicating it is designed for concurrent use. However, no test exercises concurrent access (e.g., `t.Parallel()` with multiple goroutines calling `RecordRequest`).
 

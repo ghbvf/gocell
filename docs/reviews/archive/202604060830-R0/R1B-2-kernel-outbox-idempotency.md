@@ -2,7 +2,7 @@
 
 **Reviewer**: Kernel Guardian  
 **Date**: 2026-04-06  
-**Scope**: `src/kernel/outbox/` (3 files, ~65 LOC prod) + `src/kernel/idempotency/` (3 files, ~22 LOC prod)  
+**Scope**: `kernel/outbox/` (3 files, ~65 LOC prod) + `kernel/idempotency/` (3 files, ~22 LOC prod)  
 **Role**: Interface sufficiency for L2/L3 consistency semantics, dependency compliance, type safety
 
 ---
@@ -26,7 +26,7 @@ Both packages are pure interface/type definitions with zero external dependencie
 
 **Imports**: `context`, `time` -- standard library only.
 
-Evidence: Lines 7-9 of `src/kernel/outbox/outbox.go`:
+Evidence: Lines 7-9 of `kernel/outbox/outbox.go`:
 ```go
 import (
     "context"
@@ -40,7 +40,7 @@ No imports of `runtime/`, `adapters/`, `cells/`, `pkg/`. Fully compliant with ke
 
 **Imports**: `context`, `time` -- standard library only.
 
-Evidence: Lines 4-7 of `src/kernel/idempotency/idempotency.go`:
+Evidence: Lines 4-7 of `kernel/idempotency/idempotency.go`:
 ```go
 import (
     "context"
@@ -52,7 +52,7 @@ Fully compliant.
 
 ### kernel/cell -> kernel/outbox coupling
 
-`src/kernel/cell/registrar.go` imports `kernel/outbox` for the `outbox.Subscriber` type in `EventRegistrar` interface. This is a kernel-to-kernel dependency (permitted). No upward dependencies detected.
+`kernel/cell/registrar.go` imports `kernel/outbox` for the `outbox.Subscriber` type in `EventRegistrar` interface. This is a kernel-to-kernel dependency (permitted). No upward dependencies detected.
 
 **Verdict**: Dependency compliance is GREEN. Both packages satisfy the constraint "kernel/ only depends on standard library + pkg/".
 
@@ -69,7 +69,7 @@ type Writer interface {
 }
 ```
 
-**Transaction context**: The doc comment states "extract tx from context via TxFromContext(ctx)". This is confirmed by `src/adapters/postgres/outbox_writer.go:34-36` which calls `TxFromContext(ctx)` and returns `ErrAdapterPGNoTx` if missing. The pattern works for the current single-DB setup.
+**Transaction context**: The doc comment states "extract tx from context via TxFromContext(ctx)". This is confirmed by `adapters/postgres/outbox_writer.go:34-36` which calls `TxFromContext(ctx)` and returns `ErrAdapterPGNoTx` if missing. The pattern works for the current single-DB setup.
 
 **Assessment**: Adequate for current scope. The context-embedded tx pattern avoids coupling the kernel interface to a specific DB driver.
 
@@ -78,13 +78,13 @@ type Writer interface {
 **Finding**: `Writer.Write` accepts a single `Entry`. All 7 call sites in cells (`sessionlogin`, `sessionlogout`, `identitymanage`, `auditappend`, `auditverify`, `configwrite`, `configpublish`) write exactly one entry per operation. However, as the framework matures, aggregate operations that emit multiple events (e.g., bulk config changes, batch identity provisioning) will need to write N outbox entries atomically within one transaction.
 
 **Evidence**: All 7 call sites confirmed single-entry:
-- `src/cells/access-core/slices/sessionlogin/service.go:167`
-- `src/cells/access-core/slices/sessionlogout/service.go:102`
-- `src/cells/access-core/slices/identitymanage/service.go:230`
-- `src/cells/audit-core/slices/auditappend/service.go:123`
-- `src/cells/audit-core/slices/auditverify/service.go:104`
-- `src/cells/config-core/slices/configwrite/service.go:185`
-- `src/cells/config-core/slices/configpublish/service.go:169`
+- `cells/access-core/slices/sessionlogin/service.go:167`
+- `cells/access-core/slices/sessionlogout/service.go:102`
+- `cells/access-core/slices/identitymanage/service.go:230`
+- `cells/audit-core/slices/auditappend/service.go:123`
+- `cells/audit-core/slices/auditverify/service.go:104`
+- `cells/config-core/slices/configwrite/service.go:185`
+- `cells/config-core/slices/configpublish/service.go:169`
 
 **Impact**: Low today, medium when L3 workflow sagas or bulk operations are implemented.
 
@@ -109,7 +109,7 @@ type Entry struct {
 
 #### F-OB-02 [P1]: Entry lacks explicit Topic field -- EventType serves double duty
 
-**Finding**: `Entry` has no `Topic` field. The relay (`src/adapters/postgres/outbox_relay.go:196`) uses `e.EventType` as the publish topic:
+**Finding**: `Entry` has no `Topic` field. The relay (`adapters/postgres/outbox_relay.go:196`) uses `e.EventType` as the publish topic:
 ```go
 r.pub.Publish(ctx, e.EventType, payload)
 ```
@@ -136,7 +136,7 @@ Today these are 1:1, but they will diverge when:
 
 **Finding**: All `Entry` fields are bare strings/bytes with no compile-time or runtime guarantees. `ID`, `AggregateID`, and `EventType` are semantically required but can be empty string. The `OutboxWriter` implementation inserts whatever it receives -- an Entry with empty ID would create a row with an empty primary key or violate a DB constraint at runtime.
 
-**Evidence**: `src/adapters/postgres/outbox_writer.go:49-51` inserts `entry.ID` directly without nil/empty check. The DB schema likely has a NOT NULL constraint, but the interface contract is silent.
+**Evidence**: `adapters/postgres/outbox_writer.go:49-51` inserts `entry.ID` directly without nil/empty check. The DB schema likely has a NOT NULL constraint, but the interface contract is silent.
 
 **Recommendation**: Add a `Validate() error` method or doc-comment contract specifying required fields. This is standard for kernel types that cross layer boundaries.
 
@@ -154,7 +154,7 @@ type Relay interface {
 
 **Assessment**: Adequate. The Relay is intentionally opaque -- polling interval, batch size, and retry/backoff are implementation concerns (configured via `RelayConfig` in `adapters/postgres`). The kernel interface correctly hides these details.
 
-The postgres implementation (`src/adapters/postgres/outbox_relay.go`) provides:
+The postgres implementation (`adapters/postgres/outbox_relay.go`) provides:
 - Configurable `PollInterval`, `BatchSize`, `RetentionPeriod`
 - `FOR UPDATE SKIP LOCKED` for multi-instance safety
 - Automatic cleanup of published entries
@@ -237,7 +237,7 @@ if !shouldProcess { return nil }
 
 **Finding**: `DefaultTTL = 24 * time.Hour` is defined and used as the fallback in `ConsumerBaseConfig.setDefaults()`. However, the interface allows `ttl=0` which in Redis means "no expiry" -- potentially causing memory leaks for high-volume consumers.
 
-**Evidence**: `src/adapters/redis/idempotency.go:52-53` passes `ttl` directly to `SetNX` without floor check. This was also noted in P1-K10.
+**Evidence**: `adapters/redis/idempotency.go:52-53` passes `ttl` directly to `SetNX` without floor check. This was also noted in P1-K10.
 
 **Recommendation**: Add a doc-comment warning on `MarkProcessed` that `ttl <= 0` results in no expiry. Consider a minimum TTL floor in the Redis adapter (not the kernel interface).
 
@@ -283,10 +283,10 @@ Same pattern: compile-time interface check + trivial mock test. Acceptable for t
 
 **Finding**: 5 separate `noopWriter` definitions exist across the codebase:
 
-1. `src/examples/sso-bff/main.go:32`
-2. `src/cells/access-core/cell_test.go:28`
-3. `src/cells/config-core/cell_test.go:20`
-4. `src/cells/audit-core/cell_test.go:21`
+1. `examples/sso-bff/main.go:32`
+2. `cells/access-core/cell_test.go:28`
+3. `cells/config-core/cell_test.go:20`
+4. `cells/audit-core/cell_test.go:21`
 5. (Various test files with similar patterns)
 
 This was previously tracked as P4-TD-01. The kernel package should provide `outbox.NoopWriter` and `idempotency.NoopChecker` to eliminate this duplication. These are zero-behavior types that belong in the kernel alongside the interface definitions.

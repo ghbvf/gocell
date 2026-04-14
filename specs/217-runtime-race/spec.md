@@ -21,10 +21,10 @@ The remaining real implementation gap is `runtime/bootstrap`: config reload shut
 
 ## Scope
 
-- `src/runtime/bootstrap/`: replace the reload shutdown coordination with an explicit gate that stops new reload callbacks before draining in-flight work.
-- `src/runtime/bootstrap/*_test.go`: add unit and integration coverage for the new reload gate semantics.
-- `src/runtime/eventbus/*`: add a concurrency regression test and document the publish/close lock invariant.
-- `src/runtime/worker/*`: revalidate the existing first-error cancellation behavior and keep the backlog item accurate.
+- `runtime/bootstrap/`: replace the reload shutdown coordination with an explicit gate that stops new reload callbacks before draining in-flight work.
+- `runtime/bootstrap/*_test.go`: add unit and integration coverage for the new reload gate semantics.
+- `runtime/eventbus/*`: add a concurrency regression test and document the publish/close lock invariant.
+- `runtime/worker/*`: revalidate the existing first-error cancellation behavior and keep the backlog item accurate.
 - `docs/backlog.md`: update the runtime race item to reflect the actual closure state.
 
 ## Out Of Scope

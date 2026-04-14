@@ -8,7 +8,7 @@
 
 ### S-01 | P0 | stale lock holders can mint newer fencing tokens and win downstream conditional writes
 
-- File: `src/adapters/redis/distlock.go`
+- File: `adapters/redis/distlock.go`
 - Security property broken: integrity of write serialization.
 - Evidence:
   - `FenceToken()` uses unconditional `INCR`.
@@ -21,7 +21,7 @@
 
 ### S-02 | P1 | shutdown path in RabbitMQ subscriber can silently drop messages by default
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - On `ctx.Err() != nil`, `processDelivery()` now calls `Nack(..., requeue=false)`.
   - `DLXExchange` is optional and defaults to empty.

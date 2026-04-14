@@ -2,7 +2,7 @@
 
 > 日期: 2026-04-06
 > 目标 PR: `ghbvf/gocell#39`
-> 范围: `src/adapters/redis/*`
+> 范围: `adapters/redis/*`
 > 结论: 现阶段继续以 `go-redis` 作为 gocell 的 Redis 底座，保持 adapter 薄封装；当前 PR 以最小修复为主，不建议借机重构为新的锁模型或切换到 `rueidis`。
 
 ---
@@ -89,43 +89,43 @@
 
 ### 4.1 必修项
 
-1. `src/adapters/redis/distlock.go`
+1. `adapters/redis/distlock.go`
    将 `renewCtx` 改回独立生命周期，不再直接继承 `Acquire(ctx, ...)` 的调用方 `ctx`。
    原因：调用方常用 timeout ctx 仅限制 acquire 耗时，不能隐式决定锁续租生命周期。
 
-2. `src/adapters/redis/distlock.go`
+2. `adapters/redis/distlock.go`
    保留 `done` channel 解决 goroutine 泄漏，但 `Release(ctx)` 等待 `done` 时必须对 `ctx.Done()` 友好，避免无界阻塞。
 
-3. `src/adapters/redis/distlock_test.go`
+3. `adapters/redis/distlock_test.go`
    增加回归测试：`Acquire` 使用超时 ctx 成功后，即使该 ctx 到期，只要未显式 `Release`，续租不应立即停止。
 
-4. `src/adapters/redis/client.go`
+4. `adapters/redis/client.go`
    恢复 `Config()` 的无损返回语义。
    若需要脱敏展示，新增 `RedactedConfig()` 或同等接口，不要复用 `Config()`。
 
-5. `src/adapters/redis/client_test.go`
+5. `adapters/redis/client_test.go`
    调整 `Config()` 测试回到 round-trip 语义。
    若新增 `RedactedConfig()`，为其单独补测试。
 
-6. `src/adapters/redis/client.go`
+6. `adapters/redis/client.go`
    保持当前对外错误码字符串兼容，继续发出 `ERR_ADAPTER_REDIS_LOCK_ACQUIRED`。
    若未来要修拼写，应作为显式 breaking change 处理，并同步规格与迁移说明。
 
-7. `src/adapters/redis/client.go`
+7. `adapters/redis/client.go`
    为 `ModeSentinel` 补 `SentinelMaster` 非空校验。
 
-8. `src/adapters/redis/client_test.go`
+8. `adapters/redis/client_test.go`
    补充 Sentinel 无效配置测试，覆盖：
    - `SentinelAddrs` 为空
    - `SentinelMaster` 为空
 
-9. `src/adapters/redis/doc.go` 与 `src/adapters/redis/distlock.go`
+9. `adapters/redis/doc.go` 与 `adapters/redis/distlock.go`
    调整示例和说明，避免继续鼓励 `defer lock.Release(ctx)` 直接复用 request ctx。
    更合适的文档表达应是使用新的、有界 cleanup ctx。
 
 ### 4.2 本 PR 可接受保留项
 
-1. `src/adapters/redis/client.go`
+1. `adapters/redis/client.go`
    standalone 空 `Addr` 不再默认回落到 `localhost:6379`，改为直接报错。
    该项已按“Pre-1.0 有意加固”接受，不再视为当前阻塞问题。
    建议仅补一句迁移说明。

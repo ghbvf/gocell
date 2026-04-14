@@ -14,13 +14,13 @@
 ## 安全审查 P2 建议（待 Fix Pack D）
 
 ### SEC-P2-01: validateIdentifier 长度无上限
-- **文件**: `src/adapters/postgres/migrator.go:25`
+- **文件**: `adapters/postgres/migrator.go:25`
 - **问题**: `identifierRe` 使用 `*` 无上限，PostgreSQL 标识符最大 63 字节
 - **建议**: 改为 `{1,63}` — `^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`
 - **风险**: LOW — 调用方均为内部硬编码，非用户输入
 
 ### SEC-P2-02: advisory_unlock errcheck 被忽略
-- **文件**: `src/adapters/postgres/migrator.go:120,161`
+- **文件**: `adapters/postgres/migrator.go:120,161`
 - **问题**: `pg_advisory_unlock` 返回值被 `_ =` 丢弃，unlock 失败时无日志
 - **建议**: 添加 `slog.Warn("migrator: advisory unlock failed", "error", err)` 提升可调试性
 - **风险**: LOW — conn.Release() 在 defer 中跟随，session 结束时锁自动释放

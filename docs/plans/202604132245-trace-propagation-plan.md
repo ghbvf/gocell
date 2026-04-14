@@ -4,7 +4,7 @@
 
 - Backlog item: `TRACE-PROP-01` in `docs/backlog.md`
 - Goal: preserve inbound distributed trace continuity for HTTP requests by extracting upstream trace headers before starting the server span
-- Scope: `src/runtime/http/middleware/`, `src/runtime/observability/tracing/`, `src/runtime/http/router/` tests, and `src/go.mod` if a B3 propagator dependency is needed
+- Scope: `runtime/http/middleware/`, `runtime/observability/tracing/`, `runtime/http/router/` tests, and `go.mod` if a B3 propagator dependency is needed
 - Non-goal: outbound client injection, event metadata bridge, or tracing metrics expansion
 
 ## Team Exploration
@@ -56,7 +56,7 @@ Add an HTTP extraction helper in `runtime/http/middleware` and call it at the to
 
 ### Concrete decisions
 
-1. Add an internal HTTP extraction helper in `src/runtime/http/middleware/`
+1. Add an internal HTTP extraction helper in `runtime/http/middleware/`
 2. Use W3C Trace Context as primary and B3 only as a fallback
 3. When extraction yields a valid remote span context, mirror the extracted trace ID into `ctxkeys` so the simple tracer preserves continuity too
 4. Keep invalid or absent headers as a safe no-op so the current root-span fallback remains intact
@@ -105,8 +105,8 @@ Add failing tests that prove the current gap:
 
 ## File-Level Task List
 
-- [x] Add tracing extraction helper with table-driven tests in `src/runtime/http/middleware/`
-- [x] Update `src/runtime/http/middleware/tracing.go` to extract before `tracer.Start`
+- [x] Add tracing extraction helper with table-driven tests in `runtime/http/middleware/`
+- [x] Update `runtime/http/middleware/tracing.go` to extract before `tracer.Start`
 - [x] Extend middleware tests for W3C and B3 propagation
 - [x] Extend router integration tests to prove end-to-end ingress extraction
 - [x] Update dependencies only if `go.opentelemetry.io/contrib/propagators/b3` is not already available

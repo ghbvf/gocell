@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Scope | `src/adapters/postgres/outbox_relay.go`, `src/adapters/postgres/outbox_relay_test.go`, `src/kernel/outbox/outbox.go` |
+| Scope | `adapters/postgres/outbox_relay.go`, `adapters/postgres/outbox_relay_test.go`, `kernel/outbox/outbox.go` |
 | Date | `2026-04-06` |
 | Status | `analysis only; not implemented in this report` |
 | Basis | Current local worktree + targeted test/review discussion |
@@ -24,9 +24,9 @@ Verdict:
 
 Relevant code:
 
-- `src/adapters/postgres/outbox_relay.go:89`
-- `src/adapters/postgres/outbox_relay.go:140`
-- `src/adapters/postgres/outbox_relay_test.go:43`
+- `adapters/postgres/outbox_relay.go:89`
+- `adapters/postgres/outbox_relay.go:140`
+- `adapters/postgres/outbox_relay_test.go:43`
 
 Current behavior:
 
@@ -45,8 +45,8 @@ Assessment:
 
 Relevant code:
 
-- `src/adapters/postgres/outbox_relay.go:241`
-- `src/adapters/postgres/outbox_relay.go:261`
+- `adapters/postgres/outbox_relay.go:241`
+- `adapters/postgres/outbox_relay.go:261`
 
 Current behavior:
 

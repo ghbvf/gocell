@@ -14,11 +14,11 @@ The Batch 6A outbox cleanup row mixes three small-but-related API ownership issu
 
 ## Scope
 
-- `src/kernel/outbox/`: add shared no-op/discard helpers and update docs/tests.
-- `src/kernel/idempotency/`: make `Receipt` an idempotency-owned contract.
-- `src/runtime/eventbus/`, `src/adapters/redis/`, `src/adapters/rabbitmq/`: update receipt typing where needed.
-- `src/cells/order-cell/`: use the shared discard publisher without regressing the current stricter demo-mode semantics.
-- `src/cmd/core-bundle/`, `src/cells/*_test.go`, `src/examples/sso-bff/`: replace duplicated local noop writers.
+- `kernel/outbox/`: add shared no-op/discard helpers and update docs/tests.
+- `kernel/idempotency/`: make `Receipt` an idempotency-owned contract.
+- `runtime/eventbus/`, `adapters/redis/`, `adapters/rabbitmq/`: update receipt typing where needed.
+- `cells/order-cell/`: use the shared discard publisher without regressing the current stricter demo-mode semantics.
+- `cmd/core-bundle/`, `cells/*_test.go`, `examples/sso-bff/`: replace duplicated local noop writers.
 
 ## Out Of Scope
 

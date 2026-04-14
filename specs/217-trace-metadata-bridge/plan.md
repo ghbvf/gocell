@@ -33,7 +33,7 @@ Add a small shared helper around existing outbox abstractions:
 
 Planned location:
 
-- `src/kernel/outbox/` for reserved-key ownership and subscriber middleware.
+- `kernel/outbox/` for reserved-key ownership and subscriber middleware.
 
 Constraints:
 
@@ -56,8 +56,8 @@ Rules:
 
 Planned files:
 
-- `src/adapters/postgres/outbox_writer.go`
-- `src/adapters/postgres/outbox_writer_test.go`
+- `adapters/postgres/outbox_writer.go`
+- `adapters/postgres/outbox_writer_test.go`
 
 ### Work Package 3 — Consume-Side Restore
 
@@ -69,10 +69,10 @@ Wire a single subscriber middleware into bootstrap so all registered event handl
 
 Planned files:
 
-- `src/runtime/bootstrap/bootstrap.go`
-- `src/runtime/bootstrap/bootstrap_test.go`
-- `src/kernel/outbox/outbox_test.go`
-- `src/adapters/rabbitmq/rabbitmq_test.go`
+- `runtime/bootstrap/bootstrap.go`
+- `runtime/bootstrap/bootstrap_test.go`
+- `kernel/outbox/outbox_test.go`
+- `adapters/rabbitmq/rabbitmq_test.go`
 
 ### Work Package 4 — Logging and Docs
 
@@ -83,9 +83,9 @@ Close the loop for framework users:
 
 Planned files:
 
-- `src/runtime/observability/logging/logging.go` and tests if needed
+- `runtime/observability/logging/logging.go` and tests if needed
 - `README.md`
-- `src/kernel/outbox/outbox.go` comments
+- `kernel/outbox/outbox.go` comments
 
 ## TDD Order
 

@@ -321,28 +321,28 @@ The postgres adapter delivers a solid, well-tested foundation for PostgreSQL int
 
 | Absolute path | Role |
 |---------------|------|
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/doc.go` | Package documentation |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/pool.go` | Connection pool |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/tx_manager.go` | Transaction manager |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator.go` | Migration engine |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_writer.go` | Outbox writer |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go` | Outbox relay |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/errors.go` | Error codes |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/helpers.go` | RowScanner + QueryBuilder |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/embed.go` | Embedded migrations FS |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrations/001_create_outbox_entries.up.sql` | Outbox DDL |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrations/001_create_outbox_entries.down.sql` | Outbox drop |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/pool_test.go` | Pool unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/tx_manager_test.go` | TxManager unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/migrator_test.go` | Migrator unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_writer_test.go` | OutboxWriter unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay_test.go` | OutboxRelay unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/errors_test.go` | Error code tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/helpers_test.go` | Helpers unit tests |
-| `/Users/shengming/Documents/code/gocell/src/adapters/postgres/integration_test.go` | Integration tests (testcontainers) |
-| `/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox.go` | Kernel interfaces |
-| `/Users/shengming/Documents/code/gocell/src/runtime/worker/worker.go` | Worker interface |
-| `/Users/shengming/Documents/code/gocell/src/adapters/redis/client.go` | Redis adapter (consistency comparison) |
-| `/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/connection.go` | RabbitMQ adapter (consistency comparison) |
-| `/Users/shengming/Documents/code/gocell/src/cells/audit-core/internal/adapters/postgres/audit_repo.go` | Downstream consumer |
-| `/Users/shengming/Documents/code/gocell/src/cells/config-core/internal/adapters/postgres/config_repo.go` | Downstream consumer |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/doc.go` | Package documentation |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/pool.go` | Connection pool |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/tx_manager.go` | Transaction manager |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator.go` | Migration engine |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_writer.go` | Outbox writer |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go` | Outbox relay |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/errors.go` | Error codes |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/helpers.go` | RowScanner + QueryBuilder |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/embed.go` | Embedded migrations FS |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/migrations/001_create_outbox_entries.up.sql` | Outbox DDL |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/migrations/001_create_outbox_entries.down.sql` | Outbox drop |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/pool_test.go` | Pool unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/tx_manager_test.go` | TxManager unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/migrator_test.go` | Migrator unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_writer_test.go` | OutboxWriter unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay_test.go` | OutboxRelay unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/errors_test.go` | Error code tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/helpers_test.go` | Helpers unit tests |
+| `/Users/shengming/Documents/code/gocell/adapters/postgres/integration_test.go` | Integration tests (testcontainers) |
+| `/Users/shengming/Documents/code/gocell/kernel/outbox/outbox.go` | Kernel interfaces |
+| `/Users/shengming/Documents/code/gocell/runtime/worker/worker.go` | Worker interface |
+| `/Users/shengming/Documents/code/gocell/adapters/redis/client.go` | Redis adapter (consistency comparison) |
+| `/Users/shengming/Documents/code/gocell/adapters/rabbitmq/connection.go` | RabbitMQ adapter (consistency comparison) |
+| `/Users/shengming/Documents/code/gocell/cells/audit-core/internal/adapters/postgres/audit_repo.go` | Downstream consumer |
+| `/Users/shengming/Documents/code/gocell/cells/config-core/internal/adapters/postgres/config_repo.go` | Downstream consumer |

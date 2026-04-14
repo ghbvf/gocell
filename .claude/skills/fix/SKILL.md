@@ -309,7 +309,7 @@ scope 按层：kernel/runtime/cells/pkg。安全约束：只 add 修复文件（
 go build ./...
 go test ./path/to/modified/package/...
 go test -race ./path/to/modified/package/...  # 涉及并发时
-go test ./src/kernel/...                       # 改了 kernel 时
+go test ./kernel/...                            # 改了 kernel 时
 ```
 
 ### 4.6 测试失败处理（分层回退）
@@ -348,7 +348,7 @@ go test ./src/kernel/...                       # 改了 kernel 时
 
 ## 阶段 5: 输出 + 验证
 
-报告保存到 `tools/docs/`，命名: `yyyyMMddHHmm-{diagnose|fix|review-verify}-{简称}.md`。
+报告保存到 `.claude/tools/docs/`，命名: `yyyyMMddHHmm-{diagnose|fix|review-verify}-{简称}.md`。
 三种形态: A 诊断报告（未修）/ B 修复报告（已修）/ C 批量验证（审查报告）。
 
 **Backlog 验证**（4.8 已执行，此处 grep 确认）：

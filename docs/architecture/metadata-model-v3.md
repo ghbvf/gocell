@@ -3,7 +3,7 @@
 > 本文档从 V2.1 最小重建。只保留不可逆的真相层和边界定义，不写满规则。
 > 细节在工具实现中优化，不在文档中预设。
 
-当前仓库约定：元数据根目录为 `src/`。下文中的路径示例均以仓库根相对路径表示。
+当前仓库约定：元数据根目录为 项目根目录。下文中的路径示例均以仓库根相对路径表示。
 
 ## 六条真相
 
@@ -28,7 +28,7 @@
 - **L0**：计算分区，纯函数库，同 assembly 内直接导入，不参与契约。
 
 ```yaml
-# src/cells/access-core/cell.yaml
+# cells/access-core/cell.yaml
 id: access-core
 type: core
 consistencyLevel: L2
@@ -45,14 +45,14 @@ l0Dependencies:           # 仅在导入 L0 Cell 时声明
     reason: 确定性哈希工具
 ```
 
-目录约定：`src/cells/{cell-id}/cell.yaml`，且 `cell.id` == 目录名。`schema.primary` 对 L0 可选。
+目录约定：`cells/{cell-id}/cell.yaml`，且 `cell.id` == 目录名。`schema.primary` 对 L0 可选。
 
 ### Slice
 
 实现映射。slice 是**依赖真相的唯一写入方**。
 
 ```yaml
-# src/cells/access-core/slices/session-login/slice.yaml
+# cells/access-core/slices/session-login/slice.yaml
 id: session-login
 belongsToCell: access-core       # derived-anchor，可省略
 contractUsages:
@@ -75,14 +75,14 @@ verify:
       expiresAt: 2026-06-01
 ```
 
-目录约定：`src/cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 缺省时按目录约定推导。
+目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 缺省时按目录约定推导。
 
 ### Contract
 
 跨 Cell 边界协议。L1+ Cell 之间的所有交互都需要契约。
 
 ```yaml
-# src/contracts/http/auth/login/v1/contract.yaml
+# contracts/http/auth/login/v1/contract.yaml
 id: http.auth.login.v1
 kind: http                        # derived-anchor，可省略
 ownerCell: access-core            # 缺省 = provider，可省略
@@ -97,7 +97,7 @@ schemaRefs:
   response: response.schema.json
 ```
 
-目录约定：`src/contracts/{kind}/{domain...}/{version}/contract.yaml`。`schemaRefs` 相对 `contract.yaml` 所在目录解析。
+目录约定：`contracts/{kind}/{domain...}/{version}/contract.yaml`。`schemaRefs` 相对 `contract.yaml` 所在目录解析。
 
 四种 kind：`http` / `event` / `command` / `projection`。端点字段按 kind 不同：
 
@@ -118,7 +118,7 @@ Projection 额外必填：`replayable`。
 验收真相。定义"完成"的含义。**不是依赖真相。**
 
 ```yaml
-# src/journeys/J-sso-login.yaml
+# journeys/J-sso-login.yaml
 id: J-sso-login
 goal: 用户完成 SSO 登录并获得有效 session
 owner:
@@ -149,7 +149,7 @@ passCriteria:
 运营层。不参与架构合法性判定。
 
 ```yaml
-# src/journeys/status-board.yaml
+# journeys/status-board.yaml
 - journeyId: J-sso-login
   state: doing
   risk: low
@@ -164,20 +164,20 @@ passCriteria:
 物理打包。手工编写只管 `id` / `cells` / `build`。边界信息由工具生成到独立文件。
 
 ```yaml
-# src/assemblies/core-bundle/assembly.yaml（手工编写）
+# assemblies/core-bundle/assembly.yaml（手工编写）
 id: core-bundle
 cells:
   - access-core
   - audit-core
   - config-core
 build:
-  entrypoint: src/cmd/core-bundle/main.go
+  entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
   deployTemplate: k8s
 ```
 
 ```yaml
-# src/assemblies/core-bundle/generated/boundary.yaml（工具生成，禁止手编）
+# assemblies/core-bundle/generated/boundary.yaml（工具生成，禁止手编）
 generatedAt: "2026-04-04T10:30:00Z"
 sourceFingerprint: "sha256:b5e6f7..."
 exportedContracts:
@@ -192,7 +192,7 @@ smokeTargets:
 非 Cell 的外部参与方。
 
 ```yaml
-# src/actors.yaml
+# actors.yaml
 - id: edge-bff
   type: external
   maxConsistencyLevel: L1
@@ -212,8 +212,8 @@ smokeTargets:
 | 契约边界协议 | `contract.yaml` | slice 或 journey |
 | 验收标准 | `journey.passCriteria` | slice.verify |
 | Cell 归属 | `slice.belongsToCell`（或目录路径） | cell.yaml 反向索引 |
-| 交付状态 | `src/journeys/status-board.yaml` | 任何其他元数据文件 |
-| Assembly 边界 | `src/assemblies/*/generated/boundary.yaml` | assembly.yaml 内联 |
+| 交付状态 | `journeys/status-board.yaml` | 任何其他元数据文件 |
+| Assembly 边界 | `assemblies/*/generated/boundary.yaml` | assembly.yaml 内联 |
 
 ---
 
@@ -272,7 +272,7 @@ waivers:
 
 | V2.1 概念 | V3 处理 |
 |-----------|---------|
-| Assembly 内联 exported/imported/smoke | 迁移到 `src/assemblies/*/generated/boundary.yaml` |
+| Assembly 内联 exported/imported/smoke | 迁移到 `assemblies/*/generated/boundary.yaml` |
 | `producer` / `consumers` | 已替换为 kind-specific `endpoints` |
 | `version` 字段 | 已删除，从 `id` 末段派生 |
 | 隐式 L0 import | 迁移到显式 `l0Dependencies` |

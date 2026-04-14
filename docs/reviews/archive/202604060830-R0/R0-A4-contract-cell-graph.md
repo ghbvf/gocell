@@ -2,7 +2,7 @@
 
 **Agent**: R0-A4 (Kernel Guardian)
 **Date**: 2026-04-06
-**Scope**: All `cell.yaml`, `slice.yaml`, `contract.yaml`, `assembly.yaml`, journey YAML in `src/`
+**Scope**: All `cell.yaml`, `slice.yaml`, `contract.yaml`, `assembly.yaml`, journey YAML in 项目根目录
 
 ---
 
@@ -158,7 +158,7 @@ All slice.yaml files contain: `id`, `belongsToCell`, `contractUsages`, `verify.u
 |------|----------------|----------|
 | (none) | -- | -- |
 
-Searched all YAML files under `src/` for: `cellId`, `sliceId`, `contractId`, `assemblyId`, `ownedSlices`, `authoritativeData`, `producer`, `consumers`, `callsContracts`, `publishes`, `consumes`.
+Searched all YAML files under 项目根目录 for: `cellId`, `sliceId`, `contractId`, `assemblyId`, `ownedSlices`, `authoritativeData`, `producer`, `consumers`, `callsContracts`, `publishes`, `consumes`.
 
 **Result: PASS** -- No forbidden old field names found.
 
@@ -168,7 +168,7 @@ Searched all YAML files under `src/` for: `cellId`, `sliceId`, `contractId`, `as
 |-------|-------------------|--------|
 | (none) | -- | -- |
 
-All 18 contracts referenced by slices exist in `src/contracts/`. Every `contractUsages[].contract` dotted-ID maps to a defined `contract.yaml`.
+All 18 contracts referenced by slices exist in `contracts/`. Every `contractUsages[].contract` dotted-ID maps to a defined `contract.yaml`.
 
 **Result: PASS** -- No dangling references.
 
@@ -317,13 +317,13 @@ While not strictly a schemaRefs declaration violation, the following event contr
 
 ### Assembly: core-bundle
 
-**File**: `src/assemblies/core-bundle/assembly.yaml`
+**File**: `assemblies/core-bundle/assembly.yaml`
 
 | Field | Value |
 |-------|-------|
 | id | core-bundle |
 | cells | access-core, audit-core, config-core |
-| build.entrypoint | src/cmd/core-bundle/main.go |
+| build.entrypoint | cmd/core-bundle/main.go |
 | build.binary | core-bundle |
 | build.deployTemplate | k8s |
 
@@ -381,7 +381,7 @@ While not strictly a schemaRefs declaration violation, the following event contr
 
 ### Status Board Completeness
 
-**FINDING**: `J-order-create` is defined in `src/journeys/J-order-create.yaml` but is **not listed** in `src/journeys/status-board.yaml`.
+**FINDING**: `J-order-create` is defined in `journeys/J-order-create.yaml` but is **not listed** in `journeys/status-board.yaml`.
 
 **Severity: WARN (P2)** -- status-board.yaml is incomplete.
 
@@ -389,7 +389,7 @@ While not strictly a schemaRefs declaration violation, the following event contr
 
 ## External Actors
 
-**File**: `src/actors.yaml`
+**File**: `actors.yaml`
 
 | Actor ID | Type | MaxConsistencyLevel |
 |----------|------|-------------------|
@@ -416,16 +416,16 @@ While not strictly a schemaRefs declaration violation, the following event contr
 
 | # | Finding | Location | Recommendation |
 |---|---------|----------|---------------|
-| P2-1 | Contract `event.config.changed.v1` declares `access-core` as subscriber but no access-core slice subscribes | `src/contracts/event/config/changed/v1/contract.yaml` | Either add a subscribing slice to access-core or remove access-core from subscribers list |
-| P2-2 | Contract `event.config.rollback.v1` declares `access-core` as subscriber but no access-core slice subscribes | `src/contracts/event/config/rollback/v1/contract.yaml` | Same as P2-1 |
-| P2-3 | Contract `http.config.flags.v1` declares `access-core` as client but no access-core slice calls it | `src/contracts/http/config/flags/v1/contract.yaml` | Either add a calling slice or remove access-core from clients |
-| P2-4 | `J-order-create` journey missing from `status-board.yaml` | `src/journeys/status-board.yaml` | Add J-order-create entry to status-board.yaml |
+| P2-1 | Contract `event.config.changed.v1` declares `access-core` as subscriber but no access-core slice subscribes | `contracts/event/config/changed/v1/contract.yaml` | Either add a subscribing slice to access-core or remove access-core from subscribers list |
+| P2-2 | Contract `event.config.rollback.v1` declares `access-core` as subscriber but no access-core slice subscribes | `contracts/event/config/rollback/v1/contract.yaml` | Same as P2-1 |
+| P2-3 | Contract `http.config.flags.v1` declares `access-core` as client but no access-core slice calls it | `contracts/http/config/flags/v1/contract.yaml` | Either add a calling slice or remove access-core from clients |
+| P2-4 | `J-order-create` journey missing from `status-board.yaml` | `journeys/status-board.yaml` | Add J-order-create entry to status-board.yaml |
 
 ### Low (P3): 3 findings
 
 | # | Finding | Location | Recommendation |
 |---|---------|----------|---------------|
-| P3-1 | `boundary.yaml` missing for core-bundle assembly (3 cells) | `src/assemblies/core-bundle/` | Generate boundary.yaml via tooling |
+| P3-1 | `boundary.yaml` missing for core-bundle assembly (3 cells) | `assemblies/core-bundle/` | Generate boundary.yaml via tooling |
 | P3-2 | 10 of 18 contracts lack schema files (includes 2 HTTP contracts) | Various contract directories | Prioritize http.device.v1 and http.order.v1 schema creation |
 | P3-3 | 7 contracts have no journey coverage | See journey coverage table above | Create device-cell journey(s); add http.auth.me.v1 to an existing journey |
 

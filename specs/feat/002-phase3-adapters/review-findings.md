@@ -37,9 +37,9 @@ Phase 3 Adapters 实现了 6 个核心 adapter（postgres/redis/rabbitmq/oidc/s3
 ### F-01 [席位 2: 安全/权限] [P0] SEC-04 未完全兑现 — access-core 仍使用 HS256 签发 JWT
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/sessionlogin/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/sessionrefresh/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/sessionvalidate/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/sessionlogin/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/sessionrefresh/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/sessionvalidate/service.go`
 
 **证据**:
 
@@ -78,13 +78,13 @@ c.signingKey = []byte(keyStr)  // signingKey 仍为 []byte (HMAC key)
 ### F-02 [席位 1: 架构一致性] [P0] outbox 写入未与业务写入原子绑定 — L2 一致性承诺未兑现
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/sessionlogin/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/sessionlogout/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/access-core/slices/identitymanage/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/audit-core/slices/auditappend/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/audit-core/slices/auditverify/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/config-core/slices/configwrite/service.go`
-- `/Users/shengming/Documents/code/gocell/src/cells/config-core/slices/configpublish/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/sessionlogin/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/sessionlogout/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/access-core/slices/identitymanage/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/audit-core/slices/auditappend/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/audit-core/slices/auditverify/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/config-core/slices/configwrite/service.go`
+- `/Users/shengming/Documents/code/gocell/cells/config-core/slices/configpublish/service.go`
 
 **证据**:
 
@@ -122,14 +122,14 @@ return s.txManager.RunInTx(ctx, func(ctx context.Context) error {
 ### F-03 [席位 3: 测试/回归] [P0] 所有 integration_test.go 均为 t.Skip 存根 — S1/S2/S3 成功标准无法验证
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/redis/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/oidc/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/s3/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/websocket/integration_test.go`
-- `/Users/shengming/Documents/code/gocell/src/tests/integration/assembly_test.go`
-- `/Users/shengming/Documents/code/gocell/src/tests/integration/journey_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/rabbitmq/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/redis/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/oidc/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/s3/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/websocket/integration_test.go`
+- `/Users/shengming/Documents/code/gocell/tests/integration/assembly_test.go`
+- `/Users/shengming/Documents/code/gocell/tests/integration/journey_test.go`
 
 **证据**:
 
@@ -169,7 +169,7 @@ func TestJourney_ConfigRollback(t *testing.T) {
 ### F-04 [席位 3: 测试/回归] [P1] postgres adapter 覆盖率 46.6% — 低于 80% 要求
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/`（整包）
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/`（整包）
 
 **证据**:
 
@@ -197,8 +197,8 @@ Pool 的核心生命周期方法（`NewPool` 真实连接路径、`Health`、`Cl
 
 **受影响文件**:
 - `/Users/shengming/Documents/code/gocell/.env.example`
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/pool.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/redis/client.go`（推断）
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/pool.go`
+- `/Users/shengming/Documents/code/gocell/adapters/redis/client.go`（推断）
 
 **证据**:
 
@@ -232,7 +232,7 @@ for _, key := range []string{"PG_DSN", "PG_MAX_CONNS", ...}
 ### F-06 [席位 1: 架构一致性] [P1] OutboxRelay 的 FOR UPDATE SKIP LOCKED 未在事务中执行
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go`
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go`
 
 **证据**:
 
@@ -270,12 +270,12 @@ tx.Commit(ctx)
 ### F-07 [席位 5: DX/可维护性] [P1] 多处 fmt.Errorf 外露 — 违反 errcode 规范
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/s3/client.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/redis/distlock.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/oidc/token.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/oidc/userinfo.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/oidc/verifier.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/connection.go`
+- `/Users/shengming/Documents/code/gocell/adapters/s3/client.go`
+- `/Users/shengming/Documents/code/gocell/adapters/redis/distlock.go`
+- `/Users/shengming/Documents/code/gocell/adapters/oidc/token.go`
+- `/Users/shengming/Documents/code/gocell/adapters/oidc/userinfo.go`
+- `/Users/shengming/Documents/code/gocell/adapters/oidc/verifier.go`
+- `/Users/shengming/Documents/code/gocell/adapters/rabbitmq/connection.go`
 
 **证据**:
 
@@ -331,7 +331,7 @@ return fmt.Errorf("rabbitmq: dial: %w", err)
 ### F-09 [席位 2: 安全/权限] [P2] websocket/hub.go 使用已弃用的 pkg/id 包（64 位熵）
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/websocket/hub.go`
+- `/Users/shengming/Documents/code/gocell/adapters/websocket/hub.go`
 
 **证据**:
 
@@ -362,9 +362,9 @@ connID := id.New("ws")
 ### F-10 [席位 3: 测试/回归] [P2] 3 个 adapter 单元测试因 httptest 沙箱限制失败
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/websocket/hub_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/oidc/oidc_test.go`
-- `/Users/shengming/Documents/code/gocell/src/adapters/s3/client_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/websocket/hub_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/oidc/oidc_test.go`
+- `/Users/shengming/Documents/code/gocell/adapters/s3/client_test.go`
 
 **证据**:
 
@@ -453,7 +453,7 @@ if s.outboxWriter != nil {
 ### F-13 [席位 5: DX/可维护性] [P2] OutboxRelay 未声明 worker.Worker 接口合规
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/adapters/postgres/outbox_relay.go`
+- `/Users/shengming/Documents/code/gocell/adapters/postgres/outbox_relay.go`
 
 **证据**:
 
@@ -480,7 +480,7 @@ var _ worker.Worker = (*OutboxRelay)(nil)
 ### F-14 [席位 6: 产品/用户体验] [P2] testcontainers-go 未列入 go.mod — S9 依赖可控承诺失效
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/go.mod`
+- `/Users/shengming/Documents/code/gocell/go.mod`
 
 **证据**:
 
@@ -511,7 +511,7 @@ nhooyr.io/websocket v1.8.17
 ### F-15 [席位 1: 架构一致性] [P2] bootstrap 保留 WithEventBus 的具体类型参数
 
 **受影响文件**:
-- `/Users/shengming/Documents/code/gocell/src/runtime/bootstrap/bootstrap.go`
+- `/Users/shengming/Documents/code/gocell/runtime/bootstrap/bootstrap.go`
 
 **证据**:
 
@@ -547,8 +547,8 @@ func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
 
 | 约束 | 状态 | 说明 |
 |------|------|------|
-| kernel/ 不引入 adapters/ | PASS | `grep '"github.com/ghbvf/gocell/adapters' src/kernel/` 返回 0 |
-| adapters/ 不引入 cells/ | PASS | `grep '"github.com/ghbvf/gocell/cells' src/adapters/` 返回 0 |
+| kernel/ 不引入 adapters/ | PASS | `grep '"github.com/ghbvf/gocell/adapters' kernel/` 返回 0 |
+| adapters/ 不引入 cells/ | PASS | `grep '"github.com/ghbvf/gocell/cells' adapters/` 返回 0 |
 | runtime/ 不引入 adapters/ | PASS | 注释中提及 adapters/ 但无实际 import |
 | outbox.Writer 接口断言 | PASS | `var _ outbox.Writer = (*OutboxWriter)(nil)` 存在 |
 | outbox.Relay 接口断言 | PASS | `var _ outbox.Relay = (*OutboxRelay)(nil)` 存在 |

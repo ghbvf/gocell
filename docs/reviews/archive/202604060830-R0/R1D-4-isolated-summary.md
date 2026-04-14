@@ -2,7 +2,7 @@
 
 ## Scope
 
-Independent six-seat review of `src/adapters/oidc`, reconstructed directly into the main workspace.
+Independent six-seat review of `adapters/oidc`, reconstructed directly into the main workspace.
 
 ## Artifacts
 
@@ -23,5 +23,5 @@ Independent six-seat review of `src/adapters/oidc`, reconstructed directly into 
 
 ## Verification Notes
 
-- Unit tests pass from `src/`.
+- Unit tests pass from 项目根目录.
 - Integration tests are not real yet; they currently pass only because all cases are skipped.

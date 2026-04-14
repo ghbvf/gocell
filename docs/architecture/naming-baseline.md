@@ -8,8 +8,8 @@
 
 发生冲突时，按以下顺序判断：
 
-1. 当前元数据真相文件：`src/cells/**/cell.yaml`、`src/cells/**/slice.yaml`、`src/contracts/**/contract.yaml`、`src/journeys/*.yaml`
-2. 当前治理代码：`src/kernel/governance/*`
+1. 当前元数据真相文件：`cells/**/cell.yaml`、`cells/**/slice.yaml`、`contracts/**/contract.yaml`、`journeys/*.yaml`
+2. 当前治理代码：`kernel/governance/*`
 3. 本文
 4. 其他现行文档
 
@@ -83,7 +83,7 @@ Contract ID 统一使用小写点分格式：
 
 一个 Slice 只能有一个规范目录：
 
-- `src/cells/{cell-id}/slices/{slice-id}/`
+- `cells/{cell-id}/slices/{slice-id}/`
 
 规则：
 

@@ -8,7 +8,7 @@ GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-i
 
 ```bash
 git clone https://github.com/ghbvf/gocell.git
-cd gocell/src
+cd gocell
 go run ./examples/todo-order
 ```
 
@@ -69,10 +69,10 @@ Follow these steps to create a custom Cell from scratch.
 ### Step 1: Create Cell directory and metadata
 
 ```bash
-mkdir -p src/cells/my-cell/slices/my-action
+mkdir -p cells/my-cell/slices/my-action
 ```
 
-Create `src/cells/my-cell/cell.yaml`:
+Create `cells/my-cell/cell.yaml`:
 ```yaml
 id: my-cell
 type: core
@@ -87,7 +87,7 @@ verify:
     - my-cell/smoke
 ```
 
-Create `src/cells/my-cell/slices/my-action/slice.yaml`:
+Create `cells/my-cell/slices/my-action/slice.yaml`:
 ```yaml
 id: my-action
 belongsToCell: my-cell
@@ -101,7 +101,7 @@ verify:
 
 ### Step 2: Define the domain
 
-Create `src/cells/my-cell/internal/domain/model.go`:
+Create `cells/my-cell/internal/domain/model.go`:
 ```go
 package domain
 
@@ -118,7 +118,7 @@ type ItemRepository interface {
 
 ### Step 3: Implement the Cell
 
-Create `src/cells/my-cell/cell.go`:
+Create `cells/my-cell/cell.go`:
 ```go
 package mycell
 
@@ -190,7 +190,7 @@ func main() {
 ### Step 5: Build and run
 
 ```bash
-cd src && go build ./cmd/my-app && ./my-app
+go build ./cmd/my-app && ./my-app
 # In another terminal:
 curl http://localhost:8080/api/v1/hello
 # {"message":"hello from my-cell"}
@@ -200,14 +200,13 @@ curl http://localhost:8080/api/v1/hello
 
 | Example | Complexity | What it demonstrates |
 |---------|-----------|---------------------|
-| [todo-order](src/examples/todo-order/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
-| [sso-bff](src/examples/sso-bff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
-| [iot-device](src/examples/iot-device/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
+| [todo-order](examples/todo-order/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
+| [sso-bff](examples/sso-bff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
+| [iot-device](examples/iot-device/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
 ## Architecture
 
 ```
-src/
 ├── kernel/       — Cell/Slice runtime + governance tools (framework core)
 ├── cells/        — Cell implementations (access-core / audit-core / config-core / order-cell / device-cell)
 ├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)

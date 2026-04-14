@@ -21,7 +21,7 @@ The spec is well-structured and covers the 6 adapter modules with clear interfac
 
 **Problem:**
 
-Spec FR-1.4 states: "Write(ctx, Entry) error must execute within TxManager transaction scope." The kernel interface at `/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox.go:26-28` is:
+Spec FR-1.4 states: "Write(ctx, Entry) error must execute within TxManager transaction scope." The kernel interface at `/Users/shengming/Documents/code/gocell/kernel/outbox/outbox.go:26-28` is:
 
 ```go
 type Writer interface {
@@ -68,7 +68,7 @@ Spec section 4.1 and FR-4.4 declare:
 cells/*/ports.ArchiveStore <-- adapters/s3/archive.go
 ```
 
-This means `adapters/s3/archive.go` must import `cells/audit-core/internal/ports` to implement the `ArchiveStore` interface. The interface is defined at `/Users/shengming/Documents/code/gocell/src/cells/audit-core/internal/ports/archive_store.go` and references `cells/audit-core/internal/domain.AuditEntry`.
+This means `adapters/s3/archive.go` must import `cells/audit-core/internal/ports` to implement the `ArchiveStore` interface. The interface is defined at `/Users/shengming/Documents/code/gocell/cells/audit-core/internal/ports/archive_store.go` and references `cells/audit-core/internal/domain.AuditEntry`.
 
 This violates two rules:
 1. **NFR-1** in the spec itself: "adapters/ does not import cells/"
@@ -109,7 +109,7 @@ outboxRelay := postgres.NewOutboxRelay(pool, rabbitPublisher)
 
 This means `adapters/postgres/outbox_relay.go` takes a `rabbitPublisher` (concrete type from `adapters/rabbitmq/`) as a constructor argument. If the relay takes the concrete type, this creates a compile-time coupling between two adapter packages (`adapters/postgres` imports `adapters/rabbitmq`), which is an undesirable horizontal dependency within the same layer.
 
-The kernel interface `outbox.Publisher` exists at `/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox.go:37-39` and should be the injection point, not the concrete type.
+The kernel interface `outbox.Publisher` exists at `/Users/shengming/Documents/code/gocell/kernel/outbox/outbox.go:37-39` and should be the injection point, not the concrete type.
 
 **Suggestion:**
 
@@ -131,7 +131,7 @@ The relay depends on the kernel `outbox.Publisher` interface, not the concrete R
 
 **Problem:**
 
-At `/Users/shengming/Documents/code/gocell/src/runtime/bootstrap/bootstrap.go:64`, the `WithEventBus` option accepts only the concrete type:
+At `/Users/shengming/Documents/code/gocell/runtime/bootstrap/bootstrap.go:64`, the `WithEventBus` option accepts only the concrete type:
 
 ```go
 func WithEventBus(eb *eventbus.InMemoryEventBus) Option {
@@ -226,10 +226,10 @@ Add to FR-1.5:
 
 The following Cell port interfaces return unbounded lists:
 
-- `/Users/shengming/Documents/code/gocell/src/cells/config-core/internal/ports/config_repo.go:16`: `List(ctx context.Context) ([]*domain.ConfigEntry, error)`
-- `/Users/shengming/Documents/code/gocell/src/cells/config-core/internal/ports/flag_repo.go:14`: `List(ctx context.Context) ([]*domain.FeatureFlag, error)`
-- `/Users/shengming/Documents/code/gocell/src/cells/audit-core/internal/ports/audit_repo.go:22`: `GetRange(ctx context.Context, from, to int) ([]*domain.AuditEntry, error)` -- range-based but `to` can be arbitrarily large
-- `/Users/shengming/Documents/code/gocell/src/cells/audit-core/internal/ports/audit_repo.go:23`: `Query(ctx context.Context, filters AuditFilters) ([]*domain.AuditEntry, error)` -- no limit/offset
+- `/Users/shengming/Documents/code/gocell/cells/config-core/internal/ports/config_repo.go:16`: `List(ctx context.Context) ([]*domain.ConfigEntry, error)`
+- `/Users/shengming/Documents/code/gocell/cells/config-core/internal/ports/flag_repo.go:14`: `List(ctx context.Context) ([]*domain.FeatureFlag, error)`
+- `/Users/shengming/Documents/code/gocell/cells/audit-core/internal/ports/audit_repo.go:22`: `GetRange(ctx context.Context, from, to int) ([]*domain.AuditEntry, error)` -- range-based but `to` can be arbitrarily large
+- `/Users/shengming/Documents/code/gocell/cells/audit-core/internal/ports/audit_repo.go:23`: `Query(ctx context.Context, filters AuditFilters) ([]*domain.AuditEntry, error)` -- no limit/offset
 
 With in-memory storage these are harmless, but once PostgreSQL is the backend, these become full table scans with unbounded result sets. The audit table especially can grow very large.
 

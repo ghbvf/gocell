@@ -1,7 +1,7 @@
 # R1D-3: adapters/rabbitmq Security Review
 
 - **Reviewer Seat**: S2 (Security / Permissions)
-- **Scope**: `src/adapters/rabbitmq/` all .go files (~950 LOC on develop)
+- **Scope**: `adapters/rabbitmq/` all .go files (~950 LOC on develop)
 - **Review Baseline**: commit `ce03ba1` (develop HEAD)
 - **Date**: 2026-04-06
 
@@ -20,7 +20,7 @@ The `adapters/rabbitmq` package implements `outbox.Publisher` and `outbox.Subscr
 - **Seat**: S2 Security
 - **Severity**: P0
 - **Category**: Credential Leakage
-- **Affected File**: `src/adapters/rabbitmq/connection.go` lines 372-379
+- **Affected File**: `adapters/rabbitmq/connection.go` lines 372-379
 - **Prior Finding**: P0-F12S01
 
 **Evidence**:
@@ -73,7 +73,7 @@ func sanitizeURL(rawURL string) string {
 - **Seat**: S2 Security
 - **Severity**: P0
 - **Category**: Message Loss / Data Integrity
-- **Affected File**: `src/adapters/rabbitmq/consumer_base.go` lines 170-174, 196-213
+- **Affected File**: `adapters/rabbitmq/consumer_base.go` lines 170-174, 196-213
 - **Prior Finding**: Issue #26
 
 **Evidence**:
@@ -147,7 +147,7 @@ return nil
 - **Seat**: S2 Security
 - **Severity**: P0
 - **Category**: Message Safety / Requeue Storm
-- **Affected File**: `src/adapters/rabbitmq/consumer_base.go` lines 155-159, `src/adapters/rabbitmq/subscriber.go` lines 197-208
+- **Affected File**: `adapters/rabbitmq/consumer_base.go` lines 155-159, `adapters/rabbitmq/subscriber.go` lines 197-208
 - **Prior Finding**: P0-F12D01
 
 **Evidence**:
@@ -212,7 +212,7 @@ Alternatively, consider routing to DLQ instead of requeue on shutdown, depending
 - **Seat**: S2 Security
 - **Severity**: P1
 - **Category**: Transport Security
-- **Affected Files**: `src/adapters/rabbitmq/connection.go` lines 25-44, 110-116
+- **Affected Files**: `adapters/rabbitmq/connection.go` lines 25-44, 110-116
 
 **Evidence**:
 
@@ -254,7 +254,7 @@ The `amqp091-go` library provides `amqp.DialTLS(url, tlsConfig)` for TLS connect
 - **Seat**: S2 Security
 - **Severity**: P1
 - **Category**: Data Integrity / Idempotency
-- **Affected File**: `src/adapters/rabbitmq/consumer_base.go` lines 107-115
+- **Affected File**: `adapters/rabbitmq/consumer_base.go` lines 107-115
 
 **Evidence**:
 
@@ -292,7 +292,7 @@ The test at `rabbitmq_test.go:1030-1049` confirms this behavior explicitly.
 - **Seat**: S2 Security
 - **Severity**: P1
 - **Category**: Message Safety / Reconnect
-- **Affected Files**: `src/adapters/rabbitmq/subscriber.go` lines 90-132, `src/adapters/rabbitmq/connection.go` lines 187-226
+- **Affected Files**: `adapters/rabbitmq/subscriber.go` lines 90-132, `adapters/rabbitmq/connection.go` lines 187-226
 
 **Evidence**:
 
@@ -337,7 +337,7 @@ Furthermore, there is a window between reconnect and the delivery channel closin
 - **Seat**: S2 Security
 - **Severity**: P2
 - **Category**: Correctness / Performance
-- **Affected File**: `src/adapters/rabbitmq/publisher.go` lines 43-48
+- **Affected File**: `adapters/rabbitmq/publisher.go` lines 43-48
 
 **Evidence**:
 
@@ -363,7 +363,7 @@ Every `Publish()` call acquires a channel from the pool and calls `ch.Confirm(fa
 - **Seat**: S2 Security
 - **Severity**: P2
 - **Category**: Input Validation
-- **Affected Files**: `src/adapters/rabbitmq/publisher.go` line 31, `src/adapters/rabbitmq/subscriber.go` line 80
+- **Affected Files**: `adapters/rabbitmq/publisher.go` line 31, `adapters/rabbitmq/subscriber.go` line 80
 
 **Evidence**:
 

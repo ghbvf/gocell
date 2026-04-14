@@ -3156,7 +3156,7 @@ func TestREF16(t *testing.T) {
 		tmpDir := t.TempDir()
 		srcDir := filepath.Join(tmpDir, "src")
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
-		// Create boundary.yaml under src/assemblies/ (where gocell generate writes it).
+		// Create boundary.yaml under assemblies/ (where gocell generate writes it).
 		boundaryDir := filepath.Join(srcDir, "assemblies", "core-bundle", "generated")
 		require.NoError(t, os.MkdirAll(boundaryDir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(boundaryDir, "boundary.yaml"), []byte("assembly: core-bundle"), 0o644))

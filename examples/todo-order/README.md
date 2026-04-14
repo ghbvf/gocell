@@ -38,7 +38,7 @@ The server starts on `:8082`.
 Start infrastructure services, then run the application:
 
 ```bash
-cd src/examples/todo-order
+cd examples/todo-order
 docker compose up -d
 cd ../..
 go run ./examples/todo-order

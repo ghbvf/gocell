@@ -21,7 +21,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-01 [P0] Seat 5 (DX/Maintainability) + Seat 1 (Architecture): Duplicate `ErrSessionNotFound` with conflicting error code values
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/cells/access-core/internal/mem/session_repo.go` line 13; `/Users/shengming/Documents/code/gocell/src/pkg/errcode/errcode.go` line 32
+- **File**: `/Users/shengming/Documents/code/gocell/cells/access-core/internal/mem/session_repo.go` line 13; `/Users/shengming/Documents/code/gocell/pkg/errcode/errcode.go` line 32
 - **Evidence**:
   - `pkg/errcode/errcode.go:32`: `ErrSessionNotFound Code = "ERR_SESSION_NOT_FOUND"`
   - `cells/access-core/internal/mem/session_repo.go:13`: `ErrSessionNotFound errcode.Code = "ERR_AUTH_SESSION_NOT_FOUND"`
@@ -35,7 +35,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-02 [P1] Seat 5 (DX/Maintainability) + Seat 6 (Product/UX): order-cell and device-cell misuse kernel error code `ErrCellNotFound` for domain "not found" errors
 
-- **Files**: `/Users/shengming/Documents/code/gocell/src/cells/order-cell/internal/mem/repository.go` line 49; `/Users/shengming/Documents/code/gocell/src/cells/device-cell/internal/mem/repository.go` lines 52, 106
+- **Files**: `/Users/shengming/Documents/code/gocell/cells/order-cell/internal/mem/repository.go` line 49; `/Users/shengming/Documents/code/gocell/cells/device-cell/internal/mem/repository.go` lines 52, 106
 - **Evidence**:
   - `order-cell/internal/mem/repository.go:49`: `errcode.New(errcode.ErrCellNotFound, fmt.Sprintf("order %q not found", id))`
   - `device-cell/internal/mem/repository.go:52`: `errcode.New(errcode.ErrCellNotFound, fmt.Sprintf("device %q not found", id))`
@@ -49,7 +49,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-03 [P1] Seat 6 (Product/UX): sso-bff README step 9 curl URL does not match actual route for feature flags
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/examples/sso-bff/README.md` line 92
+- **File**: `/Users/shengming/Documents/code/gocell/examples/sso-bff/README.md` line 92
 - **Evidence**:
   - README step 9: `curl -s http://localhost:8081/api/v1/config/flags | jq`
   - Actual route in `config-core/cell.go:167`: `v1.Route("/flags", ...)` which resolves to `/api/v1/flags/`, NOT `/api/v1/config/flags`
@@ -62,7 +62,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-04 [P2] Seat 6 (Product/UX): sso-bff README has duplicate step numbering
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/examples/sso-bff/README.md` lines 51, 57
+- **File**: `/Users/shengming/Documents/code/gocell/examples/sso-bff/README.md` lines 51, 57
 - **Evidence**:
   - Line 51: `### 4. List users`
   - Line 57: `### 4. Logout (delete session)`
@@ -91,7 +91,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-06 [P2] Seat 6 (Product/UX): List endpoints in order-cell and device-cell lack `page` field in response
 
-- **Files**: `/Users/shengming/Documents/code/gocell/src/cells/order-cell/slices/order-query/handler.go` lines 42-45; `/Users/shengming/Documents/code/gocell/src/cells/device-cell/slices/device-command/handler.go` lines 64-67
+- **Files**: `/Users/shengming/Documents/code/gocell/cells/order-cell/slices/order-query/handler.go` lines 42-45; `/Users/shengming/Documents/code/gocell/cells/device-cell/slices/device-command/handler.go` lines 64-67
 - **Evidence**:
   - `order-query/handler.go:42-45`: `httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": orders, "total": len(orders)})` -- no `page` field
   - API versioning rule in `.claude/rules/gocell/api-versioning.md`: `{"data":...,"total":...,"page":...}`
@@ -104,7 +104,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-07 [P2] Seat 6 (Product/UX): order-create POST response format inconsistent with GET endpoints
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/cells/order-cell/slices/order-create/handler.go` lines 41-45
+- **File**: `/Users/shengming/Documents/code/gocell/cells/order-cell/slices/order-create/handler.go` lines 41-45
 - **Evidence**:
   - POST handler returns: `{"id":"...","item":"...","status":"..."}`  (flat, no `data` wrapper)
   - GET handler returns: `{"data": {...}}` (wrapped)
@@ -118,7 +118,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-08 [P2] Seat 3 (Test/Regression): `TestSentinelCodes` in errcode_test.go does not cover newly added sentinel codes
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/pkg/errcode/errcode_test.go` lines 190-209
+- **File**: `/Users/shengming/Documents/code/gocell/pkg/errcode/errcode_test.go` lines 190-209
 - **Evidence**:
   - `TestSentinelCodes` checks 10 codes: `ErrMetadataInvalid` through `ErrReferenceBroken`
   - Missing from the test: `ErrInternal`, `ErrAuthUnauthorized`, `ErrAuthForbidden`, `ErrRateLimited`, `ErrBodyTooLarge`, `ErrJourneyNotFound`, `ErrTestExecution`, `ErrBusClosed`, `ErrCellMissingOutbox`, `ErrSessionNotFound`, `ErrAdapterNoTx`, `ErrAuthKeyInvalid`, `ErrAuthTokenInvalid`, `ErrAuthTokenExpired`
@@ -131,7 +131,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-09 [P2] Seat 4 (Ops/Deploy): iot-device docker-compose lacks rabbitmq service
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/examples/iot-device/docker-compose.yml`
+- **File**: `/Users/shengming/Documents/code/gocell/examples/iot-device/docker-compose.yml`
 - **Evidence**: The file defines only `postgres` and `redis` services. No `rabbitmq` service is present. Contrast with sso-bff and todo-order which both include rabbitmq with `start_period: 15s`.
 - **Problem**: When the iot-device example is later extended to use real adapters (Docker Mode), it will need rabbitmq for event publishing. The `device-register` slice publishes `event.device-registered.v1`. Without rabbitmq in docker-compose, the Docker Mode section of the README would be incomplete. For now, since the example runs in-memory mode, this is not a blocker.
 - **Fix**: Add rabbitmq service to iot-device docker-compose.yml consistent with the other two examples, or explicitly document in the README that rabbitmq is not needed for L4 cells (if that is the design intent).
@@ -141,7 +141,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-10 [P1] Seat 3 (Test/Regression): order-cell and device-cell tests do not verify errcode types on all error paths
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/cells/device-cell/internal/mem/repository_test.go`
+- **File**: `/Users/shengming/Documents/code/gocell/cells/device-cell/internal/mem/repository_test.go`
 - **Evidence**:
   - `TestDeviceRepository_Create` line 56: `assert.Error(t, err)` -- does not check `errcode.Code`
   - `TestDeviceRepository_GetByID` line 95: `assert.Error(t, err)` -- does not check `errcode.Code`
@@ -156,7 +156,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-11 [P2] Seat 1 (Architecture): order-cell declares L2 but Init does not enforce outboxWriter fail-fast
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/cells/order-cell/cell.go` lines 86-89
+- **File**: `/Users/shengming/Documents/code/gocell/cells/order-cell/cell.go` lines 86-89
 - **Evidence**:
   - `cell.yaml:3`: `consistencyLevel: L2`
   - `cell.go:57-61`: BaseCell metadata declares `ConsistencyLevel: cell.L2`
@@ -181,7 +181,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-13 [P2] Seat 2 (Security): sso-bff example uses hardcoded HMAC key
 
-- **File**: `/Users/shengming/Documents/code/gocell/src/examples/sso-bff/main.go` line 64
+- **File**: `/Users/shengming/Documents/code/gocell/examples/sso-bff/main.go` line 64
 - **Evidence**: `auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")`
 - **Problem**: While this is a development-only example, the hardcoded key with no environment variable override makes it easy for teams to copy this pattern into production code. The key is deterministic and visible in the source code.
 - **Fix**: Add a comment `// DO NOT use hardcoded keys in production. Use environment variable: GOCELL_AUDIT_HMAC_KEY` or read from env with a fallback: `hmacKey := os.Getenv("GOCELL_AUDIT_HMAC_KEY"); if hmacKey == "" { hmacKey = "sso-bff-dev-hmac-key-32-bytes!!!" }`.
@@ -191,7 +191,7 @@ Overall: solid test suite with good coverage of the happy path, error paths, and
 
 ### F-14 [P2] Seat 3 (Test/Regression): No concurrent access test for in-memory repositories
 
-- **Files**: `/Users/shengming/Documents/code/gocell/src/cells/order-cell/internal/mem/repository.go`, `/Users/shengming/Documents/code/gocell/src/cells/device-cell/internal/mem/repository.go`
+- **Files**: `/Users/shengming/Documents/code/gocell/cells/order-cell/internal/mem/repository.go`, `/Users/shengming/Documents/code/gocell/cells/device-cell/internal/mem/repository.go`
 - **Evidence**:
   - Both repositories use `sync.RWMutex` for thread safety
   - No test exercises concurrent access (no `t.Parallel()` + goroutine stress tests)

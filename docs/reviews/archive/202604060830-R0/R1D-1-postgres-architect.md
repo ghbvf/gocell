@@ -1,7 +1,7 @@
 # R1D-1 Architect Review: adapters/postgres
 
 **Reviewer**: Architect Agent  
-**Scope**: `src/adapters/postgres/` (~1200 LOC, 9 source files + 7 test files)  
+**Scope**: `adapters/postgres/` (~1200 LOC, 9 source files + 7 test files)  
 **Date**: 2026-04-06  
 **Verdict**: 3 P0, 4 P1, 3 P2
 
