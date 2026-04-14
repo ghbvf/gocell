@@ -247,7 +247,7 @@ func (e *CommandEntry) ValidateNew() error {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry has invalid Status")
 	}
 	if e.Status != CommandPending {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: new command entry must have Pending status (use AdvanceCommand to change status)")
+		return errcode.New(errcode.ErrValidationFailed, "outbox: new command entry must have Pending status")
 	}
 	if e.CreatedAt.IsZero() {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing CreatedAt")
