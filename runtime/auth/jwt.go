@@ -36,8 +36,10 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 		// and line 57 wraps the result with errcode. Using errcode here
 		// would cause double-wrapping.
 
-		// Pin to RS256 only -- reject HS256, none, and all other algorithms.
-		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+		// Pin to RS256 only -- reject HS256, RS384, RS512, none, and all others.
+		// Type assertion (*jwt.SigningMethodRSA) would accept the entire RSA family;
+		// we compare the concrete instance to reject RS384/RS512 explicitly.
+		if token.Method != jwt.SigningMethodRS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
@@ -53,7 +55,7 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 
 		pub, err := v.keys.PublicKeyByKID(kid)
 		if err != nil {
-			return nil, fmt.Errorf("unknown kid: %s", kid)
+			return nil, fmt.Errorf("key lookup failed for kid %s: %w", kid, err)
 		}
 		return pub, nil
 	})
@@ -95,6 +97,9 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration) (*J
 // Issue creates a signed JWT token for the given subject and roles.
 // The token header includes the kid of the active signing key.
 func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (string, error) {
+	if i.keys.SigningKey() == nil {
+		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
+	}
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub": subject,

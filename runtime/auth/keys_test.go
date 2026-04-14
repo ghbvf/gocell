@@ -133,6 +133,21 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "verification")
 }
 
+func TestNewKeySetWithVerificationKeys_RejectsEmptyKeyID(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: pub2,
+		KeyID:     "",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
 func TestNewKeySetWithVerificationKeys_RejectsNilPublicKey(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 

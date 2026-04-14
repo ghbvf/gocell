@@ -201,6 +201,47 @@ func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
 
+func TestJWTVerifier_RejectsRS384(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	// Sign a valid token with RS384 instead of RS256.
+	token := jwt.NewWithClaims(jwt.SigningMethodRS384, jwt.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = ks.SigningKeyID()
+	tokenStr, err := token.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestJWTVerifier_RejectsRS512(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = ks.SigningKeyID()
+	tokenStr, err := token.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
 func TestJWTVerifier_WrongKey(t *testing.T) {
 	ks1 := mustTestKeySet(t)
 	ks2 := mustTestKeySet(t)
@@ -367,6 +408,30 @@ func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {
 	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
 	require.NoError(t, err)
 	assert.Contains(t, string(headerJSON), "test-kid-001")
+}
+
+func TestJWTIssuer_EmptyKID_ProducesTokenWithEmptyKID(t *testing.T) {
+	priv, _ := generateTestKeyPair(t)
+	stub := &stubSigningKeyProvider{key: priv, kid: ""}
+
+	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
+	require.NoError(t, err)
+
+	// Issue succeeds but produces a token with empty kid — verifier would reject it.
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, tokenStr)
+}
+
+func TestJWTIssuer_NilKey_FailsToSign(t *testing.T) {
+	stub := &stubSigningKeyProvider{key: nil, kid: "some-kid"}
+
+	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
+	require.NoError(t, err)
+
+	// Sign should fail because the key is nil.
+	_, err = issuer.Issue("user-1", nil, nil)
+	require.Error(t, err)
 }
 
 func TestJWTVerifier_AcceptsVerificationKeyStore(t *testing.T) {
