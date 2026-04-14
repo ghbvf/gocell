@@ -1,155 +1,153 @@
 # GoCell Backlog
 
-> 只含待办事项。已完成项（PR#67-91）归档至 `docs/reviews/archive/202604121800-backlog-pre-restructure.md`。
-> 更新日期: 2026-04-13（PR#102-108 状态更新 + B8→6A/6B 合并 11 项，减少 ~10 PR）
-> Batch 1-4: ✅ 全部完成（PR#67-91，25 个 PR）
+> 只含待办事项。已完成项归档至 `docs/reviews/archive/`。
+> 更新日期: 2026-04-14
+> Batch 1-5: ✅ 全部完成 (PR#67-114, 48 PRs)
+> 重构依据: `tools/docs/20260414-backlog-wave-restructure.md`
+> 旧版备份: `docs/reviews/archive/20260414-backlog-pre-wave-restructure.md`
 
 ---
 
-## Batch 5A: 六席位 P1 修复（~34h，6 路全并行）
+## Wave 1: 立即可做（29 项，~99h）
 
-> 来源: PR#87/89/90/91 六席位复核。正确性/安全问题，功能推进之前优先修复。
+> PR#112 (trace propagation) / PR#113 (outbox cleanup) / PR#114 (Health/Readyz) 已合入，前置全部满足。
+> 按优先级排序；单人执行时从上到下依次做，多人时全并行。
 
-| PR | 任务 | 工时 | 文件范围 |
-|----|------|------|---------|
-| ~~CURSOR-FIX~~ | ~~P1-01~~ ✅ PR#94 + ~~P1-02~~ ✅ PR#94 + ~~P1-03(scope/context强制)~~ ✅ PR#95 + ~~P2-01~~ ✅ PR#94 + ~~P4-TD-11~~ ✅ PR#94 + ~~P4-TD-14~~ ✅ PR#94 + ~~WM-6-F2~~ ✅ PR#94 | ✅ 全部完成 | — |
-| ~~HTTP-SEC-FIX~~ | ~~HTTP-SEC-01(IP格式校验)~~ ✅ PR#96 `normalizeIPToken` + `net.ParseIP` 校验 + ~~SEC-02(trusted proxy fail-fast)~~ ✅ PR#96 `ValidateTrustedProxies` + `NewE` error return | ✅ done | — |
-| CONTRACT-FIX | ~~STRICT-P1-01(contract覆盖)~~ ✅ PR#98 + ~~P1-02(contract_test可执行)~~ ✅ PR#98 + ~~SCHEMA-01(空壳schema)~~ ✅ PR#98 | 8h → ✅ done | `contracts/http/` + `cells/*/contract_test.go` |
-| ~~CFG-WATCHER~~ | ~~CFG-P1-01(目录级监听)~~ + ~~P1-02(shutdown顺序)~~ + ~~P2-02(补测试)~~ | ✅ PR#97 | — |
-| ~~CFG-RELOAD~~ | ~~CFG-P1-03(generation counter)~~ + ~~P1-04(DeepCloneValue)~~ + ~~WM-34-F4(commit语义)~~ | ✅ PR#97 | — |
-| ~~BATCH3-FIX~~ | ~~OB-02(safe_observe测试)~~ ✅ PR#96 `safe_observe_test.go` + ~~WriteErrorWithContext(25+ handler)~~ ✅ 全部 48 处已用 `WriteDomainError`/`WriteDecodeError` + ~~PATCH-STRICT(identity PATCH strict decode)~~ ✅ PR#96 `handlePatch` 用 `DecodeJSON`(非 strict) + ~~CURSOR-DECODE-01~~ ✅ PR#99 | ✅ done | — |
-| ~~OBS-WIRE~~ | ~~HTTP observability 接入默认链~~ ✅ PR#96 `WithTracer` + `Tracing` middleware 已在默认链 `RequestID→RealIP→Recorder→[Tracing]→AccessLog→[Metrics]→Recovery→SecurityHeaders→BodyLimit` | ✅ done | — |
+### Auth 关键路径起点 ★
 
----
+| # | 任务 | 工时 | 文件 |
+|---|------|------|------|
+| 1 | **WM-2-F1** KeyProvider 接口抽象 | **1d** | `runtime/auth/` |
 
-## Batch 5B: 功能推进（~5d，2 轨道并行）
+> ★ v1.0 唯一关键路径：WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) = 4.5d 串行。每延迟 1 天 = v1.0 推迟 1 天。
 
-> 前置: Batch 5A 合并后。GAP 硬化: CorrelationID + rate limiter + metadata bridge。
+### P1 正确性
 
-| 轨道 | PR | 任务 | 工时 |
-|------|-----|------|------|
-| A | ~~韧性~~ | ~~WM-33b(熔断器) + RL-WIRE-01(rate limiter激活)~~ ✅ PR#104 | ✅ done |
-| A | 测试基础设施 | ~~WM-20 TestPubSub 认证套件~~ ✅ PR#93 | 1.5d |
-| A | ~~可观测~~ | ~~RL-METRICS-01 Relay Prometheus 指标~~ ✅ PR#102 | ✅ done |
-| B | 事件模型 | ~~WM-15 L4 队列状态机~~ ✅ PR#93 | 1.5d |
-| B | ~~事件路由~~ | ~~ER-ARCH-02 ConsumerGroup 支持~~ ✅ PR#105 | ✅ done |
-| B | ~~链路追踪~~ | ~~CID-01(consumer侧) + META-BRIDGE-01(Entry.Metadata注入)~~ ✅ PR#108 | ✅ done |
-| B | ~~config 契约收口~~ | ~~CFG-CONTRACT-01/02~~ ✅ PR#98 schema 填充 + PR#101 additionalProperties 加固 + contract_test 验证 | ✅ done |
-| ~~⚠ A~~ | ~~🔴 auth 装配缺口~~ | ~~AUTH-WIRE-01(P0 阻塞)~~ ✅ PR#111: (1) router+bootstrap `WithAuthMiddleware` Option (2) core-bundle+sso-bff 生产入口接入 auth (3) `DefaultPublicEndpoints` 修正+清空(公开路径由 composition root 声明) (4) E2E 测试断言 11 条敏感路由 401 | ✅ done | — |
-| B | **trace propagation** | **TRACE-PROP-01**: 补 inbound HTTP header extract（W3C traceparent/b3），tracer.Start 前先 extract 上游 context。当前默认每次开根 span，跨服务 trace_id 不连续 | 3h |
-| B | trace trust policy | **TRUST-POLICY-01**: 为 public-facing endpoint 实现 trust-boundary 策略（参考 otelhttp `WithPublicEndpoint`：new root + link），当前默认 trusted-upstream。PR#112 review 发现，已文档化假设，实现级策略待后续 | 2h |
-| — | ~~contract 运行时闭环~~ | ~~CONTRACT-CLOSURE-01~~: evt- prefix schema 描述修正 + contract route path 对齐 + outbox.Entry.Validate ID 校验 + FMT-13 反向约束 + order-cell durable 模式强化 ✅ PR#106 | ✅ done |
+| # | 任务 | 工时 | 文件 | 来源 |
+|---|------|------|------|------|
+| 2 | **L4 API 收敛** L4-API-01: ValidateNew 改名 + AdvanceCommand 统一副作用 + CommandStateAdvancer 迁移契约 + L4-PURE-01(time.Now 注入) + L4-RETRY-01(ResetForRetry) | 5.5h | `kernel/outbox/l4.go` | 6A |
+| 3 | **CONTRACT-OP-01** HTTP operation model 收口: slice 元数据缺 HTTP serve contract、response.schema oneOf 混合 | 4h | `cells/config-core/slices/*/slice.yaml` + `contracts/http/config/` + `cells/access-core/slices/sessionlogout/slice.yaml` | 6B |
+| 4 | **CONTRACT-TEST-02** 假阳性修复: contracttest helper 不验证真实 handler/outbox 输出 | 5h | `pkg/contracttest/` + `cells/*/contract_test.go` + `cells/device-cell/slices/deviceregister/` | 6B |
+| 5 | **AUTH-DX-01** README + seed 用户 + sso-bff walkthrough: auth 已拦截全部业务路由，README 失效；sso-bff README 缺 refresh/GET user/event 消费 demo (P4-P1-6) | 3h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
+| 6 | **TPUB-01** TestPubSub 真实 adapter 认证: conformance harness 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
+| 7 | **API 响应格式统一** P4-TD-09(list endpoint 缺 `nextCursor/hasMore`) + P4-TD-10(POST 201 未包裹 `{"data":...}`) — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` | B8 提前 |
+| 8 | **Entity→DTO** P4-TD-13: 8 个 handler 直出 entity 含内部字段，需 DTO 映射隔离 API 契约 — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` (user/session/config/flag/audit/order/device/demo) | B8 提前 |
 
----
+### 运维 + 基础设施
 
-## Batch 6A: 运维 + 正确性（~38h，7 路并行）
+| # | 任务 | 工时 | 文件 | 来源 |
+|---|------|------|------|------|
+| 9 | **Bootstrap 加固 + 端点隔离** OPS-4(graceful shutdown) + BOOT-PANIC-01 + BOOT-OPTION-01 + INFRA-EXPOSE-01(/metrics opt-in + health 分离) | 6h | `runtime/bootstrap/` + `runtime/http/router/` | 6A |
+| 10 | **Watcher 核心增强** R97-02(debounce) + R97-F1(symlink-pivot) + WM-34-F1(目录级监听) + F2(metrics) + F3(key 过滤) + R97-04(DeepCloneValue) + R97-R3-02(ShutdownDrain channel 同步) | 7h | `runtime/config/watcher.go` + `store.go` | 6A |
+| 11 | **Watcher 状态面 + 连接池指标** R97-F3(Generation/observedGeneration) + OPS-5(PG/Redis/RMQ 连接池指标) | 4h | `runtime/config/` + `adapters/postgres/` + `adapters/redis/` + `adapters/rabbitmq/` | 6A |
+| 12 | **RabbitMQ 连接正确性** RMQ-RACE-01(WaitConnected 竞态) + P3-DEFER-05(Health 状态区分) | 4h | `adapters/rabbitmq/connection.go` | 6A |
 
-> 前置: Batch 5B 合并后。P3-DEFER-04+P4-TD-01 **必须最先合入**（阻塞 Batch 6C SOL-B-01）。
-> 从 B8 合入: L4-PURE/RETRY→L4-API, DISCARD-PUB→outbox清理, OPS-5→Watcher状态面+连接池, Config增强→Watcher核心(7h)+Watcher状态面(部分)
-> 运维 17h 拆 3 PR: Health/Readyz(7h) + Bootstrap加固(6h) + Watcher状态面+连接池(4h); Config增强从B8合入拆为Watcher核心(7h)
+### P2 Tech Debt
 
-| PR | 任务合并 | 工时 | 文件 |
-|----|----------|------|------|
-| Health/Readyz 体系 | OPS-3(pg/redis Health checker) + ER-P2-03(Router health) + SEC-READYZ-01(/readyz 与 /healthz 隔离) + CFG-P2-01(watcher readyz checker) + READYZ-ROOT(根 readyz 聚合) + **WATCHER-HEALTH-01**(watcher 初始化失败静默降级: `NewWatcher` 失败仅 warn 继续启动，readyz 不含 watcher 状态。修: watcher 注册为 readyz checker 或启动失败时 fail-fast) | 7h | `runtime/http/health/` + `runtime/config/watcher.go` + `runtime/bootstrap/` |
-| Bootstrap 加固 + 端点隔离 | OPS-4(drain 期 graceful shutdown) + **BOOT-PANIC-01**(bootstrap panic 漏口: duplicate checker 校验 + registrar safe-call) + **BOOT-OPTION-01**(WithRouterOptions 覆盖框架能力: 拒绝冲突 option 或固定优先级) + **INFRA-EXPOSE-01**(infra 端点过度暴露: /metrics opt-in + health 公开/内部分离或独立 mux) | 6h | `runtime/bootstrap/` + `runtime/http/router/` |
-| Watcher 核心增强 | R97-02(config reload debounce) + R97-F1(symlink-pivot 原子切换) + WM-34-F1(目录级监听，支持 configDir 整体变更检测) + F2(watcher metrics，暴露 reload 计数/延迟) + F3(key 过滤，Get/Watch 支持 prefix 过滤) + **R97-04**(Get()返回可变引用，需 DeepCloneValue 防调用方篡改内部状态, C1) + **R97-R3-02**(ShutdownDrain 测试改用 channel 确定性同步替代 300ms 时序) | 7h | `runtime/config/watcher.go` + `runtime/config/store.go` |
-| Watcher 状态面 + 连接池指标 | **R97-F3**(Generation observedGeneration 状态面，拆 desired vs applied，需健康端点集成；**依赖 Health/Readyz PR**) + **OPS-5**(PG/Redis/RabbitMQ 连接池指标，从 B8 合入) | 4h | `runtime/config/` + `adapters/postgres/` + `adapters/redis/` + `adapters/rabbitmq/` |
-| ~~runtime 竞态修复~~ | ~~R1C2-F01(eventbus 并发回归测试 + Close/Publish 锁序注释) + R1C2-F03(已验证: WorkerGroup cancel-on-error 已覆盖) + R97-R3-01(reload gate 替换 WaitGroup Add-after-Wait 窗口)~~ ✅ PR#107 | ✅ done | `runtime/eventbus/` + `runtime/worker/` + `runtime/bootstrap/` |
-| RabbitMQ 连接正确性 | RMQ-RACE-01(WaitConnected竞态) + P3-DEFER-05(Health状态区分) | 4h | `adapters/rabbitmq/connection.go` |
-| ~~kernel outbox 清理~~ | ~~P4-TD-01(NoopOutboxWriter) + P3-DEFER-04(Receipt移包) + **DISCARD-PUB-01**(discardPublisher 提升到 `kernel/outbox.DiscardPublisher`)~~ ✅ PR#113 | ✅ done | `kernel/outbox/` + `kernel/idempotency/` + `cells/order-cell/cell.go` |
-| **L4 API 收敛** | **L4-API-01**: Validate 改名 ValidateNew（create-only 语义）+ AdvanceCommand 统一 timestamps/attempt 副作用 + CommandStateAdvancer 暴露完整迁移契约 + **L4-PURE-01**(构造函数 `time.Now()`→参数注入) + **L4-RETRY-01**(`ResetForRetry` 补缺，禁止 adapter 绕过状态机) | 5.5h | `kernel/outbox/l4.go` **(P1, discovered via PR#93 六席位复核; L4-PURE/RETRY 从 B8 合入)** |
-
----
-
-## Batch 6B: Tech Debt 清理（~36.5h，10 路并行 + RabbitMQ 清理串行）
-
-> 前置: Batch 6A RabbitMQ PR 合入后 RabbitMQ 清理才能开始；其余 10 PR 全并行。
-> +11.5h 从 B8 合入: CUR-HDL→cursor回归, FLAG-RACE/P3-TD-12→config-core, CB-IFACE/ENCAP→新增CB清理, WM-6-F8/P3-DEFER-03→order+demo+examples
-
-| PR | 任务合并 | 工时 | 备注 |
-|----|----------|------|------|
-| RabbitMQ 代码清理 | P3-DEFER-01(backoff提取) + P3-DEFER-02(FailOpen enum) | 3h | **依赖 6A RabbitMQ PR** |
-| Hook 增强 | WM17-F2-2(ctx超时) + WM17-F4-3(Prometheus metrics via HookObserver接口) | 3h | 需定义 kernel/cell HookObserver 接口 |
-| CI 增强 | CI-01(integration路径) + T1-7(golangci-lint) | 2.5h | 同改 ci.yml |
-| Session 安全 | P3-TD-10 Session refresh TOCTOU 乐观锁 | 4h | 高风险 |
-| decode 加固 | DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` |
-| Journey 校验 | F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` |
-| OTel 覆盖率 | OTEL-COV-01 testcontainers 集成测试 | 1h | `adapters/otel/` |
-| **TestPubSub 真实 adapter 认证** | **TPUB-01**: conformance harness 替换 sleep 为显式 ready/setup-error 握手 + 接入 RabbitMQ adapter 验证 | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` **(P1, PR#93 复核)** |
-| cursor 回归矩阵 | **CURSOR-TEST-01**: 5 个分页入口 invalid-cursor 测试不齐 + **CUR-HDL-01**(4 个分页 handler 补 cursor 回归: 垃圾cursor/旧格式缺scope/跨context replay，断言400+ERR_CURSOR_INVALID)。补齐 malformed/missing-scope/same-scope-different-context 三类 | 4h | `cells/*/handler_test.go` + `service_test.go` **(P2, PR#95 复核; CUR-HDL-01 从 B8 合入)** |
-| cursor 可观测 | CURSOR-P2-02 cursor invalid 结构化日志 | 1h | `cells/audit-core/` |
-| order+demo+examples 修复 | P4-TD-04(outboxWriter enforce) + P4-TD-12(t.Skip) + **EVT-HDR-RESTORE**(outbox接入后恢复 event headers contract_test 验证) + **WM-6-F8**(demo 全局模式开关, C3) + **P3-DEFER-03**(examples 新 API 示例，前置 ER-ARCH-02 ✅) | 7h | `cells/order-cell/` + `cells/demo/` + `cells/device-cell/` + `examples/` **(WM-6-F8/P3-DEFER-03 从 B8 合入)** |
-| ~~contract 命名修正~~ | ~~CONTRACT-NAME-01~~ ✅ PR#101: `http.auth.me.v1` → 7 个 `http.auth.user.{op}.v1` | ✅ done | — |
-| **config-core 修正** | **CFG-JSON-01**: `domain.ConfigEntry` 缺 json tags，config GET 响应用 PascalCase 违反 camelCase 规范（同理 `domain.FeatureFlag`）+ **FLAG-RACE-01**(FlagRepository 并发测试补 writerErrors 断言) + **P3-TD-12**(config rollback version 校验) | 3.5h | `cells/config-core/internal/domain/config_entry.go` + `feature_flag.go` + `config_repo_test.go` **(P2; FLAG-RACE/P3-TD-12 从 B8 合入)** |
-| ~~flags request schema 拆分~~ | ~~FLAGS-SCHEMA-01~~ ✅ PR#101: 拆为 `http.config.flags.list/get/evaluate.v1` | ✅ done | — |
-| ~~contract 操作级拆分~~ | ~~CONTRACT-SPLIT-01~~ ✅ PR#101: 5 个多操作 contract → 18 个 per-operation contract + `required` + `additionalProperties: false` | ✅ done | — |
-| ~~schema-driven contract-test helper~~ | ~~CONTRACT-TEST-01~~ ✅ PR#101: `pkg/contracttest/` + 16 个 contract_test.go 全部重写为 schema 验证 | ✅ done | — |
-| **DELETE 无 body 语义闭环** | **DELETE-NOCONTENT-01**: delete contract request.schema.json 补 description + additionalProperties:false；contract_test 改为 handler 语义测试（断言 204 + body 长度 0 + 无 JSON envelope）。中期 contract 模型补 method/path/successStatus/noContent 一等元数据（→ CONTRACT-META-01） | 1.5h | `contracts/http/auth/user/delete/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` **(P2, discovered via PR#101 二轮复核)** |
-| bootstrap tracing 集成测试 | **BOOT-TEST-01**: bootstrap 业务路由 tracing 集成断言 + router panic→Recovery→Tracing error span 联通测试 | 2h | `runtime/bootstrap/bootstrap_test.go` + `router/router_test.go` **(P2, PR#96 复核)** |
-| bootstrap 次要清理 | **BOOT-MINOR-01**: `router.New` panic(err.Error())→panic(err) 保留 error 链 + access_log 输出 real_ip 字段 | 1h | `runtime/http/router/router.go` + `middleware/access_log.go` **(P2, PR#96 复核)** |
-| **README + seed 用户** | **AUTH-DX-01**: README.md 仍指导匿名创建用户/访问 config/audit，但 auth 已拦截全部业务路由。in-memory 无预置用户，dev 模式 first-user bootstrap 走不通。修: 更新 README walkthrough + 预置 demo 用户(或受控 seed 入口) | 2h | `README.md` + `cells/access-core/internal/mem/` **(P1, discovered via PR#111 review)** |
-| CB 接口+封装清理 | **CB-IFACE-01**(CircuitBreakerPolicy.Allow() 拆为 Allow()+Report(success)，去 gobreaker TwoStep 耦合) + **CB-ENCAP-01**(Config/State 本地类型映射，消除 adapter 用户 import gobreaker) | 3h | `runtime/resilience/circuitbreaker/` **(PR#104 review 跟进; 从 B8 合入)** |
-| **HTTP operation model 收口** | **CONTRACT-OP-01(P1)**: config-read slice 声明 1 个 contract(`http.config.get.v1`)但注册 2 个路由(GET list + GET single)；config-write/config-publish/session-logout 有真实 HTTP 路由但 slice 元数据只声明 event contract，缺 HTTP serve contract。response.schema.json 用 oneOf 混合单资源/列表。影响版本治理和 contract discoverability。与 CONTRACT-META-01(v1.1) 关联但可先修 slice 元数据 | 4h | `cells/config-core/slices/*/slice.yaml` + `contracts/http/config/` + `cells/access-core/slices/sessionlogout/slice.yaml` **(P1, discovered via PR#104 集成态复核)** |
-| **contract test 假阳性** | **CONTRACT-TEST-02(P1)**: `contracttest` helper 只验证"手写 JSON 过 schema"，不验证真实 handler/outbox 输出，已出现测试绿但语义漂移。三类症状: (1) user delete contract_test 只加载不校验 204/no-body (2) access-core outbox_test 只断言 EventType 不验证 event_id (3) device-register contract 样例写 `registered` 但真实实现返回 `online`。根因解释了 EVT-HDR-RESTORE/DELETE-NOCONTENT-01 为何测试体系仍显示"覆盖完成" | 5h | `pkg/contracttest/` + `cells/*/contract_test.go` + `cells/device-cell/slices/deviceregister/` **(P1, discovered via PR#104 集成态复核)** |
-| ~~session event_id 闭环~~ | ~~EVT-SESSION-01~~ ✅ PR#101: sessionlogin contract_test 验证 payload + headers event_id + MustReject | ✅ done | — |
+| # | 任务 | 工时 | 文件 | 来源 |
+|---|------|------|------|------|
+| 13 | **Session 安全** P3-TD-10 Session refresh TOCTOU 乐观锁 + P4-TD-11(in-memory repo 并发 goroutine 测试) | 5h | `cells/access-core/internal/` | 6B 高风险 + P4 review |
+| 14 | **order+demo+examples 修复** P4-TD-04 + P4-TD-12 + EVT-HDR-RESTORE + WM-6-F8(demo 模式开关) + P3-DEFER-03(examples 新 API) + NOOP-RENAME-01 + NIL-PUB-P1(device-cell nil publisher) | 7.5h | `cells/order-cell/` + `cells/demo/` + `cells/device-cell/` + `examples/` | 6B |
+| 15 | **cursor 回归矩阵** CURSOR-TEST-01 + CUR-HDL-01: 5 个分页入口补 malformed/missing-scope/cross-context 三类回归 | 4h | `cells/*/handler_test.go` + `service_test.go` | 6B |
+| 16 | **config-core 修正** CFG-JSON-01(json tags camelCase) + FLAG-RACE-01(并发测试) + P3-TD-12(rollback version 校验) | 3.5h | `cells/config-core/internal/domain/` | 6B |
+| 17 | **Hook 增强** WM17-F2-2(ctx 超时) + WM17-F4-3(Prometheus metrics via HookObserver 接口) | 3h | `kernel/cell/` | 6B |
+| 18 | **CB 接口+封装清理** CB-IFACE-01(Allow/Report 拆分) + CB-ENCAP-01(消除 gobreaker import) | 3h | `runtime/resilience/circuitbreaker/` | 6B |
+| 19 | **CI 增强** CI-01(integration 路径) + T1-7(golangci-lint) | 2.5h | `.github/ci.yml` | 6B |
+| 20 | **decode 加固** DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` | 6B |
+| 21 | **Journey 校验** F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` | 6B |
+| 22 | **DELETE 无 body** DELETE-NOCONTENT-01: 204 + body=0 语义测试 | 1.5h | `contracts/http/auth/user/delete/v1/` | 6B |
+| 23 | **OTel 覆盖率** OTEL-COV-01 testcontainers 集成测试 | 1h | `adapters/otel/` | 6B |
+| 24 | **Trace trust policy** TRUST-POLICY-01: public-facing endpoint trust-boundary 策略（参考 otelhttp `WithPublicEndpoint`：new root + link），当前默认 trusted-upstream + **OBS-REQID-TRUST**: request_id middleware 无条件信任外部 `X-Request-Id`，需信任边界校验 | 4h | `runtime/http/middleware/tracing.go` + `request_id.go` | 5B PR#112 review + 217 tech-debt |
+| 25 | **HSTS 加固** C-H4: `security_headers.go` 补 `includeSubDomains` | 0.5h | `runtime/http/middleware/security_headers.go` | P2 tech-debt |
+| 26 | **.env.example 补全** ENV-S3: 补 `GOCELL_S3_REGION=us-east-1` — `s3.Config.Validate()` 必填但示例缺失 | 0.5h | `.env.example` | P4 review |
+| 27 | **examples contract CI** INT-2: order-cell/device-cell contract YAML 存在且被 slice.yaml 引用，但 CI 未校验 | 1h | `.github/workflows/ci.yml` | P4 review |
 
 ---
 
-## Batch 6C: P1 功能补全（~5d，2 轨道）
+## Wave 2: 串行后续（6 项，~27h）
 
-> 前置: Batch 6A P3-DEFER-04 合入（SOL-B-01 需要新 Receipt 接口）。
+> 依赖 Wave 1 中的特定任务完成后启动。
 
-| 轨道 | PR | 任务 | 工时 | 前置 |
-|------|-----|------|------|------|
-| Auth | WM-2-F1 | KeyProvider 接口抽象 | 1d | WM-34 ✅ |
-| Auth | WM-35 | BFF handler 接入 cookie session | 2d | WM-2-F1 |
-| Auth | WM-36 | SecureCookie key rotation 双 key ring | 1.5d | WM-2-F1，与 WM-35 串行(cookie_session.go) |
-| Kernel | SOL-B-01 | Claimer lease 续租 Receipt.Renew | 4h | 6A P3-DEFER-04 |
+| # | 任务 | 前置 | 工时 | 文件 |
+|---|------|------|------|------|
+| 28 | **SOL-B-01** Claimer lease 续租 Receipt.Renew | L4 API (#2) | 4h | `kernel/outbox/` |
+| 29 | **Bootstrap tracing 测试** BOOT-TEST-01 | Bootstrap 加固 (#9) | 2h | `runtime/bootstrap/` + `router/` |
+| 30 | **Bootstrap 次要清理** BOOT-MINOR-01: panic(err) + access_log real_ip | Bootstrap 加固 (#9) | 1h | `runtime/http/router/` |
+| 31 | **RabbitMQ 代码清理** P3-DEFER-01(backoff 提取) + P3-DEFER-02(FailOpen enum) | RMQ 连接 (#12) | 3h | `adapters/rabbitmq/` |
+| 32 | **cursor 可观测** CURSOR-P2-02 invalid 结构化日志 | cursor 回归 (#15) | 1h | `cells/audit-core/` |
+| 33 | **WM-35** BFF handler 接入 cookie session | WM-2-F1 (#1) | **2d** ★ | `runtime/auth/` |
 
-> Auth 轨道关键路径: WM-2-F1 → WM-35 → WM-36（串行，共 4.5d）
-> Kernel 轨道与 Auth 轨道并行
-
----
-
-## Batch 7: Review + 发布准备（~16h，5 路并行 + tag 最后）
-
-> 前置: Batch 6A+6B+6C 全部合入（review 对象是最终代码）。
-
-| PR | 任务 | 工时 | 并行 |
-|----|------|------|------|
-| Review cells/ | T1-3 审查 6 cell (5,811 行) | 4h | ✅ |
-| Review examples/ | T1-6 审查 3 项目 (233 行) | 2h | ✅ |
-| Review 报告 | T1-8 汇总 findings | 2h | 依赖 T1-3+T1-6 |
-| 发布文档 | R-1(GOPRIVATE) + R-3(CONTRIBUTING) + R-5(迁移指南) + R-6(错误码) | 4h | ✅ |
-| 性能基准 | R-4 benchmark 测试 | 4h | ✅ |
-| **v1.0 tag** | R-2 git tag + CI 验收 | — | **全部完成后最后执行** |
+> 建议合并 PR: #9+#29+#30 → "Bootstrap 全家桶" (9h)；#2+#28 → "outbox 串行包" (9.5h)。
 
 ---
 
-## Batch 8: P2 偿债（v1.0 后，~44.5h，14 组全并行）
+## Wave 3: Auth 收尾
+
+| # | 任务 | 前置 | 工时 |
+|---|------|------|------|
+| 34 | **WM-36** SecureCookie key rotation 双 key ring | WM-35 (#33) | **1.5d** ★ |
+
+---
+
+## Wave 4: Review + 发布（~16h）
+
+> 前置: Wave 1-3 全部合入。
+
+| # | 任务 | 工时 | 并行 |
+|---|------|------|------|
+| 35 | Review cells/ T1-3 审查 6 cell | 4h | ✅ |
+| 36 | Review examples/ T1-6 审查 3 项目 | 2h | ✅ |
+| 37 | Review 报告 T1-8 汇总 findings | 2h | #35+#36 |
+| 38 | 发布文档 R-1(GOPRIVATE) + R-3(CONTRIBUTING) + R-5(迁移指南) + R-6(错误码) | 4h | ✅ |
+| 39 | 性能基准 R-4 benchmark 测试 | 4h | ✅ |
+| 40 | **v1.0 tag** R-2 git tag + CI 验收 | — | **全部完成后最后执行** |
+
+---
+
+## 关键路径与 PR 合并建议
+
+### 关键路径
+
+```
+★ Auth 链 (唯一关键路径):
+  WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 6.5 工作日
+
+  其余 Wave 1 全部任务并行执行，总工时 ~91h 但不在关键路径上。
+```
+
+### PR 合并建议（36→~24 PR）
+
+| 合并 PR | 包含任务 | 工时 | 理由 |
+|---------|---------|------|------|
+| Bootstrap 全家桶 | #9 + #29 + #30 | 9h | 同目录相关改动 |
+| Contract 正确性 | #3 + #4 + #22 | 10.5h | contract 体系修正 |
+| API 契约加固 | #7 + #8 | 8h | 都改 handler 响应格式，v1.0 前必修 |
+| Trust boundary | #24 (TRUST-POLICY + OBS-REQID) | 4h | 同一信任边界主题 |
+| Kernel 小修 | #20 + #21 | 4h | 独立小改 |
+| cursor 全家桶 | #15 + #32 | 5h | 紧密相关 |
+| outbox 串行包 | #2 + #28 | 9.5h | 同包串行一起 review |
+| 快修合集 | #25 + #26 + #27 | 2h | 三个独立小修 |
+
+---
+
+## Batch 8: P2 偿债（v1.0 后，~41.5h，11 组全并行）
 
 > 前置: v1.0 tag 发布后。不阻塞发布。
-> 12 项已前置合入 6A/6B：L4-PURE/RETRY→6A·L4-API, DISCARD-PUB→6A·outbox清理, OPS-5→6A·Watcher状态面+连接池, Config增强→6A·Watcher核心+Watcher状态面, CUR-HDL→6B·cursor回归, FLAG-RACE/P3-TD-12→6B·config-core修正, CB-IFACE/ENCAP→6B·CB清理, WM-6-F8/P3-DEFER-03→6B·order+demo+examples
+> 整理: 23 组 → 11 组（5 个小项合并为 OBS 全家桶、3 个合并为 Outbox 治理、2 个合并为 order-cell 收口；4 项提前到 Wave 1）
 
 | PR 组 | 任务 | 工时 |
 |-------|------|------|
-| Cursor DX | WM-6-F6(泛型 cursor helper，减少 cells/ 重复分页代码) + F7(cursor 日志收口，统一 invalid-cursor 结构化日志) + F1(prod guard，cursor decode 失败默认空结果而非 500) + TX-NIL-01(nil-safe 注释，repo 层 nil tx 语义文档化) | 3.5h |
+| **OBS 可观测全家桶** | META-SIZE-01(Metadata key 数/大小上限) + OBS-TABLE-01(table-driven 改写) + OBS-METRIC-01(bridge counter/histogram) + OBS-DX-01(cloneMetadata 导出 + wrapper 清理 + godoc) + OBS-DOC-01(IsReservedMetadataKey usage example) | 6h |
+| **Outbox 治理** | OUTBOX-GUARD-01(NoopWriter/DiscardPublisher lint 约束) + DISCARD-OBS-01(DiscardPublisher Logger 注入 + counter) + OUTBOX-RECEIPT-01(`outbox.Receipt` alias 全仓迁移 `idempotency.Receipt`) | 4h |
+| **order-cell 收口** | ORDER-DEMO-01(demo 模式产品行为决策) + NIL-PUB-P2(5 个 L2 service nil publisher 防护) | 3h |
+| Cursor DX | WM-6-F6(泛型 cursor helper) + F7(cursor 日志收口) + F1(prod guard) + TX-NIL-01(nil-safe 注释) | 3.5h |
 | metadata parser | META-67-01(strict unknown-field reject) + META-67-02(位置信息错误报告) + META-67-03(cross-file 引用校验) | 2.5h |
-| auth 增强 | WM-2-F2(HMAC replay 防护: 请求签名加 nonce+timestamp 窗口，防止截获重放) + WM-2-F3(auth metrics: 登录成功/失败/token刷新/过期计数，接入 Prometheus) | 4h |
-| access-core 重构 | P3-TD-11: domain 模型拆分——User/Session/Role 从单文件拆为独立 aggregate，消除 service 层对 domain 的循环感知 | 4h |
-| 集成测试补全 | P4-TD-05(outbox 全链路: produce→relay→consume→idempotent-ack) + RL-INT-01(Relay PG 集成: testcontainers 验证 poll+relay+cleanup) + P2-T-02(audit e2e: HTTP→auditlog→query 验证完整审计链路) | 6h |
-| 迁移+订阅 | RL-MIG-01(online-safe 索引: outbox_entries 大表加索引需 `CONCURRENTLY`，当前 migration 缺此保证) + RL-SUB-01(入站 ID 校验: subscriber 收到的 entry_id 格式校验，防止注入) | 3h |
-| CMD 重构 | CMD-MODE-01(validate/check 子命令 fail-fast: 首个 fatal 即退出，当前静默累积) + CMD-REFACTOR-01(app 包提取: cmd/ 下 bootstrap 逻辑抽到 `internal/app/`，支持测试注入) | 3.5h |
-| 批量操作 | WM-7: 泛型 `BulkResult[T]` helper，聚合批量操作的 success/fail/skip 计数 + per-item error，供 batch API handler 统一响应格式 | 1d |
-| Entity→DTO | P4-TD-13: 8 个 handler 响应从 entity 直出改为 DTO 映射，隔离持久化模型与 API 契约（涉及 user/session/config/flag/audit/order/device/demo） | 4h |
-| ~~OBS 信任边界~~ | ~~**OBS-TRUST-01**~~ ✅ PR#108: `isSafeID` + consumer 侧 `isSafeObservabilityID` 双重验证 | ✅ done |
-| ~~OBS 命名空间~~ | ~~**OBS-NS-01**~~ ✅ PR#108: unexported `reservedMetadataKeys` + `IsReservedMetadataKey()` 公共 API | ✅ done |
-| ~~OBS 运行时开关~~ | ~~**OBS-KILLSW-01**~~ ✅ PR#108: `bootstrap.WithDisableObservabilityRestore()` (移除 subscriber 双重 restore) | ✅ done |
-| Metadata map 大小限制 | **META-SIZE-01**: `Entry.Metadata` 无 key 数/总大小上限，write path 全量 JSON 序列化入库。bridge 只加 3 key 但业务层可传入任意大 map。需在 Writer 接口层或 postgres adapter 加 guard (PR#108 review F2-03) | 1h |
-| kernel 测试 table-driven | **OBS-TABLE-01**: `observability_metadata_test.go` 用独立 `Test*` 函数而非 table-driven subtests（CLAUDE.md 要求 kernel/ 层 table-driven）(PR#108 review F3-04) | 1h |
-| bridge 指标可观测 | **OBS-METRIC-01**: MergeObservabilityMetadata/ContextWithObservabilityMetadata 无 counter/histogram。生产环境无法确认 bridge 是否工作、多少 entry 缺少 trace context (PR#108 review F4-01) | 1.5h |
-| DX: OBS 代码清理 | **OBS-DX-01**: `cloneMetadata` 未导出但通用；`logAttrsWithContext`/`logWithContext` 是 1:1 wrapper；`contextValueGetter/Setter` 缺 godoc；access_log 用 `[]any` 而非 `slog.LogAttrs` (PR#108 review F5-01~04, 可一起处理) | 2h |
-| collision guidance 文档 | **OBS-DOC-01**: `IsReservedMetadataKey` 缺 usage example，开发者不知何时该调用。补 package doc 示例 (PR#108 review F6-02) | 0.5h |
+| auth 增强 | WM-2-F2(HMAC replay 防护) + WM-2-F3(auth metrics) | 4h |
+| access-core 重构 | P3-TD-11: domain 模型拆分 User/Session/Role（前置: Wave 1 #13 Session TOCTOU 先完成） | 4h |
+| 集成测试补全 | P4-TD-05(outbox 全链路) + RL-INT-01(Relay PG 集成) + P2-T-02(audit e2e) | 6h |
+| 迁移+订阅 | RL-MIG-01(online-safe 索引 CONCURRENTLY) + RL-SUB-01(入站 ID 校验) | 3h |
+| CMD 重构 | CMD-MODE-01(fail-fast) + CMD-REFACTOR-01(app 包提取) | 3.5h |
+| 批量操作 | WM-7: 泛型 `BulkResult[T]` helper | 1d |
 
 ---
 
@@ -198,7 +196,16 @@
 
 | # | 需求 | 优先级 |
 |---|------|--------|
-| CONTRACT-META-01 | contract.yaml 补 method/path/pathParams/queryParams/successStatus/noContent 一等元数据。当前 contract 只描述 body schema，transport 语义（HTTP 方法、状态码、无 body）靠隐含约定。ref: goa operation model / Kratos method binding / go-zero route DSL | P1 |
+| CONTRACT-META-01 | contract.yaml 补 method/path/pathParams/queryParams/successStatus/noContent 一等元数据 | P1 |
+
+### spec tech-debt 遗留
+
+| ID | 问题 | 来源 |
+|----|------|------|
+| C-AC7 | JWT 无 `jti` claim — token 不可单独撤销，需 invalidate 整个 session | P2 tech-debt |
+| C-L6 | Contract ID 格式不一致：scaffold 用点分 vs generator 用斜杠 — 跨工具链断裂 | P2 tech-debt |
+| C-DC9 | `auditarchive` slice 仍是 stub（`ErrNotImplemented`），S3 adapter 已就绪但 service 未接线 | P2 tech-debt |
+| DURABLE-TYPE-01 | Durable repository 约束仅靠运行时 fail-fast，缺类型系统层面的仓储能力区分 | 216 tech-debt |
 
 ### 架构风险
 
@@ -254,22 +261,23 @@
 
 ## 执行总览
 
-| Batch | PR 数 | 工时 | 并行度 | 前置 | 里程碑 |
-|-------|-------|------|--------|------|--------|
-| 5A | 7 → ✅ 全部完成 | ~~39h~~ → ✅ done | — | — | CURSOR ✅ PR#94/95, CFG ✅ PR#97, CONTRACT ✅ PR#98+101, HTTP-SEC ✅ PR#96, BATCH3 ✅ PR#96+99, OBS-WIRE ✅ PR#96 |
-| 5B | 9 → 剩 1 | ~5d | 2 轨道 | 5A | CFG-CONTRACT ✅ PR#101，韧性 ✅ PR#104，RL-METRICS ✅ PR#102，ER-ARCH-02 ✅ PR#105，CONTRACT-CLOSURE ✅ PR#106，CID-01 ✅ PR#108，AUTH-WIRE-01 ✅ PR#111，剩 TRACE-PROP-01 |
-| 6A | 7+1 | ~~25h~~ → ~38h | 8/8 | 5B | 运维拆3PR(Health+Bootstrap+Watcher状态面) + Watcher核心(B8 Config增强合入) + RMQ + outbox(+DISCARD-PUB) + L4(+PURE/RETRY)，runtime竞态 ✅ PR#107 |
-| 6B | 18 → 剩 11 | ~~25h~~ → ~36.5h | 11/11 | 6A(RMQ) | 6 项 ✅ PR#101, +B8合入(CUR-HDL/FLAG-RACE/TD-12/CB/WM-6-F8/DEFER-03) |
-| 6C | 4 | ~5d | 2 轨道 | 6A(Receipt) | P1 功能补全 (BFF+SecureCookie) |
-| 7 | 6 | ~16h | 5+tag | 6全完 | **v1.0 RC → v1.0** |
-| 8 | 20 → 剩 14 | ~~63.5h~~ → ~44.5h | 14/14 | v1.0 | P2 偿债，12 项前置合入 6A/6B(含 Config增强→6A)，OBS-TRUST/NS/KILLSW ✅ PR#108，+5 新增(META-SIZE/OBS-TABLE/OBS-METRIC/OBS-DX/OBS-DOC from PR#108 review) |
+| Wave | 项数 | 工时 | 前置 | 里程碑 |
+|------|------|------|------|--------|
+| 1 | 29 | ~99h | 无（PR#112-114 已合入） | Auth 关键路径启动 + P1 正确性 + API 契约加固 + 运维 |
+| 2 | 6 | ~27h | Wave 1 特定任务 | Auth WM-35 + Bootstrap/RMQ/cursor 收尾 |
+| 3 | 1 | ~12h | WM-35 | Auth WM-36 收尾 |
+| 4 | 6 | ~16h | Wave 1-3 全部合入 | **Review → v1.0 tag** |
+| 8 | 11 | ~41.5h | v1.0 | P2 偿债（不阻塞发布） |
 
 ```
-Week 1:  Batch 5A ✅ 全部完成 (PR#94-101)
-Week 2:  Batch 5B 大部分完成 — 韧性 ✅ PR#104, 可观测 ✅ PR#102, 事件路由 ✅ PR#105,
-         contract闭环 ✅ PR#106, runtime竞态 ✅ PR#107
-         剩余: CID-01 ✅ PR#108 + AUTH-WIRE-01(P0) + TRACE-PROP-01
-Week 3:  Batch 5B 收尾 + Batch 6A (~38h, +B8 Config增强合入) + 6B (~36.5h, +B8合入) + 6C Auth轨道启动
-Week 4:  Batch 6C 收尾 + Batch 7 (review+发布) → v1.0 tag
-Post:    Batch 8 (P2偿债, 按需排期, 14 项 ~44.5h)
+已完成:
+  Batch 1-4: ✅ PR#67-91 (25 PRs)
+  Batch 5A:  ✅ PR#94-101 (8 PRs)
+  Batch 5B:  ✅ PR#102-114 (13 PRs, 含 PR#112 trace + PR#113 outbox + PR#114 health)
+  6A 部分:   ✅ PR#107 runtime 竞态 + PR#114 Health/Readyz + PR#113 outbox 清理
+
+当前:
+  Wave 1-4: 42 项, ~154h → v1.0 (含 4 项从 Batch 8 提前)
+  Batch 8:  11 组, ~41.5h (从 23 组合并整理)
+  关键路径: WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 6.5 工作日
 ```
