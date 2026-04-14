@@ -82,7 +82,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 	payload, _ := json.Marshal(map[string]any{
 		"action":    "published",
 		"key":       key,
-		"configId": entry.ID,
+		"config_id": entry.ID,
 		"version":   version.Version,
 	})
 
@@ -128,8 +128,8 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	payload, _ := json.Marshal(map[string]any{
 		"action":         "rollback",
 		"key":            key,
-		"targetVersion": targetVersion,
-		"newVersion":    entry.Version,
+		"target_version": targetVersion,
+		"new_version":    entry.Version,
 	})
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
