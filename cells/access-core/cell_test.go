@@ -3,6 +3,7 @@ package accesscore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -417,4 +418,87 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	_, err = verifier.Verify(ctx, accessToken)
 	require.Error(t, err, "token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN", "error should be auth invalid token")
+}
+
+// TestAccessCore_RefreshTokenRevocation_E2E verifies the refresh→validate→revoke
+// chain: login → refresh → validate refreshed token → revoke → verify rejected.
+func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+
+	c := NewAccessCore(
+		WithUserRepository(userRepo),
+		WithSessionRepository(sessionRepo),
+		WithRoleRepository(roleRepo),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+	)
+	ctx := context.Background()
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
+
+	// Seed a user.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash))
+	require.NoError(t, err)
+	user.ID = "usr-refresh"
+	require.NoError(t, userRepo.Create(ctx, user))
+
+	// Login via HTTP.
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	loginBody := `{"username":"refresh-user","password":"secret123"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(loginBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var loginResp struct {
+		Data struct {
+			AccessToken  string `json:"AccessToken"`
+			RefreshToken string `json:"RefreshToken"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loginResp))
+
+	// Refresh via HTTP.
+	refreshBody := fmt.Sprintf(`{"refreshToken":%q}`, loginResp.Data.RefreshToken)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/refresh", strings.NewReader(refreshBody))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "refresh should succeed: %s", rec.Body.String())
+
+	var refreshResp struct {
+		Data struct {
+			AccessToken string `json:"AccessToken"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &refreshResp))
+	refreshedToken := refreshResp.Data.AccessToken
+	require.NotEmpty(t, refreshedToken)
+
+	// Validate refreshed token through session-aware verifier.
+	verifier := c.TokenVerifier()
+	claims, err := verifier.Verify(ctx, refreshedToken)
+	require.NoError(t, err, "refreshed token should be valid")
+
+	sid := claims.Extra["sid"].(string)
+	require.NotEmpty(t, sid)
+
+	// Revoke the session.
+	sess, err := sessionRepo.GetByID(ctx, sid)
+	require.NoError(t, err)
+	sess.Revoke()
+	require.NoError(t, sessionRepo.Update(ctx, sess))
+
+	// Refreshed token should now be rejected.
+	_, err = verifier.Verify(ctx, refreshedToken)
+	require.Error(t, err, "refreshed token should be rejected after session revocation")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }
