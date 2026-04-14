@@ -86,3 +86,45 @@ func TestHandleEvent_InvalidJSON(t *testing.T) {
 func TestTopicConstant(t *testing.T) {
 	assert.Equal(t, "event.config.changed.v1", TopicConfigChanged)
 }
+
+// --- Behavior-level tests via WrapLegacyHandler ---
+// These verify the full disposition chain: handler error → WrapLegacyHandler → HandleResult.
+
+func TestWrapLegacyHandler_ValidPayload_Ack(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	payload, err := json.Marshal(ConfigChangedEvent{Action: "updated", Key: "jwt.ttl"})
+	require.NoError(t, err)
+
+	entry := outbox.Entry{ID: "evt-wrap-1", Topic: TopicConfigChanged, Payload: payload}
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+}
+
+func TestWrapLegacyHandler_InvalidJSON_Reject(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	entry := outbox.Entry{ID: "evt-wrap-2", Topic: TopicConfigChanged, Payload: []byte("bad{")}
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	assert.Error(t, result.Err)
+}
+
+func TestWrapLegacyHandler_UnknownAction_Ack(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	payload, err := json.Marshal(ConfigChangedEvent{Action: "unknown-future-action", Key: "x"})
+	require.NoError(t, err)
+
+	entry := outbox.Entry{ID: "evt-wrap-3", Topic: TopicConfigChanged, Payload: payload}
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+}

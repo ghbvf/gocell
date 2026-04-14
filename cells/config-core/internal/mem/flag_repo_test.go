@@ -309,7 +309,7 @@ func TestFlagRepository_List_Empty(t *testing.T) {
 }
 
 // TestFlagRepository_ConcurrentCRUDAndList verifies that concurrent
-// CRUD and List calls do not race. Run with -race to verify.
+// CRUD and List calls do not race and maintain semantic invariants.
 func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	repo := NewFlagRepository()
 	ctx := context.Background()
@@ -319,21 +319,35 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	const iterations = 50
 
 	var wg sync.WaitGroup
+	var writeErrors, readErrors atomic.Int64
 
 	for w := range writers {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			for i := range iterations {
-				_ = repo.Create(ctx, &domain.FeatureFlag{
-					ID:  fmt.Sprintf("id-w%d-i%d", id, i),
-					Key: fmt.Sprintf("flag-w%d-i%d", id, i),
-				})
+				key := fmt.Sprintf("flag-w%d-i%d", id, i)
+				if err := repo.Create(ctx, &domain.FeatureFlag{
+					ID:   fmt.Sprintf("id-w%d-i%d", id, i),
+					Key:  key,
+					Type: domain.FlagBoolean,
+				}); err != nil {
+					writeErrors.Add(1)
+					continue
+				}
+				// Update the flag we just created.
+				if err := repo.Update(ctx, &domain.FeatureFlag{
+					ID:      fmt.Sprintf("id-w%d-i%d", id, i),
+					Key:     key,
+					Type:    domain.FlagBoolean,
+					Enabled: true,
+				}); err != nil {
+					writeErrors.Add(1)
+				}
 			}
 		}(w)
 	}
 
-	var readErrors atomic.Int64
 	for r := range readers {
 		wg.Add(1)
 		go func() {
@@ -351,7 +365,7 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 					readErrors.Add(1)
 					continue
 				}
-				// Semantic invariant: results sorted by key.
+				// Semantic invariant: results must be sorted.
 				for j := 1; j < len(items); j++ {
 					if items[j].Key < items[j-1].Key {
 						t.Errorf("flag list not sorted: %s < %s", items[j].Key, items[j-1].Key)
@@ -363,5 +377,6 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	}
 
 	wg.Wait()
+	assert.Zero(t, writeErrors.Load(), "concurrent writes should not error (unique keys)")
 	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

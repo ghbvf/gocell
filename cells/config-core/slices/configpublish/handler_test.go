@@ -2,6 +2,7 @@ package configpublish
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -114,6 +115,32 @@ func TestHandler_HandleRollback_BadJSON(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int
+	}{
+		{name: "version 0", version: 0},
+		{name: "version -1", version: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, repo := setupHandler()
+			seedForPublish(t, repo, "app.name", "v1")
+
+			w := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"version":%d}`, tt.version)
+			req := httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "rollback target version")
+		})
+	}
 }
 
 // --- outbox/tx tests ---
