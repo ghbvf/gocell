@@ -8,10 +8,11 @@
 
 ---
 
-## Wave 1: 立即可做（29 项，~99h）
+## Wave 1: 立即可做（32 项，~109h）
 
 > PR#112 (trace propagation) / PR#113 (outbox cleanup) / PR#114 (Health/Readyz) 已合入，前置全部满足。
 > 按优先级排序；单人执行时从上到下依次做，多人时全并行。
+> 0414 调整: access-core / config-core / rabbitmq 按模块合并为加固 PR，一次性封口；反复被审查发现的模式嵌入自动化约束。
 
 ### Auth 关键路径起点 ★
 
@@ -28,10 +29,12 @@
 | 2 | **L4 API 收敛** L4-API-01: ValidateNew 改名 + AdvanceCommand 统一副作用 + CommandStateAdvancer 迁移契约 + L4-PURE-01(time.Now 注入) + L4-RETRY-01(ResetForRetry) | 5.5h | `kernel/outbox/l4.go` | 6A |
 | 3 | **CONTRACT-OP-01** HTTP operation model 收口: slice 元数据缺 HTTP serve contract、response.schema oneOf 混合 | 4h | `cells/config-core/slices/*/slice.yaml` + `contracts/http/config/` + `cells/access-core/slices/sessionlogout/slice.yaml` | 6B |
 | 4 | **CONTRACT-TEST-02** 假阳性修复: contracttest helper 不验证真实 handler/outbox 输出 | 5h | `pkg/contracttest/` + `cells/*/contract_test.go` + `cells/device-cell/slices/deviceregister/` | 6B |
-| 5 | **AUTH-DX-01** README + seed 用户 + sso-bff walkthrough: auth 已拦截全部业务路由，README 失效；sso-bff README 缺 refresh/GET user/event 消费 demo (P4-P1-6) | 3h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
+| 5 | **AUTH-DX-01** README + seed 用户 + sso-bff walkthrough: auth 已拦截全部业务路由，README 失效；sso-bff README 缺 refresh/GET user/event 消费 demo (P4-P1-6)。具体漂移: refresh curl 发 `sessionId` 实际需 `refreshToken`；logout 204 空 body 管道 jq 失败；audit jq 用 `.createdAt` 实为 `.Timestamp` | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review + 0414 审查 |
 | 6 | **TPUB-01** TestPubSub 真实 adapter 认证: conformance harness 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
 | 7 | **API 响应格式统一** P4-TD-09(list endpoint 缺 `nextCursor/hasMore`) + P4-TD-10(POST 201 未包裹 `{"data":...}`) — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` | B8 提前 |
 | 8 | **Entity→DTO** P4-TD-13: 8 个 handler 直出 entity 含内部字段，需 DTO 映射隔离 API 契约 — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` (user/session/config/flag/audit/order/device/demo) | B8 提前 |
+| 8a | **L2-TX-01** txRunner 装配缺口: access-core/config-core 仅校验 `outboxWriter`，缺 `txRunner` 成对约束——业务写入成功但 outbox 写入可在事务外失败，破坏 L2 原子性。参照 order-cell XOR 约束模式修复 | 3h | `cells/access-core/cell.go` + `cells/config-core/cell.go` + 各 service `runInTx` | 0414 审查 |
+| 8b | **EVT-SUB-01** event contract subscriber 漂移: `contracts/event/config/changed/v1/contract.yaml` 声明 access-core 为 subscriber，但 `RegisterSubscriptions` 是 no-op；`J-config-hot-reload.yaml` passCriteria 不可达。需实现 handler 或从 contract subscribers 移除 | 3h | `cells/access-core/cell.go` + `contracts/event/config/changed/v1/contract.yaml` + `journeys/J-config-hot-reload.yaml` | 0414 审查 |
 
 ### 运维 + 基础设施
 
@@ -61,6 +64,7 @@
 | 25 | **HSTS 加固** C-H4: `security_headers.go` 补 `includeSubDomains` | 0.5h | `runtime/http/middleware/security_headers.go` | P2 tech-debt |
 | 26 | **.env.example 补全** ENV-S3: 补 `GOCELL_S3_REGION=us-east-1` — `s3.Config.Validate()` 必填但示例缺失 | 0.5h | `.env.example` | P4 review |
 | 27 | **examples contract CI** INT-2: order-cell/device-cell contract YAML 存在且被 slice.yaml 引用，但 CI 未校验 | 1h | `.github/workflows/ci.yml` | P4 review |
+| 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 |
 
 ---
 
@@ -112,13 +116,18 @@
 ★ Auth 链 (唯一关键路径):
   WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 6.5 工作日
 
-  其余 Wave 1 全部任务并行执行，总工时 ~91h 但不在关键路径上。
+  其余 Wave 1 全部任务并行执行，总工时 ~101h 但不在关键路径上。
 ```
 
-### PR 合并建议（36→~24 PR）
+### PR 合并建议（36→~21 PR）
+
+> 0414 调整: 对 top-3 问题模块按模块合并为加固 PR，一次性封口，避免逐条零散修复再被下轮审查追加。
 
 | 合并 PR | 包含任务 | 工时 | 理由 |
 |---------|---------|------|------|
+| **access-core 加固** | #8a(access) + #8b + #13 | 9.5h | 模块封口: txRunner XOR + event 订阅实现/清理 + session TOCTOU |
+| **config-core 加固** | #8a(config) + #16 | 5h | 模块封口: txRunner XOR + JSON camelCase + flag race |
+| **RabbitMQ 加固** | #12 + #27a | 8h | 模块封口: 连接竞态 + ConsumerBaseRetry/ConnectionRecovery 测试修正 |
 | Bootstrap 全家桶 | #9 + #29 + #30 | 9h | 同目录相关改动 |
 | Contract 正确性 | #3 + #4 + #22 | 10.5h | contract 体系修正 |
 | API 契约加固 | #7 + #8 | 8h | 都改 handler 响应格式，v1.0 前必修 |
@@ -128,12 +137,38 @@
 | outbox 串行包 | #2 + #28 | 9.5h | 同包串行一起 review |
 | 快修合集 | #25 + #26 + #27 | 2h | 三个独立小修 |
 
+### 防御性自动化（随加固 PR 嵌入，无独立工时）
+
+> 将反复被审查发现的模式变成代码/CI 约束，阻断同类问题再生。
+
+| 约束 | 嵌入 PR | 机制 |
+|------|---------|------|
+| L2 Cell writer+tx XOR | access/config-core 加固 | `Cell.Validate()` 加 `(outboxWriter==nil) != (txRunner==nil)` 检查，参照 order-cell |
+| contract subscriber 一致性 | contract-health 扩展 (#21 Journey 校验) | `gocell check contract-health` 校验 subscribers 有对应 `RegisterSubscriptions` handler |
+| Integration 测试真实性 | CI 增强 (#19) | `-tags integration` 要求 testcontainer setup；裸 handler 调用归入 unit test |
+| README curl 可执行 | AUTH-DX-01 (#5) | CI smoke test 执行 README curl 命令，断言 HTTP status + response schema |
+
+### 模块封口 checklist
+
+> 加固 PR 合入后标记 reviewed-sealed，后续仅在功能变更时重新审查，不做全模块扫描。
+
+**Cell 模块** (access-core / config-core / order-cell):
+- [ ] `Cell.Validate()` 覆盖所有硬约束（L2 writer+tx、依赖注入完整性）
+- [ ] `RegisterSubscriptions` 与 `contract.yaml` subscribers 列表一致
+- [ ] handler 输出匹配 `response.schema.json`
+- [ ] README/walkthrough curl 可执行
+
+**Adapter 模块** (rabbitmq / postgres / redis):
+- [ ] 所有 `TestIntegration_*` 过真实 broker / testcontainer
+- [ ] 测试名与测试行为一致（无假阳性）
+- [ ] `Health()` 状态机覆盖 connected → disconnected → recovering 路径
+
 ---
 
-## Batch 8: P2 偿债（v1.0 后，~41.5h，11 组全并行）
+## Batch 8: P2 偿债（v1.0 后，~43.5h，12 组全并行）
 
 > 前置: v1.0 tag 发布后。不阻塞发布。
-> 整理: 23 组 → 11 组（5 个小项合并为 OBS 全家桶、3 个合并为 Outbox 治理、2 个合并为 order-cell 收口；4 项提前到 Wave 1）
+> 整理: 23 组 → 12 组（5 个小项合并为 OBS 全家桶、3 个合并为 Outbox 治理、2 个合并为 order-cell 收口；4 项提前到 Wave 1；+1 Builder 可选优化）
 
 | PR 组 | 任务 | 工时 |
 |-------|------|------|
@@ -142,12 +177,14 @@
 | **order-cell 收口** | ORDER-DEMO-01(demo 模式产品行为决策) + NIL-PUB-P2(5 个 L2 service nil publisher 防护) | 3h |
 | Cursor DX | WM-6-F6(泛型 cursor helper) + F7(cursor 日志收口) + F1(prod guard) + TX-NIL-01(nil-safe 注释) | 3.5h |
 | metadata parser | META-67-01(strict unknown-field reject) + META-67-02(位置信息错误报告) + META-67-03(cross-file 引用校验) | 2.5h |
-| auth 增强 | WM-2-F2(HMAC replay 防护) + WM-2-F3(auth metrics) | 4h |
+| auth 增强 | WM-2-F2(HMAC replay 防护) + WM-2-F3(auth metrics) + AUTH-SIGNER-01(`SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey`，需自定义 jwt SigningMethod，前置: golang-jwt v6 或 wrapper) | 4h+2h |
+| auth 测试 DX | AUTH-SLOG-01(KeySet/servicetoken 注入 slog.Handler 替代全局 `slog.SetDefault`，消除并行测试风险) + AUTH-NOWFUNC-01(`var nowFunc` 包级状态改为实例字段注入) | 3h |
 | access-core 重构 | P3-TD-11: domain 模型拆分 User/Session/Role（前置: Wave 1 #13 Session TOCTOU 先完成） | 4h |
 | 集成测试补全 | P4-TD-05(outbox 全链路) + RL-INT-01(Relay PG 集成) + P2-T-02(audit e2e) | 6h |
 | 迁移+订阅 | RL-MIG-01(online-safe 索引 CONCURRENTLY) + RL-SUB-01(入站 ID 校验) | 3h |
 | CMD 重构 | CMD-MODE-01(fail-fast) + CMD-REFACTOR-01(app 包提取) | 3.5h |
 | 批量操作 | WM-7: 泛型 `BulkResult[T]` helper | 1d |
+| **Builder 可选优化** | PR#115 `fmt.Sprintf→strconv.Itoa` 微优化：补 benchmark 文件 + 修正 bolt.md 矛盾指导（Itoa vs AppendInt 分层适用）+ 删除未验证的 "40%" 声称。前置: close PR#115 DRAFT | 2h |
 
 ---
 
@@ -263,11 +300,11 @@
 
 | Wave | 项数 | 工时 | 前置 | 里程碑 |
 |------|------|------|------|--------|
-| 1 | 29 | ~99h | 无（PR#112-114 已合入） | Auth 关键路径启动 + P1 正确性 + API 契约加固 + 运维 |
+| 1 | 32 | ~109h | 无（PR#112-114 已合入） | Auth 关键路径启动 + P1 正确性 + API 契约加固 + 运维 |
 | 2 | 6 | ~27h | Wave 1 特定任务 | Auth WM-35 + Bootstrap/RMQ/cursor 收尾 |
 | 3 | 1 | ~12h | WM-35 | Auth WM-36 收尾 |
 | 4 | 6 | ~16h | Wave 1-3 全部合入 | **Review → v1.0 tag** |
-| 8 | 11 | ~41.5h | v1.0 | P2 偿债（不阻塞发布） |
+| 8 | 12 | ~43.5h | v1.0 | P2 偿债（不阻塞发布） |
 
 ```
 已完成:
@@ -277,7 +314,86 @@
   6A 部分:   ✅ PR#107 runtime 竞态 + PR#114 Health/Readyz + PR#113 outbox 清理
 
 当前:
-  Wave 1-4: 42 项, ~154h → v1.0 (含 4 项从 Batch 8 提前)
-  Batch 8:  11 组, ~41.5h (从 23 组合并整理)
+  Wave 1-4: 45 项, ~164h → v1.0 (含 4 项从 Batch 8 提前 + 3 项 0414 审查新增)
+  Batch 8:  12 组, ~43.5h (从 23 组合并整理 + Builder 可选优化)
   关键路径: WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 6.5 工作日
 ```
+
+---
+
+## Wave 1 执行顺序（7 批次，每批 3-4 项）
+
+> 按依赖链和数据流排序。同批内全并行，跨批串行。
+> 依赖图:
+> ```
+> #8a → #8b → #13        (access-core cell.go 逐步改动)
+>   └→ #16               (config-core cell.go)
+> #9 → #10 → #11         (bootstrap → watcher → watcher 指标)
+> #12 → #27a, #6          (RMQ 连接 → 测试修正 / TPUB)
+> #3 → #4                 (contract model → contract test)
+> #7 → #8 → #5            (API 格式 → DTO → README 反映最终状态)
+> #19 → #27               (CI → examples CI)
+> ```
+
+### Batch W1-1: 基座层（4 项，~19h，全并行）
+
+| 任务 | 工时 | 为什么先做 |
+|------|------|-----------|
+| #1 WM-2-F1 KeyProvider ★ | 1d | 关键路径起点，每延 1 天 v1.0 推 1 天 |
+| #2 L4 API 收敛 | 5.5h | kernel/outbox API 稳定后 Wave 2 #28 才可启动 |
+| #8a L2-TX-01 txRunner XOR | 3h | 两个 cell 加固 PR 的前置，改 Validate() 模式 |
+| #19 CI 增强 | 2.5h | golangci-lint + integration 路径，后续所有 PR 受益 |
+
+### Batch W1-2: 运行时 + 事件基础（4 项，~17h）
+
+| 任务 | 工时 | 依赖 |
+|------|------|------|
+| #9 Bootstrap 加固 | 6h | 无（#10 依赖它） |
+| #12 RabbitMQ 连接正确性 | 4h | 无（#27a、#6 依赖它） |
+| #8b EVT-SUB-01 event 订阅 | 3h | ← #8a |
+| #3 CONTRACT-OP-01 contract model | 4h | 无（#4 依赖它） |
+
+### Batch W1-3: 模块加固收口（4 项，~20.5h）
+
+| 任务 | 工时 | 依赖 | 完成的加固 PR |
+|------|------|------|-------------|
+| #13 Session TOCTOU | 5h | ← #8a, #8b | **access-core 加固** (#8a+#8b+#13) |
+| #16 config-core 修正 | 3.5h | ← #8a | **config-core 加固** (#8a+#16) |
+| #4 CONTRACT-TEST-02 | 5h | ← #3 | Contract 正确性 (#3+#4) |
+| #10 Watcher 核心增强 | 7h | ← #9 | — |
+
+### Batch W1-4: API 契约 + RMQ 收口（4 项，~16h）
+
+| 任务 | 工时 | 依赖 | 完成的加固 PR |
+|------|------|------|-------------|
+| #7 API 响应格式统一 | 4h | 无 | — |
+| #8 Entity→DTO | 4h | ← #7（同 handler 文件） | **API 契约加固** (#7+#8) |
+| #27a RMQ-TEST-01 | 4h | ← #12 | **RabbitMQ 加固** (#12+#27a) |
+| #6 TPUB-01 | 4h | ← #12 | — |
+
+### Batch W1-5: 二级加固（4 项，~18.5h）
+
+| 任务 | 工时 | 依赖 |
+|------|------|------|
+| #11 Watcher 状态面 + 连接池指标 | 4h | ← #10 |
+| #15 cursor 回归矩阵 | 4h | 无 |
+| #14 order+demo+examples 修复 | 7.5h | 无 |
+| #17 Hook 增强 | 3h | 无 |
+
+### Batch W1-6: 独立 Tech Debt（4 项，~11h，全并行）
+
+| 任务 | 工时 | 合入 PR |
+|------|------|--------|
+| #18 CB 接口清理 | 3h | 独立 |
+| #24 Trace trust policy | 4h | Trust boundary |
+| #20 decode 加固 | 2h | Kernel 小修 (#20+#21) |
+| #21 Journey 校验 | 2h | Kernel 小修 (#20+#21) |
+
+### Batch W1-7: 快修 + 文档收尾（6 项，~8.5h）
+
+| 任务 | 工时 | 依赖 |
+|------|------|------|
+| #22 DELETE 无 body | 1.5h | 无 |
+| #23 OTel 覆盖率 | 1h | 无 |
+| #25+#26+#27 快修合集 | 2h | #27 ← #19 |
+| #5 AUTH-DX-01 README | 4h | ← #7, #8（反映最终 API 状态，最后做）|
