@@ -133,6 +133,20 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "verification")
 }
 
+func TestNewKeySetWithVerificationKeys_RejectsNilPublicKey(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: nil,
+		KeyID:     "nil-key",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
+}
+
 // --- Phase 3: User Story 2 (T011-T016) ---
 
 func TestKeySet_VerificationKeyLookup(t *testing.T) {

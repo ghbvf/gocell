@@ -117,6 +117,9 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 
 	now := ks.now()
 	for _, vk := range vkeys {
+		if vk.PublicKey == nil {
+			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key public key must not be nil")
+		}
 		if err := validateRSAKeySize(vk.PublicKey.N.BitLen(), "verification"); err != nil {
 			return nil, err
 		}
