@@ -7,9 +7,9 @@ import (
 )
 
 // TODO(#8 Entity→DTO): handler outputs domain entities directly (PascalCase)
-// instead of DTO (camelCase). Invoking the real handler would fail schema
-// validation. Once #8 adds DTO mapping, rewrite these to invoke real handler
-// via httptest + ValidateHTTPResponseRecorder.
+// and response.schema.json follows correct camelCase convention. The two don't
+// match. Once #8 adds DTO mapping with json tags, rewrite these to invoke real
+// handler via httptest + ValidateHTTPResponseRecorder.
 
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
