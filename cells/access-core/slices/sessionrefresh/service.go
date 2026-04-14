@@ -108,12 +108,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	now := time.Now()
 	expiresAt := now.Add(accessTokenTTL)
 
-	accessToken, err := s.issueToken(session.UserID, roleNames)
+	accessToken, err := s.issueToken(session.UserID, roleNames, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
 
-	newRefreshToken, err := s.issueToken(session.UserID, nil)
+	newRefreshToken, err := s.issueToken(session.UserID, nil, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
@@ -137,6 +137,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string) (string, error) {
-	return s.issuer.Issue(subject, roles, []string{"gocell"})
+func (s *Service) issueToken(subject string, roles []string, sessionID string) (string, error) {
+	return s.issuer.Issue(subject, roles, []string{"gocell"}, sessionID)
 }

@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+
+	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -342,4 +345,76 @@ func TestAccessCore_RouteRolesList(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/access/roles/{userID} should not return 404 (got %d)", rec.Code)
+}
+
+// TestAccessCore_SessionRevocation_E2E verifies the complete session revocation
+// chain: login → token has sid → verify ok → revoke → verify rejected.
+func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
+	// Use separate repos so we can manipulate session state.
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+
+	c := NewAccessCore(
+		WithUserRepository(userRepo),
+		WithSessionRepository(sessionRepo),
+		WithRoleRepository(roleRepo),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+	)
+	ctx := context.Background()
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
+
+	// Seed a user.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash))
+	require.NoError(t, err)
+	user.ID = "usr-e2e"
+	require.NoError(t, userRepo.Create(ctx, user))
+
+	// Login via HTTP handler to simulate real flow.
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	body := `{"username":"e2e-user","password":"secret123"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusCreated, rec.Code, "login should succeed: %s", rec.Body.String())
+
+	// Extract access token from response.
+	respBody := rec.Body.String()
+	// Parse JSON to extract accessToken — using simple string search.
+	var accessToken string
+	for _, part := range strings.Split(respBody, `"`) {
+		if strings.HasPrefix(part, "eyJ") {
+			accessToken = part
+			break
+		}
+	}
+	require.NotEmpty(t, accessToken, "should find JWT in login response")
+
+	// Verify token through session-aware verifier — should succeed.
+	verifier := c.TokenVerifier()
+	claims, err := verifier.Verify(ctx, accessToken)
+	require.NoError(t, err, "token should be valid before revocation")
+
+	sid, ok := claims.Extra["sid"].(string)
+	require.True(t, ok, "token must contain sid claim")
+	require.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
+
+	// Revoke the session.
+	sess, err := sessionRepo.GetByID(ctx, sid)
+	require.NoError(t, err)
+	sess.Revoke()
+	require.NoError(t, sessionRepo.Update(ctx, sess))
+
+	// Verify same token again — should be rejected.
+	_, err = verifier.Verify(ctx, accessToken)
+	require.Error(t, err, "token should be rejected after session revocation")
+	assert.Contains(t, err.Error(), "revoked", "error should mention revocation")
 }

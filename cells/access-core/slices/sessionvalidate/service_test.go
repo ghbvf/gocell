@@ -65,7 +65,7 @@ func TestService_Verify(t *testing.T) {
 				return tok
 			},
 			wantSub: "usr-1",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "valid token with active session",
@@ -131,7 +131,7 @@ func TestService_Verify(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantSub, claims.Subject)
-				if tt.name == "valid token without sid" || tt.name == "valid token with active session" {
+				if tt.name == "valid token with active session" {
 					assert.Contains(t, claims.Roles, "admin")
 				}
 				assert.Equal(t, "gocell-access-core", claims.Issuer)
@@ -145,6 +145,18 @@ func TestService_Verify_NilSessionRepo(t *testing.T) {
 	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
+	require.NoError(t, err)
+
+	claims, err := svc.Verify(context.Background(), tok)
+	require.NoError(t, err)
+	assert.Equal(t, "usr-1", claims.Subject)
+}
+
+func TestService_Verify_NilSessionRepo_NoSid(t *testing.T) {
+	// When sessionRepo is nil (demo mode), tokens without sid are accepted.
+	svc := NewService(testVerifier, nil, slog.Default())
+
+	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
 
 	claims, err := svc.Verify(context.Background(), tok)

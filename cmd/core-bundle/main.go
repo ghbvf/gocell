@@ -177,7 +177,7 @@ func main() {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithAuthMiddleware(jwtVerifier, publicEndpoints),
+		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
 	if err := app.Run(ctx); err != nil {

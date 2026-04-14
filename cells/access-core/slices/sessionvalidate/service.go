@@ -37,8 +37,12 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid token")
 	}
 
-	// Check session revocation if sid claim is present in Extra.
-	if sid, ok := claims.Extra["sid"].(string); ok && sid != "" && s.sessionRepo != nil {
+	// Fail-closed: when sessionRepo is configured, tokens MUST carry sid.
+	if s.sessionRepo != nil {
+		sid, ok := claims.Extra["sid"].(string)
+		if !ok || sid == "" {
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "missing session binding (sid)")
+		}
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
 			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session not found")

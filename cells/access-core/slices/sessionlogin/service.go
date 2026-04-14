@@ -123,12 +123,12 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	expiresAt := now.Add(accessTokenTTL)
 	sessionID := "sess" + "-" + uuid.NewString()
 
-	accessToken, err := s.issueToken(user.ID, roleNames)
+	accessToken, err := s.issueToken(user.ID, roleNames, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue access token: %w", err)
 	}
 
-	refreshToken, err := s.issueToken(user.ID, nil)
+	refreshToken, err := s.issueToken(user.ID, nil, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue refresh token: %w", err)
 	}
@@ -190,6 +190,6 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string) (string, error) {
-	return s.issuer.Issue(subject, roles, []string{"gocell"})
+func (s *Service) issueToken(subject string, roles []string, sessionID string) (string, error) {
+	return s.issuer.Issue(subject, roles, []string{"gocell"}, sessionID)
 }
