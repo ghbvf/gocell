@@ -454,6 +454,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh := health.New(asm)
+	// registerHealthChecker wraps hh.RegisterChecker with an error return
+	// instead of a panic on duplicate names. Since hh is local to Run() and
+	// all registrations go through this closure, the panic path in
+	// RegisterChecker is effectively unreachable — the map check here
+	// catches duplicates first and returns a rollback-safe error.
 	registeredCheckerNames := make(map[string]struct{}, len(b.healthCheckers)+2)
 	registerHealthChecker := func(name string, fn func() error) error {
 		if _, exists := registeredCheckerNames[name]; exists {

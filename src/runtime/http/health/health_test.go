@@ -247,6 +247,31 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	assert.Equal(t, "healthy", deps["db"])
 }
 
+func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("db", func() error { return fmt.Errorf("connection refused") })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body["status"])
+	_, hasCells := body["cells"]
+	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells")
+	_, hasDependencies := body["dependencies"]
+	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies")
+}
+
 func TestReadyzVerboseQueryParsing(t *testing.T) {
 	tests := []struct {
 		name    string

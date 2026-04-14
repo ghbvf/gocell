@@ -20,8 +20,10 @@ New expectation:
 
 Meaning:
 
-1. `/healthz` is now process liveness only.
+1. `/healthz` is now process liveness only — it always returns `200` if the process can serve HTTP.
 2. It no longer reports per-cell readiness details.
+
+**Note on K8s `livenessProbe`**: Previously `/healthz` returned `503` when cells had not yet started, which could cause Kubernetes to restart the pod during slow startup. The new behavior (always `200`) is correct per K8s convention — liveness should not fail during startup (use `startupProbe` or `readinessProbe` for that). If your `livenessProbe` relied on the old `503`-during-init behavior, no action is needed — the new semantics prevent restart loops.
 
 ### `/readyz`
 
