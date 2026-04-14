@@ -13,14 +13,22 @@ import (
 type Catalog struct {
 	journeys    map[string]*metadata.JourneyMeta
 	statusBoard map[string]*metadata.StatusBoardEntry // keyed by journeyId
+
+	// Pre-computed indexes for O(1) lookups
+	cellIndex      map[string][]*metadata.JourneyMeta
+	contractIndex  map[string][]*metadata.JourneyMeta
+	crossCellIndex []*metadata.JourneyMeta
+	listIndex      []*metadata.JourneyMeta
 }
 
 // NewCatalog creates a Catalog from parsed project metadata.
 // A nil or zero-value ProjectMeta produces an empty but usable Catalog.
 func NewCatalog(project *metadata.ProjectMeta) *Catalog {
 	c := &Catalog{
-		journeys:    make(map[string]*metadata.JourneyMeta),
-		statusBoard: make(map[string]*metadata.StatusBoardEntry),
+		journeys:      make(map[string]*metadata.JourneyMeta),
+		statusBoard:   make(map[string]*metadata.StatusBoardEntry),
+		cellIndex:     make(map[string][]*metadata.JourneyMeta),
+		contractIndex: make(map[string][]*metadata.JourneyMeta),
 	}
 	if project == nil {
 		return c
@@ -28,7 +36,37 @@ func NewCatalog(project *metadata.ProjectMeta) *Catalog {
 
 	for id, j := range project.Journeys {
 		c.journeys[id] = j
+		c.listIndex = append(c.listIndex, j)
+
+		for _, cell := range j.Cells {
+			c.cellIndex[cell] = append(c.cellIndex[cell], j)
+		}
+
+		for _, ctr := range j.Contracts {
+			c.contractIndex[ctr] = append(c.contractIndex[ctr], j)
+		}
+
+		if len(j.Cells) > 1 {
+			c.crossCellIndex = append(c.crossCellIndex, j)
+		}
 	}
+
+	// Sort indexes once to guarantee deterministic results
+	sortJourneys := func(list []*metadata.JourneyMeta) {
+		sort.Slice(list, func(i, k int) bool {
+			return list[i].ID < list[k].ID
+		})
+	}
+
+	sortJourneys(c.listIndex)
+	sortJourneys(c.crossCellIndex)
+	for _, list := range c.cellIndex {
+		sortJourneys(list)
+	}
+	for _, list := range c.contractIndex {
+		sortJourneys(list)
+	}
+
 	for i := range project.StatusBoard {
 		entry := &project.StatusBoard[i]
 		c.statusBoard[entry.JourneyID] = entry
@@ -82,49 +120,33 @@ func (c *Catalog) Get(id string) *metadata.JourneyMeta {
 
 // List returns deep copies of all journeys sorted by ID.
 func (c *Catalog) List() []*metadata.JourneyMeta {
-	result := make([]*metadata.JourneyMeta, 0, len(c.journeys))
-	for _, j := range c.journeys {
+	list := c.listIndex
+	result := make([]*metadata.JourneyMeta, 0, len(list))
+	for _, j := range list {
 		result = append(result, copyJourneyMeta(j))
 	}
-	sort.Slice(result, func(i, k int) bool {
-		return result[i].ID < result[k].ID
-	})
 	return result
 }
 
 // CellJourneys returns journeys that reference the given cell ID,
 // sorted by journey ID.
 func (c *Catalog) CellJourneys(cellID string) []*metadata.JourneyMeta {
-	var result []*metadata.JourneyMeta
-	for _, j := range c.journeys {
-		for _, cell := range j.Cells {
-			if cell == cellID {
-				result = append(result, copyJourneyMeta(j))
-				break
-			}
-		}
+	list := c.cellIndex[cellID]
+	result := make([]*metadata.JourneyMeta, 0, len(list))
+	for _, j := range list {
+		result = append(result, copyJourneyMeta(j))
 	}
-	sort.Slice(result, func(i, k int) bool {
-		return result[i].ID < result[k].ID
-	})
 	return result
 }
 
 // ContractJourneys returns journeys that reference the given contract ID,
 // sorted by journey ID.
 func (c *Catalog) ContractJourneys(contractID string) []*metadata.JourneyMeta {
-	var result []*metadata.JourneyMeta
-	for _, j := range c.journeys {
-		for _, ctr := range j.Contracts {
-			if ctr == contractID {
-				result = append(result, copyJourneyMeta(j))
-				break
-			}
-		}
+	list := c.contractIndex[contractID]
+	result := make([]*metadata.JourneyMeta, 0, len(list))
+	for _, j := range list {
+		result = append(result, copyJourneyMeta(j))
 	}
-	sort.Slice(result, func(i, k int) bool {
-		return result[i].ID < result[k].ID
-	})
 	return result
 }
 
@@ -141,15 +163,11 @@ func (c *Catalog) Status(journeyID string) *metadata.StatusBoardEntry {
 // CrossCellJourneys returns journeys that involve more than one cell,
 // sorted by journey ID.
 func (c *Catalog) CrossCellJourneys() []*metadata.JourneyMeta {
-	var result []*metadata.JourneyMeta
-	for _, j := range c.journeys {
-		if len(j.Cells) > 1 {
-			result = append(result, copyJourneyMeta(j))
-		}
+	list := c.crossCellIndex
+	result := make([]*metadata.JourneyMeta, 0, len(list))
+	for _, j := range list {
+		result = append(result, copyJourneyMeta(j))
 	}
-	sort.Slice(result, func(i, k int) bool {
-		return result[i].ID < result[k].ID
-	})
 	return result
 }
 
