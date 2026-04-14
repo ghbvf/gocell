@@ -6,9 +6,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-// TODO(CFG-JSON-01 #16): handler outputs domain entities with PascalCase fields
-// instead of camelCase DTO. Invoking the real handler would fail schema validation.
-// Once #16 adds json tags and DTO mapping, rewrite these to invoke real handler
+// TODO(#8 Entity→DTO): handler outputs domain entities directly (PascalCase)
+// instead of DTO (camelCase). Invoking the real handler would fail schema
+// validation. Once #8 adds DTO mapping, rewrite these to invoke real handler
 // via httptest + ValidateHTTPResponseRecorder.
 
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {
