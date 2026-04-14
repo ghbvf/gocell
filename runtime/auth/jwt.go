@@ -14,18 +14,18 @@ import (
 // ref: go-kratos/kratos middleware/auth/jwt/jwt.go -- JWT middleware pattern
 // Adopted: KeyFunc-based verification, Claims extraction from context.
 // Deviated: RS256 pinned (no configurable signing method), refuses HS256/none.
-// Extended: kid-based key lookup from KeySet (RFC 7638 thumbprint).
+// Extended: kid-based key lookup from VerificationKeyStore (RFC 7638 thumbprint).
 type JWTVerifier struct {
-	keySet *KeySet
+	keys VerificationKeyStore
 }
 
 // NewJWTVerifier creates a JWTVerifier that validates tokens by looking up the
-// signing key from the KeySet using the token's kid header.
-func NewJWTVerifier(keySet *KeySet) (*JWTVerifier, error) {
-	if keySet == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "key set must not be nil")
+// signing key from the VerificationKeyStore using the token's kid header.
+func NewJWTVerifier(keys VerificationKeyStore) (*JWTVerifier, error) {
+	if keys == nil {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
-	return &JWTVerifier{keySet: keySet}, nil
+	return &JWTVerifier{keys: keys}, nil
 }
 
 // Verify validates the token string and returns Claims on success.
@@ -47,7 +47,7 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 			return nil, fmt.Errorf("invalid kid header")
 		}
 
-		pub, err := v.keySet.PublicKeyByKID(kid)
+		pub, err := v.keys.PublicKeyByKID(kid)
 		if err != nil {
 			return nil, fmt.Errorf("unknown kid: %s", kid)
 		}
@@ -68,21 +68,21 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 	return mapClaimsToClaims(mapClaims), nil
 }
 
-// JWTIssuer signs JWT tokens with RS256 using the active key from a KeySet.
+// JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
 // Each issued token carries a kid header derived from the signing key.
 type JWTIssuer struct {
-	keySet *KeySet
+	keys   SigningKeyProvider
 	issuer string
 	ttl    time.Duration
 }
 
-// NewJWTIssuer creates a JWTIssuer using the active signing key from the KeySet.
-func NewJWTIssuer(keySet *KeySet, issuer string, ttl time.Duration) (*JWTIssuer, error) {
-	if keySet == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "key set must not be nil")
+// NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
+func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration) (*JWTIssuer, error) {
+	if keys == nil {
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	return &JWTIssuer{
-		keySet: keySet,
+		keys:   keys,
 		issuer: issuer,
 		ttl:    ttl,
 	}, nil
@@ -106,8 +106,8 @@ func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (st
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = i.keySet.SigningKeyID()
-	return token.SignedString(i.keySet.SigningKey())
+	token.Header["kid"] = i.keys.SigningKeyID()
+	return token.SignedString(i.keys.SigningKey())
 }
 
 func mapClaimsToClaims(mc jwt.MapClaims) Claims {

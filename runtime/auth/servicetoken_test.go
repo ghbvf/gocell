@@ -33,6 +33,19 @@ func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 	return ring
 }
 
+func TestHMACKeyRing_Current_ReturnsCopy(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	c := ring.Current()
+	original := make([]byte, len(c))
+	copy(original, c)
+
+	// Mutate the returned slice.
+	c[0] = 0xFF
+
+	// The ring's internal state must be unchanged.
+	assert.Equal(t, original, ring.Current(), "Current() must return a defensive copy")
+}
+
 // --- Phase 4: User Story 3 (T017-T025) ---
 
 func TestHMACKeyRing_SignWithCurrent(t *testing.T) {

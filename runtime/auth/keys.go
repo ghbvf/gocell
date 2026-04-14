@@ -117,6 +117,9 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 
 	now := ks.now()
 	for _, vk := range vkeys {
+		if err := validateRSAKeySize(vk.PublicKey.N.BitLen(), "verification"); err != nil {
+			return nil, err
+		}
 		if !now.Before(vk.ExpiresAt) {
 			slog.Info("key pruned",
 				slog.String("kid", vk.KeyID),

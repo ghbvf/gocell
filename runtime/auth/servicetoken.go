@@ -58,9 +58,13 @@ func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
 	}, nil
 }
 
-// Current returns the active signing secret.
+// Current returns a copy of the active signing secret.
+// The returned slice is a fresh allocation; callers cannot mutate the ring's
+// internal state.
 func (r *HMACKeyRing) Current() []byte {
-	return r.current
+	c := make([]byte, len(r.current))
+	copy(c, r.current)
+	return c
 }
 
 // Secrets returns a copy of all secrets in try-order: current first, then previous (if set).

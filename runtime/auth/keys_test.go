@@ -116,6 +116,23 @@ func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "1024")
 }
 
+func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) //NOSONAR — intentional weak key
+	require.NoError(t, err)
+
+	vk := VerificationKey{
+		PublicKey: &weakKey.PublicKey,
+		KeyID:     Thumbprint(&weakKey.PublicKey),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err = NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1024")
+	assert.Contains(t, err.Error(), "verification")
+}
+
 // --- Phase 3: User Story 2 (T011-T016) ---
 
 func TestKeySet_VerificationKeyLookup(t *testing.T) {
