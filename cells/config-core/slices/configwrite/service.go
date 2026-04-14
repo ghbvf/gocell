@@ -17,10 +17,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	// TopicConfigChanged is the event topic for config changes.
-	TopicConfigChanged = "event.config.changed.v1"
-)
+// TopicConfigChanged is re-exported from domain for backward compatibility
+// within this package's tests and callers.
+const TopicConfigChanged = domain.TopicConfigChanged
 
 // Option configures a config-write Service.
 type Option func(*Service)
@@ -189,7 +188,7 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 	// Demo mode: publisher failure is logged but not propagated since
 	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, TopicConfigChanged, payload); err != nil {
-		s.logger.Error("config-write: failed to publish event",
+		s.logger.Warn("config-write: failed to publish event (demo mode)",
 			slog.Any("error", err),
 			slog.String("key", entry.Key),
 		)

@@ -17,11 +17,11 @@ import (
 	"github.com/google/uuid"
 )
 
+// Re-exported from domain for backward compatibility within this package's
+// tests and callers.
 const (
-	// TopicConfigChanged is the event topic for config changes.
-	TopicConfigChanged = "event.config.changed.v1"
-	// TopicConfigRollback is the event topic for config rollbacks.
-	TopicConfigRollback = "event.config.rollback.v1"
+	TopicConfigChanged  = domain.TopicConfigChanged
+	TopicConfigRollback = domain.TopicConfigRollback
 )
 
 // Option configures a config-publish Service.
@@ -175,7 +175,7 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 	// Demo mode: publisher failure is logged but not propagated since
 	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
-		s.logger.Error("config-publish: failed to publish event",
+		s.logger.Warn("config-publish: failed to publish event (demo mode)",
 			slog.Any("error", err), slog.String("key", key))
 	}
 	return nil

@@ -268,11 +268,19 @@ func TestHttpAuthUserDeleteV1Serve_RejectsBodyOn204(t *testing.T) {
 	}
 }
 
-// capturingTB is a testing.TB implementation that captures whether Errorf was called.
+// capturingTB is a minimal testing.TB that captures whether an error method was called.
+// Methods beyond Helper/Errorf/Fatalf are implemented defensively to avoid nil-panic
+// if ValidateHTTPResponseRecorder's call-sites change.
 type capturingTB struct {
 	testing.TB
 	errored bool
 }
 
-func (c *capturingTB) Helper()                           {}
-func (c *capturingTB) Errorf(format string, args ...any) { c.errored = true }
+func (c *capturingTB) Helper()                            {}
+func (c *capturingTB) Errorf(format string, args ...any)  { c.errored = true }
+func (c *capturingTB) Fatalf(format string, args ...any)  { c.errored = true }
+func (c *capturingTB) Logf(format string, args ...any)    {}
+func (c *capturingTB) Name() string                       { return "capturingTB" }
+func (c *capturingTB) Log(args ...any)                    {}
+func (c *capturingTB) Error(args ...any)                  { c.errored = true }
+func (c *capturingTB) Fatal(args ...any)                  { c.errored = true }

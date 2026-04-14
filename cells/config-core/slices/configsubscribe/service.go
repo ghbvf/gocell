@@ -9,13 +9,12 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-const (
-	// TopicConfigChanged is the event topic consumed by this slice.
-	TopicConfigChanged = "event.config.changed.v1"
-)
+// TopicConfigChanged is re-exported from domain for this package's callers.
+const TopicConfigChanged = domain.TopicConfigChanged
 
 // Cache holds the latest config values observed from events.
 type Cache struct {

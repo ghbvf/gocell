@@ -233,7 +233,7 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 	// Demo mode: publisher failure is logged but not propagated since
 	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, topic, data); err != nil {
-		s.logger.Error("identity-manage: failed to publish event",
+		s.logger.Warn("identity-manage: failed to publish event (demo mode)",
 			slog.Any("error", err), slog.String("topic", topic))
 	}
 	return nil
