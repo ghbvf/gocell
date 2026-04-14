@@ -175,8 +175,9 @@ func WithShutdownTimeout(d time.Duration) Option {
 // and stop routing new traffic before the server closes connections.
 //
 // Default is 0 (no delay). Typical Kubernetes deployments use 3-5 seconds.
+// The delay counts toward the total shutdownTimeout budget (not additive).
 //
-// ref: Kubernetes pod shutdown — preStop + readyz unhealthy before SIGTERM
+// ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
 func WithPreShutdownDelay(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.preShutdownDelay = d
@@ -669,13 +670,19 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	slog.Info("bootstrap: initiating graceful shutdown")
 	reloads.BeginShutdown()
 	hh.SetShuttingDown() // Mark readyz unhealthy so LBs drain traffic
+
+	// Single shutdown budget: preShutdownDelay + teardown share shutdownTimeout.
+	// ref: Kubernetes — preStop counts toward terminationGracePeriodSeconds
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	defer shutCancel()
 	if b.preShutdownDelay > 0 {
 		slog.Info("bootstrap: pre-shutdown drain delay",
 			slog.Duration("delay", b.preShutdownDelay))
-		time.Sleep(b.preShutdownDelay)
+		select {
+		case <-time.After(b.preShutdownDelay):
+		case <-shutCtx.Done():
+		}
 	}
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
-	defer shutCancel()
 
 	var errs []error
 	for i := len(teardowns) - 1; i >= 0; i-- {

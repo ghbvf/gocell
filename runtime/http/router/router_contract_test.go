@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // ---------------------------------------------------------------------------
@@ -477,6 +478,19 @@ func TestMetricsEndpoint_NotExposedByDefault(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code,
 		"/metrics must not be exposed without explicit opt-in")
+}
+
+func TestMetricsEndpoint_CollectorOnly_NotExposed(t *testing.T) {
+	// WithMetricsCollector enables recording middleware but must NOT expose
+	// a /metrics HTTP endpoint. Adopts Prometheus/Kratos separation of
+	// "collect" vs "serve".
+	mc := metrics.NewInMemoryCollector()
+	r := New(WithMetricsCollector(mc))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"/metrics must not be exposed with collector-only configuration")
 }
 
 func TestMetricsEndpoint_ExposedWithHandler(t *testing.T) {

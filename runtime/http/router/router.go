@@ -262,14 +262,12 @@ func NewE(opts ...Option) (*Router, error) {
 		r.outerMux.Get("/healthz", r.healthHandler.LivezHandler())
 		r.outerMux.Get("/readyz", r.healthHandler.ReadyzHandler())
 	}
-	switch {
-	case r.metricsHandler != nil:
+	// /metrics is only registered when explicitly provided via WithMetricsHandler.
+	// WithMetricsCollector enables the metrics middleware (recording) but does NOT
+	// expose a /metrics endpoint — adopting the Prometheus/Kratos convention of
+	// separating "collect" from "serve".
+	if r.metricsHandler != nil {
 		r.outerMux.Handle("/metrics", r.metricsHandler)
-	case r.metricsCollector != nil:
-		type handlerProvider interface{ Handler() http.Handler }
-		if hp, ok := r.metricsCollector.(handlerProvider); ok {
-			r.outerMux.Handle("/metrics", hp.Handler())
-		}
 	}
 
 	// --- Phase 2: mux — business routes with RL/CB/Auth ---
