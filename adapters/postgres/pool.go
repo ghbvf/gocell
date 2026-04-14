@@ -5,11 +5,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var (
+	// Matches `password=value` or `password='value'` in key-value DSNs.
+	kvPasswordRegex = regexp.MustCompile(`password=([^\s']+|'[^']*')`)
+	// Matches `postgres://user:password@` or `postgresql://...`
+	urlPasswordRegex = regexp.MustCompile(`(postgres(?:ql)?:\/\/[^:]+:)([^@]+)(@)`)
 )
 
 // Default pool configuration values.
@@ -89,6 +97,23 @@ type Pool struct {
 	config Config
 }
 
+// redactDSNError attempts to redact passwords from error messages related to DSN parsing.
+func redactDSNError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	errMsg := err.Error()
+	errMsg = kvPasswordRegex.ReplaceAllString(errMsg, "password=***")
+	errMsg = urlPasswordRegex.ReplaceAllString(errMsg, "${1}***${3}")
+
+	// If the string was changed, return a new error. Otherwise, return the original.
+	if errMsg != err.Error() {
+		return fmt.Errorf("%s", errMsg)
+	}
+	return err
+}
+
 // NewPool creates a new connection pool from the supplied Config.
 // It validates the DSN, applies defaults, and pings the database to confirm
 // connectivity.
@@ -101,7 +126,7 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: parse DSN", err)
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: parse DSN", redactDSNError(err))
 	}
 
 	poolCfg.MaxConns = cfg.MaxConns
