@@ -133,7 +133,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		data := resp["data"].([]any)
 		for _, item := range data {
 			m := item.(map[string]any)
-			allIDs = append(allIDs, m["ID"].(string))
+			allIDs = append(allIDs, m["id"].(string))
 		}
 
 		hasMore := resp["hasMore"].(bool)

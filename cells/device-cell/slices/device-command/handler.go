@@ -3,9 +3,30 @@ package devicecommand
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// CommandResponse is the public DTO for Command, isolating the API contract
+// from the domain model.
+type CommandResponse struct {
+	ID        string     `json:"id"`
+	DeviceID  string     `json:"deviceId"`
+	Payload   string     `json:"payload"`
+	Status    string     `json:"status"`
+	CreatedAt time.Time  `json:"createdAt"`
+	AckedAt   *time.Time `json:"ackedAt,omitempty"`
+}
+
+func toCommandResponse(c *domain.Command) CommandResponse {
+	return CommandResponse{
+		ID: c.ID, DeviceID: c.DeviceID, Payload: c.Payload,
+		Status: c.Status, CreatedAt: c.CreatedAt, AckedAt: c.AckedAt,
+	}
+}
 
 // Handler provides HTTP endpoints for device commands.
 type Handler struct {
@@ -69,7 +90,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, result)
+	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toCommandResponse))
 }
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.

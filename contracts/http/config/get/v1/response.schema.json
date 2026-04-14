@@ -18,14 +18,14 @@
         "data": {
           "type": "object",
           "properties": {
-            "ID": { "type": "string" },
-            "Key": { "type": "string" },
-            "Value": { "type": "string" },
-            "Version": { "type": "integer" },
-            "CreatedAt": { "type": "string", "format": "date-time" },
-            "UpdatedAt": { "type": "string", "format": "date-time" }
+            "id": { "type": "string" },
+            "key": { "type": "string" },
+            "value": { "type": "string" },
+            "version": { "type": "integer" },
+            "createdAt": { "type": "string", "format": "date-time" },
+            "updatedAt": { "type": "string", "format": "date-time" }
           },
-          "required": ["ID", "Key", "Value", "Version"]
+          "required": ["id", "key", "value", "version"]
         }
       }
     },
@@ -37,10 +37,10 @@
           "items": {
             "type": "object",
             "properties": {
-              "ID": { "type": "string" },
-              "Key": { "type": "string" },
-              "Value": { "type": "string" },
-              "Version": { "type": "integer" }
+              "id": { "type": "string" },
+              "key": { "type": "string" },
+              "value": { "type": "string" },
+              "version": { "type": "integer" }
             }
           }
         },
