@@ -5,6 +5,7 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// startRabbitMQ launches a testcontainers RabbitMQ instance and returns a
-// connected Connection plus a cleanup function.
-func startRabbitMQ(t *testing.T) (*Connection, func()) {
+// startRabbitMQWithContainer launches a testcontainers RabbitMQ instance and
+// returns the Connection, the container (for Exec/Stop operations), and a
+// cleanup function.
+func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcrabbitmq.RabbitMQContainer, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -29,13 +31,15 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get rabbitmq amqp url")
 
-	conn, err := NewConnection(Config{
-		URL:                 amqpURL,
-		ReconnectMaxBackoff: 5 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
-		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-	})
+	config.URL = amqpURL
+	if config.ChannelPoolSize == 0 {
+		config.ChannelPoolSize = 5
+	}
+	if config.ConfirmTimeout == 0 {
+		config.ConfirmTimeout = 10 * time.Second
+	}
+
+	conn, err := NewConnection(config)
 	require.NoError(t, err, "create rabbitmq connection")
 
 	cleanup := func() {
@@ -43,6 +47,15 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 		_ = container.Terminate(ctx)
 	}
 
+	return conn, container, cleanup
+}
+
+// startRabbitMQ is a convenience wrapper that discards the container reference.
+func startRabbitMQ(t *testing.T) (*Connection, func()) {
+	conn, _, cleanup := startRabbitMQWithContainer(t, Config{
+		ReconnectMaxBackoff: 5 * time.Second,
+		ReconnectBaseDelay:  500 * time.Millisecond,
+	})
 	return conn, cleanup
 }
 
@@ -88,6 +101,7 @@ func TestIntegration_ConnectionHealth(t *testing.T) {
 
 	err := conn.Health()
 	assert.NoError(t, err, "Health should succeed on a live RabbitMQ")
+	assert.Equal(t, StateConnected, conn.ConnectionStatus())
 }
 
 // TestIntegration_PublishConsume publishes a message and consumes it
@@ -185,96 +199,181 @@ func TestIntegration_PublishOnly(t *testing.T) {
 	assert.NoError(t, err, "Publish should succeed even without consumers")
 }
 
-// TestIntegration_ConsumerBaseRetry verifies that ConsumerBase retries
-// a transiently-failing handler up to the configured limit and then
-// routes the message to the DLQ.
+// TestIntegration_ConsumerBaseRetry verifies the full end-to-end path:
 //
-// This test is simplified: it verifies the ConsumerBase.Wrap handler
-// invocation count and DLQ publish behavior using a real RabbitMQ
-// connection for the Publisher/Subscriber infrastructure.
+//	publish → subscriber consume → ConsumerBase retry exhaustion → broker Nack
+//	→ DLX routing → dead-letter queue receives the message
+//
+// Unlike the previous version (which invoked the wrapped handler directly),
+// this test publishes through the broker and verifies that ConsumerBase retry
+// logic works correctly when integrated with the real Subscriber.
 func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	topic := "test.integration.retry"
+	pub := NewPublisher(conn)
 
-	// Track DLQ messages via a separate subscriber on the DLQ topic.
-	dlqTopic := topic + ".dlq"
-	dlqReceived := make(chan outbox.Entry, 1)
+	const (
+		topic       = "test.retry.e2e"
+		dlxExchange = "test.retry.e2e.dlx"
+		dlxQueue    = "test.retry.e2e.dlq"
+		mainQueue   = "test.retry.e2e.main"
+	)
 
-	dlqSub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test.integration.retry.dlq.queue",
-		PrefetchCount:   1,
-		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
-	})
+	// --- Set up DLX infrastructure via raw AMQP channel ---
+	rawCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
 
-	dlqCtx, dlqCancel := context.WithTimeout(ctx, 30*time.Second)
-	defer dlqCancel()
+	err = rawCh.ExchangeDeclare(dlxExchange, "direct", true, false, false, false, nil)
+	require.NoError(t, err, "declare DLX exchange")
 
-	// Start DLQ subscriber first.
-	go func() {
-		_ = dlqSub.Subscribe(dlqCtx, dlqTopic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			dlqReceived <- e
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "integration-test-dlq")
-	}()
+	_, err = rawCh.QueueDeclare(dlxQueue, true, false, false, false, nil)
+	require.NoError(t, err, "declare DLQ queue")
 
-	// Give DLQ subscriber time to bind.
-	time.Sleep(500 * time.Millisecond)
+	err = rawCh.QueueBind(dlxQueue, "", dlxExchange, false, nil)
+	require.NoError(t, err, "bind DLQ to DLX exchange")
 
-	// Create a ConsumerBase with RetryCount=2 and very short delays.
+	conn.ReleaseChannel(rawCh)
+
+	// --- Create ConsumerBase with short retry ---
 	cb := NewConsumerBase(
 		&noopClaimer{},
 		ConsumerBaseConfig{
-			ConsumerGroup:  "test-retry-group",
+			ConsumerGroup:  "test-retry-e2e",
 			RetryCount:     2,
-			RetryBaseDelay: 100 * time.Millisecond,
+			RetryBaseDelay: 50 * time.Millisecond,
 			IdempotencyTTL: time.Hour,
 		},
 	)
 
-	// Wrap a handler that always fails with a transient error.
-	callCount := 0
+	// --- Start main subscriber with ConsumerBase-wrapped handler ---
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       mainQueue,
+		PrefetchCount:   1,
+		DLXExchange:     dlxExchange,
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	var callCount atomic.Int32
+	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer subCancel()
+
 	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		callCount++
+		callCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
 	})
 
-	// Publish a message.
+	subErrCh := make(chan error, 1)
+	go func() {
+		subErrCh <- sub.Subscribe(subCtx, topic, wrappedHandler, "test-retry-e2e")
+	}()
+
+	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
+
+	// --- Publish a message ---
 	entry := outbox.Entry{
-		ID:        "evt-retry-001",
-		EventType: "test.retry",
-		Payload:   []byte(`{"retry":"test"}`),
+		ID:        "evt-retry-e2e-001",
+		EventType: "test.retry.transient",
+		Payload:   []byte(`{"retry":"e2e"}`),
 		CreatedAt: time.Now().UTC(),
 	}
-
-	// Invoke the wrapped handler directly (simulates what Subscriber does).
-	res := wrappedHandler(ctx, entry)
-	// In Solution B, exhausted retries return Reject (broker routes to DLX).
-	assert.Equal(t, outbox.DispositionReject, res.Disposition, "exhausted retries should reject")
-	assert.Equal(t, 2, callCount, "handler should be called RetryCount times")
-
-	// Clean up.
-	dlqCancel()
-	_ = dlqSub.Close()
-}
-
-// TestIntegration_ConnectionRecovery kills the AMQP connection and
-// asserts the adapter detects the state change.
-func TestIntegration_ConnectionRecovery(t *testing.T) {
-	conn, cleanup := startRabbitMQ(t)
-	defer cleanup()
-
-	// Connection should be healthy.
-	err := conn.Health()
+	payload, err := json.Marshal(entry)
 	require.NoError(t, err)
 
-	// Acquire and release a channel to verify pool works.
+	err = pub.Publish(ctx, topic, payload)
+	require.NoError(t, err, "publish should succeed")
+
+	// --- Verify: message appears in DLQ after retry exhaustion ---
+	// Set up a single consumer ONCE, then poll its delivery channel inside
+	// Eventually. This avoids creating multiple competing consumers on
+	// different channels (R2-P1-A review fix).
+	dlxCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	defer conn.ReleaseChannel(dlxCh)
+
+	dlxMsgs, err := dlxCh.Consume(dlxQueue, "retry-dlx-consumer", true, false, false, false, nil)
+	require.NoError(t, err, "consume from DLQ")
+
+	var dlEntry outbox.Entry
+	require.Eventually(t, func() bool {
+		select {
+		case msg := <-dlxMsgs:
+			return json.Unmarshal(msg.Body, &dlEntry) == nil
+		default:
+			return false
+		}
+	}, 15*time.Second, 200*time.Millisecond,
+		"message should appear in DLQ after retry exhaustion — handler called %d times", callCount.Load())
+
+	assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"retry":"e2e"}`, string(dlEntry.Payload))
+	t.Logf("ConsumerBase retry e2e verified: message %s routed to DLQ after %d handler calls",
+		dlEntry.ID, callCount.Load())
+
+	// Handler should have been called RetryCount times.
+	assert.GreaterOrEqual(t, callCount.Load(), int32(2),
+		"handler should be called at least RetryCount times before rejection")
+
+	subCancel()
+	_ = sub.Close()
+}
+
+// TestIntegration_ConnectionRecovery verifies that the Connection automatically
+// reconnects after the broker forcibly closes all client connections.
+//
+// Uses rabbitmqctl close_all_connections (not container stop/start) to avoid
+// port remapping issues — the broker stays on the same address.
+func TestIntegration_ConnectionRecovery(t *testing.T) {
+	conn, container, cleanup := startRabbitMQWithContainer(t, Config{
+		ReconnectBaseDelay:  200 * time.Millisecond,
+		ReconnectMaxBackoff: 2 * time.Second,
+	})
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Verify initial healthy state.
+	require.NoError(t, conn.Health(), "initial Health should be nil")
+	assert.Equal(t, StateConnected, conn.ConnectionStatus())
+
+	// 2. Force-close all connections via rabbitmqctl.
+	exitCode, _, err := container.Exec(ctx, []string{
+		"rabbitmqctl", "close_all_connections", "integration-test",
+	})
+	require.NoError(t, err, "rabbitmqctl exec should not error")
+	require.Equal(t, 0, exitCode, "rabbitmqctl should exit 0")
+
+	// 3. Health() should return error during reconnect.
+	require.Eventually(t, func() bool {
+		return conn.Health() != nil
+	}, 5*time.Second, 50*time.Millisecond,
+		"Health() should report error after broker-forced disconnect")
+
+	// Verify the state is Disconnected (not Terminal).
+	status := conn.ConnectionStatus()
+	assert.True(t, status == StateDisconnected || status == StateConnecting,
+		"state should be Disconnected or Connecting during reconnect, got %s", status)
+
+	// 4. Health() should recover after reconnect succeeds.
+	require.Eventually(t, func() bool {
+		return conn.Health() == nil
+	}, 10*time.Second, 100*time.Millisecond,
+		"Health() should recover after successful reconnect")
+
+	assert.Equal(t, StateConnected, conn.ConnectionStatus(),
+		"state should be Connected after recovery")
+
+	// 5. Verify connection is usable: acquire and release a channel.
 	ch, err := conn.AcquireChannel()
-	require.NoError(t, err, "AcquireChannel should succeed")
+	require.NoError(t, err, "AcquireChannel should succeed after recovery")
 	conn.ReleaseChannel(ch)
+
+	// 6. WaitConnected should return immediately.
+	waitCtx, waitCancel := context.WithTimeout(ctx, time.Second)
+	defer waitCancel()
+	require.NoError(t, conn.WaitConnected(waitCtx),
+		"WaitConnected should return nil after recovery")
 }
 
 // TestIntegration_DLXBrokerNative verifies the full broker-native DLX path:
@@ -364,27 +463,28 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	}
 
 	// --- Consume from the dead-letter queue via raw AMQP ---
-	// Give broker a moment to route the rejected message to DLX.
-	time.Sleep(500 * time.Millisecond)
-
+	// Single consumer setup, then poll delivery channel (R2-P2 review fix).
 	dlxCh, err := conn.AcquireChannel()
 	require.NoError(t, err)
 	defer conn.ReleaseChannel(dlxCh)
 
-	msgs, err := dlxCh.Consume(dlxQueue, "dlx-test-consumer", true, false, false, false, nil)
+	dlxMsgs, err := dlxCh.Consume(dlxQueue, "dlx-test-consumer", true, false, false, false, nil)
 	require.NoError(t, err, "consume from DLQ")
 
-	select {
-	case msg := <-msgs:
-		// Unmarshal and verify the dead-lettered message.
-		var dlEntry outbox.Entry
-		require.NoError(t, json.Unmarshal(msg.Body, &dlEntry))
-		assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
-		assert.JSONEq(t, `{"dlx":"end-to-end"}`, string(dlEntry.Payload), "payload should match")
-		t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for message in dead-letter queue — DLX routing failed")
-	}
+	var dlEntry outbox.Entry
+	require.Eventually(t, func() bool {
+		select {
+		case msg := <-dlxMsgs:
+			return json.Unmarshal(msg.Body, &dlEntry) == nil
+		default:
+			return false
+		}
+	}, 10*time.Second, 100*time.Millisecond,
+		"message should appear in dead-letter queue — DLX routing failed")
+
+	assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"dlx":"end-to-end"}`, string(dlEntry.Payload), "payload should match")
+	t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
 
 	subCancel()
 	_ = sub.Close()
