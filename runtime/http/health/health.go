@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 )
@@ -22,8 +23,9 @@ type Checker func() error
 type Handler struct {
 	assembly *assembly.CoreAssembly
 
-	mu       sync.RWMutex
-	checkers map[string]Checker
+	mu           sync.RWMutex
+	checkers     map[string]Checker
+	shuttingDown atomic.Bool
 }
 
 // New creates a Handler backed by the given CoreAssembly.
@@ -44,6 +46,14 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 		panic(fmt.Sprintf("health: duplicate checker name %q", name))
 	}
 	h.checkers[name] = fn
+}
+
+// SetShuttingDown marks the handler as shutting down. Once called,
+// ReadyzHandler always returns 503 regardless of checker results.
+// This enables load balancers to stop sending traffic before the
+// HTTP server closes connections.
+func (h *Handler) SetShuttingDown() {
+	h.shuttingDown.Store(true)
 }
 
 // LivezHandler returns an http.HandlerFunc for the /healthz liveness endpoint.
@@ -67,6 +77,12 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // the ingress layer or enable a future WithVerboseToken bootstrap option.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if h.shuttingDown.Load() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"status": "shutting_down",
+			})
+			return
+		}
 		verbose := readyzVerbose(r)
 		cellHealth := h.assembly.Health()
 

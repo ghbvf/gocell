@@ -309,6 +309,30 @@ func TestRegisterChecker_DuplicatePanics(t *testing.T) {
 	})
 }
 
+func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+
+	// Before shutdown: should be healthy.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Mark shutting down.
+	h.SetShuttingDown()
+
+	// After shutdown: should be 503.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Contains(t, rec.Body.String(), "shutting_down")
+}
+
 func TestEmptyAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "empty"})
 	h := New(asm)

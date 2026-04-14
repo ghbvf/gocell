@@ -10,7 +10,7 @@ import (
 
 // AccessLog logs structured request/response information via slog.Info.
 // Fields: method, path, route, status, duration_ms, request_id,
-// correlation_id, trace_id.
+// correlation_id, trace_id, real_ip.
 //
 // ref: go-zero rest/handler/loghandler.go — structured request logging with trace context
 //
@@ -48,6 +48,9 @@ func AccessLog(next http.Handler) http.Handler {
 			}
 			if traceID, ok := ctxkeys.TraceIDFrom(r.Context()); ok {
 				attrs = append(attrs, slog.String("trace_id", traceID))
+			}
+			if realIP, ok := ctxkeys.RealIPFrom(r.Context()); ok {
+				attrs = append(attrs, slog.String("real_ip", realIP))
 			}
 			slog.Info("http request", attrs...)
 		})

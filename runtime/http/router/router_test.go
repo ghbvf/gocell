@@ -322,6 +322,17 @@ func TestNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {
 	New(WithTrustedProxies([]string{"192.168.1.1", "not-an-ip"}))
 }
 
+func TestNew_PanicPreservesErrorChain(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r)
+		err, ok := r.(error)
+		require.True(t, ok, "panic value must be an error, got %T", r)
+		assert.ErrorContains(t, err, "router")
+	}()
+	New(WithTrustedProxies([]string{"not-an-ip"}))
+}
+
 // --- Tracing wiring ---
 
 func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
@@ -414,6 +425,46 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 		if entry["msg"] == "http request" {
 			found = true
 			assert.NotEmpty(t, entry["trace_id"], "access log must include trace_id when tracing is configured")
+			break
+		}
+	}
+	assert.True(t, found, "access log entry must exist")
+}
+
+func TestAccessLog_IncludesRealIP(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	r := New(WithTrustedProxies([]string{"127.0.0.1"}))
+	r.Handle("/real-ip-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/real-ip-test", nil)
+	req.RemoteAddr = "127.0.0.1:12345" // trusted proxy
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Parse all JSON log entries and find the access log (msg="http request").
+	var found bool
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "http request" {
+			found = true
+			assert.Equal(t, "203.0.113.50", entry["real_ip"],
+				"access log must include real_ip extracted from X-Forwarded-For")
 			break
 		}
 	}

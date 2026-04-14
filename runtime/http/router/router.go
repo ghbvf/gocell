@@ -191,7 +191,7 @@ type Router struct {
 func New(opts ...Option) *Router {
 	r, err := NewE(opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(err)
 	}
 	return r
 }

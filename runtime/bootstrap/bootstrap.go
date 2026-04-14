@@ -183,13 +183,9 @@ func WithListener(ln net.Listener) Option {
 // bootstrap depending on adapter types.
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
+// Validation (empty name, nil fn) is deferred to Run() so that failures
+// enter the rollback path instead of panicking past it.
 func WithHealthChecker(name string, fn func() error) Option {
-	if name == "" {
-		panic("bootstrap: health checker name must not be empty")
-	}
-	if fn == nil {
-		panic(fmt.Sprintf("bootstrap: health checker %q must not be nil", name))
-	}
 	return func(b *Bootstrap) {
 		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 	}
@@ -469,6 +465,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return nil
 	}
 	for _, hc := range b.healthCheckers {
+		if hc.name == "" {
+			return rollback(fmt.Errorf("bootstrap: health checker name must not be empty"))
+		}
+		if hc.fn == nil {
+			return rollback(fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name))
+		}
 		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
 			return rollback(err)
 		}
@@ -478,7 +480,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			return rollback(err)
 		}
 	}
-	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
+	// Framework health handler is applied LAST so user-supplied router options
+	// cannot accidentally override it. WithHealthHandler sets r.healthHandler;
+	// the last call wins, so placing the framework handler after user options
+	// guarantees the bootstrap-managed handler is always used.
+	routerOpts := append(b.routerOpts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(routerOpts...)
 	if err != nil {
 		return rollback(fmt.Errorf("bootstrap: %w", err))
@@ -626,6 +632,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Step 10: Orderly shutdown.
 	slog.Info("bootstrap: initiating graceful shutdown")
 	reloads.BeginShutdown()
+	hh.SetShuttingDown() // Mark readyz unhealthy so LBs drain traffic
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
 

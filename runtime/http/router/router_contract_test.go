@@ -467,3 +467,27 @@ func TestMount_WithRouteParams(t *testing.T) {
 		})
 	}
 }
+
+// --- Metrics Endpoint Opt-In -------------------------------------------------
+
+func TestMetricsEndpoint_NotExposedByDefault(t *testing.T) {
+	r := New()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"/metrics must not be exposed without explicit opt-in")
+}
+
+func TestMetricsEndpoint_ExposedWithHandler(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("# metrics"))
+	})
+	r := New(WithMetricsHandler(handler))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "# metrics")
+}
