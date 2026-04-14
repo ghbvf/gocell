@@ -20,25 +20,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
-// noopPublisher is a no-op outbox.Publisher for testing.
-type noopPublisher struct{}
-
-func (noopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-
-// Compile-time check.
-var _ outbox.Publisher = noopPublisher{}
-
-type noopWriter struct{}
-
-func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
-var _ outbox.Writer = noopWriter{}
 var _ persistence.TxRunner = noopTxRunner{}
 
 func newTestDeps() cell.Dependencies {
@@ -50,7 +37,7 @@ func newTestDeps() cell.Dependencies {
 func newTestCell() *OrderCell {
 	return NewOrderCell(
 		WithRepository(mem.NewOrderRepository()),
-		WithPublisher(noopPublisher{}),
+		WithPublisher(outbox.DiscardPublisher{}),
 	)
 }
 
@@ -95,10 +82,16 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 		name       string
 		opts       []Option
 		wantSlices int
+		wantErr    bool
 	}{
 		{
-			name:       "no options uses in-memory defaults",
-			opts:       nil,
+			name:    "no options fails — publisher required",
+			opts:    nil,
+			wantErr: true,
+		},
+		{
+			name:       "discard publisher opt-in succeeds",
+			opts:       []Option{WithPublisher(outbox.DiscardPublisher{})},
 			wantSlices: 2,
 		},
 		{
@@ -111,27 +104,24 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
-			require.NoError(t, c.Init(context.Background(), newTestDeps()))
-			assert.Len(t, c.OwnedSlices(), tt.wantSlices)
+			err := c.Init(context.Background(), newTestDeps())
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "publisher or outbox writer")
+			} else {
+				require.NoError(t, err)
+				assert.Len(t, c.OwnedSlices(), tt.wantSlices)
+			}
 		})
 	}
 }
 
-func TestOrderCell_DefaultInit_UsesSafePublisherFallback(t *testing.T) {
+func TestOrderCell_DefaultInit_RequiresPublisher(t *testing.T) {
 	c := NewOrderCell()
-	require.NoError(t, c.Init(context.Background(), newTestDeps()))
-
-	r := router.New()
-	c.RegisterRoutes(r)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"safe-default"}`))
-	req.Header.Set("Content-Type", "application/json")
-
-	assert.NotPanics(t, func() {
-		r.ServeHTTP(rec, req)
-	})
-	assert.Equal(t, http.StatusCreated, rec.Code)
+	err := c.Init(context.Background(), newTestDeps())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher or outbox writer")
+	assert.Contains(t, err.Error(), "DiscardPublisher")
 }
 
 func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
@@ -141,7 +131,7 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 	}{
 		{
 			name: "writer without tx manager",
-			opts: []Option{WithOutboxWriter(noopWriter{})},
+			opts: []Option{WithOutboxWriter(outbox.NoopWriter{})},
 		},
 		{
 			name: "tx manager without writer",
@@ -163,7 +153,7 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 
 func TestOrderCell_InitRejectsDurableModeWithDefaultRepo(t *testing.T) {
 	c := NewOrderCell(
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 

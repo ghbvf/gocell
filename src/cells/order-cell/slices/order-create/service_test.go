@@ -1,6 +1,7 @@
 package ordercreate
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -248,13 +249,34 @@ func TestService_Create_DemoPublishSuccess(t *testing.T) {
 }
 
 func TestService_Create_DemoNilPublisher(t *testing.T) {
+	// NewService defaults nil publisher to DiscardPublisher (constructor fallback).
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, nil, slog.Default())
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	svc := NewService(repo, nil, logger)
 
 	order, err := svc.Create(context.Background(), "nil-pub")
 	require.NoError(t, err)
 	require.NotNil(t, order)
 	assert.Equal(t, "nil-pub", order.Item)
+	// No error logged — DiscardPublisher.Publish() returns nil.
+	assert.NotContains(t, logs.String(), "ERROR")
+}
+
+func TestService_Create_DemoDiscardPublisher(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	svc := NewService(repo, outbox.DiscardPublisher{}, logger)
+
+	order, err := svc.Create(context.Background(), "discard-pub")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, "discard-pub", order.Item)
+	// Service logs no error — DiscardPublisher.Publish() returns nil.
+	// DiscardPublisher's own slog.Warn goes through slog.Default(), not
+	// the injected logger, so it does not appear in logs buffer.
+	assert.NotContains(t, logs.String(), "ERROR")
 }
 
 func TestService_Create_DemoRepoFailure(t *testing.T) {

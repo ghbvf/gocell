@@ -31,6 +31,41 @@ func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byt
 
 var _ Publisher = (*mockPublisher)(nil)
 
+func TestNoopWriter_Write(t *testing.T) {
+	writer := NoopWriter{}
+	err := writer.Write(context.Background(), validEntry("noop"))
+	assert.NoError(t, err)
+}
+
+func TestNoopWriter_WriteRejectsInvalidEntry(t *testing.T) {
+	writer := NoopWriter{}
+	err := writer.Write(context.Background(), Entry{})
+	assert.Error(t, err)
+}
+
+func TestNoopWriter_WriteBatch(t *testing.T) {
+	writer := NoopWriter{}
+	err := WriteBatchFallback(context.Background(), writer, []Entry{validEntry("noop-1"), validEntry("noop-2")})
+	assert.NoError(t, err)
+}
+
+func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
+	writer := NoopWriter{}
+	err := writer.WriteBatch(context.Background(), []Entry{validEntry("noop-1"), {}})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "entry[1]")
+}
+
+func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
+	var publisher Publisher = DiscardPublisher{}
+	err := publisher.Publish(context.Background(), "orders.created", []byte(`{"ok":true}`))
+	assert.NoError(t, err)
+	assert.True(t, isDiscardPublisher(publisher))
+	assert.True(t, isDiscardPublisher(&DiscardPublisher{}), "pointer receiver must also match")
+	assert.False(t, isDiscardPublisher(&mockPublisher{}))
+	assert.False(t, isDiscardPublisher(nil))
+}
+
 type mockSubscriber struct{}
 
 func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler, _ string) error {

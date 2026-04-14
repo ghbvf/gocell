@@ -42,7 +42,11 @@ type Service struct {
 }
 
 // NewService creates an order-create Service.
+// If publisher is nil, it defaults to DiscardPublisher (demo mode).
 func NewService(repo domain.OrderRepository, publisher outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+	if publisher == nil {
+		publisher = outbox.DiscardPublisher{}
+	}
 	s := &Service{
 		repo:      repo,
 		publisher: publisher,
@@ -115,22 +119,10 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return order, nil // order is created, event publish is best-effort
 	}
 
-	if s.publisher == nil {
-		s.logger.Warn("order-create: publisher not configured, skipping direct publish",
-			slog.String("order_id", order.ID),
-		)
-		return order, nil
-	}
-
 	if err := s.publisher.Publish(ctx, TopicOrderCreated, payload); err != nil {
 		s.logger.Error("order-create: publish event failed",
 			slog.String("order_id", order.ID),
 			slog.Any("error", err),
-		)
-	} else {
-		s.logger.Info("order-create: event published",
-			slog.String("order_id", order.ID),
-			slog.String("topic", TopicOrderCreated),
 		)
 	}
 

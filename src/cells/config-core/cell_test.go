@@ -20,17 +20,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopWriter is a no-op outbox.Writer for testing.
-type noopWriter struct{}
-
-func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithPublisher(eventbus.New()),
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 }
 

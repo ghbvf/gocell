@@ -40,11 +40,6 @@ func mustVerifier(ks *auth.KeySet) *auth.JWTVerifier {
 	return v
 }
 
-// noopWriter is a no-op outbox.Writer for testing.
-type noopWriter struct{}
-
-func (noopWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
-
 func newTestCell() *AccessCore {
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
@@ -53,7 +48,7 @@ func newTestCell() *AccessCore {
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 }
 
@@ -64,7 +59,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithPublisher(eventbus.New()),
 		WithJWTVerifier(testVerifier), // issuer missing
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
@@ -78,7 +73,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer), // verifier missing
-		WithOutboxWriter(noopWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
