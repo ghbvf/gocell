@@ -59,14 +59,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"data": map[string]any{
-			"id":       cmd.ID,
-			"deviceId": cmd.DeviceID,
-			"payload":  cmd.Payload,
-			"status":   cmd.Status,
-		},
-	})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toCommandResponse(cmd)})
 }
 
 // HandleListPending handles GET /api/v1/devices/{id}/commands?limit=N&cursor=TOKEN.
@@ -94,6 +87,9 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.
+// Returns a status-only response (not a full CommandResponse) because
+// Ack is a fire-and-forget action — the service does not return the
+// updated entity.
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 	cmdID := r.PathValue("cmdId")
