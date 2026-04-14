@@ -4,6 +4,7 @@ package sessionvalidate
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -34,7 +35,9 @@ func NewService(verifier auth.TokenVerifier, sessionRepo ports.SessionRepository
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	claims, err := s.verifier.Verify(ctx, tokenStr)
 	if err != nil {
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid token")
+		s.logger.Warn("session-validate: JWT verification failed",
+			slog.Any("error", err))
+		return auth.Claims{}, errcode.Wrap(errcode.ErrAuthInvalidToken, "invalid token", err)
 	}
 
 	// Fail-closed: when sessionRepo is configured, tokens MUST carry sid.
@@ -47,9 +50,17 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 		}
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
-			s.logger.Warn("session-validate: session not found",
-				slog.String("sid", sid),
-				slog.String("subject", claims.Subject))
+			var ec *errcode.Error
+			if errors.As(err, &ec) {
+				s.logger.Warn("session-validate: session not found",
+					slog.String("sid", sid),
+					slog.String("subject", claims.Subject))
+			} else {
+				s.logger.Error("session-validate: session repo unavailable",
+					slog.String("sid", sid),
+					slog.String("subject", claims.Subject),
+					slog.Any("error", err))
+			}
 			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
 		}
 		if session.IsRevoked() {

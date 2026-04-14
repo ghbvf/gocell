@@ -53,6 +53,17 @@ func TestService_Verify(t *testing.T) {
 	revokedSession.Revoke()
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
+	// Seed an expired session.
+	expiredSession := &domain.Session{
+		ID:           "sess-expired",
+		UserID:       "usr-3",
+		AccessToken:  "dummy3",
+		RefreshToken: "dummy-refresh3",
+		ExpiresAt:    time.Now().Add(-time.Hour), // already expired
+		CreatedAt:    time.Now().Add(-2 * time.Hour),
+	}
+	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
+
 	tests := []struct {
 		name    string
 		token   func() string
@@ -89,6 +100,14 @@ func TestService_Verify(t *testing.T) {
 			name: "token with non-existent session",
 			token: func() string {
 				tok, _ := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-nonexistent")
+				return tok
+			},
+			wantErr: true,
+		},
+		{
+			name: "token with expired session",
+			token: func() string {
+				tok, _ := IssueTestToken(testPrivKey, "usr-3", nil, time.Hour, "sess-expired")
 				return tok
 			},
 			wantErr: true,

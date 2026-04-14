@@ -174,8 +174,14 @@ func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) O
 // AuthProvider cell is discovered post-Init. Unlike WithAuthMiddleware
 // (which provides the verifier explicitly), this option defers verifier
 // resolution to Run() time.
+// WithPublicEndpoints must not be combined with WithAuthMiddleware —
+// use one or the other. If both are called, the last one wins for
+// publicEndpoints and a warning is logged at startup.
 func WithPublicEndpoints(endpoints []string) Option {
 	return func(b *Bootstrap) {
+		if b.authVerifier != nil {
+			slog.Warn("bootstrap: WithPublicEndpoints called after WithAuthMiddleware; publicEndpoints will be overwritten")
+		}
 		b.authPublicEndpoints = endpoints
 		b.authDiscovery = true
 	}
@@ -435,7 +441,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return asm.Stop(c)
 	})
 
-	// Step 4.7: Discover auth verifier from cells (post-Init).
+	// Step 4.5a: Discover auth verifier from cells (post-Init).
 	// When no explicit verifier was provided via WithAuthMiddleware but
 	// publicEndpoints are configured via WithPublicEndpoints, discover a
 	// cell implementing authProvider and use its TokenVerifier.
@@ -455,7 +461,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 
-	// Step 4.5: Register config watcher OnChange callback (now that asm is started).
+	// Step 4.5b: Register config watcher OnChange callback (now that asm is started).
 	// Snapshot → Reload → Diff → notify ConfigReloader cells.
 	if cfgWatcher != nil {
 		yamlPath, envPrefix := b.configPath, b.envPrefix

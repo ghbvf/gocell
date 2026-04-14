@@ -391,8 +391,8 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Extract access token from response via structured JSON parsing.
 	var loginResp struct {
 		Data struct {
-			AccessToken  string `json:"AccessToken"`
-			RefreshToken string `json:"RefreshToken"`
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loginResp), "should parse login response JSON")
@@ -460,8 +460,8 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	var loginResp struct {
 		Data struct {
-			AccessToken  string `json:"AccessToken"`
-			RefreshToken string `json:"RefreshToken"`
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loginResp))
@@ -476,7 +476,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	var refreshResp struct {
 		Data struct {
-			AccessToken string `json:"AccessToken"`
+			AccessToken string `json:"accessToken"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &refreshResp))
