@@ -398,6 +398,13 @@ func TestPrintTargetList(t *testing.T) {
 func TestIsWithinRoot(t *testing.T) {
 	root := t.TempDir()
 
+	// Create a symlink inside root that points outside it.
+	outsideDir := t.TempDir()
+	symlink := filepath.Join(root, "escape-link")
+	if err := os.Symlink(outsideDir, symlink); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
 	tests := []struct {
 		name   string
 		target string
@@ -407,6 +414,7 @@ func TestIsWithinRoot(t *testing.T) {
 		{"root itself", root, true},
 		{"parent escape", filepath.Join(root, "..", "etc", "passwd"), false},
 		{"double escape", filepath.Join(root, "..", "..", "tmp"), false},
+		{"symlink escape", filepath.Join(symlink, "secret.txt"), false},
 	}
 
 	for _, tt := range tests {
