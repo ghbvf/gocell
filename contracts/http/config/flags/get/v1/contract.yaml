@@ -6,6 +6,11 @@ lifecycle: active
 endpoints:
   server: config-core
   clients: []
+  http:
+    method: GET
+    path: /api/v1/flags/{key}
+    successStatus: 200
+    noContent: false
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

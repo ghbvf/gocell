@@ -83,7 +83,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		if err := s.repo.Create(txCtx, entry); err != nil {
 			return fmt.Errorf("config-write: create: %w", err)
 		}
-		s.publishChange(txCtx, "created", entry)
+		if err := s.publishChange(txCtx, "created", entry); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -118,7 +120,9 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		if err := s.repo.Update(txCtx, entry); err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		s.publishChange(txCtx, "updated", entry)
+		if err := s.publishChange(txCtx, "updated", entry); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -143,7 +147,9 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		if err := s.repo.Delete(txCtx, key); err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		s.publishChange(txCtx, "deleted", entry)
+		if err := s.publishChange(txCtx, "deleted", entry); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return err
@@ -162,7 +168,7 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return fn(ctx)
 }
 
-func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) {
+func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
 	payload, _ := json.Marshal(map[string]any{
 		"action":  action,
 		"key":     entry.Key,
@@ -176,17 +182,17 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 			Payload:   payload,
 		}
 		if err := s.outboxWriter.Write(ctx, outboxEntry); err != nil {
-			s.logger.Error("config-write: failed to write outbox entry",
-				slog.Any("error", err),
-				slog.String("key", entry.Key),
-			)
+			return fmt.Errorf("config-write: write outbox entry: %w", err)
 		}
-		return
+		return nil
 	}
+	// Demo mode: publisher failure is logged but not propagated since
+	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, TopicConfigChanged, payload); err != nil {
 		s.logger.Error("config-write: failed to publish event",
 			slog.Any("error", err),
 			slog.String("key", entry.Key),
 		)
 	}
+	return nil
 }

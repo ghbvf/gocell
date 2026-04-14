@@ -1,0 +1,16 @@
+id: http.auth.session.delete.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/access/sessions/{id}
+    successStatus: 204
+    noContent: true
+schemaRefs:
+  request: request.schema.json

@@ -90,7 +90,9 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
-		s.publishEvent(txCtx, TopicConfigChanged, payload, key)
+		if err := s.publishEvent(txCtx, TopicConfigChanged, payload, key); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -136,7 +138,9 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 		if err := s.repo.Update(txCtx, entry); err != nil {
 			return fmt.Errorf("config-publish: rollback update: %w", err)
 		}
-		s.publishEvent(txCtx, TopicConfigRollback, payload, key)
+		if err := s.publishEvent(txCtx, TopicConfigRollback, payload, key); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -156,7 +160,7 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return fn(ctx)
 }
 
-func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) {
+func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte, key string) error {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
 			ID:        "evt" + "-" + uuid.NewString(),
@@ -164,13 +168,15 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 			Payload:   payload,
 		}
 		if err := s.outboxWriter.Write(ctx, entry); err != nil {
-			s.logger.Error("config-publish: failed to write outbox entry",
-				slog.Any("error", err), slog.String("key", key))
+			return fmt.Errorf("config-publish: write outbox entry: %w", err)
 		}
-		return
+		return nil
 	}
+	// Demo mode: publisher failure is logged but not propagated since
+	// demo mode does not guarantee L2 atomicity.
 	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
 		s.logger.Error("config-publish: failed to publish event",
 			slog.Any("error", err), slog.String("key", key))
 	}
+	return nil
 }

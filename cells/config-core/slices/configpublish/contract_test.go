@@ -1,24 +1,68 @@
 package configpublish
 
 import (
+	"context"
+	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/stretchr/testify/require"
 )
+
+func newContractService() (*Service, *mem.ConfigRepository, *recordingWriter) {
+	repo := mem.NewConfigRepository()
+	writer := &recordingWriter{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+	return svc, repo, writer
+}
+
+func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
+	now := time.Now()
+	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	})
+}
 
 func TestEventConfigChangedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	svc, repo, writer := newContractService()
+	seedContractEntry(repo, "app.name", "value")
 
-	c.ValidatePayload(t, []byte(`{"action":"published","key":"app.name","config_id":"cfg-1","version":2}`))
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-456"}`))
+	_, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+
+	require.Len(t, writer.entries, 1, "Publish must emit one outbox entry")
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.MustRejectPayload(t, []byte(`{"action":"published","key":"app.name"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
 func TestEventConfigRollbackV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.rollback.v1")
+	svc, repo, writer := newContractService()
+	seedContractEntry(repo, "app.name", "v1")
 
-	c.ValidatePayload(t, []byte(`{"action":"rollback","key":"app.name","target_version":1,"new_version":3}`))
-	c.ValidateHeaders(t, []byte(`{"event_id":"evt-789"}`))
+	// Publish first to create a version, then rollback
+	_, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+	writer.entries = nil // reset
+
+	_, err = svc.Rollback(context.Background(), "app.name", 1)
+	require.NoError(t, err)
+
+	require.Len(t, writer.entries, 1, "Rollback must emit one outbox entry")
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"action":"rollback","key":"app.name"}`))
+	c.MustRejectHeaders(t, []byte(`{}`))
 }

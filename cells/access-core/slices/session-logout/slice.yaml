@@ -1,11 +1,14 @@
 id: session-logout
 belongsToCell: access-core
 contractUsages:
+  - contract: http.auth.session.delete.v1
+    role: serve
   - contract: event.session.revoked.v1
     role: publish
 verify:
   unit:
     - unit.session-logout.service
   contract:
+    - contract.http.auth.session.delete.v1.serve
     - contract.event.session.revoked.v1.publish
   waivers: []
