@@ -642,6 +642,41 @@ func TestAdvanceCommand_FullLifecycle(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AdvanceCommand — L4 delay arrival / deadline expiry (review S3-F3)
+// ---------------------------------------------------------------------------
+
+func TestAdvanceCommand_ExpiredViaDeadline(t *testing.T) {
+	// Documents the intended adapter sweep pattern for L4 deadline enforcement:
+	// 1. Create entry with OverallDeadline
+	// 2. Advance to Sent
+	// 3. Simulate now exceeding the overall deadline
+	// 4. Adapter calls AdvanceCommand(CommandExpired) when DeadlineFor < now
+	// 5. Assert CompletedAt is set
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "cert-renew", []byte(`{}`), CommandTimeouts{
+		OverallDeadline: 1 * time.Minute,
+	}, created)
+
+	// Advance to Sent
+	sentAt := created.Add(5 * time.Second)
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, sentAt))
+
+	// Simulate adapter sweep: now exceeds the overall deadline
+	now := created.Add(2 * time.Minute) // well past 1-minute deadline
+	deadline := entry.DeadlineFor(PhaseOverall)
+	assert.False(t, deadline.IsZero(), "OverallDeadline must produce a non-zero deadline")
+	assert.True(t, now.After(deadline), "now must exceed the overall deadline")
+
+	// Adapter would call AdvanceCommand to expire the command
+	err := AdvanceCommand(&entry, CommandExpired, now)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandExpired, entry.Status)
+	assert.True(t, entry.Status.IsTerminal())
+	assert.NotNil(t, entry.CompletedAt)
+	assert.Equal(t, now, *entry.CompletedAt)
+}
+
+// ---------------------------------------------------------------------------
 // ResetForRetry — L4-RETRY-01
 // ---------------------------------------------------------------------------
 

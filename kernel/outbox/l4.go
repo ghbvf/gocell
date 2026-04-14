@@ -394,6 +394,16 @@ type CommandReader interface {
 // kernel-owned side effects (timestamps, attempt counter) before persisting.
 // Implementations SHOULD use optimistic locking (e.g., WHERE status = $from)
 // to prevent concurrent transitions.
+//
+// Typical adapter implementation:
+//
+//	func (a *PGAdapter) AdvanceStatus(ctx context.Context, id string, from, to CommandStatus, now time.Time) error {
+//	    cmd, err := a.GetCommand(ctx, id)
+//	    if err != nil { return err }
+//	    if err := AdvanceCommand(cmd, to, now); err != nil { return err }
+//	    // Optimistic lock: WHERE status = from prevents concurrent transitions.
+//	    return a.updateStatus(ctx, cmd) // persist cmd with updated timestamps
+//	}
 type CommandStateAdvancer interface {
 	// AdvanceStatus atomically transitions a command from one status to another.
 	// The now parameter is passed through to AdvanceCommand for timestamp
