@@ -4,7 +4,9 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // Handler provides HTTP endpoints for config read operations.
@@ -27,7 +29,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entry})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
 }
 
 // HandleList handles GET /?limit=N&cursor=TOKEN — returns paginated config entries.
@@ -48,5 +50,5 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, result)
+	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, dto.ToConfigEntryResponse))
 }

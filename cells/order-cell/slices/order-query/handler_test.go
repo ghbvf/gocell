@@ -207,7 +207,9 @@ func TestHandleList_Pagination_FullTraversal(t *testing.T) {
 		data := resp["data"].([]any)
 		for _, item := range data {
 			m := item.(map[string]any)
-			allIDs = append(allIDs, m["id"].(string))
+			id, ok := m["id"].(string)
+				require.True(t, ok, "response item should have string 'id' field")
+				allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)

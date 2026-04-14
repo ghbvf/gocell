@@ -18,7 +18,13 @@ import (
 
 func setup() http.Handler {
 	roleRepo := mem.NewRoleRepository()
-	roleRepo.SeedRole(&domain.Role{ID: "r1", Name: "admin"})
+	roleRepo.SeedRole(&domain.Role{
+		ID: "r1", Name: "admin",
+		Permissions: []domain.Permission{
+			{Resource: "users", Action: "read"},
+			{Resource: "users", Action: "write"},
+		},
+	})
 	_ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
 
 	svc := NewService(roleRepo, slog.Default())
@@ -35,16 +41,26 @@ func TestHandler(t *testing.T) {
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "GET /{userID} returns roles",
+			name:       "GET /{userID} returns roles with permissions",
 			path:       "/user-1",
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
-					Data  []json.RawMessage `json:"data"`
-					Total int               `json:"total"`
+					Data []struct {
+						ID          string `json:"id"`
+						Name        string `json:"name"`
+						Permissions []struct {
+							Resource string `json:"resource"`
+							Action   string `json:"action"`
+						} `json:"permissions"`
+					} `json:"data"`
 				}
 				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.Equal(t, 1, resp.Total)
+				require.Len(t, resp.Data, 1)
+				assert.Equal(t, "admin", resp.Data[0].Name)
+				require.Len(t, resp.Data[0].Permissions, 2)
+				assert.Equal(t, "users", resp.Data[0].Permissions[0].Resource)
+				assert.Equal(t, "read", resp.Data[0].Permissions[0].Action)
 			},
 		},
 		{
@@ -53,10 +69,10 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
-					Total int `json:"total"`
+					Data []json.RawMessage `json:"data"`
 				}
 				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.Equal(t, 0, resp.Total)
+				assert.Empty(t, resp.Data)
 			},
 		},
 		{

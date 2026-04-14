@@ -2,6 +2,7 @@ package query
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -115,4 +116,53 @@ func TestBuildPageResult_ExactLimit(t *testing.T) {
 	assert.Len(t, result.Items, 3)
 	assert.False(t, result.HasMore)
 	assert.Empty(t, result.NextCursor)
+}
+
+// --- MapPageResult tests ---
+
+func TestMapPageResult_Empty(t *testing.T) {
+	src := PageResult[int]{Items: []int{}, HasMore: false}
+	got := MapPageResult(src, func(i int) string { return "" })
+	assert.Empty(t, got.Items)
+	assert.NotNil(t, got.Items)
+	assert.False(t, got.HasMore)
+	assert.Empty(t, got.NextCursor)
+}
+
+func TestMapPageResult_Single(t *testing.T) {
+	src := PageResult[int]{Items: []int{42}, HasMore: false}
+	got := MapPageResult(src, func(i int) string {
+		return "val-" + string(rune('0'+i%10))
+	})
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "val-2", got.Items[0]) // 42 % 10 = 2
+}
+
+func TestMapPageResult_Multiple_PreservesCursor(t *testing.T) {
+	src := PageResult[int]{
+		Items:      []int{1, 2, 3},
+		NextCursor: "cursor-token-abc",
+		HasMore:    true,
+	}
+	got := MapPageResult(src, func(i int) int { return i * 10 })
+	assert.Equal(t, []int{10, 20, 30}, got.Items)
+	assert.Equal(t, "cursor-token-abc", got.NextCursor)
+	assert.True(t, got.HasMore)
+}
+
+func TestMapPageResult_NilItems(t *testing.T) {
+	src := PageResult[int]{Items: nil, HasMore: false}
+	got := MapPageResult(src, func(i int) string { return "" })
+	assert.NotNil(t, got.Items)
+	assert.Empty(t, got.Items)
+}
+
+func TestMapPageResult_NilItems_JSONArray(t *testing.T) {
+	src := PageResult[int]{Items: nil, HasMore: false}
+	got := MapPageResult(src, func(i int) string { return "" })
+
+	b, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"data":[]`)
+	assert.NotContains(t, string(b), `"data":null`)
 }

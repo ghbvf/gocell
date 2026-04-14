@@ -3,9 +3,27 @@ package orderquery
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// OrderResponse is the public DTO for Order, isolating the API contract from
+// the domain model.
+type OrderResponse struct {
+	ID        string    `json:"id"`
+	Item      string    `json:"item"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func toOrderResponse(o *domain.Order) OrderResponse {
+	return OrderResponse{
+		ID: o.ID, Item: o.Item, Status: o.Status, CreatedAt: o.CreatedAt,
+	}
+}
 
 // Handler provides HTTP endpoints for order queries.
 type Handler struct {
@@ -27,7 +45,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": order})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toOrderResponse(order)})
 }
 
 // HandleList handles GET /api/v1/orders?limit=N&cursor=TOKEN.
@@ -48,5 +66,5 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, result)
+	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toOrderResponse))
 }

@@ -3,6 +3,7 @@ package configwrite
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -33,7 +34,7 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": entry})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
 }
 
 // HandleUpdate handles PUT /{key} — updates an existing config entry.
@@ -54,7 +55,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": entry})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
 }
 
 // HandleDelete handles DELETE /{key} — deletes a config entry.

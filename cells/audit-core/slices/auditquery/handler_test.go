@@ -133,7 +133,9 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		data := resp["data"].([]any)
 		for _, item := range data {
 			m := item.(map[string]any)
-			allIDs = append(allIDs, m["ID"].(string))
+			id, ok := m["id"].(string)
+				require.True(t, ok, "response item should have string 'id' field")
+				allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)
@@ -187,4 +189,27 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
 		})
 	}
+}
+
+func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
+	resp := toAuditEntryResponse(&domain.AuditEntry{
+		ID: "ae-1", EventID: "evt-1", EventType: "test.event.v1",
+		ActorID: "usr-1", Timestamp: time.Now(),
+		Payload:  []byte(`{"secret":"data"}`),
+		PrevHash: "abc123", Hash: "def456",
+	})
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	body := string(b)
+
+	assert.Contains(t, body, `"id"`)
+	assert.Contains(t, body, `"eventId"`)
+	assert.Contains(t, body, `"eventType"`)
+	assert.Contains(t, body, `"actorId"`)
+	assert.Contains(t, body, `"timestamp"`)
+
+	assert.Contains(t, body, `"payload"`)
+
+	assert.NotContains(t, body, `"prevHash"`)
+	assert.NotContains(t, body, `"hash"`)
 }

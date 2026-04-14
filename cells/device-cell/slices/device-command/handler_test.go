@@ -214,7 +214,9 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 		data := resp["data"].([]any)
 		for _, item := range data {
 			m := item.(map[string]any)
-			allIDs = append(allIDs, m["id"].(string))
+			id, ok := m["id"].(string)
+				require.True(t, ok, "response item should have string 'id' field")
+				allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)
@@ -317,4 +319,29 @@ func TestHandleAck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommandResponse_AckedAt_Serialization(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("pending command omits ackedAt", func(t *testing.T) {
+		resp := toCommandResponse(&domain.Command{
+			ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot",
+			Status: "pending", CreatedAt: now, AckedAt: nil,
+		})
+		b, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), `"ackedAt"`)
+	})
+
+	t.Run("acked command includes ackedAt", func(t *testing.T) {
+		ackedAt := now.Add(time.Minute)
+		resp := toCommandResponse(&domain.Command{
+			ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot",
+			Status: "acked", CreatedAt: now, AckedAt: &ackedAt,
+		})
+		b, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"ackedAt"`)
+	})
 }

@@ -64,7 +64,9 @@ func TestHandler_HandlePublish_OK(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "data")
+	body := w.Body.String()
+	assert.Contains(t, body, `"publishedAt"`)
+	assert.Contains(t, body, `"configId"`)
 }
 
 func TestHandler_HandlePublish_NotFound(t *testing.T) {
