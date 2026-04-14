@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	cd src && go run ./examples/sso-bff
+//	go run ./examples/sso-bff
 package main
 
 import (
