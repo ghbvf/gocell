@@ -52,6 +52,8 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 // ReadyzHandler always returns 503 regardless of checker results.
 // This enables load balancers to stop sending traffic before the
 // HTTP server closes connections.
+//
+// Intended for framework use only (called by bootstrap.Run during shutdown).
 func (h *Handler) SetShuttingDown() {
 	h.shuttingDown.Store(true)
 }

@@ -29,6 +29,9 @@ var _ kcell.RouteMux = (*Router)(nil)
 type Option func(*Router)
 
 // WithHealthHandler registers /healthz and /readyz using the given health.Handler.
+// Last call wins: if multiple WithHealthHandler options are applied, only the
+// final one takes effect. Bootstrap relies on this to apply the framework-managed
+// handler after user options.
 func WithHealthHandler(h *health.Handler) Option {
 	return func(r *Router) {
 		r.healthHandler = h
