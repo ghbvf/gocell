@@ -1,6 +1,7 @@
 package auditquery
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -13,19 +14,21 @@ import (
 )
 
 // AuditEntryResponse is the public DTO for AuditEntry, excluding internal
-// hash-chain fields (PrevHash, Hash, Payload) that are implementation details.
+// hash-chain integrity fields (PrevHash, Hash) that are implementation details.
+// Payload is preserved as it contains the audited operation content.
 type AuditEntryResponse struct {
-	ID        string    `json:"id"`
-	EventID   string    `json:"eventId"`
-	EventType string    `json:"eventType"`
-	ActorID   string    `json:"actorId"`
-	Timestamp time.Time `json:"timestamp"`
+	ID        string          `json:"id"`
+	EventID   string          `json:"eventId"`
+	EventType string          `json:"eventType"`
+	ActorID   string          `json:"actorId"`
+	Timestamp time.Time       `json:"timestamp"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 func toAuditEntryResponse(e *domain.AuditEntry) AuditEntryResponse {
 	return AuditEntryResponse{
 		ID: e.ID, EventID: e.EventID, EventType: e.EventType,
-		ActorID: e.ActorID, Timestamp: e.Timestamp,
+		ActorID: e.ActorID, Timestamp: e.Timestamp, Payload: e.Payload,
 	}
 }
 

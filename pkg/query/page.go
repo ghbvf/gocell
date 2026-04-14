@@ -106,13 +106,6 @@ func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []Sor
 // pagination metadata (NextCursor, HasMore). fn must not panic; if an item
 // may be nil, the caller should handle that within fn.
 func MapPageResult[T any, U any](src PageResult[T], fn func(T) U) PageResult[U] {
-	if len(src.Items) == 0 {
-		return PageResult[U]{
-			Items:      make([]U, 0),
-			NextCursor: src.NextCursor,
-			HasMore:    src.HasMore,
-		}
-	}
 	items := make([]U, len(src.Items))
 	for i, item := range src.Items {
 		items[i] = fn(item)

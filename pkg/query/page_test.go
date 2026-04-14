@@ -134,7 +134,8 @@ func TestMapPageResult_Single(t *testing.T) {
 	got := MapPageResult(src, func(i int) string {
 		return "val-" + string(rune('0'+i%10))
 	})
-	assert.Len(t, got.Items, 1)
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "val-2", got.Items[0]) // 42 % 10 = 2
 }
 
 func TestMapPageResult_Multiple_PreservesCursor(t *testing.T) {

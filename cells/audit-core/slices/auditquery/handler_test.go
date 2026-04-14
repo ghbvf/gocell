@@ -133,7 +133,9 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		data := resp["data"].([]any)
 		for _, item := range data {
 			m := item.(map[string]any)
-			allIDs = append(allIDs, m["id"].(string))
+			id, ok := m["id"].(string)
+				require.True(t, ok, "response item should have string 'id' field")
+				allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)
@@ -206,7 +208,8 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 	assert.Contains(t, body, `"actorId"`)
 	assert.Contains(t, body, `"timestamp"`)
 
+	assert.Contains(t, body, `"payload"`)
+
 	assert.NotContains(t, body, `"prevHash"`)
 	assert.NotContains(t, body, `"hash"`)
-	assert.NotContains(t, body, `"payload"`)
 }
