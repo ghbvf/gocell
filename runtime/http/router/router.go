@@ -67,12 +67,10 @@ func WithBodyLimit(maxBytes int64) Option {
 // middleware is placed after Recorder and before AccessLog so trace IDs appear
 // in access logs.
 //
-// Trust model: the current implementation unconditionally continues upstream
-// traces from valid inbound headers. This assumes a trusted-upstream
-// deployment (service-to-service behind a gateway). For public-facing
-// endpoints exposed directly to untrusted clients, consider adding a
-// trust-boundary middleware or gateway-level header sanitization to prevent
-// external callers from injecting arbitrary trace identities.
+// Trust model: by default the tracer continues upstream traces from valid
+// inbound headers (trusted-upstream assumption). Use WithTracingOptions to
+// configure WithPublicEndpointFn for public-facing endpoints that should
+// create new root traces instead of inheriting from untrusted callers.
 //
 // ref: go-zero — observability wired by default when configured
 // ref: otelchi — chi middleware for OpenTelemetry trace propagation
@@ -80,6 +78,18 @@ func WithBodyLimit(maxBytes int64) Option {
 func WithTracer(t tracing.Tracer) Option {
 	return func(r *Router) {
 		r.tracer = t
+	}
+}
+
+// WithTracingOptions passes additional TracingOption values to the Tracing
+// middleware. Use this to configure trust-boundary behavior, e.g.:
+//
+//	WithTracingOptions(middleware.WithPublicEndpointFn(func(r *http.Request) bool {
+//	    return isPublicPath(r.URL.Path)
+//	}))
+func WithTracingOptions(opts ...middleware.TracingOption) Option {
+	return func(r *Router) {
+		r.tracingOpts = append(r.tracingOpts, opts...)
 	}
 }
 
@@ -164,6 +174,7 @@ type Router struct {
 	metricsCollector    metrics.Collector
 	metricsHandler      http.Handler
 	tracer              tracing.Tracer
+	tracingOpts         []middleware.TracingOption
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
@@ -242,7 +253,7 @@ func NewE(opts ...Option) (*Router, error) {
 		middleware.Recorder,
 	)
 	if r.tracer != nil {
-		r.outerMux.Use(middleware.Tracing(r.tracer))
+		r.outerMux.Use(middleware.Tracing(r.tracer, r.tracingOpts...))
 	}
 	r.outerMux.Use(middleware.AccessLog)
 	if r.metricsCollector != nil {

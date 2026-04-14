@@ -428,11 +428,23 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "admin bypass allowed",
+			subject:    "operator-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "different device returns 403",
 			subject:    "dev-2",
 			roles:      []string{"device"},
 			wantStatus: http.StatusForbidden,
 			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			name:       "no subject returns 401",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "ERR_AUTH_UNAUTHORIZED",
 		},
 	}
 
@@ -447,7 +459,9 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-idor/ack", nil)
 			req.SetPathValue("id", "dev-1")
 			req.SetPathValue("cmdId", "cmd-idor")
-			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
 			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)

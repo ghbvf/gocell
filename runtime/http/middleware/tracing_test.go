@@ -319,10 +319,35 @@ func TestTracing_2xxDoesNotSetErrorSpanStatus(t *testing.T) {
 // --- Public endpoint trust boundary tests (#24 TRUST-POLICY-01) ---
 
 func TestTracing_PublicEndpoint_NewRootTrace(t *testing.T) {
+	tracer := tracing.NewTracer("public-test")
+	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+
+	var gotTraceID string
+	handler := Tracing(tracer, WithPublicEndpointFn(func(r *http.Request) bool {
+		return true // all endpoints are public
+	}))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-00f067aa0ba902b7-01")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Core semantic: public endpoint must NOT inherit upstream trace.
+	assert.NotEqual(t, upstreamTraceID, gotTraceID,
+		"public endpoint must create new root trace, not inherit upstream")
+	assert.Len(t, gotTraceID, 32, "new root trace ID must be a valid 32-char hex")
+}
+
+func TestTracing_PublicEndpoint_LinkedAttributes(t *testing.T) {
 	spy := &spyTracer{}
 
 	handler := Tracing(spy, WithPublicEndpointFn(func(r *http.Request) bool {
-		return true // all endpoints are public
+		return true
 	}))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -335,7 +360,7 @@ func TestTracing_PublicEndpoint_NewRootTrace(t *testing.T) {
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
 
-	// Span should record the linked remote context as attributes.
+	// Linked attributes record the remote context for correlation.
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", spans[0].Attr("linked.trace_id"),
 		"public endpoint must record incoming trace_id as linked attribute")
 	assert.Equal(t, "00f067aa0ba902b7", spans[0].Attr("linked.span_id"),
