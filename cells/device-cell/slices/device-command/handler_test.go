@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
@@ -105,6 +106,7 @@ func TestHandleListPending_InvalidLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
+	req = req.WithContext(auth.TestContext("dev-1", nil))
 	h.HandleListPending(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -116,6 +118,7 @@ func TestHandleListPending_ExceedsMaxLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
+	req = req.WithContext(auth.TestContext("dev-1", nil))
 	h.HandleListPending(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -166,6 +169,8 @@ func TestHandleListPending(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
 			req.SetPathValue("id", tc.deviceID)
+			// Device authenticates as itself (self-access).
+			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
 			h.HandleListPending(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -206,6 +211,7 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		req.SetPathValue("id", "dev-1")
+		req = req.WithContext(auth.TestContext("dev-1", nil))
 		h.HandleListPending(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -215,8 +221,8 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 		for _, item := range data {
 			m := item.(map[string]any)
 			id, ok := m["id"].(string)
-				require.True(t, ok, "response item should have string 'id' field")
-				allIDs = append(allIDs, id)
+			require.True(t, ok, "response item should have string 'id' field")
+			allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)
@@ -262,6 +268,7 @@ func TestHandleListPending_InvalidCursor(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?cursor="+tc.cursor, nil)
 			req.SetPathValue("id", "dev-1")
+			req = req.WithContext(auth.TestContext("dev-1", nil))
 			h.HandleListPending(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -307,6 +314,8 @@ func TestHandleAck(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands/"+tc.cmdID+"/ack", nil)
 			req.SetPathValue("id", tc.deviceID)
 			req.SetPathValue("cmdId", tc.cmdID)
+			// Device authenticates as itself.
+			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
 			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -344,4 +353,121 @@ func TestCommandResponse_AckedAt_Serialization(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(b), `"ackedAt"`)
 	})
+}
+
+// Trust boundary tests (#27p)
+func TestHandleListPending_DeviceIDOR(t *testing.T) {
+	tests := []struct {
+		name       string
+		deviceID   string
+		subject    string
+		roles      []string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "self-access allowed",
+			deviceID:   "dev-1",
+			subject:    "dev-1",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "admin bypass allowed",
+			deviceID:   "dev-1",
+			subject:    "operator-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "different device returns 403",
+			deviceID:   "dev-1",
+			subject:    "dev-2",
+			roles:      []string{"device"},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			name:       "no subject returns 401",
+			deviceID:   "dev-1",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := setupCommandHandler()
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
+			req.SetPathValue("id", tc.deviceID)
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			h.HandleListPending(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestHandleAck_DeviceIDOR(t *testing.T) {
+	tests := []struct {
+		name       string
+		subject    string
+		roles      []string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "self-access allowed",
+			subject:    "dev-1",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "admin bypass allowed",
+			subject:    "operator-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "different device returns 403",
+			subject:    "dev-2",
+			roles:      []string{"device"},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			name:       "no subject returns 401",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, cmdRepo := setupCommandHandler()
+			_ = cmdRepo.Create(context.Background(), &domain.Command{
+				ID: "cmd-idor", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-idor/ack", nil)
+			req.SetPathValue("id", "dev-1")
+			req.SetPathValue("cmdId", "cmd-idor")
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			h.HandleAck(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
+			}
+		})
+	}
 }

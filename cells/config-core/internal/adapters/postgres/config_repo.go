@@ -51,8 +51,8 @@ func NewConfigRepository(db DBTX) *ConfigRepository {
 // Create inserts a new config entry.
 func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry) error {
 	const query = `INSERT INTO config_entries
-		(id, key, value, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		(id, key, value, sensitive, version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 
 	now := time.Now()
 	if entry.CreatedAt.IsZero() {
@@ -63,7 +63,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 	}
 
 	_, err := r.db.Exec(ctx, query,
-		entry.ID, entry.Key, entry.Value, entry.Version,
+		entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
 		entry.CreatedAt, entry.UpdatedAt,
 	)
 	if err != nil {
@@ -76,13 +76,13 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 
 // GetByKey retrieves a config entry by key.
 func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	const query = `SELECT id, key, value, version, created_at, updated_at
+	const query = `SELECT id, key, value, sensitive, version, created_at, updated_at
 		FROM config_entries WHERE key = $1`
 
 	row := r.db.QueryRow(ctx, query, key)
 
 	var e domain.ConfigEntry
-	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
+	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: key not found: %s", key), err)
 	}
@@ -93,15 +93,15 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 // Update updates an existing config entry.
 func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry) error {
 	const query = `UPDATE config_entries
-		SET value = $1, version = $2, updated_at = $3
-		WHERE key = $4`
+		SET value = $1, sensitive = $2, version = $3, updated_at = $4
+		WHERE key = $5`
 
 	if entry.UpdatedAt.IsZero() {
 		entry.UpdatedAt = time.Now()
 	}
 
 	affected, err := r.db.Exec(ctx, query,
-		entry.Value, entry.Version, entry.UpdatedAt, entry.Key,
+		entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
 	)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
@@ -136,7 +136,7 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 // Requires composite index: CREATE INDEX idx_config_entries_key_id ON config_entries (key ASC, id ASC)
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	b := query.NewBuilder()
-	b.Append("SELECT id, key, value, version, created_at, updated_at FROM config_entries WHERE 1=1")
+	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at FROM config_entries WHERE 1=1")
 
 	if err := query.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
@@ -152,7 +152,7 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	var entries []*domain.ConfigEntry
 	for rows.Next() {
 		var e domain.ConfigEntry
-		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
 		}
 		entries = append(entries, &e)

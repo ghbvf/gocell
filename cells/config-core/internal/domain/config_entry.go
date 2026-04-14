@@ -8,6 +8,7 @@ type ConfigEntry struct {
 	ID        string
 	Key       string
 	Value     string
+	Sensitive bool // marks value as containing secrets (API keys, passwords, etc.)
 	Version   int
 	CreatedAt time.Time
 	UpdatedAt time.Time

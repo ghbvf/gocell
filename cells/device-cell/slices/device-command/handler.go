@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // CommandResponse is the public DTO for Command, isolating the API contract
@@ -44,6 +45,9 @@ type enqueueRequest struct {
 }
 
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
+// No subject-deviceID check: this is an operator/management endpoint where
+// authenticated operators enqueue commands for any device they manage.
+// ListPending and Ack are device-facing (subject == deviceID).
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
@@ -64,8 +68,16 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 // HandleListPending handles GET /api/v1/devices/{id}/commands?limit=N&cursor=TOKEN.
 // Devices poll this endpoint to retrieve pending commands (L4 latent model).
+//
+// Trust boundary: subject must match deviceID (device authenticates as itself)
+// or hold admin role.
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+
+	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
 
 	pageReq, err := httputil.ParsePageRequest(r)
 	if err != nil {
@@ -90,8 +102,16 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 // Returns a status-only response (not a full CommandResponse) because
 // Ack is a fire-and-forget action — the service does not return the
 // updated entity.
+//
+// Trust boundary: subject must match deviceID or hold admin role.
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+
+	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	cmdID := r.PathValue("cmdId")
 
 	if err := h.svc.Ack(r.Context(), deviceID, cmdID); err != nil {

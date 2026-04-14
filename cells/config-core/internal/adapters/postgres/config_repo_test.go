@@ -47,7 +47,7 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "app.name", "GoCell", 1, now, now},
+			values: []any{"cfg-1", "app.name", "GoCell", false, 1, now, now},
 		},
 	}
 	repo := NewConfigRepository(db)
@@ -131,8 +131,8 @@ func TestConfigRepository_List(t *testing.T) {
 	db := &mockDB{
 		queryRows: &mockRowSet{
 			entries: []mockRowValues{
-				{values: []any{"cfg-1", "a.key", "val1", 1, now, now}},
-				{values: []any{"cfg-2", "b.key", "val2", 1, now, now}},
+				{values: []any{"cfg-1", "a.key", "val1", false, 1, now, now}},
+				{values: []any{"cfg-2", "b.key", "val2", false, 1, now, now}},
 			},
 		},
 	}
@@ -265,6 +265,8 @@ func (r *mockRow) Scan(dest ...any) error {
 			*d = v.(string)
 		case *int:
 			*d = v.(int)
+		case *bool:
+			*d = v.(bool)
 		case *[]byte:
 			*d = v.([]byte)
 		case *time.Time:
@@ -298,6 +300,8 @@ func (r *mockRowSet) Scan(dest ...any) error {
 			*d = v.(string)
 		case *int:
 			*d = v.(int)
+		case *bool:
+			*d = v.(bool)
 		case *[]byte:
 			*d = v.([]byte)
 		case *time.Time:

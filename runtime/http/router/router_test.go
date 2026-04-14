@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
@@ -376,6 +377,46 @@ func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTraceID,
 		"router tracing chain should preserve upstream trace continuity")
+}
+
+func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
+	tracer := tracing.NewTracer("test-public")
+	r := New(
+		WithTracer(tracer),
+		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
+			return req.URL.Path == "/public"
+		})),
+	)
+
+	var publicTraceID, internalTraceID string
+	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+
+	// Public endpoint: should NOT inherit upstream trace.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-00f067aa0ba902b7-01")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NotEqual(t, upstreamTraceID, publicTraceID,
+		"public endpoint must NOT inherit upstream trace (new root)")
+
+	// Internal endpoint: should inherit upstream trace.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-00f067aa0ba902b7-01")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, upstreamTraceID, internalTraceID,
+		"internal endpoint must inherit upstream trace")
 }
 
 func TestNoTracer_NoTraceID(t *testing.T) {

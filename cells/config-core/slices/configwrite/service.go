@@ -58,8 +58,9 @@ func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.
 
 // CreateInput holds parameters for creating a config entry.
 type CreateInput struct {
-	Key   string
-	Value string
+	Key       string
+	Value     string
+	Sensitive bool
 }
 
 // Create creates a new config entry and publishes a change event.
@@ -73,6 +74,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		ID:        "cfg" + "-" + uuid.NewString(),
 		Key:       input.Key,
 		Value:     input.Value,
+		Sensitive: input.Sensitive,
 		Version:   1,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -168,10 +170,14 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 }
 
 func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
+	eventValue := entry.Value
+	if entry.Sensitive {
+		eventValue = "******"
+	}
 	payload, err := json.Marshal(map[string]any{
 		"action":  action,
 		"key":     entry.Key,
-		"value":   entry.Value,
+		"value":   eventValue,
 		"version": entry.Version,
 	})
 	if err != nil {

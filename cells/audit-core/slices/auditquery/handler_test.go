@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +57,8 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
+			// Inject auth context so the handler doesn't reject with 401.
+			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 			h.HandleQuery(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -79,6 +82,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=abc", nil)
+	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	h.HandleQuery(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -92,6 +96,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
+	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	h.HandleQuery(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -125,6 +130,8 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
+		// Self-access: subject matches actorId in data.
+		req = req.WithContext(auth.TestContext("usr-1", nil))
 		h.HandleQuery(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -134,8 +141,8 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		for _, item := range data {
 			m := item.(map[string]any)
 			id, ok := m["id"].(string)
-				require.True(t, ok, "response item should have string 'id' field")
-				allIDs = append(allIDs, id)
+			require.True(t, ok, "response item should have string 'id' field")
+			allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)
@@ -183,6 +190,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor="+tc.cursor, nil)
+			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 			h.HandleQuery(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -212,4 +220,88 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 
 	assert.NotContains(t, body, `"prevHash"`)
 	assert.NotContains(t, body, `"hash"`)
+}
+
+// Trust boundary tests (#27q)
+func TestHandleQuery_ActorBinding(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	svc := NewService(repo, testCodec(), slog.Default())
+	h := NewHandler(svc)
+
+	// Seed entries for two actors
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+		ID: "ae-1", EventID: "evt-1", EventType: "event.test.v1",
+		ActorID: "usr-1", Timestamp: base, Payload: []byte("{}"),
+	}))
+	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+		ID: "ae-2", EventID: "evt-2", EventType: "event.test.v1",
+		ActorID: "usr-2", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+	}))
+
+	tests := []struct {
+		name       string
+		query      string
+		subject    string
+		roles      []string
+		wantStatus int
+		wantCount  int // -1 = don't check
+	}{
+		{
+			name:       "self actorId matches subject",
+			query:      "?actorId=usr-1",
+			subject:    "usr-1",
+			wantStatus: http.StatusOK,
+			wantCount:  1,
+		},
+		{
+			name:       "no actorId defaults to subject",
+			query:      "",
+			subject:    "usr-1",
+			wantStatus: http.StatusOK,
+			wantCount:  1,
+		},
+		{
+			name:       "other actorId without admin returns 403",
+			query:      "?actorId=usr-2",
+			subject:    "usr-1",
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+			wantCount:  -1,
+		},
+		{
+			name:       "other actorId with admin allowed",
+			query:      "?actorId=usr-2",
+			subject:    "admin-user",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusOK,
+			wantCount:  1,
+		},
+		{
+			name:       "no subject returns 401",
+			query:      "",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+			wantCount:  -1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			h.HandleQuery(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCount >= 0 {
+				var resp map[string]any
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				data := resp["data"].([]any)
+				assert.Len(t, data, tc.wantCount)
+			}
+		})
+	}
 }
