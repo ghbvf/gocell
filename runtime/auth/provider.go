@@ -48,10 +48,10 @@ func NewEnvKeyProvider() *EnvKeyProvider {
 	ks, rsaErr := LoadKeySetFromEnv()
 	ring, hmacErr := LoadHMACKeyRingFromEnv()
 	if rsaErr != nil {
-		slog.Warn("RSA key set not loaded from environment", slog.String("error", rsaErr.Error()))
+		slog.Info("RSA key set not loaded from environment", slog.String("error", rsaErr.Error()))
 	}
 	if hmacErr != nil {
-		slog.Warn("HMAC key ring not loaded from environment", slog.String("error", hmacErr.Error()))
+		slog.Info("HMAC key ring not loaded from environment", slog.String("error", hmacErr.Error()))
 	}
 	return &EnvKeyProvider{
 		rsaKeySet: ks,

@@ -59,7 +59,7 @@ func TestEnvKeyProvider_RSAKeySet_WithVerificationKey(t *testing.T) {
 }
 
 func TestEnvKeyProvider_RSAKeySet_MissingKeysFails(t *testing.T) {
-	// Clear JWT env vars (t.Setenv with empty does not help; just don't set them).
+	// Set JWT env vars to empty to simulate missing configuration.
 	t.Setenv(EnvJWTPrivateKey, "")
 	t.Setenv(EnvJWTPublicKey, "")
 
@@ -137,8 +137,11 @@ func TestEnvKeyProvider_RSAKeySet_ReturnsSameInstance(t *testing.T) {
 	setJWTEnvVars(t)
 
 	p := NewEnvKeyProvider()
-	ks1, _ := p.RSAKeySet()
-	ks2, _ := p.RSAKeySet()
+	ks1, err := p.RSAKeySet()
+	require.NoError(t, err)
+	require.NotNil(t, ks1)
+	ks2, err := p.RSAKeySet()
+	require.NoError(t, err)
 	assert.Same(t, ks1, ks2, "RSAKeySet must return the same cached instance")
 }
 
@@ -146,8 +149,11 @@ func TestEnvKeyProvider_HMACKeyRing_ReturnsSameInstance(t *testing.T) {
 	t.Setenv(EnvServiceSecret, "this-is-a-32-byte-secret-for-hmac!")
 
 	p := NewEnvKeyProvider()
-	r1, _ := p.HMACKeyRing()
-	r2, _ := p.HMACKeyRing()
+	r1, err := p.HMACKeyRing()
+	require.NoError(t, err)
+	require.NotNil(t, r1)
+	r2, err := p.HMACKeyRing()
+	require.NoError(t, err)
 	assert.Same(t, r1, r2, "HMACKeyRing must return the same cached instance")
 }
 
