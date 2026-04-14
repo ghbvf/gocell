@@ -1,8 +1,9 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/`。
-> 更新日期: 2026-04-14
+> 更新日期: 2026-04-15
 > Batch 1-5: ✅ 全部完成 (PR#67-114, 48 PRs)
+> Wave 1 进行中: ✅ PR#116-122+PR#124 (8 PRs 已合入), 🔄 PR#123 (待合并)
 > 重构依据: `tools/docs/20260414-backlog-wave-restructure.md`
 > 旧版备份: `docs/reviews/archive/20260414-backlog-pre-wave-restructure.md`
 
@@ -13,12 +14,13 @@
 > PR#112 (trace propagation) / PR#113 (outbox cleanup) / PR#114 (Health/Readyz) 已合入，前置全部满足。
 > 按优先级排序；单人执行时从上到下依次做，多人时全并行。
 > 0414 调整: access-core / config-core / rabbitmq 按模块合并为加固 PR，一次性封口；反复被审查发现的模式嵌入自动化约束。
+> 0415 进展: PR#116(flatten) PR#117(qodana) PR#118(WM-2-F1) PR#119(access-core 加固) PR#120(flatten 遗留) PR#121(L4 API) PR#122(config-core 加固) PR#124(RMQ 加固) 已合入；PR#123(Bootstrap 全家桶) 待合并。
 
 ### Auth 关键路径起点 ★
 
 | # | 任务 | 工时 | 文件 |
 |---|------|------|------|
-| 1 | **WM-2-F1** KeyProvider 接口抽象 | **1d** | `runtime/auth/` |
+| 1 | **WM-2-F1** KeyProvider 接口抽象 | **1d** | `runtime/auth/` | ✅ PR#118 |
 
 > ★ v1.0 唯一关键路径：WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) = 4.5d 串行。每延迟 1 天 = v1.0 推迟 1 天。
 
@@ -26,24 +28,24 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| 2 | **L4 API 收敛** L4-API-01: ValidateNew 改名 + AdvanceCommand 统一副作用 + CommandStateAdvancer 迁移契约 + L4-PURE-01(time.Now 注入) + L4-RETRY-01(ResetForRetry) | 5.5h | `kernel/outbox/l4.go` | 6A |
+| 2 | **L4 API 收敛** L4-API-01: ValidateNew 改名 + AdvanceCommand 统一副作用 + CommandStateAdvancer 迁移契约 + L4-PURE-01(time.Now 注入) + L4-RETRY-01(ResetForRetry) | 5.5h | `kernel/outbox/l4.go` | 6A | ✅ PR#121 |
 | 3 | **CONTRACT-OP-01** HTTP operation model 收口: slice 元数据缺 HTTP serve contract、response.schema oneOf 混合 | 4h | `cells/config-core/slices/*/slice.yaml` + `contracts/http/config/` + `cells/access-core/slices/sessionlogout/slice.yaml` | 6B |
 | 4 | **CONTRACT-TEST-02** 假阳性修复: contracttest helper 不验证真实 handler/outbox 输出 | 5h | `pkg/contracttest/` + `cells/*/contract_test.go` + `cells/device-cell/slices/deviceregister/` | 6B |
 | 5 | **AUTH-DX-01** README + seed 用户 + sso-bff walkthrough: auth 已拦截全部业务路由，README 失效；sso-bff README 缺 refresh/GET user/event 消费 demo (P4-P1-6)。具体漂移: refresh curl 发 `sessionId` 实际需 `refreshToken`；logout 204 空 body 管道 jq 失败；audit jq 用 `.createdAt` 实为 `.Timestamp` | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review + 0414 审查 |
 | 6 | **TPUB-01** TestPubSub 真实 adapter 认证: conformance harness 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
 | 7 | **API 响应格式统一** P4-TD-09(list endpoint 缺 `nextCursor/hasMore`) + P4-TD-10(POST 201 未包裹 `{"data":...}`) — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` | B8 提前 |
 | 8 | **Entity→DTO** P4-TD-13: 8 个 handler 直出 entity 含内部字段，需 DTO 映射隔离 API 契约 — v1.0 后修 = breaking change | 4h | `cells/*/handler.go` (user/session/config/flag/audit/order/device/demo) | B8 提前 |
-| 8a | **L2-TX-01** txRunner 装配缺口: access-core/config-core 仅校验 `outboxWriter`，缺 `txRunner` 成对约束——业务写入成功但 outbox 写入可在事务外失败，破坏 L2 原子性。参照 order-cell XOR 约束模式修复 | 3h | `cells/access-core/cell.go` + `cells/config-core/cell.go` + 各 service `runInTx` | 0414 审查 |
-| 8b | **EVT-SUB-01** event contract subscriber 漂移: `contracts/event/config/changed/v1/contract.yaml` 声明 access-core 为 subscriber，但 `RegisterSubscriptions` 是 no-op；`J-config-hot-reload.yaml` passCriteria 不可达。需实现 handler 或从 contract subscribers 移除 | 3h | `cells/access-core/cell.go` + `contracts/event/config/changed/v1/contract.yaml` + `journeys/J-config-hot-reload.yaml` | 0414 审查 |
+| 8a | **L2-TX-01** txRunner 装配缺口: access-core/config-core 仅校验 `outboxWriter`，缺 `txRunner` 成对约束——业务写入成功但 outbox 写入可在事务外失败，破坏 L2 原子性。参照 order-cell XOR 约束模式修复 | 3h | `cells/access-core/cell.go` + `cells/config-core/cell.go` + 各 service `runInTx` | 0414 审查 | ✅ PR#119+PR#122 |
+| 8b | **EVT-SUB-01** event contract subscriber 漂移: `contracts/event/config/changed/v1/contract.yaml` 声明 access-core 为 subscriber，但 `RegisterSubscriptions` 是 no-op；`J-config-hot-reload.yaml` passCriteria 不可达。需实现 handler 或从 contract subscribers 移除 | 3h | `cells/access-core/cell.go` + `contracts/event/config/changed/v1/contract.yaml` + `journeys/J-config-hot-reload.yaml` | 0414 审查 | ✅ PR#119 |
 
 ### 运维 + 基础设施
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| 9 | **Bootstrap 加固 + 端点隔离** OPS-4(graceful shutdown) + BOOT-PANIC-01 + BOOT-OPTION-01 + INFRA-EXPOSE-01(/metrics opt-in + health 分离) | 6h | `runtime/bootstrap/` + `runtime/http/router/` | 6A |
+| 9 | **Bootstrap 加固 + 端点隔离** OPS-4(graceful shutdown) + BOOT-PANIC-01 + BOOT-OPTION-01 + INFRA-EXPOSE-01(/metrics opt-in + health 分离) | 6h | `runtime/bootstrap/` + `runtime/http/router/` | 6A | 🔄 PR#123 |
 | 10 | **Watcher 核心增强** R97-02(debounce) + R97-F1(symlink-pivot) + WM-34-F1(目录级监听) + F2(metrics) + F3(key 过滤) + R97-04(DeepCloneValue) + R97-R3-02(ShutdownDrain channel 同步) | 7h | `runtime/config/watcher.go` + `store.go` | 6A |
 | 11 | **Watcher 状态面 + 连接池指标** R97-F3(Generation/observedGeneration) + OPS-5(PG/Redis/RMQ 连接池指标) | 4h | `runtime/config/` + `adapters/postgres/` + `adapters/redis/` + `adapters/rabbitmq/` | 6A |
-| 12 | **RabbitMQ 连接正确性** RMQ-RACE-01(WaitConnected 竞态) + P3-DEFER-05(Health 状态区分) | 4h | `adapters/rabbitmq/connection.go` | 6A |
+| 12 | **RabbitMQ 连接正确性** RMQ-RACE-01(WaitConnected 竞态) + P3-DEFER-05(Health 状态区分) | 4h | `adapters/rabbitmq/connection.go` | 6A | ✅ PR#124 |
 
 ### PR#116 Flatten 遗留修复 ✅
 
@@ -61,13 +63,13 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| 13 | **Session 安全** P3-TD-10 Session refresh TOCTOU 乐观锁 + P4-TD-11(in-memory repo 并发 goroutine 测试) | 5h | `cells/access-core/internal/` | 6B 高风险 + P4 review |
+| 13 | **Session 安全** P3-TD-10 Session refresh TOCTOU 乐观锁 + P4-TD-11(in-memory repo 并发 goroutine 测试) | 5h | `cells/access-core/internal/` | 6B 高风险 + P4 review | ✅ PR#119 |
 | 14 | **order+demo+examples 修复** P4-TD-04 + P4-TD-12 + EVT-HDR-RESTORE + WM-6-F8(demo 模式开关) + P3-DEFER-03(examples 新 API) + NOOP-RENAME-01 + NIL-PUB-P1(device-cell nil publisher) | 7.5h | `cells/order-cell/` + `cells/demo/` + `cells/device-cell/` + `examples/` | 6B |
 | 15 | **cursor 回归矩阵** CURSOR-TEST-01 + CUR-HDL-01: 5 个分页入口补 malformed/missing-scope/cross-context 三类回归 | 4h | `cells/*/handler_test.go` + `service_test.go` | 6B |
-| 16 | **config-core 修正** CFG-JSON-01(json tags camelCase) + FLAG-RACE-01(并发测试) + P3-TD-12(rollback version 校验) | 3.5h | `cells/config-core/internal/domain/` | 6B |
+| 16 | **config-core 修正** CFG-JSON-01(json tags camelCase) + FLAG-RACE-01(并发测试) + P3-TD-12(rollback version 校验) | 3.5h | `cells/config-core/internal/domain/` | 6B | ✅ PR#122 |
 | 17 | **Hook 增强** WM17-F2-2(ctx 超时) + WM17-F4-3(Prometheus metrics via HookObserver 接口) | 3h | `kernel/cell/` | 6B |
 | 18 | **CB 接口+封装清理** CB-IFACE-01(Allow/Report 拆分) + CB-ENCAP-01(消除 gobreaker import) | 3h | `runtime/resilience/circuitbreaker/` | 6B |
-| 19 | **CI 增强** ✅ CI-01(integration 路径, fix/507-flatten-followup Makefile 对齐) + T1-7(golangci-lint) | 2h | `.github/ci.yml` | 6B |
+| 19 | **CI 增强** ✅ CI-01(integration 路径, fix/507-flatten-followup Makefile 对齐) + ✅ Qodana(PR#117) + T1-7(golangci-lint) + TC-PIN-01(testcontainers 镜像 pin 到 patch 版本，当前全仓用 floating minor tag `3.12-management-alpine`，PR#124 review S4-F1) | 2.5h | `.github/ci.yml` + `adapters/*/integration_test.go` | 6B |
 | 20 | **decode 加固** DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` | 6B |
 | 21 | **Journey 校验** F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` | 6B |
 | 22 | **DELETE 无 body** DELETE-NOCONTENT-01: 204 + body=0 语义测试 | 1.5h | `contracts/http/auth/user/delete/v1/` | 6B |
@@ -76,7 +78,7 @@
 | 25 | **HSTS 加固** C-H4: `security_headers.go` 补 `includeSubDomains` | 0.5h | `runtime/http/middleware/security_headers.go` | P2 tech-debt |
 | 26 | **.env.example 补全** ENV-S3: 补 `GOCELL_S3_REGION=us-east-1` — `s3.Config.Validate()` 必填但示例缺失 | 0.5h | `.env.example` | P4 review |
 | 27 | **examples contract CI** INT-2: order-cell/device-cell contract YAML 存在且被 slice.yaml 引用，但 CI 未校验 | 1h | `.github/workflows/ci.yml` | P4 review |
-| 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 |
+| 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 | ✅ PR#124 |
 | 27b | **SLICE-ALLOWEDFILES-01** 全部 slice 默认 allowedFiles 不覆盖 Go 包目录（kebab-case YAML 目录 vs no-dash Go 包目录），需系统性补 allowedFiles 或改 `BaseSlice.AllowedFiles()` 默认逻辑 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review |
 | 27c | **L2-HARD-GATE-01** L2 cell 启动门禁从 publisher 兜底升级为强制 outbox+txRunner（需配合 demo 模式显式开关 `WithDemoMode()`），消除声明能力与运行能力漂移 | 3h | `cells/access-core/cell.go` + `cells/config-core/cell.go` + `cells/audit-core/cell.go` | PR#119 review P1-1 |
 | 27d | **OUTBOX-WRITE-ERR-01** `publishEvent` 吞 `outbox.Write` 错误: durable 模式下 outbox 写入失败仅日志不返回 error，事务内业务写入成功但事件丢失，违反 L2 原子性。需改 `publishEvent` 返回 error 并传播给 `runInTx` | 3h | `cells/config-core/slices/configpublish/service.go` + `cells/config-core/slices/configwrite/service.go` | PR#122 review F5-1 |
@@ -93,13 +95,13 @@
 | # | 任务 | 前置 | 工时 | 文件 |
 |---|------|------|------|------|
 | 28 | **SOL-B-01** Claimer lease 续租 Receipt.Renew | L4 API (#2) | 4h | `kernel/outbox/` |
-| 29 | **Bootstrap tracing 测试** BOOT-TEST-01 | Bootstrap 加固 (#9) | 2h | `runtime/bootstrap/` + `router/` |
-| 30 | **Bootstrap 次要清理** BOOT-MINOR-01: panic(err) + access_log real_ip | Bootstrap 加固 (#9) | 1h | `runtime/http/router/` |
+| 29 | **Bootstrap tracing 测试** BOOT-TEST-01 | Bootstrap 加固 (#9) | 2h | `runtime/bootstrap/` + `router/` | 🔄 PR#123 |
+| 30 | **Bootstrap 次要清理** BOOT-MINOR-01: panic(err) + access_log real_ip | Bootstrap 加固 (#9) | 1h | `runtime/http/router/` | 🔄 PR#123 |
 | 31 | **RabbitMQ 代码清理** P3-DEFER-01(backoff 提取) + P3-DEFER-02(FailOpen enum) | RMQ 连接 (#12) | 3h | `adapters/rabbitmq/` |
 | 32 | **cursor 可观测** CURSOR-P2-02 invalid 结构化日志 | cursor 回归 (#15) | 1h | `cells/audit-core/` |
 | 33 | **WM-35** BFF handler 接入 cookie session | WM-2-F1 (#1) | **2d** ★ | `runtime/auth/` |
 
-> 建议合并 PR: #9+#29+#30 → "Bootstrap 全家桶" (9h)；#2+#28 → "outbox 串行包" (9.5h)。
+> 建议合并 PR: #9+#29+#30 → "Bootstrap 全家桶" (9h) 🔄 PR#123 待合并；#2+#28 → "outbox 串行包" (✅ #2 PR#121 已合入, #28 可启动)。
 
 ---
 
@@ -143,10 +145,10 @@
 
 | 合并 PR | 包含任务 | 工时 | 理由 |
 |---------|---------|------|------|
-| **access-core 加固** | #8a(access) + #8b + #13 | 9.5h | 模块封口: txRunner XOR + event 订阅实现/清理 + session TOCTOU |
-| **config-core 加固** | #8a(config) + #16 | 5h | 模块封口: txRunner XOR + JSON camelCase + flag race |
-| **RabbitMQ 加固** | #12 + #27a | 8h | 模块封口: 连接竞态 + ConsumerBaseRetry/ConnectionRecovery 测试修正 |
-| Bootstrap 全家桶 | #9 + #29 + #30 | 9h | 同目录相关改动 |
+| **access-core 加固** | #8a(access) + #8b + #13 | 9.5h | 模块封口: txRunner XOR + event 订阅实现/清理 + session TOCTOU | ✅ PR#119 |
+| **config-core 加固** | #8a(config) + #16 | 5h | 模块封口: txRunner XOR + JSON camelCase + flag race | ✅ PR#122 |
+| **RabbitMQ 加固** | #12 + #27a | 8h | 模块封口: 连接竞态 + ConsumerBaseRetry/ConnectionRecovery 测试修正 | ✅ PR#124 |
+| Bootstrap 全家桶 | #9 + #29 + #30 | 9h | 同目录相关改动 | 🔄 PR#123 |
 | Contract 正确性 | #3 + #4 + #22 | 10.5h | contract 体系修正 |
 | API 契约加固 | #7 + #8 | 8h | 都改 handler 响应格式，v1.0 前必修 |
 | Trust boundary | #24 (TRUST-POLICY + OBS-REQID) | 4h | 同一信任边界主题 |
@@ -202,7 +204,7 @@
 | 迁移+订阅 | RL-MIG-01(online-safe 索引 CONCURRENTLY) + RL-SUB-01(入站 ID 校验) | 3h |
 | CMD 重构 | CMD-MODE-01(fail-fast) + CMD-REFACTOR-01(app 包提取) | 3.5h |
 | 批量操作 | WM-7: 泛型 `BulkResult[T]` helper | 1d |
-| **Builder 可选优化** | PR#115 `fmt.Sprintf→strconv.Itoa` 微优化：补 benchmark 文件 + 修正 bolt.md 矛盾指导（Itoa vs AppendInt 分层适用）+ 删除未验证的 "40%" 声称。前置: close PR#115 DRAFT | 2h |
+| **Builder 可选优化** | PR#115 `fmt.Sprintf→strconv.Itoa` 微优化：补 benchmark 文件 + 修正 bolt.md 矛盾指导（Itoa vs AppendInt 分层适用）+ 删除未验证的 "40%" 声称。~~前置: close PR#115 DRAFT~~ ✅ PR#115 已关闭 | 2h |
 
 ---
 
@@ -236,6 +238,7 @@
 | AL-01 | outbox_relay.go 轮询逻辑属于 runtime | 拆出 `runtime/outbox/relay.go` |
 | AL-02 | distlock.go 续期 goroutine 属于 runtime | 拆出通用 distlock 接口 |
 | AL-04 | runtime/auth 直接 import golang-jwt | 评估是否值得拆 |
+| RMQ-STATUS-01 | `ConnectionStatus()` 返回 raw `ConnectionState` enum，dashboard 集成需结构化类型 (state+message+lastError) | `adapters/rabbitmq/connection.go` — P2, discovered via PR#124 S6-F2 review |
 
 ### 跨框架 GAP — v1.1 待评估
 
@@ -330,11 +333,14 @@
   Batch 5A:  ✅ PR#94-101 (8 PRs)
   Batch 5B:  ✅ PR#102-114 (13 PRs, 含 PR#112 trace + PR#113 outbox + PR#114 health)
   6A 部分:   ✅ PR#107 runtime 竞态 + PR#114 Health/Readyz + PR#113 outbox 清理
+  Wave 1 部分: ✅ PR#116(flatten) + PR#117(qodana) + PR#118(WM-2-F1) + PR#119(access-core 加固) + PR#120(flatten 遗留) + PR#121(L4 API) + PR#122(config-core 加固) + PR#124(RMQ 加固) — 8 PRs
+  Wave 1+2 待合并: 🔄 PR#123(Bootstrap 全家桶: #9+#29+#30)
 
 当前:
-  Wave 1-4: 45 项, ~164h → v1.0 (含 4 项从 Batch 8 提前 + 3 项 0414 审查新增)
+  Wave 1: 已完成 #1+#2+#8a+#8b+#12+#13+#16+#27a+F1~F6, 待合并 #9(PR#123); 剩余 #3~#8+#10~#11+#14~#15+#17~#27
+  Wave 2-4: 45 项, ~164h → v1.0
   Batch 8:  12 组, ~43.5h (从 23 组合并整理 + Builder 可选优化)
-  关键路径: WM-2-F1 (1d) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 6.5 工作日
+  关键路径: ✅ WM-2-F1 (PR#118) → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 剩余 5.5 工作日
 ```
 
 ---
@@ -353,41 +359,41 @@
 > #19 → #27               (CI → examples CI)
 > ```
 
-### Batch W1-1: 基座层（4 项，~19h，全并行）
+### Batch W1-1: 基座层（4 项，~19h，全并行）✅ 全部完成
 
-| 任务 | 工时 | 为什么先做 |
-|------|------|-----------|
-| #1 WM-2-F1 KeyProvider ★ | 1d | 关键路径起点，每延 1 天 v1.0 推 1 天 |
-| #2 L4 API 收敛 | 5.5h | kernel/outbox API 稳定后 Wave 2 #28 才可启动 |
-| #8a L2-TX-01 txRunner XOR | 3h | 两个 cell 加固 PR 的前置，改 Validate() 模式 |
-| #19 CI 增强 | 2.5h | golangci-lint + integration 路径，后续所有 PR 受益 |
+| 任务 | 工时 | 为什么先做 | 状态 |
+|------|------|-----------|------|
+| #1 WM-2-F1 KeyProvider ★ | 1d | 关键路径起点，每延 1 天 v1.0 推 1 天 | ✅ PR#118 |
+| #2 L4 API 收敛 | 5.5h | kernel/outbox API 稳定后 Wave 2 #28 才可启动 | ✅ PR#121 |
+| #8a L2-TX-01 txRunner XOR | 3h | 两个 cell 加固 PR 的前置，改 Validate() 模式 | ✅ PR#119+PR#122 |
+| #19 CI 增强 | 2.5h | golangci-lint + integration 路径，后续所有 PR 受益 | 部分 ✅ Qodana PR#117 |
 
-### Batch W1-2: 运行时 + 事件基础（4 项，~17h）
+### Batch W1-2: 运行时 + 事件基础（4 项，~17h）3/4 完成
 
-| 任务 | 工时 | 依赖 |
-|------|------|------|
-| #9 Bootstrap 加固 | 6h | 无（#10 依赖它） |
-| #12 RabbitMQ 连接正确性 | 4h | 无（#27a、#6 依赖它） |
-| #8b EVT-SUB-01 event 订阅 | 3h | ← #8a |
-| #3 CONTRACT-OP-01 contract model | 4h | 无（#4 依赖它） |
+| 任务 | 工时 | 依赖 | 状态 |
+|------|------|------|------|
+| #9 Bootstrap 加固 | 6h | 无（#10 依赖它） | 🔄 PR#123 |
+| #12 RabbitMQ 连接正确性 | 4h | 无（#27a、#6 依赖它） | ✅ PR#124 |
+| #8b EVT-SUB-01 event 订阅 | 3h | ← #8a | ✅ PR#119 |
+| #3 CONTRACT-OP-01 contract model | 4h | 无（#4 依赖它） | — |
 
-### Batch W1-3: 模块加固收口（4 项，~20.5h）
+### Batch W1-3: 模块加固收口（4 项，~20.5h）2/4 完成
 
-| 任务 | 工时 | 依赖 | 完成的加固 PR |
-|------|------|------|-------------|
-| #13 Session TOCTOU | 5h | ← #8a, #8b | **access-core 加固** (#8a+#8b+#13) |
-| #16 config-core 修正 | 3.5h | ← #8a | **config-core 加固** (#8a+#16) |
-| #4 CONTRACT-TEST-02 | 5h | ← #3 | Contract 正确性 (#3+#4) |
-| #10 Watcher 核心增强 | 7h | ← #9 | — |
+| 任务 | 工时 | 依赖 | 完成的加固 PR | 状态 |
+|------|------|------|-------------|------|
+| #13 Session TOCTOU | 5h | ← #8a, #8b | **access-core 加固** (#8a+#8b+#13) | ✅ PR#119 |
+| #16 config-core 修正 | 3.5h | ← #8a | **config-core 加固** (#8a+#16) | ✅ PR#122 |
+| #4 CONTRACT-TEST-02 | 5h | ← #3 | Contract 正确性 (#3+#4) | — |
+| #10 Watcher 核心增强 | 7h | ← #9 | — | blocked by #9 |
 
-### Batch W1-4: API 契约 + RMQ 收口（4 项，~16h）
+### Batch W1-4: API 契约 + RMQ 收口（4 项，~16h）1/4 完成
 
-| 任务 | 工时 | 依赖 | 完成的加固 PR |
-|------|------|------|-------------|
-| #7 API 响应格式统一 | 4h | 无 | — |
-| #8 Entity→DTO | 4h | ← #7（同 handler 文件） | **API 契约加固** (#7+#8) |
-| #27a RMQ-TEST-01 | 4h | ← #12 | **RabbitMQ 加固** (#12+#27a) |
-| #6 TPUB-01 | 4h | ← #12 | — |
+| 任务 | 工时 | 依赖 | 完成的加固 PR | 状态 |
+|------|------|------|-------------|------|
+| #7 API 响应格式统一 | 4h | 无 | — | — |
+| #8 Entity→DTO | 4h | ← #7（同 handler 文件） | **API 契约加固** (#7+#8) | — |
+| #27a RMQ-TEST-01 | 4h | ← #12 | **RabbitMQ 加固** (#12+#27a) | ✅ PR#124 |
+| #6 TPUB-01 | 4h | ← #12（前置已满足） | — | — |
 
 ### Batch W1-5: 二级加固（4 项，~18.5h）
 
