@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide"
+	"github.com/ghbvf/gocell/cells/access-core/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/access-core/slices/identitymanage"
 	"github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
@@ -19,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -73,6 +75,11 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *AccessCore) { c.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx persistence.TxRunner) Option {
+	return func(c *AccessCore) { c.txRunner = tx }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -91,6 +98,7 @@ type AccessCore struct {
 	roleRepo     ports.RoleRepository
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     persistence.TxRunner
 	logger       *slog.Logger
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
@@ -102,9 +110,10 @@ type AccessCore struct {
 	logoutHandler   *sessionlogout.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
-	validateSvc *sessionvalidate.Service
-	authzSvc    *authorizationdecide.Service
-	rbacHandler *rbaccheck.Handler
+	validateSvc      *sessionvalidate.Service
+	authzSvc         *authorizationdecide.Service
+	rbacHandler      *rbaccheck.Handler
+	configReceiveSvc *configreceive.Service
 }
 
 // NewAccessCore creates a new AccessCore Cell.
@@ -142,10 +151,11 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		slog.Warn("access-core: outboxWriter not injected, L2 consistency not guaranteed")
-		return errcode.New(errcode.ErrCellMissingOutbox, "access-core (L2) requires outboxWriter injection")
+	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
+	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"access-core durable mode requires both outboxWriter and txRunner")
 	}
 
 	// Fail-fast: RS256 key pair required.
@@ -159,6 +169,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.outboxWriter != nil {
 		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
 	}
+	if c.txRunner != nil {
+		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
+	}
 	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
 	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
@@ -167,6 +180,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	var loginOpts []sessionlogin.Option
 	if c.outboxWriter != nil {
 		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		loginOpts = append(loginOpts, sessionlogin.WithTxManager(c.txRunner))
 	}
 	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.jwtIssuer, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
@@ -181,6 +197,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	var logoutOpts []sessionlogout.Option
 	if c.outboxWriter != nil {
 		logoutOpts = append(logoutOpts, sessionlogout.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		logoutOpts = append(logoutOpts, sessionlogout.WithTxManager(c.txRunner))
 	}
 	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
@@ -198,6 +217,10 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	rbacSvc := rbaccheck.NewService(c.roleRepo, c.logger)
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbac-check", "access-core", cell.L0))
+
+	// config-receive: subscribes to config.changed events from config-core
+	c.configReceiveSvc = configreceive.NewService(c.logger)
+	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
 
 	return nil
 }
@@ -220,8 +243,10 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 	})
 }
 
-// RegisterSubscriptions is a no-op for access-core.
-// Future: subscribe to cross-cell events if needed.
-func (c *AccessCore) RegisterSubscriptions(_ cell.EventRouter) error {
+// RegisterSubscriptions declares event subscriptions for access-core.
+// The Router manages goroutine lifecycle and setup-error detection.
+func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
+	handler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEvent)
+	r.AddHandler(configreceive.TopicConfigChanged, handler, "access-core")
 	return nil
 }

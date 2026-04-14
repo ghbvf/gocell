@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
@@ -33,6 +34,9 @@ func (r *SessionRepository) Create(_ context.Context, session *domain.Session) e
 	defer r.mu.Unlock()
 
 	clone := *session
+	if clone.Version == 0 {
+		clone.Version = 1
+	}
 	r.byID[session.ID] = &clone
 	r.byRefresh[session.RefreshToken] = &clone
 	if session.PreviousRefreshToken != "" {
@@ -86,6 +90,13 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 		return errcode.New(errcode.ErrSessionNotFound, "session not found: "+session.ID)
 	}
 
+	// Optimistic lock: reject if version mismatch.
+	if session.Version != old.Version {
+		return errcode.Safe(errcode.ErrSessionConflict,
+			"session was modified by another request, please retry",
+			fmt.Sprintf("version conflict: expected %d, got %d", old.Version, session.Version))
+	}
+
 	// Remove old refresh-token index entry.
 	delete(r.byRefresh, old.RefreshToken)
 	// Remove old previous-refresh-token index entry.
@@ -93,6 +104,7 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 		delete(r.byPrevRefresh, old.PreviousRefreshToken)
 	}
 
+	session.Version++
 	clone := *session
 	r.byID[session.ID] = &clone
 	r.byRefresh[session.RefreshToken] = &clone

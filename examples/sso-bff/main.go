@@ -21,11 +21,21 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
+
+// noopTxRunner executes fn directly without a real transaction (demo mode).
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	return fn(context.Background())
+}
+
+var _ persistence.TxRunner = noopTxRunner{}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -67,6 +77,7 @@ func main() {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithOutboxWriter(nw),
+		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithLogger(logger),
 	)
 

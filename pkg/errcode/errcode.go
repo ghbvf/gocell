@@ -33,6 +33,7 @@ const (
 	ErrBusClosed          Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
 	ErrSessionNotFound    Code = "ERR_SESSION_NOT_FOUND"
+	ErrSessionConflict    Code = "ERR_SESSION_CONFLICT"
 	ErrOrderNotFound      Code = "ERR_ORDER_NOT_FOUND"
 	ErrDeviceNotFound     Code = "ERR_DEVICE_NOT_FOUND"
 	ErrCommandNotFound    Code = "ERR_COMMAND_NOT_FOUND"

@@ -3,6 +3,7 @@ package sessionrefresh
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,4 +146,50 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 
 	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
+}
+
+// TestService_Refresh_ConcurrentRefresh verifies that concurrent refresh
+// attempts on the same session result in at most one success. The remaining
+// goroutines either get a version conflict (409) or trigger reuse detection.
+// Run with -race to verify memory safety.
+func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
+	svc, repo := newTestService()
+
+	rt := issueTestToken("usr-conc")
+	sess, err := domain.NewSession("usr-conc", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-conc"
+	require.NoError(t, repo.Create(context.Background(), sess))
+
+	const goroutines = 5
+	var (
+		wg        sync.WaitGroup
+		successes int64
+		failures  int64
+		mu        sync.Mutex
+	)
+
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, refreshErr := svc.Refresh(context.Background(), rt)
+			mu.Lock()
+			defer mu.Unlock()
+			if refreshErr == nil {
+				successes++
+			} else {
+				failures++
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// With optimistic locking, exactly 1 goroutine succeeds.
+	// Others fail with version conflict or reuse detection.
+	assert.Equal(t, int64(1), successes,
+		"exactly one concurrent refresh should succeed")
+	assert.Equal(t, int64(goroutines-1), failures,
+		"remaining goroutines should fail")
 }

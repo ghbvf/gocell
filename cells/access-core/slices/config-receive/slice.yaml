@@ -1,0 +1,10 @@
+id: config-receive
+belongsToCell: access-core
+contractUsages:
+  - contract: event.config.changed.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.config-receive.service
+  contract:
+    - contract.event.config.changed.v1.subscribe

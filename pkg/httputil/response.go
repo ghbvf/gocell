@@ -201,6 +201,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAssemblyNotFound:   http.StatusNotFound,
 	errcode.ErrJourneyNotFound:    http.StatusNotFound,
 	errcode.ErrSessionNotFound:    http.StatusNotFound,
+	errcode.ErrSessionConflict:    http.StatusConflict,
 	errcode.ErrOrderNotFound:      http.StatusNotFound,
 	errcode.ErrDeviceNotFound:     http.StatusNotFound,
 	errcode.ErrCommandNotFound:    http.StatusNotFound,
