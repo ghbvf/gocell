@@ -4,6 +4,7 @@ package sessionvalidate
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -11,6 +12,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+
+// errMsgAuthFailed is the uniform error message for all session validation
+// failures. Using a single message prevents session-state enumeration attacks.
+const errMsgAuthFailed = "invalid or expired authentication token"
 
 // Compile-time check: Service implements auth.TokenVerifier.
 var _ auth.TokenVerifier = (*Service)(nil)
@@ -34,17 +39,45 @@ func NewService(verifier auth.TokenVerifier, sessionRepo ports.SessionRepository
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
 	claims, err := s.verifier.Verify(ctx, tokenStr)
 	if err != nil {
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid token")
+		s.logger.Warn("session-validate: JWT verification failed",
+			slog.Any("error", err))
+		return auth.Claims{}, errcode.Wrap(errcode.ErrAuthInvalidToken, "invalid token", err)
 	}
 
-	// Check session revocation if sid claim is present in Extra.
-	if sid, ok := claims.Extra["sid"].(string); ok && sid != "" && s.sessionRepo != nil {
+	// Fail-closed: when sessionRepo is configured, tokens MUST carry sid.
+	if s.sessionRepo != nil {
+		sid, ok := claims.Extra["sid"].(string)
+		if !ok || sid == "" {
+			s.logger.Warn("session-validate: token missing sid",
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		}
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session not found")
+			var ec *errcode.Error
+			if errors.As(err, &ec) {
+				s.logger.Warn("session-validate: session not found",
+					slog.String("sid", sid),
+					slog.String("subject", claims.Subject))
+			} else {
+				s.logger.Error("session-validate: session repo unavailable",
+					slog.String("sid", sid),
+					slog.String("subject", claims.Subject),
+					slog.Any("error", err))
+			}
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 		if session.IsRevoked() {
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session has been revoked")
+			s.logger.Warn("session-validate: revoked session used",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		}
+		if session.IsExpired() {
+			s.logger.Warn("session-validate: expired session used",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 	}
 

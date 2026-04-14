@@ -137,6 +137,9 @@ func NewAccessCore(opts ...Option) *AccessCore {
 
 // TokenVerifier returns the session-validate service (implements auth.TokenVerifier).
 func (c *AccessCore) TokenVerifier() auth.TokenVerifier {
+	if c.validateSvc == nil {
+		return nil
+	}
 	return c.validateSvc
 }
 

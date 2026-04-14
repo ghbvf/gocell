@@ -39,7 +39,7 @@ func TestJWTIssuer_TokenHasKID(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	// Decode the token header to check kid.
@@ -60,7 +60,7 @@ func TestJWTIssuer_KIDMatchesThumbprint(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	// Parse without verification to inspect header.
@@ -80,7 +80,7 @@ func TestJWTVerifier_VerifiesByKID(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, []string{"api"})
+	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, []string{"api"}, "")
 	require.NoError(t, err)
 
 	claims, err := verifier.Verify(context.Background(), tokenStr)
@@ -100,7 +100,7 @@ func TestJWTVerifier_RejectsUnknownKID(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks2) // different key set
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	_, err = verifier.Verify(context.Background(), tokenStr)
@@ -139,7 +139,7 @@ func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", []string{"admin", "user"}, []string{"api"})
+	tokenStr, err := issuer.Issue("user-1", []string{"admin", "user"}, []string{"api"}, "")
 	require.NoError(t, err)
 
 	claims, err := verifier.Verify(context.Background(), tokenStr)
@@ -159,7 +159,7 @@ func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	_, err = verifier.Verify(context.Background(), tokenStr)
@@ -251,7 +251,7 @@ func TestJWTVerifier_WrongKey(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks2)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	_, err = verifier.Verify(context.Background(), tokenStr)
@@ -274,7 +274,7 @@ func TestJWTIssuer_RoundTrip(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("svc-audit", []string{"service"}, []string{"internal"})
+	tokenStr, err := issuer.Issue("svc-audit", []string{"service"}, []string{"internal"}, "")
 	require.NoError(t, err)
 
 	claims, err := verifier.Verify(context.Background(), tokenStr)
@@ -292,7 +292,7 @@ func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-2", nil, nil)
+	tokenStr, err := issuer.Issue("user-2", nil, nil, "")
 	require.NoError(t, err)
 
 	claims, err := verifier.Verify(context.Background(), tokenStr)
@@ -355,7 +355,7 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	newTokenStr, err := issuer.Issue("user-new", nil, nil)
+	newTokenStr, err := issuer.Issue("user-new", nil, nil, "")
 	require.NoError(t, err)
 
 	claims, err = verifier.Verify(context.Background(), newTokenStr)
@@ -398,7 +398,7 @@ func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {
 	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, nil)
+	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, nil, "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, tokenStr)
 
@@ -418,7 +418,7 @@ func TestJWTIssuer_EmptyKID_ProducesTokenWithEmptyKID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Issue succeeds but produces a token with empty kid — verifier would reject it.
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 	assert.NotEmpty(t, tokenStr)
 }
@@ -430,7 +430,7 @@ func TestJWTIssuer_NilKey_FailsToSign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign should fail because the key is nil.
-	_, err = issuer.Issue("user-1", nil, nil)
+	_, err = issuer.Issue("user-1", nil, nil, "")
 	require.Error(t, err)
 }
 
@@ -443,7 +443,7 @@ func TestJWTVerifier_AcceptsVerificationKeyStore(t *testing.T) {
 	require.NoError(t, err)
 	issuer, err := NewJWTIssuer(ks, "gocell-test", time.Hour)
 	require.NoError(t, err)
-	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
 	require.NoError(t, err)
 
 	// Verify using a stub store with only the public key.
@@ -533,6 +533,40 @@ func TestMapClaimsToClaims_EdgeCases(t *testing.T) {
 			tt.check(t, c)
 		})
 	}
+}
+
+// --- Session ID claim tests (P0-1 fix) ---
+
+func TestJWTIssuer_Issue_IncludesSessionID(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, []string{"api"}, "sess-abc123")
+	require.NoError(t, err)
+
+	claims, err := verifier.Verify(context.Background(), tokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", claims.Subject)
+	assert.Equal(t, "sess-abc123", claims.Extra["sid"])
+}
+
+func TestJWTIssuer_Issue_EmptySessionID_OmitsSid(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", nil, nil, "")
+	require.NoError(t, err)
+
+	claims, err := verifier.Verify(context.Background(), tokenStr)
+	require.NoError(t, err)
+	_, hasSid := claims.Extra["sid"]
+	assert.False(t, hasSid, "empty sessionID should not produce a sid claim")
 }
 
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {

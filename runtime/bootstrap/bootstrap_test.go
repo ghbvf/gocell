@@ -2239,3 +2239,208 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	assert.Contains(t, logOutput, "trace_id",
 		"infra endpoint /healthz must have trace_id in access log when tracing is enabled")
 }
+
+// --- Auth Provider discovery (post-Init cell discovery) ---
+
+// authProviderCell implements HTTPRegistrar and exposes a TokenVerifier.
+type authProviderCell struct {
+	*cell.BaseCell
+	verifier auth.TokenVerifier
+}
+
+func newAuthProviderCell(id string, verifier auth.TokenVerifier) *authProviderCell {
+	return &authProviderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		verifier: verifier,
+	}
+}
+
+func (c *authProviderCell) TokenVerifier() auth.TokenVerifier {
+	return c.verifier
+}
+
+func (c *authProviderCell) RegisterRoutes(mux cell.RouteMux) {
+	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}))
+	mux.Handle("POST /api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+	}))
+}
+
+func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-401"})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("no token provided"),
+	}
+	hc := newAuthProviderCell("access-core", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints(nil),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Protected route without token -> 401.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+		"discovered auth verifier must protect business routes")
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-public"})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not verify for public route"),
+	}
+	hc := newAuthProviderCell("access-core", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Public login route without token -> should pass auth.
+	resp, err := testHTTPClient.Post(
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr),
+		"application/json", nil,
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"public endpoint must be accessible without auth token via discovered verifier")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for public endpoint")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-auth-precedence"})
+
+	cellVerifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("cell-verifier: should not be called"),
+	}
+	hc := newAuthProviderCell("access-core", cellVerifier)
+	require.NoError(t, asm.Register(hc))
+
+	explicitVerifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "explicit-user", Roles: []string{"admin"}},
+	}
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithAuthMiddleware(explicitVerifier, nil),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Send request WITH Authorization header — explicit verifier should handle it.
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/api/v1/data", addr), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"explicit verifier should authenticate successfully")
+	assert.Equal(t, int32(1), explicitVerifier.callCount.Load(),
+		"explicit verifier must be called")
+	assert.Equal(t, int32(0), cellVerifier.callCount.Load(),
+		"cell verifier must NOT be called when explicit verifier is provided")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// Register a plain cell with no TokenVerifier method.
+	asm := assembly.New(assembly.Config{ID: "test-no-auth-provider"})
+	hc := newHTTPCell("plain-cell")
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run should fail because no auth provider cell was discovered.
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should fail when no auth provider cell is discovered")
+	assert.Contains(t, err.Error(), "auth provider cell",
+		"error should mention missing auth provider")
+}

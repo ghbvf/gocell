@@ -35,6 +35,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
+// authProvider is discovered post-Init from cells that provide a
+// session-aware TokenVerifier (e.g. access-core's TokenVerifier()).
+type authProvider interface {
+	TokenVerifier() auth.TokenVerifier
+}
+
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
@@ -143,7 +149,7 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 }
 
 // WithAuthMiddleware enables authentication for HTTP business routes. The
-// verifier is forwarded to the router's middleware chain via
+// verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
 // publicEndpoints specifies business-route paths that bypass authentication.
@@ -159,7 +165,25 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts, router.WithAuthMiddleware(verifier, publicEndpoints))
+		b.authVerifier = verifier
+		b.authPublicEndpoints = publicEndpoints
+	}
+}
+
+// WithPublicEndpoints sets paths that bypass authentication when an
+// AuthProvider cell is discovered post-Init. Unlike WithAuthMiddleware
+// (which provides the verifier explicitly), this option defers verifier
+// resolution to Run() time.
+// WithPublicEndpoints must not be combined with WithAuthMiddleware —
+// use one or the other. If both are called, the last one wins for
+// publicEndpoints and a warning is logged at startup.
+func WithPublicEndpoints(endpoints []string) Option {
+	return func(b *Bootstrap) {
+		if b.authVerifier != nil {
+			slog.Warn("bootstrap: WithPublicEndpoints called after WithAuthMiddleware; publicEndpoints will be overwritten")
+		}
+		b.authPublicEndpoints = endpoints
+		b.authDiscovery = true
 	}
 }
 
@@ -233,8 +257,11 @@ type Bootstrap struct {
 	workers         []worker.Worker
 	publisher       outbox.Publisher
 	subscriber      outbox.Subscriber
-	routerOpts      []router.Option
-	shutdownTimeout  time.Duration
+	routerOpts          []router.Option
+	authVerifier        auth.TokenVerifier
+	authPublicEndpoints []string
+	authDiscovery       bool // true when WithPublicEndpoints was called
+	shutdownTimeout     time.Duration
 	preShutdownDelay time.Duration
 	listener         net.Listener
 	healthCheckers             []namedChecker
@@ -414,7 +441,27 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return asm.Stop(c)
 	})
 
-	// Step 4.5: Register config watcher OnChange callback (now that asm is started).
+	// Step 4.5a: Discover auth verifier from cells (post-Init).
+	// When no explicit verifier was provided via WithAuthMiddleware but
+	// publicEndpoints are configured via WithPublicEndpoints, discover a
+	// cell implementing authProvider and use its TokenVerifier.
+	if b.authVerifier == nil && b.authDiscovery {
+		for _, id := range asm.CellIDs() {
+			if ap, ok := asm.Cell(id).(authProvider); ok {
+				if v := ap.TokenVerifier(); v != nil {
+					b.authVerifier = v
+					slog.Info("bootstrap: auth verifier discovered from cell",
+						slog.String("cell", id))
+					break
+				}
+			}
+		}
+		if b.authVerifier == nil {
+			return rollback(fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered"))
+		}
+	}
+
+	// Step 4.5b: Register config watcher OnChange callback (now that asm is started).
 	// Snapshot → Reload → Diff → notify ConfigReloader cells.
 	if cfgWatcher != nil {
 		yamlPath, envPrefix := b.configPath, b.envPrefix
@@ -527,9 +574,12 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// the last call wins, so placing the framework handler after user options
 	// guarantees the bootstrap-managed handler is always used.
 	// Copy to avoid mutating b.routerOpts' backing array.
-	routerOpts := make([]router.Option, len(b.routerOpts)+1)
-	copy(routerOpts, b.routerOpts)
-	routerOpts[len(b.routerOpts)] = router.WithHealthHandler(hh)
+	routerOpts := make([]router.Option, 0, len(b.routerOpts)+2)
+	routerOpts = append(routerOpts, b.routerOpts...)
+	if b.authVerifier != nil {
+		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
+	}
+	routerOpts = append(routerOpts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(routerOpts...)
 	if err != nil {
 		return rollback(fmt.Errorf("bootstrap: %w", err))

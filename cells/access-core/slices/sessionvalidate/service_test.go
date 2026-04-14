@@ -2,6 +2,7 @@ package sessionvalidate
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -52,6 +53,17 @@ func TestService_Verify(t *testing.T) {
 	revokedSession.Revoke()
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
+	// Seed an expired session.
+	expiredSession := &domain.Session{
+		ID:           "sess-expired",
+		UserID:       "usr-3",
+		AccessToken:  "dummy3",
+		RefreshToken: "dummy-refresh3",
+		ExpiresAt:    time.Now().Add(-time.Hour), // already expired
+		CreatedAt:    time.Now().Add(-2 * time.Hour),
+	}
+	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
+
 	tests := []struct {
 		name    string
 		token   func() string
@@ -65,7 +77,7 @@ func TestService_Verify(t *testing.T) {
 				return tok
 			},
 			wantSub: "usr-1",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name: "valid token with active session",
@@ -88,6 +100,14 @@ func TestService_Verify(t *testing.T) {
 			name: "token with non-existent session",
 			token: func() string {
 				tok, _ := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-nonexistent")
+				return tok
+			},
+			wantErr: true,
+		},
+		{
+			name: "token with expired session",
+			token: func() string {
+				tok, _ := IssueTestToken(testPrivKey, "usr-3", nil, time.Hour, "sess-expired")
 				return tok
 			},
 			wantErr: true,
@@ -131,7 +151,7 @@ func TestService_Verify(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.wantSub, claims.Subject)
-				if tt.name == "valid token without sid" || tt.name == "valid token with active session" {
+				if tt.name == "valid token with active session" {
 					assert.Contains(t, claims.Roles, "admin")
 				}
 				assert.Equal(t, "gocell-access-core", claims.Issuer)
@@ -145,6 +165,47 @@ func TestService_Verify_NilSessionRepo(t *testing.T) {
 	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
+	require.NoError(t, err)
+
+	claims, err := svc.Verify(context.Background(), tok)
+	require.NoError(t, err)
+	assert.Equal(t, "usr-1", claims.Subject)
+}
+
+// errorSessionRepo simulates infrastructure failures (DB timeout, connection reset).
+type errorSessionRepo struct{}
+
+func (errorSessionRepo) Create(_ context.Context, _ *domain.Session) error   { return nil }
+func (errorSessionRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, fmt.Errorf("db connection timeout")
+}
+func (errorSessionRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, nil
+}
+func (errorSessionRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, nil
+}
+func (errorSessionRepo) Update(_ context.Context, _ *domain.Session) error { return nil }
+func (errorSessionRepo) Delete(_ context.Context, _ string) error          { return nil }
+func (errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error  { return nil }
+
+func TestService_Verify_DBError_FailsClosed(t *testing.T) {
+	// Infrastructure errors (not just "not found") must also fail-closed.
+	svc := NewService(testVerifier, errorSessionRepo{}, slog.Default())
+
+	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
+	require.NoError(t, err)
+
+	_, err = svc.Verify(context.Background(), tok)
+	require.Error(t, err, "DB errors must cause verification failure (fail-closed)")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
+}
+
+func TestService_Verify_NilSessionRepo_NoSid(t *testing.T) {
+	// When sessionRepo is nil (demo mode), tokens without sid are accepted.
+	svc := NewService(testVerifier, nil, slog.Default())
+
+	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
 
 	claims, err := svc.Verify(context.Background(), tok)

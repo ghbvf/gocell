@@ -39,7 +39,7 @@ func newTestService() (*Service, *mem.SessionRepository) {
 }
 
 func issueTestToken(sub string) string {
-	tok, _ := testIssuer.Issue(sub, nil, nil)
+	tok, _ := testIssuer.Issue(sub, nil, nil, "")
 	return tok
 }
 
@@ -142,7 +142,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 	require.NoError(t, err)
 	otherIssuer, err := auth.NewJWTIssuer(otherKS, "gocell-access-core", time.Hour)
 	require.NoError(t, err)
-	tokenStr, _ := otherIssuer.Issue("usr-1", nil, nil)
+	tokenStr, _ := otherIssuer.Issue("usr-1", nil, nil, "")
 
 	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
@@ -192,4 +192,29 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 		"exactly one concurrent refresh should succeed")
 	assert.Equal(t, int64(goroutines-1), failures,
 		"remaining goroutines should fail")
+}
+
+func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
+	svc, repo := newTestService()
+
+	rt := issueTestToken("usr-sid")
+	sess, err := domain.NewSession("usr-sid", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-r1"
+	require.NoError(t, repo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+
+	// Decode the new access token to verify sid.
+	verifier, err := auth.NewJWTVerifier(testKeySet)
+	require.NoError(t, err)
+
+	accessClaims, err := verifier.Verify(context.Background(), pair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, "sess-r1", accessClaims.Extra["sid"], "new access token must carry the session ID")
+
+	refreshClaims, err := verifier.Verify(context.Background(), pair.RefreshToken)
+	require.NoError(t, err)
+	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
 }

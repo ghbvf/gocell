@@ -96,7 +96,9 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration) (*J
 
 // Issue creates a signed JWT token for the given subject and roles.
 // The token header includes the kid of the active signing key.
-func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (string, error) {
+// When sessionID is non-empty, a "sid" claim is included to bind the token
+// to a specific session for revocation support.
+func (i *JWTIssuer) Issue(subject string, roles []string, audience []string, sessionID string) (string, error) {
 	if i.keys.SigningKey() == nil {
 		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
@@ -112,6 +114,9 @@ func (i *JWTIssuer) Issue(subject string, roles []string, audience []string) (st
 	}
 	if len(roles) > 0 {
 		claims["roles"] = roles
+	}
+	if sessionID != "" {
+		claims["sid"] = sessionID
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
