@@ -197,8 +197,8 @@ func WithListener(ln net.Listener) Option {
 // bootstrap depending on adapter types.
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
-// Validation (empty name, nil fn) is deferred to Run() so that failures
-// enter the rollback path instead of panicking past it.
+// Validation (empty name, nil fn) is deferred to Run() where it fires at
+// Step 0 before any component starts, returning an error directly.
 func WithHealthChecker(name string, fn func() error) Option {
 	return func(b *Bootstrap) {
 		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
@@ -538,7 +538,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Invariant: if any cell declares subscriptions, a subscriber must be injected.
 	// Without this check, callers who migrate from WithEventBus to WithPublisher
 	// but forget WithSubscriber would silently lose all event consumption.
-	var routerErrCh chan error // hoisted for Step 9 monitoring
+	var routerErrCh chan error // nil channel: never selected in Step 9; assigned only when event router starts
 	if sub == nil {
 		// Check whether any cell implements EventRegistrar — if so, the missing
 		// subscriber is a configuration error, not a valid "no-events" setup.
