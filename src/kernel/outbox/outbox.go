@@ -212,8 +212,11 @@ func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error
 
 var _ Publisher = DiscardPublisher{}
 
-// IsDiscardPublisher reports whether p is the explicit discard sink.
-func IsDiscardPublisher(p Publisher) bool {
+// isDiscardPublisher reports whether p is the explicit discard sink.
+// Unexported: concrete-type detection should not leak into the public API.
+// Cell/runtime code that needs discard awareness should use cell metadata
+// or DurabilityMode instead of type-switching on Publisher implementations.
+func isDiscardPublisher(p Publisher) bool {
 	switch p.(type) {
 	case DiscardPublisher, *DiscardPublisher:
 		return true
