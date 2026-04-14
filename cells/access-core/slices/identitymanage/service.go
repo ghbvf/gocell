@@ -218,7 +218,10 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 }
 
 func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) error {
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
+	}
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
 			ID:        "evt" + "-" + uuid.NewString(),

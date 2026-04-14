@@ -79,12 +79,15 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		PublishedAt: &now,
 	}
 
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"action":    "published",
 		"key":       key,
 		"config_id": entry.ID,
 		"version":   version.Version,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
+	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
@@ -127,12 +130,15 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	entry.Version++
 	entry.UpdatedAt = time.Now()
 
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"action":         "rollback",
 		"key":            key,
 		"target_version": targetVersion,
 		"new_version":    entry.Version,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
+	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Update(txCtx, entry); err != nil {

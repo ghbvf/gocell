@@ -168,12 +168,15 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 }
 
 func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"action":  action,
 		"key":     entry.Key,
 		"value":   entry.Value,
 		"version": entry.Version,
 	})
+	if err != nil {
+		return fmt.Errorf("config-write: marshal event payload: %w", err)
+	}
 	if s.outboxWriter != nil {
 		outboxEntry := outbox.Entry{
 			ID:        "evt" + "-" + uuid.NewString(),
