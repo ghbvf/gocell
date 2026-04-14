@@ -2,6 +2,7 @@ package query
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -153,4 +154,14 @@ func TestMapPageResult_NilItems(t *testing.T) {
 	got := MapPageResult(src, func(i int) string { return "" })
 	assert.NotNil(t, got.Items)
 	assert.Empty(t, got.Items)
+}
+
+func TestMapPageResult_NilItems_JSONArray(t *testing.T) {
+	src := PageResult[int]{Items: nil, HasMore: false}
+	got := MapPageResult(src, func(i int) string { return "" })
+
+	b, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"data":[]`)
+	assert.NotContains(t, string(b), `"data":null`)
 }

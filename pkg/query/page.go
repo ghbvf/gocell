@@ -103,7 +103,8 @@ func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []Sor
 }
 
 // MapPageResult transforms each item in a PageResult using fn, preserving
-// pagination metadata (NextCursor, HasMore).
+// pagination metadata (NextCursor, HasMore). fn must not panic; if an item
+// may be nil, the caller should handle that within fn.
 func MapPageResult[T any, U any](src PageResult[T], fn func(T) U) PageResult[U] {
 	if len(src.Items) == 0 {
 		return PageResult[U]{
