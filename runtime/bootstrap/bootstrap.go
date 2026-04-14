@@ -218,8 +218,8 @@ func WithDisableObservabilityRestore() Option {
 
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
-	name string
-	fn   func() error
+	name string       // unique identifier shown in /readyz?verbose output
+	fn   func() error // nil return = healthy; non-nil = unhealthy
 }
 
 // Bootstrap orchestrates the GoCell application lifecycle.
@@ -626,8 +626,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
-	workerErrCh := make(chan error, 1)
+	var workerErrCh chan error // nil channel: never selected in Step 9 when no workers
 	if len(b.workers) > 0 {
+		workerErrCh = make(chan error, 1)
 		go func() {
 			workerErrCh <- wg.Start(workerCtx)
 			close(workerErrCh)

@@ -333,6 +333,21 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "shutting_down")
 }
 
+func TestSetShuttingDown_Idempotent(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.SetShuttingDown()
+	h.SetShuttingDown() // second call must not panic
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
 func TestEmptyAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "empty"})
 	h := New(asm)
