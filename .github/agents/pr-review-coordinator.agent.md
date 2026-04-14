@@ -6,8 +6,10 @@ tools:
   - agent
   - read
   - search
+  - todo
   - terminal
   - web/fetch
+  - web/githubRepo
 agents:
   - PR审查架构
   - PR审查安全
