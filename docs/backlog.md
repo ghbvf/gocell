@@ -77,9 +77,10 @@
 | 26 | **.env.example 补全** ENV-S3: 补 `GOCELL_S3_REGION=us-east-1` — `s3.Config.Validate()` 必填但示例缺失 | 0.5h | `.env.example` | P4 review |
 | 27 | **examples contract CI** INT-2: order-cell/device-cell contract YAML 存在且被 slice.yaml 引用，但 CI 未校验 | 1h | `.github/workflows/ci.yml` | P4 review |
 | 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 |
-| 27b | **BOOT-RUNONCE-01** `Bootstrap.Run()` 缺 double-call 防护——加 `sync.Once` 或 `atomic` 状态标记，防止二次调用导致重复 teardown 和 assembly 重复启动 | 1h | `runtime/bootstrap/bootstrap.go` | PR#123 review S1-F2 |
+| 27b | **BOOT-RUNONCE-01** `Bootstrap.Run()` 缺 double-call 防护——加 `sync.Once` 或 `atomic` 状态标记，防止二次调用导致重复 teardown 和 assembly 重复启动 | ✅ PR#123 | PR#123 review S1-F2 |
 | 27c | **BOOT-COMPLEXITY-01** `Bootstrap.Run()` 认知复杂度 ~385 行，超 15 上限。考虑按 Step 拆分为私有方法（startConfig / startAssembly / startHTTP / startWorkers / shutdown） | 3h | `runtime/bootstrap/bootstrap.go` | PR#123 review S5-F3 |
 | 27d | **OBS-LOG-FIELD-POLICY** access_log 日志字段（request_id / correlation_id / trace_id / real_ip）均无独立开关或脱敏策略。需统一的字段分级治理方案（如按环境/敏感度配置输出字段集） | 2h | `runtime/http/middleware/access_log.go` | PR#123 review F3 |
+| 27e | **BOOT-SHUTDOWN-PHASE** 将 shutdown 从 LIFO teardown 栈 + sleep 改为显式阶段流（mark unready → bounded drain → stop listener → stop workers → stop assembly），参考 K8s/fx 生命周期状态机 | 4h | `runtime/bootstrap/bootstrap.go` | PR#123 review F2 彻底方案 |
 
 ---
 
