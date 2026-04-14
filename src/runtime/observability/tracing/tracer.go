@@ -77,6 +77,11 @@ func SpanSetStatus(s Span, isError bool, description string) {
 type Tracer interface {
 	// Start creates a new span with the given name. The returned context
 	// carries the span and its trace/span IDs.
+	//
+	// Implementations MUST continue the parent trace when the input context
+	// carries an upstream trace identity (e.g. ctxkeys.TraceID for the
+	// simple tracer, or a remote SpanContext for OTel). When no parent is
+	// present, a new root trace is started.
 	Start(ctx context.Context, name string) (context.Context, Span)
 }
 

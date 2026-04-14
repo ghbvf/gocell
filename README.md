@@ -267,6 +267,34 @@ server span so synchronous service hops preserve the same `trace_id`. Note:
 `span_id` is intentionally excluded across async boundaries — spans do not
 cross the outbox hop.
 
+### Trace Propagation
+
+When HTTP tracing is enabled via `WithTracer`, GoCell automatically extracts
+inbound W3C `traceparent` and B3 headers before starting the server span.
+W3C takes precedence; B3 is used only as a fallback. Invalid or missing headers
+safely degrade to a new root trace.
+
+**Enablement** — tracing is opt-in via `bootstrap.WithTracer` or
+`router.WithTracer`:
+
+```go
+// bootstrap (recommended)
+tracer := tracing.NewTracer("my-service")  // or adapters/otel.NewTracer(...)
+app := bootstrap.New(
+    bootstrap.WithAssembly(asm),
+    bootstrap.WithHTTPAddr(":8080"),
+    bootstrap.WithTracer(tracer),
+)
+
+// router (standalone)
+r := router.New(router.WithTracer(tracer))
+```
+
+**Trust assumption**: trace header propagation assumes a trusted-upstream
+deployment (service-to-service behind a gateway or mesh). Public-facing edges
+should sanitize or ignore inbound trace headers at the gateway layer. See
+`TRUST-POLICY-01` in `docs/backlog.md` for the planned public-endpoint strategy.
+
 Framework-emitted consumer logs pick up these fields when the process uses
 GoCell's context-aware slog handler. This branch does not make plain slog JSON
 handlers automatically extract `request_id`, `correlation_id`, or `trace_id`.

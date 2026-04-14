@@ -37,6 +37,7 @@
 | B | ~~config 契约收口~~ | ~~CFG-CONTRACT-01/02~~ ✅ PR#98 schema 填充 + PR#101 additionalProperties 加固 + contract_test 验证 | ✅ done |
 | ~~⚠ A~~ | ~~🔴 auth 装配缺口~~ | ~~AUTH-WIRE-01(P0 阻塞)~~ ✅ PR#111: (1) router+bootstrap `WithAuthMiddleware` Option (2) core-bundle+sso-bff 生产入口接入 auth (3) `DefaultPublicEndpoints` 修正+清空(公开路径由 composition root 声明) (4) E2E 测试断言 11 条敏感路由 401 | ✅ done | — |
 | B | **trace propagation** | **TRACE-PROP-01**: 补 inbound HTTP header extract（W3C traceparent/b3），tracer.Start 前先 extract 上游 context。当前默认每次开根 span，跨服务 trace_id 不连续 | 3h |
+| B | trace trust policy | **TRUST-POLICY-01**: 为 public-facing endpoint 实现 trust-boundary 策略（参考 otelhttp `WithPublicEndpoint`：new root + link），当前默认 trusted-upstream。PR#112 review 发现，已文档化假设，实现级策略待后续 | 2h |
 | — | ~~contract 运行时闭环~~ | ~~CONTRACT-CLOSURE-01~~: evt- prefix schema 描述修正 + contract route path 对齐 + outbox.Entry.Validate ID 校验 + FMT-13 反向约束 + order-cell durable 模式强化 ✅ PR#106 | ✅ done |
 
 ---

@@ -14,9 +14,7 @@ func TestExtractTraceContext(t *testing.T) {
 		name         string
 		headers      map[string]string
 		wantTraceID  string
-		wantSpanID   string
 		wantTraceSet bool
-		wantSpanSet  bool
 	}{
 		{
 			name: "w3c traceparent",
@@ -24,9 +22,7 @@ func TestExtractTraceContext(t *testing.T) {
 				"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 			},
 			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			wantSpanID:   "00f067aa0ba902b7",
 			wantTraceSet: true,
-			wantSpanSet:  true,
 		},
 		{
 			name: "b3 single header",
@@ -34,9 +30,7 @@ func TestExtractTraceContext(t *testing.T) {
 				"b3": "4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-1",
 			},
 			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			wantSpanID:   "00f067aa0ba902b7",
 			wantTraceSet: true,
-			wantSpanSet:  true,
 		},
 		{
 			name: "b3 multi header",
@@ -46,9 +40,7 @@ func TestExtractTraceContext(t *testing.T) {
 				"X-B3-Sampled": "1",
 			},
 			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			wantSpanID:   "00f067aa0ba902b7",
 			wantTraceSet: true,
-			wantSpanSet:  true,
 		},
 		{
 			name: "valid traceparent wins over conflicting b3",
@@ -59,9 +51,7 @@ func TestExtractTraceContext(t *testing.T) {
 				"X-B3-Sampled": "1",
 			},
 			wantTraceID:  "4bf92f3577b34da6a3ce929d0e0e4736",
-			wantSpanID:   "00f067aa0ba902b7",
 			wantTraceSet: true,
-			wantSpanSet:  true,
 		},
 		{
 			name: "invalid traceparent falls back to b3",
@@ -72,9 +62,7 @@ func TestExtractTraceContext(t *testing.T) {
 				"X-B3-Sampled": "1",
 			},
 			wantTraceID:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantSpanID:   "bbbbbbbbbbbbbbbb",
 			wantTraceSet: true,
-			wantSpanSet:  true,
 		},
 		{
 			name: "invalid traceparent ignored",
@@ -82,7 +70,6 @@ func TestExtractTraceContext(t *testing.T) {
 				"traceparent": "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
 			},
 			wantTraceSet: false,
-			wantSpanSet:  false,
 		},
 	}
 
@@ -96,18 +83,17 @@ func TestExtractTraceContext(t *testing.T) {
 			ctx := extractTraceContext(t.Context(), header)
 
 			traceID, traceOK := ctxkeys.TraceIDFrom(ctx)
-			spanID, spanOK := ctxkeys.SpanIDFrom(ctx)
 
 			assert.Equal(t, tt.wantTraceSet, traceOK)
-			assert.Equal(t, tt.wantSpanSet, spanOK)
+
+			// Extraction only seeds trace_id into ctxkeys; span_id is left
+			// to tracer.Start so it always gets a fresh server span.
+			_, spanOK := ctxkeys.SpanIDFrom(ctx)
+			assert.False(t, spanOK, "extraction must not pre-seed span_id")
 
 			if tt.wantTraceSet {
 				require.True(t, traceOK)
 				assert.Equal(t, tt.wantTraceID, traceID)
-			}
-			if tt.wantSpanSet {
-				require.True(t, spanOK)
-				assert.Equal(t, tt.wantSpanID, spanID)
 			}
 		})
 	}

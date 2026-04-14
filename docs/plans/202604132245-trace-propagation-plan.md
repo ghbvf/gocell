@@ -71,52 +71,68 @@ Add failing tests that prove the current gap:
 - `runtime/http/middleware/tracing_test.go`
 - `runtime/http/router/router_test.go`
 
-### New failing test cases
+### Actual test layout (post-review)
 
-1. `TestTracing_UsesTraceparentTraceID`
-2. `TestTracing_UsesB3SingleHeaderTraceID`
-3. `TestTracing_UsesB3MultiHeaderTraceID`
-4. `TestTracing_InvalidTraceHeadersStartNewRoot`
-5. `TestWithTracer_ExtractsUpstreamTraceparent`
+**Helper unit tests** (`runtime/http/middleware/trace_propagation_test.go`):
+1. `TestExtractTraceContext/w3c_traceparent`
+2. `TestExtractTraceContext/b3_single_header`
+3. `TestExtractTraceContext/b3_multi_header`
+4. `TestExtractTraceContext/valid_traceparent_wins_over_conflicting_b3`
+5. `TestExtractTraceContext/invalid_traceparent_falls_back_to_b3`
+6. `TestExtractTraceContext/invalid_traceparent_ignored`
+
+**Middleware integration** (`runtime/http/middleware/tracing_test.go`):
+7. `TestTracing_UsesUpstreamTraceparent`
+8. `TestTracing_InvalidTraceHeadersStartNewRoot`
+
+**Router integration** (`runtime/http/router/router_test.go`):
+9. `TestWithTracer_ExtractsUpstreamTraceparent`
+
+**OTel ingress contract** (`adapters/otel/tracer_test.go`):
+10. `TestTracer_IngressPropagation_OTel` (W3C traceparent)
+11. `TestTracer_IngressPropagation_OTel_B3Single`
+12. `TestTracer_IngressPropagation_OTel_B3Multi`
+13. `TestTracer_StartContinuesRemoteParent` (direct remote parent)
 
 ### Assertions
 
 - Valid upstream headers keep the same `trace_id`
 - A new server span still gets a new `span_id`
+- Extraction does NOT pre-seed `span_id` into ctxkeys
 - Invalid headers do not panic and do not poison context
 - Existing no-tracer behavior remains unchanged
+- Both W3C and B3 paths are locked through the full ingress→OTel exporter chain
 
 ## File-Level Task List
 
-- [ ] Add tracing extraction helper with table-driven tests in `src/runtime/http/middleware/`
-- [ ] Update `src/runtime/http/middleware/tracing.go` to extract before `tracer.Start`
-- [ ] Extend middleware tests for W3C and B3 propagation
-- [ ] Extend router integration tests to prove end-to-end ingress extraction
-- [ ] Update dependencies only if `go.opentelemetry.io/contrib/propagators/b3` is not already available
-- [ ] Run focused build and tests
-- [ ] Create PR against `develop`
-- [ ] Launch six-role review and collect findings
-- [ ] Fix all confirmed C1 and C2 findings
+- [x] Add tracing extraction helper with table-driven tests in `src/runtime/http/middleware/`
+- [x] Update `src/runtime/http/middleware/tracing.go` to extract before `tracer.Start`
+- [x] Extend middleware tests for W3C and B3 propagation
+- [x] Extend router integration tests to prove end-to-end ingress extraction
+- [x] Update dependencies only if `go.opentelemetry.io/contrib/propagators/b3` is not already available
+- [x] Run focused build and tests
+- [x] Create PR against `develop`
+- [x] Launch six-role review and collect findings
+- [x] Fix all confirmed C1 and C2 findings
+- [x] Add OTel ingress contract tests (W3C + B3 single + B3 multi)
+- [x] Document Tracer.Start parent-trace contract in interface comment
+- [x] Document trust model in WithTracer GoDoc + README
+- [x] Register TRUST-POLICY-01 in backlog
 
 ## Verification Matrix
 
-Run at minimum:
+Full verification per CLAUDE.md (build + test all affected packages):
 
 ```bash
 cd src
-go test ./runtime/http/middleware ./runtime/http/router ./adapters/otel
 go build ./...
-```
-
-If the implementation changes OTel adapter behavior or shared tracing utilities, expand to:
-
-```bash
-cd src
-go test ./adapters/otel/...
+go test ./runtime/http/middleware/ ./runtime/http/router/ ./adapters/otel/ ./runtime/observability/tracing/
 ```
 
 ## Expected PR Outcome
 
-- Backlog item `TRACE-PROP-01` becomes actionable on `fix/219-trace-propagation`
+- Backlog item `TRACE-PROP-01` closed on `fix/219-trace-propagation`
 - Inbound HTTP requests honor upstream `traceparent` and B3 headers
+- Both W3C and B3 paths locked by OTel ingress contract tests
 - Trace continuity works without changing public bootstrap or router APIs
+- Trust model documented; `TRUST-POLICY-01` registered for public-endpoint work

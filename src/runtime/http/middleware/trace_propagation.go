@@ -16,9 +16,6 @@ var (
 )
 
 func extractTraceContext(ctx context.Context, header http.Header) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if header == nil {
 		return ctx
 	}
@@ -36,15 +33,18 @@ func extractTraceContextWithPropagator(ctx context.Context, header http.Header, 
 	return withExtractedRemoteSpanContext(ctx)
 }
 
+// withExtractedRemoteSpanContext mirrors the upstream trace ID into ctxkeys
+// so that simpleTracer.Start reuses it instead of generating a new root.
+// Span ID is intentionally NOT pre-seeded — tracer.Start always creates a
+// fresh server span, so any value written here would be immediately
+// overwritten.
 func withExtractedRemoteSpanContext(ctx context.Context) context.Context {
 	spanCtx := oteltrace.SpanContextFromContext(ctx)
 	if !spanCtx.IsValid() || !spanCtx.IsRemote() {
 		return ctx
 	}
 
-	ctx = ctxkeys.WithTraceID(ctx, spanCtx.TraceID().String())
-	ctx = ctxkeys.WithSpanID(ctx, spanCtx.SpanID().String())
-	return ctx
+	return ctxkeys.WithTraceID(ctx, spanCtx.TraceID().String())
 }
 
 func hasRemoteSpanContext(ctx context.Context) bool {
