@@ -33,10 +33,10 @@ func isRecoverableAMQPError(err error) bool {
 	if errors.Is(err, amqp.ErrClosed) {
 		return true
 	}
-	// ErrAdapterAMQPConnect from AcquireChannel means the connection is nil or
-	// IsClosed — this is transient and should trigger reconnect.
+	// ErrAdapterAMQPConnect or ErrAdapterAMQPReconnecting from AcquireChannel /
+	// Health means the connection is nil, IsClosed, or mid-reconnect — transient.
 	var ecErr *errcode.Error
-	if errors.As(err, &ecErr) && ecErr.Code == ErrAdapterAMQPConnect {
+	if errors.As(err, &ecErr) && (ecErr.Code == ErrAdapterAMQPConnect || ecErr.Code == ErrAdapterAMQPReconnecting) {
 		return true
 	}
 	// AMQP protocol errors: Recover=true means the broker will restart the

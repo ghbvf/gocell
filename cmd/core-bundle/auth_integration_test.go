@@ -75,6 +75,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithOutboxWriter(nw),
+		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
 	auc := auditcore.NewAuditCore(

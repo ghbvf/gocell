@@ -14,11 +14,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// noopTxRunner is a test double that executes fn directly without a real transaction.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	return fn(context.Background())
+}
+
+var _ persistence.TxRunner = noopTxRunner{}
 
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
@@ -26,6 +37,7 @@ func newTestCell() *ConfigCore {
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithPublisher(eventbus.New()),
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 }
 
@@ -70,6 +82,57 @@ func TestConfigCore_Startup(t *testing.T) {
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
+}
+
+func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []Option
+	}{
+		{
+			name: "writer without tx manager",
+			opts: []Option{
+				WithInMemoryDefaults(),
+				WithPublisher(eventbus.New()),
+				WithOutboxWriter(outbox.NoopWriter{}),
+			},
+		},
+		{
+			name: "tx manager without writer",
+			opts: []Option{
+				WithInMemoryDefaults(),
+				WithPublisher(eventbus.New()),
+				WithTxManager(noopTxRunner{}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := NewConfigCore(tt.opts...)
+			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+		})
+	}
+}
+
+func TestConfigCore_InitDemoMode_RequiresPublisher(t *testing.T) {
+	c := NewConfigCore(WithInMemoryDefaults())
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher")
+}
+
+func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithPublisher(eventbus.New()),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	require.NoError(t, err)
 }
 
 func TestConfigCore_RegisterRoutes(t *testing.T) {

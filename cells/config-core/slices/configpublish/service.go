@@ -106,6 +106,10 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	if key == "" {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
 	}
+	if targetVersion < 1 {
+		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput,
+			"rollback target version must be >= 1")
+	}
 
 	entry, err := s.repo.GetByKey(ctx, key)
 	if err != nil {
