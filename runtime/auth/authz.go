@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -22,24 +23,48 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 	}
 
+	if targetID == "" {
+		slog.Warn("authz: RequireSelfOrRole called with empty targetID",
+			slog.String("subject", subject))
+	}
+
 	if targetID != "" && subject == targetID {
 		return nil
 	}
 
-	if len(bypassRoles) > 0 {
-		claims, hasClaims := ClaimsFrom(ctx)
-		if hasClaims {
-			roleSet := make(map[string]bool, len(bypassRoles))
-			for _, r := range bypassRoles {
-				roleSet[r] = true
-			}
-			for _, r := range claims.Roles {
-				if roleSet[r] {
-					return nil
-				}
-			}
-		}
+	if hasAnyRole(ctx, bypassRoles) {
+		return nil
 	}
 
 	return errcode.New(errcode.ErrAuthForbidden, "access denied")
+}
+
+// hasAnyRole checks whether the authenticated Claims in ctx carry at least
+// one of the specified roles. Returns false when roles is empty, Claims are
+// absent, or no role matches.
+func hasAnyRole(ctx context.Context, roles []string) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	claims, ok := ClaimsFrom(ctx)
+	if !ok {
+		return false
+	}
+	roleSet := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		roleSet[r] = true
+	}
+	for _, r := range claims.Roles {
+		if roleSet[r] {
+			return true
+		}
+	}
+	return false
+}
+
+// TestContext creates a context carrying the given subject and roles for use
+// in handler tests across cells/. Follows the net/http/httptest naming pattern.
+func TestContext(subject string, roles []string) context.Context {
+	ctx := ctxkeys.WithSubject(context.Background(), subject)
+	return WithClaims(ctx, Claims{Subject: subject, Roles: roles})
 }

@@ -12,18 +12,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// authCtx creates a context with the given subject and roles for auth testing.
-func authCtx(subject string, roles []string) context.Context {
-	ctx := ctxkeys.WithSubject(context.Background(), subject)
-	return auth.WithClaims(ctx, auth.Claims{Subject: subject, Roles: roles})
-}
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
@@ -65,7 +58,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 			// Inject auth context so the handler doesn't reject with 401.
-			req = req.WithContext(authCtx("usr-1", []string{"admin"}))
+			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 			h.HandleQuery(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -89,7 +82,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=abc", nil)
-	req = req.WithContext(authCtx("usr-1", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	h.HandleQuery(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -103,7 +96,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
-	req = req.WithContext(authCtx("usr-1", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 	h.HandleQuery(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -138,7 +131,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		// Self-access: subject matches actorId in data.
-		req = req.WithContext(authCtx("usr-1", nil))
+		req = req.WithContext(auth.TestContext("usr-1", nil))
 		h.HandleQuery(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -197,7 +190,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor="+tc.cursor, nil)
-			req = req.WithContext(authCtx("usr-1", []string{"admin"}))
+			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
 			h.HandleQuery(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -298,7 +291,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 			if tc.subject != "" {
-				req = req.WithContext(authCtx(tc.subject, tc.roles))
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
 			h.HandleQuery(w, req)
 

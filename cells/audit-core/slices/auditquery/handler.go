@@ -67,6 +67,10 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 			httputil.WriteDomainError(r.Context(), w, err)
 			return
 		}
+		slog.Info("audit: admin querying other user",
+			slog.String("admin", subject),
+			slog.String("target_actor", actorID),
+		)
 	}
 
 	filters := ports.AuditFilters{

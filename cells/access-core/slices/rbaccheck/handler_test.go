@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -33,12 +32,6 @@ func setup() http.Handler {
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
-}
-
-// authCtx creates a context with the given subject and roles for auth testing.
-func authCtx(subject string, roles []string) context.Context {
-	ctx := ctxkeys.WithSubject(context.Background(), subject)
-	return auth.WithClaims(ctx, auth.Claims{Subject: subject, Roles: roles})
 }
 
 func TestHandler(t *testing.T) {
@@ -154,7 +147,7 @@ func TestHandler(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			if tc.subject != "" {
-				req = req.WithContext(authCtx(tc.subject, tc.roles))
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)

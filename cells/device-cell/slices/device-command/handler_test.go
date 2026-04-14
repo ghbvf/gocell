@@ -16,7 +16,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -33,12 +32,6 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandReposit
 	})
 
 	return NewHandler(svc), devRepo, cmdRepo
-}
-
-// authCtx creates a context with the given subject and roles for auth testing.
-func authCtx(subject string, roles []string) context.Context {
-	ctx := ctxkeys.WithSubject(context.Background(), subject)
-	return auth.WithClaims(ctx, auth.Claims{Subject: subject, Roles: roles})
 }
 
 func TestHandleEnqueue(t *testing.T) {
@@ -113,7 +106,7 @@ func TestHandleListPending_InvalidLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
-	req = req.WithContext(authCtx("dev-1", nil))
+	req = req.WithContext(auth.TestContext("dev-1", nil))
 	h.HandleListPending(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -125,7 +118,7 @@ func TestHandleListPending_ExceedsMaxLimit(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
-	req = req.WithContext(authCtx("dev-1", nil))
+	req = req.WithContext(auth.TestContext("dev-1", nil))
 	h.HandleListPending(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -177,7 +170,7 @@ func TestHandleListPending(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
 			req.SetPathValue("id", tc.deviceID)
 			// Device authenticates as itself (self-access).
-			req = req.WithContext(authCtx(tc.deviceID, nil))
+			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
 			h.HandleListPending(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -218,7 +211,7 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		req.SetPathValue("id", "dev-1")
-		req = req.WithContext(authCtx("dev-1", nil))
+		req = req.WithContext(auth.TestContext("dev-1", nil))
 		h.HandleListPending(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -275,7 +268,7 @@ func TestHandleListPending_InvalidCursor(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?cursor="+tc.cursor, nil)
 			req.SetPathValue("id", "dev-1")
-			req = req.WithContext(authCtx("dev-1", nil))
+			req = req.WithContext(auth.TestContext("dev-1", nil))
 			h.HandleListPending(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -322,7 +315,7 @@ func TestHandleAck(t *testing.T) {
 			req.SetPathValue("id", tc.deviceID)
 			req.SetPathValue("cmdId", tc.cmdID)
 			// Device authenticates as itself.
-			req = req.WithContext(authCtx(tc.deviceID, nil))
+			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
 			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -409,7 +402,7 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
 			req.SetPathValue("id", tc.deviceID)
 			if tc.subject != "" {
-				req = req.WithContext(authCtx(tc.subject, tc.roles))
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
 			h.HandleListPending(w, req)
 
@@ -454,7 +447,7 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-idor/ack", nil)
 			req.SetPathValue("id", "dev-1")
 			req.SetPathValue("cmdId", "cmd-idor")
-			req = req.WithContext(authCtx(tc.subject, tc.roles))
+			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
