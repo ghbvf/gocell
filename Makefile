@@ -4,26 +4,28 @@
         healthcheck-verify
 
 # ---------------------------------------------------------------------------
-# Delegate to src/Makefile for Go targets
+# Go targets
 # ---------------------------------------------------------------------------
 
 build:
-	$(MAKE) -C src build
+	go build ./...
 
 test:
-	$(MAKE) -C src test
+	go test ./... -count=1
 
 validate:
-	$(MAKE) -C src validate
+	go run ./cmd/gocell validate
 
 generate:
-	$(MAKE) -C src generate
+	go run ./cmd/gocell generate assembly --id=core-bundle
 
 cover:
-	$(MAKE) -C src cover
+	go test ./... -coverprofile=coverage.out
+	go tool cover -func=coverage.out | tail -1
 
 clean:
-	$(MAKE) -C src clean
+	rm -f coverage.out
+	rm -f core-bundle
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle
@@ -42,7 +44,7 @@ down:
 
 test-integration:
 	docker compose up -d --wait
-	cd src && go test ./adapters/... -tags=integration -count=1 -v
+	go test ./adapters/... -tags=integration -count=1 -v
 	docker compose down
 
 # ---------------------------------------------------------------------------
