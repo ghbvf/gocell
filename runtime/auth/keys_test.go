@@ -462,6 +462,45 @@ func TestKeySet_ConcurrentPublicKeyByKID(t *testing.T) {
 	}
 }
 
+func TestKeySet_ConcurrentPruneExpiredAndRead(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: pub2,
+		KeyID:     Thumbprint(pub2),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	ks, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.NoError(t, err)
+
+	// Run PruneExpired (write lock) concurrently with PublicKeyByKID (read lock).
+	// go test -race will detect data races if locking is broken.
+	const goroutines = 20
+	done := make(chan struct{})
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 100 {
+				_, _ = ks.PublicKeyByKID(ks.SigningKeyID())
+				_, _ = ks.PublicKeyByKID(vk.KeyID)
+			}
+		}()
+	}
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 50 {
+				ks.PruneExpired()
+			}
+		}()
+	}
+	for range goroutines * 2 {
+		<-done
+	}
+}
+
 // --- Existing tests (preserved) ---
 
 func TestLoadKeysFromEnv_BothMissing(t *testing.T) {

@@ -32,6 +32,10 @@ func NewJWTVerifier(keys VerificationKeyStore) (*JWTVerifier, error) {
 // It rejects tokens that are not signed with RS256 or do not carry a valid kid.
 func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
+		// Inner errors use bare fmt.Errorf because jwt.Parse wraps them
+		// and line 57 wraps the result with errcode. Using errcode here
+		// would cause double-wrapping.
+
 		// Pin to RS256 only -- reject HS256, none, and all other algorithms.
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])

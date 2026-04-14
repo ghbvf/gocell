@@ -1,6 +1,10 @@
 package auth
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import (
+	"log/slog"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
 
 // KeyProvider abstracts the source of cryptographic key material.
 // It is consumed at the composition root (main.go) to build JWTIssuer,
@@ -43,6 +47,12 @@ type EnvKeyProvider struct {
 func NewEnvKeyProvider() *EnvKeyProvider {
 	ks, rsaErr := LoadKeySetFromEnv()
 	ring, hmacErr := LoadHMACKeyRingFromEnv()
+	if rsaErr != nil {
+		slog.Warn("RSA key set not loaded from environment", slog.String("error", rsaErr.Error()))
+	}
+	if hmacErr != nil {
+		slog.Warn("HMAC key ring not loaded from environment", slog.String("error", hmacErr.Error()))
+	}
 	return &EnvKeyProvider{
 		rsaKeySet: ks,
 		rsaErr:    rsaErr,

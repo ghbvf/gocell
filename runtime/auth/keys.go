@@ -146,7 +146,10 @@ func (ks *KeySet) SigningKeyID() string {
 	return ks.signingKeyID
 }
 
-// SigningKey returns the active private key for signing.
+// SigningKey returns the active private key for signing. The returned pointer
+// is shared — the caller must not modify the key or its Precomputed fields.
+// Unlike HMACKeyRing.Current(), RSA private keys are returned by reference
+// because deep-copying is expensive and unnecessary for the signing hot path.
 func (ks *KeySet) SigningKey() *rsa.PrivateKey {
 	return ks.signingKey
 }
