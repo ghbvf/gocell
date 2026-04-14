@@ -20,15 +20,16 @@ func NewHandler(svc *Service) *Handler {
 // HandleCreate handles POST / — creates a new config entry.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
+		Key       string `json:"key"`
+		Value     string `json:"value"`
+		Sensitive bool   `json:"sensitive"`
 	}
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
-	entry, err := h.svc.Create(r.Context(), CreateInput{Key: req.Key, Value: req.Value})
+	entry, err := h.svc.Create(r.Context(), CreateInput{Key: req.Key, Value: req.Value, Sensitive: req.Sensitive})
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return

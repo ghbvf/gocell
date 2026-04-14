@@ -6,6 +6,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // RoleResponse is the public DTO for Role, isolating the API contract from the
@@ -49,6 +50,11 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
 
+	if err := auth.RequireSelfOrRole(r.Context(), userID, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	roles, err := h.svc.ListRoles(r.Context(), userID)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -64,6 +70,12 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
+
+	if err := auth.RequireSelfOrRole(r.Context(), userID, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	roleName := r.PathValue("roleName")
 
 	has, err := h.svc.HasRole(r.Context(), userID, roleName)

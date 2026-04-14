@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +192,71 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
 		})
 	}
+}
+
+// Sensitive value redaction tests (#27o)
+func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-s1", Key: "db.password", Value: "s3cret!", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/db.password", nil)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data dto.ConfigEntryResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, dto.RedactedValue, resp.Data.Value)
+	assert.True(t, resp.Data.Sensitive)
+	assert.NotContains(t, w.Body.String(), "s3cret!")
+}
+
+func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-n1", Key: "app.name", Value: "gocell", Sensitive: false,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/app.name", nil)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data dto.ConfigEntryResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "gocell", resp.Data.Value)
+	assert.False(t, resp.Data.Sensitive)
+}
+
+func TestHandler_HandleList_SensitiveRedacted(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-1", Key: "app.name", Value: "gocell", Sensitive: false,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-2", Key: "api.key", Value: "sk-secret-key-123", Sensitive: true,
+		Version: 1, CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "gocell")
+	assert.NotContains(t, body, "sk-secret-key-123")
+	assert.Contains(t, body, dto.RedactedValue)
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -216,9 +218,12 @@ func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// List pending (should be empty).
+	// List pending (should be empty). Inject auth context: device authenticates as itself.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
+	ctx := ctxkeys.WithSubject(context.Background(), deviceID)
+	ctx = auth.WithClaims(ctx, auth.Claims{Subject: deviceID})
+	req = req.WithContext(ctx)
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -247,9 +252,12 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	cmdData := extractData(t, rec.Body.Bytes())
 	cmdID := cmdData["id"].(string)
 
-	// Ack.
+	// Ack. Inject auth context: device authenticates as itself.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands/"+cmdID+"/ack", nil)
+	ackCtx := ctxkeys.WithSubject(context.Background(), deviceID)
+	ackCtx = auth.WithClaims(ackCtx, auth.Claims{Subject: deviceID})
+	req = req.WithContext(ackCtx)
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

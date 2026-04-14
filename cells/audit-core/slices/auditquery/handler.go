@@ -8,9 +8,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // AuditEntryResponse is the public DTO for AuditEntry, excluding internal
@@ -44,10 +46,32 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleQuery handles GET /api/v1/audit/entries.
 // Query parameters: eventType, actorId, from, to (RFC3339), limit, cursor.
+//
+// Trust boundary: non-admin users can only query their own audit entries.
+// If actorId is omitted, it defaults to the authenticated subject.
+// If actorId differs from subject, admin role is required.
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
+	subject, ok := ctxkeys.SubjectFrom(r.Context())
+	if !ok {
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
+			string(errcode.ErrAuthUnauthorized), "authentication required")
+		return
+	}
+
+	actorID := r.URL.Query().Get("actorId")
+	if actorID == "" {
+		actorID = subject
+	}
+	if actorID != subject {
+		if err := auth.RequireSelfOrRole(r.Context(), actorID, "admin"); err != nil {
+			httputil.WriteDomainError(r.Context(), w, err)
+			return
+		}
+	}
+
 	filters := ports.AuditFilters{
 		EventType: r.URL.Query().Get("eventType"),
-		ActorID:   r.URL.Query().Get("actorId"),
+		ActorID:   actorID,
 	}
 
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {

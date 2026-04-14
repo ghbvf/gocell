@@ -74,7 +74,7 @@
 | 21 | **Journey 校验** F-5 catalog 不校验引用 | 2h | `kernel/journey/catalog.go` | 6B |
 | 22 | **DELETE 无 body** DELETE-NOCONTENT-01: 204 + body=0 语义测试 | 1.5h | `contracts/http/auth/user/delete/v1/` | 6B |
 | 23 | **OTel 覆盖率** OTEL-COV-01 testcontainers 集成测试 | 1h | `adapters/otel/` | 6B |
-| 24 | **Trace trust policy** TRUST-POLICY-01: public-facing endpoint trust-boundary 策略（参考 otelhttp `WithPublicEndpoint`：new root + link），当前默认 trusted-upstream + **OBS-REQID-TRUST**: request_id middleware 无条件信任外部 `X-Request-Id`，需信任边界校验 | 4h | `runtime/http/middleware/tracing.go` + `request_id.go` | 5B PR#112 review + 217 tech-debt |
+| 24 | **Trace trust policy** TRUST-POLICY-01: public-facing endpoint trust-boundary 策略（参考 otelhttp `WithPublicEndpoint`：new root + link），当前默认 trusted-upstream + **OBS-REQID-TRUST**: request_id middleware 无条件信任外部 `X-Request-Id`，需信任边界校验 | 4h | `runtime/http/middleware/tracing.go` + `request_id.go` | 5B PR#112 review + 217 tech-debt | ✅ PR#127 |
 | 25 | **HSTS 加固** C-H4: `security_headers.go` 补 `includeSubDomains` | 0.5h | `runtime/http/middleware/security_headers.go` | P2 tech-debt |
 | 26 | **.env.example 补全** ENV-S3: 补 `GOCELL_S3_REGION=us-east-1` — `s3.Config.Validate()` 必填但示例缺失 | 0.5h | `.env.example` | P4 review |
 | 27 | **examples contract CI** INT-2: order-cell/device-cell contract YAML 存在且被 slice.yaml 引用，但 CI 未校验 | 1h | `.github/workflows/ci.yml` | P4 review |
