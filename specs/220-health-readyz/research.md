@@ -69,7 +69,7 @@ Implications for GoCell:
 2. `/readyz` always returns `cells` and `dependencies`, which leaks runtime topology by default.
 3. `runtime/bootstrap/bootstrap.go` warns and continues when `config.NewWatcher` fails, leaving reload unavailable while readiness still reports healthy.
 4. `runtime/eventrouter.Router` only exposes a startup signal and does not provide a reusable runtime readiness surface.
-5. `src/templates/runbook.md` already documents `/readyz?verbose`, but the implementation does not support it yet.
+5. `templates/runbook.md` already documents `/readyz?verbose`, but the implementation does not support it yet.
 
 ## Decisions For This Branch
 

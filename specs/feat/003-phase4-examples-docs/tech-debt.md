@@ -19,7 +19,7 @@
 
 - **Severity**: P2
 - **Source**: S6 review P2-5
-- **Affected files**: `src/examples/sso-bff/main.go:30-34`, `src/adapters/rabbitmq/integration_test.go:253-260`
+- **Affected files**: `examples/sso-bff/main.go:30-34`, `adapters/rabbitmq/integration_test.go:253-260`
 - **Description**: Multiple locations define ad-hoc noop implementations of `outbox.Writer` or `idempotency.Checker`. KG-02 recommended a shared noop writer. Currently each consumer creates its own.
 - **Recommended location**: `kernel/outbox/noop.go` or `pkg/testutil/noop.go`
 - **Status**: OPEN
@@ -41,7 +41,7 @@
 
 - **Severity**: P1
 - **Source**: S6 review P1-8
-- **Affected file**: `src/cells/access-core/slices/sessionvalidate/service.go:64-91`
+- **Affected file**: `cells/access-core/slices/sessionvalidate/service.go:64-91`
 - **Description**: `IssueTestToken` accepts `[]byte` and `default` cases that produce HS256 tokens. Since `JWTVerifier` rejects all non-RS256 tokens, these code paths produce tokens that will always fail verification. This is misleading for test writers.
 - **Recommended fix**: Remove HS256 paths from `IssueTestToken`, accept only `*rsa.PrivateKey`.
 - **Status**: OPEN
@@ -52,7 +52,7 @@
 
 - **Severity**: P1
 - **Source**: S6 review P2-1
-- **Affected file**: `src/cells/order-cell/cell.go:56-103`
+- **Affected file**: `cells/order-cell/cell.go:56-103`
 - **Description**: order-cell declares `consistencyLevel: L2` in both cell.yaml and code, but its Init does not validate outboxWriter presence (unlike access-core and config-core which fail-fast). The order-create service uses direct `publisher.Publish()` instead of transactional outbox writes. This creates a semantic gap: the metadata promises L2 but the code delivers best-effort publishing.
 - **Recommended fix**: Either (a) enforce outboxWriter in Init like other L2 cells, or (b) downgrade to L1 and document why.
 - **Status**: OPEN
@@ -83,7 +83,7 @@
 
 - **Severity**: P1/P2
 - **Source**: S6 review P1-5, P2-6
-- **Affected files**: `src/examples/*/docker-compose.yml`
+- **Affected files**: `examples/*/docker-compose.yml`
 - **Description**: (a) `start_period: 15s` missing on rabbitmq healthcheck in all example compose files (root compose has it). (b) `version: "3.9"` key is deprecated in Docker Compose V2.
 - **Status**: OPEN
 - **Priority**: Medium

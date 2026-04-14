@@ -57,32 +57,32 @@
 ## 全部 P0 Findings (10 条, 按修复优先级排序)
 
 ### P0-1. F-8S-01 — uid.New() 静默丢弃 crypto/rand 错误
-- **文件**: `src/pkg/uid/uid.go:17`
+- **文件**: `pkg/uid/uid.go:17`
 - **影响**: 熵源不可用时生成固定 UUID `00000000-0000-4000-8000-000000000000`, session ID / audit ID 完全可预测
 - **修复**: `if _, err := rand.Read(b); err != nil { panic("uid: crypto/rand unavailable") }`
 
 ### P0-2. F-10A-01 — Migrator 声称 advisory lock 但实现缺失
-- **文件**: `src/adapters/postgres/migrator.go:39-40`
+- **文件**: `adapters/postgres/migrator.go:39-40`
 - **影响**: 多实例并发启动时重复执行 migration DDL, 可致数据损坏
 - **修复**: 在 Up/Down 执行前后用 `pg_advisory_lock/unlock(hashtext('gocell_migration'))` 包裹
 
 ### P0-3. F-10S-01 — tableName 直接 fmt.Sprintf 插入 SQL, SQL 注入向量
-- **文件**: `src/adapters/postgres/migrator.go:68,224,247,271,306,345` (6 处)
+- **文件**: `adapters/postgres/migrator.go:68,224,247,271,306,345` (6 处)
 - **影响**: 若 tableName 来自外部配置, 可注入任意 SQL
 - **修复**: `NewMigrator` 中白名单校验 `^[a-zA-Z_][a-zA-Z0-9_]*$`, 或用 `pgx.Identifier.Sanitize()`
 
 ### P0-4. F-11S-01 — DistLock 无 fencing token, 锁过期后并发写入不可防
-- **文件**: `src/adapters/redis/distlock.go:96-133`
+- **文件**: `adapters/redis/distlock.go:96-133`
 - **影响**: GC/网络停顿超过 TTL 后两个持锁方并发执行业务逻辑
 - **修复**: godoc 明确标注安全边界 ("不适用于强一致性互斥"), 将 "Redlock 风格" 更正为 "single-node Redis lock"
 
 ### P0-5. F-12S-01 — sanitizeURL 固定截断泄露 AMQP 凭据
-- **文件**: `src/adapters/rabbitmq/connection.go:373-380`
+- **文件**: `adapters/rabbitmq/connection.go:373-380`
 - **影响**: 短 username 时密码出现在日志中
 - **修复**: 改用 `net/url.Parse` + `url.UserPassword(username, "***")`
 
 ### P0-6. F-12D-01 — ctx 取消时 ConsumerBase 返回 error 触发 NACK+requeue, 关闭时重复消费
-- **文件**: `src/adapters/rabbitmq/consumer_base.go:160-165`
+- **文件**: `adapters/rabbitmq/consumer_base.go:160-165`
 - **影响**: 程序关闭时已执行副作用的消息被 requeue, 幂等保护失效
 - **修复**: ctx 取消时走 DLQ 路径并返回 nil (ACK), 避免 requeue 循环
 
@@ -97,12 +97,12 @@
 - **修复**: runtime/auth 层强制非空校验, .env.example 提供生成命令
 
 ### P0-9. F-7T-01 — bootstrap Run() 覆盖率 42.7%, 违反 >=80% 约束
-- **文件**: `src/runtime/bootstrap/bootstrap_test.go`
+- **文件**: `runtime/bootstrap/bootstrap_test.go`
 - **影响**: io.Closer teardown、EventRegistrar 分支、graceful shutdown 等关键路径未测试
 - **修复**: 至少补充 4 个测试 (listener shutdown / EventRegistrar / dual closer / worker rollback)
 
 ### P0-10. F-11T-01 — Redis adapter 完全缺失集成测试
-- **文件**: `src/adapters/redis/` (无 *_integration_test.go)
+- **文件**: `adapters/redis/` (无 *_integration_test.go)
 - **影响**: TTL 过期、Sentinel 故障转移、锁原子性等关键场景从未真实验证
 - **修复**: 创建 `redis_integration_test.go`, 使用 testcontainers-go 启动真实 Redis
 

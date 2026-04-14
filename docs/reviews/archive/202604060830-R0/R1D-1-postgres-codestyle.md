@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S5 DX/Maintainability |
-| Scope | `src/adapters/postgres/` -- all `.go` source and test files |
+| Scope | `adapters/postgres/` -- all `.go` source and test files |
 | Review Basis Commit | `ce03ba1` (HEAD of develop) |
 | Date | 2026-04-06 |
 
@@ -22,7 +22,7 @@ The `adapters/postgres` module is well-structured: it correctly implements `kern
 **Seat**: S5 DX/Maintainability
 **Severity**: P1
 **Category**: Naming / errcode consistency
-**File**: `src/adapters/postgres/errors.go:21`
+**File**: `adapters/postgres/errors.go:21`
 **Evidence**:
 
 ```go
@@ -38,7 +38,7 @@ All other codes in this file use the `ERR_ADAPTER_PG_*` prefix:
 - `ERR_ADAPTER_PG_MARSHAL`
 - `ERR_ADAPTER_PG_PUBLISH`
 
-But `ERR_ADAPTER_NO_TX` drops the `PG` segment. Furthermore, the `errcode` central registry in `src/pkg/errcode/errcode.go:36` defines a **duplicate sentinel** `ErrAdapterNoTx Code = "ERR_ADAPTER_NO_TX"` at the global level. This creates confusion about which constant to reference and whether the code is postgres-specific or adapter-generic.
+But `ERR_ADAPTER_NO_TX` drops the `PG` segment. Furthermore, the `errcode` central registry in `pkg/errcode/errcode.go:36` defines a **duplicate sentinel** `ErrAdapterNoTx Code = "ERR_ADAPTER_NO_TX"` at the global level. This creates confusion about which constant to reference and whether the code is postgres-specific or adapter-generic.
 
 The `errors_test.go` prefix check only asserts 4 of the 7 codes against `ERR_ADAPTER_PG_`, so this inconsistency slips past testing.
 
@@ -53,7 +53,7 @@ The `errors_test.go` prefix check only asserts 4 of the 7 codes against `ERR_ADA
 **Seat**: S5 DX/Maintainability
 **Severity**: P1
 **Category**: Error handling fragility
-**File**: `src/adapters/postgres/migrator.go:275`
+**File**: `adapters/postgres/migrator.go:275`
 **Evidence**:
 
 ```go
@@ -83,7 +83,7 @@ if errors.Is(err, pgx.ErrNoRows) {
 **Seat**: S5 DX/Maintainability (also S2 Security)
 **Severity**: P1
 **Category**: Input validation / SQL injection risk
-**File**: `src/adapters/postgres/migrator.go` -- lines 68, 224, 247, 271, 306, 345
+**File**: `adapters/postgres/migrator.go` -- lines 68, 224, 247, 271, 306, 345
 **Evidence**:
 
 ```go
@@ -113,7 +113,7 @@ The `tableName` is interpolated directly into SQL via `fmt.Sprintf` without any 
 **Seat**: S5 DX/Maintainability
 **Severity**: P2
 **Category**: Dead code
-**File**: `src/adapters/postgres/errors.go:15`
+**File**: `adapters/postgres/errors.go:15`
 **Evidence**:
 
 ```go
@@ -123,7 +123,7 @@ The `tableName` is interpolated directly into SQL via `fmt.Sprintf` without any 
 ErrAdapterPGTxTimeout errcode.Code = "ERR_ADAPTER_PG_TX_TIMEOUT"
 ```
 
-Grep across all source files (`src/adapters/postgres/*.go` excluding tests) shows this code is **never referenced** in any `errcode.New` or `errcode.Wrap` call. It exists only in the constant declaration and in the test that checks uniqueness/prefix. `TxManager` does not use it for context timeout errors; it wraps with `ErrAdapterPGConnect` instead.
+Grep across all source files (`adapters/postgres/*.go` excluding tests) shows this code is **never referenced** in any `errcode.New` or `errcode.Wrap` call. It exists only in the constant declaration and in the test that checks uniqueness/prefix. `TxManager` does not use it for context timeout errors; it wraps with `ErrAdapterPGConnect` instead.
 
 **Recommendation**: Either use it in `TxManager.RunInTx` when context is cancelled/timed out (to distinguish timeout from connection errors), or remove it to avoid confusion.
 
@@ -136,7 +136,7 @@ Grep across all source files (`src/adapters/postgres/*.go` excluding tests) show
 **Seat**: S5 DX/Maintainability
 **Severity**: P2
 **Category**: Logic clarity / correctness
-**File**: `src/adapters/postgres/outbox_relay.go:186-213`
+**File**: `adapters/postgres/outbox_relay.go:186-213`
 **Evidence**:
 
 ```go
@@ -178,7 +178,7 @@ The comment on line 202 says "Do NOT mark as published; will retry on next poll"
 **Seat**: S5 DX/Maintainability
 **Severity**: P2
 **Category**: Test coverage gap
-**File**: `src/adapters/postgres/errors_test.go:11-16, 26-30`
+**File**: `adapters/postgres/errors_test.go:11-16, 26-30`
 **Evidence**:
 
 ```go

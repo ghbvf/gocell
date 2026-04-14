@@ -28,8 +28,6 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # 检测 go.mod 位置，兼容主 repo 和 worktree
 if [[ -f "$REPO_ROOT/go.mod" ]]; then
   GO_MODULE_ROOT="$REPO_ROOT"
-elif [[ -f "$REPO_ROOT/src/go.mod" ]]; then
-  GO_MODULE_ROOT="$REPO_ROOT/src"
 else
   echo "ERROR: go.mod not found under $REPO_ROOT"
   exit 1

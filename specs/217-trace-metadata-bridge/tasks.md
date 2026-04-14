@@ -5,9 +5,9 @@
 - [x] T01 Create branch-local research, plan, acceptance, dependency, and PR plan docs.
 - [x] T02 Write failing tests for shared bridge helper:
   `context -> metadata`, `metadata -> context`, nil metadata handling, preserve existing keys, no `span_id` propagation.
-- [x] T03 Implement the shared bridge helper and consume-side middleware in `src/kernel/outbox/`.
+- [x] T03 Implement the shared bridge helper and consume-side middleware in `kernel/outbox/`.
 - [x] T04 Write failing tests for PostgreSQL outbox writer auto-injection in both `Write` and `WriteBatch`.
-- [x] T05 Implement publish-side metadata injection in `src/adapters/postgres/outbox_writer.go`.
+- [x] T05 Implement publish-side metadata injection in `adapters/postgres/outbox_writer.go`.
 - [x] T06 Write failing tests for bootstrap subscriber wrapping and restored handler context.
 - [x] T07 Implement bootstrap wrapping with `outbox.SubscriberWithMiddleware` before `eventrouter.New(sub)`.
 - [x] T08 Extend RabbitMQ / integration tests to prove end-to-end survival of `trace_id`, `request_id`, and `correlation_id`.

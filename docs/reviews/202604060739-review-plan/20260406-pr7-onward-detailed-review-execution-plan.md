@@ -23,12 +23,12 @@
 
 | 模块 | 目录范围 | 主要 PR | 主要 issue | 主要风险 |
 |---|---|---|---|---|
-| M1 基础内核 | `src/pkg`, `src/kernel` | #7, #8, #17, #30, #31, #32 | #21, #22, #23 | 错误码、一致性语义、生命周期、治理规则 |
-| M2 运行时 | `src/runtime` | #7, #16, #31, #32 | #24 | bootstrap、auth、shutdown、worker、可观测性 |
-| M3 适配器-A | `src/adapters/postgres`, `src/adapters/redis`, `src/adapters/rabbitmq` | #10, #11, #12, #13, #31, #32 | #18, #20, #21, #22, #25, #26 | outbox、tx、lock、idempotency、delivery、reconnect |
-| M4 适配器-B | `src/adapters/oidc`, `src/adapters/s3`, `src/adapters/websocket` | #14, #31, #32 | 无主 follow-up issue | 外部协议边界、抽象稳定性、扩展点 |
-| M5 Cell/Contract/Journey | `src/cells/access-core`, `src/cells/audit-core`, `src/cells/config-core`, `src/contracts`, `src/journeys`, `src/assemblies` | #8, #13, #14, #15, #31, #32 | #24 | 契约闭环、事件传播、L2/L3 一致性 |
-| M6 交付层 | `src/cmd`, `src/examples`, `src/tests`, `Makefile`, `.github`, `docker-compose.yml` | #9, #28, #29, #30, #32 | #19 | wiring、集成验证、脚本可靠性、文档可执行性 |
+| M1 基础内核 | `pkg`, `kernel` | #7, #8, #17, #30, #31, #32 | #21, #22, #23 | 错误码、一致性语义、生命周期、治理规则 |
+| M2 运行时 | `runtime` | #7, #16, #31, #32 | #24 | bootstrap、auth、shutdown、worker、可观测性 |
+| M3 适配器-A | `adapters/postgres`, `adapters/redis`, `adapters/rabbitmq` | #10, #11, #12, #13, #31, #32 | #18, #20, #21, #22, #25, #26 | outbox、tx、lock、idempotency、delivery、reconnect |
+| M4 适配器-B | `adapters/oidc`, `adapters/s3`, `adapters/websocket` | #14, #31, #32 | 无主 follow-up issue | 外部协议边界、抽象稳定性、扩展点 |
+| M5 Cell/Contract/Journey | `cells/access-core`, `cells/audit-core`, `cells/config-core`, `contracts`, `journeys`, `assemblies` | #8, #13, #14, #15, #31, #32 | #24 | 契约闭环、事件传播、L2/L3 一致性 |
+| M6 交付层 | `cmd`, `examples`, `tests`, `Makefile`, `.github`, `docker-compose.yml` | #9, #28, #29, #30, #32 | #19 | wiring、集成验证、脚本可靠性、文档可执行性 |
 
 ## 执行原则
 
@@ -84,10 +84,10 @@
 
 - `docs/architecture/metadata-model-v3.md`
 - `docs/reviews/202604051500-032-phase3-pr7-12-six-role-review.md`
-- `src/cells/**/slice.yaml`
-- `src/contracts/**/contract.yaml`
-- `src/journeys/**`
-- `src/assemblies/**`
+- `cells/**/slice.yaml`
+- `contracts/**/contract.yaml`
+- `journeys/**`
+- `assemblies/**`
 - GitHub PR #7 ~ #32
 - GitHub Issue #18 ~ #27
 

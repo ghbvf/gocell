@@ -143,7 +143,7 @@ app.Start(ctx)
 ### 4.1 access-core — SSO/BFF 认证
 
 ```yaml
-# src/cells/access-core/cell.yaml（V3 格式）
+# cells/access-core/cell.yaml（V3 格式）
 id: access-core
 type: core
 consistencyLevel: L2
@@ -167,7 +167,7 @@ Slices（5 个）：identity-manage / session-login / session-refresh / session-
 ### 4.2 audit-core — 审计追踪
 
 ```yaml
-# src/cells/audit-core/cell.yaml（V3 格式）
+# cells/audit-core/cell.yaml（V3 格式）
 id: audit-core
 type: core
 consistencyLevel: L2
@@ -191,7 +191,7 @@ Slices（3 个）：audit-write / audit-verify / audit-archive
 ### 4.3 config-core — 配置热更新 + Feature Flags（v2 新增）
 
 ```yaml
-# src/cells/config-core/cell.yaml（V3 格式）
+# cells/config-core/cell.yaml（V3 格式）
 id: config-core
 type: core
 consistencyLevel: L2

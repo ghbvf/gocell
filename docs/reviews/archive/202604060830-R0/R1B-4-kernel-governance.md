@@ -2,7 +2,7 @@
 
 **Reviewer**: Kernel Guardian  
 **Date**: 2026-04-06  
-**Scope**: `src/kernel/governance/` (13 files, ~4875 LOC including tests)  
+**Scope**: `kernel/governance/` (13 files, ~4875 LOC including tests)  
 **Coverage**: 96.2% of statements (target: >=90% for kernel/)
 
 ---

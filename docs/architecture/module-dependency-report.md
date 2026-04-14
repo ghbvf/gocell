@@ -73,11 +73,11 @@ flowchart LR
 
 关键入口:
 
-- `src/kernel/cell/interfaces.go`
-- `src/kernel/cell/base.go`
-- `src/kernel/metadata/parser.go`
-- `src/kernel/governance/validate.go`
-- `src/kernel/assembly/assembly.go`
+- `kernel/cell/interfaces.go`
+- `kernel/cell/base.go`
+- `kernel/metadata/parser.go`
+- `kernel/governance/validate.go`
+- `kernel/assembly/assembly.go`
 
 ### 2.3 运行时: `runtime/`
 
@@ -422,12 +422,12 @@ dev 模式使用临时密钥对，real 模式通过 `auth.LoadKeySetFromEnv()` �
 
 建议从这些文件继续阅读:
 
-- `src/cmd/core-bundle/main.go`
-- `src/runtime/bootstrap/bootstrap.go`
-- `src/kernel/assembly/assembly.go`
-- `src/kernel/cell/interfaces.go`
-- `src/cells/access-core/cell.go`
-- `src/cells/audit-core/cell.go`
-- `src/cells/config-core/cell.go`
-- `src/contracts/**/contract.yaml`
-- `src/journeys/J-*.yaml`
+- `cmd/core-bundle/main.go`
+- `runtime/bootstrap/bootstrap.go`
+- `kernel/assembly/assembly.go`
+- `kernel/cell/interfaces.go`
+- `cells/access-core/cell.go`
+- `cells/audit-core/cell.go`
+- `cells/config-core/cell.go`
+- `contracts/**/contract.yaml`
+- `journeys/J-*.yaml`

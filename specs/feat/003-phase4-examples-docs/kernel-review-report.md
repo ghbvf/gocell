@@ -252,12 +252,12 @@ All 6 layering constraints verified via Grep tool on the actual codebase:
 
 | Constraint | Grep Pattern | Path | Result |
 |------------|-------------|------|--------|
-| C-01: kernel/ no import runtime/adapters/cells/ | `github\.com/ghbvf/gocell/(runtime\|adapters\|cells)` | src/kernel/ | 0 matches |
-| C-02: cells/ no import adapters/ | `github\.com/ghbvf/gocell/adapters` | src/cells/ | 0 matches |
-| C-03: runtime/ no import adapters/cells/ | `github\.com/ghbvf/gocell/(adapters\|cells)` | src/runtime/ | 0 matches |
-| C-04: adapters/ no import cells/ | `github\.com/ghbvf/gocell/cells` | src/adapters/ | 0 matches |
-| C-05: examples/ no import cells/*/internal/ | `cells/.*/internal` | src/examples/ | 0 matches |
-| C-06: examples/ no import adapters/*/internal/ | `adapters/.*/internal` | src/examples/ | 0 matches |
+| C-01: kernel/ no import runtime/adapters/cells/ | `github\.com/ghbvf/gocell/(runtime\|adapters\|cells)` | kernel/ | 0 matches |
+| C-02: cells/ no import adapters/ | `github\.com/ghbvf/gocell/adapters` | cells/ | 0 matches |
+| C-03: runtime/ no import adapters/cells/ | `github\.com/ghbvf/gocell/(adapters\|cells)` | runtime/ | 0 matches |
+| C-04: adapters/ no import cells/ | `github\.com/ghbvf/gocell/cells` | adapters/ | 0 matches |
+| C-05: examples/ no import cells/*/internal/ | `cells/.*/internal` | examples/ | 0 matches |
+| C-06: examples/ no import adapters/*/internal/ | `adapters/.*/internal` | examples/ | 0 matches |
 
 All 6 layering isolation checks PASS. The dependency direction is fully maintained.
 
@@ -318,7 +318,7 @@ All 3 must-fix items from Phase 3 are closed. This discharges the CONDITIONAL fl
 
 The QA report (qa-report.md) contains one factual error that must be noted:
 
-**AC-16.1 ("kernel files unchanged from Phase 3")**: Rated PASS. This is incorrect. `git diff develop...HEAD -- src/kernel/` shows 364 lines changed across 20 files, including substantive logic additions (mutex, shutdownCtx, FMT-10 rule, empty-ID guards). The QA report appears to have relied on the S6 review finding rather than independently verifying via `git diff`.
+**AC-16.1 ("kernel files unchanged from Phase 3")**: Rated PASS. This is incorrect. `git diff develop...HEAD -- kernel/` shows 364 lines changed across 20 files, including substantive logic additions (mutex, shutdownCtx, FMT-10 rule, empty-ID guards). The QA report appears to have relied on the S6 review finding rather than independently verifying via `git diff`.
 
 This error does not invalidate the overall QA verdict (kernel coverage and stability are maintained), but it demonstrates a process gap where the evidence chain for kernel stability was not independently verified.
 

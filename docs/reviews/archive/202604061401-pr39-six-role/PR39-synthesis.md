@@ -14,13 +14,13 @@
 
 The PR improves several smaller issues, but it introduces or leaves open two P0 problems:
 
-1. `src/adapters/redis/distlock.go`: the new `Lock.FenceToken()` is generated lazily via unconditional `INCR`, so the token is not bound to lock acquisition or current ownership. A stale holder can mint a newer token after losing the lease, which defeats the entire fencing design.
-2. `src/adapters/rabbitmq/subscriber.go`: the new shutdown path NACKs with `requeue=false` whenever `ctx.Err() != nil`. With the default empty `DLXExchange`, RabbitMQ drops the message instead of requeueing it. That is a shutdown-time data-loss regression.
+1. `adapters/redis/distlock.go`: the new `Lock.FenceToken()` is generated lazily via unconditional `INCR`, so the token is not bound to lock acquisition or current ownership. A stale holder can mint a newer token after losing the lease, which defeats the entire fencing design.
+2. `adapters/rabbitmq/subscriber.go`: the new shutdown path NACKs with `requeue=false` whenever `ctx.Err() != nil`. With the default empty `DLXExchange`, RabbitMQ drops the message instead of requeueing it. That is a shutdown-time data-loss regression.
 
 Secondary issues:
 
-- `src/adapters/redis/distlock.go`: renewal is still derived from `context.Background()` instead of caller `ctx`, despite the intended fix.
-- `src/adapters/rabbitmq/subscriber.go`: reconnect loop now retries on all subscription setup errors, not just broken delivery channels, which can spin on permanent topology/configuration failures and leak channels on the early-return paths.
+- `adapters/redis/distlock.go`: renewal is still derived from `context.Background()` instead of caller `ctx`, despite the intended fix.
+- `adapters/rabbitmq/subscriber.go`: reconnect loop now retries on all subscription setup errors, not just broken delivery channels, which can spin on permanent topology/configuration failures and leak channels on the early-return paths.
 
 ## Role files
 

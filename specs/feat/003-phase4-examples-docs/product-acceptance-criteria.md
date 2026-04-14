@@ -575,19 +575,19 @@
 
 **AC-16.1** [P1] kernel/ 零代码修改
 - Given: Phase 4 分支 vs develop 基线
-- When: 执行 `git diff develop -- kernel/` (或 `src/kernel/`)
+- When: 执行 `git diff develop -- kernel/` (或 `kernel/`)
 - Then: 零行非注释修改（允许纯注释/文档修改）
 - 验证方式: [代码审查] git diff
 
 **AC-16.2** [P1] kernel/cell.Cell 接口签名不变
 - Given: Phase 4 分支 vs develop 基线
-- When: 执行 `git diff develop -- src/kernel/cell/interfaces.go`（路径以实际为准）
+- When: 执行 `git diff develop -- kernel/cell/interfaces.go`（路径以实际为准）
 - Then: 零 diff 或仅注释变更
 - 验证方式: [代码审查] git diff
 
 **AC-16.3** [P1] kernel/outbox 接口签名不变
 - Given: Phase 4 分支 vs develop 基线
-- When: 执行 `git diff develop -- src/kernel/outbox/outbox.go`（路径以实际为准）
+- When: 执行 `git diff develop -- kernel/outbox/outbox.go`（路径以实际为准）
 - Then: 零 diff 或仅注释变更
 - 验证方式: [代码审查] git diff
 

@@ -2,7 +2,7 @@
 
 - **Reviewer**: Kernel Guardian
 - **Date**: 2026-04-06
-- **Scope**: `src/kernel/cell/` (~850 LOC, 7 files) + `src/kernel/slice/` (~225 LOC, 3 files)
+- **Scope**: `kernel/cell/` (~850 LOC, 7 files) + `kernel/slice/` (~225 LOC, 3 files)
 - **Test Coverage**: kernel/cell 99.2%, kernel/slice 94.2%
 - **All tests pass**: Yes (including `-race` for concurrent test)
 

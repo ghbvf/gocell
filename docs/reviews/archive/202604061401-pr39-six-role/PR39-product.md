@@ -8,14 +8,14 @@
 
 ### P-01 | P0 | PR title and docs claim a fencing-token fix that the shipped API does not actually provide
 
-- Files: `src/adapters/redis/doc.go`, `src/adapters/redis/distlock.go`
+- Files: `adapters/redis/doc.go`, `adapters/redis/distlock.go`
 - Product impact: consumers reading this PR will believe `DistLock` now supports the standard "lease + conditional write" safety pattern. In reality, the token can be minted late and by stale holders.
 - Why this matters: this is a misleading product capability claim, not just an internal implementation detail.
 - Required fix: do not ship this API shape under a "fencing token fix" banner.
 
 ### P-02 | P1 | subscriber default behavior became less safe for operators during shutdown
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - A default-config subscriber has no DLX.
   - The new shutdown branch uses `requeue=false`.
@@ -24,7 +24,7 @@
 
 ### P-03 | P1 | Sentinel mode validation is still incomplete
 
-- File: `src/adapters/redis/client.go`
+- File: `adapters/redis/client.go`
 - Evidence:
   - The PR now requires `SentinelAddrs`.
   - It still does not validate `SentinelMaster`.

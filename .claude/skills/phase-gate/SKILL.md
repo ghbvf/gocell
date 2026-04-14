@@ -59,8 +59,8 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S{N} --bra
 | S2 | exit | kernel-constraints.md, review-architect.md, review-roadmap.md, review-product-manager.md | kernel-constraints: `(集成风险\|分层隔离\|核心约束\|元数据合规\|契约完整性)` |
 | S3 | exit | decisions.md | decisions: `(采纳\|拒绝\|延迟\|accept\|reject\|defer)` |
 | S4 | exit | plan.md, tasks.md, product-acceptance-criteria.md | tasks: 3 pattern, product-acceptance-criteria: `(P1\|P2\|P3)` |
-| S5 | exit | tasks.md | tasks: no_unchecked_tasks; command: `cd src && go build ./...` |
-| S7 | exit | qa-report.md, user-signoff.md | qa-report: `(go test.*PASS\|coverage\|全量测试通过)`, user-signoff: `(APPROVE\|CONDITIONAL\|REJECT)`; command: `cd src && go test ./...` |
+| S5 | exit | tasks.md | tasks: no_unchecked_tasks; command: `go build ./...` |
+| S7 | exit | qa-report.md, user-signoff.md | qa-report: `(go test.*PASS\|coverage\|全量测试通过)`, user-signoff: `(APPROVE\|CONDITIONAL\|REJECT)`; command: `go test ./...` |
 | S8 | exit | kernel-review-report.md, product-review-report.md, phase-report.md; repo: CHANGELOG.md | kernel/product-review: `(绿\|黄\|红\|GREEN\|YELLOW\|RED)`, phase-report: `(变更摘要\|关键决策)` |
 
 ---

@@ -8,7 +8,7 @@
 
 ### D-01 | P0 | shutdown-time message loss risk makes safe rollout impossible without extra broker config
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Operational impact:
   - Graceful shutdown during deploy or restart can discard in-flight failed messages unless every affected queue is provisioned with a DLX.
   - The new behavior is not safe by default, which raises rollout risk for the PR.
@@ -16,7 +16,7 @@
 
 ### D-02 | P1 | reconnect loop can spin aggressively on permanent topology failures
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - `Subscribe()` retries forever on any `subscribeOnce()` error.
   - Healthy connections cause `WaitConnected()` to return immediately.
@@ -25,7 +25,7 @@
 
 ### D-03 | P1 | tests do not cover the broken fencing scenario they are introducing
 
-- Files: `src/adapters/redis/distlock_test.go`
+- Files: `adapters/redis/distlock_test.go`
 - Evidence:
   - New tests cover monotonic increase across calls and acquisitions.
   - No test covers the actual stale-holder scenario.

@@ -37,7 +37,7 @@ The framework already has a stable `outbox.Writer` abstraction, but no shared pl
 
 ### 2. Move canonical `Receipt` ownership to `kernel/idempotency`
 
-- define `Receipt` in `src/kernel/idempotency/idempotency.go`
+- define `Receipt` in `kernel/idempotency/idempotency.go`
 - update `Claimer` to return `idempotency.Receipt`
 - update core code paths that consume receipts
 - if churn becomes disproportionate, keep a temporary alias in `kernel/outbox` while making `kernel/idempotency` the source of truth
@@ -55,26 +55,26 @@ The framework already has a stable `outbox.Writer` abstraction, but no shared pl
 
 ## Expected Files
 
-- `src/kernel/outbox/outbox.go`
-- `src/kernel/outbox/outbox_test.go`
-- `src/kernel/idempotency/idempotency.go`
-- `src/kernel/idempotency/idempotency_test.go`
-- `src/kernel/outbox/outboxtest/mock_receipt.go`
-- `src/runtime/eventbus/eventbus.go`
-- `src/runtime/eventbus/eventbus_test.go`
-- `src/adapters/redis/idempotency.go`
-- `src/adapters/redis/idempotency_test.go`
-- `src/adapters/rabbitmq/consumer_base.go`
-- `src/adapters/rabbitmq/rabbitmq_test.go`
-- `src/cells/order-cell/cell.go`
-- `src/cells/order-cell/cell_test.go`
-- `src/cells/order-cell/slices/order-create/service.go`
-- `src/cells/order-cell/slices/order-create/service_test.go`
-- `src/cmd/core-bundle/auth_integration_test.go`
-- `src/cells/access-core/cell_test.go`
-- `src/cells/audit-core/cell_test.go`
-- `src/cells/config-core/cell_test.go`
-- `src/examples/sso-bff/main.go`
+- `kernel/outbox/outbox.go`
+- `kernel/outbox/outbox_test.go`
+- `kernel/idempotency/idempotency.go`
+- `kernel/idempotency/idempotency_test.go`
+- `kernel/outbox/outboxtest/mock_receipt.go`
+- `runtime/eventbus/eventbus.go`
+- `runtime/eventbus/eventbus_test.go`
+- `adapters/redis/idempotency.go`
+- `adapters/redis/idempotency_test.go`
+- `adapters/rabbitmq/consumer_base.go`
+- `adapters/rabbitmq/rabbitmq_test.go`
+- `cells/order-cell/cell.go`
+- `cells/order-cell/cell_test.go`
+- `cells/order-cell/slices/order-create/service.go`
+- `cells/order-cell/slices/order-create/service_test.go`
+- `cmd/core-bundle/auth_integration_test.go`
+- `cells/access-core/cell_test.go`
+- `cells/audit-core/cell_test.go`
+- `cells/config-core/cell_test.go`
+- `examples/sso-bff/main.go`
 - `docs/backlog.md`
 
 ## TDD Order

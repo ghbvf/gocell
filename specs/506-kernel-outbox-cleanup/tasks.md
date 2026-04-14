@@ -13,7 +13,7 @@
 - [x] T006 Replace duplicated local noop writers in touched tests/examples with `outbox.NoopOutboxWriter{}`.
 - [x] T007 Update `order-cell` to use the shared discard publisher without reporting false publish success.
 - [x] T008 Run targeted package tests for kernel, order-cell, runtime/eventbus, adapters/redis, and adapters/rabbitmq.
-- [x] T009 Run touched cell/example tests and `go build ./...` from `src/`.
+- [x] T009 Run touched cell/example tests and `go build ./...` from 项目根目录.
 - [x] T010 Update `docs/backlog.md` to reflect closure of the outbox cleanup row.
 - [x] T011 Create the PR with the plan/research context in the description.
 - [x] T012 Launch six-seat review and collect findings.

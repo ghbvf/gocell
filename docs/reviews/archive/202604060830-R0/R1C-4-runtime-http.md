@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S1 Architecture + S2 Security + S3 Test + S5 DX (combined full-module review) |
-| Scope | `src/runtime/http/` (middleware/, health/, router/) ~650 LOC |
+| Scope | `runtime/http/` (middleware/, health/, router/) ~650 LOC |
 | Review basis commit | `ce03ba1` (HEAD of develop) |
 | Date | 2026-04-06 |
 
@@ -35,7 +35,7 @@
 | Seat | S2 Security |
 | Severity | **P1** |
 | Category | Security / Configuration |
-| File | `src/runtime/http/middleware/real_ip.go:16-18` |
+| File | `runtime/http/middleware/real_ip.go:16-18` |
 | Status | OPEN |
 
 **Evidence:**
@@ -62,7 +62,7 @@ Parse each entry via `net.ParseCIDR()`; if that fails, treat as a single IP. Mat
 | Seat | S1 Architecture |
 | Severity | **P1** |
 | Category | Configuration / Middleware Chain |
-| File | `src/runtime/http/router/router.go:73` |
+| File | `runtime/http/router/router.go:73` |
 | Status | OPEN |
 
 **Evidence:**
@@ -98,11 +98,11 @@ Add a `WithTrustedProxies(proxies []string) Option` to the router. The bootstrap
 | Seat | S2 Security |
 | Severity | **P1** |
 | Category | Security / Cross-Origin |
-| File | `src/runtime/http/middleware/` (missing) |
+| File | `runtime/http/middleware/` (missing) |
 | Status | OPEN |
 
 **Evidence:**
-Searched for "CORS" or "cors" across `src/runtime/` -- zero matches. No `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, or `Access-Control-Allow-Headers` are set anywhere in the middleware package.
+Searched for "CORS" or "cors" across `runtime/` -- zero matches. No `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, or `Access-Control-Allow-Headers` are set anywhere in the middleware package.
 
 Any browser-based client (SPA, BFF) calling the GoCell API from a different origin will be blocked by the browser's same-origin policy. This is a fundamental gap for the `sso-bff` example and any real frontend integration.
 
@@ -118,7 +118,7 @@ Add a `CORS` middleware with configurable `AllowedOrigins`, `AllowedMethods`, `A
 | Seat | S2 Security |
 | Severity | **P2** |
 | Category | Security Headers |
-| File | `src/runtime/http/middleware/security_headers.go:9-16` |
+| File | `runtime/http/middleware/security_headers.go:9-16` |
 | Status | OPEN |
 
 **Evidence:**
@@ -155,7 +155,7 @@ Add these headers with sensible API defaults. Make CSP configurable via an optio
 | Seat | S5 DX / Maintainability |
 | Severity | **P2** |
 | Category | Code Duplication |
-| Files | `src/runtime/http/middleware/access_log.go:12-20`, `src/pkg/httputil/response.go:66-83` |
+| Files | `runtime/http/middleware/access_log.go:12-20`, `pkg/httputil/response.go:66-83` |
 | Status | OPEN |
 
 **Evidence:**
@@ -196,7 +196,7 @@ Replace the private `statusRecorder` with `httputil.StatusRecorder` / `httputil.
 | Seat | S1 Architecture |
 | Severity | **P1** |
 | Category | Interface Compatibility |
-| Files | `src/runtime/http/middleware/access_log.go:12-20`, `src/pkg/httputil/response.go:66-83` |
+| Files | `runtime/http/middleware/access_log.go:12-20`, `pkg/httputil/response.go:66-83` |
 | Status | OPEN |
 
 **Evidence:**
@@ -230,7 +230,7 @@ Go 1.20+ supports `http.ResponseController` which uses `Unwrap()`.
 | Seat | S2 Security |
 | Severity | **P2** |
 | Category | Rate Limiting Design |
-| File | `src/runtime/http/middleware/rate_limit.go:37-38` |
+| File | `runtime/http/middleware/rate_limit.go:37-38` |
 | Status | OPEN |
 
 **Evidence:**
@@ -257,7 +257,7 @@ After auth middleware has run, compose a key like `"user:" + subject` when a sub
 | Seat | S1 Architecture |
 | Severity | **P1** |
 | Category | Middleware Chain / Security Default |
-| File | `src/runtime/http/router/router.go:72-79` |
+| File | `runtime/http/router/router.go:72-79` |
 | Status | OPEN |
 
 **Evidence:**
@@ -297,7 +297,7 @@ While auth is intentionally not in the default chain (it requires a `TokenVerifi
 | Seat | S1 Architecture |
 | Severity | **P2** |
 | Category | Correctness |
-| File | `src/runtime/http/middleware/recovery.go:21-46` |
+| File | `runtime/http/middleware/recovery.go:21-46` |
 | Status | OPEN |
 
 **Evidence:**
@@ -332,7 +332,7 @@ Wrap `w` in a `statusRecorder` that tracks whether `WriteHeader` or `Write` has 
 | Seat | S1 Architecture |
 | Severity | **P2** |
 | Category | Resilience |
-| File | `src/runtime/http/health/health.go:93-99` |
+| File | `runtime/http/health/health.go:93-99` |
 | Status | OPEN |
 
 **Evidence:**
@@ -367,7 +367,7 @@ Additionally, the `Checker` function signature is `func() error` -- it does not 
 | Seat | S5 DX / Maintainability |
 | Severity | **P2** |
 | Category | Error Handling Consistency |
-| Files | `src/runtime/http/middleware/rate_limit.go:42-49`, `body_limit.go:31-38`, `recovery.go:35-43` |
+| Files | `runtime/http/middleware/rate_limit.go:42-49`, `body_limit.go:31-38`, `recovery.go:35-43` |
 | Status | OPEN |
 
 **Evidence:**
@@ -404,7 +404,7 @@ Use `httputil.WriteError(w, status, code, message)` in all middleware error path
 | Seat | S5 DX / Maintainability |
 | Severity | **P2** |
 | Category | Constant Management |
-| Files | `src/runtime/http/middleware/rate_limit.go:45`, `body_limit.go:35`, `recovery.go:39` |
+| Files | `runtime/http/middleware/rate_limit.go:45`, `body_limit.go:35`, `recovery.go:39` |
 | Status | OPEN |
 
 **Evidence:**
@@ -430,7 +430,7 @@ Define these codes as `errcode.Code` constants in `pkg/errcode` (e.g., `errcode.
 | Seat | S1 Architecture |
 | Severity | **P2** |
 | Category | API Completeness |
-| File | `src/runtime/http/router/router.go:139-165` |
+| File | `runtime/http/router/router.go:139-165` |
 | Status | OPEN |
 
 **Evidence:**
@@ -451,7 +451,7 @@ Consider adding `Use(mw ...func(http.Handler) http.Handler)` to the `RouteMux` i
 | Seat | S5 DX |
 | Severity | **P2** |
 | Category | Documentation |
-| File | `src/runtime/http/middleware/doc.go:17-23` |
+| File | `runtime/http/middleware/doc.go:17-23` |
 | Status | OPEN |
 
 **Evidence:**
@@ -483,7 +483,7 @@ Update doc.go to show the chi `Use()` pattern or clearly document both patterns 
 | Seat | S6 Product/UX |
 | Severity | **P2** |
 | Category | API Consistency |
-| File | `src/runtime/http/health/health.go:64-68, 109-113` |
+| File | `runtime/http/health/health.go:64-68, 109-113` |
 | Status | OPEN |
 
 **Evidence:**
@@ -513,7 +513,7 @@ Health/infrastructure endpoints are commonly exempted from the data envelope, bu
 | Seat | S5 DX |
 | Severity | **P2** |
 | Category | Observability |
-| File | `src/runtime/http/health/health.go:93-99` |
+| File | `runtime/http/health/health.go:93-99` |
 | Status | OPEN |
 
 **Evidence:**
@@ -565,7 +565,7 @@ At minimum, log the write error at Debug level for the middleware paths (since i
 | Seat | S2 Security |
 | Severity | **P2** |
 | Category | Denial of Service |
-| File | `src/runtime/http/middleware/` (missing) |
+| File | `runtime/http/middleware/` (missing) |
 | Status | OPEN |
 
 **Evidence:**

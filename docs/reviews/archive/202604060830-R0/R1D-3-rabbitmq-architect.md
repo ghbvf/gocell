@@ -2,7 +2,7 @@
 
 **Reviewer**: Architect  
 **Date**: 2026-04-06  
-**Scope**: `src/adapters/rabbitmq/` -- 7 files (~950 LOC prod, ~1080 LOC test)  
+**Scope**: `adapters/rabbitmq/` -- 7 files (~950 LOC prod, ~1080 LOC test)  
 **Files**: connection.go (380L), publisher.go (81L), subscriber.go (257L), consumer_base.go (224L), doc.go (8L), rabbitmq_test.go (1081L), integration_test.go (267L)
 
 ---
@@ -34,7 +34,7 @@ The RabbitMQ adapter is a well-structured implementation of `outbox.Publisher` a
 **Verified absence**: Zero imports of `runtime/`, `cells/`, or other `adapters/` packages in any production file. Confirmed by running:
 
 ```
-grep -r "runtime/\|cells/\|adapters/" src/adapters/rabbitmq/*.go
+grep -r "runtime/\|cells/\|adapters/" adapters/rabbitmq/*.go
 # (no matches in non-test files)
 ```
 
@@ -48,12 +48,12 @@ grep -r "runtime/\|cells/\|adapters/" src/adapters/rabbitmq/*.go
 
 ### 3.1 outbox.Publisher
 
-**Compile-time check**: `src/adapters/rabbitmq/publisher.go:15`
+**Compile-time check**: `adapters/rabbitmq/publisher.go:15`
 ```go
 var _ outbox.Publisher = (*Publisher)(nil)
 ```
 
-**Kernel interface** (`src/kernel/outbox/outbox.go:53-55`):
+**Kernel interface** (`kernel/outbox/outbox.go:53-55`):
 ```go
 type Publisher interface {
     Publish(ctx context.Context, topic string, payload []byte) error
@@ -64,12 +64,12 @@ type Publisher interface {
 
 ### 3.2 outbox.Subscriber
 
-**Compile-time check**: `src/adapters/rabbitmq/subscriber.go:19`
+**Compile-time check**: `adapters/rabbitmq/subscriber.go:19`
 ```go
 var _ outbox.Subscriber = (*Subscriber)(nil)
 ```
 
-**Kernel interface** (`src/kernel/outbox/outbox.go:63-74`):
+**Kernel interface** (`kernel/outbox/outbox.go:63-74`):
 ```go
 type Subscriber interface {
     Subscribe(ctx context.Context, topic string, handler func(context.Context, Entry) error) error
@@ -91,7 +91,7 @@ ConsumerBase consumes `idempotency.Checker` via dependency injection (consumer_b
 
 **Dimension**: [Consistency Level] -- L2 OutboxFact data loss
 
-**Location**: `src/adapters/rabbitmq/consumer_base.go:170-173`
+**Location**: `adapters/rabbitmq/consumer_base.go:170-173`
 ```go
 // Exhausted all retries -- route to DLQ.
 cb.deadLetter(ctx, topic, entry, lastErr, cb.config.RetryCount)
@@ -146,7 +146,7 @@ Both call sites must propagate DLQ publish failure.
 
 **Dimension**: [Cell Aggregation / Reconnect Strategy] -- silent consumer death
 
-**Location**: `src/adapters/rabbitmq/connection.go:213` and `subscriber.go:91-132`
+**Location**: `adapters/rabbitmq/connection.go:213` and `subscriber.go:91-132`
 
 **Problem**: When the AMQP connection drops and `reconnectLoop()` runs:
 
@@ -180,7 +180,7 @@ Recommendation: Option 1 is the most robust and aligns with the Watermill refere
 
 **Dimension**: [Interface Stability] -- API contract fragility
 
-**Location**: `src/adapters/rabbitmq/consumer_base.go:134`
+**Location**: `adapters/rabbitmq/consumer_base.go:134`
 ```go
 if _, ok := lastErr.(*PermanentError); ok {
 ```
@@ -210,7 +210,7 @@ if errors.As(lastErr, &permErr) {
 
 **Dimension**: [Interface Stability / Security]
 
-**Location**: `src/adapters/rabbitmq/connection.go:372-379`
+**Location**: `adapters/rabbitmq/connection.go:372-379`
 ```go
 func sanitizeURL(url string) string {
     if len(url) > 10 {
@@ -242,7 +242,7 @@ func sanitizeURL(rawURL string) string {
 
 **Dimension**: [Extensibility]
 
-**Location**: `src/adapters/rabbitmq/connection.go:25-44` (Config struct) and `connection.go:110-116` (DefaultDial)
+**Location**: `adapters/rabbitmq/connection.go:25-44` (Config struct) and `connection.go:110-116` (DefaultDial)
 
 **Problem**: `Config` has no `TLSConfig *tls.Config` field. `DefaultDial` uses `amqp.Dial` which does not support TLS. Production RabbitMQ deployments almost universally require TLS (`amqps://`). The `amqp091-go` library provides `amqp.DialTLS(url, tlsConfig)` for this purpose.
 
@@ -256,7 +256,7 @@ func sanitizeURL(rawURL string) string {
 
 **Dimension**: [Performance / Scalability]
 
-**Location**: `src/adapters/rabbitmq/subscriber.go:161-162`
+**Location**: `adapters/rabbitmq/subscriber.go:161-162`
 ```go
 s.wg.Add(1)
 s.processDelivery(ctx, ch, delivery, topic, handler)
@@ -280,7 +280,7 @@ This is a design decision that should be made carefully. Track as P1, not P0, be
 
 **Dimension**: [Performance]
 
-**Location**: `src/adapters/rabbitmq/publisher.go:43-46`
+**Location**: `adapters/rabbitmq/publisher.go:43-46`
 ```go
 // Enable confirm mode.
 if err := ch.Confirm(false); err != nil {
@@ -304,7 +304,7 @@ Furthermore, since `AcquireChannel` may return a channel from the pool that alre
 
 **Dimension**: [Observability / Traceability]
 
-**Location**: `src/adapters/rabbitmq/publisher.go:50-55`
+**Location**: `adapters/rabbitmq/publisher.go:50-55`
 ```go
 msg := amqp.Publishing{
     ContentType:  "application/octet-stream",
@@ -348,7 +348,7 @@ Key metrics missing:
 
 **Dimension**: [Performance]
 
-**Location**: `src/adapters/rabbitmq/consumer_base.go:155-159`
+**Location**: `adapters/rabbitmq/consumer_base.go:155-159`
 ```go
 select {
 case <-time.After(delay):
@@ -372,7 +372,7 @@ The TOCTOU fix is correctly implemented. Evidence:
 shouldProcess, err := cb.checker.TryProcess(ctx, idempotencyKey, cb.config.IdempotencyTTL)
 ```
 
-This replaces the old two-step `IsProcessed` + `MarkProcessed` pattern with a single atomic call. The `TryProcess` method was added to the `idempotency.Checker` interface (`src/kernel/idempotency/idempotency.go:23-27`) and the mock implementation in tests correctly simulates atomic check-and-mark semantics (`rabbitmq_test.go:239-250`).
+This replaces the old two-step `IsProcessed` + `MarkProcessed` pattern with a single atomic call. The `TryProcess` method was added to the `idempotency.Checker` interface (`kernel/idempotency/idempotency.go:23-27`) and the mock implementation in tests correctly simulates atomic check-and-mark semantics (`rabbitmq_test.go:239-250`).
 
 **Architect verdict**: Issue #18 fix is **ACCEPTED**. The atomic TryProcess eliminates the TOCTOU race. The fail-open behavior (line 113: `shouldProcess = true` when TryProcess errors) is a reasonable design choice for availability, with appropriate warning-level logging.
 

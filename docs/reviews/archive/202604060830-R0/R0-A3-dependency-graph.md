@@ -1,7 +1,7 @@
 # R0-A3: 分层依赖图与违规列表
 
 > 生成日期: 2026-04-06  
-> 分析范围: `src/` 下所有非测试 `.go` 文件的 `github.com/ghbvf/gocell/` 内部 import  
+> 分析范围: 项目根目录 下所有非测试 `.go` 文件的 `github.com/ghbvf/gocell/` 内部 import  
 > 模块路径: `github.com/ghbvf/gocell`
 
 ---

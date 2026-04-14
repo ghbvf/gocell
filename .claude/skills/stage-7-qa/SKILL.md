@@ -49,7 +49,7 @@ bash .claude/skills/stage-7-qa/scripts/run-qa.sh --branch {branch}
 1. 创建 `specs/{branch}/evidence/` 目录结构
 2. 执行 `go test ./... -v -count=1` 并保存到 `evidence/go-test/result.txt`
 3. 执行 `gocell validate` 并保存到 `evidence/validate/result.txt`
-4. 遍历 `src/journeys/J-*.yaml` 执行 `gocell verify journey` 并保存到 `evidence/journey/`
+4. 遍历 `journeys/J-*.yaml` 执行 `gocell verify journey` 并保存到 `evidence/journey/`
 5. 如 role-roster.md 中 QA自动化=ON 且存在 UI 组件，执行 `npx playwright test`
 6. 汇总通过/失败统计
 

@@ -26,11 +26,11 @@ These two root causes produce a cascade of downstream problems: the 100ms race, 
 The `outbox.Subscriber` interface defines a single method:
 
 ```go
-// src/kernel/outbox/outbox.go:189
+// kernel/outbox/outbox.go:189
 Subscribe(ctx context.Context, topic string, handler EntryHandler) error
 ```
 
-The RabbitMQ implementation (`src/adapters/rabbitmq/subscriber.go:147-212`) does the following inside this single call:
+The RabbitMQ implementation (`adapters/rabbitmq/subscriber.go:147-212`) does the following inside this single call:
 
 1. Acquire AMQP channel (line 225)
 2. Set QoS (line 255)
@@ -57,7 +57,7 @@ Steps 1-7 are setup; step 8 is a blocking run loop. There is no way for the call
 
 ### Current Cell Code (duplicated pattern)
 
-**audit-core** (`src/cells/audit-core/cell.go:174-196`):
+**audit-core** (`cells/audit-core/cell.go:174-196`):
 ```go
 go func() {
     ctx := context.Background()       // BUG: ignores shutdown
@@ -69,7 +69,7 @@ case <-time.After(100 * time.Millisecond): // heuristic
 }
 ```
 
-**config-core** (`src/cells/config-core/cell.go:181-195`): identical pattern.
+**config-core** (`cells/config-core/cell.go:181-195`): identical pattern.
 
 Both cells:
 - Use `context.Background()` despite `BaseCell.ShutdownCtx()` being available since the same PR
@@ -99,7 +99,7 @@ Key Watermill design decisions relevant to GoCell:
 
 ### Evidence
 
-`PermanentError` is defined in `src/adapters/rabbitmq/consumer_base.go:63-71`:
+`PermanentError` is defined in `adapters/rabbitmq/consumer_base.go:63-71`:
 
 ```go
 package rabbitmq
@@ -109,7 +109,7 @@ type PermanentError struct {
 }
 ```
 
-But the concept is referenced (by name, in comments) from `src/kernel/outbox/outbox.go:157-160`:
+But the concept is referenced (by name, in comments) from `kernel/outbox/outbox.go:157-160`:
 
 ```go
 // Note: PermanentError is mapped to DispositionRequeue, not DispositionReject.
@@ -155,7 +155,7 @@ This creates a design inversion: the kernel defines `WrapLegacyHandler` and `Dis
 
 ### Phase 1: Move PermanentError to kernel/outbox (1 PR, non-breaking)
 
-**Scope**: `src/kernel/outbox/outbox.go`, `src/adapters/rabbitmq/consumer_base.go`, `src/runtime/eventbus/eventbus.go`
+**Scope**: `kernel/outbox/outbox.go`, `adapters/rabbitmq/consumer_base.go`, `runtime/eventbus/eventbus.go`
 
 1. Define `outbox.PermanentError` in `kernel/outbox/outbox.go`
 2. Add `rabbitmq.PermanentError` as a type alias: `type PermanentError = outbox.PermanentError`
@@ -168,7 +168,7 @@ This creates a design inversion: the kernel defines `WrapLegacyHandler` and `Dis
 
 ### Phase 2: Introduce EventRouter in runtime/ (1 PR, additive)
 
-**Scope**: New `src/runtime/eventrouter/router.go`, changes to `src/kernel/cell/registrar.go`
+**Scope**: New `runtime/eventrouter/router.go`, changes to `kernel/cell/registrar.go`
 
 Define an `EventRouter` that separates declaration from execution:
 
@@ -228,7 +228,7 @@ This is a **breaking change** to `cell.EventRegistrar`. Migration path:
 
 ### Phase 3: Deprecate Checker, Consolidate Receipt (1 PR, cleanup)
 
-**Scope**: `src/kernel/idempotency/idempotency.go`, `src/adapters/rabbitmq/consumer_base.go`, `src/adapters/redis/`
+**Scope**: `kernel/idempotency/idempotency.go`, `adapters/rabbitmq/consumer_base.go`, `adapters/redis/`
 
 With the Router centralizing receipt settlement (Commit/Release after broker Ack/Nack), the dual Checker/Claimer paths in ConsumerBase can be reduced:
 

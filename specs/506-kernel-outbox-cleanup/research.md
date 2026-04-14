@@ -14,12 +14,12 @@
 
 Current local `outbox.Writer` placeholders exist in at least these call sites:
 
-- `src/cmd/core-bundle/auth_integration_test.go`
-- `src/cells/access-core/cell_test.go`
-- `src/cells/audit-core/cell_test.go`
-- `src/cells/config-core/cell_test.go`
-- `src/cells/order-cell/cell_test.go`
-- `src/examples/sso-bff/main.go`
+- `cmd/core-bundle/auth_integration_test.go`
+- `cells/access-core/cell_test.go`
+- `cells/audit-core/cell_test.go`
+- `cells/config-core/cell_test.go`
+- `cells/order-cell/cell_test.go`
+- `examples/sso-bff/main.go`
 
 They all implement the same single-method no-op contract.
 

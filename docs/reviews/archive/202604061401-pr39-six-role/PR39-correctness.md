@@ -8,7 +8,7 @@
 
 ### C-01 | P0 | `FenceToken()` semantics are incorrect and the new tests codify the wrong behavior
 
-- Files: `src/adapters/redis/distlock.go`, `src/adapters/redis/distlock_test.go`, `src/adapters/redis/mock_test.go`
+- Files: `adapters/redis/distlock.go`, `adapters/redis/distlock_test.go`, `adapters/redis/mock_test.go`
 - Evidence:
   - `TestLock_FenceToken` asserts that calling `FenceToken()` twice on the same lock should return `1` then `2`.
   - That means the implementation is explicitly per-call, not per-acquisition.
@@ -18,7 +18,7 @@
 
 ### C-02 | P0 | subscriber shutdown path now loses messages when handler returns error after context cancellation
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - `processDelivery()` checks `ctx.Err()` after handler failure and calls `Nack(tag, false, false)`.
   - The code comment says the message will be picked up later, but that is false without broker dead-letter configuration.
@@ -30,7 +30,7 @@
 
 ### C-03 | P1 | channel acquisition failures in `subscribeOnce()` leak channels on early returns
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - After `AcquireChannel()`, the code tracks the channel.
   - On `Qos`, `ExchangeDeclare`, `QueueDeclare`, `QueueBind`, or `Consume` error, it only calls `untrackChannel(ch)` and returns.

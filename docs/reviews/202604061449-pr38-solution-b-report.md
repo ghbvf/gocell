@@ -2,7 +2,7 @@
 
 > 日期: 2026-04-06
 > 目标 PR: `ghbvf/gocell#38`
-> 范围: `src/adapters/rabbitmq/*`, `src/kernel/outbox/*`, `src/kernel/idempotency/*`, `src/adapters/redis/idempotency.go`
+> 范围: `adapters/rabbitmq/*`, `kernel/outbox/*`, `kernel/idempotency/*`, `adapters/redis/idempotency.go`
 > 结论: 建议采用“处置结果 + 可提交幂等回执”的正构方案，不建议继续在当前 `error -> ACK/NACK` 语义上补丁。
 
 ---
@@ -51,7 +51,7 @@
 
 ### 4.1 outbox.Subscriber 与 handler 接口
 
-建议改造 [src/kernel/outbox/outbox.go](/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox.go)：
+建议改造 [kernel/outbox/outbox.go](/Users/shengming/Documents/code/gocell/kernel/outbox/outbox.go)：
 
 ```go
 type Disposition uint8
@@ -91,7 +91,7 @@ type TopicHandlerMiddleware func(topic string, next EntryHandler) EntryHandler
 
 ### 4.2 幂等接口
 
-建议改造 [src/kernel/idempotency/idempotency.go](/Users/shengming/Documents/code/gocell/src/kernel/idempotency/idempotency.go)：
+建议改造 [kernel/idempotency/idempotency.go](/Users/shengming/Documents/code/gocell/kernel/idempotency/idempotency.go)：
 
 ```go
 type ClaimState uint8
@@ -119,7 +119,7 @@ type Claimer interface {
 
 ## 5. Redis 幂等实现
 
-建议改造 [src/adapters/redis/idempotency.go](/Users/shengming/Documents/code/gocell/src/adapters/redis/idempotency.go) 为双状态键模型：
+建议改造 [adapters/redis/idempotency.go](/Users/shengming/Documents/code/gocell/adapters/redis/idempotency.go) 为双状态键模型：
 
 1. `lease:{key}`: 表示“处理中”，值为随机 token，带 `LeaseTTL`
 2. `done:{key}`: 表示“已完成”，值固定，带 `DoneTTL`
@@ -162,7 +162,7 @@ Lua 流程建议：
 
 ## 6. ConsumerBase 重构
 
-建议改造 [src/adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/consumer_base.go)：
+建议改造 [adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/consumer_base.go)：
 
 ### 6.1 去掉应用侧 DLQ publish
 
@@ -205,7 +205,7 @@ Lua 流程建议：
 
 ## 7. Subscriber 重构
 
-建议改造 [src/adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/subscriber.go)：
+建议改造 [adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/subscriber.go)：
 
 ### 7.1 processDelivery 新语义
 
@@ -257,7 +257,7 @@ if res.Receipt != nil {
 
 ## 8. 重连策略重构
 
-建议改造 [src/adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/subscriber.go) 和 [src/adapters/rabbitmq/connection.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/connection.go)。
+建议改造 [adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/subscriber.go) 和 [adapters/rabbitmq/connection.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/connection.go)。
 
 ### 8.1 错误分类
 
@@ -315,11 +315,11 @@ if res.Receipt != nil {
 
 ### 9.1 SubscriberConfig
 
-[src/adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/subscriber.go) 中的 `DLXExchange` 和 `DLXRoutingKey` 仍然保留，因为 broker-native DLX 仍然需要队列参数来声明。
+[adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/subscriber.go) 中的 `DLXExchange` 和 `DLXRoutingKey` 仍然保留，因为 broker-native DLX 仍然需要队列参数来声明。
 
 ### 9.2 ConsumerBaseConfig
 
-建议从 [src/adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/consumer_base.go) 中移除：
+建议从 [adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/consumer_base.go) 中移除：
 
 - `DLQTopic`
 
@@ -342,7 +342,7 @@ if res.Receipt != nil {
 
 ### 10.1 幂等时序
 
-在 [src/adapters/rabbitmq/rabbitmq_test.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/rabbitmq_test.go) 增加：
+在 [adapters/rabbitmq/rabbitmq_test.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/rabbitmq_test.go) 增加：
 
 1. `Requeue` 后 `Release` 被调用，redelivery 能再次进入业务处理
 2. `Ack` 成功后才 `Commit`
@@ -369,7 +369,7 @@ if res.Receipt != nil {
 
 ### 10.4 集成测试
 
-在 [src/adapters/rabbitmq/integration_test.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/integration_test.go) 补：
+在 [adapters/rabbitmq/integration_test.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/integration_test.go) 补：
 
 1. `Nack(requeue=false)` 后消息进入 DLQ
 2. `Requeue` 后消息可再次被消费
@@ -377,7 +377,7 @@ if res.Receipt != nil {
 
 ### 10.5 middleware / outbox 接口
 
-在 [src/kernel/outbox/outbox_test.go](/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox_test.go) 补：
+在 [kernel/outbox/outbox_test.go](/Users/shengming/Documents/code/gocell/kernel/outbox/outbox_test.go) 补：
 
 1. `EntryHandler` 和 `TopicHandlerMiddleware` 新签名测试
 2. middleware 链下 `HandleResult` 透传测试
@@ -390,23 +390,23 @@ if res.Receipt != nil {
 
 ### 第 1 刀
 
-改 [src/kernel/outbox/outbox.go](/Users/shengming/Documents/code/gocell/src/kernel/outbox/outbox.go) 和 [src/kernel/idempotency/idempotency.go](/Users/shengming/Documents/code/gocell/src/kernel/idempotency/idempotency.go) 接口定义。
+改 [kernel/outbox/outbox.go](/Users/shengming/Documents/code/gocell/kernel/outbox/outbox.go) 和 [kernel/idempotency/idempotency.go](/Users/shengming/Documents/code/gocell/kernel/idempotency/idempotency.go) 接口定义。
 
 ### 第 2 刀
 
-改 [src/adapters/redis/idempotency.go](/Users/shengming/Documents/code/gocell/src/adapters/redis/idempotency.go)，实现 `Claim / Commit / Release`。
+改 [adapters/redis/idempotency.go](/Users/shengming/Documents/code/gocell/adapters/redis/idempotency.go)，实现 `Claim / Commit / Release`。
 
 ### 第 3 刀
 
-改 [src/adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/consumer_base.go)，移除应用侧 DLQ publish，改为返回 `HandleResult`。
+改 [adapters/rabbitmq/consumer_base.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/consumer_base.go)，移除应用侧 DLQ publish，改为返回 `HandleResult`。
 
 ### 第 4 刀
 
-改 [src/adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/subscriber.go)，接入新的 disposition 与 receipt 生命周期。
+改 [adapters/rabbitmq/subscriber.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/subscriber.go)，接入新的 disposition 与 receipt 生命周期。
 
 ### 第 5 刀
 
-改 [src/adapters/rabbitmq/connection.go](/Users/shengming/Documents/code/gocell/src/adapters/rabbitmq/connection.go) 与 `Subscriber` retry loop，补 setup 错误分类和 backoff。
+改 [adapters/rabbitmq/connection.go](/Users/shengming/Documents/code/gocell/adapters/rabbitmq/connection.go) 与 `Subscriber` retry loop，补 setup 错误分类和 backoff。
 
 ### 第 6 刀
 

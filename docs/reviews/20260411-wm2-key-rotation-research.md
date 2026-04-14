@@ -135,7 +135,7 @@ ref: gravitational/teleport `lib/auth/rotate.go`
 
 ## 五、GoCell 现状差距
 
-### 当前 `src/runtime/auth/` 代码
+### 当前 `runtime/auth/` 代码
 
 | 文件 | 现状 | 差距 |
 |------|------|------|

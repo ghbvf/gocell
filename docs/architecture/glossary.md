@@ -184,7 +184,7 @@ cells:
   - audit-core
   - config-core
 build:
-  entrypoint: src/cmd/core-bundle/main.go
+  entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
   deployTemplate: k8s
 ```

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Mode | Independent pass |
-| Scope | `src/adapters/websocket/` |
+| Scope | `adapters/websocket/` |
 | Review basis commit | `b6b14af` |
 | Date | 2026-04-06 |
 
@@ -29,7 +29,7 @@ The module is compact, but it still has several production-facing risks around s
 |---|---|
 | Severity | **P1** |
 | Category | Lifecycle / Availability |
-| Files | `src/adapters/websocket/handler.go:44-47`, `src/adapters/websocket/hub.go:132-155`, `src/adapters/websocket/hub.go:176-181`, `src/adapters/websocket/hub.go:250-258` |
+| Files | `adapters/websocket/handler.go:44-47`, `adapters/websocket/hub.go:132-155`, `adapters/websocket/hub.go:176-181`, `adapters/websocket/hub.go:250-258` |
 | Status | OPEN |
 
 **Evidence**
@@ -63,7 +63,7 @@ If the service is shutting down while any client is still connected, graceful sh
 |---|---|
 | Severity | **P1** |
 | Category | Security / Boundary Validation |
-| File | `src/adapters/websocket/handler.go:26-30` |
+| File | `adapters/websocket/handler.go:26-30` |
 | Status | OPEN |
 
 **Evidence**
@@ -89,7 +89,7 @@ The default adapter boundary accepts cross-site WebSocket upgrades from arbitrar
 |---|---|
 | Severity | **P1** |
 | Category | Concurrency / Resilience |
-| Files | `src/adapters/websocket/hub.go:79-80`, `src/adapters/websocket/hub.go:250-264`, `src/adapters/websocket/hub.go:283-299` |
+| Files | `adapters/websocket/hub.go:79-80`, `adapters/websocket/hub.go:250-264`, `adapters/websocket/hub.go:283-299` |
 | Status | OPEN |
 
 **Evidence**
@@ -121,7 +121,7 @@ One bad message or one slow downstream handler can destabilize the whole WebSock
 |---|---|
 | Severity | **P1** |
 | Category | Performance / Availability |
-| Files | `src/adapters/websocket/hub.go:18-19`, `src/adapters/websocket/hub.go:33-48`, `src/adapters/websocket/hub.go:209-225` |
+| Files | `adapters/websocket/hub.go:18-19`, `adapters/websocket/hub.go:33-48`, `adapters/websocket/hub.go:209-225` |
 | Status | OPEN |
 
 **Evidence**
@@ -148,7 +148,7 @@ A single slow or half-dead client can delay delivery to every later client in th
 |---|---|
 | Severity | **P2** |
 | Category | Robustness / State Management |
-| Files | `src/adapters/websocket/hub.go:97-110`, `src/adapters/websocket/hub.go:113-128`, `src/adapters/websocket/hub.go:132-137`, `src/adapters/websocket/hub.go:268-270` |
+| Files | `adapters/websocket/hub.go:97-110`, `adapters/websocket/hub.go:113-128`, `adapters/websocket/hub.go:132-137`, `adapters/websocket/hub.go:268-270` |
 | Status | OPEN |
 
 **Evidence**
@@ -176,7 +176,7 @@ Bad config can crash startup, and unusual call ordering can leave the Hub in an 
 |---|---|
 | Severity | **P2** |
 | Category | Test Coverage |
-| Files | `src/adapters/websocket/hub_test.go:54-69`, `src/adapters/websocket/hub_test.go:223-243`, `src/adapters/websocket/hub_test.go:251-260`, `src/adapters/websocket/integration_test.go:11-30` |
+| Files | `adapters/websocket/hub_test.go:54-69`, `adapters/websocket/hub_test.go:223-243`, `adapters/websocket/hub_test.go:251-260`, `adapters/websocket/integration_test.go:11-30` |
 | Status | OPEN |
 
 **Evidence**

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Reviewer Seat | S3 (Test/Regression) |
-| Scope | `src/adapters/postgres/` -- all `*_test.go` files |
+| Scope | `adapters/postgres/` -- all `*_test.go` files |
 | Review Baseline | `ce03ba1` (develop HEAD at review time) |
 | Date | 2026-04-06 |
 
@@ -52,7 +52,7 @@ The `integration_test.go` file uses **testcontainers** (postgres:15-alpine) with
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P1
 - **Category**: Missing test coverage
-- **File**: `src/adapters/postgres/outbox_relay.go:250-262`, `src/adapters/postgres/outbox_relay_test.go`
+- **File**: `adapters/postgres/outbox_relay.go:250-262`, `adapters/postgres/outbox_relay_test.go`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -72,7 +72,7 @@ The `integration_test.go` file uses **testcontainers** (postgres:15-alpine) with
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P1
 - **Category**: Missing integration test
-- **File**: `src/adapters/postgres/integration_test.go`
+- **File**: `adapters/postgres/integration_test.go`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -93,7 +93,7 @@ The `integration_test.go` file uses **testcontainers** (postgres:15-alpine) with
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P1
 - **Category**: Missing test -- concurrency
-- **File**: `src/adapters/postgres/migrator.go`, `src/adapters/postgres/migrator_test.go`
+- **File**: `adapters/postgres/migrator.go`, `adapters/postgres/migrator_test.go`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -113,7 +113,7 @@ The `integration_test.go` file uses **testcontainers** (postgres:15-alpine) with
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Incomplete test coverage
-- **File**: `src/adapters/postgres/errors_test.go:11-15` and `:26-30`
+- **File**: `adapters/postgres/errors_test.go:11-15` and `:26-30`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -139,7 +139,7 @@ But `errors.go` defines 7 codes total -- the tests omit `ErrAdapterPGNoTx`, `Err
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Test infrastructure fragility
-- **File**: `src/adapters/postgres/outbox_relay_test.go:207-221`
+- **File**: `adapters/postgres/outbox_relay_test.go:207-221`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -173,7 +173,7 @@ func (r *mockRows) Scan(dest ...any) error {
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Incomplete assertion
-- **File**: `src/adapters/postgres/outbox_relay_test.go:55-93`
+- **File**: `adapters/postgres/outbox_relay_test.go:55-93`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -188,7 +188,7 @@ func (r *mockRows) Scan(dest ...any) error {
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Missing unit test path
-- **File**: `src/adapters/postgres/tx_manager_test.go`
+- **File**: `adapters/postgres/tx_manager_test.go`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -205,7 +205,7 @@ func (r *mockRows) Scan(dest ...any) error {
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Test style
-- **File**: `src/adapters/postgres/pool_test.go:12-60`
+- **File**: `adapters/postgres/pool_test.go:12-60`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 
@@ -220,7 +220,7 @@ func (r *mockRows) Scan(dest ...any) error {
 - **Seat**: S3 (Test/Regression)
 - **Severity**: P2
 - **Category**: Missing edge case
-- **File**: `src/adapters/postgres/outbox_writer_test.go`
+- **File**: `adapters/postgres/outbox_writer_test.go`
 - **Baseline**: `ce03ba1`
 - **Status**: OPEN
 

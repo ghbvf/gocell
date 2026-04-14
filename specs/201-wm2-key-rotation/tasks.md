@@ -20,12 +20,12 @@
 
 **Covers**: KeySet, VerificationKey, HMACKeyRing types; RFC 7638 thumbprint function.
 
-- [x] T001 Write table-driven tests for RFC 7638 SHA-256 thumbprint computation (determinism, different key sizes, consistency) in src/runtime/auth/keys_test.go (TDD: RED)
-- [x] T002 Implement `Thumbprint(pub *rsa.PublicKey) string` — RFC 7638 SHA-256 thumbprint that derives kid from public key material — in src/runtime/auth/keys.go (TDD: GREEN for T001)
-- [x] T003 Write tests for KeySet constructor: single signing key, kid matches thumbprint, PublicKeyByKID returns correct key, PublicKeyByKID returns error for unknown kid in src/runtime/auth/keys_test.go (TDD: RED)
-- [x] T004 Implement `VerificationKey` struct and `KeySet` struct with `NewKeySet(privateKey, publicKey)` constructor and `PublicKeyByKID(kid) (*rsa.PublicKey, error)` method in src/runtime/auth/keys.go (TDD: GREEN for T003)
+- [x] T001 Write table-driven tests for RFC 7638 SHA-256 thumbprint computation (determinism, different key sizes, consistency) in runtime/auth/keys_test.go (TDD: RED)
+- [x] T002 Implement `Thumbprint(pub *rsa.PublicKey) string` — RFC 7638 SHA-256 thumbprint that derives kid from public key material — in runtime/auth/keys.go (TDD: GREEN for T001)
+- [x] T003 Write tests for KeySet constructor: single signing key, kid matches thumbprint, PublicKeyByKID returns correct key, PublicKeyByKID returns error for unknown kid in runtime/auth/keys_test.go (TDD: RED)
+- [x] T004 Implement `VerificationKey` struct and `KeySet` struct with `NewKeySet(privateKey, publicKey)` constructor and `PublicKeyByKID(kid) (*rsa.PublicKey, error)` method in runtime/auth/keys.go (TDD: GREEN for T003)
 
-**Checkpoint**: Foundational types compile and pass tests. `go test ./src/runtime/auth/... -run TestThumbprint` and `go test ./src/runtime/auth/... -run TestKeySet` both GREEN.
+**Checkpoint**: Foundational types compile and pass tests. `go test ./runtime/auth/... -run TestThumbprint` and `go test ./runtime/auth/... -run TestKeySet` both GREEN.
 
 ---
 
@@ -39,17 +39,17 @@
 
 > **TDD: Write these tests FIRST. They MUST FAIL before implementation.**
 
-- [x] T005 [P] [US1] Write tests for JWTIssuer: issued token header contains `kid` field matching signing key thumbprint in src/runtime/auth/jwt_test.go (TDD: RED)
-- [x] T006 [P] [US1] Write tests for JWTVerifier: verifies token by looking up public key from KeySet using token's `kid` header in src/runtime/auth/jwt_test.go (TDD: RED)
-- [x] T007 [P] [US1] Write tests for JWTVerifier rejection: unknown kid returns error; missing kid header returns error in src/runtime/auth/jwt_test.go (TDD: RED)
+- [x] T005 [P] [US1] Write tests for JWTIssuer: issued token header contains `kid` field matching signing key thumbprint in runtime/auth/jwt_test.go (TDD: RED)
+- [x] T006 [P] [US1] Write tests for JWTVerifier: verifies token by looking up public key from KeySet using token's `kid` header in runtime/auth/jwt_test.go (TDD: RED)
+- [x] T007 [P] [US1] Write tests for JWTVerifier rejection: unknown kid returns error; missing kid header returns error in runtime/auth/jwt_test.go (TDD: RED)
 
 ### Implementation for User Story 1
 
-- [x] T008 [US1] Update `NewJWTIssuer` to accept `*KeySet` instead of `*rsa.PrivateKey`; update `Issue()` to set `token.Header["kid"] = keySet.SigningKeyID()` in src/runtime/auth/jwt.go (TDD: GREEN for T005)
-- [x] T009 [US1] Update `NewJWTVerifier` to accept `*KeySet` instead of `*rsa.PublicKey`; update `Verify()` KeyFunc to extract `kid` from token header and call `keySet.PublicKeyByKID(kid)` in src/runtime/auth/jwt.go (TDD: GREEN for T006, T007)
-- [x] T010 [US1] Update existing tests in src/runtime/auth/jwt_test.go and src/runtime/auth/middleware_test.go to use KeySet-based constructors (fix compilation)
+- [x] T008 [US1] Update `NewJWTIssuer` to accept `*KeySet` instead of `*rsa.PrivateKey`; update `Issue()` to set `token.Header["kid"] = keySet.SigningKeyID()` in runtime/auth/jwt.go (TDD: GREEN for T005)
+- [x] T009 [US1] Update `NewJWTVerifier` to accept `*KeySet` instead of `*rsa.PublicKey`; update `Verify()` KeyFunc to extract `kid` from token header and call `keySet.PublicKeyByKID(kid)` in runtime/auth/jwt.go (TDD: GREEN for T006, T007)
+- [x] T010 [US1] Update existing tests in runtime/auth/jwt_test.go and runtime/auth/middleware_test.go to use KeySet-based constructors (fix compilation)
 
-**Checkpoint**: `go test ./src/runtime/auth/... -run TestJWT` all GREEN. Tokens have kid. Verification works by kid lookup.
+**Checkpoint**: `go test ./runtime/auth/... -run TestJWT` all GREEN. Tokens have kid. Verification works by kid lookup.
 
 ---
 
@@ -61,17 +61,17 @@
 
 ### Tests for User Story 2
 
-- [x] T011 [P] [US2] Write tests for KeySet multi-key: verification-only key lookup by kid succeeds; signing always uses active key only in src/runtime/auth/keys_test.go (TDD: RED)
-- [x] T012 [P] [US2] Write tests for KeySet pruning: expired verification key is removed on PruneExpired(); lookup by pruned kid fails in src/runtime/auth/keys_test.go (TDD: RED)
-- [x] T013 [P] [US2] Write tests for KeySet edge cases: rapid rotation replaces oldest verification key; zero/negative expiry prunes immediately in src/runtime/auth/keys_test.go (TDD: RED)
+- [x] T011 [P] [US2] Write tests for KeySet multi-key: verification-only key lookup by kid succeeds; signing always uses active key only in runtime/auth/keys_test.go (TDD: RED)
+- [x] T012 [P] [US2] Write tests for KeySet pruning: expired verification key is removed on PruneExpired(); lookup by pruned kid fails in runtime/auth/keys_test.go (TDD: RED)
+- [x] T013 [P] [US2] Write tests for KeySet edge cases: rapid rotation replaces oldest verification key; zero/negative expiry prunes immediately in runtime/auth/keys_test.go (TDD: RED)
 
 ### Implementation for User Story 2
 
-- [x] T014 [US2] Implement `NewKeySetWithVerificationKeys(privateKey, publicKey, verificationKeys []VerificationKey)` constructor and `PruneExpired()` method in src/runtime/auth/keys.go (TDD: GREEN for T011, T012, T013)
-- [x] T015 [US2] Implement `LoadKeySetFromEnv()` — load active key pair from existing env vars + optional `GOCELL_JWT_PREV_PUBLIC_KEY` and `GOCELL_JWT_PREV_KEY_EXPIRES` for verification-only key in src/runtime/auth/keys.go
-- [x] T016 [US2] Write tests for `LoadKeySetFromEnv`: active-only, active+verification, missing active fails, invalid expiry fails in src/runtime/auth/keys_test.go
+- [x] T014 [US2] Implement `NewKeySetWithVerificationKeys(privateKey, publicKey, verificationKeys []VerificationKey)` constructor and `PruneExpired()` method in runtime/auth/keys.go (TDD: GREEN for T011, T012, T013)
+- [x] T015 [US2] Implement `LoadKeySetFromEnv()` — load active key pair from existing env vars + optional `GOCELL_JWT_PREV_PUBLIC_KEY` and `GOCELL_JWT_PREV_KEY_EXPIRES` for verification-only key in runtime/auth/keys.go
+- [x] T016 [US2] Write tests for `LoadKeySetFromEnv`: active-only, active+verification, missing active fails, invalid expiry fails in runtime/auth/keys_test.go
 
-**Checkpoint**: `go test ./src/runtime/auth/... -run TestKeySet` all GREEN. Multi-key verification works. Pruning works. LoadKeySetFromEnv works.
+**Checkpoint**: `go test ./runtime/auth/... -run TestKeySet` all GREEN. Multi-key verification works. Pruning works. LoadKeySetFromEnv works.
 
 ---
 
@@ -83,20 +83,20 @@
 
 ### Tests for User Story 3
 
-- [x] T017 [P] [US3] Write tests for HMACKeyRing: sign with current (position 0), verify succeeds with current, verify succeeds with previous in src/runtime/auth/servicetoken_test.go (TDD: RED)
-- [x] T018 [P] [US3] Write tests for HMACKeyRing: reject unknown secret; single-secret mode (nil previous) works correctly in src/runtime/auth/servicetoken_test.go (TDD: RED)
-- [x] T019 [P] [US3] Write tests for HMACKeyRing edge case: same secret in both positions works (degenerate case) in src/runtime/auth/servicetoken_test.go (TDD: RED)
+- [x] T017 [P] [US3] Write tests for HMACKeyRing: sign with current (position 0), verify succeeds with current, verify succeeds with previous in runtime/auth/servicetoken_test.go (TDD: RED)
+- [x] T018 [P] [US3] Write tests for HMACKeyRing: reject unknown secret; single-secret mode (nil previous) works correctly in runtime/auth/servicetoken_test.go (TDD: RED)
+- [x] T019 [P] [US3] Write tests for HMACKeyRing edge case: same secret in both positions works (degenerate case) in runtime/auth/servicetoken_test.go (TDD: RED)
 
 ### Implementation for User Story 3
 
-- [x] T020 [US3] Implement `HMACKeyRing` struct with `Current() []byte` and `Secrets() [][]byte` methods in src/runtime/auth/servicetoken.go (TDD: GREEN for T017, T018, T019)
-- [x] T021 [US3] Update `ServiceTokenMiddleware` to accept `*HMACKeyRing` — try-all-keys verification (current first, then previous) in src/runtime/auth/servicetoken.go
-- [x] T022 [US3] Update `GenerateServiceToken` to accept `*HMACKeyRing` — always sign with Current() in src/runtime/auth/servicetoken.go
-- [x] T023 [US3] Implement `LoadHMACKeyRingFromEnv()` — load `GOCELL_SERVICE_SECRET` + optional `GOCELL_SERVICE_SECRET_PREVIOUS` in src/runtime/auth/servicetoken.go
-- [x] T024 [US3] Write tests for `LoadHMACKeyRingFromEnv`: current-only, current+previous, missing current fails in src/runtime/auth/servicetoken_test.go
-- [x] T025 [US3] Update existing ServiceToken tests in src/runtime/auth/servicetoken_test.go to use HMACKeyRing-based API (fix compilation)
+- [x] T020 [US3] Implement `HMACKeyRing` struct with `Current() []byte` and `Secrets() [][]byte` methods in runtime/auth/servicetoken.go (TDD: GREEN for T017, T018, T019)
+- [x] T021 [US3] Update `ServiceTokenMiddleware` to accept `*HMACKeyRing` — try-all-keys verification (current first, then previous) in runtime/auth/servicetoken.go
+- [x] T022 [US3] Update `GenerateServiceToken` to accept `*HMACKeyRing` — always sign with Current() in runtime/auth/servicetoken.go
+- [x] T023 [US3] Implement `LoadHMACKeyRingFromEnv()` — load `GOCELL_SERVICE_SECRET` + optional `GOCELL_SERVICE_SECRET_PREVIOUS` in runtime/auth/servicetoken.go
+- [x] T024 [US3] Write tests for `LoadHMACKeyRingFromEnv`: current-only, current+previous, missing current fails in runtime/auth/servicetoken_test.go
+- [x] T025 [US3] Update existing ServiceToken tests in runtime/auth/servicetoken_test.go to use HMACKeyRing-based API (fix compilation)
 
-**Checkpoint**: `go test ./src/runtime/auth/... -run TestServiceToken` and `go test ./src/runtime/auth/... -run TestHMAC` all GREEN. Key ring rotation works.
+**Checkpoint**: `go test ./runtime/auth/... -run TestServiceToken` and `go test ./runtime/auth/... -run TestHMAC` all GREEN. Key ring rotation works.
 
 ---
 
@@ -108,15 +108,15 @@
 
 ### Tests for User Story 4
 
-- [x] T026 [P] [US4] Write tests for slog output on KeySet creation (key activation log), verification key addition (demotion log), and pruning (pruning log) in src/runtime/auth/keys_test.go (TDD: RED)
-- [x] T027 [P] [US4] Write tests for fail-fast: NewKeySet with nil key panics or returns error; LoadKeySetFromEnv with missing env var returns clear error in src/runtime/auth/keys_test.go (TDD: RED)
+- [x] T026 [P] [US4] Write tests for slog output on KeySet creation (key activation log), verification key addition (demotion log), and pruning (pruning log) in runtime/auth/keys_test.go (TDD: RED)
+- [x] T027 [P] [US4] Write tests for fail-fast: NewKeySet with nil key panics or returns error; LoadKeySetFromEnv with missing env var returns clear error in runtime/auth/keys_test.go (TDD: RED)
 
 ### Implementation for User Story 4
 
-- [x] T028 [US4] Add structured slog.Info logging to KeySet constructor (activation), AddVerificationKey/NewKeySetWithVerificationKeys (demotion), and PruneExpired (pruning) with fields: kid, transition, timestamp in src/runtime/auth/keys.go (TDD: GREEN for T026)
-- [x] T029 [US4] Add fail-fast validation: NewKeySet returns error on nil/invalid key; LoadKeySetFromEnv returns errcode error on missing GOCELL_JWT_PRIVATE_KEY or GOCELL_JWT_PUBLIC_KEY in src/runtime/auth/keys.go (TDD: GREEN for T027)
+- [x] T028 [US4] Add structured slog.Info logging to KeySet constructor (activation), AddVerificationKey/NewKeySetWithVerificationKeys (demotion), and PruneExpired (pruning) with fields: kid, transition, timestamp in runtime/auth/keys.go (TDD: GREEN for T026)
+- [x] T029 [US4] Add fail-fast validation: NewKeySet returns error on nil/invalid key; LoadKeySetFromEnv returns errcode error on missing GOCELL_JWT_PRIVATE_KEY or GOCELL_JWT_PUBLIC_KEY in runtime/auth/keys.go (TDD: GREEN for T027)
 
-**Checkpoint**: `go test ./src/runtime/auth/... -run TestLifecycle` and `go test ./src/runtime/auth/... -run TestFailFast` all GREEN. Lifecycle events observable in logs.
+**Checkpoint**: `go test ./runtime/auth/... -run TestLifecycle` and `go test ./runtime/auth/... -run TestFailFast` all GREEN. Lifecycle events observable in logs.
 
 ---
 
@@ -124,12 +124,12 @@
 
 **Purpose**: Update callers, verify full build, ensure coverage.
 
-- [x] T030 [P] Update callers in src/cells/access-core/ to use KeySet-based JWTIssuer/JWTVerifier API
-- [x] T031 [P] Update callers in src/examples/sso-bff/main.go to use KeySet and HMACKeyRing API
-- [x] T032 [P] Update src/adapters/oidc/oidc.go if it references old JWTVerifier constructor
+- [x] T030 [P] Update callers in cells/access-core/ to use KeySet-based JWTIssuer/JWTVerifier API
+- [x] T031 [P] Update callers in examples/sso-bff/main.go to use KeySet and HMACKeyRing API
+- [x] T032 [P] Update adapters/oidc/oidc.go if it references old JWTVerifier constructor
 - [x] T033 Run `go build ./...` — verify zero compilation errors across entire codebase
-- [x] T034 Run `go test ./src/runtime/auth/...` — verify all tests pass, coverage ≥ 80%
-- [x] T035 Run `go vet ./src/runtime/auth/...` — verify no vet warnings
+- [x] T034 Run `go test ./runtime/auth/...` — verify all tests pass, coverage ≥ 80%
+- [x] T035 Run `go vet ./runtime/auth/...` — verify no vet warnings
 - [x] T036 Run `go test -race ./runtime/auth/...` — **mandatory** race detection gate for auth package
 
 **Checkpoint**: Full codebase compiles. All auth tests pass with `-race`. Coverage meets threshold.
@@ -235,7 +235,7 @@ T021: Update ServiceTokenMiddleware in servicetoken.go
 
 ## Notes
 
-- All changes are within `src/runtime/auth/` — no new packages or directories
+- All changes are within `runtime/auth/` — no new packages or directories
 - No new external dependencies — uses existing `github.com/golang-jwt/jwt/v5` + stdlib `crypto/*`
 - Constitution requires TDD: every test task (RED) must FAIL before its matching implementation task (GREEN)
 - `auth.go` and `middleware.go` are NOT modified — new types integrate behind existing interfaces

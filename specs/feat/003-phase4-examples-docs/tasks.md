@@ -146,7 +146,7 @@
 > 2026-04-06 第一轮审查: T75-T80 初始追加
 > 2026-04-06 第二轮审查: 修正 T77/T78 约束编号映射错误，补充 T81-T88 覆盖遗漏约束
 
-- **T75** [KG] 验证 kernel/ 零代码修改: `git diff develop -- src/kernel/ | grep "^[+-]" | grep -v "^[+-]\s*//"` 零行非注释修改（C-19）
+- **T75** [KG] 验证 kernel/ 零代码修改: `git diff develop -- kernel/ | grep "^[+-]" | grep -v "^[+-]\s*//"` 零行非注释修改（C-19）
 - **T76** [KG] 验证分层隔离 6 项 grep 全部 0 匹配（C-01 ~ C-06）。具体命令见 kernel-constraints.md 表格，6 条 grep 全部执行
 - **T77** [KG] 验证 examples/ 不 import `cells/.*/internal/` 且不 import `adapters/.*/internal/`（C-05 + C-06）。与 T70 交叉验证，确认 grep 覆盖两个方向
 - **T78** [KG] 验证 todo-order cell.yaml/slice.yaml 通过 `gocell validate`，全部必填字段存在（C-07, C-08）
@@ -155,9 +155,9 @@
 - **T81** [KG][NEW] 验证 iot-device cell.yaml 含全部必填字段（C-09）: 对 `examples/iot-device/cells/device-cell/cell.yaml` 单独运行 `gocell validate`，确认 id/type/consistencyLevel/owner/schema.primary/verify.smoke 全部存在且 type=edge, consistencyLevel=L4
 - **T82** [KG][NEW] 验证 contractUsages.role 拓扑合法性（C-10）: 检查 todo-order + iot-device 所有 slice.yaml 中 contractUsages.role 是否匹配 kind 对应合法角色（http->serve/call, event->publish/subscribe, command->handle/invoke）
 - **T83** [KG][NEW] 验证 cell.type 枚举合规（C-11）: 确认 order-cell type=core, device-cell type=edge，值在 {core, edge, support} 范围内
-- **T84** [KG][NEW] 验证 HS256 移除完整性（C-17）: `grep -rn "SigningMethodHS256" src/cells/access-core/` 零匹配（或仅出现在 test 文件 / Deprecated 标注路径中）。迁移后不得存在未标注的 HS256 默认路径
+- **T84** [KG][NEW] 验证 HS256 移除完整性（C-17）: `grep -rn "SigningMethodHS256" cells/access-core/` 零匹配（或仅出现在 test 文件 / Deprecated 标注路径中）。迁移后不得存在未标注的 HS256 默认路径
 - **T85** [KG][NEW] 验证 sso-bff 使用 RSA key pair（C-18）: 代码审查 `examples/sso-bff/main.go`，确认使用 `auth.LoadRSAKeyPair` 或 `auth.NewIssuer(privateKey, ...)` 而非 `WithSigningKey([]byte(...))`
-- **T86** [KG][NEW] 验证 kernel/cell.Cell + kernel/outbox 接口签名无变更（C-23, C-24）: `git diff develop -- src/kernel/cell/interfaces.go` 和 `git diff develop -- src/kernel/outbox/outbox.go` 均为零 diff 或仅注释变更
+- **T86** [KG][NEW] 验证 kernel/cell.Cell + kernel/outbox 接口签名无变更（C-23, C-24）: `git diff develop -- kernel/cell/interfaces.go` 和 `git diff develop -- kernel/outbox/outbox.go` 均为零 diff 或仅注释变更
 - **T87** [KG][NEW] 验证 iot-device contract YAML 注册到 contracts/ 目录（C-25）: 确认 `contracts/` 下存在 iot-device 相关契约定义（如 command.device.v1, event.device-status.v1 等）。注意: T33 仅创建 todo-order 契约，iot-device 契约需在 T43 或 T45 实施阶段同步创建
 - **T88** [KG][NEW] 验证 examples/ 编码规范合规（C-28, C-29）: (1) `grep -rn "errors\.New" examples/` 零匹配（或仅 test 文件），确认使用 pkg/errcode；(2) `grep -rn "fmt\.Println\|log\.Printf" examples/` 零匹配，确认使用 slog
 

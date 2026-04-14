@@ -8,7 +8,7 @@
 
 ### A-01 | P0 | `FenceToken()` is not bound to lock acquisition or lock ownership
 
-- Files: `src/adapters/redis/distlock.go`
+- Files: `adapters/redis/distlock.go`
 - Evidence:
   - `FenceToken()` runs `INCR` on `fence:{key}` every time it is called.
   - It does not check that the lock is still owned by `l.value`.
@@ -23,7 +23,7 @@
 
 ### A-02 | P1 | subscriber reconnect loop treats permanent setup errors as reconnectable transport failures
 
-- File: `src/adapters/rabbitmq/subscriber.go`
+- File: `adapters/rabbitmq/subscriber.go`
 - Evidence:
   - `Subscribe()` loops forever on any non-nil `subscribeOnce(...)` error.
   - `subscribeOnce()` returns errors for `Qos`, `ExchangeDeclare`, `QueueDeclare`, `QueueBind`, and `Consume`, not only delivery-channel loss.

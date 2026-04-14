@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gocell.dev/schemas/cell.schema.json",
+  "title": "GoCell Cell Descriptor",
+  "description": "Defines a Cell, the governance partition in the GoCell architecture. A Cell is either an L1+ runtime boundary with data sovereignty, or an L0 pure-computation partition.",
+  "type": "object",
+  "required": ["id", "type", "consistencyLevel", "owner", "verify"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique cell identifier. Must equal the directory name under cells/.",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "type": {
+      "type": "string",
+      "description": "Cell sub-type that determines governance rules.",
+      "enum": ["core", "edge", "support"]
+    },
+    "consistencyLevel": {
+      "type": "string",
+      "description": "Maximum consistency level this cell operates at.",
+      "enum": ["L0", "L1", "L2", "L3", "L4"]
+    },
+    "owner": {
+      "type": "object",
+      "description": "Team and role responsible for the cell.",
+      "required": ["team", "role"],
+      "additionalProperties": false,
+      "properties": {
+        "team": {
+          "type": "string",
+          "description": "Owning team name."
+        },
+        "role": {
+          "type": "string",
+          "description": "Ownership role, typically 'cell-owner'."
+        }
+      }
+    },
+    "schema": {
+      "type": "object",
+      "description": "Database schema ownership. The primary field is optional for L0 cells.",
+      "additionalProperties": false,
+      "properties": {
+        "primary": {
+          "type": "string",
+          "description": "Primary database schema name owned by this cell."
+        }
+      }
+    },
+    "verify": {
+      "type": "object",
+      "description": "Verification targets for this cell.",
+      "required": ["smoke"],
+      "additionalProperties": false,
+      "properties": {
+        "smoke": {
+          "type": "array",
+          "description": "Smoke test identifiers executed by verify-cell.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "l0Dependencies": {
+      "type": "array",
+      "description": "Explicit L0 Cell import dependencies. Only declared when importing L0 (pure-computation) cells within the same assembly.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["cell", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "cell": {
+            "type": "string",
+            "description": "The L0 cell id being imported."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Justification for the direct import."
+          }
+        }
+      }
+    }
+  }
+}

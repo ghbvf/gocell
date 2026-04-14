@@ -21,7 +21,7 @@
    }
    ```
 
-2. Zero production callers read `deps.Cells` or `deps.Contracts`. Confirmed via `Grep` for `deps.Cells[` and `deps.Contracts[` across all of `src/` -- the only hits are from `kernel/metadata` and `kernel/governance`, which use entirely different types (`metadata.ProjectModel.Cells`, not `cell.Dependencies.Cells`).
+2. Zero production callers read `deps.Cells` or `deps.Contracts`. Confirmed via `Grep` for `deps.Cells[` and `deps.Contracts[` across all of 项目根目录 -- the only hits are from `kernel/metadata` and `kernel/governance`, which use entirely different types (`metadata.ProjectModel.Cells`, not `cell.Dependencies.Cells`).
 
 3. Test files that construct `Dependencies{}` with `Cells:` and `Contracts:` fields (approximately 20 sites across 5 cell test files plus assembly tests) all pass `make(map[...])` with empty maps. None populate or read these maps.
 

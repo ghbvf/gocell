@@ -151,7 +151,7 @@ python3 .claude/skills/phase-gate/scripts/phase-gate-check.py --stage S5 --branc
 
 | 文件/产出 | 路径 | 责任角色 |
 |----------|------|---------|
-| 代码实现 | `src/` | 后端/前端开发者 |
+| 代码实现 | 项目根目录 | 后端/前端开发者 |
 | OpenAPI spec | `contracts/` 或 `docs/` | 文档工程师 |
 | 部署配置 | `docker-compose*.yml` 等 | DevOps |
 | E2E 测试 | `examples/{project}/ui/e2e/*.spec.ts`（有 UI 时） | QA 自动化 |

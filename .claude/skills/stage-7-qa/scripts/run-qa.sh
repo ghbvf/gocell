@@ -74,7 +74,7 @@ fi
 echo "--- Running journey tests ---"
 JOURNEY_COUNT=0
 JOURNEY_FAIL=0
-for jfile in "$REPO_ROOT"/src/journeys/J-*.yaml; do
+for jfile in "$REPO_ROOT"/journeys/J-*.yaml; do
   [[ -f "$jfile" ]] || continue
   jid=$(basename "$jfile" .yaml)
   JOURNEY_COUNT=$((JOURNEY_COUNT + 1))

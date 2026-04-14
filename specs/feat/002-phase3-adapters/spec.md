@@ -146,7 +146,7 @@ Phase 3 实现 6 个外部系统适配器（postgres, redis, oidc, s3, rabbitmq,
 | FR-10.7 边界修复 | #60 configsubscribe unmarshal 失败 → DLQ 路由（依赖 FR-5.4）; #61 auditappend publish → outbox.Writer 事务内写入（依赖 FR-1.4）（决策 8） |
 
 **验证方式**（决策 PM-03）:
-- FR-10.1: `grep -rn "fmt.Errorf" src/kernel/ src/cells/` 对外暴露路径返回 0 匹配
+- FR-10.1: `grep -rn "fmt.Errorf" kernel/ cells/` 对外暴露路径返回 0 匹配
 - FR-10.3: shutdown 顺序 table-driven 单元测试
 - FR-10.4: handler >= 80%, bootstrap >= 70%, router >= 80%
 - **S7 计数规则**: 80 条中 DEFERRED 6 条（#54, #56-59, #62）不计入分母，有效分母 74 条，至少 60 条 RESOLVED。完整条目清单见 `specs/feat/001-phase2-runtime-cells/tech-debt.md`

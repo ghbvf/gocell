@@ -2,7 +2,7 @@
 
 > Date: 2026-04-07 21:01
 > Status: Draft
-> Scope: `src/pkg/errcode`, `src/pkg/httputil`, `src/runtime/http/*`, `src/runtime/observability/*`, HTTP-facing cells
+> Scope: `pkg/errcode`, `pkg/httputil`, `runtime/http/*`, `runtime/observability/*`, HTTP-facing cells
 
 ## 1. Goals
 

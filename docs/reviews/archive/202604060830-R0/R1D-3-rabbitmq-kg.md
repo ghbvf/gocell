@@ -1,7 +1,7 @@
 # R1D-3: adapters/rabbitmq -- Kernel Guardian Review
 
 **Reviewer role**: Kernel Guardian
-**Scope**: `src/adapters/rabbitmq/` (7 .go files)
+**Scope**: `adapters/rabbitmq/` (7 .go files)
 **Date**: 2026-04-06
 
 ---

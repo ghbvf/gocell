@@ -20,10 +20,10 @@
 
 | 文件 | 内容 |
 |------|------|
-| `src/pkg/errcode/errcode.go` | `Code` 类型、`Error` struct（Code/Message/Details/Cause）、`New()`、`Wrap()` + 哨兵码（ERR_METADATA_INVALID, ERR_CELL_NOT_FOUND 等） |
-| `src/pkg/errcode/errcode_test.go` | table-driven: New / Wrap / Error() / Unwrap |
-| `src/pkg/ctxkeys/keys.go` | context key 常量（CellID, SliceID, CorrelationID, JourneyID, TraceID, SpanID）+ `WithX(ctx)` / `XFrom(ctx)` 辅助函数 |
-| `src/pkg/ctxkeys/keys_test.go` | round-trip 测试 |
+| `pkg/errcode/errcode.go` | `Code` 类型、`Error` struct（Code/Message/Details/Cause）、`New()`、`Wrap()` + 哨兵码（ERR_METADATA_INVALID, ERR_CELL_NOT_FOUND 等） |
+| `pkg/errcode/errcode_test.go` | table-driven: New / Wrap / Error() / Unwrap |
+| `pkg/ctxkeys/keys.go` | context key 常量（CellID, SliceID, CorrelationID, JourneyID, TraceID, SpanID）+ `WithX(ctx)` / `XFrom(ctx)` 辅助函数 |
+| `pkg/ctxkeys/keys_test.go` | round-trip 测试 |
 
 ### errcode 接口设计
 
@@ -79,11 +79,11 @@ func CellIDFrom(ctx context.Context) (string, bool)
 
 | 文件 | 内容 |
 |------|------|
-| `src/kernel/cell/types.go` | `CellType`（core/edge/support）、`Level`（L0-L4）+ ParseLevel/String、`HealthStatus`、`ContractKind`（http/event/command/projection）、`ContractRole`（serve/call/publish/subscribe/handle/invoke/provide/read）、`Lifecycle`（draft/active/deprecated） |
-| `src/kernel/cell/interfaces.go` | `Cell`、`Slice`、`Contract`、`Assembly` 四个核心接口 + `Dependencies`、`VerifySpec`、`Waiver`、`CellMetadata`、`Owner`、`SchemaConfig` 等关联类型 |
-| `src/kernel/cell/consistency.go` | `ValidRolesForKind(kind) []ContractRole`、`IsProviderRole(role) bool`、`IsConsumerRole(role) bool` |
-| `src/kernel/cell/types_test.go` | ParseLevel round-trip、枚举合法性 |
-| `src/kernel/cell/consistency_test.go` | kind-role 映射 table-driven |
+| `kernel/cell/types.go` | `CellType`（core/edge/support）、`Level`（L0-L4）+ ParseLevel/String、`HealthStatus`、`ContractKind`（http/event/command/projection）、`ContractRole`（serve/call/publish/subscribe/handle/invoke/provide/read）、`Lifecycle`（draft/active/deprecated） |
+| `kernel/cell/interfaces.go` | `Cell`、`Slice`、`Contract`、`Assembly` 四个核心接口 + `Dependencies`、`VerifySpec`、`Waiver`、`CellMetadata`、`Owner`、`SchemaConfig` 等关联类型 |
+| `kernel/cell/consistency.go` | `ValidRolesForKind(kind) []ContractRole`、`IsProviderRole(role) bool`、`IsConsumerRole(role) bool` |
+| `kernel/cell/types_test.go` | ParseLevel round-trip、枚举合法性 |
+| `kernel/cell/consistency_test.go` | kind-role 映射 table-driven |
 
 ### types.go
 
@@ -261,8 +261,8 @@ func IsConsumerRole(role ContractRole) bool
 
 | 文件 | 内容 |
 |------|------|
-| `src/kernel/cell/base.go` | `BaseCell`、`BaseSlice`、`BaseContract` 默认实现 |
-| `src/kernel/cell/base_test.go` | 生命周期 + accessor 测试 |
+| `kernel/cell/base.go` | `BaseCell`、`BaseSlice`、`BaseContract` 默认实现 |
+| `kernel/cell/base_test.go` | 生命周期 + accessor 测试 |
 
 ### BaseCell
 
@@ -330,8 +330,8 @@ func NewBaseContract(id string, kind ContractKind, owner string, level Level) *B
 
 | 文件 | 内容 |
 |------|------|
-| `src/kernel/assembly/assembly.go` | `CoreAssembly` — Assembly 接口实现 |
-| `src/kernel/assembly/assembly_test.go` | 生命周期 + 错误场景测试 |
+| `kernel/assembly/assembly.go` | `CoreAssembly` — Assembly 接口实现 |
+| `kernel/assembly/assembly_test.go` | 生命周期 + 错误场景测试 |
 
 ```go
 package assembly
@@ -372,11 +372,11 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus
 
 | 文件 | 内容 |
 |------|------|
-| `src/gocell.go` | 顶层便利函数 |
-| `src/gocell_test.go` | Phase 0 Gate 测试 |
+| `gocell.go` | 顶层便利函数 |
+| `gocell_test.go` | Phase 0 Gate 测试 |
 
 ```go
-// src/gocell.go
+// gocell.go
 package gocell
 
 import "github.com/ghbvf/gocell/kernel/assembly"
@@ -387,7 +387,7 @@ func NewAssembly(id string) *assembly.CoreAssembly {
 ```
 
 ```go
-// src/gocell_test.go — Phase 0 Gate
+// gocell_test.go — Phase 0 Gate
 func TestPhase0Gate(t *testing.T) {
     app := gocell.NewAssembly("test-bundle")
     myCell := cell.NewBaseCell(cell.CellMetadata{
@@ -422,7 +422,7 @@ master-plan Phase 0 第 4 项明确要求产出 JSON Schema。这些 schema 是 
 每个 schema 使用 JSON Schema Draft 2020-12。YAML 文件可通过 `# yaml-language-server: $schema=...` 注释获得 IDE 支持。
 
 ```go
-// src/kernel/metadata/schemas/embed.go
+// kernel/metadata/schemas/embed.go
 package schemas
 
 import "embed"
@@ -465,29 +465,29 @@ gocell.go               ← kernel/assembly
 
 | # | 文件路径 | 类型 |
 |---|---------|------|
-| 1 | `src/pkg/errcode/errcode.go` | Go |
-| 2 | `src/pkg/errcode/errcode_test.go` | Go test |
-| 3 | `src/pkg/ctxkeys/keys.go` | Go |
-| 4 | `src/pkg/ctxkeys/keys_test.go` | Go test |
-| 5 | `src/kernel/cell/types.go` | Go |
-| 6 | `src/kernel/cell/interfaces.go` | Go |
-| 7 | `src/kernel/cell/consistency.go` | Go |
-| 8 | `src/kernel/cell/types_test.go` | Go test |
-| 9 | `src/kernel/cell/consistency_test.go` | Go test |
-| 10 | `src/kernel/cell/base.go` | Go |
-| 11 | `src/kernel/cell/base_test.go` | Go test |
-| 12 | `src/kernel/assembly/assembly.go` | Go |
-| 13 | `src/kernel/assembly/assembly_test.go` | Go test |
-| 14 | `src/gocell.go` | Go |
-| 15 | `src/gocell_test.go` | Go test |
-| 16 | `src/kernel/metadata/schemas/cell.schema.json` | JSON Schema |
-| 17 | `src/kernel/metadata/schemas/slice.schema.json` | JSON Schema |
-| 18 | `src/kernel/metadata/schemas/contract.schema.json` | JSON Schema |
-| 19 | `src/kernel/metadata/schemas/assembly.schema.json` | JSON Schema |
-| 20 | `src/kernel/metadata/schemas/journey.schema.json` | JSON Schema |
-| 21 | `src/kernel/metadata/schemas/status-board.schema.json` | JSON Schema |
-| 22 | `src/kernel/metadata/schemas/actors.schema.json` | JSON Schema |
-| 23 | `src/kernel/metadata/schemas/embed.go` | Go |
+| 1 | `pkg/errcode/errcode.go` | Go |
+| 2 | `pkg/errcode/errcode_test.go` | Go test |
+| 3 | `pkg/ctxkeys/keys.go` | Go |
+| 4 | `pkg/ctxkeys/keys_test.go` | Go test |
+| 5 | `kernel/cell/types.go` | Go |
+| 6 | `kernel/cell/interfaces.go` | Go |
+| 7 | `kernel/cell/consistency.go` | Go |
+| 8 | `kernel/cell/types_test.go` | Go test |
+| 9 | `kernel/cell/consistency_test.go` | Go test |
+| 10 | `kernel/cell/base.go` | Go |
+| 11 | `kernel/cell/base_test.go` | Go test |
+| 12 | `kernel/assembly/assembly.go` | Go |
+| 13 | `kernel/assembly/assembly_test.go` | Go test |
+| 14 | `gocell.go` | Go |
+| 15 | `gocell_test.go` | Go test |
+| 16 | `kernel/metadata/schemas/cell.schema.json` | JSON Schema |
+| 17 | `kernel/metadata/schemas/slice.schema.json` | JSON Schema |
+| 18 | `kernel/metadata/schemas/contract.schema.json` | JSON Schema |
+| 19 | `kernel/metadata/schemas/assembly.schema.json` | JSON Schema |
+| 20 | `kernel/metadata/schemas/journey.schema.json` | JSON Schema |
+| 21 | `kernel/metadata/schemas/status-board.schema.json` | JSON Schema |
+| 22 | `kernel/metadata/schemas/actors.schema.json` | JSON Schema |
+| 23 | `kernel/metadata/schemas/embed.go` | Go |
 
 **预估**: 23 个文件（15 Go + 1 embed + 7 JSON Schema），~1600 行
 
