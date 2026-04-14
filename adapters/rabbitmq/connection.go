@@ -30,6 +30,13 @@ const (
 	ErrAdapterAMQPReconnecting        errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
 )
 
+// Pre-allocated Health() errors to avoid per-call allocation.
+var (
+	errHealthReconnecting   = errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
+	errHealthNeverConnected = errcode.New(ErrAdapterAMQPConnect, "rabbitmq: never connected")
+	errHealthClosed         = errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
+)
+
 // ConnectionState represents the lifecycle state of a Connection.
 //
 // ref: wagslane/go-rabbitmq connection_manager.go — adopted explicit state tracking
@@ -241,9 +248,10 @@ func DefaultDial(url string) (AMQPConnection, error) {
 
 // Connection manages an AMQP connection with auto-reconnect and channel pooling.
 //
-// Connection has three states:
+// Connection has four lifecycle states (see ConnectionState):
+//   - connecting:   initial state before first successful dial
 //   - connected:    ready for use (connected channel is closed)
-//   - reconnecting: lost connection, attempting backoff reconnect
+//   - disconnected: lost connection, attempting backoff reconnect
 //   - terminal:     permanent error, will not reconnect (terminalCh is closed)
 type Connection struct {
 	config Config
@@ -600,15 +608,18 @@ func (c *Connection) Health() error {
 	}
 	switch state {
 	case StateDisconnected:
-		return errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
+		return errHealthReconnecting
 	case StateConnecting:
-		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: never connected")
-	// StateConnected: falls through to conn.IsClosed() check below.
-	// StateTerminal: handled by permErr guard above.
-	default:
+		return errHealthNeverConnected
+	case StateTerminal:
+		// Defensive: permErr should be non-nil for terminal state (checked above).
+		// If we reach here, it's an internal invariant violation.
+		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: terminal state without permanent error")
+	case StateConnected:
+		// Fall through to conn.IsClosed() check below.
 	}
 	if conn == nil || conn.IsClosed() {
-		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
+		return errHealthClosed
 	}
 	return nil
 }
