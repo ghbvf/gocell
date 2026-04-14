@@ -116,6 +116,52 @@ func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "1024")
 }
 
+func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) //NOSONAR — intentional weak key
+	require.NoError(t, err)
+
+	vk := VerificationKey{
+		PublicKey: &weakKey.PublicKey,
+		KeyID:     Thumbprint(&weakKey.PublicKey),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err = NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1024")
+	assert.Contains(t, err.Error(), "verification")
+}
+
+func TestNewKeySetWithVerificationKeys_RejectsEmptyKeyID(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: pub2,
+		KeyID:     "",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+}
+
+func TestNewKeySetWithVerificationKeys_RejectsNilPublicKey(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: nil,
+		KeyID:     "nil-key",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
+}
+
 // --- Phase 3: User Story 2 (T011-T016) ---
 
 func TestKeySet_VerificationKeyLookup(t *testing.T) {
@@ -441,6 +487,45 @@ func TestKeySet_ConcurrentPublicKeyByKID(t *testing.T) {
 		}()
 	}
 	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}
+
+func TestKeySet_ConcurrentPruneExpiredAndRead(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	_, pub2 := generateTestKeyPair(t)
+
+	vk := VerificationKey{
+		PublicKey: pub2,
+		KeyID:     Thumbprint(pub2),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	ks, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	require.NoError(t, err)
+
+	// Run PruneExpired (write lock) concurrently with PublicKeyByKID (read lock).
+	// go test -race will detect data races if locking is broken.
+	const goroutines = 20
+	done := make(chan struct{})
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 100 {
+				_, _ = ks.PublicKeyByKID(ks.SigningKeyID())
+				_, _ = ks.PublicKeyByKID(vk.KeyID)
+			}
+		}()
+	}
+	for range goroutines {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for range 50 {
+				ks.PruneExpired()
+			}
+		}()
+	}
+	for range goroutines * 2 {
 		<-done
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,47 @@ func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
 
+func TestJWTVerifier_RejectsRS384(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	// Sign a valid token with RS384 instead of RS256.
+	token := jwt.NewWithClaims(jwt.SigningMethodRS384, jwt.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = ks.SigningKeyID()
+	tokenStr, err := token.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestJWTVerifier_RejectsRS512(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = ks.SigningKeyID()
+	tokenStr, err := token.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.Verify(context.Background(), tokenStr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+}
+
 func TestJWTVerifier_WrongKey(t *testing.T) {
 	ks1 := mustTestKeySet(t)
 	ks2 := mustTestKeySet(t)
@@ -319,6 +361,178 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 	claims, err = verifier.Verify(context.Background(), newTokenStr)
 	require.NoError(t, err)
 	assert.Equal(t, "user-new", claims.Subject)
+}
+
+// --- Interface abstraction tests (WM-2-F1) ---
+
+// Compile-time checks: *KeySet satisfies both interfaces.
+var _ SigningKeyProvider = (*KeySet)(nil)
+var _ VerificationKeyStore = (*KeySet)(nil)
+
+// stubSigningKeyProvider is a minimal test double for SigningKeyProvider.
+type stubSigningKeyProvider struct {
+	key *rsa.PrivateKey
+	kid string
+}
+
+func (s *stubSigningKeyProvider) SigningKey() *rsa.PrivateKey { return s.key }
+func (s *stubSigningKeyProvider) SigningKeyID() string        { return s.kid }
+
+// stubVerificationKeyStore is a minimal test double for VerificationKeyStore.
+type stubVerificationKeyStore struct {
+	keys map[string]*rsa.PublicKey
+}
+
+func (s *stubVerificationKeyStore) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
+	pub, ok := s.keys[kid]
+	if !ok {
+		return nil, fmt.Errorf("unknown kid: %s", kid)
+	}
+	return pub, nil
+}
+
+func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {
+	priv, _ := generateTestKeyPair(t)
+	stub := &stubSigningKeyProvider{key: priv, kid: "test-kid-001"}
+
+	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue("user-1", []string{"admin"}, nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, tokenStr)
+
+	// Verify the kid in token header matches stub's kid.
+	parts := strings.SplitN(tokenStr, ".", 3)
+	require.Len(t, parts, 3)
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(headerJSON), "test-kid-001")
+}
+
+func TestJWTIssuer_EmptyKID_ProducesTokenWithEmptyKID(t *testing.T) {
+	priv, _ := generateTestKeyPair(t)
+	stub := &stubSigningKeyProvider{key: priv, kid: ""}
+
+	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
+	require.NoError(t, err)
+
+	// Issue succeeds but produces a token with empty kid — verifier would reject it.
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+	assert.NotEmpty(t, tokenStr)
+}
+
+func TestJWTIssuer_NilKey_FailsToSign(t *testing.T) {
+	stub := &stubSigningKeyProvider{key: nil, kid: "some-kid"}
+
+	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
+	require.NoError(t, err)
+
+	// Sign should fail because the key is nil.
+	_, err = issuer.Issue("user-1", nil, nil)
+	require.Error(t, err)
+}
+
+func TestJWTVerifier_AcceptsVerificationKeyStore(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	kid := Thumbprint(pub)
+
+	// Issue a token with the real key.
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	issuer, err := NewJWTIssuer(ks, "gocell-test", time.Hour)
+	require.NoError(t, err)
+	tokenStr, err := issuer.Issue("user-1", nil, nil)
+	require.NoError(t, err)
+
+	// Verify using a stub store with only the public key.
+	stub := &stubVerificationKeyStore{keys: map[string]*rsa.PublicKey{kid: pub}}
+	verifier, err := NewJWTVerifier(stub)
+	require.NoError(t, err)
+
+	claims, err := verifier.Verify(context.Background(), tokenStr)
+	require.NoError(t, err)
+	assert.Equal(t, "user-1", claims.Subject)
+}
+
+func TestNewJWTIssuer_NilSigningKeyProvider(t *testing.T) {
+	_, err := NewJWTIssuer(nil, "gocell", time.Hour)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "signing key provider")
+}
+
+func TestNewJWTVerifier_NilVerificationKeyStore(t *testing.T) {
+	_, err := NewJWTVerifier(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verification key store")
+}
+
+func TestMapClaimsToClaims_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims jwt.MapClaims
+		check  func(t *testing.T, c Claims)
+	}{
+		{
+			name:   "empty claims",
+			claims: jwt.MapClaims{},
+			check: func(t *testing.T, c Claims) {
+				assert.Empty(t, c.Subject)
+				assert.Empty(t, c.Issuer)
+				assert.Nil(t, c.Audience)
+				assert.Nil(t, c.Roles)
+				assert.True(t, c.ExpiresAt.IsZero())
+			},
+		},
+		{
+			name:   "string audience",
+			claims: jwt.MapClaims{"aud": "single-aud"},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"single-aud"}, c.Audience)
+			},
+		},
+		{
+			name:   "array audience with non-string elements",
+			claims: jwt.MapClaims{"aud": []any{"valid", 42, "also-valid"}},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"valid", "also-valid"}, c.Audience,
+					"non-string audience elements should be silently skipped")
+			},
+		},
+		{
+			name:   "roles with non-string elements",
+			claims: jwt.MapClaims{"roles": []any{"admin", 123, "user"}},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"admin", "user"}, c.Roles,
+					"non-string role elements should be silently skipped")
+			},
+		},
+		{
+			name:   "numeric audience ignored",
+			claims: jwt.MapClaims{"aud": 42},
+			check: func(t *testing.T, c Claims) {
+				assert.Nil(t, c.Audience, "numeric audience should not match any switch case")
+			},
+		},
+		{
+			name:   "extra claims collected",
+			claims: jwt.MapClaims{"sub": "u1", "custom_field": "val", "nbf": 123.0},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, "u1", c.Subject)
+				assert.Equal(t, "val", c.Extra["custom_field"])
+				_, hasNbf := c.Extra["nbf"]
+				assert.False(t, hasNbf, "nbf is a standard claim and should not appear in Extra")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := mapClaimsToClaims(tt.claims)
+			tt.check(t, c)
+		})
+	}
 }
 
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {

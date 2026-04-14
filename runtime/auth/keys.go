@@ -117,6 +117,15 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 
 	now := ks.now()
 	for _, vk := range vkeys {
+		if vk.PublicKey == nil {
+			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key public key must not be nil")
+		}
+		if vk.KeyID == "" {
+			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key ID must not be empty")
+		}
+		if err := validateRSAKeySize(vk.PublicKey.N.BitLen(), "verification"); err != nil {
+			return nil, err
+		}
 		if !now.Before(vk.ExpiresAt) {
 			slog.Info("key pruned",
 				slog.String("kid", vk.KeyID),
@@ -143,7 +152,10 @@ func (ks *KeySet) SigningKeyID() string {
 	return ks.signingKeyID
 }
 
-// SigningKey returns the active private key for signing.
+// SigningKey returns the active private key for signing. The returned pointer
+// is shared — the caller must not modify the key or its Precomputed fields.
+// Unlike HMACKeyRing.Current(), RSA private keys are returned by reference
+// because deep-copying is expensive and unnecessary for the signing hot path.
 func (ks *KeySet) SigningKey() *rsa.PrivateKey {
 	return ks.signingKey
 }

@@ -10,6 +10,7 @@ package auth
 
 import (
 	"context"
+	"crypto/rsa"
 	"time"
 )
 
@@ -44,6 +45,27 @@ type Authorizer interface {
 	// Authorize returns true if the subject is authorized to perform the
 	// given action on the resource.
 	Authorize(ctx context.Context, subject, resource, action string) (bool, error)
+}
+
+// SigningKeyProvider supplies the active signing key for JWT issuance.
+// Implementations must be safe for concurrent use.
+//
+// *KeySet satisfies this interface.
+type SigningKeyProvider interface {
+	// SigningKey returns the active RSA private key for signing tokens.
+	SigningKey() *rsa.PrivateKey
+	// SigningKeyID returns the kid (key identifier) of the active signing key.
+	SigningKeyID() string
+}
+
+// VerificationKeyStore looks up public keys for JWT verification by kid.
+// Implementations must be safe for concurrent use.
+//
+// *KeySet satisfies this interface.
+type VerificationKeyStore interface {
+	// PublicKeyByKID returns the public key matching the given kid.
+	// Returns an error for unknown or expired kids.
+	PublicKeyByKID(kid string) (*rsa.PublicKey, error)
 }
 
 // claimsKey is the context key for storing Claims.
