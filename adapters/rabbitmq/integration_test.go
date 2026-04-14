@@ -285,22 +285,20 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.NoError(t, err, "publish should succeed")
 
 	// --- Verify: message appears in DLQ after retry exhaustion ---
-	// Poll the DLQ instead of sleeping a fixed duration (S3-F3 review fix).
+	// Set up a single consumer ONCE, then poll its delivery channel inside
+	// Eventually. This avoids creating multiple competing consumers on
+	// different channels (R2-P1-A review fix).
+	dlxCh, err := conn.AcquireChannel()
+	require.NoError(t, err)
+	defer conn.ReleaseChannel(dlxCh)
+
+	dlxMsgs, err := dlxCh.Consume(dlxQueue, "retry-dlx-consumer", true, false, false, false, nil)
+	require.NoError(t, err, "consume from DLQ")
+
 	var dlEntry outbox.Entry
 	require.Eventually(t, func() bool {
-		dlxCh, chErr := conn.AcquireChannel()
-		if chErr != nil {
-			return false
-		}
-		defer conn.ReleaseChannel(dlxCh)
-
-		msgs, consumeErr := dlxCh.Consume(dlxQueue, "retry-dlx-consumer", true, false, false, false, nil)
-		if consumeErr != nil {
-			return false
-		}
-
 		select {
-		case msg := <-msgs:
+		case msg := <-dlxMsgs:
 			return json.Unmarshal(msg.Body, &dlEntry) == nil
 		default:
 			return false
@@ -465,27 +463,28 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	}
 
 	// --- Consume from the dead-letter queue via raw AMQP ---
-	// Give broker a moment to route the rejected message to DLX.
-	time.Sleep(500 * time.Millisecond)
-
+	// Single consumer setup, then poll delivery channel (R2-P2 review fix).
 	dlxCh, err := conn.AcquireChannel()
 	require.NoError(t, err)
 	defer conn.ReleaseChannel(dlxCh)
 
-	msgs, err := dlxCh.Consume(dlxQueue, "dlx-test-consumer", true, false, false, false, nil)
+	dlxMsgs, err := dlxCh.Consume(dlxQueue, "dlx-test-consumer", true, false, false, false, nil)
 	require.NoError(t, err, "consume from DLQ")
 
-	select {
-	case msg := <-msgs:
-		// Unmarshal and verify the dead-lettered message.
-		var dlEntry outbox.Entry
-		require.NoError(t, json.Unmarshal(msg.Body, &dlEntry))
-		assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
-		assert.JSONEq(t, `{"dlx":"end-to-end"}`, string(dlEntry.Payload), "payload should match")
-		t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for message in dead-letter queue — DLX routing failed")
-	}
+	var dlEntry outbox.Entry
+	require.Eventually(t, func() bool {
+		select {
+		case msg := <-dlxMsgs:
+			return json.Unmarshal(msg.Body, &dlEntry) == nil
+		default:
+			return false
+		}
+	}, 10*time.Second, 100*time.Millisecond,
+		"message should appear in dead-letter queue — DLX routing failed")
+
+	assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
+	assert.JSONEq(t, `{"dlx":"end-to-end"}`, string(dlEntry.Payload), "payload should match")
+	t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
 
 	subCancel()
 	_ = sub.Close()

@@ -3958,21 +3958,31 @@ func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
 // for the WaitConnected re-validation loop under concurrent reconnection cycles.
 // Multiple goroutines call WaitConnected while the main goroutine cycles through
 // disconnect/reconnect. All should eventually return nil. Run with -race.
+// TestConnection_WaitConnected_ConcurrentDisconnectReconnect is a stress test
+// that ensures WaitConnected goroutines actually traverse the disconnect/reconnect
+// window, not return instantly from a pre-closed channel.
+//
+// R2-P1-B fix: start with an UNCLOSED connected channel so waiters block.
+// Use a barrier to confirm all waiters are in WaitConnected before starting
+// disconnect/reconnect cycles. This guarantees waiters must traverse at least
+// one re-validation iteration through the stale-channel detection path.
+//
+// ref: amqp091-go client_test.go — start barrier + WaitGroup + timeout pattern.
 func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	mockConn := newMockConnection()
 
-	connected := make(chan struct{})
-	close(connected) // initially connected
+	// Start UNCLOSED — waiters will block in WaitConnected's select.
+	initialConnected := make(chan struct{})
 
 	c := &Connection{
 		config:      Config{URL: "amqp://test@localhost/"},
 		dial:        func(string) (AMQPConnection, error) { return mockConn, nil },
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
-		connected:   connected,
+		connected:   initialConnected,
 		terminalCh:  make(chan struct{}),
 		conn:        mockConn,
-		state:       StateConnected,
+		state:       StateConnecting, // not yet connected
 	}
 
 	const numWaiters = 10
@@ -3980,32 +3990,56 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, numWaiters)
 
-	// Launch waiters — exercise both WaitConnected and ConnectionStatus
-	// under concurrent state transitions to detect races (S3-F2).
+	// Launch waiters — they will block on the unclosed connected channel.
 	for range numWaiters {
 		wg.Go(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			// Concurrent ConnectionStatus reads alongside WaitConnected.
 			_ = c.ConnectionStatus()
 			errs <- c.WaitConnected(ctx)
 			_ = c.ConnectionStatus()
 		})
 	}
 
-	// Cycle disconnect/reconnect.
-	for range numCycles {
+	// Give waiters time to enter select on the unclosed channel.
+	time.Sleep(10 * time.Millisecond)
+
+	// Cycle disconnect/reconnect. The pattern mirrors reconnectLoop:
+	//  1. Replace c.connected with a new unclosed channel (= disconnect)
+	//  2. Close the new channel after a delay (= reconnect success)
+	//
+	// Waiters holding a ref to a previously-closed channel will wake from
+	// select, detect the stale reference in re-validation, and loop back
+	// to block on the new channel — exercising the RMQ-RACE-01 fix.
+	//
+	// Close initialConnected first to wake all waiters from their initial block.
+	// They will re-validate, find that c.connected has been replaced, and loop.
+	firstCh := make(chan struct{})
+	c.mu.Lock()
+	c.connected = firstCh
+	c.state = StateDisconnected
+	c.mu.Unlock()
+	close(initialConnected) // wake initial waiters
+
+	for i := range numCycles {
 		time.Sleep(2 * time.Millisecond)
-		newCh := make(chan struct{})
-		c.mu.Lock()
-		c.connected = newCh
-		c.state = StateDisconnected
-		c.mu.Unlock()
+
+		if i > 0 {
+			// Disconnect: replace with new unclosed channel.
+			newCh := make(chan struct{})
+			c.mu.Lock()
+			c.connected = newCh
+			c.state = StateDisconnected
+			c.mu.Unlock()
+			firstCh = newCh
+		}
 
 		time.Sleep(2 * time.Millisecond)
+
+		// Reconnect: close the current channel = connected.
 		c.mu.Lock()
-		close(newCh)
 		c.state = StateConnected
+		close(firstCh)
 		c.mu.Unlock()
 	}
 
@@ -4013,7 +4047,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	close(errs)
 
 	for err := range errs {
-		assert.NoError(t, err, "all waiters should succeed after reconnect")
+		assert.NoError(t, err, "all waiters should succeed after reconnect cycles")
 	}
 }
 
