@@ -79,6 +79,10 @@
 | 27a | **RMQ-TEST-01** RabbitMQ 集成测试名实不符: `TestIntegration_ConsumerBaseRetry` 直调 handler 不过 broker（假阳性 P1）+ `TestIntegration_ConnectionRecovery` 仅做 Health check 无断连验证（P2）。`DLXBrokerNative` 已确认是真实集成测试无需改动 | 4h | `adapters/rabbitmq/integration_test.go` | 0414 审查 |
 | 27b | **SLICE-ALLOWEDFILES-01** 全部 slice 默认 allowedFiles 不覆盖 Go 包目录（kebab-case YAML 目录 vs no-dash Go 包目录），需系统性补 allowedFiles 或改 `BaseSlice.AllowedFiles()` 默认逻辑 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review |
 | 27c | **L2-HARD-GATE-01** L2 cell 启动门禁从 publisher 兜底升级为强制 outbox+txRunner（需配合 demo 模式显式开关 `WithDemoMode()`），消除声明能力与运行能力漂移 | 3h | `cells/access-core/cell.go` + `cells/config-core/cell.go` + `cells/audit-core/cell.go` | PR#119 review P1-1 |
+| 27d | **OUTBOX-WRITE-ERR-01** `publishEvent` 吞 `outbox.Write` 错误: durable 模式下 outbox 写入失败仅日志不返回 error，事务内业务写入成功但事件丢失，违反 L2 原子性。需改 `publishEvent` 返回 error 并传播给 `runInTx` | 3h | `cells/config-core/slices/configpublish/service.go` + `cells/config-core/slices/configwrite/service.go` | PR#122 review F5-1 |
+| 27e | **NOOP-TX-SHARED-01** `noopTxRunner` 在 5 处重复定义（order-cell/access-core/config-core test + core-bundle test + sso-bff main），提取为 `kernel/persistence.NoopTxRunner` 共享类型（类似 `outbox.NoopWriter`） | 1h | `kernel/persistence/tx.go` + 5 处调用方 | PR#122 review F4-1 |
+| 27f | **TEST-UNUSED-VAR-01** `cells/access-core/cell_test.go:33` `testPrivKey` 未使用，应改为 `_` 或移除 | 0.5h | `cells/access-core/cell_test.go` | PR#122 review F3-5 |
+| 27g | **DEMO-WARN-STRUCTURED-01** access-core/config-core Init() demo 模式 `logger.Warn` 缺少结构化字段（`cell_id`、`consistency_level`），应补充以便运维快速定位 | 0.5h | `cells/access-core/cell.go` + `cells/config-core/cell.go` | PR#122 review F2-2 |
 
 ---
 
