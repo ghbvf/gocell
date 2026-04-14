@@ -85,6 +85,10 @@
 | 27e | **NOOP-TX-SHARED-01** `noopTxRunner` 在 5 处重复定义（order-cell/access-core/config-core test + core-bundle test + sso-bff main），提取为 `kernel/persistence.NoopTxRunner` 共享类型（类似 `outbox.NoopWriter`） | 1h | `kernel/persistence/tx.go` + 5 处调用方 | PR#122 review F4-1 |
 | 27f | **TEST-UNUSED-VAR-01** `cells/access-core/cell_test.go:33` `testPrivKey` 未使用，应改为 `_` 或移除 | 0.5h | `cells/access-core/cell_test.go` | PR#122 review F3-5 |
 | 27g | **DEMO-WARN-STRUCTURED-01** access-core/config-core Init() demo 模式 `logger.Warn` 缺少结构化字段（`cell_id`、`consistency_level`），应补充以便运维快速定位 | 0.5h | `cells/access-core/cell.go` + `cells/config-core/cell.go` | PR#122 review F2-2 |
+| 27h | **BOOT-RUNONCE-01** double-call guard | PR#123 | PR#123 review S1-F2 |
+| 27i | **BOOT-COMPLEXITY-01** Run complexity | 3h | runtime/bootstrap/bootstrap.go | PR#123 review S5-F3 |
+| 27j | **OBS-LOG-FIELD-POLICY** log field toggle | 2h | runtime/http/middleware/access_log.go | PR#123 review F3 |
+| 27k | **BOOT-SHUTDOWN-PHASE** explicit shutdown phases | 4h | runtime/bootstrap/bootstrap.go | PR#123 review F2 |
 
 ---
 

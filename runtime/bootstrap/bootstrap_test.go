@@ -1,10 +1,12 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +41,27 @@ const fsnotifySettleDelay = 200 * time.Millisecond
 // testHTTPClient is used in place of http.DefaultClient to prevent test
 // hangs on stalled connections (e.g., during shutdown races).
 var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
+// newLocalListener creates a TCP listener on a random port, suitable for tests.
+func newLocalListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	return ln
+}
+
+// waitForHealthy polls /healthz until it returns 200 or the timeout expires.
+func waitForHealthy(t *testing.T, addr string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+}
 
 // testCell is a minimal Cell for bootstrap testing.
 type testCell struct {
@@ -492,6 +516,18 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	_ = err
 }
 
+func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so first Run exits quickly
+
+	b := New(WithHTTPAddr("127.0.0.1:0"))
+	_ = b.Run(ctx) // first call — may error due to cancelled ctx or sandbox
+
+	err := b.Run(ctx) // second call — must be rejected
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Run called more than once")
+}
+
 func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -596,16 +632,43 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	}
 }
 
-func TestWithHealthChecker_EmptyName_Panics(t *testing.T) {
-	assert.PanicsWithValue(t, "bootstrap: health checker name must not be empty", func() {
-		WithHealthChecker("", func() error { return nil })
-	})
+func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
+	b := New(
+		WithHealthChecker("", func() error { return nil }),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
 }
 
-func TestWithHealthChecker_NilFn_Panics(t *testing.T) {
-	assert.PanicsWithValue(t, `bootstrap: health checker "rabbitmq" must not be nil`, func() {
-		WithHealthChecker("rabbitmq", nil)
-	})
+func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
+	// Verify that invalid health checker params are caught BEFORE any
+	// component starts (no assembly start, no config watcher, no rollback).
+	// Evidence: error returned directly (not wrapped by rollback log).
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	oldDefault := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(oldDefault)
+
+	b := New(
+		WithHealthChecker("", func() error { return nil }),
+		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "health checker name must not be empty")
+	assert.NotContains(t, buf.String(), "rolling back",
+		"validation error must fire before any side effects — no rollback should occur")
+}
+
+func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
+	b := New(
+		WithHealthChecker("mycheck", nil),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
 }
 
 func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
@@ -1901,4 +1964,278 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
+}
+
+// --- Framework capability protection (BOOT-OPTION-01) ---
+
+func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-health-override"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	// Create a custom health handler backed by an un-started assembly (unhealthy).
+	// If the user's handler wins, /readyz would return 503 because the custom
+	// assembly was never started.
+	customAsm := assembly.New(assembly.Config{ID: "custom-unstartled"})
+	require.NoError(t, customAsm.Register(newTestCell("custom-cell")))
+	customHandler := health.New(customAsm) // un-started → always unhealthy
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		// User attempts to override with custom health handler.
+		WithRouterOptions(router.WithHealthHandler(customHandler)),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// The framework-managed handler (backed by started asm) should respond,
+	// not the custom un-started one. Started assembly → healthy → 200.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"framework health handler must win over user-supplied one; "+
+			"user handler would return 503 (un-started assembly)")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// --- Graceful shutdown drain (OPS-4) ---
+
+func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
+	ln := newLocalListener(t)
+	addr := ln.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	b := New(WithListener(ln))
+	go func() { errCh <- b.Run(ctx) }()
+
+	// Wait for server to be ready.
+	waitForHealthy(t, addr)
+
+	// Trigger shutdown.
+	cancel()
+
+	// Poll /readyz — it should become 503.
+	deadline := time.After(5 * time.Second)
+	for {
+		resp, err := testHTTPClient.Get("http://" + addr + "/readyz")
+		if err != nil {
+			break // server already closed, that's fine
+		}
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			resp.Body.Close()
+			break // got 503 — drain signal works
+		}
+		resp.Body.Close()
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for /readyz to return 503 during shutdown")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for bootstrap shutdown")
+	}
+}
+
+// --- Bootstrap tracing E2E ---
+
+// tracingTestCell is a test Cell that implements HTTPRegistrar with a
+// caller-supplied route registration function, used by tracing E2E tests.
+type tracingTestCell struct {
+	*cell.BaseCell
+	registerFn func(mux cell.RouteMux)
+}
+
+func newTracingTestCell(id string, fn func(mux cell.RouteMux)) *tracingTestCell {
+	return &tracingTestCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+		registerFn: fn,
+	}
+}
+
+func (c *tracingTestCell) RegisterRoutes(mux cell.RouteMux) {
+	if c.registerFn != nil {
+		c.registerFn(mux)
+	}
+}
+
+func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracing.NewTracer("bootstrap-tracing-e2e")
+
+	var gotTraceID string
+	tc := newTracingTestCell("trace-biz", func(mux cell.RouteMux) {
+		mux.Handle("GET /api/v1/trace-test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+	})
+
+	asm := assembly.New(assembly.Config{ID: "trace-e2e"})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithTracer(tracer),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/trace-test")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context via bootstrap tracing")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracing.NewTracer("bootstrap-upstream-e2e")
+
+	var gotTraceID string
+	tc := newTracingTestCell("trace-upstream", func(mux cell.RouteMux) {
+		mux.Handle("GET /api/v1/propagate", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+	})
+
+	asm := assembly.New(assembly.Config{ID: "trace-upstream"})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithTracer(tracer),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Send request with upstream traceparent header.
+	upstreamTraceID := "0af7651916cd43dd8448eb211c80319c"
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/api/v1/propagate", nil)
+	require.NoError(t, err)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-b7ad6b7169203331-01")
+
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, upstreamTraceID, gotTraceID,
+		"bootstrap must propagate upstream trace_id from traceparent header")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracing.NewTracer("bootstrap-panic-e2e")
+
+	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) {
+		mux.Handle("GET /api/v1/boom", http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			panic("boom for tracing test")
+		}))
+	})
+
+	asm := assembly.New(assembly.Config{ID: "trace-panic"})
+	require.NoError(t, asm.Register(tc))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithTracer(tracer),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/boom")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"panicking handler must return 500 even with tracing enabled")
+
+	cancel()
+	<-done
+}
+
+func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
+	// Verify infra endpoints (/healthz) also get tracing coverage.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	oldDefault := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(oldDefault)
+
+	ln := newLocalListener(t)
+	tracer := tracing.NewTracer("bootstrap-infra-e2e")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b := New(
+		WithListener(ln),
+		WithTracer(tracer),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Shut down so all access logs are flushed.
+	cancel()
+	<-done
+
+	// Check access log contains trace_id for /healthz.
+	logOutput := buf.String()
+	assert.Contains(t, logOutput, "trace_id",
+		"infra endpoint /healthz must have trace_id in access log when tracing is enabled")
 }

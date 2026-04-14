@@ -29,6 +29,9 @@ var _ kcell.RouteMux = (*Router)(nil)
 type Option func(*Router)
 
 // WithHealthHandler registers /healthz and /readyz using the given health.Handler.
+// Last call wins: if multiple WithHealthHandler options are applied, only the
+// final one takes effect. Bootstrap relies on this to apply the framework-managed
+// handler after user options.
 func WithHealthHandler(h *health.Handler) Option {
 	return func(r *Router) {
 		r.healthHandler = h
@@ -191,7 +194,7 @@ type Router struct {
 func New(opts ...Option) *Router {
 	r, err := NewE(opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(err)
 	}
 	return r
 }
@@ -259,14 +262,12 @@ func NewE(opts ...Option) (*Router, error) {
 		r.outerMux.Get("/healthz", r.healthHandler.LivezHandler())
 		r.outerMux.Get("/readyz", r.healthHandler.ReadyzHandler())
 	}
-	switch {
-	case r.metricsHandler != nil:
+	// /metrics is only registered when explicitly provided via WithMetricsHandler.
+	// WithMetricsCollector enables the metrics middleware (recording) but does NOT
+	// expose a /metrics endpoint — adopting the Prometheus/Kratos convention of
+	// separating "collect" from "serve".
+	if r.metricsHandler != nil {
 		r.outerMux.Handle("/metrics", r.metricsHandler)
-	case r.metricsCollector != nil:
-		type handlerProvider interface{ Handler() http.Handler }
-		if hp, ok := r.metricsCollector.(handlerProvider); ok {
-			r.outerMux.Handle("/metrics", hp.Handler())
-		}
 	}
 
 	// --- Phase 2: mux — business routes with RL/CB/Auth ---

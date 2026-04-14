@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -169,6 +170,21 @@ func WithShutdownTimeout(d time.Duration) Option {
 	}
 }
 
+// WithPreShutdownDelay sets a delay between marking /readyz as 503 and
+// starting the HTTP server shutdown. This gives load balancers (e.g.,
+// Kubernetes kube-proxy) time to observe the unhealthy readiness probe
+// and stop routing new traffic before the server closes connections.
+//
+// Default is 0 (no delay). Typical Kubernetes deployments use 3-5 seconds.
+// The delay counts toward the total shutdownTimeout budget (not additive).
+//
+// ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
+func WithPreShutdownDelay(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.preShutdownDelay = d
+	}
+}
+
 // WithListener sets a pre-built net.Listener for the HTTP server,
 // useful in tests to avoid port conflicts.
 func WithListener(ln net.Listener) Option {
@@ -183,13 +199,9 @@ func WithListener(ln net.Listener) Option {
 // bootstrap depending on adapter types.
 //
 // Accepts func() error so callers do not need to import runtime/http/health.
+// Validation (empty name, nil fn) is deferred to Run() where it fires at
+// Step 0 before any component starts, returning an error directly.
 func WithHealthChecker(name string, fn func() error) Option {
-	if name == "" {
-		panic("bootstrap: health checker name must not be empty")
-	}
-	if fn == nil {
-		panic(fmt.Sprintf("bootstrap: health checker %q must not be nil", name))
-	}
 	return func(b *Bootstrap) {
 		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 	}
@@ -208,8 +220,8 @@ func WithDisableObservabilityRestore() Option {
 
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
-	name string
-	fn   func() error
+	name string       // unique identifier shown in /readyz?verbose output
+	fn   func() error // nil return = healthy; non-nil = unhealthy
 }
 
 // Bootstrap orchestrates the GoCell application lifecycle.
@@ -222,11 +234,13 @@ type Bootstrap struct {
 	publisher       outbox.Publisher
 	subscriber      outbox.Subscriber
 	routerOpts      []router.Option
-	shutdownTimeout time.Duration
-	listener        net.Listener
+	shutdownTimeout  time.Duration
+	preShutdownDelay time.Duration
+	listener         net.Listener
 	healthCheckers             []namedChecker
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+	runOnce                    sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
@@ -264,11 +278,40 @@ func New(opts ...Option) *Bootstrap {
 //
 // If any step fails, already-started components are rolled back in reverse.
 func (b *Bootstrap) Run(ctx context.Context) error {
+	// Guard against double-Run. A second call would create duplicate
+	// teardowns and race on shared resources.
+	// ref: uber-go/fx App.Run — returns immediately if already started
+	started := false
+	b.runOnce.Do(func() { started = true })
+	if !started {
+		return fmt.Errorf("bootstrap: Run called more than once")
+	}
+
+	// Step 0: Validate inputs before any side effects.
+	// Health checker params are pure data — no reason to defer to runtime.
+	for _, hc := range b.healthCheckers {
+		if hc.name == "" {
+			return fmt.Errorf("bootstrap: health checker name must not be empty")
+		}
+		if hc.fn == nil {
+			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
+		}
+	}
+
 	// Track teardown functions for rollback (LIFO order).
 	var teardowns []func(context.Context) error
 
+	// hh is declared here (not at Step 5) so the rollback closure can
+	// mark readyz unhealthy when rolling back after the HTTP server
+	// has started. Before Step 5 executes, hh remains nil and the
+	// nil check in rollback is a no-op.
+	var hh *health.Handler
+
 	rollback := func(cause error) error {
 		slog.Error("bootstrap: startup failed, rolling back", slog.Any("error", cause))
+		if hh != nil {
+			hh.SetShuttingDown()
+		}
 		rctx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 		defer cancel()
 		for i := len(teardowns) - 1; i >= 0; i-- {
@@ -453,7 +496,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// already-started components (assembly, config watcher, pub/sub).
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
-	hh := health.New(asm)
+	hh = health.New(asm)
 	// registerHealthChecker wraps hh.RegisterChecker with an error return
 	// instead of a panic on duplicate names. Since hh is local to Run() and
 	// all registrations go through this closure, the panic path in
@@ -468,6 +511,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		registeredCheckerNames[name] = struct{}{}
 		return nil
 	}
+	// Name/fn already validated in Step 0 (before any side effects).
 	for _, hc := range b.healthCheckers {
 		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
 			return rollback(err)
@@ -478,7 +522,14 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			return rollback(err)
 		}
 	}
-	routerOpts := append([]router.Option{router.WithHealthHandler(hh)}, b.routerOpts...)
+	// Framework health handler is applied LAST so user-supplied router options
+	// cannot accidentally override it. WithHealthHandler sets r.healthHandler;
+	// the last call wins, so placing the framework handler after user options
+	// guarantees the bootstrap-managed handler is always used.
+	// Copy to avoid mutating b.routerOpts' backing array.
+	routerOpts := make([]router.Option, len(b.routerOpts)+1)
+	copy(routerOpts, b.routerOpts)
+	routerOpts[len(b.routerOpts)] = router.WithHealthHandler(hh)
 	rtr, err := router.NewE(routerOpts...)
 	if err != nil {
 		return rollback(fmt.Errorf("bootstrap: %w", err))
@@ -499,7 +550,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Invariant: if any cell declares subscriptions, a subscriber must be injected.
 	// Without this check, callers who migrate from WithEventBus to WithPublisher
 	// but forget WithSubscriber would silently lose all event consumption.
-	var routerErrCh chan error // hoisted for Step 9 monitoring
+	var routerErrCh chan error // nil channel: never selected in Step 9; assigned only when event router starts
 	if sub == nil {
 		// Check whether any cell implements EventRegistrar — if so, the missing
 		// subscriber is a configuration error, not a valid "no-events" setup.
@@ -587,8 +638,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	workerCtx, workerCancel := context.WithCancel(ctx)
-	workerErrCh := make(chan error, 1)
+	var workerErrCh chan error // nil channel: never selected in Step 9 when no workers
 	if len(b.workers) > 0 {
+		workerErrCh = make(chan error, 1)
 		go func() {
 			workerErrCh <- wg.Start(workerCtx)
 			close(workerErrCh)
@@ -624,10 +676,24 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 
 	// Step 10: Orderly shutdown.
+	// Sequence: mark readyz unhealthy → wait for LBs to drain → close connections.
+	// ref: Kubernetes pod shutdown model
 	slog.Info("bootstrap: initiating graceful shutdown")
 	reloads.BeginShutdown()
+	hh.SetShuttingDown() // Mark readyz unhealthy so LBs drain traffic
+
+	// Single shutdown budget: preShutdownDelay + teardown share shutdownTimeout.
+	// ref: Kubernetes — preStop counts toward terminationGracePeriodSeconds
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer shutCancel()
+	if b.preShutdownDelay > 0 {
+		slog.Info("bootstrap: pre-shutdown drain delay",
+			slog.Duration("delay", b.preShutdownDelay))
+		select {
+		case <-time.After(b.preShutdownDelay):
+		case <-shutCtx.Done():
+		}
+	}
 
 	var errs []error
 	for i := len(teardowns) - 1; i >= 0; i-- {
