@@ -20,15 +20,22 @@ import (
 // ref: otelhttp handler.go — span status set for 5xx, unset for 4xx
 // ref: OTel semantic conventions — http.route must be low-cardinality template
 //
+// When inbound headers carry tracing context, Tracing continues the upstream
+// trace before span creation. W3C `traceparent` takes precedence and B3 is
+// used only as a fallback. Invalid headers are ignored and result in a new
+// root span.
+//
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), Tracing reuses it. Otherwise it creates its own to
 // capture http.status_code as a standalone middleware.
 func Tracing(tracer tracing.Tracer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := extractTraceContext(r.Context(), r.Header)
+
 			// Start span with tentative name using raw path.
 			// After routing, the span is renamed to use the route pattern.
-			ctx, span := tracer.Start(r.Context(), r.Method+" "+r.URL.Path)
+			ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
 			defer span.End()
 
 			state := RecorderStateFrom(ctx)

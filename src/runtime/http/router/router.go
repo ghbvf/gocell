@@ -59,11 +59,21 @@ func WithBodyLimit(maxBytes int64) Option {
 
 // WithTracer enables distributed tracing middleware using the given Tracer.
 // When provided, each request gets a trace span with trace_id and span_id
-// propagated through context. The tracing middleware is placed after Recorder
-// and before AccessLog so trace IDs appear in access logs.
+// propagated through context. Inbound W3C `traceparent` headers are extracted
+// before span creation, with B3 used only as a fallback. The tracing
+// middleware is placed after Recorder and before AccessLog so trace IDs appear
+// in access logs.
+//
+// Trust model: the current implementation unconditionally continues upstream
+// traces from valid inbound headers. This assumes a trusted-upstream
+// deployment (service-to-service behind a gateway). For public-facing
+// endpoints exposed directly to untrusted clients, consider adding a
+// trust-boundary middleware or gateway-level header sanitization to prevent
+// external callers from injecting arbitrary trace identities.
 //
 // ref: go-zero — observability wired by default when configured
 // ref: otelchi — chi middleware for OpenTelemetry trace propagation
+// ref: otelhttp — public endpoint option (WithPublicEndpoint) starts new root with link
 func WithTracer(t tracing.Tracer) Option {
 	return func(r *Router) {
 		r.tracer = t
@@ -145,12 +155,12 @@ func WithTrustedProxies(proxies []string) Option {
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux         *chi.Mux
-	mux              *chi.Mux
-	healthHandler    *health.Handler
-	metricsCollector metrics.Collector
-	metricsHandler   http.Handler
-	tracer           tracing.Tracer
+	outerMux            *chi.Mux
+	mux                 *chi.Mux
+	healthHandler       *health.Handler
+	metricsCollector    metrics.Collector
+	metricsHandler      http.Handler
+	tracer              tracing.Tracer
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
