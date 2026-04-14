@@ -58,7 +58,7 @@ func main() {
 	}
 
 	// Shared noop outbox writer for all L2+ Cells.
-	var nw outbox.Writer = outbox.NoopOutboxWriter{}
+	var nw outbox.Writer = outbox.NoopWriter{}
 
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(

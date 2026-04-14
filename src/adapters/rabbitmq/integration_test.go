@@ -394,7 +394,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 // returns ClaimAcquired with a noopReceipt.
 type noopClaimer struct{}
 
-func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	return idempotency.ClaimAcquired, &noopReceipt{}, nil
 }
 

@@ -109,13 +109,6 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return nil, fmt.Errorf("order-create: persist: %w", err)
 	}
 
-	if s.publisher == nil {
-		s.logger.Warn("order-create: publisher not configured, skipping direct publish",
-			slog.String("order_id", order.ID),
-		)
-		return order, nil
-	}
-
 	payload, err := json.Marshal(order)
 	if err != nil {
 		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
@@ -126,11 +119,6 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		s.logger.Error("order-create: publish event failed",
 			slog.String("order_id", order.ID),
 			slog.Any("error", err),
-		)
-	} else {
-		s.logger.Info("order-create: event published",
-			slog.String("order_id", order.ID),
-			slog.String("topic", TopicOrderCreated),
 		)
 	}
 

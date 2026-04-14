@@ -20,6 +20,12 @@ const DefaultLeaseTTL = 5 * time.Minute
 // Claim acquires a lease, then the caller Commits it after broker Ack or
 // Releases it after Reject/Requeue.
 //
+// Disposition → Receipt mapping (broker-layer convention):
+//   - DispositionAck    + broker Ack success  → Receipt.Commit()
+//   - DispositionReject + broker Nack success → Receipt.Release() (allows DLQ replay)
+//   - DispositionRequeue + broker Nack success → Receipt.Release()
+//   - Any broker Ack/Nack failure             → Receipt.Release()
+//
 // Callers MUST use context.WithoutCancel for Receipt operations to ensure the
 // idempotency state is persisted even during graceful shutdown.
 type Receipt interface {

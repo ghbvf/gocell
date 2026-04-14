@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/google/uuid"
@@ -397,7 +398,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 
 // commitReceipt calls Receipt.Commit with a detached 5s-timeout context,
 // consistent with the RabbitMQ subscriber path.
-func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
+func commitReceipt(ctx context.Context, r idempotency.Receipt, topic, entryID string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := r.Commit(rctx); err != nil {
@@ -409,7 +410,7 @@ func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string)
 }
 
 // releaseReceipt calls Receipt.Release with a detached 5s-timeout context.
-func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
+func releaseReceipt(ctx context.Context, r idempotency.Receipt, topic, entryID string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := r.Release(rctx); err != nil {

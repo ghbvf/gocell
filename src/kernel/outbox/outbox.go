@@ -163,18 +163,18 @@ type Publisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
 }
 
-// NoopOutboxWriter is an explicit outbox writer sink for tests and demos.
+// NoopWriter is an explicit outbox writer sink for tests and demos.
 // It validates entries like a real writer, then discards them instead of
 // persisting anything. It is not a production durability mechanism.
-type NoopOutboxWriter struct{}
+type NoopWriter struct{}
 
 // Write validates the entry, discards it, and returns nil.
-func (NoopOutboxWriter) Write(_ context.Context, entry Entry) error {
+func (NoopWriter) Write(_ context.Context, entry Entry) error {
 	return entry.Validate()
 }
 
 // WriteBatch validates all entries, discards them, and returns nil.
-func (NoopOutboxWriter) WriteBatch(_ context.Context, entries []Entry) error {
+func (NoopWriter) WriteBatch(_ context.Context, entries []Entry) error {
 	for i, entry := range entries {
 		if err := entry.Validate(); err != nil {
 			return fmt.Errorf("outbox: noop writer entry[%d]: %w", i, err)
@@ -183,10 +183,10 @@ func (NoopOutboxWriter) WriteBatch(_ context.Context, entries []Entry) error {
 	return nil
 }
 
-var _ BatchWriter = NoopOutboxWriter{}
+var _ BatchWriter = (*NoopWriter)(nil)
 
 // DiscardPublisher is an explicit publisher sink for tests and demos.
-// Unlike NoopOutboxWriter, it affects direct-publish flows rather than durable
+// Unlike NoopWriter, it affects direct-publish flows rather than durable
 // outbox writes. It is an explicit opt-in sink, not a default runtime fallback.
 //
 // Publish logs a structured warning and discards the payload.
@@ -198,7 +198,7 @@ func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error
 	return nil
 }
 
-var _ Publisher = DiscardPublisher{}
+var _ Publisher = (*DiscardPublisher)(nil)
 
 // IsDiscardPublisher reports whether p is the explicit discard sink.
 func IsDiscardPublisher(p Publisher) bool {

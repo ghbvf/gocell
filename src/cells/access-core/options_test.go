@@ -44,7 +44,7 @@ func TestInit_MissingOutboxWriter(t *testing.T) {
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
-		WithOutboxWriter(outbox.NoopOutboxWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
 	err := c.Init(context.Background(), deps)

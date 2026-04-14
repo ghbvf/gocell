@@ -24,7 +24,7 @@ func newTestCell() *AuditCore {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(outbox.NoopOutboxWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 }
 
@@ -90,7 +90,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
-		WithOutboxWriter(outbox.NoopOutboxWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{

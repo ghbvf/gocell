@@ -25,7 +25,7 @@ func newTestCell() *ConfigCore {
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithPublisher(eventbus.New()),
-		WithOutboxWriter(outbox.NoopOutboxWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 	)
 }
 

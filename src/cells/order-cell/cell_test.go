@@ -107,7 +107,8 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 func TestOrderCell_DefaultInit_UsesSafePublisherFallback(t *testing.T) {
 	c := NewOrderCell()
 	require.NoError(t, c.Init(context.Background(), newTestDeps()))
-	assert.Nil(t, c.publisher)
+	assert.True(t, outbox.IsDiscardPublisher(c.publisher),
+		"default publisher should be DiscardPublisher")
 
 	r := router.New()
 	c.RegisterRoutes(r)
@@ -129,7 +130,7 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 	}{
 		{
 			name: "writer without tx manager",
-			opts: []Option{WithOutboxWriter(outbox.NoopOutboxWriter{})},
+			opts: []Option{WithOutboxWriter(outbox.NoopWriter{})},
 		},
 		{
 			name: "tx manager without writer",
@@ -151,7 +152,7 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 
 func TestOrderCell_InitRejectsDurableModeWithDefaultRepo(t *testing.T) {
 	c := NewOrderCell(
-		WithOutboxWriter(outbox.NoopOutboxWriter{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 

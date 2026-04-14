@@ -248,17 +248,18 @@ func TestService_Create_DemoPublishSuccess(t *testing.T) {
 	assert.Equal(t, TopicOrderCreated, pub.calls[0].topic)
 }
 
-func TestService_Create_DemoNilPublisher(t *testing.T) {
+func TestService_Create_DemoNilPublisher_Panics(t *testing.T) {
+	// After approach B, callers must inject a publisher (cell.go defaults to
+	// DiscardPublisher). Passing nil panics on Publish call.
 	repo := mem.NewOrderRepository()
 	svc := NewService(repo, nil, slog.Default())
 
-	order, err := svc.Create(context.Background(), "nil-pub")
-	require.NoError(t, err)
-	require.NotNil(t, order)
-	assert.Equal(t, "nil-pub", order.Item)
+	assert.Panics(t, func() {
+		_, _ = svc.Create(context.Background(), "nil-pub")
+	})
 }
 
-func TestService_Create_DemoDiscardPublisherLogsSkip(t *testing.T) {
+func TestService_Create_DemoDiscardPublisher_NoFakeSuccessLog(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
@@ -267,12 +268,9 @@ func TestService_Create_DemoDiscardPublisherLogsSkip(t *testing.T) {
 	order, err := svc.Create(context.Background(), "discard-pub")
 	require.NoError(t, err)
 	require.NotNil(t, order)
-	// DiscardPublisher.Publish() logs via slog.Default, not the injected logger.
-	// The service should NOT log "event published" (success) since DiscardPublisher
-	// returns nil error but the caller logs Info "event published" on success.
-	// With the new design, Publish() succeeds (nil error) so "event published"
-	// IS logged by the service — but the discard warn comes from DiscardPublisher
-	// itself via slog.Default which goes to stderr, not our buffer.
+	// Service no longer logs "event published" success — DiscardPublisher.Publish()
+	// handles its own slog.Warn via slog.Default().
+	assert.NotContains(t, logs.String(), "event published")
 	assert.NotContains(t, logs.String(), "skipping direct publish")
 }
 
