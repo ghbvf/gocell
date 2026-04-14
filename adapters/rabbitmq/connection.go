@@ -589,6 +589,8 @@ func (c *Connection) Health() error {
 	permErr := c.permanentErr
 	c.mu.RUnlock()
 
+	// StateTerminal: permanent error was recorded — return it directly.
+	// This covers ErrAdapterAMQPConnectPermanent and ErrAdapterAMQPReconnectExhausted.
 	if permErr != nil {
 		return permErr
 	}

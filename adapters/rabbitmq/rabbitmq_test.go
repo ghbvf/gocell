@@ -3340,6 +3340,11 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 			err:  errcode.New(ErrAdapterAMQPConnect, "connection not available"),
 			want: true,
 		},
+		{
+			name: "ErrAdapterAMQPReconnecting errcode",
+			err:  errcode.New(ErrAdapterAMQPReconnecting, "reconnecting"),
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {
