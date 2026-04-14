@@ -403,6 +403,73 @@ func TestNewJWTVerifier_NilVerificationKeyStore(t *testing.T) {
 	assert.Contains(t, err.Error(), "verification key store")
 }
 
+func TestMapClaimsToClaims_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims jwt.MapClaims
+		check  func(t *testing.T, c Claims)
+	}{
+		{
+			name:   "empty claims",
+			claims: jwt.MapClaims{},
+			check: func(t *testing.T, c Claims) {
+				assert.Empty(t, c.Subject)
+				assert.Empty(t, c.Issuer)
+				assert.Nil(t, c.Audience)
+				assert.Nil(t, c.Roles)
+				assert.True(t, c.ExpiresAt.IsZero())
+			},
+		},
+		{
+			name:   "string audience",
+			claims: jwt.MapClaims{"aud": "single-aud"},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"single-aud"}, c.Audience)
+			},
+		},
+		{
+			name:   "array audience with non-string elements",
+			claims: jwt.MapClaims{"aud": []any{"valid", 42, "also-valid"}},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"valid", "also-valid"}, c.Audience,
+					"non-string audience elements should be silently skipped")
+			},
+		},
+		{
+			name:   "roles with non-string elements",
+			claims: jwt.MapClaims{"roles": []any{"admin", 123, "user"}},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, []string{"admin", "user"}, c.Roles,
+					"non-string role elements should be silently skipped")
+			},
+		},
+		{
+			name:   "numeric audience ignored",
+			claims: jwt.MapClaims{"aud": 42},
+			check: func(t *testing.T, c Claims) {
+				assert.Nil(t, c.Audience, "numeric audience should not match any switch case")
+			},
+		},
+		{
+			name:   "extra claims collected",
+			claims: jwt.MapClaims{"sub": "u1", "custom_field": "val", "nbf": 123.0},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, "u1", c.Subject)
+				assert.Equal(t, "val", c.Extra["custom_field"])
+				_, hasNbf := c.Extra["nbf"]
+				assert.False(t, hasNbf, "nbf is a standard claim and should not appear in Extra")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := mapClaimsToClaims(tt.claims)
+			tt.check(t, c)
+		})
+	}
+}
+
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
