@@ -139,7 +139,7 @@ const (
 // pure deadline calculation (via CommandEntry.DeadlineFor). The adapter
 // MUST run a periodic sweeper (e.g., every 30s–60s) that queries
 // non-terminal commands, computes DeadlineFor for each active phase,
-// and calls AdvanceStatus(..., CommandExpired) when time.Now() exceeds
+// and calls AdvanceStatus(..., CommandExpired, now) when now exceeds
 // the deadline.
 //
 // ref: Temporal Nexus operations — ScheduleToCloseTimeout, ScheduleToStartTimeout,
@@ -177,7 +177,10 @@ type CommandEntry struct {
 	// avoids a combinatorial explosion of states (Retrying×{Sent,Delivered})
 	// and keeps the transition table compact. Adapters inspect Attempt to
 	// decide whether to retry or transition to Failed.
-	Attempt int
+	//
+	// Use ResetForRetry to move a command back to Pending for retry —
+	// do NOT directly mutate Status/SentAt fields.
+	Attempt     int
 	CreatedAt   time.Time
 	SentAt      *time.Time // set when Status transitions to Sent
 	DeliveredAt *time.Time // set when device ACKs receipt
@@ -214,8 +217,11 @@ func (e *CommandEntry) DeadlineFor(phase TimeoutPhase) time.Time {
 	}
 }
 
-// Validate checks that required fields are present, status is valid,
+// ValidateNew checks that required fields are present, status is valid,
 // timeouts are non-negative, and creation-time invariants hold.
+// This is a creation-time validator — it enforces that the entry is in its
+// initial state (Pending, no timestamps, Attempt=0). It is NOT suitable for
+// validating an entry that has been advanced through the lifecycle.
 //
 // Creation-time invariants (enforced by NewCommandEntry):
 //   - Status must be CommandPending
@@ -224,7 +230,7 @@ func (e *CommandEntry) DeadlineFor(phase TimeoutPhase) time.Time {
 //
 // These constraints ensure that callers cannot bypass the state machine
 // by constructing a CommandEntry with an arbitrary status or timestamps.
-func (e *CommandEntry) Validate() error {
+func (e *CommandEntry) ValidateNew() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: command entry missing ID")
 	}
@@ -274,11 +280,14 @@ func (e *CommandEntry) Validate() error {
 //   - Status = CommandPending (callers cannot create non-Pending commands)
 //   - SentAt / DeliveredAt / CompletedAt = nil (no phase timestamps at creation)
 //   - Attempt = 0
-//   - CreatedAt = now
+//   - CreatedAt = now (caller-provided, not wall-clock)
+//
+// The now parameter makes the constructor pure and deterministically testable.
 //
 // ref: Temporal StartWorkflowExecution — callers submit intent + timeouts,
-// status/timestamps are owned by the server.
-func NewCommandEntry(id, deviceID, commandType string, payload []byte, timeouts CommandTimeouts) CommandEntry {
+// status/timestamps are owned by the server. Time is an explicit event
+// parameter, never read from wall clock inside the state machine.
+func NewCommandEntry(id, deviceID, commandType string, payload []byte, timeouts CommandTimeouts, now time.Time) CommandEntry {
 	return CommandEntry{
 		ID:          id,
 		DeviceID:    deviceID,
@@ -287,13 +296,13 @@ func NewCommandEntry(id, deviceID, commandType string, payload []byte, timeouts 
 		Status:      CommandPending,
 		Timeouts:    timeouts,
 		Attempt:     0,
-		CreatedAt:   time.Now(),
+		CreatedAt:   now,
 	}
 }
 
 // AdvanceCommand validates a transition and applies the timestamp side effects
 // that the kernel owns. This is the canonical entry point for all state changes.
-// Adapters SHOULD call this before persisting the new status.
+// Adapters MUST call this before persisting the new status.
 //
 // Side effects by target status:
 //   - Sent:      sets SentAt, increments Attempt
@@ -325,6 +334,40 @@ func AdvanceCommand(entry *CommandEntry, to CommandStatus, now time.Time) error 
 	return nil
 }
 
+// ResetForRetry resets a command back to Pending for retry. This is the only
+// sanctioned way to retry a command — adapters MUST NOT directly mutate
+// Status, SentAt, or other fields to simulate retry.
+//
+// Allowed source states:
+//   - CommandSent:   transport delivery failed, retry from scratch
+//   - CommandFailed: explicit operator/system retry of a failed command
+//
+// Disallowed source states:
+//   - CommandPending:   already pending (caller bug, no-op not allowed)
+//   - CommandDelivered: device ACK'd receipt, resending would duplicate execution
+//   - CommandSucceeded/CommandExpired/CommandCanceled: semantically final
+//
+// Side effects:
+//   - Status → CommandPending
+//   - SentAt, DeliveredAt, CompletedAt → nil
+//   - Attempt is preserved (tracks total attempts across retries)
+//   - All other fields (ID, DeviceID, Payload, Timeouts, Metadata, CreatedAt) preserved
+func ResetForRetry(entry *CommandEntry) error {
+	switch entry.Status {
+	case CommandSent, CommandFailed:
+		// allowed
+	default:
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("outbox: cannot reset for retry from status %s (allowed: sent, failed)", entry.Status))
+	}
+
+	entry.Status = CommandPending
+	entry.SentAt = nil
+	entry.DeliveredAt = nil
+	entry.CompletedAt = nil
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Adapter injection interfaces
 // ---------------------------------------------------------------------------
@@ -347,11 +390,14 @@ type CommandReader interface {
 }
 
 // CommandStateAdvancer atomically advances a command's status.
-// The adapter MUST use the Transition function to validate the transition
-// before persisting. Implementations SHOULD use optimistic locking
-// (e.g., WHERE status = $from) to prevent concurrent transitions.
+// The adapter MUST call AdvanceCommand with the provided now to compute
+// kernel-owned side effects (timestamps, attempt counter) before persisting.
+// Implementations SHOULD use optimistic locking (e.g., WHERE status = $from)
+// to prevent concurrent transitions.
 type CommandStateAdvancer interface {
 	// AdvanceStatus atomically transitions a command from one status to another.
+	// The now parameter is passed through to AdvanceCommand for timestamp
+	// side effects — adapters must not independently decide timestamps.
 	// Consistency: L4 (DeviceLatent).
-	AdvanceStatus(ctx context.Context, id string, from, to CommandStatus) error
+	AdvanceStatus(ctx context.Context, id string, from, to CommandStatus, now time.Time) error
 }
