@@ -81,7 +81,7 @@ func targetsProject() *metadata.ProjectMeta {
 				ID:    "core-bundle",
 				Cells: []string{"access-core", "audit-core"},
 				Build: metadata.BuildMeta{
-					Entrypoint: "src/cmd/core-bundle/main.go",
+					Entrypoint: "cmd/core-bundle/main.go",
 					Binary:     "core-bundle",
 				},
 			},

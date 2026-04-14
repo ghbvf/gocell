@@ -258,7 +258,7 @@ func TestAssemblyMetaRoundTrip(t *testing.T) {
 		ID:    "core-bundle",
 		Cells: []string{"access-core", "audit-core", "config-core"},
 		Build: BuildMeta{
-			Entrypoint:     "src/cmd/core-bundle/main.go",
+			Entrypoint:     "cmd/core-bundle/main.go",
 			Binary:         "core-bundle",
 			DeployTemplate: "k8s",
 		},

@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testProjectRoot returns the absolute path to the src/ directory.
+// testProjectRoot returns the absolute path to the project root directory.
 func testProjectRoot(t *testing.T) string {
 	t.Helper()
-	// This file lives at src/kernel/metadata/parser_integration_test.go.
-	// Walk up three levels to reach src/.
+	// This file lives at kernel/metadata/parser_integration_test.go.
+	// Walk up two levels to reach the project root.
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller failed")
 	return filepath.Join(filepath.Dir(thisFile), "..", "..")

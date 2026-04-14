@@ -9,7 +9,7 @@
   "properties": {
     "id": {
       "type": "string",
-      "description": "Unique slice identifier. Must equal the directory name under src/cells/{cell-id}/slices/.",
+      "description": "Unique slice identifier. Must equal the directory name under cells/{cell-id}/slices/.",
       "pattern": "^[a-z][a-z0-9-]*$"
     },
     "belongsToCell": {

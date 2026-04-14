@@ -82,15 +82,15 @@ type schemaRefsYAML struct {
 	Headers  string `yaml:"headers,omitempty"`
 }
 
-// ContractsRoot returns the absolute path to the src/contracts/ directory,
+// ContractsRoot returns the absolute path to the contracts/ directory,
 // derived from the source location of this package.
 func ContractsRoot() string {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		panic("contracttest: runtime.Caller failed")
 	}
-	// thisFile = .../src/pkg/contracttest/contracttest.go
-	// walk up to src/, then append contracts/
+	// thisFile = .../pkg/contracttest/contracttest.go
+	// walk up to project root, then append contracts/
 	srcDir := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 	return filepath.Join(srcDir, "contracts")
 }

@@ -19,7 +19,7 @@ type Parser struct {
 }
 
 // NewParser creates a Parser that reads from the given filesystem root.
-// The root should point to the project's src/ directory (the metadata root).
+// The root should point to the project root directory (containing go.mod).
 func NewParser(root string) *Parser {
 	return &Parser{root: root}
 }

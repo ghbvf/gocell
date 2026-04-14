@@ -26,8 +26,8 @@ func TestFindRoot(t *testing.T) {
 		}
 	})
 
-	// findRoot should find the go.mod in the src/ directory (or wherever it is
-	// relative to the test binary). Walk up from current test dir to find it.
+	// findRoot should find the go.mod in the project root (walk up from
+	// current test dir to find it).
 	root, err := findRoot()
 	if err != nil {
 		t.Fatalf("findRoot() error: %v", err)

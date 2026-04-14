@@ -109,15 +109,11 @@ func containsString(ss []string, target string) bool {
 
 // --- path helpers ---
 
-// repositoryRoot returns the repository root from the project root.
-// If root ends with "src", the repository root is the parent directory.
+// repositoryRoot returns the absolute repository root from the project root.
 func repositoryRoot(root string) string {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return root
-	}
-	if filepath.Base(absRoot) == "src" {
-		return filepath.Dir(absRoot)
 	}
 	return absRoot
 }

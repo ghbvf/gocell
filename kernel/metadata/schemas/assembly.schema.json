@@ -9,7 +9,7 @@
   "properties": {
     "id": {
       "type": "string",
-      "description": "Unique assembly identifier. Must equal the directory name under src/assemblies/.",
+      "description": "Unique assembly identifier. Must equal the directory name under assemblies/.",
       "pattern": "^[a-z][a-z0-9-]*$"
     },
     "cells": {

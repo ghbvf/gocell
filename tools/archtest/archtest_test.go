@@ -130,7 +130,7 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 
 			// LAYER-05: no cross-cell internal imports.
 			// TODO: L0 Cell exception — CLAUDE.md allows L0 cells to be directly imported
-			// by sibling cells in the same assembly. When L0 cells exist under src/cells/,
+			// by sibling cells in the same assembly. When L0 cells exist under cells/,
 			// parse cell.yaml to identify them and skip LAYER-05 for L0 targets.
 			if srcCell != "" && isInternal(imp) {
 				impCell := cellOf(modPrefix, imp)

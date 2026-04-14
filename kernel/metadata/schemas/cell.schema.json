@@ -9,7 +9,7 @@
   "properties": {
     "id": {
       "type": "string",
-      "description": "Unique cell identifier. Must equal the directory name under src/cells/.",
+      "description": "Unique cell identifier. Must equal the directory name under cells/.",
       "pattern": "^[a-z][a-z0-9-]*$"
     },
     "type": {

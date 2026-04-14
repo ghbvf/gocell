@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -90,10 +89,7 @@ func generateAssembly(args []string) error {
 	if entrypointRel == "" {
 		entrypointRel = filepath.Join("cmd", *id, "main.go")
 	}
-	// The entrypoint path in assembly.yaml is relative to the project root
-	// (go.mod parent). If it starts with "src/" and our working root IS src/,
-	// strip that prefix so the file lands in the correct location.
-	entrypointRel = strings.TrimPrefix(entrypointRel, "src/")
+	// The entrypoint path in assembly.yaml is relative to the project root.
 
 	entrypointPath := filepath.Join(root, entrypointRel)
 	if err := os.MkdirAll(filepath.Dir(entrypointPath), 0o755); err != nil {

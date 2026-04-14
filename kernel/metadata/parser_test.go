@@ -113,7 +113,7 @@ cells:
   - access-core
   - audit-core
 build:
-  entrypoint: src/cmd/core-bundle/main.go
+  entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
   deployTemplate: k8s
 `)},
@@ -678,7 +678,7 @@ func TestParseFS_DuplicateAssemblyID(t *testing.T) {
 cells:
   - access-core
 build:
-  entrypoint: src/cmd/core-bundle/main.go
+  entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
   deployTemplate: k8s
 `)},
@@ -686,7 +686,7 @@ build:
 cells:
   - access-core
 build:
-  entrypoint: src/cmd/core-bundle/main.go
+  entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
   deployTemplate: k8s
 `)},

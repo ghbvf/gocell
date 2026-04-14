@@ -134,7 +134,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:    "core-bundle",
 				Cells: []string{"access-core", "audit-core", "shared-crypto"},
 				Build: metadata.BuildMeta{
-					Entrypoint:     "src/cmd/core-bundle/main.go",
+					Entrypoint:     "cmd/core-bundle/main.go",
 					Binary:         "core-bundle",
 					DeployTemplate: "k8s",
 				},
@@ -830,7 +830,7 @@ func TestTOPO06(t *testing.T) {
 					ID:    "edge-bundle",
 					Cells: []string{"access-core"}, // also in core-bundle
 					Build: metadata.BuildMeta{
-						Entrypoint:     "src/cmd/edge-bundle/main.go",
+						Entrypoint:     "cmd/edge-bundle/main.go",
 						Binary:         "edge-bundle",
 						DeployTemplate: "k8s",
 					},
@@ -1989,8 +1989,7 @@ func TestREF11(t *testing.T) {
 
 	t.Run("entrypoint file exists", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		// Create the entrypoint file. repositoryRoot logic: if base is "src", go up one level.
-		// So we create root as tmpDir/src, and entrypoint relative to tmpDir.
+		// Create the entrypoint file under the project root.
 		srcDir := filepath.Join(tmpDir, "src")
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
 		entryDir := filepath.Join(tmpDir, "src", "cmd", "core-bundle")
@@ -2405,7 +2404,7 @@ func TestRepositoryRoot(t *testing.T) {
 		srcDir := filepath.Join(tmpDir, "src")
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
 		got := repositoryRoot(srcDir)
-		assert.Equal(t, tmpDir, got)
+		assert.Equal(t, srcDir, got)
 	})
 
 	t.Run("root not ending in src", func(t *testing.T) {
@@ -3193,7 +3192,7 @@ func TestREF16(t *testing.T) {
 			ID:    "../../etc",
 			Cells: []string{"access-core"},
 			Build: metadata.BuildMeta{
-				Entrypoint: "src/cmd/evil/main.go",
+				Entrypoint: "cmd/evil/main.go",
 				Binary:     "evil",
 			},
 		}
@@ -3222,7 +3221,7 @@ func TestREF16(t *testing.T) {
 			ID:    "edge-bundle",
 			Cells: []string{"access-core"},
 			Build: metadata.BuildMeta{
-				Entrypoint:     "src/cmd/edge-bundle/main.go",
+				Entrypoint:     "cmd/edge-bundle/main.go",
 				Binary:         "edge-bundle",
 				DeployTemplate: "k8s",
 			},

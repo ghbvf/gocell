@@ -63,7 +63,7 @@ type JourneyOpts struct {
 
 // Scaffolder generates directory structures and YAML templates.
 type Scaffolder struct {
-	root string // project root (e.g., src/)
+	root string // project root containing go.mod
 }
 
 // New creates a Scaffolder rooted at the given directory.
