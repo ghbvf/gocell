@@ -13,6 +13,10 @@ import (
 )
 
 
+// errMsgAuthFailed is the uniform error message for all session validation
+// failures. Using a single message prevents session-state enumeration attacks.
+const errMsgAuthFailed = "invalid or expired authentication token"
+
 // Compile-time check: Service implements auth.TokenVerifier.
 var _ auth.TokenVerifier = (*Service)(nil)
 
@@ -46,7 +50,7 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 		if !ok || sid == "" {
 			s.logger.Warn("session-validate: token missing sid",
 				slog.String("subject", claims.Subject))
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
@@ -61,19 +65,19 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 					slog.String("subject", claims.Subject),
 					slog.Any("error", err))
 			}
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 		if session.IsRevoked() {
 			s.logger.Warn("session-validate: revoked session used",
 				slog.String("sid", sid),
 				slog.String("subject", claims.Subject))
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 		if session.IsExpired() {
 			s.logger.Warn("session-validate: expired session used",
 				slog.String("sid", sid),
 				slog.String("subject", claims.Subject))
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 		}
 	}
 

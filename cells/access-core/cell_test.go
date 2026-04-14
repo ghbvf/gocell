@@ -34,6 +34,10 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
+// testPassword is a fixed test-only credential used to seed users in E2E tests.
+// Not a real secret — safe to appear in test source code.
+const testPassword = "secret123" //nolint:gosec // test-only credential
+
 var (
 	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
 	testIssuer                 = mustIssuer(testKeySet)
@@ -371,7 +375,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
 
 	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
 	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash))
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
@@ -381,7 +385,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	r := router.New()
 	c.RegisterRoutes(r)
 
-	body := `{"username":"e2e-user","password":"secret123"}`
+	body := fmt.Sprintf(`{"username":"e2e-user","password":%q}`, testPassword)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -441,7 +445,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
 
 	// Seed a user.
-	hash, _ := bcrypt.GenerateFromPassword([]byte("secret123"), bcrypt.DefaultCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
 	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash))
 	require.NoError(t, err)
 	user.ID = "usr-refresh"
@@ -451,7 +455,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	r := router.New()
 	c.RegisterRoutes(r)
 
-	loginBody := `{"username":"refresh-user","password":"secret123"}`
+	loginBody := fmt.Sprintf(`{"username":"refresh-user","password":%q}`, testPassword)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(loginBody))
 	req.Header.Set("Content-Type", "application/json")
