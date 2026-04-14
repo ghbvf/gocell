@@ -196,7 +196,6 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	userID := createUserForContractTest(t, handler, createContract)
 	// Lock first
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
-	httptest.NewRecorder()
 	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 

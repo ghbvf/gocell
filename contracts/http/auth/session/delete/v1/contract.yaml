@@ -1,7 +1,7 @@
 id: http.auth.session.delete.v1
 kind: http
 ownerCell: access-core
-consistencyLevel: L2
+consistencyLevel: L1
 lifecycle: active
 endpoints:
   server: access-core
