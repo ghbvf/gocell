@@ -45,6 +45,9 @@ type enqueueRequest struct {
 }
 
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
+// No subject-deviceID check: this is an operator/management endpoint where
+// authenticated operators enqueue commands for any device they manage.
+// ListPending and Ack are device-facing (subject == deviceID).
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 

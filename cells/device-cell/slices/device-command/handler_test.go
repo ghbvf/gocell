@@ -370,6 +370,7 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 		subject    string
 		roles      []string
 		wantStatus int
+		wantCode   string
 	}{
 		{
 			name:       "self-access allowed",
@@ -390,12 +391,14 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 			subject:    "dev-2",
 			roles:      []string{"device"},
 			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
 		},
 		{
 			name:       "no subject returns 401",
 			deviceID:   "dev-1",
 			subject:    "",
 			wantStatus: http.StatusUnauthorized,
+			wantCode:   "ERR_AUTH_UNAUTHORIZED",
 		},
 	}
 
@@ -411,6 +414,9 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 			h.HandleListPending(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
+			}
 		})
 	}
 }
@@ -421,6 +427,7 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 		subject    string
 		roles      []string
 		wantStatus int
+		wantCode   string
 	}{
 		{
 			name:       "self-access allowed",
@@ -432,6 +439,7 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			subject:    "dev-2",
 			roles:      []string{"device"},
 			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
 		},
 	}
 
@@ -450,6 +458,9 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			h.HandleAck(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
+			}
 		})
 	}
 }

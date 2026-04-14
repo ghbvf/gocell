@@ -2,6 +2,7 @@ package configwrite
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -170,6 +172,67 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// --- sensitive value redaction tests (#27o) ---
+
+func TestHandler_HandleCreate_SensitiveRedacted(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"key":"db.password","value":"s3cret!","sensitive":true}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	var resp struct {
+		Data dto.ConfigEntryResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, dto.RedactedValue, resp.Data.Value, "sensitive value must be redacted in response")
+	assert.True(t, resp.Data.Sensitive)
+	assert.NotContains(t, w.Body.String(), "s3cret!")
+}
+
+func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-s1", Key: "api.key", Value: "old-secret", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	body := `{"value":"new-secret"}`
+	req := httptest.NewRequest(http.MethodPut, "/api.key", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data dto.ConfigEntryResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, dto.RedactedValue, resp.Data.Value, "sensitive value must be redacted in update response")
+	assert.NotContains(t, w.Body.String(), "new-secret")
+}
+
+func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	ow := &stubOutboxWriter{}
+	svc := NewService(repo, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+
+	_, err := svc.Create(context.Background(), CreateInput{
+		Key: "db.password", Value: "s3cret!", Sensitive: true,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, ow.entries, 1)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &payload))
+	assert.Equal(t, "******", payload["value"], "sensitive value must be redacted in event payload")
+	assert.NotEqual(t, "s3cret!", payload["value"])
 }
 
 // --- outbox/tx service tests ---

@@ -10,6 +10,9 @@ import (
 // RequireSelfOrRole checks that the authenticated subject matches targetID
 // or holds one of the specified bypass roles. Returns nil on success.
 //
+// ref: go-kratos/kratos middleware/auth/auth.go — adopted: subject-from-context
+// pattern; deviated: combined self+role check instead of separate authz middleware.
+//
 // Errors:
 //   - ErrAuthUnauthorized: no subject in context (auth middleware did not run)
 //   - ErrAuthForbidden: subject does not match targetID and lacks bypass roles

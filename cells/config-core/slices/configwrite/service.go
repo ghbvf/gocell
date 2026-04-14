@@ -170,10 +170,14 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 }
 
 func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
+	eventValue := entry.Value
+	if entry.Sensitive {
+		eventValue = "******"
+	}
 	payload, err := json.Marshal(map[string]any{
 		"action":  action,
 		"key":     entry.Key,
-		"value":   entry.Value,
+		"value":   eventValue,
 		"version": entry.Version,
 	})
 	if err != nil {
