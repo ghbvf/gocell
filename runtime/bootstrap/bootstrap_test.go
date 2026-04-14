@@ -2418,3 +2418,29 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
+
+func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// Register a plain cell with no TokenVerifier method.
+	asm := assembly.New(assembly.Config{ID: "test-no-auth-provider"})
+	hc := newHTTPCell("plain-cell")
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run should fail because no auth provider cell was discovered.
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should fail when no auth provider cell is discovered")
+	assert.Contains(t, err.Error(), "auth provider cell",
+		"error should mention missing auth provider")
+}

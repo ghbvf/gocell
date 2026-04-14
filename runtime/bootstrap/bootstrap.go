@@ -450,6 +450,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				}
 			}
 		}
+		if b.authVerifier == nil {
+			return rollback(fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered"))
+		}
 	}
 
 	// Step 4.5: Register config watcher OnChange callback (now that asm is started).

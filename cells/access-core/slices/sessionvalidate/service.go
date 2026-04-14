@@ -41,14 +41,28 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 	if s.sessionRepo != nil {
 		sid, ok := claims.Extra["sid"].(string)
 		if !ok || sid == "" {
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "missing session binding (sid)")
+			s.logger.Warn("session-validate: token missing sid",
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
 		}
 		session, err := s.sessionRepo.GetByID(ctx, sid)
 		if err != nil {
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session not found")
+			s.logger.Warn("session-validate: session not found",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
 		}
 		if session.IsRevoked() {
-			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "session has been revoked")
+			s.logger.Warn("session-validate: revoked session used",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
+		}
+		if session.IsExpired() {
+			s.logger.Warn("session-validate: expired session used",
+				slog.String("sid", sid),
+				slog.String("subject", claims.Subject))
+			return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, "invalid or expired authentication token")
 		}
 	}
 

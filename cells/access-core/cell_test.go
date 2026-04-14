@@ -2,6 +2,7 @@ package accesscore
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -386,17 +387,16 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code, "login should succeed: %s", rec.Body.String())
 
-	// Extract access token from response.
-	respBody := rec.Body.String()
-	// Parse JSON to extract accessToken — using simple string search.
-	var accessToken string
-	for _, part := range strings.Split(respBody, `"`) {
-		if strings.HasPrefix(part, "eyJ") {
-			accessToken = part
-			break
-		}
+	// Extract access token from response via structured JSON parsing.
+	var loginResp struct {
+		Data struct {
+			AccessToken  string `json:"AccessToken"`
+			RefreshToken string `json:"RefreshToken"`
+		} `json:"data"`
 	}
-	require.NotEmpty(t, accessToken, "should find JWT in login response")
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &loginResp), "should parse login response JSON")
+	accessToken := loginResp.Data.AccessToken
+	require.NotEmpty(t, accessToken, "login response must contain access token")
 
 	// Verify token through session-aware verifier — should succeed.
 	verifier := c.TokenVerifier()
@@ -416,5 +416,5 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Verify same token again — should be rejected.
 	_, err = verifier.Verify(ctx, accessToken)
 	require.Error(t, err, "token should be rejected after session revocation")
-	assert.Contains(t, err.Error(), "revoked", "error should mention revocation")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN", "error should be auth invalid token")
 }
