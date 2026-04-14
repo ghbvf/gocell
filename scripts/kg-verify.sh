@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC_DIR="${REPO_ROOT}/src"
+SRC_DIR="${REPO_ROOT}"
 FAIL=0
 
 red()   { printf '\033[0;31m%s\033[0m\n' "$1"; }
