@@ -291,10 +291,10 @@ func TestDeadlineFor_UnknownPhase(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CommandEntry.Validate tests
+// CommandEntry.ValidateNew tests (renamed from Validate — L4-API-01)
 // ---------------------------------------------------------------------------
 
-func TestCommandEntry_Validate_Valid(t *testing.T) {
+func TestCommandEntry_ValidateNew_Valid(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -303,10 +303,10 @@ func TestCommandEntry_Validate_Valid(t *testing.T) {
 		Status:      CommandPending,
 		CreatedAt:   time.Now(),
 	}
-	assert.NoError(t, entry.Validate())
+	assert.NoError(t, entry.ValidateNew())
 }
 
-func TestCommandEntry_Validate_MissingID(t *testing.T) {
+func TestCommandEntry_ValidateNew_MissingID(t *testing.T) {
 	entry := CommandEntry{
 		DeviceID:    "dev-1",
 		CommandType: "reboot",
@@ -314,12 +314,12 @@ func TestCommandEntry_Validate_MissingID(t *testing.T) {
 		Status:      CommandPending,
 		CreatedAt:   time.Now(),
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
 
-func TestCommandEntry_Validate_MissingDeviceID(t *testing.T) {
+func TestCommandEntry_ValidateNew_MissingDeviceID(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		CommandType: "reboot",
@@ -327,25 +327,25 @@ func TestCommandEntry_Validate_MissingDeviceID(t *testing.T) {
 		Status:      CommandPending,
 		CreatedAt:   time.Now(),
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
 
-func TestCommandEntry_Validate_MissingCommandType(t *testing.T) {
+func TestCommandEntry_ValidateNew_MissingCommandType(t *testing.T) {
 	entry := CommandEntry{
-		ID:       "cmd-1",
-		DeviceID: "dev-1",
-		Payload:  []byte(`{}`),
-		Status:   CommandPending,
+		ID:        "cmd-1",
+		DeviceID:  "dev-1",
+		Payload:   []byte(`{}`),
+		Status:    CommandPending,
 		CreatedAt: time.Now(),
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
 
-func TestCommandEntry_Validate_MissingPayload(t *testing.T) {
+func TestCommandEntry_ValidateNew_MissingPayload(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -353,12 +353,12 @@ func TestCommandEntry_Validate_MissingPayload(t *testing.T) {
 		Status:      CommandPending,
 		CreatedAt:   time.Now(),
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
 
-func TestCommandEntry_Validate_InvalidStatus(t *testing.T) {
+func TestCommandEntry_ValidateNew_InvalidStatus(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -367,12 +367,12 @@ func TestCommandEntry_Validate_InvalidStatus(t *testing.T) {
 		Status:      CommandStatus(0), // zero = invalid
 		CreatedAt:   time.Now(),
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
 
-func TestCommandEntry_Validate_NegativeTimeout(t *testing.T) {
+func TestCommandEntry_ValidateNew_NegativeTimeout(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -382,7 +382,7 @@ func TestCommandEntry_Validate_NegativeTimeout(t *testing.T) {
 		CreatedAt:   time.Now(),
 		Timeouts:    CommandTimeouts{ScheduleToSend: -1 * time.Second},
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 }
@@ -408,9 +408,10 @@ func (m *mockCommandReader) GetCommand(_ context.Context, _ string) (*CommandEnt
 
 var _ CommandReader = (*mockCommandReader)(nil)
 
+// mockCommandStateAdvancer — updated to include now time.Time (L4-API-01)
 type mockCommandStateAdvancer struct{}
 
-func (m *mockCommandStateAdvancer) AdvanceStatus(_ context.Context, _ string, _, _ CommandStatus) error {
+func (m *mockCommandStateAdvancer) AdvanceStatus(_ context.Context, _ string, _, _ CommandStatus, _ time.Time) error {
 	return nil
 }
 
@@ -442,7 +443,7 @@ func TestDeadlineFor_ZeroPhase(t *testing.T) {
 		"zero-value TimeoutPhase must return zero Time")
 }
 
-func TestCommandEntry_Validate_MissingCreatedAt(t *testing.T) {
+func TestCommandEntry_ValidateNew_MissingCreatedAt(t *testing.T) {
 	entry := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -451,13 +452,13 @@ func TestCommandEntry_Validate_MissingCreatedAt(t *testing.T) {
 		Status:      CommandPending,
 		// CreatedAt zero value
 	}
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 	assert.Contains(t, err.Error(), "CreatedAt")
 }
 
-func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
+func TestCommandEntry_ValidateNew_NegativeTimeouts_AllFields(t *testing.T) {
 	base := CommandEntry{
 		ID:          "cmd-1",
 		DeviceID:    "dev-1",
@@ -479,7 +480,7 @@ func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := base
 			entry.Timeouts = tt.timeouts
-			err := entry.Validate()
+			err := entry.ValidateNew()
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
 		})
@@ -487,42 +488,45 @@ func TestCommandEntry_Validate_NegativeTimeouts_AllFields(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Validate — creation-time invariant enforcement
+// ValidateNew — creation-time invariant enforcement
 // ---------------------------------------------------------------------------
 
-func TestCommandEntry_Validate_NonPendingStatus(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+func TestCommandEntry_ValidateNew_NonPendingStatus(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, now)
 	entry.Status = CommandSent // violate invariant
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Pending status")
 }
 
-func TestCommandEntry_Validate_NonZeroAttempt(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+func TestCommandEntry_ValidateNew_NonZeroAttempt(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, now)
 	entry.Attempt = 1 // violate invariant
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Attempt=0")
 }
 
-func TestCommandEntry_Validate_HasPhaseTimestamps(t *testing.T) {
-	now := time.Now()
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+func TestCommandEntry_ValidateNew_HasPhaseTimestamps(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, now)
 	entry.SentAt = &now // violate invariant
-	err := entry.Validate()
+	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "phase timestamps")
 }
 
 // ---------------------------------------------------------------------------
-// NewCommandEntry
+// NewCommandEntry — L4-PURE-01: now time.Time injection
 // ---------------------------------------------------------------------------
 
 func TestNewCommandEntry(t *testing.T) {
+	now := time.Date(2026, 3, 15, 10, 30, 0, 0, time.UTC)
 	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{
 		OverallDeadline: 1 * time.Hour,
-	})
+	}, now)
 	assert.Equal(t, "cmd-1", entry.ID)
 	assert.Equal(t, "dev-1", entry.DeviceID)
 	assert.Equal(t, "reboot", entry.CommandType)
@@ -531,17 +535,50 @@ func TestNewCommandEntry(t *testing.T) {
 	assert.Nil(t, entry.SentAt)
 	assert.Nil(t, entry.DeliveredAt)
 	assert.Nil(t, entry.CompletedAt)
-	assert.False(t, entry.CreatedAt.IsZero())
-	assert.NoError(t, entry.Validate())
+	assert.Equal(t, now, entry.CreatedAt, "CreatedAt must equal injected now, not wall-clock")
+	assert.NoError(t, entry.ValidateNew())
+}
+
+func TestNewCommandEntry_ExplicitTime(t *testing.T) {
+	// L4-PURE-01: verify CreatedAt is exactly the injected time, not time.Now().
+	fixed := time.Date(2020, 6, 15, 12, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, fixed)
+	assert.Equal(t, fixed, entry.CreatedAt,
+		"CreatedAt must be the injected time parameter, not wall-clock time.Now()")
+}
+
+func TestNewCommandEntry_ZeroTime_FailsValidateNew(t *testing.T) {
+	// Constructing via NewCommandEntry with zero time is accepted (no error return),
+	// but ValidateNew catches the invalid CreatedAt. This is by design: the
+	// constructor is a pure value builder; validation is a separate step.
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, time.Time{})
+	err := entry.ValidateNew()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "CreatedAt")
 }
 
 // ---------------------------------------------------------------------------
 // AdvanceCommand
 // ---------------------------------------------------------------------------
 
+func TestAdvanceCommand_NilEntry(t *testing.T) {
+	err := AdvanceCommand(nil, CommandSent, time.Now())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, err.Error(), "nil")
+}
+
+func TestResetForRetry_NilEntry(t *testing.T) {
+	err := ResetForRetry(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Contains(t, err.Error(), "nil")
+}
+
 func TestAdvanceCommand_PendingToSent(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
-	now := time.Now()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
 
 	err := AdvanceCommand(&entry, CommandSent, now)
 	assert.NoError(t, err)
@@ -554,8 +591,9 @@ func TestAdvanceCommand_PendingToSent(t *testing.T) {
 }
 
 func TestAdvanceCommand_SentToDelivered(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
-	now := time.Now()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
 	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
 
 	deliveredAt := now.Add(5 * time.Second)
@@ -567,8 +605,9 @@ func TestAdvanceCommand_SentToDelivered(t *testing.T) {
 }
 
 func TestAdvanceCommand_DeliveredToSucceeded(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
-	now := time.Now()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
 	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
 	assert.NoError(t, AdvanceCommand(&entry, CommandDelivered, now.Add(1*time.Second)))
 
@@ -581,14 +620,16 @@ func TestAdvanceCommand_DeliveredToSucceeded(t *testing.T) {
 }
 
 func TestAdvanceCommand_InvalidTransition(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
 	err := AdvanceCommand(&entry, CommandSucceeded, time.Now())
 	assert.Error(t, err)
 	assert.Equal(t, CommandPending, entry.Status, "status must not change on invalid transition")
 }
 
 func TestAdvanceCommand_DeliveredWithoutSentAt(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
 	// Force Sent status without SentAt (simulating a corrupt entry).
 	entry.Status = CommandSent
 	entry.SentAt = nil
@@ -599,12 +640,13 @@ func TestAdvanceCommand_DeliveredWithoutSentAt(t *testing.T) {
 }
 
 func TestAdvanceCommand_FullLifecycle(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	entry := NewCommandEntry("cmd-1", "dev-1", "cert-renew", []byte(`{}`), CommandTimeouts{
 		ScheduleToSend:  30 * time.Second,
 		SendToComplete:  5 * time.Minute,
 		OverallDeadline: 1 * time.Hour,
-	})
-	now := time.Now()
+	}, created)
+	now := created.Add(5 * time.Second)
 
 	// Pending → Sent
 	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
@@ -623,17 +665,197 @@ func TestAdvanceCommand_FullLifecycle(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestAdvanceCommand_SentIncrementsAttempt(t *testing.T) {
-	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{})
-	now := time.Now()
+// ---------------------------------------------------------------------------
+// AdvanceCommand — L4 delay arrival / deadline expiry (review S3-F3)
+// ---------------------------------------------------------------------------
+
+func TestAdvanceCommand_ExpiredViaDeadline(t *testing.T) {
+	// Documents the intended adapter sweep pattern for L4 deadline enforcement:
+	// 1. Create entry with OverallDeadline
+	// 2. Advance to Sent
+	// 3. Simulate now exceeding the overall deadline
+	// 4. Adapter calls AdvanceCommand(CommandExpired) when DeadlineFor < now
+	// 5. Assert CompletedAt is set
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "cert-renew", []byte(`{}`), CommandTimeouts{
+		OverallDeadline: 1 * time.Minute,
+	}, created)
+
+	// Advance to Sent
+	sentAt := created.Add(5 * time.Second)
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, sentAt))
+
+	// Simulate adapter sweep: now exceeds the overall deadline
+	now := created.Add(2 * time.Minute) // well past 1-minute deadline
+	deadline := entry.DeadlineFor(PhaseOverall)
+	assert.False(t, deadline.IsZero(), "OverallDeadline must produce a non-zero deadline")
+	assert.True(t, now.After(deadline), "now must exceed the overall deadline")
+
+	// Adapter would call AdvanceCommand to expire the command
+	err := AdvanceCommand(&entry, CommandExpired, now)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandExpired, entry.Status)
+	assert.True(t, entry.Status.IsTerminal())
+	assert.NotNil(t, entry.CompletedAt)
+	assert.Equal(t, now, *entry.CompletedAt)
+}
+
+// ---------------------------------------------------------------------------
+// ResetForRetry — L4-RETRY-01
+// ---------------------------------------------------------------------------
+
+func TestResetForRetry_FromSent(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{"force":true}`), CommandTimeouts{
+		OverallDeadline: 1 * time.Hour,
+	}, created)
+
+	// Advance to Sent (Attempt becomes 1, SentAt set)
+	sentAt := created.Add(5 * time.Second)
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, sentAt))
+	assert.Equal(t, 1, entry.Attempt)
+	assert.NotNil(t, entry.SentAt)
+
+	// Reset for retry
+	err := ResetForRetry(&entry)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandPending, entry.Status)
+	assert.Nil(t, entry.SentAt, "SentAt must be cleared")
+	assert.Nil(t, entry.DeliveredAt, "DeliveredAt must be cleared")
+	assert.Nil(t, entry.CompletedAt, "CompletedAt must be cleared")
+	assert.Equal(t, 1, entry.Attempt, "Attempt must be preserved (not reset)")
+}
+
+func TestResetForRetry_FromFailed(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
+
+	// Advance through Sent → Failed
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.NoError(t, AdvanceCommand(&entry, CommandFailed, now.Add(10*time.Second)))
+	assert.True(t, entry.Status.IsTerminal())
+	assert.NotNil(t, entry.CompletedAt)
+	assert.Equal(t, 1, entry.Attempt)
+
+	// Reset for retry from Failed
+	err := ResetForRetry(&entry)
+	assert.NoError(t, err)
+	assert.Equal(t, CommandPending, entry.Status)
+	assert.Nil(t, entry.SentAt, "SentAt must be cleared")
+	assert.Nil(t, entry.CompletedAt, "CompletedAt must be cleared")
+	assert.Equal(t, 1, entry.Attempt, "Attempt must be preserved")
+}
+
+func TestResetForRetry_FromTerminal_Rejected(t *testing.T) {
+	// Succeeded, Expired, Canceled are NOT retryable (unlike Failed).
+	rejectedStatuses := []CommandStatus{CommandSucceeded, CommandExpired, CommandCanceled}
+	for _, status := range rejectedStatuses {
+		t.Run(status.String(), func(t *testing.T) {
+			created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+			// Force the status (bypassing state machine for test setup)
+			entry.Status = status
+			completedAt := created.Add(10 * time.Second)
+			entry.CompletedAt = &completedAt
+
+			err := ResetForRetry(&entry)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+			assert.Equal(t, status, entry.Status, "status must not change on rejected reset")
+		})
+	}
+}
+
+func TestResetForRetry_FromPending_Rejected(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+
+	err := ResetForRetry(&entry)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Equal(t, CommandPending, entry.Status, "status must not change")
+}
+
+func TestResetForRetry_FromDelivered_Rejected(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
+
+	// Advance to Delivered
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.NoError(t, AdvanceCommand(&entry, CommandDelivered, now.Add(1*time.Second)))
+
+	err := ResetForRetry(&entry)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+	assert.Equal(t, CommandDelivered, entry.Status, "status must not change")
+}
+
+func TestResetForRetry_PreservesFields(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	metadata := map[string]string{"env": "prod", "region": "us-east-1"}
+	timeouts := CommandTimeouts{
+		ScheduleToSend:  30 * time.Second,
+		SendToComplete:  5 * time.Minute,
+		OverallDeadline: 1 * time.Hour,
+	}
+	entry := NewCommandEntry("cmd-42", "dev-99", "cert-renew", []byte(`{"key":"val"}`), timeouts, created)
+	entry.Metadata = metadata
+
+	// Advance to Sent
+	sentAt := created.Add(5 * time.Second)
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, sentAt))
+
+	// Reset
+	assert.NoError(t, ResetForRetry(&entry))
+
+	// Verify preserved fields
+	assert.Equal(t, "cmd-42", entry.ID)
+	assert.Equal(t, "dev-99", entry.DeviceID)
+	assert.Equal(t, "cert-renew", entry.CommandType)
+	assert.Equal(t, []byte(`{"key":"val"}`), entry.Payload)
+	assert.Equal(t, timeouts, entry.Timeouts)
+	assert.Equal(t, metadata, entry.Metadata)
+	assert.Equal(t, created, entry.CreatedAt, "CreatedAt must be preserved")
+}
+
+func TestAdvanceCommand_AfterRetry(t *testing.T) {
+	// Full cycle: Pending→Sent→ResetForRetry→Pending→Sent — verify Attempt=2.
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
 
 	// First attempt
 	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
 	assert.Equal(t, 1, entry.Attempt)
 
-	// Simulate retry: reset to Pending (not through AdvanceCommand — adapter does this)
-	entry.Status = CommandPending
-	entry.SentAt = nil
+	// Reset for retry (replaces old direct-mutation pattern)
+	assert.NoError(t, ResetForRetry(&entry))
+	assert.Equal(t, CommandPending, entry.Status)
+	assert.Equal(t, 1, entry.Attempt, "Attempt preserved across reset")
+
+	// Second attempt
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now.Add(1*time.Second)))
+	assert.Equal(t, 2, entry.Attempt)
+
+	// Complete successfully
+	assert.NoError(t, AdvanceCommand(&entry, CommandDelivered, now.Add(2*time.Second)))
+	assert.NoError(t, AdvanceCommand(&entry, CommandSucceeded, now.Add(3*time.Second)))
+	assert.True(t, entry.Status.IsTerminal())
+}
+
+func TestAdvanceCommand_SentIncrementsAttempt(t *testing.T) {
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewCommandEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), CommandTimeouts{}, created)
+	now := created.Add(5 * time.Second)
+
+	// First attempt
+	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now))
+	assert.Equal(t, 1, entry.Attempt)
+
+	// Use ResetForRetry instead of direct mutation (L4-RETRY-01)
+	assert.NoError(t, ResetForRetry(&entry))
 
 	assert.NoError(t, AdvanceCommand(&entry, CommandSent, now.Add(1*time.Second)))
 	assert.Equal(t, 2, entry.Attempt)
