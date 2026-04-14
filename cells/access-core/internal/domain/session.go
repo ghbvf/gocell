@@ -17,6 +17,7 @@ type Session struct {
 	ExpiresAt            time.Time
 	RevokedAt            *time.Time // nil = not revoked
 	CreatedAt            time.Time
+	Version              int64      // optimistic lock version; incremented on each update
 }
 
 // NewSession creates a new session for the given user.
@@ -38,6 +39,7 @@ func NewSession(userID, accessToken, refreshToken string, expiresAt time.Time) (
 		RefreshToken: refreshToken,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    time.Now(),
+		Version:      1,
 	}, nil
 }
 

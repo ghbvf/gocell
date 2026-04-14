@@ -11,12 +11,23 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// noopTxRunner is a test double that executes fn directly without a real transaction.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	return fn(context.Background())
+}
+
+var _ persistence.TxRunner = noopTxRunner{}
 
 var (
 	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
@@ -49,6 +60,7 @@ func newTestCell() *AccessCore {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 }
 
@@ -60,6 +72,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithPublisher(eventbus.New()),
 		WithJWTVerifier(testVerifier), // issuer missing
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
@@ -74,10 +87,60 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer), // verifier missing
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
+}
+
+func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
+	// outboxWriter present but txRunner missing → XOR mismatch → error
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(mem.NewRoleRepository()),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		// txRunner intentionally omitted
+	)
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "txRunner")
+}
+
+func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
+	// txRunner present but outboxWriter missing → XOR mismatch → error
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(mem.NewRoleRepository()),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithTxManager(noopTxRunner{}),
+		// outboxWriter intentionally omitted
+	)
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "txRunner")
+}
+
+func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
+	// Both outboxWriter and txRunner present → should succeed
+	c := newTestCell() // newTestCell includes both
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	require.NoError(t, c.Init(context.Background(), deps))
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {
@@ -89,7 +152,7 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Equal(t, 7, len(c.OwnedSlices()), "should have 7 slices")
+	assert.Equal(t, 8, len(c.OwnedSlices()), "should have 8 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

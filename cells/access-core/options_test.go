@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,25 +27,34 @@ func TestWithInMemoryDefaults(t *testing.T) {
 
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
-	err := c.RegisterSubscriptions(nil)
-	require.NoError(t, err)
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any)}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := &celltest.StubEventRouter{}
+	require.NoError(t, c.RegisterSubscriptions(r))
+	assert.Equal(t, 1, r.HandlerCount(), "access-core should register 1 topic handler")
+	assert.Equal(t, "event.config.changed.v1", r.Topics[0])
+	assert.Equal(t, "access-core", r.ConsumerGroups[0])
 }
 
 func TestInit_MissingOutboxWriter(t *testing.T) {
-	// L2 cell without outboxWriter should fail.
+	// L2 cell without outboxWriter (but with txRunner) should fail via XOR check.
 	c := NewAccessCore(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithTxManager(noopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
 	err := c.Init(context.Background(), deps)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter")
+	assert.Contains(t, err.Error(), "txRunner")
 }
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
 	err := c.Init(context.Background(), deps)
