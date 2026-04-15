@@ -179,7 +179,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		verifyOpts = append(verifyOpts, auditverify.WithTxManager(c.txRunner))
 	}
 	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, verifyOpts...)
-	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L0))
+	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
+	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L2))
 
 	// audit-archive (stub)
 	c.archiveSvc = auditarchive.NewService()
