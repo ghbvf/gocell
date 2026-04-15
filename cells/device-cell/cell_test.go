@@ -197,10 +197,11 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Enqueue command.
+	// Enqueue command (operator role required).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
@@ -241,10 +242,11 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Enqueue command.
+	// Enqueue command (operator role required).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 
