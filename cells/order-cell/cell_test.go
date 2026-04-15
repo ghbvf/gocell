@@ -16,17 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
-
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
 
 func newTestDeps() cell.Dependencies {
 	return cell.Dependencies{
@@ -34,10 +25,12 @@ func newTestDeps() cell.Dependencies {
 	}
 }
 
+// newTestCell creates an OrderCell with NoopWriter + NoopTxRunner (unified outbox path).
 func newTestCell() *OrderCell {
 	return NewOrderCell(
 		WithRepository(mem.NewOrderRepository()),
-		WithPublisher(outbox.DiscardPublisher{}),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 }
 
@@ -85,18 +78,25 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:    "no options fails — publisher required",
+			name:    "no options fails — outboxWriter+txRunner required",
 			opts:    nil,
 			wantErr: true,
 		},
 		{
-			name:       "discard publisher opt-in succeeds",
-			opts:       []Option{WithPublisher(outbox.DiscardPublisher{})},
+			name: "NoopWriter + NoopTxRunner succeeds (demo mode)",
+			opts: []Option{
+				WithOutboxWriter(outbox.NoopWriter{}),
+				WithTxManager(persistence.NoopTxRunner{}),
+			},
 			wantSlices: 2,
 		},
 		{
-			name:       "with injected dependencies",
-			opts:       []Option{WithRepository(mem.NewOrderRepository()), WithPublisher(eventbus.New())},
+			name: "with explicit repo + NoopWriter + NoopTxRunner",
+			opts: []Option{
+				WithRepository(mem.NewOrderRepository()),
+				WithOutboxWriter(outbox.NoopWriter{}),
+				WithTxManager(persistence.NoopTxRunner{}),
+			},
 			wantSlices: 2,
 		},
 	}
@@ -107,7 +107,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 			err := c.Init(context.Background(), newTestDeps())
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "publisher or outbox writer")
+				assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 			} else {
 				require.NoError(t, err)
 				assert.Len(t, c.OwnedSlices(), tt.wantSlices)
@@ -116,15 +116,16 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	}
 }
 
-func TestOrderCell_DefaultInit_RequiresPublisher(t *testing.T) {
+func TestOrderCell_DefaultInit_RequiresOutboxWriterAndTxRunner(t *testing.T) {
 	c := NewOrderCell()
 	err := c.Init(context.Background(), newTestDeps())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publisher or outbox writer")
-	assert.Contains(t, err.Error(), "DiscardPublisher")
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	assert.Contains(t, err.Error(), "NoopWriter")
+	assert.Contains(t, err.Error(), "NoopTxRunner")
 }
 
-func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
+func TestOrderCell_InitRejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
@@ -135,7 +136,7 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 		},
 		{
 			name: "tx manager without writer",
-			opts: []Option{WithTxManager(noopTxRunner{})},
+			opts: []Option{WithTxManager(persistence.NoopTxRunner{})},
 		},
 	}
 
@@ -149,20 +150,6 @@ func TestOrderCell_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
 		})
 	}
-}
-
-func TestOrderCell_InitRejectsDurableModeWithDefaultRepo(t *testing.T) {
-	c := NewOrderCell(
-		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
-	)
-
-	err := c.Init(context.Background(), newTestDeps())
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
-	assert.Contains(t, err.Error(), "explicit repository")
 }
 
 func TestOrderCell_RegisterRoutes(t *testing.T) {

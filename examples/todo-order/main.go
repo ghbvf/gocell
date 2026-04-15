@@ -16,6 +16,8 @@ import (
 
 	ordercell "github.com/ghbvf/gocell/cells/order-cell"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -38,7 +40,10 @@ func main() {
 	}
 
 	// Create the order cell with in-memory defaults.
+	// Demo mode: NoopWriter + NoopTxRunner → unified outbox code path (zero fork).
 	oc := ordercell.NewOrderCell(
+		ordercell.WithOutboxWriter(outbox.NoopWriter{}),
+		ordercell.WithTxManager(persistence.NoopTxRunner{}),
 		ordercell.WithPublisher(eb),
 		ordercell.WithCursorCodec(cursorCodec),
 		ordercell.WithLogger(logger),

@@ -15,6 +15,7 @@ import (
 	devicestatus "github.com/ghbvf/gocell/cells/device-cell/slices/device-status"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -103,8 +104,10 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Info("device-cell: using in-memory command repository (demo mode)")
 	}
 
+	// Publisher is required (NIL-PUB-P1). Use DiscardPublisher{} for demo mode.
 	if c.publisher == nil {
-		c.logger.Warn("device-cell: no publisher injected, events will not be published")
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"device-cell requires publisher; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
 	}
 
 	// device-register slice

@@ -1,5 +1,8 @@
 // Package ordercreate implements the order-create slice: creating orders
-// and publishing order.created events.
+// and publishing order.created events via the transactional outbox pattern.
+//
+// Demo mode injects NoopWriter + NoopTxRunner to exercise the same code
+// path as production (zero fork). ref: Watermill GoChannel / Uber fx pattern.
 package ordercreate
 
 import (
@@ -37,7 +40,7 @@ func toOrderCreatedEvent(o *domain.Order) orderCreatedEvent {
 // Option configures the order-create Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for durable event emission.
+// WithOutboxWriter sets the outbox.Writer for event emission.
 func WithOutboxWriter(w outbox.Writer) Option {
 	return func(s *Service) { s.outboxWriter = w }
 }
@@ -48,24 +51,23 @@ func WithTxManager(tx persistence.TxRunner) Option {
 }
 
 // Service handles order creation business logic.
+// Both outboxWriter and txRunner are required — the cell Init() enforces this.
+// Demo mode uses outbox.NoopWriter + persistence.NoopTxRunner for a unified
+// code path with zero fork.
 type Service struct {
 	repo         domain.OrderRepository
-	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	logger       *slog.Logger
 }
 
 // NewService creates an order-create Service.
-// If publisher is nil, it defaults to DiscardPublisher (demo mode).
-func NewService(repo domain.OrderRepository, publisher outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
-	if publisher == nil {
-		publisher = outbox.DiscardPublisher{}
-	}
+// outboxWriter and txRunner must be set via options; the cell Init()
+// validates their presence before constructing the Service.
+func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
-		repo:      repo,
-		publisher: publisher,
-		logger:    logger,
+		repo:   repo,
+		logger: logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -73,14 +75,10 @@ func NewService(repo domain.OrderRepository, publisher outbox.Publisher, logger 
 	return s
 }
 
-// Create creates a new order and publishes an order.created event.
+// Create creates a new order and writes an outbox entry atomically.
 func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error) {
 	if item == "" {
 		return nil, errcode.New(errcode.ErrValidationFailed, "item must not be empty")
-	}
-	if (s.outboxWriter == nil) != (s.txRunner == nil) {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
-			"order-create durable mode requires both outboxWriter and txRunner")
 	}
 
 	order := &domain.Order{
@@ -90,19 +88,12 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 		CreatedAt: time.Now(),
 	}
 
-	if s.outboxWriter != nil {
-		return s.createDurable(ctx, order)
-	}
-	return s.createDemo(ctx, order)
-}
-
-// createDurable persists the order and writes an outbox entry atomically.
-func (s *Service) createDurable(ctx context.Context, order *domain.Order) (*domain.Order, error) {
 	entry, err := s.buildOrderCreatedEntry(order)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Create(txCtx, order); err != nil {
 			return fmt.Errorf("order-create: persist: %w", err)
 		}
@@ -119,28 +110,6 @@ func (s *Service) createDurable(ctx context.Context, order *domain.Order) (*doma
 		slog.String("entry_id", entry.ID),
 		slog.String("topic", entry.RoutingTopic()),
 	)
-	return order, nil
-}
-
-// createDemo persists the order and publishes directly (best-effort, no transactional guarantee).
-func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.Order, error) {
-	if err := s.repo.Create(ctx, order); err != nil {
-		return nil, fmt.Errorf("order-create: persist: %w", err)
-	}
-
-	payload, err := json.Marshal(toOrderCreatedEvent(order))
-	if err != nil {
-		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
-		return order, nil // order is created, event publish is best-effort
-	}
-
-	if err := s.publisher.Publish(ctx, TopicOrderCreated, payload); err != nil {
-		s.logger.Error("order-create: publish event failed",
-			slog.String("order_id", order.ID),
-			slog.Any("error", err),
-		)
-	}
-
 	return order, nil
 }
 
@@ -162,11 +131,4 @@ func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, err
 		return outbox.Entry{}, fmt.Errorf("order-create: invalid outbox entry: %w", err)
 	}
 	return entry, nil
-}
-
-func (s *Service) runInTx(ctx context.Context, fn func(context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
 }

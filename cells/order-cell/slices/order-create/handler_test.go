@@ -1,7 +1,6 @@
 package ordercreate
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,14 +14,8 @@ import (
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
-
-// stubPublisher is a no-op publisher for handler tests.
-type stubPublisher struct{}
-
-func (stubPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-
-var _ outbox.Publisher = stubPublisher{}
 
 func TestOrderCreateResponse_Fields(t *testing.T) {
 	order := &domain.Order{ID: "ord-1", Item: "laptop", Status: "pending"}
@@ -42,7 +35,10 @@ func TestOrderCreateResponse_Fields(t *testing.T) {
 
 func newTestHandler() *Handler {
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, stubPublisher{}, slog.Default())
+	svc := NewService(repo, slog.Default(),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
 	return NewHandler(svc)
 }
 

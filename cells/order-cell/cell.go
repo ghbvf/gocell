@@ -92,19 +92,17 @@ func NewOrderCell(opts ...Option) *OrderCell {
 }
 
 // Init sets up repositories, slice services, and handlers.
-// In demo mode, missing dependencies are replaced with in-memory defaults.
+// outboxWriter and txRunner are required. For demo mode, inject
+// outbox.NoopWriter{} + persistence.NoopTxRunner{} for a unified code path.
 func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
 
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+	// outboxWriter + txRunner are mandatory (demo uses NoopWriter + NoopTxRunner).
+	if c.outboxWriter == nil || c.txRunner == nil {
 		return errcode.New(errcode.ErrCellMissingOutbox,
-			"order-cell durable mode requires both outboxWriter and txRunner")
-	}
-	if (c.outboxWriter != nil || c.txRunner != nil) && c.repo == nil {
-		return errcode.New(errcode.ErrValidationFailed,
-			"order-cell durable mode requires explicit repository injection")
+			"order-cell requires outboxWriter and txRunner; use outbox.NoopWriter{} + persistence.NoopTxRunner{} for demo mode")
 	}
 
 	// Default to in-memory repository if none injected.
@@ -113,20 +111,11 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Info("order-cell: using in-memory repository (demo mode)")
 	}
 
-	if c.publisher == nil && c.outboxWriter == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"order-cell requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
-	}
-
-	// order-create slice
-	var createOpts []ordercreate.Option
-	if c.outboxWriter != nil {
-		createOpts = append(createOpts, ordercreate.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		createOpts = append(createOpts, ordercreate.WithTxManager(c.txRunner))
-	}
-	createSvc := ordercreate.NewService(c.repo, c.publisher, c.logger, createOpts...)
+	// order-create slice — unified outbox path, no publisher fork.
+	createSvc := ordercreate.NewService(c.repo, c.logger,
+		ordercreate.WithOutboxWriter(c.outboxWriter),
+		ordercreate.WithTxManager(c.txRunner),
+	)
 	c.createHandler = ordercreate.NewHandler(createSvc)
 	c.AddSlice(cell.NewBaseSlice("order-create", "order-cell", cell.L2))
 

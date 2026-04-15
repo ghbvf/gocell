@@ -78,7 +78,7 @@ func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 }
 
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
-	// No publisher injected; Init should succeed with warning.
+	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithCommandRepository(mem.NewCommandRepository()),
@@ -87,8 +87,10 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	deps := cell.Dependencies{
 		Config: make(map[string]any),
 	}
-	require.NoError(t, c.Init(ctx, deps))
-	assert.Len(t, c.OwnedSlices(), 3)
+	err := c.Init(ctx, deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher")
+	assert.Contains(t, err.Error(), "DiscardPublisher")
 }
 
 func TestDeviceCell_RegisterRoutes(t *testing.T) {
