@@ -22,6 +22,10 @@ type WatcherCollector interface {
 // All methods are safe for concurrent use.
 type NoopWatcherCollector struct{}
 
-func (NoopWatcherCollector) RecordEvent(string)              {}
+// Intentionally empty: NoopWatcherCollector discards all metrics when no
+// collector is configured. Real implementations live in adapters/ (e.g.
+// Prometheus, OTel) and are injected via WithMetrics.
+
+func (NoopWatcherCollector) RecordEvent(string)                {}
 func (NoopWatcherCollector) RecordLastEventTimestamp(time.Time) {}
 func (NoopWatcherCollector) RecordDebounceCoalesced()           {}
