@@ -36,7 +36,7 @@ func readModule(root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open go.mod: %w", err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // read-only file
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

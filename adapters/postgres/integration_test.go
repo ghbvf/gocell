@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,7 @@ func setupPostgres(t *testing.T) (*Pool, func()) {
 
 	ctx := context.Background()
 
-	container, err := tcpostgres.Run(ctx, "postgres:15-alpine",
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),

@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 // Service implements RBAC query operations.
 type Service struct {
 	roleRepo ports.RoleRepository

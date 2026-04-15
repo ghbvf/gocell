@@ -1,0 +1,30 @@
+version: "2"
+
+linters:
+  # Default-enabled: govet, errcheck, staticcheck, unused, ineffassign.
+  # gosimple is part of staticcheck in v2.
+  enable:
+    - gocognit
+
+  settings:
+    gocognit:
+      min-complexity: 16 # project rule: ≤ 15, flag at 16+
+
+  exclusions:
+    rules:
+      # Test files: defer .Close() and similar are acceptable.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocognit
+      # Examples are demo code — allow slightly relaxed checks.
+      - path: ^examples/
+        linters:
+          - errcheck
+    paths:
+      - generated
+      - vendor
+
+formatters:
+  enable:
+    - gofmt

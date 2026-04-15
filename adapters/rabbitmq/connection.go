@@ -405,6 +405,7 @@ func (c *Connection) reconnectLoop() {
 // reconnectWithBackoff attempts to re-establish the connection with exponential
 // backoff. Returns (true, nil) on success, (false, err) on permanent failure,
 // or (false, nil) if closeCh fired (clean shutdown).
+//nolint:gocognit // pre-existing complexity; tracked in backlog Batch 8
 func (c *Connection) reconnectWithBackoff() (bool, error) {
 	attempt := 0
 	for {

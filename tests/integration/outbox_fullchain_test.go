@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,7 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcpostgres.Run(ctx, "postgres:15-alpine",
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
@@ -67,7 +68,7 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcrabbitmq.Run(ctx, "rabbitmq:3.12-management-alpine")
+	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
 	require.NoError(t, err, "start rabbitmq container")
 
 	amqpURL, err := container.AmqpURL(ctx)
@@ -95,7 +96,7 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
+	container, err := tcredis.Run(ctx, testutil.RedisImage)
 	require.NoError(t, err, "start redis container")
 
 	connStr, err := container.ConnectionString(ctx)
