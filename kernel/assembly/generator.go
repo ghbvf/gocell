@@ -181,9 +181,9 @@ func (g *Generator) sourceFingerprint(assemblyID string) string {
 
 	// Hash assembly identity.
 	// hash.Hash.Write never returns error — safe to ignore per Go spec.
-	fmt.Fprintf(h, "assembly:%s\n", asm.ID)       //nolint:errcheck
+	fmt.Fprintf(h, "assembly:%s\n", asm.ID) //nolint:errcheck
 	for _, c := range cells {
-		fmt.Fprintf(h, "cells:%s\n", c)            //nolint:errcheck
+		fmt.Fprintf(h, "cells:%s\n", c) //nolint:errcheck
 	}
 	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint) //nolint:errcheck
 	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)         //nolint:errcheck

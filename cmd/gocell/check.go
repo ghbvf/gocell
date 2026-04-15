@@ -107,23 +107,33 @@ func validateContractHealth(contracts []*metadata.ContractMeta) []string {
 			issues = append(issues, fmt.Sprintf("%s: missing lifecycle", c.ID))
 		}
 		if c.Kind == "http" {
-			if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
-				issues = append(issues, fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID))
-				continue
-			}
-			// Response schema required unless noContent is true.
-			noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
-			if c.SchemaRefs.Response == "" && !noContent {
-				issues = append(issues, fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID))
-			}
-			// Request schema required for PUT/PATCH (always body-bearing).
-			// POST is excluded: action-style POSTs (publish, ack) are legitimately body-less.
-			if c.Endpoints.HTTP != nil {
-				method := c.Endpoints.HTTP.Method
-				if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
-					issues = append(issues, fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method))
-				}
-			}
+			issues = append(issues, validateHTTPSchemaRefs(c)...)
+		}
+	}
+
+	return issues
+}
+
+// validateHTTPSchemaRefs checks that an HTTP contract has the required schema references.
+func validateHTTPSchemaRefs(c *metadata.ContractMeta) []string {
+	var issues []string
+
+	if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
+		return []string{fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID)}
+	}
+
+	// Response schema required unless noContent is true.
+	noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
+	if c.SchemaRefs.Response == "" && !noContent {
+		issues = append(issues, fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID))
+	}
+
+	// Request schema required for PUT/PATCH (always body-bearing).
+	// POST is excluded: action-style POSTs (publish, ack) are legitimately body-less.
+	if c.Endpoints.HTTP != nil {
+		method := c.Endpoints.HTTP.Method
+		if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
+			issues = append(issues, fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method))
 		}
 	}
 
