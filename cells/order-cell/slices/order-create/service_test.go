@@ -1,7 +1,6 @@
 package ordercreate
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -18,35 +17,6 @@ import (
 )
 
 // --- test doubles ---
-
-// noopPublisher always succeeds.
-type noopPublisher struct{}
-
-func (noopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-
-var _ outbox.Publisher = noopPublisher{}
-
-// failPublisher always returns an error.
-type failPublisher struct{}
-
-func (failPublisher) Publish(_ context.Context, _ string, _ []byte) error {
-	return errors.New("publish unavailable")
-}
-
-// recordingPublisher records each publish call.
-type recordingPublisher struct {
-	calls []publishCall
-}
-
-type publishCall struct {
-	topic   string
-	payload []byte
-}
-
-func (p *recordingPublisher) Publish(_ context.Context, topic string, payload []byte) error {
-	p.calls = append(p.calls, publishCall{topic: topic, payload: payload})
-	return nil
-}
 
 type recordingWriter struct {
 	entries []outbox.Entry
@@ -76,35 +46,29 @@ var _ persistence.TxRunner = (*stubTxRunner)(nil)
 
 func TestService_Create(t *testing.T) {
 	tests := []struct {
-		name      string
-		item      string
-		publisher outbox.Publisher
-		wantErr   bool
-		errCode   errcode.Code
+		name    string
+		item    string
+		wantErr bool
+		errCode errcode.Code
 	}{
 		{
-			name:      "success",
-			item:      "widget",
-			publisher: noopPublisher{},
+			name: "success via outbox path",
+			item: "widget",
 		},
 		{
-			name:      "empty item returns validation error",
-			item:      "",
-			publisher: noopPublisher{},
-			wantErr:   true,
-			errCode:   errcode.ErrValidationFailed,
-		},
-		{
-			name:      "publish failure does not fail create",
-			item:      "gadget",
-			publisher: failPublisher{},
+			name:    "empty item returns validation error",
+			item:    "",
+			wantErr: true,
+			errCode: errcode.ErrValidationFailed,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := mem.NewOrderRepository()
-			svc := NewService(repo, tt.publisher, slog.Default())
+			svc := NewService(mem.NewOrderRepository(), slog.Default(),
+				WithOutboxWriter(outbox.NoopWriter{}),
+				WithTxManager(persistence.NoopTxRunner{}),
+			)
 
 			order, err := svc.Create(context.Background(), tt.item)
 			if tt.wantErr {
@@ -124,33 +88,17 @@ func TestService_Create(t *testing.T) {
 	}
 }
 
-func TestService_Create_PublishesEvent(t *testing.T) {
+func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
-	pub := &recordingPublisher{}
-	svc := NewService(repo, pub, slog.Default())
-
-	order, err := svc.Create(context.Background(), "test-item")
-	require.NoError(t, err)
-	require.NotNil(t, order)
-
-	require.Len(t, pub.calls, 1, "should publish exactly one event")
-	assert.Equal(t, TopicOrderCreated, pub.calls[0].topic)
-	assert.Contains(t, string(pub.calls[0].payload), order.ID)
-}
-
-func TestService_Create_UsesOutboxWriterWhenConfigured(t *testing.T) {
-	repo := mem.NewOrderRepository()
-	pub := &recordingPublisher{}
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, pub, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.NoError(t, err)
 	require.NotNil(t, order)
 	require.Len(t, writer.entries, 1, "should write exactly one outbox entry")
-	assert.Equal(t, 1, txRunner.calls, "durable path should run inside txRunner when configured")
-	assert.Empty(t, pub.calls, "outbox path should not call direct publisher")
+	assert.Equal(t, 1, txRunner.calls, "should run inside txRunner")
 	assert.NotEmpty(t, writer.entries[0].ID)
 	assert.Equal(t, order.ID, writer.entries[0].AggregateID)
 	assert.Equal(t, "order", writer.entries[0].AggregateType)
@@ -161,53 +109,36 @@ func TestService_Create_UsesOutboxWriterWhenConfigured(t *testing.T) {
 
 func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
-	pub := &recordingPublisher{}
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, pub, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.Error(t, err)
 	assert.Nil(t, order)
 	assert.Equal(t, 1, txRunner.calls)
-	assert.Empty(t, pub.calls, "failure on durable path must not fall back to direct publish")
 }
 
-func TestService_Create_RejectsHalfConfiguredDurablePath(t *testing.T) {
-	tests := []struct {
-		name string
-		opts []Option
-	}{
-		{
-			name: "writer without tx manager",
-			opts: []Option{WithOutboxWriter(&recordingWriter{})},
-		},
-		{
-			name: "tx manager without writer",
-			opts: []Option{WithTxManager(&stubTxRunner{})},
-		},
-	}
+func TestService_Create_NoopWriterDemoPath(t *testing.T) {
+	// Demo mode: NoopWriter validates entries then discards. Same outbox code path.
+	repo := mem.NewOrderRepository()
+	svc := NewService(repo, slog.Default(),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := mem.NewOrderRepository()
-			pub := &recordingPublisher{}
-			svc := NewService(repo, pub, slog.Default(), tt.opts...)
-
-			order, err := svc.Create(context.Background(), "misconfigured")
-			require.Error(t, err)
-			assert.Nil(t, order)
-			var ecErr *errcode.Error
-			require.ErrorAs(t, err, &ecErr)
-			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-			assert.Empty(t, pub.calls)
-		})
-	}
+	order, err := svc.Create(context.Background(), "demo-item")
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, "demo-item", order.Item)
 }
 
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, noopPublisher{}, slog.Default())
+	svc := NewService(repo, slog.Default(),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
 
 	order, err := svc.Create(context.Background(), "persisted")
 	require.NoError(t, err)
@@ -228,61 +159,12 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 }
 
 func TestService_Create_RepoFailure(t *testing.T) {
-	svc := NewService(failRepo{}, noopPublisher{}, slog.Default())
+	svc := NewService(failRepo{}, slog.Default(),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
 
 	order, err := svc.Create(context.Background(), "item")
-	require.Error(t, err)
-	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "persist")
-}
-
-func TestService_Create_DemoPublishSuccess(t *testing.T) {
-	repo := mem.NewOrderRepository()
-	pub := &recordingPublisher{}
-	svc := NewService(repo, pub, slog.Default())
-
-	order, err := svc.Create(context.Background(), "demo-item")
-	require.NoError(t, err)
-	require.NotNil(t, order)
-	require.Len(t, pub.calls, 1)
-	assert.Equal(t, TopicOrderCreated, pub.calls[0].topic)
-}
-
-func TestService_Create_DemoNilPublisher(t *testing.T) {
-	// NewService defaults nil publisher to DiscardPublisher (constructor fallback).
-	repo := mem.NewOrderRepository()
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	svc := NewService(repo, nil, logger)
-
-	order, err := svc.Create(context.Background(), "nil-pub")
-	require.NoError(t, err)
-	require.NotNil(t, order)
-	assert.Equal(t, "nil-pub", order.Item)
-	// No error logged — DiscardPublisher.Publish() returns nil.
-	assert.NotContains(t, logs.String(), "ERROR")
-}
-
-func TestService_Create_DemoDiscardPublisher(t *testing.T) {
-	repo := mem.NewOrderRepository()
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	svc := NewService(repo, outbox.DiscardPublisher{}, logger)
-
-	order, err := svc.Create(context.Background(), "discard-pub")
-	require.NoError(t, err)
-	require.NotNil(t, order)
-	assert.Equal(t, "discard-pub", order.Item)
-	// Service logs no error — DiscardPublisher.Publish() returns nil.
-	// DiscardPublisher's own slog.Warn goes through slog.Default(), not
-	// the injected logger, so it does not appear in logs buffer.
-	assert.NotContains(t, logs.String(), "ERROR")
-}
-
-func TestService_Create_DemoRepoFailure(t *testing.T) {
-	svc := NewService(failRepo{}, &recordingPublisher{}, slog.Default())
-
-	order, err := svc.Create(context.Background(), "fail")
 	require.Error(t, err)
 	assert.Nil(t, order)
 	assert.Contains(t, err.Error(), "persist")

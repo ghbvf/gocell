@@ -12,3 +12,19 @@ import "context"
 type TxRunner interface {
 	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
+
+// NoopTxRunner executes fn directly without a real transaction.
+// Use for demo mode and unit tests that do not require transactional
+// guarantees. Unlike a nil TxRunner, NoopTxRunner is safe to call
+// unconditionally, enabling unified code paths (no demo/durable fork).
+type NoopTxRunner struct{}
+
+// RunInTx calls fn with the provided context (no transaction wrapping).
+func (NoopTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ TxRunner = NoopTxRunner{}
+
+// Noop implements cell.Nooper. CheckNotNoop rejects NoopTxRunner in durable mode.
+func (NoopTxRunner) Noop() bool { return true }

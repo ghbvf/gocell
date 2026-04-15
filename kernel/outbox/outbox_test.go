@@ -56,6 +56,14 @@ func TestNoopWriter_WriteBatchRejectsInvalidEntry(t *testing.T) {
 	assert.Contains(t, err.Error(), "entry[1]")
 }
 
+func TestNoopWriter_Noop(t *testing.T) {
+	assert.True(t, NoopWriter{}.Noop())
+}
+
+func TestDiscardPublisher_Noop(t *testing.T) {
+	assert.True(t, DiscardPublisher{}.Noop())
+}
+
 func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
 	var publisher Publisher = DiscardPublisher{}
 	err := publisher.Publish(context.Background(), "orders.created", []byte(`{"ok":true}`))

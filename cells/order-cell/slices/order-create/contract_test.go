@@ -15,7 +15,7 @@ import (
 func newContractHandler() (http.Handler, *recordingWriter) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
-	svc := NewService(repo, stubPublisher{}, slog.Default(), WithOutboxWriter(writer), WithTxManager(&stubTxRunner{}))
+	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(&stubTxRunner{}))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
 	return mux, writer

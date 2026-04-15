@@ -35,7 +35,8 @@ const (
 
 // Config holds assembly-level configuration.
 type Config struct {
-	ID string
+	ID             string
+	DurabilityMode cell.DurabilityMode // Demo (default) or Durable
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of
@@ -43,6 +44,7 @@ type Config struct {
 type CoreAssembly struct {
 	mu      sync.Mutex
 	id      string
+	cfg     Config
 	cells   []cell.Cell
 	cellMap map[string]cell.Cell
 	state   assemblyState
@@ -52,6 +54,7 @@ type CoreAssembly struct {
 func New(cfg Config) *CoreAssembly {
 	return &CoreAssembly{
 		id:      cfg.ID,
+		cfg:     cfg,
 		cellMap: make(map[string]cell.Cell),
 	}
 }
@@ -193,7 +196,8 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	}
 
 	deps := cell.Dependencies{
-		Config: cfgMap,
+		Config:         cfgMap,
+		DurabilityMode: a.cfg.DurabilityMode,
 	}
 
 	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
