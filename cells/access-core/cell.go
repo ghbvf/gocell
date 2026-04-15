@@ -135,6 +135,19 @@ func NewAccessCore(opts ...Option) *AccessCore {
 	return c
 }
 
+// SessionHealthChecker returns a health check function for the session store,
+// or nil if the underlying repository does not support health checks (e.g. when
+// using a third-party implementation without a Health method).
+// Callers should register this with bootstrap.WithHealthChecker("session-store", fn)
+// when fn is non-nil.
+func (c *AccessCore) SessionHealthChecker() func() error {
+	type healthChecker interface{ Health() error }
+	if hc, ok := c.sessionRepo.(healthChecker); ok {
+		return hc.Health
+	}
+	return nil
+}
+
 // TokenVerifier returns the session-validate service (implements auth.TokenVerifier).
 func (c *AccessCore) TokenVerifier() auth.TokenVerifier {
 	if c.validateSvc == nil {

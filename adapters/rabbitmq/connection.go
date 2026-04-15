@@ -624,6 +624,26 @@ func (c *Connection) Health() error {
 	return nil
 }
 
+// PoolStats holds structured channel pool statistics.
+type PoolStats struct {
+	ChannelPoolSize int             // configured pool capacity
+	IdleChannels    int             // channels currently idle in pool
+	State           ConnectionState // current connection lifecycle state
+}
+
+// PoolStats returns structured pool statistics suitable for metrics collection
+// and operational dashboards.
+func (c *Connection) PoolStats() PoolStats {
+	c.mu.RLock()
+	state := c.state
+	c.mu.RUnlock()
+	return PoolStats{
+		ChannelPoolSize: cap(c.channelPool),
+		IdleChannels:    len(c.channelPool),
+		State:           state,
+	}
+}
+
 // ConnectionStatus returns the current lifecycle state of the connection.
 // Useful for dashboards, structured logging, and operational tooling.
 func (c *Connection) ConnectionStatus() ConnectionState {

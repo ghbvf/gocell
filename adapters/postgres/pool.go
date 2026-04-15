@@ -148,6 +148,45 @@ func (p *Pool) Close() {
 	slog.Info("postgres pool closed")
 }
 
+// PoolStats holds structured connection pool statistics.
+//
+// ref: pgxpool Stat() — adopted same field set for operational dashboards
+// and Prometheus/OTel metric collectors.
+type PoolStats struct {
+	AcquireCount            int64
+	AcquireDuration         time.Duration
+	AcquiredConns           int32
+	CanceledAcquireCount    int64
+	ConstructingConns       int32
+	EmptyAcquireCount       int64
+	IdleConns               int32
+	MaxConns                int32
+	TotalConns              int32
+	NewConnsCount           int64
+	MaxLifetimeDestroyCount int64
+	MaxIdleDestroyCount     int64
+}
+
+// PoolStats returns structured pool statistics suitable for metrics collection
+// and operational dashboards.
+func (p *Pool) PoolStats() PoolStats {
+	s := p.inner.Stat()
+	return PoolStats{
+		AcquireCount:            s.AcquireCount(),
+		AcquireDuration:         s.AcquireDuration(),
+		AcquiredConns:           s.AcquiredConns(),
+		CanceledAcquireCount:    s.CanceledAcquireCount(),
+		ConstructingConns:       s.ConstructingConns(),
+		EmptyAcquireCount:       s.EmptyAcquireCount(),
+		IdleConns:               s.IdleConns(),
+		MaxConns:                s.MaxConns(),
+		TotalConns:              s.TotalConns(),
+		NewConnsCount:           s.NewConnsCount(),
+		MaxLifetimeDestroyCount: s.MaxLifetimeDestroyCount(),
+		MaxIdleDestroyCount:     s.MaxIdleDestroyCount(),
+	}
+}
+
 // Stats returns pool statistics as a formatted string for diagnostics.
 func (p *Pool) Stats() string {
 	s := p.inner.Stat()

@@ -172,12 +172,20 @@ func main() {
 		"/api/v1/access/sessions/refresh",
 	}
 
-	app := bootstrap.New(
+	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
-	)
+	}
+
+	// Register session store health checker if the repository supports it.
+	// In-memory: always healthy. Future PG-backed: checks DB connectivity.
+	if fn := accessCell.SessionHealthChecker(); fn != nil {
+		bootstrapOpts = append(bootstrapOpts, bootstrap.WithHealthChecker("session-store", fn))
+	}
+
+	app := bootstrap.New(bootstrapOpts...)
 
 	if err := app.Run(ctx); err != nil {
 		slog.Error("application failed", "error", err)

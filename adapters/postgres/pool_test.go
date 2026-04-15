@@ -119,6 +119,22 @@ func TestNewPool_InvalidDSN(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse DSN")
 }
 
+func TestPoolStats_ZeroValue(t *testing.T) {
+	var stats PoolStats
+	assert.Equal(t, int64(0), stats.AcquireCount)
+	assert.Equal(t, time.Duration(0), stats.AcquireDuration)
+	assert.Equal(t, int32(0), stats.AcquiredConns)
+	assert.Equal(t, int64(0), stats.CanceledAcquireCount)
+	assert.Equal(t, int32(0), stats.ConstructingConns)
+	assert.Equal(t, int64(0), stats.EmptyAcquireCount)
+	assert.Equal(t, int32(0), stats.IdleConns)
+	assert.Equal(t, int32(0), stats.MaxConns)
+	assert.Equal(t, int32(0), stats.TotalConns)
+	assert.Equal(t, int64(0), stats.NewConnsCount)
+	assert.Equal(t, int64(0), stats.MaxLifetimeDestroyCount)
+	assert.Equal(t, int64(0), stats.MaxIdleDestroyCount)
+}
+
 func TestNewPool_UnreachableHost(t *testing.T) {
 	if os.Getenv("PG_INTEGRATION") == "" {
 		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")

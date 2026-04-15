@@ -55,6 +55,11 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 	wg.Wait()
 }
 
+func TestSessionRepository_Health(t *testing.T) {
+	repo := NewSessionRepository()
+	assert.NoError(t, repo.Health(), "in-memory session repo is always healthy")
+}
+
 // TestSessionRepository_ConcurrentCreateAndGet verifies that concurrent
 // Create and Get calls do not race. Run with -race to verify.
 func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {

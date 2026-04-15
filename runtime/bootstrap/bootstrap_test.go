@@ -854,6 +854,87 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	}
 }
 
+func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return false
+		}
+		deps, ok := body["dependencies"].(map[string]any)
+		if !ok {
+			return false
+		}
+		// Config drift checker should be registered and healthy (no drift).
+		return deps[configDriftCheckerName] == "healthy"
+	}, 3*time.Second, 50*time.Millisecond, "config-drift checker not found or not healthy")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_ConfigDriftChecker_ReportsUnhealthy(t *testing.T) {
+	// Unit test: verify the config-drift checker closure logic directly.
+	// Integration of HasDrift with generation/observedGeneration is covered
+	// by runtime/config/config_test.go (TestConfig_HasDrift).
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	// Initially: generation=0, observedGeneration=0 → no drift.
+	assert.False(t, config.HasDrift(cfg))
+
+	// Reload to bump generation to 1; observedGeneration stays 0 → drift.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: updated\n"), 0o644))
+	r, ok := cfg.(config.Reloader)
+	require.True(t, ok)
+	require.NoError(t, r.Reload(cfgFile, ""))
+	assert.True(t, config.HasDrift(cfg), "generation 1 != observed 0 → drift")
+
+	// Simulate cells applying → set observed = generation → no drift.
+	og := cfg.(config.ObservedGenerationer)
+	g := cfg.(config.Generationer)
+	og.SetObservedGeneration(g.Generation())
+	assert.False(t, config.HasDrift(cfg), "after cells apply, drift resolved")
+}
+
 func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")

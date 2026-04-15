@@ -117,6 +117,14 @@ func TestConfigLogValueRedactsPassword(t *testing.T) {
 	assert.NotContains(t, resolved, "s3cret", "LogValue must not contain password")
 }
 
+func TestClientPoolStats_NilProvider(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	stats := client.PoolStats()
+	assert.Equal(t, PoolStats{}, stats, "mock client must return zero PoolStats")
+}
+
 func TestNewClient_StandaloneEmptyAddr(t *testing.T) {
 	_, err := NewClient(context.Background(), Config{Mode: ModeStandalone})
 	require.Error(t, err)
