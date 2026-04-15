@@ -67,9 +67,11 @@ func TestValidateAdapterMode_InMemory_OK(t *testing.T) {
 	require.NoError(t, validateAdapterMode(""))
 }
 
-func TestValidateAdapterMode_Unknown_OK(t *testing.T) {
-	// Unknown modes (not "real") should pass validation — loadKeySet handles the warning.
-	require.NoError(t, validateAdapterMode("staging"))
+func TestValidateAdapterMode_Unknown_ReturnsError(t *testing.T) {
+	err := validateAdapterMode("staging")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown GOCELL_ADAPTER_MODE")
+	assert.Contains(t, err.Error(), "staging")
 }
 
 // generateTestPEM creates a fresh 2048-bit RSA key pair as PEM bytes.

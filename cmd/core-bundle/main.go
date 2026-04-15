@@ -33,29 +33,31 @@ func envOrDefault(key, fallback string) []byte {
 }
 
 // loadKeySet returns a KeySet based on the adapter mode.
+// validateAdapterMode must be called before loadKeySet to reject invalid modes.
 // In "real" mode, keys are loaded from environment variables (fail-fast if missing).
 // In dev mode (default), an ephemeral RSA key pair is generated per process.
 func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	if adapterMode == "real" {
 		return auth.LoadKeySetFromEnv()
 	}
-	if adapterMode != "" {
-		slog.Warn("unrecognized GOCELL_ADAPTER_MODE, falling back to dev mode",
-			slog.String("value", adapterMode),
-			slog.String("expected", "real"))
-	}
+	// All other modes use ephemeral dev keys (validateAdapterMode already
+	// rejected unknown values, so only "" reaches here).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey)
 }
 
-// validateAdapterMode returns an error if the requested adapter mode is not
-// yet supported. Extracted from main() for testability.
+// validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
+// Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
 func validateAdapterMode(mode string) error {
-	if mode == "real" {
-		return fmt.Errorf("adapter mode 'real' is not yet supported: real adapter implementations are pending")
+	switch mode {
+	case "":
+		return nil
+	case "real":
+		return fmt.Errorf("adapter mode %q is not yet supported: real adapter implementations are pending", mode)
+	default:
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; valid values: \"\" (dev), \"real\"", mode)
 	}
-	return nil
 }
 
 func main() {
