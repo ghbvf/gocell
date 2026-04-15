@@ -17,6 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDefaultAccessTokenTTL(t *testing.T) {
+	assert.Equal(t, 15*time.Minute, DefaultAccessTokenTTL,
+		"DefaultAccessTokenTTL must be 15 minutes")
+	assert.True(t, DefaultAccessTokenTTL > 0,
+		"DefaultAccessTokenTTL must be positive")
+}
+
 func generateTestKeyPair(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

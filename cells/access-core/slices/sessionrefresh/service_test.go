@@ -22,7 +22,7 @@ var (
 
 func init() {
 	var err error
-	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", 15*time.Minute)
+	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", auth.DefaultAccessTokenTTL)
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

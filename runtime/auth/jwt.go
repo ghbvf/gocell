@@ -9,6 +9,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// DefaultAccessTokenTTL is the default time-to-live for access tokens issued
+// by JWTIssuer. Shared across session-login, session-refresh, and bootstrap.
+const DefaultAccessTokenTTL = 15 * time.Minute
+
 // JWTVerifier verifies JWT tokens signed with RS256.
 //
 // ref: go-kratos/kratos middleware/auth/jwt/jwt.go -- JWT middleware pattern

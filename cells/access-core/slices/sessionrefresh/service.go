@@ -13,9 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const (
-	accessTokenTTL = 15 * time.Minute
-)
 
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
@@ -106,7 +103,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}
 
 	now := time.Now()
-	expiresAt := now.Add(accessTokenTTL)
+	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 
 	accessToken, err := s.issueToken(session.UserID, roleNames, session.ID)
 	if err != nil {
