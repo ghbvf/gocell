@@ -10,21 +10,21 @@ linters:
     gocognit:
       min-complexity: 16 # project rule: ≤ 15, flag at 16+
 
+  exclusions:
+    rules:
+      # Test files: defer .Close() and similar are acceptable.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocognit
+      # Examples are demo code — allow slightly relaxed checks.
+      - path: ^examples/
+        linters:
+          - errcheck
+    paths:
+      - generated
+      - vendor
+
 formatters:
   enable:
     - gofmt
-
-issues:
-  exclude-dirs:
-    - generated
-    - vendor
-  exclude-rules:
-    # Test files: defer .Close() and similar are acceptable.
-    - path: _test\.go
-      linters:
-        - errcheck
-        - gocognit
-    # Examples are demo code — allow slightly relaxed checks.
-    - path: ^examples/
-      linters:
-        - errcheck
