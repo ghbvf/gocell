@@ -486,3 +486,72 @@ func TestConfig_ConcurrentGetAndReload(t *testing.T) {
 	val := cfg.Get("key")
 	assert.NotNil(t, val, "key should be present after concurrent reloads")
 }
+
+func TestConfig_ObservedGeneration(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: val\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	og, ok := cfg.(ObservedGenerationer)
+	require.True(t, ok, "*config must implement ObservedGenerationer")
+
+	assert.Equal(t, int64(0), og.ObservedGeneration(), "initial observed generation must be 0")
+
+	og.SetObservedGeneration(1)
+	assert.Equal(t, int64(1), og.ObservedGeneration())
+
+	og.SetObservedGeneration(42)
+	assert.Equal(t, int64(42), og.ObservedGeneration())
+}
+
+func TestConfig_ObservedGeneration_IndependentOfGeneration(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: v1\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	c := cfg.(*config)
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: v2\n"), 0o644))
+	require.NoError(t, c.Reload(yamlFile, ""))
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: v3\n"), 0o644))
+	require.NoError(t, c.Reload(yamlFile, ""))
+
+	g := cfg.(Generationer)
+	og := cfg.(ObservedGenerationer)
+
+	assert.Equal(t, int64(2), g.Generation(), "two successful reloads → generation 2")
+	assert.Equal(t, int64(0), og.ObservedGeneration(), "observed generation not yet set")
+
+	og.SetObservedGeneration(1)
+	assert.Equal(t, int64(2), g.Generation())
+	assert.Equal(t, int64(1), og.ObservedGeneration(), "drift: generation 2 vs observed 1")
+}
+
+func TestConfig_HasDrift(t *testing.T) {
+	dir := t.TempDir()
+	yamlFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: val\n"), 0o644))
+
+	cfg, err := Load(yamlFile, "")
+	require.NoError(t, err)
+
+	assert.False(t, HasDrift(cfg), "generation 0 == observed 0 → no drift")
+
+	c := cfg.(*config)
+	require.NoError(t, os.WriteFile(yamlFile, []byte("key: v2\n"), 0o644))
+	require.NoError(t, c.Reload(yamlFile, ""))
+
+	assert.True(t, HasDrift(cfg), "generation 1 != observed 0 → drift")
+
+	cfg.(ObservedGenerationer).SetObservedGeneration(1)
+	assert.False(t, HasDrift(cfg), "generation 1 == observed 1 → no drift")
+
+	// NewFromMap does not implement ObservedGenerationer.
+	mapCfg := NewFromMap(map[string]any{"a": 1})
+	assert.False(t, HasDrift(mapCfg), "NewFromMap → no drift (interfaces not satisfied)")
+}
