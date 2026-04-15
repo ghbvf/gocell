@@ -121,6 +121,15 @@
 | **PR#133 review C3** | F1-ARCH-03(RTR-HSTS-WIRING-TEST router 层 `WithSecurityHeadersOptions` 接线测试, `runtime/http/router/router_test.go`) + F2-SEC-03(TRUST-TRACEPARENT-TEST bootstrap 信任边界测试补 `traceparent` 注入向量, 需 `WithTracer` 设置, `runtime/bootstrap/bootstrap_test.go`) + F3-TEST-01(CONVERTER-NIL-INPUT converter 函数 nil 指针输入测试/文档, 各 `handler_test.go`) + F4-OPS-01(BOOTSTRAP-SECHDR-CONVENIENCE `bootstrap.WithSecurityHeadersOptions` 便利包装, `runtime/bootstrap/bootstrap.go`) (discovered via PR#133 6-seat review) | 3h |
 | **快修合集** | #26(.env.example 补 `GOCELL_S3_REGION=us-east-1`, `.env.example`) + #27(contract CI: order-cell/device-cell contract YAML CI 未校验, `.github/workflows/ci.yml`) + F-7(BUILD-OUTDIR-01 统一 `go build -o bin/` 输出目录) + #17(Hook 增强 WM17-F2-2 ctx 超时 + WM17-F4-3 Prometheus metrics via HookObserver 接口, `kernel/cell/`) + #18(CB 接口+封装清理 CB-IFACE-01 Allow/Report 拆分 + CB-ENCAP-01 消除 gobreaker import, `runtime/resilience/circuitbreaker/`) + #21(Journey 校验 F-5 catalog 不校验引用, `kernel/journey/catalog.go`) | 9h |
 
+### 设计决策记录（PR#140 对标确认）
+
+> 以下 2 项在 PR#140 实施前对标主流开源框架后确认为设计正确，记录于此避免重复审查。
+
+| # | 主题 | 结论 | 对标来源 + 理由 |
+|---|------|------|----------------|
+| A | Request/Trace ID 生成不做 `rand.Read` 错误分支 | ✅ PR#140 | **chi** `middleware/request_id.go`: 同样不检查 `rand.Read` 返回值。**Kratos** `middleware/tracing/*.go`: 核心依赖 tracing 链路，不提供独立 request-id 生成失败模型。**OTel** `sdk/trace/id_generator.go`: ID 生成路径默认无 error 返回通道，强调链路可用性。Go 1.24+ `crypto/rand.Read` 已改为 always-succeed-or-fatal，`_, _ =` 是死代码 |
+| B | JSON unknown field 用字符串匹配 + guard test | ✅ PR#140 | **Gin** `binding/json.go`: 开启 strict 后仍依赖底层错误文本语义。**Echo** `bind.go`: 默认宽松，strict 依赖自定义扩展；框架不提供统一结构化 unknown-field 类型。**go-zero** `rest/httpx/requests.go`: 默认不做 strict unknown-field 分类治理。Go 标准库 `encoding/json` 至 1.25 仍用 `fmt.Errorf("json: unknown field %q", key)`，无 typed error。单点字符串识别 + 守卫测试是稳妥且常见的工程化折中 |
+
 ### 触发条件项（仅在条件满足时做）
 
 | # | 任务 | 工时 | 触发条件 |
