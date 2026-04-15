@@ -37,6 +37,10 @@ func TestNoopTxRunner_NilFnPanics(t *testing.T) {
 	})
 }
 
+func TestNoopTxRunner_IsNoop(t *testing.T) {
+	assert.True(t, NoopTxRunner{}.IsNoop())
+}
+
 func TestNoopTxRunner_PassesContext(t *testing.T) {
 	type key struct{}
 	ctx := context.WithValue(context.Background(), key{}, "val")
