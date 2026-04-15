@@ -26,7 +26,8 @@
         "required": ["id", "name", "permissions"],
         "additionalProperties": false
       }
-    }
+    },
+    "hasMore": { "type": "boolean" }
   },
-  "required": ["data"]
+  "required": ["data", "hasMore"]
 }

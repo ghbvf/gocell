@@ -91,11 +91,75 @@ func TestHandleEnqueue(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
+			req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
 			h.HandleEnqueue(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())
+			}
+		})
+	}
+}
+
+// Trust boundary tests for enqueue (#P1-2)
+func TestHandleEnqueue_Authorization(t *testing.T) {
+	tests := []struct {
+		name       string
+		subject    string
+		roles      []string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "admin allowed",
+			subject:    "admin-user",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "operator allowed",
+			subject:    "op-1",
+			roles:      []string{"operator"},
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "device role returns 403",
+			subject:    "dev-99",
+			roles:      []string{"device"},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			name:       "no roles returns 403",
+			subject:    "user-1",
+			roles:      nil,
+			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
+		{
+			name:       "no subject returns 401",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := setupCommandHandler()
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("id", "dev-1")
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			h.HandleEnqueue(w, req)
+
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
 			}
 		})
 	}
