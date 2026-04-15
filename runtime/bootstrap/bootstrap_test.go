@@ -2689,6 +2689,38 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 		"error should mention missing auth provider")
 }
 
+func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	verifier1 := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	verifier2 := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-2", Roles: []string{"admin"}},
+	}
+
+	asm := assembly.New(assembly.Config{ID: "test-multi-auth"})
+	require.NoError(t, asm.Register(newAuthProviderCell("access-core", verifier1)))
+	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should reject multiple auth provider cells")
+	assert.Contains(t, err.Error(), "multiple auth provider cells")
+	assert.Contains(t, err.Error(), "access-core")
+	assert.Contains(t, err.Error(), "identity-core")
+}
+
 // TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that
 // bootstrap auto-wiring correctly passes authPublicEndpoints to the request_id
 // middleware. Public endpoints must reject client-supplied X-Request-Id headers

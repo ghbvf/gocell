@@ -458,19 +458,25 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// publicEndpoints are configured via WithPublicEndpoints, discover a
 	// cell implementing authProvider and use its TokenVerifier.
 	if b.authVerifier == nil && b.authDiscovery {
+		var discoveredFrom string
 		for _, id := range asm.CellIDs() {
 			if ap, ok := asm.Cell(id).(authProvider); ok {
 				if v := ap.TokenVerifier(); v != nil {
+					if discoveredFrom != "" {
+						return rollback(fmt.Errorf(
+							"bootstrap: multiple auth provider cells discovered: %q and %q; use WithAuthMiddleware to select explicitly",
+							discoveredFrom, id))
+					}
 					b.authVerifier = v
-					slog.Info("bootstrap: auth verifier discovered from cell",
-						slog.String("cell", id))
-					break
+					discoveredFrom = id
 				}
 			}
 		}
 		if b.authVerifier == nil {
 			return rollback(fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered"))
 		}
+		slog.Info("bootstrap: auth verifier discovered from cell",
+			slog.String("cell", discoveredFrom))
 	}
 
 	// Step 4.5b: Register config watcher OnChange callback (now that asm is started).
