@@ -93,6 +93,18 @@ func WithTracingOptions(opts ...middleware.TracingOption) Option {
 	}
 }
 
+// WithRequestIDOptions passes additional RequestIDOption values to the
+// RequestID middleware for trust-boundary configuration, e.g.:
+//
+//	WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(func(r *http.Request) bool {
+//	    return isPublicPath(r.URL.Path)
+//	}))
+func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
+	return func(r *Router) {
+		r.requestIDOpts = append(r.requestIDOpts, opts...)
+	}
+}
+
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
 // When provided, the rate limiter is placed after AccessLog (so rejected
 // requests are logged) and before Metrics (so rejections are counted).
@@ -175,6 +187,7 @@ type Router struct {
 	metricsHandler      http.Handler
 	tracer              tracing.Tracer
 	tracingOpts         []middleware.TracingOption
+	requestIDOpts       []middleware.RequestIDOption
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
@@ -248,7 +261,7 @@ func NewE(opts ...Option) (*Router, error) {
 	// Metrics is placed before RL/CB so 429/503 short-circuit responses are
 	// counted. Recovery + SecurityHeaders apply to all paths.
 	r.outerMux.Use(
-		middleware.RequestID,
+		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
 		middleware.Recorder,
 	)

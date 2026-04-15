@@ -23,7 +23,7 @@ func TestSecurityHeaders(t *testing.T) {
 	}{
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
-		{"Strict-Transport-Security", "max-age=31536000"},
+		{"Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload"},
 	}
 
 	for _, tt := range tests {

@@ -20,11 +20,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const (
-	TopicSessionCreated = "event.session.created.v1"
-
-	accessTokenTTL = 15 * time.Minute
-)
+const TopicSessionCreated = "event.session.created.v1"
 
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
@@ -120,7 +116,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 
 	// Issue JWT via RS256 issuer.
 	now := time.Now()
-	expiresAt := now.Add(accessTokenTTL)
+	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 	sessionID := "sess" + "-" + uuid.NewString()
 
 	accessToken, err := s.issueToken(user.ID, roleNames, sessionID)

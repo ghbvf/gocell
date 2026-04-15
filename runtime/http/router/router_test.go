@@ -869,3 +869,38 @@ func TestWithAuthMiddleware_NilVerifier_Panics(t *testing.T) {
 		WithAuthMiddleware(nil, nil)
 	}, "WithAuthMiddleware must panic when verifier is nil")
 }
+
+func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
+	r := New(
+		WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(func(req *http.Request) bool {
+			return req.URL.Path == "/public"
+		})),
+	)
+
+	var publicID, internalID string
+	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Public endpoint: must ignore client-supplied header.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("X-Request-Id", "attacker-id")
+	r.ServeHTTP(rec, req)
+	assert.NotEqual(t, "attacker-id", publicID,
+		"public endpoint must reject client-supplied X-Request-Id")
+	assert.Len(t, publicID, 36, "public endpoint must generate fresh UUID")
+
+	// Non-public endpoint: must accept valid client-supplied header.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
+	req.Header.Set("X-Request-Id", "trusted-upstream-id")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, "trusted-upstream-id", internalID,
+		"non-public endpoint must accept trusted upstream X-Request-Id")
+}

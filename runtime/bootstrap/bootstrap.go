@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"sync"
 	"time"
 
@@ -574,8 +575,25 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// the last call wins, so placing the framework handler after user options
 	// guarantees the bootstrap-managed handler is always used.
 	// Copy to avoid mutating b.routerOpts' backing array.
-	routerOpts := make([]router.Option, 0, len(b.routerOpts)+2)
+	routerOpts := make([]router.Option, 0, len(b.routerOpts)+4)
 	routerOpts = append(routerOpts, b.routerOpts...)
+	// Wire trust-boundary policy for tracing and request_id from public endpoints.
+	// Public endpoints (e.g., login, refresh) ignore client-supplied trace context
+	// and X-Request-Id headers, preventing untrusted callers from injecting
+	// arbitrary observability identifiers.
+	if len(b.authPublicEndpoints) > 0 {
+		publicSet := make(map[string]bool, len(b.authPublicEndpoints))
+		for _, p := range b.authPublicEndpoints {
+			publicSet[path.Clean(p)] = true
+		}
+		isPublic := func(r *http.Request) bool {
+			return publicSet[path.Clean(r.URL.Path)]
+		}
+		routerOpts = append(routerOpts,
+			router.WithTracingOptions(middleware.WithPublicEndpointFn(isPublic)),
+			router.WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(isPublic)),
+		)
+	}
 	if b.authVerifier != nil {
 		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
 	}

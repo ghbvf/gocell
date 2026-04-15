@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
@@ -61,7 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", 15*time.Minute)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
 	if err != nil {
 		slog.Error("failed to create JWT issuer", "error", err)
 		os.Exit(1)
