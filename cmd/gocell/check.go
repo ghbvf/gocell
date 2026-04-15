@@ -115,16 +115,25 @@ func validateContractHealth(contracts []*metadata.ContractMeta) []string {
 }
 
 // validateHTTPSchemaRefs checks that an HTTP contract has the required schema references.
+// Logic: noContent endpoints (typically DELETE/204) may omit response schema;
+// all other endpoints need a response schema; PUT/PATCH always need a request schema.
 func validateHTTPSchemaRefs(c *metadata.ContractMeta) []string {
+	noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
+
+	// noContent endpoints (e.g., DELETE 204) need at most a request schema.
+	if noContent {
+		return nil
+	}
+
 	var issues []string
 
+	// Non-noContent endpoints must have at least one schema reference.
 	if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
 		return []string{fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID)}
 	}
 
-	// Response schema required unless noContent is true.
-	noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
-	if c.SchemaRefs.Response == "" && !noContent {
+	// Response schema required for all non-noContent endpoints.
+	if c.SchemaRefs.Response == "" {
 		issues = append(issues, fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID))
 	}
 

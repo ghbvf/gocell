@@ -196,6 +196,24 @@ func TestValidateContractHealth(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "DELETE noContent with no schemas passes",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.delete.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method:    "DELETE",
+							NoContent: true,
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
