@@ -172,8 +172,9 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	// Fallback direct publish when outbox is not in use.
 	if s.outboxWriter == nil {
 		if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
-			s.logger.Error("session-login: failed to publish event",
-				slog.Any("error", pubErr))
+			s.logger.Warn("session-login: failed to publish event (demo mode)",
+				slog.Any("error", pubErr),
+				slog.String("topic", TopicSessionCreated))
 		}
 	}
 

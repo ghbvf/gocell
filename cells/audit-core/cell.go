@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -54,6 +55,11 @@ func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *AuditCore) { c.outboxWriter = w }
 }
 
+// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+func WithTxManager(tx persistence.TxRunner) Option {
+	return func(c *AuditCore) { c.txRunner = tx }
+}
+
 // WithHMACKey sets the HMAC key for hash chain operations.
 func WithHMACKey(key []byte) Option {
 	return func(c *AuditCore) { c.hmacKey = key }
@@ -80,6 +86,7 @@ type AuditCore struct {
 	archiveStore ports.ArchiveStore
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
+	txRunner     persistence.TxRunner
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 	hmacKey      []byte
@@ -131,16 +138,33 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	// Fail-fast: L2+ Cell requires outboxWriter for transactional event publishing.
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		slog.Warn("audit-core: outboxWriter not injected, L2 consistency not guaranteed")
-		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L2) requires outboxWriter injection")
+	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
+	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"audit-core durable mode requires both outboxWriter and txRunner")
+	}
+
+	// Demo mode: both nil → require publisher for degraded event delivery.
+	if c.outboxWriter == nil && c.txRunner == nil {
+		if c.publisher == nil {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"audit-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+		}
+		if c.ConsistencyLevel() >= cell.L2 {
+			c.logger.Warn("audit-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+				slog.String("cell", c.ID()),
+				slog.Int("consistency_level", int(c.ConsistencyLevel())))
+		}
 	}
 
 	// audit-append
 	var appendOpts []auditappend.Option
 	if c.outboxWriter != nil {
 		appendOpts = append(appendOpts, auditappend.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		appendOpts = append(appendOpts, auditappend.WithTxManager(c.txRunner))
 	}
 	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, appendOpts...)
 	// L3: 订阅 access-core/config-core 跨 cell 事件，slice 级别可高于 cell 级别。
@@ -150,6 +174,9 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	var verifyOpts []auditverify.Option
 	if c.outboxWriter != nil {
 		verifyOpts = append(verifyOpts, auditverify.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		verifyOpts = append(verifyOpts, auditverify.WithTxManager(c.txRunner))
 	}
 	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, verifyOpts...)
 	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L0))
@@ -182,7 +209,8 @@ func (c *AuditCore) initCursorCodec() error {
 		return err
 	}
 	c.cursorCodec = codec
-	slog.Warn("audit-core: using default cursor codec (demo mode)")
+	c.logger.Warn("audit-core: using default cursor codec (demo mode)",
+		slog.String("cell", c.ID()))
 	return nil
 }
 

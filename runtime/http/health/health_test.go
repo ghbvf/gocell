@@ -247,6 +247,53 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	assert.Equal(t, "healthy", deps["db"])
 }
 
+func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.SetAdapterInfo(map[string]string{
+		"mode":    "in-memory",
+		"storage": "in-memory",
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	adapters, ok := body["adapters"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain adapters")
+	assert.Equal(t, "in-memory", adapters["mode"])
+	assert.Equal(t, "in-memory", adapters["storage"])
+}
+
+func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test"})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	// No SetAdapterInfo call.
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasAdapters := body["adapters"]
+	assert.False(t, hasAdapters, "verbose readyz output should not contain adapters when not set")
+}
+
 func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test"})
 	c := newStubCell("cell-1")

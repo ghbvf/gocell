@@ -233,6 +233,15 @@ func WithHealthChecker(name string, fn func() error) Option {
 	}
 }
 
+// WithAdapterInfo sets static adapter configuration metadata that is exposed
+// in /readyz?verbose output. Helps operators verify which storage/bus backends
+// are active without inspecting application logs.
+func WithAdapterInfo(info map[string]string) Option {
+	return func(b *Bootstrap) {
+		b.adapterInfo = info
+	}
+}
+
 // WithDisableObservabilityRestore prevents the bootstrap from registering
 // ObservabilityContextMiddleware on the event subscriber. When set, consumer
 // handlers will not have request_id/correlation_id/trace_id restored from
@@ -267,6 +276,7 @@ type Bootstrap struct {
 	preShutdownDelay time.Duration
 	listener         net.Listener
 	healthCheckers             []namedChecker
+	adapterInfo                map[string]string // static adapter metadata for /readyz verbose
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
 	runOnce                    sync.Once
@@ -566,6 +576,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh = health.New(asm)
+	if b.adapterInfo != nil {
+		hh.SetAdapterInfo(b.adapterInfo)
+	}
 	// registerHealthChecker wraps hh.RegisterChecker with an error return
 	// instead of a panic on duplicate names. Since hh is local to Run() and
 	// all registrations go through this closure, the panic path in

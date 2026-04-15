@@ -10,11 +10,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// noopTxRunner is a test double that executes fn directly without a real transaction.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	return fn(context.Background())
+}
+
+var _ persistence.TxRunner = noopTxRunner{}
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
@@ -25,6 +36,7 @@ func newTestCell() *AuditCore {
 		WithPublisher(eventbus.New()),
 		WithHMACKey(testHMACKey),
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 }
 
@@ -91,6 +103,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithPublisher(eventbus.New()),
 		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -98,6 +111,71 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	}
 
 	require.NoError(t, c.Init(ctx, deps))
+}
+
+// --- L2 Hard Gate: XOR constraint + publisher check ---
+
+func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
+	// outboxWriter present but txRunner missing → XOR mismatch → error
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithPublisher(eventbus.New()),
+		WithHMACKey(testHMACKey),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		// txRunner intentionally omitted
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "both outboxWriter and txRunner")
+}
+
+func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
+	// txRunner present but outboxWriter missing → XOR mismatch → error
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithPublisher(eventbus.New()),
+		WithHMACKey(testHMACKey),
+		WithTxManager(noopTxRunner{}),
+		// outboxWriter intentionally omitted
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "both outboxWriter and txRunner")
+}
+
+func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		// No outboxWriter, no txRunner, no publisher.
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "publisher")
+}
+
+func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithPublisher(eventbus.New()),
+		WithHMACKey(testHMACKey),
+		// No outboxWriter, no txRunner — demo mode with publisher.
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
 func TestAuditCore_RegisterRoutes(t *testing.T) {

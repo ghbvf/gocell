@@ -39,7 +39,7 @@ var _ persistence.TxRunner = noopTxRunner{}
 const testPassword = "secret123" //nolint:gosec // test-only credential
 
 var (
-	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
+	testKeySet, _, _ = auth.MustNewTestKeySet()
 	testIssuer                 = mustIssuer(testKeySet)
 	testVerifier               = mustVerifier(testKeySet)
 )

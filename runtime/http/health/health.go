@@ -25,6 +25,7 @@ type Handler struct {
 
 	mu           sync.RWMutex
 	checkers     map[string]Checker
+	adapterInfo  map[string]string // static adapter metadata for verbose output
 	shuttingDown atomic.Bool
 }
 
@@ -46,6 +47,14 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 		panic(fmt.Sprintf("health: duplicate checker name %q", name))
 	}
 	h.checkers[name] = fn
+}
+
+// SetAdapterInfo sets static adapter metadata that is included in /readyz
+// verbose output. Helps operators verify which storage/bus backends are active.
+func (h *Handler) SetAdapterInfo(info map[string]string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.adapterInfo = info
 }
 
 // SetShuttingDown marks the handler as shutting down. Once called,
@@ -137,6 +146,11 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		if verbose {
 			response["cells"] = cells
 			response["dependencies"] = dependencies
+			h.mu.RLock()
+			if h.adapterInfo != nil {
+				response["adapters"] = h.adapterInfo
+			}
+			h.mu.RUnlock()
 		}
 
 		writeJSON(w, httpStatus, response)

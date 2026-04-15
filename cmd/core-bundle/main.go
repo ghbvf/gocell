@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -48,6 +49,15 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	return auth.NewKeySet(privKey, pubKey)
 }
 
+// validateAdapterMode returns an error if the requested adapter mode is not
+// yet supported. Extracted from main() for testability.
+func validateAdapterMode(mode string) error {
+	if mode == "real" {
+		return fmt.Errorf("adapter mode 'real' is not yet supported: real adapter implementations are pending")
+	}
+	return nil
+}
+
 func main() {
 	// Determine adapter mode early — it controls key loading strategy.
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
@@ -83,31 +93,19 @@ func main() {
 		auditOpts  []auditcore.Option
 	)
 
-	if adapterMode == "real" {
-		slog.Info("adapter mode: real — adapter stubs prepared (connect in integration tests)")
-
-		// TODO(Phase 3): Wire real adapters here when available:
-		//   postgresDSN := os.Getenv("GOCELL_POSTGRES_DSN")
-		//   redisAddr   := os.Getenv("GOCELL_REDIS_ADDR")
-		//   rabbitmqURL := os.Getenv("GOCELL_RABBITMQ_URL")
-		//
-		// Real adapter initialization:
-		//   pgPool := adapters.NewPostgresPool(postgresDSN)
-		//   outboxWriter := adapters.NewPostgresOutboxWriter(pgPool)
-		//   configOpts = append(configOpts, configcore.WithOutboxWriter(outboxWriter))
-		//   accessOpts = append(accessOpts, accesscore.WithOutboxWriter(outboxWriter))
-		//   auditOpts  = append(auditOpts, auditcore.WithOutboxWriter(outboxWriter))
-
-		// Fallback to in-memory until real adapters are implemented.
-		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
-		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
-		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
-	} else {
-		slog.Info("adapter mode: in-memory (development)")
-		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
-		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
-		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
+	// Strict mode: refuse to start with in-memory fallbacks when the operator
+	// explicitly requested production-grade adapters via GOCELL_ADAPTER_MODE=real.
+	if err := validateAdapterMode(adapterMode); err != nil {
+		slog.Error("adapter mode validation failed",
+			slog.String("adapter_mode", adapterMode),
+			slog.Any("error", err))
+		os.Exit(1)
 	}
+
+	slog.Info("adapter mode: in-memory (development)")
+	configOpts = append(configOpts, configcore.WithInMemoryDefaults())
+	accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
+	auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
 
 	// Cursor codecs for pagination — per-cell isolation prevents cross-cell cursor reuse.
 	auditCursorCodec, err := query.NewCursorCodec(
@@ -172,11 +170,22 @@ func main() {
 		"/api/v1/access/sessions/refresh",
 	}
 
+	slog.Info("core-bundle: startup configuration",
+		slog.String("adapter_mode", "in-memory"),
+		slog.String("storage", "in-memory"),
+		slog.String("event_bus", "in-memory"),
+		slog.String("publisher", "in-memory"))
+
 	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithAdapterInfo(map[string]string{
+			"mode":      "in-memory",
+			"storage":   "in-memory",
+			"event_bus": "in-memory",
+		}),
 	}
 
 	// Register session store health checker if the repository supports it.

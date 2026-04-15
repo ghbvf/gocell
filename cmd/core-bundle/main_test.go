@@ -57,6 +57,21 @@ func TestEnvOrDefault_Fallback(t *testing.T) {
 	assert.Equal(t, []byte("fallback"), got)
 }
 
+func TestValidateAdapterMode_Real_ReturnsError(t *testing.T) {
+	err := validateAdapterMode("real")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not yet supported")
+}
+
+func TestValidateAdapterMode_InMemory_OK(t *testing.T) {
+	require.NoError(t, validateAdapterMode(""))
+}
+
+func TestValidateAdapterMode_Unknown_OK(t *testing.T) {
+	// Unknown modes (not "real") should pass validation — loadKeySet handles the warning.
+	require.NoError(t, validateAdapterMode("staging"))
+}
+
 // generateTestPEM creates a fresh 2048-bit RSA key pair as PEM bytes.
 func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 	t.Helper()
