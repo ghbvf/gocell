@@ -18,6 +18,21 @@ import (
 // TopicDeviceRegistered is the canonical event topic for device registration events.
 const TopicDeviceRegistered = "event.device-registered.v1"
 
+// deviceRegisteredEvent is the event payload DTO for device registration events,
+// decoupled from the domain model.
+type deviceRegisteredEvent struct {
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Status   string    `json:"status"`
+	LastSeen time.Time `json:"lastSeen"`
+}
+
+func toDeviceRegisteredEvent(d *domain.Device) deviceRegisteredEvent {
+	return deviceRegisteredEvent{
+		ID: d.ID, Name: d.Name, Status: d.Status, LastSeen: d.LastSeen,
+	}
+}
+
 // Service handles device registration business logic.
 type Service struct {
 	repo      domain.DeviceRepository
@@ -52,10 +67,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 	}
 
 	// L4 Cell uses publisher.Publish directly (no outboxWriter per KG-07).
-	payload, err := json.Marshal(map[string]any{
-		"id": device.ID, "name": device.Name,
-		"status": device.Status, "lastSeen": device.LastSeen,
-	})
+	payload, err := json.Marshal(toDeviceRegisteredEvent(device))
 	if err != nil {
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil

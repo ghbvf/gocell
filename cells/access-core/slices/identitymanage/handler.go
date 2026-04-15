@@ -11,6 +11,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
+// StatusResponse is a single-field DTO for lock/unlock responses.
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
 // UserResponse is the public DTO for User, excluding sensitive fields like
 // PasswordHash.
 type UserResponse struct {
@@ -164,7 +169,7 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "locked"}})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "locked"}})
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
@@ -173,5 +178,5 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "active"}})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "active"}})
 }

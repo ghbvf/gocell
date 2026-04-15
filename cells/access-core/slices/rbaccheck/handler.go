@@ -31,6 +31,11 @@ func toRoleResponse(r *domain.Role) RoleResponse {
 	return RoleResponse{ID: r.ID, Name: r.Name, Permissions: perms}
 }
 
+// HasRoleResponse is the public DTO for role-check results.
+type HasRoleResponse struct {
+	HasRole bool `json:"hasRole"`
+}
+
 // Handler provides HTTP endpoints for RBAC queries.
 type Handler struct {
 	svc *Service
@@ -84,5 +89,5 @@ func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"hasRole": has}})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": HasRoleResponse{HasRole: has}})
 }
