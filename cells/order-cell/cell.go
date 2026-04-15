@@ -99,6 +99,11 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 			"order-cell requires outboxWriter and txRunner; use outbox.NoopWriter{} + persistence.NoopTxRunner{} for demo mode")
 	}
 
+	// Durable mode: reject noop implementations (#27c-2 BOOTSTRAP-STRICT-MODE).
+	if err := cell.CheckNotNoop(deps.DurabilityMode, "order-cell", c.outboxWriter, c.txRunner); err != nil {
+		return err
+	}
+
 	// Default to in-memory repository if none injected.
 	if c.repo == nil {
 		c.repo = mem.NewOrderRepository()

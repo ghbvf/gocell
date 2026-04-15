@@ -21,7 +21,8 @@ import "context"
 // directly) for forward compatibility: future fields (e.g. Secrets,
 // ServiceLocator) can be added without changing the Cell.Init signature.
 type Dependencies struct {
-	Config map[string]any
+	Config         map[string]any
+	DurabilityMode DurabilityMode // Demo (default) or Durable; see durability.go
 }
 
 // VerifySpec describes the verification requirements for a Slice.

@@ -152,6 +152,32 @@ func TestOrderCell_InitRejectsHalfConfiguredPath(t *testing.T) {
 	}
 }
 
+func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
+	c := NewOrderCell(
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	deps := cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDurable,
+	}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable mode rejects")
+}
+
+func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
+	c := NewOrderCell(
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	deps := cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+	}
+	require.NoError(t, c.Init(context.Background(), deps))
+}
+
 func TestOrderCell_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

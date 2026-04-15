@@ -110,6 +110,11 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 			"device-cell requires publisher; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
 	}
 
+	// Durable mode: reject noop publisher (#27c-2).
+	if err := cell.CheckNotNoop(deps.DurabilityMode, "device-cell", c.publisher); err != nil {
+		return err
+	}
+
 	// device-register slice
 	registerSvc := deviceregister.NewService(c.deviceRepo, c.publisher, c.logger)
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
