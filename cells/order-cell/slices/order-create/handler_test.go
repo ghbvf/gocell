@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -22,6 +23,22 @@ type stubPublisher struct{}
 func (stubPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
 
 var _ outbox.Publisher = stubPublisher{}
+
+func TestOrderCreateResponse_Fields(t *testing.T) {
+	order := &domain.Order{ID: "ord-1", Item: "laptop", Status: "pending"}
+	resp := toOrderCreateResponse(order)
+
+	assert.Equal(t, "ord-1", resp.ID)
+	assert.Equal(t, "laptop", resp.Item)
+	assert.Equal(t, "pending", resp.Status)
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"item"`)
+	assert.Contains(t, s, `"status"`)
+}
 
 func newTestHandler() *Handler {
 	repo := mem.NewOrderRepository()

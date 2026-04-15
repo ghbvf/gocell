@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +15,25 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 )
+
+func TestDeviceStatusResponse_Fields(t *testing.T) {
+	now := time.Now()
+	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online", LastSeen: now}
+	resp := toDeviceStatusResponse(device)
+
+	assert.Equal(t, "dev-1", resp.ID)
+	assert.Equal(t, "sensor-a", resp.Name)
+	assert.Equal(t, "online", resp.Status)
+	assert.Equal(t, now, resp.LastSeen)
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"name"`)
+	assert.Contains(t, s, `"status"`)
+	assert.Contains(t, s, `"lastSeen"`)
+}
 
 func setupStatusHandler() (*Handler, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
@@ -46,6 +66,12 @@ func TestHandleGetStatus(t *testing.T) {
 				assert.Equal(t, "dev-1", data["id"])
 				assert.Equal(t, "sensor-a", data["name"])
 				assert.Equal(t, "online", data["status"])
+
+				// Verify camelCase JSON keys (#27n).
+				assert.Contains(t, data, "id", "key must be camelCase")
+				assert.Contains(t, data, "name", "key must be camelCase")
+				assert.Contains(t, data, "status", "key must be camelCase")
+				assert.Contains(t, data, "lastSeen", "key must be camelCase")
 			},
 		},
 		{

@@ -8,11 +8,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDeviceRegisterResponse_Fields(t *testing.T) {
+	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online"}
+	resp := toDeviceRegisterResponse(device)
+
+	assert.Equal(t, "dev-1", resp.ID)
+	assert.Equal(t, "sensor-a", resp.Name)
+	assert.Equal(t, "online", resp.Status)
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"name"`)
+	assert.Contains(t, s, `"status"`)
+}
 
 func setupRegisterHandler() *Handler {
 	repo := mem.NewDeviceRepository()
@@ -40,6 +57,11 @@ func TestHandleRegister(t *testing.T) {
 				assert.NotEmpty(t, data["id"])
 				assert.Equal(t, "sensor-a", data["name"])
 				assert.Equal(t, "online", data["status"])
+
+				// Verify camelCase JSON keys (#27n).
+				assert.Contains(t, data, "id", "key must be camelCase")
+				assert.Contains(t, data, "name", "key must be camelCase")
+				assert.Contains(t, data, "status", "key must be camelCase")
 			},
 		},
 		{
