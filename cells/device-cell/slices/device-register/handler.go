@@ -3,8 +3,24 @@ package deviceregister
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
+
+// DeviceRegisterResponse is the public DTO for the device registration response.
+type DeviceRegisterResponse struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func toDeviceRegisterResponse(d *domain.Device) DeviceRegisterResponse {
+	return DeviceRegisterResponse{
+		ID:     d.ID,
+		Name:   d.Name,
+		Status: d.Status,
+	}
+}
 
 // Handler provides HTTP endpoints for device registration.
 type Handler struct {
@@ -35,11 +51,5 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"data": map[string]any{
-			"id":     device.ID,
-			"name":   device.Name,
-			"status": device.Status,
-		},
-	})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toDeviceRegisterResponse(device)})
 }

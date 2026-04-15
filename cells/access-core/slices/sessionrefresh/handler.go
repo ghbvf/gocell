@@ -3,8 +3,17 @@ package sessionrefresh
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
+
+func toTokenPairResponse(p *TokenPair) dto.TokenPairResponse {
+	return dto.TokenPairResponse{
+		AccessToken:  p.AccessToken,
+		RefreshToken: p.RefreshToken,
+		ExpiresAt:    p.ExpiresAt,
+	}
+}
 
 // Handler provides HTTP endpoints for session refresh.
 type Handler struct {
@@ -32,5 +41,5 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": pair})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toTokenPairResponse(pair)})
 }

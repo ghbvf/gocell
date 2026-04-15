@@ -17,6 +17,41 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+func TestRoleResponse_PermissionMapping(t *testing.T) {
+	role := &domain.Role{
+		ID: "r1", Name: "admin",
+		Permissions: []domain.Permission{
+			{Resource: "users", Action: "read"},
+			{Resource: "orders", Action: "write"},
+		},
+	}
+	resp := toRoleResponse(role)
+
+	assert.Equal(t, "r1", resp.ID)
+	assert.Equal(t, "admin", resp.Name)
+	require.Len(t, resp.Permissions, 2)
+	assert.Equal(t, "users", resp.Permissions[0].Resource)
+	assert.Equal(t, "read", resp.Permissions[0].Action)
+	assert.Equal(t, "orders", resp.Permissions[1].Resource)
+	assert.Equal(t, "write", resp.Permissions[1].Action)
+
+	// Verify camelCase JSON keys (#27n).
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"name"`)
+	assert.Contains(t, s, `"permissions"`)
+	assert.Contains(t, s, `"resource"`)
+	assert.Contains(t, s, `"action"`)
+}
+
+func TestRoleResponse_EmptyPermissions(t *testing.T) {
+	role := &domain.Role{ID: "r2", Name: "viewer", Permissions: nil}
+	resp := toRoleResponse(role)
+	assert.Empty(t, resp.Permissions)
+}
+
 func setup() http.Handler {
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{

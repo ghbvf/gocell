@@ -10,10 +10,10 @@ import (
 
 // Device represents an IoT device aggregate.
 type Device struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Status   string    `json:"status"` // online, offline
-	LastSeen time.Time `json:"lastSeen"`
+	ID       string
+	Name     string
+	Status   string // online, offline
+	LastSeen time.Time
 }
 
 // Command represents a command dispatched to a device.
@@ -21,12 +21,12 @@ type Device struct {
 // polled by the device on its own schedule. The device acknowledges
 // execution via the ack endpoint.
 type Command struct {
-	ID        string     `json:"id"`
-	DeviceID  string     `json:"deviceId"`
-	Payload   string     `json:"payload"`
-	Status    string     `json:"status"` // pending, acked
-	CreatedAt time.Time  `json:"createdAt"`
-	AckedAt   *time.Time `json:"ackedAt,omitempty"`
+	ID        string
+	DeviceID  string
+	Payload   string
+	Status    string // pending, acked
+	CreatedAt time.Time
+	AckedAt   *time.Time
 }
 
 // DeviceRepository abstracts device persistence.

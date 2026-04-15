@@ -18,6 +18,28 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+func TestOrderResponse_Fields(t *testing.T) {
+	now := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
+	order := &domain.Order{
+		ID: "ord-1", Item: "laptop", Status: "pending", CreatedAt: now,
+	}
+	resp := toOrderResponse(order)
+
+	assert.Equal(t, "ord-1", resp.ID)
+	assert.Equal(t, "laptop", resp.Item)
+	assert.Equal(t, "pending", resp.Status)
+	assert.Equal(t, now, resp.CreatedAt)
+
+	// Verify camelCase JSON keys.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"item"`)
+	assert.Contains(t, s, `"status"`)
+	assert.Contains(t, s, `"createdAt"`)
+}
+
 func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 	repo := mem.NewOrderRepository()
 	for _, o := range orders {

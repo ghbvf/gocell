@@ -29,6 +29,11 @@ func toCommandResponse(c *domain.Command) CommandResponse {
 	}
 }
 
+// AckResponse is the public DTO for command acknowledgement.
+type AckResponse struct {
+	Status string `json:"status"`
+}
+
 // Handler provides HTTP endpoints for device commands.
 type Handler struct {
 	svc *Service
@@ -119,9 +124,5 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data": map[string]any{
-			"status": "acked",
-		},
-	})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": AckResponse{Status: "acked"}})
 }

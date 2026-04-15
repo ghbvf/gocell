@@ -19,6 +19,21 @@ import (
 // TopicOrderCreated is the canonical event topic for order creation events.
 const TopicOrderCreated = "event.order-created.v1"
 
+// orderCreatedEvent is the event payload DTO for order creation events,
+// decoupled from the domain model.
+type orderCreatedEvent struct {
+	ID        string    `json:"id"`
+	Item      string    `json:"item"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func toOrderCreatedEvent(o *domain.Order) orderCreatedEvent {
+	return orderCreatedEvent{
+		ID: o.ID, Item: o.Item, Status: o.Status, CreatedAt: o.CreatedAt,
+	}
+}
+
 // Option configures the order-create Service.
 type Option func(*Service)
 
@@ -113,7 +128,7 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return nil, fmt.Errorf("order-create: persist: %w", err)
 	}
 
-	payload, err := json.Marshal(order)
+	payload, err := json.Marshal(toOrderCreatedEvent(order))
 	if err != nil {
 		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
 		return order, nil // order is created, event publish is best-effort
@@ -130,7 +145,7 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 }
 
 func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, error) {
-	payload, err := json.Marshal(order)
+	payload, err := json.Marshal(toOrderCreatedEvent(order))
 	if err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-create: marshal event: %w", err)
 	}
