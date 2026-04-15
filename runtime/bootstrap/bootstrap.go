@@ -605,6 +605,18 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			return rollback(err)
 		}
 	}
+	// Auto-discover HealthContributor cells and register their probes.
+	// This replaces manual WithHealthChecker calls for cell-owned probes
+	// (e.g. session-store), aligning with the authProvider discovery pattern.
+	for _, id := range asm.CellIDs() {
+		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
+			for name, fn := range hcc.HealthCheckers() {
+				if err := registerHealthChecker(name, fn); err != nil {
+					return rollback(err)
+				}
+			}
+		}
+	}
 	if cfgWatcher != nil {
 		if err := registerHealthChecker(configWatcherCheckerName, cfgWatcher.Health); err != nil {
 			return rollback(err)

@@ -192,12 +192,8 @@ func main() {
 		bootstrap.WithAdapterInfo(adapterInfo),
 	}
 
-	// Register session store health checker if the repository supports it.
-	// In-memory: always healthy. Future PG-backed: checks DB connectivity.
-	if fn := accessCell.SessionHealthChecker(); fn != nil {
-		bootstrapOpts = append(bootstrapOpts, bootstrap.WithHealthChecker("session-store", fn))
-	}
-
+	// Cell health probes (e.g. session-store) are auto-discovered by bootstrap
+	// via cell.HealthContributor interface — no manual registration needed.
 	app := bootstrap.New(bootstrapOpts...)
 
 	if err := app.Run(ctx); err != nil {

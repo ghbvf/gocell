@@ -150,6 +150,24 @@ type ConfigChangeEvent struct {
 	Generation int64
 }
 
+// HealthContributor is optionally implemented by Cells that expose internal
+// component health probes. Bootstrap discovers HealthContributor cells via
+// type assertion and registers each returned checker in /readyz.
+//
+// HealthCheckers returns a map of named probes (e.g. "session-store" → fn).
+// A nil return or empty map means the cell has no additional probes beyond
+// the base Cell.Health() status. Probe names MUST be unique across all cells;
+// bootstrap fails fast on duplicate names.
+//
+// ref: Kubernetes PodSpec — explicit readinessProbe/livenessProbe per container
+// Adopted: explicit named probes. Deviated: returned as map, not declarative YAML.
+//
+// ref: uber-go/fx Lifecycle.Append — each module registers own health hooks
+// Adopted: cell-owned probes. Deviated: discovery-based, not explicit registration.
+type HealthContributor interface {
+	HealthCheckers() map[string]func() error
+}
+
 // ConfigReloader is optionally implemented by Cells that need to react to
 // configuration changes at runtime. Bootstrap discovers ConfigReloader cells
 // via type assertion and calls OnConfigReload after each successful config
