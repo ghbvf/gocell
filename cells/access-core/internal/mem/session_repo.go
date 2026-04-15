@@ -29,6 +29,12 @@ func NewSessionRepository() *SessionRepository {
 	}
 }
 
+// Health returns nil for in-memory repositories (always available).
+// Future DB-backed implementations should check connection liveness.
+func (r *SessionRepository) Health() error {
+	return nil
+}
+
 func (r *SessionRepository) Create(_ context.Context, session *domain.Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

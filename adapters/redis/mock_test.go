@@ -207,6 +207,15 @@ func toInt64(v any) (int64, bool) {
 // errMock is a sentinel error used in tests.
 var errMock = errors.New("mock error")
 
+// mockPoolStatsProvider implements poolStatsProvider for testing.
+type mockPoolStatsProvider struct {
+	stats *goredis.PoolStats
+}
+
+func (m *mockPoolStatsProvider) PoolStats() *goredis.PoolStats {
+	return m.stats
+}
+
 // claimerMockCmdable extends mockCmdable with Eval behavior that simulates
 // the IdempotencyClaimer's Lua scripts (claim, commit, release).
 type claimerMockCmdable struct {

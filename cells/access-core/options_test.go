@@ -25,6 +25,19 @@ func TestWithInMemoryDefaults(t *testing.T) {
 	assert.NotNil(t, c.roleRepo)
 }
 
+func TestSessionHealthChecker_InMemory(t *testing.T) {
+	c := NewAccessCore(WithInMemoryDefaults())
+	fn := c.SessionHealthChecker()
+	require.NotNil(t, fn, "in-memory session repo implements Health()")
+	assert.NoError(t, fn())
+}
+
+func TestSessionHealthChecker_NilRepo(t *testing.T) {
+	c := NewAccessCore() // no repo set
+	fn := c.SessionHealthChecker()
+	assert.Nil(t, fn, "nil session repo has no health checker")
+}
+
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

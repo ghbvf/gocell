@@ -47,6 +47,7 @@ type Option func(*Bootstrap)
 
 const (
 	configWatcherCheckerName = "config-watcher"
+	configDriftCheckerName   = "config-drift"
 	eventRouterCheckerName   = "eventrouter"
 )
 
@@ -588,6 +589,24 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if cfgWatcher != nil {
 		if err := registerHealthChecker(configWatcherCheckerName, cfgWatcher.Health); err != nil {
 			return rollback(err)
+		}
+	}
+	// Register config-drift checker when the config supports generation tracking.
+	// Reuses config.HasDrift to avoid duplicating the generation comparison logic.
+	// Returns unhealthy when desired generation (config reloaded) differs from
+	// observed generation (all cells applied). Transient drift during reload is
+	// absorbed by K8s failureThreshold (default 3 consecutive failures).
+	if g, gOK := cfg.(config.Generationer); gOK {
+		if og, ogOK := cfg.(config.ObservedGenerationer); ogOK {
+			if err := registerHealthChecker(configDriftCheckerName, func() error {
+				if config.HasDrift(cfg) {
+					return fmt.Errorf("config drift: generation %d, observed %d",
+						g.Generation(), og.ObservedGeneration())
+				}
+				return nil
+			}); err != nil {
+				return rollback(err)
+			}
 		}
 	}
 	// Framework health handler is applied LAST so user-supplied router options

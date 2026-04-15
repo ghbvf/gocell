@@ -105,11 +105,30 @@ type cmdable interface {
 	Eval(ctx context.Context, script string, keys []string, args ...any) *goredis.Cmd
 }
 
+// poolStatsProvider abstracts the PoolStats method available on concrete
+// go-redis clients (*Client, *FailoverClient) but not on the cmdable interface.
+type poolStatsProvider interface {
+	PoolStats() *goredis.PoolStats
+}
+
+// PoolStats holds structured connection pool statistics.
+//
+// ref: go-redis PoolStats / redisprometheus — adopted same field set.
+type PoolStats struct {
+	Hits       uint32 // times free connection was found in pool
+	Misses     uint32 // times free connection was NOT found in pool
+	Timeouts   uint32 // times a wait timeout occurred
+	TotalConns uint32 // total connections in pool
+	IdleConns  uint32 // idle connections in pool
+	StaleConns uint32 // stale connections removed from pool
+}
+
 // Client wraps a go-redis universal client and provides health checking
 // and lifecycle management.
 type Client struct {
-	rdb    cmdable
-	config Config
+	rdb           cmdable
+	config        Config
+	statsProvider poolStatsProvider // nil for test mocks
 }
 
 // NewClient creates a new Redis Client with the given configuration.
@@ -130,10 +149,13 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 			"redis: Config.SentinelMaster is required for sentinel mode")
 	}
 
-	var rdb cmdable
+	var (
+		rdb           cmdable
+		statsProvider poolStatsProvider
+	)
 	switch cfg.Mode {
 	case ModeSentinel:
-		rdb = goredis.NewFailoverClient(&goredis.FailoverOptions{
+		fc := goredis.NewFailoverClient(&goredis.FailoverOptions{
 			MasterName:    cfg.SentinelMaster,
 			SentinelAddrs: cfg.SentinelAddrs,
 			Password:      cfg.Password,
@@ -142,8 +164,10 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 			ReadTimeout:   cfg.ReadTimeout,
 			WriteTimeout:  cfg.WriteTimeout,
 		})
+		rdb = fc
+		statsProvider = fc
 	default:
-		rdb = goredis.NewClient(&goredis.Options{
+		rc := goredis.NewClient(&goredis.Options{
 			Addr:         cfg.Addr,
 			Password:     cfg.Password,
 			DB:           cfg.DB,
@@ -151,9 +175,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 			ReadTimeout:  cfg.ReadTimeout,
 			WriteTimeout: cfg.WriteTimeout,
 		})
+		rdb = rc
+		statsProvider = rc
 	}
 
-	c := &Client{rdb: rdb, config: cfg}
+	c := &Client{rdb: rdb, config: cfg, statsProvider: statsProvider}
 
 	if err := c.Health(ctx); err != nil {
 		// Close to avoid resource leak on failed initial connection.
@@ -201,6 +227,23 @@ func (c *Client) Close() error {
 // (DistLock, Cache, IdempotencyClaimer). Not exported.
 func (c *Client) cmdable() cmdable {
 	return c.rdb
+}
+
+// PoolStats returns structured pool statistics suitable for metrics collection.
+// Returns zero-value PoolStats for test mocks (no statsProvider).
+func (c *Client) PoolStats() PoolStats {
+	if c.statsProvider == nil {
+		return PoolStats{}
+	}
+	s := c.statsProvider.PoolStats()
+	return PoolStats{
+		Hits:       s.Hits,
+		Misses:     s.Misses,
+		Timeouts:   s.Timeouts,
+		TotalConns: s.TotalConns,
+		IdleConns:  s.IdleConns,
+		StaleConns: s.StaleConns,
+	}
 }
 
 // Config returns a copy of the client configuration.

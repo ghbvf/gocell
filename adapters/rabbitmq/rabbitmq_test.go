@@ -376,6 +376,28 @@ func TestConnection_AcquireFromPool(t *testing.T) {
 	assert.Equal(t, pooledCh, ch)
 }
 
+func TestConnection_PoolStats_Connected(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	// Put 2 channels in the pool.
+	conn.ReleaseChannel(newMockChannel())
+	conn.ReleaseChannel(newMockChannel())
+
+	stats := conn.PoolStats()
+	assert.Equal(t, conn.config.ChannelPoolSize, stats.ChannelPoolSize)
+	assert.Equal(t, 2, stats.IdleChannels)
+	assert.Equal(t, StateConnected, stats.State)
+}
+
+func TestConnection_PoolStats_Empty(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	stats := conn.PoolStats()
+	assert.Equal(t, conn.config.ChannelPoolSize, stats.ChannelPoolSize)
+	assert.Equal(t, 0, stats.IdleChannels)
+	assert.Equal(t, StateConnected, stats.State)
+}
+
 func TestConnection_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
