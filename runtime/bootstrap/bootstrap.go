@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path"
 	"sync"
 	"time"
 
@@ -583,10 +584,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if len(b.authPublicEndpoints) > 0 {
 		publicSet := make(map[string]bool, len(b.authPublicEndpoints))
 		for _, p := range b.authPublicEndpoints {
-			publicSet[p] = true
+			publicSet[path.Clean(p)] = true
 		}
 		isPublic := func(r *http.Request) bool {
-			return publicSet[r.URL.Path]
+			return publicSet[path.Clean(r.URL.Path)]
 		}
 		routerOpts = append(routerOpts,
 			router.WithTracingOptions(middleware.WithPublicEndpointFn(isPublic)),
