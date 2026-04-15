@@ -77,7 +77,7 @@ func (hc *HashChain) Len() int {
 // The message is: prevHash + eventID + eventType + actorID + timestamp + payload.
 func (hc *HashChain) computeHash(entry *AuditEntry) string {
 	mac := hmac.New(sha256.New, hc.hmacKey)
-	fmt.Fprintf(mac, "%s|%s|%s|%s|%d|%s",
+	fmt.Fprintf(mac, "%s|%s|%s|%s|%d|%s", //nolint:errcheck // hash.Hash.Write never returns error
 		entry.PrevHash,
 		entry.EventID,
 		entry.EventType,

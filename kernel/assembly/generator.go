@@ -180,12 +180,13 @@ func (g *Generator) sourceFingerprint(assemblyID string) string {
 	cells := sortedCopy(asm.Cells)
 
 	// Hash assembly identity.
-	fmt.Fprintf(h, "assembly:%s\n", asm.ID)
+	// hash.Hash.Write never returns error — safe to ignore per Go spec.
+	fmt.Fprintf(h, "assembly:%s\n", asm.ID)       //nolint:errcheck
 	for _, c := range cells {
-		fmt.Fprintf(h, "cells:%s\n", c)
+		fmt.Fprintf(h, "cells:%s\n", c)            //nolint:errcheck
 	}
-	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint)
-	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)
+	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint) //nolint:errcheck
+	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)         //nolint:errcheck
 
 	// Hash cell metadata in sorted order for determinism.
 	cellSet := make(map[string]bool, len(asm.Cells))

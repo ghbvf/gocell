@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
@@ -19,7 +20,7 @@ func startRedis(t *testing.T) (*Client, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcredis.Run(ctx, "redis:7-alpine")
+	container, err := tcredis.Run(ctx, testutil.RedisImage)
 	require.NoError(t, err, "start redis container")
 
 	connStr, err := container.ConnectionString(ctx)

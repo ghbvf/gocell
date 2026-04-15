@@ -606,6 +606,7 @@ const (
 // writeBack updates entry statuses based on publish outcomes in a short transaction.
 // All UPDATEs include WHERE status='claiming' as an optimistic lock — this prevents
 // a race where reclaimStale recovers the entry between Phase 2 and Phase 3.
+//nolint:gocognit // pre-existing complexity; tracked in backlog Batch 8
 func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (pollStats, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {

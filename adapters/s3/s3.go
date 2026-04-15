@@ -17,25 +17,25 @@ import (
 
 // Config holds the S3 connection configuration.
 type Config struct {
-	Endpoint       string
-	Region         string
-	Bucket         string
-	AccessKeyID    string
+	Endpoint        string
+	Region          string
+	Bucket          string
+	AccessKeyID     string
 	SecretAccessKey string
-	UsePathStyle   bool
-	HTTPTimeout    time.Duration // default 30s
+	UsePathStyle    bool
+	HTTPTimeout     time.Duration // default 30s
 }
 
 // ConfigFromEnv creates a Config from environment variables.
 func ConfigFromEnv() Config {
 	return Config{
-		Endpoint:       envWithFallback("GOCELL_S3_ENDPOINT", "S3_ENDPOINT"),
-		Region:         envWithFallback("GOCELL_S3_REGION", "S3_REGION"),
-		Bucket:         envWithFallback("GOCELL_S3_BUCKET", "S3_BUCKET"),
-		AccessKeyID:    envWithFallback("GOCELL_S3_ACCESS_KEY", "S3_ACCESS_KEY_ID"),
+		Endpoint:        envWithFallback("GOCELL_S3_ENDPOINT", "S3_ENDPOINT"),
+		Region:          envWithFallback("GOCELL_S3_REGION", "S3_REGION"),
+		Bucket:          envWithFallback("GOCELL_S3_BUCKET", "S3_BUCKET"),
+		AccessKeyID:     envWithFallback("GOCELL_S3_ACCESS_KEY", "S3_ACCESS_KEY_ID"),
 		SecretAccessKey: envWithFallback("GOCELL_S3_SECRET_KEY", "S3_SECRET_ACCESS_KEY"),
-		UsePathStyle:   envWithFallback("GOCELL_S3_USE_PATH_STYLE", "S3_USE_PATH_STYLE") == "true",
-		HTTPTimeout:    30 * time.Second,
+		UsePathStyle:    envWithFallback("GOCELL_S3_USE_PATH_STYLE", "S3_USE_PATH_STYLE") == "true",
+		HTTPTimeout:     30 * time.Second,
 	}
 }
 

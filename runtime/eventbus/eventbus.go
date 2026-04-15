@@ -55,7 +55,7 @@ type subscription struct {
 //   - different consumerGroups on same topic: each group gets a copy (fanout)
 //   - empty consumerGroup: broadcast to every subscriber (backward compatible)
 type InMemoryEventBus struct {
-	mu            sync.RWMutex
+	mu sync.RWMutex
 	// groupSubs: topic → consumerGroup → *groupState
 	// Each groupState holds the subscriber list and an atomic round-robin
 	// counter for competing dispatch. Empty consumerGroup ("" key) entries

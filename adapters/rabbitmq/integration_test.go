@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // startRabbitMQWithContainer launches a testcontainers RabbitMQ instance and
@@ -25,7 +26,7 @@ func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcra
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcrabbitmq.Run(ctx, "rabbitmq:3.12-management-alpine")
+	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
 	require.NoError(t, err, "start rabbitmq container")
 
 	amqpURL, err := container.AmqpURL(ctx)

@@ -23,11 +23,20 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@4afd733a84b2f1a21f7c2e8d1cda21a70304028f # v7
+        with:
+          version: v2.11
+          only-new-issues: true
+
       - name: Test
         run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
 
       - name: Validate metadata
         run: go run ./cmd/gocell validate
+
+      - name: Check contract health
+        run: go run ./cmd/gocell check contract-health
 
       # NOTE: Example metadata (cell.yaml/slice.yaml) lives under cells/ and contracts/,
       # not under examples/. The main `gocell validate` step above already covers them.

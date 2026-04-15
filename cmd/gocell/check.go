@@ -51,20 +51,26 @@ func checkContractHealth(_ []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	contracts := registry.NewContractRegistry(project)
-	ids := contracts.AllIDs()
+	reg := registry.NewContractRegistry(project)
+	ids := reg.AllIDs()
 
 	if len(ids) == 0 {
 		fmt.Println("No contracts found.")
 		return nil
 	}
 
-	fmt.Printf("Contract Health (%d contracts):\n\n", len(ids))
+	// Collect contracts for validation.
+	contracts := make([]*metadata.ContractMeta, 0, len(ids))
+	for _, id := range ids {
+		contracts = append(contracts, reg.Get(id))
+	}
+
+	// Print summary.
+	fmt.Printf("Contract Health (%d contracts):\n\n", len(contracts))
 	fmt.Printf("  %-40s %-12s %-12s %s\n", "ID", "KIND", "LIFECYCLE", "OWNER")
 	fmt.Printf("  %-40s %-12s %-12s %s\n", "---", "----", "---------", "-----")
 
-	for _, id := range ids {
-		c := contracts.Get(id)
+	for _, c := range contracts {
 		lifecycle := c.Lifecycle
 		if lifecycle == "" {
 			lifecycle = "(unset)"
@@ -72,7 +78,48 @@ func checkContractHealth(_ []string) error {
 		fmt.Printf("  %-40s %-12s %-12s %s\n", c.ID, c.Kind, lifecycle, c.OwnerCell)
 	}
 
+	// Validate.
+	issues := validateContractHealth(contracts)
+	if len(issues) > 0 {
+		fmt.Printf("\nISSUES (%d):\n", len(issues))
+		for _, issue := range issues {
+			fmt.Printf("  - %s\n", issue)
+		}
+		return fmt.Errorf("contract-health: %d issue(s) found", len(issues))
+	}
+
+	fmt.Println("\nPASS: all contracts healthy")
 	return nil
+}
+
+// validateContractHealth checks contracts for CI-blocking issues:
+//   - ownerCell must be set
+//   - lifecycle must be set
+//   - HTTP contracts must have schemaRefs (request + response unless noContent)
+func validateContractHealth(contracts []*metadata.ContractMeta) []string {
+	var issues []string
+
+	for _, c := range contracts {
+		if c.OwnerCell == "" {
+			issues = append(issues, fmt.Sprintf("%s: missing ownerCell", c.ID))
+		}
+		if c.Lifecycle == "" {
+			issues = append(issues, fmt.Sprintf("%s: missing lifecycle", c.ID))
+		}
+		if c.Kind == "http" {
+			if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
+				issues = append(issues, fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID))
+				continue
+			}
+			// Response schema required unless noContent is true.
+			noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
+			if c.SchemaRefs.Response == "" && !noContent {
+				issues = append(issues, fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID))
+			}
+		}
+	}
+
+	return issues
 }
 
 func checkPlaceholder(name string, args []string) error {
