@@ -52,7 +52,7 @@
 | 131b | ✅ **BOOTSTRAP-TRUST-TEST-01** bootstrap 信任边界自动接线（`authPublicEndpoints` → tracing + request_id）无集成测试。现有 bootstrap 测试全部依赖 `net.Listen`，需 router-only 测试路径或 mock listener | 2h | `runtime/bootstrap/bootstrap_test.go` | PR#131 review F3-1 | PR#133 |
 | 27n | ✅ **HANDLER-TEST-CAMELCASE-ASSERT** 13 个 handler_test.go 无显式 camelCase key 断言（如 `assert.Contains(body, "createdAt")`），camelCase 合规由 contract_test + schema 守护 | 2h | 12+ `handler_test.go` | PR#126 review | PR#133 |
 | 27k | ✅ **DTO-CONVERTER-UNIT-TEST** 8 个 DTO converter 函数（toXxxResponse）无独立单测，仅靠 handler httptest 间接覆盖。若 converter 增加条件逻辑需补专项测试 | 2h | 6 个 `handler_test.go` | PR#126 review | PR#133 |
-| 20 | **decode 加固** DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` | 6B | MG-E |
+| 20 | ✅ **decode 加固** DECODE-STR-01 classifyDecodeError 加固(CutPrefix+guard test) + REQID-RAND-ERR rand.Read 清理 + MAIN-TEST-CLEANUP 类型安全错误匹配 | 2h | `pkg/httputil/decode.go` + `runtime/http/middleware/request_id.go` + `cmd/core-bundle/main_test.go` | 6B | PR#139 |
 | 19 | **CI 增强** T1-7(golangci-lint) + TC-PIN-01(testcontainers 镜像 pin 到 patch 版本，当前全仓用 floating minor tag `3.12-management-alpine`，PR#124 review S4-F1) | 2.5h | `.github/ci.yml` + `adapters/*/integration_test.go` | 6B | MG-F 治理 |
 | 27b | **SLICE-ALLOWEDFILES-01** 全部 slice 默认 allowedFiles 不覆盖 Go 包目录（kebab-case YAML 目录 vs no-dash Go 包目录），需系统性补 allowedFiles 或改 `BaseSlice.AllowedFiles()` 默认逻辑 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review | MG-F |
 | 28a | **AUTH-CACHE-01** session 验证 DB round-trip 缓存: 每请求 `GetByID` 查主库，real adapter 下需 Redis short-TTL（5-15s）session cache + 撤销时主动失效。可选: circuitbreaker 包住 `GetByID`（仅 infra error 触发） | 4h | `cells/access-core/slices/sessionvalidate/service.go` + `adapters/redis/` | PR#127 review | MG-G Auth ops |
@@ -200,7 +200,7 @@
 |------|------|------|
 | #27n HANDLER-TEST-CAMELCASE-ASSERT | 2h | 断言 camelCase key |
 | #27k DTO-CONVERTER-UNIT-TEST | 2h | 8 个 converter 补单测 |
-| #20 decode 加固 | 2h | classifyDecodeError 安全 |
+| ✅ #20 decode 加固 + REQID-RAND-ERR + MAIN-TEST-CLEANUP | 2h | classifyDecodeError 安全 + rand.Read 清理 + main_test 类型安全 | PR#139 |
 
 ### Batch F: CI + 治理（2 项，~4.5h，全并行）
 

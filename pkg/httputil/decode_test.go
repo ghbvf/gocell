@@ -128,6 +128,22 @@ func TestDecodeJSON(t *testing.T) {
 	}
 }
 
+// TestDecodeJSON_GoStdlibUnknownFieldFormat is a guard test that verifies
+// the error message format produced by json.Decoder.DisallowUnknownFields().
+// Go's encoding/json has no typed error for unknown fields (verified up to
+// Go 1.25); classifyDecodeError relies on string prefix matching. If Go
+// changes the format, this test fails immediately rather than silently
+// misclassifying unknown-field errors as 500 Internal Server Error.
+func TestDecodeJSON_GoStdlibUnknownFieldFormat(t *testing.T) {
+	dec := json.NewDecoder(strings.NewReader(`{"bogus": 1}`))
+	dec.DisallowUnknownFields()
+	var dst struct{ Name string }
+	err := dec.Decode(&dst)
+	require.Error(t, err)
+	assert.True(t, strings.HasPrefix(err.Error(), "json: unknown field"),
+		"Go stdlib changed unknown-field error format; update classifyDecodeError — got %q", err.Error())
+}
+
 func TestClassifyDecodeError_UnknownError(t *testing.T) {
 	// Exercise the default branch in classifyDecodeError: an error that is
 	// not io.EOF, io.ErrUnexpectedEOF, MaxBytesError, SyntaxError, or

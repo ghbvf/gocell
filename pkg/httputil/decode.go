@@ -94,10 +94,12 @@ func classifyDecodeError(err error) *errcode.Error {
 				map[string]any{"reason": "type mismatch", "field": typeErr.Field},
 			)
 		}
-		// DisallowUnknownFields produces: json: unknown field "fieldName"
-		if msg := err.Error(); strings.HasPrefix(msg, "json: unknown field") {
-			field := strings.TrimPrefix(msg, `json: unknown field `)
-			field = strings.Trim(field, `"`)
+		// Go's json.Decoder.DisallowUnknownFields() produces:
+		//   fmt.Errorf("json: unknown field %q", key)
+		// No typed alternative exists (verified up to Go 1.25).
+		// Guard test: TestDecodeJSON_GoStdlibUnknownFieldFormat.
+		if after, ok := strings.CutPrefix(err.Error(), `json: unknown field `); ok {
+			field := strings.Trim(after, `"`)
 			return errcode.WithDetails(
 				errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
 				map[string]any{"reason": "unknown field", "field": field},
