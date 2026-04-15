@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -116,6 +117,25 @@ func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "failed to extract actor from payload")
 	assert.Contains(t, logOutput, "evt-bad-json")
+}
+
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
+	svc := NewService(repo, testHMACKey, fp, slog.Default())
+
+	entry := outbox.Entry{
+		ID:        "evt-pub-err",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+	}
+	err := svc.HandleEvent(context.Background(), entry)
+	require.NoError(t, err, "publish failure in demo mode should not fail append")
+	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
 }
 
 func mustJSON(v any) []byte {

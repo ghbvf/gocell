@@ -27,8 +27,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell           = (*AccessCore)(nil)
-	_ cell.HTTPRegistrar  = (*AccessCore)(nil)
+	_ cell.Cell              = (*AccessCore)(nil)
+	_ cell.HTTPRegistrar     = (*AccessCore)(nil)
+	_ cell.HealthContributor = (*AccessCore)(nil)
 	_ cell.EventRegistrar = (*AccessCore)(nil)
 )
 
@@ -135,23 +136,20 @@ func NewAccessCore(opts ...Option) *AccessCore {
 	return c
 }
 
-// SessionHealthChecker returns a health check function for the session store,
-// or nil if the underlying repository does not support health checks.
+// HealthCheckers implements cell.HealthContributor. Returns named readiness
+// probes for internal components. Bootstrap auto-discovers this interface
+// and registers probes in /readyz.
 //
-// Returns non-nil when the session repo implements ports.HealthCheckable.
-// Future real adapters (e.g. PG-backed session store) SHOULD implement
-// ports.HealthCheckable so that session store availability is reflected in
-// /readyz. If they don't, this method returns nil and bootstrap silently
-// skips the registration — a compile-time check is not possible since
-// HealthCheckable is intentionally separate from SessionRepository.
-//
-// Callers should register with bootstrap.WithHealthChecker("session-store", fn)
-// when fn is non-nil.
-func (c *AccessCore) SessionHealthChecker() func() error {
+// Currently exposes "session-store" when the session repo implements
+// ports.HealthCheckable. Both in-memory and real adapters implement
+// HealthCheckable, so the probe is present in all modes. Returns an
+// empty map only when sessionRepo is nil (no repo injected at all).
+func (c *AccessCore) HealthCheckers() map[string]func() error {
+	checkers := make(map[string]func() error)
 	if hc, ok := c.sessionRepo.(ports.HealthCheckable); ok {
-		return hc.Health
+		checkers["session-store"] = hc.Health
 	}
-	return nil
+	return checkers
 }
 
 // TokenVerifier returns the session-validate service (implements auth.TokenVerifier).
@@ -187,7 +185,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				"access-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
 		}
 		if c.ConsistencyLevel() >= cell.L2 {
-			c.logger.Warn("access-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)")
+			c.logger.Warn("access-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+				slog.String("cell", c.ID()),
+				slog.Int("consistency_level", int(c.ConsistencyLevel())))
 		}
 	}
 

@@ -632,6 +632,158 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	}
 }
 
+func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-adapter-info"})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithAdapterInfo(map[string]string{
+			"mode":    "in-memory",
+			"storage": "in-memory",
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	adapters, ok := body["adapters"].(map[string]any)
+	require.True(t, ok, "verbose readyz must contain adapters map")
+	assert.Equal(t, "in-memory", adapters["mode"])
+	assert.Equal(t, "in-memory", adapters["storage"])
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// --- HealthContributor discovery tests ---
+
+// healthContribCell is a Cell that implements cell.HealthContributor.
+type healthContribCell struct {
+	*cell.BaseCell
+	checkers map[string]func() error
+}
+
+func newHealthContribCell(id string, checkers map[string]func() error) *healthContribCell {
+	return &healthContribCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		checkers: checkers,
+	}
+}
+
+func (c *healthContribCell) HealthCheckers() map[string]func() error {
+	return c.checkers
+}
+
+var _ cell.HealthContributor = (*healthContribCell)(nil)
+
+func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-hc-contrib"})
+	hcc := newHealthContribCell("access-core", map[string]func() error{
+		"session-store": func() error { return nil },
+	})
+	require.NoError(t, asm.Register(hcc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	assert.Equal(t, "healthy", deps["session-store"],
+		"HealthContributor-discovered probe should appear in /readyz verbose")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-hc-dup"})
+	// Two cells both return "session-store" probe — should conflict.
+	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func() error{
+		"session-store": func() error { return nil },
+	})))
+	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func() error{
+		"session-store": func() error { return nil },
+	})))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = b.Run(ctx)
+	require.Error(t, err, "duplicate probe names across cells should fail")
+	assert.Contains(t, err.Error(), "duplicate health checker")
+	assert.Contains(t, err.Error(), "session-store")
+}
+
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
 	b := New(
 		WithHealthChecker("", func() error { return nil }),
@@ -2636,6 +2788,38 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	require.Error(t, err, "bootstrap should fail when no auth provider cell is discovered")
 	assert.Contains(t, err.Error(), "auth provider cell",
 		"error should mention missing auth provider")
+}
+
+func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	verifier1 := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	verifier2 := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-2", Roles: []string{"admin"}},
+	}
+
+	asm := assembly.New(assembly.Config{ID: "test-multi-auth"})
+	require.NoError(t, asm.Register(newAuthProviderCell("access-core", verifier1)))
+	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = b.Run(ctx)
+	require.Error(t, err, "bootstrap should reject multiple auth provider cells")
+	assert.Contains(t, err.Error(), "multiple auth provider cells")
+	assert.Contains(t, err.Error(), "access-core")
+	assert.Contains(t, err.Error(), "identity-core")
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that

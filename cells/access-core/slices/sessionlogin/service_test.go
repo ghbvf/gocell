@@ -2,6 +2,7 @@ package sessionlogin
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -132,4 +133,23 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	refreshSid, ok := refreshClaims.Extra["sid"].(string)
 	assert.True(t, ok, "refresh token must contain sid claim")
 	assert.Equal(t, sid, refreshSid, "both tokens must share the same session ID")
+}
+
+// failingPublisher returns an error on every Publish call.
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedUser(userRepo, "pub-err", "pass123")
+
+	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
+	svc := NewService(userRepo, sessionRepo, roleRepo, fp, testIssuer, slog.Default())
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
+	require.NoError(t, err, "publish failure in demo mode should not fail login")
+	assert.NotEmpty(t, pair.AccessToken)
 }

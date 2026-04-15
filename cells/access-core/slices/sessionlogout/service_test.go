@@ -2,6 +2,7 @@ package sessionlogout
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -76,6 +77,21 @@ func TestService_Logout(t *testing.T) {
 			}
 		})
 	}
+}
+
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
+	repo := mem.NewSessionRepository()
+	seedSession(repo, "sess-pub", "usr-1")
+
+	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
+	svc := NewService(repo, fp, slog.Default())
+
+	err := svc.Logout(context.Background(), "sess-pub")
+	require.NoError(t, err, "publish failure in demo mode should not fail logout")
 }
 
 func TestService_LogoutUser(t *testing.T) {

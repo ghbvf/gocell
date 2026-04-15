@@ -83,6 +83,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
 		auditcore.WithOutboxWriter(nw),
+		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
@@ -102,7 +103,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		bootstrap.WithListener(ln),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.WithAuthMiddleware(jwtVerifier, publicEndpoints),
+		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

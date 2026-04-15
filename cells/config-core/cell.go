@@ -133,7 +133,9 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				"config-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
 		}
 		if c.ConsistencyLevel() >= cell.L2 {
-			c.logger.Warn("config-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)")
+			c.logger.Warn("config-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+				slog.String("cell", c.ID()),
+				slog.Int("consistency_level", int(c.ConsistencyLevel())))
 		}
 	}
 
@@ -157,7 +159,8 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			return err
 		}
 		c.cursorCodec = codec
-		c.logger.Warn("config-core: using default cursor codec (demo mode)")
+		c.logger.Warn("config-core: using default cursor codec (demo mode)",
+			slog.String("cell", c.ID()))
 	}
 
 	// config-read slice

@@ -127,8 +127,9 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	// Fallback direct publish when outbox is not in use.
 	if s.outboxWriter == nil {
 		if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
-			s.logger.Error("audit-append: failed to publish appended event",
-				slog.Any("error", pubErr))
+			s.logger.Warn("audit-append: failed to publish appended event (demo mode)",
+				slog.Any("error", pubErr),
+				slog.String("topic", TopicAuditAppended))
 		}
 	}
 

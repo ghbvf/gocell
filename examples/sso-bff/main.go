@@ -93,6 +93,7 @@ func main() {
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(auditHMACKey),
 		auditcore.WithOutboxWriter(nw),
+		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
 	)
@@ -140,7 +141,7 @@ func main() {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
-		bootstrap.WithAuthMiddleware(jwtVerifier, publicEndpoints),
+		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
 	logger.Info("sso-bff: starting on :8081",

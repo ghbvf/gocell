@@ -35,7 +35,7 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
 		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
-		_ = repo.Append(context.Background(), entry)
+		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
 	result, err := svc.VerifyChain(context.Background(), 0, 10)
@@ -54,7 +54,7 @@ func TestService_VerifyChain_TamperedEntry(t *testing.T) {
 			// Tamper with the second entry.
 			entry.Hash = "tampered-hash"
 		}
-		_ = repo.Append(context.Background(), entry)
+		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
 	result, err := svc.VerifyChain(context.Background(), 0, 10)

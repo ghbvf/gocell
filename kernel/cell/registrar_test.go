@@ -294,6 +294,53 @@ func TestConfigReloader_ReturnsError(t *testing.T) {
 	assert.EqualError(t, err, "reload failed")
 }
 
+// --- HealthContributor ---
+
+// healthContributorCell implements HealthContributor.
+type healthContributorCell struct {
+	BaseCell
+	checkers map[string]func() error
+}
+
+var _ HealthContributor = (*healthContributorCell)(nil)
+
+func (c *healthContributorCell) HealthCheckers() map[string]func() error {
+	return c.checkers
+}
+
+func TestHealthContributor_TypeAssertion(t *testing.T) {
+	hc := &healthContributorCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "access-core"}),
+		checkers: map[string]func() error{
+			"session-store": func() error { return nil },
+		},
+	}
+
+	var c Cell = hc
+	hcc, ok := c.(HealthContributor)
+	assert.True(t, ok, "healthContributorCell should satisfy HealthContributor")
+
+	checkers := hcc.HealthCheckers()
+	assert.Contains(t, checkers, "session-store")
+	assert.NoError(t, checkers["session-store"]())
+}
+
+func TestHealthContributor_NegativeTypeAssertion(t *testing.T) {
+	plain := NewBaseCell(CellMetadata{ID: "plain-cell"})
+
+	var c Cell = plain
+	_, ok := c.(HealthContributor)
+	assert.False(t, ok, "plain BaseCell should NOT satisfy HealthContributor")
+}
+
+func TestHealthContributor_EmptyMap(t *testing.T) {
+	hc := &healthContributorCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "no-probes"}),
+		checkers: map[string]func() error{},
+	}
+	assert.Empty(t, hc.HealthCheckers())
+}
+
 func TestRouteMux_Group(t *testing.T) {
 	mux := &mockRouteMux{}
 

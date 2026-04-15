@@ -154,6 +154,10 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 // verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
+// Deprecated: Use WithPublicEndpoints instead. WithPublicEndpoints discovers
+// the auth verifier automatically from cells implementing authProvider,
+// eliminating the need for explicit verifier injection at the composition root.
+//
 // publicEndpoints specifies business-route paths that bypass authentication.
 // If nil, no business routes are public (fail-closed). Callers must
 // explicitly list paths like login and token refresh that should be
@@ -233,6 +237,15 @@ func WithHealthChecker(name string, fn func() error) Option {
 	}
 }
 
+// WithAdapterInfo sets static adapter configuration metadata that is exposed
+// in /readyz?verbose output. Helps operators verify which storage/bus backends
+// are active without inspecting application logs.
+func WithAdapterInfo(info map[string]string) Option {
+	return func(b *Bootstrap) {
+		b.adapterInfo = info
+	}
+}
+
 // WithDisableObservabilityRestore prevents the bootstrap from registering
 // ObservabilityContextMiddleware on the event subscriber. When set, consumer
 // handlers will not have request_id/correlation_id/trace_id restored from
@@ -267,6 +280,7 @@ type Bootstrap struct {
 	preShutdownDelay time.Duration
 	listener         net.Listener
 	healthCheckers             []namedChecker
+	adapterInfo                map[string]string // static adapter metadata for /readyz verbose
 	closers                    []io.Closer // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
 	runOnce                    sync.Once
@@ -448,19 +462,25 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// publicEndpoints are configured via WithPublicEndpoints, discover a
 	// cell implementing authProvider and use its TokenVerifier.
 	if b.authVerifier == nil && b.authDiscovery {
+		var discoveredFrom string
 		for _, id := range asm.CellIDs() {
 			if ap, ok := asm.Cell(id).(authProvider); ok {
 				if v := ap.TokenVerifier(); v != nil {
+					if discoveredFrom != "" {
+						return rollback(fmt.Errorf(
+							"bootstrap: multiple auth provider cells discovered: %q and %q; use WithAuthMiddleware to select explicitly",
+							discoveredFrom, id))
+					}
 					b.authVerifier = v
-					slog.Info("bootstrap: auth verifier discovered from cell",
-						slog.String("cell", id))
-					break
+					discoveredFrom = id
 				}
 			}
 		}
 		if b.authVerifier == nil {
 			return rollback(fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered"))
 		}
+		slog.Info("bootstrap: auth verifier discovered from cell",
+			slog.String("cell", discoveredFrom))
 	}
 
 	// Step 4.5b: Register config watcher OnChange callback (now that asm is started).
@@ -566,12 +586,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// ref: uber-go/fx — startup failures return error, trigger rollback
 	hh = health.New(asm)
+	if b.adapterInfo != nil {
+		hh.SetAdapterInfo(b.adapterInfo)
+	}
 	// registerHealthChecker wraps hh.RegisterChecker with an error return
 	// instead of a panic on duplicate names. Since hh is local to Run() and
 	// all registrations go through this closure, the panic path in
 	// RegisterChecker is effectively unreachable — the map check here
 	// catches duplicates first and returns a rollback-safe error.
-	registeredCheckerNames := make(map[string]struct{}, len(b.healthCheckers)+2)
+	registeredCheckerNames := make(map[string]struct{})
 	registerHealthChecker := func(name string, fn func() error) error {
 		if _, exists := registeredCheckerNames[name]; exists {
 			return fmt.Errorf("bootstrap: duplicate health checker %q", name)
@@ -584,6 +607,21 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	for _, hc := range b.healthCheckers {
 		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
 			return rollback(err)
+		}
+	}
+	// Auto-discover HealthContributor cells and register their probes.
+	// This replaces manual WithHealthChecker calls for cell-owned probes
+	// (e.g. session-store), aligning with the authProvider discovery pattern.
+	for _, id := range asm.CellIDs() {
+		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
+			for name, fn := range hcc.HealthCheckers() {
+				if fn == nil {
+					return rollback(fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name))
+				}
+				if err := registerHealthChecker(name, fn); err != nil {
+					return rollback(err)
+				}
+			}
 		}
 	}
 	if cfgWatcher != nil {

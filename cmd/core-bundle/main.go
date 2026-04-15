@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -32,163 +33,135 @@ func envOrDefault(key, fallback string) []byte {
 }
 
 // loadKeySet returns a KeySet based on the adapter mode.
+// validateAdapterMode must be called before loadKeySet to reject invalid modes.
 // In "real" mode, keys are loaded from environment variables (fail-fast if missing).
 // In dev mode (default), an ephemeral RSA key pair is generated per process.
 func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	if adapterMode == "real" {
 		return auth.LoadKeySetFromEnv()
 	}
-	if adapterMode != "" {
-		slog.Warn("unrecognized GOCELL_ADAPTER_MODE, falling back to dev mode",
-			slog.String("value", adapterMode),
-			slog.String("expected", "real"))
-	}
+	// All other modes use ephemeral dev keys (validateAdapterMode already
+	// rejected unknown values, so only "" reaches here).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey)
 }
 
+// validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
+// Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
+func validateAdapterMode(mode string) error {
+	switch mode {
+	case "":
+		return nil
+	case "real":
+		return fmt.Errorf("adapter mode %q is not yet supported: real adapter implementations are pending", mode)
+	default:
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\" (not yet implemented)", mode)
+	}
+}
+
 func main() {
-	// Determine adapter mode early — it controls key loading strategy.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := run(ctx); err != nil {
+		slog.Error("application failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run contains all assembly and bootstrap logic, extracted from main() for testability.
+func run(ctx context.Context) error {
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
+
+	if err := validateAdapterMode(adapterMode); err != nil {
+		return fmt.Errorf("adapter mode: %w", err)
+	}
 
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
-		slog.Error("failed to load JWT key set", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load JWT key set: %w", err)
 	}
 
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
 	if err != nil {
-		slog.Error("failed to create JWT issuer", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create JWT issuer: %w", err)
 	}
 	jwtVerifier, err := auth.NewJWTVerifier(keySet)
 	if err != nil {
-		slog.Error("failed to create JWT verifier", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create JWT verifier: %w", err)
 	}
 
-	// Create shared event bus (in-memory by default).
-	// When GOCELL_ADAPTER_MODE=real, a real message broker adapter would replace
-	// this; for now we always use the in-memory event bus as a fallback.
 	eb := eventbus.New()
 
-	// Build cell options based on adapter mode.
-	var (
-		configOpts []configcore.Option
-		accessOpts []accesscore.Option
-		auditOpts  []auditcore.Option
-	)
+	slog.Info("adapter mode: in-memory (development)",
+		slog.String("requested", adapterMode),
+		slog.String("effective", "in-memory"))
 
-	if adapterMode == "real" {
-		slog.Info("adapter mode: real — adapter stubs prepared (connect in integration tests)")
-
-		// TODO(Phase 3): Wire real adapters here when available:
-		//   postgresDSN := os.Getenv("GOCELL_POSTGRES_DSN")
-		//   redisAddr   := os.Getenv("GOCELL_REDIS_ADDR")
-		//   rabbitmqURL := os.Getenv("GOCELL_RABBITMQ_URL")
-		//
-		// Real adapter initialization:
-		//   pgPool := adapters.NewPostgresPool(postgresDSN)
-		//   outboxWriter := adapters.NewPostgresOutboxWriter(pgPool)
-		//   configOpts = append(configOpts, configcore.WithOutboxWriter(outboxWriter))
-		//   accessOpts = append(accessOpts, accesscore.WithOutboxWriter(outboxWriter))
-		//   auditOpts  = append(auditOpts, auditcore.WithOutboxWriter(outboxWriter))
-
-		// Fallback to in-memory until real adapters are implemented.
-		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
-		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
-		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
-	} else {
-		slog.Info("adapter mode: in-memory (development)")
-		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
-		accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
-		auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
-	}
-
-	// Cursor codecs for pagination — per-cell isolation prevents cross-cell cursor reuse.
 	auditCursorCodec, err := query.NewCursorCodec(
 		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key32!"),
 	)
 	if err != nil {
-		slog.Error("failed to create audit cursor codec", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create audit cursor codec: %w", err)
 	}
 	configCursorCodec, err := query.NewCursorCodec(
 		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key-32b!"),
 	)
 	if err != nil {
-		slog.Error("failed to create config cursor codec", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create config cursor codec: %w", err)
 	}
 
-	// Common options.
-	configOpts = append(configOpts,
+	configCell := configcore.NewConfigCore(
+		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
-	accessOpts = append(accessOpts,
+	accessCell := accesscore.NewAccessCore(
+		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 	)
-	auditOpts = append(auditOpts,
+	auditCell := auditcore.NewAuditCore(
+		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	// Create cells.
-	configCell := configcore.NewConfigCore(configOpts...)
-	accessCell := accesscore.NewAccessCore(accessOpts...)
-	auditCell := auditcore.NewAuditCore(auditOpts...)
-
-	// Create assembly and register cells in dependency order.
 	asm := assembly.New(assembly.Config{ID: "core-bundle"})
 	if err := asm.Register(configCell); err != nil {
-		slog.Error("failed to register config-core", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("register config-core: %w", err)
 	}
 	if err := asm.Register(accessCell); err != nil {
-		slog.Error("failed to register access-core", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("register access-core: %w", err)
 	}
 	if err := asm.Register(auditCell); err != nil {
-		slog.Error("failed to register audit-core", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("register audit-core: %w", err)
 	}
 
-	// Bootstrap the application.
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// Public endpoints declared at composition root — not in runtime/auth defaults.
-	// Only login and refresh are accessible without a valid JWT.
-	publicEndpoints := []string{
-		"/api/v1/access/sessions/login",
-		"/api/v1/access/sessions/refresh",
+	adapterInfo := map[string]string{
+		"mode":      "in-memory",
+		"storage":   "in-memory",
+		"event_bus": "in-memory",
 	}
+	slog.Info("core-bundle: startup configuration",
+		slog.String("adapter_mode", adapterInfo["mode"]),
+		slog.String("storage", adapterInfo["storage"]),
+		slog.String("event_bus", adapterInfo["event_bus"]))
 
-	bootstrapOpts := []bootstrap.Option{
+	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithPublicEndpoints(publicEndpoints),
-	}
+		bootstrap.WithPublicEndpoints([]string{
+			"/api/v1/access/sessions/login",
+			"/api/v1/access/sessions/refresh",
+		}),
+		bootstrap.WithAdapterInfo(adapterInfo),
+	)
 
-	// Register session store health checker if the repository supports it.
-	// In-memory: always healthy. Future PG-backed: checks DB connectivity.
-	if fn := accessCell.SessionHealthChecker(); fn != nil {
-		bootstrapOpts = append(bootstrapOpts, bootstrap.WithHealthChecker("session-store", fn))
-	}
-
-	app := bootstrap.New(bootstrapOpts...)
-
-	if err := app.Run(ctx); err != nil {
-		slog.Error("application failed", "error", err)
-		os.Exit(1)
-	}
+	return app.Run(ctx)
 }

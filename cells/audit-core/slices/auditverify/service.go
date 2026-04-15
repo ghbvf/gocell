@@ -84,29 +84,56 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 		EntriesChecked:    len(entries),
 	}
 
-	// Publish verification result.
-	payload, _ := json.Marshal(map[string]any{
-		"valid":               valid,
-		"first_invalid_index": firstInvalid,
-		"entries_checked":     len(entries),
+	// Publish verification result via outbox (durable) or direct publish (demo).
+	payload, err := json.Marshal(map[string]any{
+		"valid":             valid,
+		"firstInvalidIndex": firstInvalid,
+		"entriesChecked":    len(entries),
 	})
-	if s.outboxWriter != nil {
-		outboxEntry := outbox.Entry{
-			ID:        "evt" + "-" + uuid.NewString(),
-			EventType: TopicIntegrityVerified,
-			Payload:   payload,
+	if err != nil {
+		return result, fmt.Errorf("audit-verify: marshal payload: %w", err)
+	}
+
+	// Persist + outbox write in a transaction for L2 atomicity.
+	persistFn := s.buildPersistFn(payload)
+	if persistErr := s.runPersist(ctx, persistFn); persistErr != nil {
+		return result, fmt.Errorf("audit-verify: persist: %w", persistErr)
+	}
+
+	// Fallback direct publish when outbox is not in use.
+	if s.outboxWriter == nil {
+		if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, payload); pubErr != nil {
+			s.logger.Warn("audit-verify: failed to publish event (demo mode)",
+				slog.Any("error", pubErr),
+				slog.String("topic", TopicIntegrityVerified))
 		}
-		if writeErr := s.outboxWriter.Write(ctx, outboxEntry); writeErr != nil {
-			s.logger.Error("audit-verify: failed to write outbox entry",
-				slog.Any("error", writeErr))
-		}
-	} else if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, payload); pubErr != nil {
-		s.logger.Error("audit-verify: failed to publish event",
-			slog.Any("error", pubErr))
 	}
 
 	s.logger.Info("hash chain verification completed",
 		slog.Bool("valid", valid), slog.Int("entries_checked", len(entries)))
 
 	return result, nil
+}
+
+// buildPersistFn returns a transaction function that writes the outbox event.
+func (s *Service) buildPersistFn(payload []byte) func(context.Context) error {
+	return func(txCtx context.Context) error {
+		if s.outboxWriter == nil {
+			return nil
+		}
+		return s.outboxWriter.Write(txCtx, outbox.Entry{
+			ID:        "evt-" + uuid.NewString(),
+			EventType: TopicIntegrityVerified,
+			Payload:   payload,
+		})
+	}
+}
+
+// runPersist executes fn within a transaction if txRunner is configured,
+// otherwise calls fn directly.
+func (s *Service) runPersist(ctx context.Context, fn func(context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
 }
