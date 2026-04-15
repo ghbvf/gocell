@@ -98,4 +98,13 @@ func TestHandleCreate_ResponseBody(t *testing.T) {
 	assert.NotEmpty(t, resp.Data.ID)
 	assert.Equal(t, "laptop", resp.Data.Item)
 	assert.Equal(t, "pending", resp.Data.Status)
+
+	// Verify camelCase JSON keys (#27n).
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	var dataMap map[string]any
+	require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+	assert.Contains(t, dataMap, "id", "key must be camelCase")
+	assert.Contains(t, dataMap, "item", "key must be camelCase")
+	assert.Contains(t, dataMap, "status", "key must be camelCase")
 }

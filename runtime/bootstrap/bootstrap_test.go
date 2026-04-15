@@ -2444,3 +2444,77 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	assert.Contains(t, err.Error(), "auth provider cell",
 		"error should mention missing auth provider")
 }
+
+// TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that
+// bootstrap auto-wiring correctly passes authPublicEndpoints to the request_id
+// middleware. Public endpoints must reject client-supplied X-Request-Id headers
+// (preventing untrusted callers from injecting observability identifiers),
+// while protected endpoints must accept trusted upstream IDs.
+func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-trust-boundary"})
+	verifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	hc := newAuthProviderCell("access-core", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// --- Public endpoint: client-supplied X-Request-Id must be ignored ---
+	t.Run("public endpoint ignores client-supplied request ID", func(t *testing.T) {
+		req, reqErr := http.NewRequest("POST",
+			fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr), nil)
+		require.NoError(t, reqErr)
+		req.Header.Set("X-Request-Id", "attacker-injected-id")
+
+		resp, respErr := testHTTPClient.Do(req)
+		require.NoError(t, respErr)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		actualID := resp.Header.Get("X-Request-Id")
+		assert.NotEmpty(t, actualID, "response must have X-Request-Id")
+		assert.NotEqual(t, "attacker-injected-id", actualID,
+			"public endpoint must generate a fresh request ID, not accept client-supplied value")
+	})
+
+	// --- Protected endpoint: trusted upstream X-Request-Id must be accepted ---
+	t.Run("protected endpoint accepts trusted upstream request ID", func(t *testing.T) {
+		req, reqErr := http.NewRequest("GET",
+			fmt.Sprintf("http://%s/api/v1/data", addr), nil)
+		require.NoError(t, reqErr)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("X-Request-Id", "trusted-upstream-id")
+
+		resp, respErr := testHTTPClient.Do(req)
+		require.NoError(t, respErr)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "trusted-upstream-id", resp.Header.Get("X-Request-Id"),
+			"protected endpoint must accept trusted upstream X-Request-Id")
+	})
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}

@@ -21,8 +21,8 @@ var flagSort = []query.SortColumn{
 
 // EvaluateResult holds the result of a flag evaluation.
 type EvaluateResult struct {
-	Key     string `json:"key"`
-	Enabled bool   `json:"enabled"`
+	Key     string
+	Enabled bool
 }
 
 // Service implements feature flag business logic.

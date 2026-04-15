@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -21,6 +23,38 @@ func setup() http.Handler {
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
+}
+
+func TestUserResponse_ExcludesSensitiveFields(t *testing.T) {
+	now := time.Now()
+	user := &domain.User{
+		ID: "u1", Username: "alice", Email: "a@b.com",
+		PasswordHash: "secret-hash-bcrypt", Status: domain.StatusActive,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	resp := toUserResponse(user)
+
+	assert.Equal(t, "u1", resp.ID)
+	assert.Equal(t, "alice", resp.Username)
+	assert.Equal(t, "a@b.com", resp.Email)
+	assert.Equal(t, "active", resp.Status)
+	assert.Equal(t, now, resp.CreatedAt)
+	assert.Equal(t, now, resp.UpdatedAt)
+
+	// Verify sensitive fields are not serialized.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.NotContains(t, s, "secret-hash-bcrypt")
+	assert.NotContains(t, s, "passwordHash")
+
+	// Verify camelCase JSON keys (#27n).
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"username"`)
+	assert.Contains(t, s, `"email"`)
+	assert.Contains(t, s, `"status"`)
+	assert.Contains(t, s, `"createdAt"`)
+	assert.Contains(t, s, `"updatedAt"`)
 }
 
 func TestHandler(t *testing.T) {
@@ -42,6 +76,16 @@ func TestHandler(t *testing.T) {
 				var resp map[string]json.RawMessage
 				require.NoError(t, json.Unmarshal(body, &resp))
 				assert.Contains(t, string(resp["data"]), "alice")
+
+				// Verify camelCase JSON keys (#27n).
+				var dataMap map[string]any
+				require.NoError(t, json.Unmarshal(resp["data"], &dataMap))
+				assert.Contains(t, dataMap, "id", "key must be camelCase")
+				assert.Contains(t, dataMap, "username", "key must be camelCase")
+				assert.Contains(t, dataMap, "email", "key must be camelCase")
+				assert.Contains(t, dataMap, "status", "key must be camelCase")
+				assert.Contains(t, dataMap, "createdAt", "key must be camelCase")
+				assert.Contains(t, dataMap, "updatedAt", "key must be camelCase")
 			},
 		},
 		{

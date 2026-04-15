@@ -42,6 +42,19 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "gocell")
+
+	// Verify camelCase JSON keys (#27n).
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	var dataMap map[string]any
+	require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+	assert.Contains(t, dataMap, "id", "key must be camelCase")
+	assert.Contains(t, dataMap, "key", "key must be camelCase")
+	assert.Contains(t, dataMap, "value", "key must be camelCase")
+	assert.Contains(t, dataMap, "sensitive", "key must be camelCase")
+	assert.Contains(t, dataMap, "version", "key must be camelCase")
+	assert.Contains(t, dataMap, "createdAt", "key must be camelCase")
+	assert.Contains(t, dataMap, "updatedAt", "key must be camelCase")
 }
 
 func TestHandler_HandleGet_NotFound(t *testing.T) {

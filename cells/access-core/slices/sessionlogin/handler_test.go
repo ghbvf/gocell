@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -33,6 +34,28 @@ func setup() *Handler {
 	return NewHandler(svc)
 }
 
+func TestTokenPairResponse_Fields(t *testing.T) {
+	now := time.Now()
+	pair := &TokenPair{
+		AccessToken:  "access-tok-1",
+		RefreshToken: "refresh-tok-1",
+		ExpiresAt:    now,
+	}
+	resp := toTokenPairResponse(pair)
+
+	assert.Equal(t, "access-tok-1", resp.AccessToken)
+	assert.Equal(t, "refresh-tok-1", resp.RefreshToken)
+	assert.Equal(t, now, resp.ExpiresAt)
+
+	// Verify JSON key casing via serialization.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"accessToken"`)
+	assert.Contains(t, s, `"refreshToken"`)
+	assert.Contains(t, s, `"expiresAt"`)
+}
+
 func TestHandleLogin(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -49,11 +72,22 @@ func TestHandleLogin(t *testing.T) {
 					Data struct {
 						AccessToken  string `json:"accessToken"`
 						RefreshToken string `json:"refreshToken"`
+						ExpiresAt    string `json:"expiresAt"`
 					} `json:"data"`
 				}
 				require.NoError(t, json.Unmarshal(body, &resp))
 				assert.NotEmpty(t, resp.Data.AccessToken)
 				assert.NotEmpty(t, resp.Data.RefreshToken)
+				assert.NotEmpty(t, resp.Data.ExpiresAt)
+
+				// Verify camelCase JSON keys (#27n).
+				var raw map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal(body, &raw))
+				var dataMap map[string]any
+				require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+				assert.Contains(t, dataMap, "accessToken", "key must be camelCase")
+				assert.Contains(t, dataMap, "refreshToken", "key must be camelCase")
+				assert.Contains(t, dataMap, "expiresAt", "key must be camelCase")
 			},
 		},
 		{

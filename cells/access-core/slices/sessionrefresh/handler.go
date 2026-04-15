@@ -2,9 +2,26 @@ package sessionrefresh
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
+
+// TokenPairResponse is the public DTO for TokenPair, isolating the API
+// contract from the service-layer model.
+type TokenPairResponse struct {
+	AccessToken  string    `json:"accessToken"`
+	RefreshToken string    `json:"refreshToken"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+}
+
+func toTokenPairResponse(p *TokenPair) TokenPairResponse {
+	return TokenPairResponse{
+		AccessToken:  p.AccessToken,
+		RefreshToken: p.RefreshToken,
+		ExpiresAt:    p.ExpiresAt,
+	}
+}
 
 // Handler provides HTTP endpoints for session refresh.
 type Handler struct {
@@ -32,5 +49,5 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": pair})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toTokenPairResponse(pair)})
 }

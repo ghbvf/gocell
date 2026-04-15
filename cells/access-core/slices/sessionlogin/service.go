@@ -24,9 +24,9 @@ const TopicSessionCreated = "event.session.created.v1"
 
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
-	AccessToken  string    `json:"accessToken"`
-	RefreshToken string    `json:"refreshToken"`
-	ExpiresAt    time.Time `json:"expiresAt"`
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    time.Time
 }
 
 // Option configures a session-login Service.

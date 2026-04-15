@@ -26,6 +26,17 @@ func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
 	}
 }
 
+// EvaluateResultResponse is the public DTO for EvaluateResult, isolating the
+// API contract from the service-layer model.
+type EvaluateResultResponse struct {
+	Key     string `json:"key"`
+	Enabled bool   `json:"enabled"`
+}
+
+func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
+	return EvaluateResultResponse{Key: r.Key, Enabled: r.Enabled}
+}
+
 // Handler provides HTTP endpoints for feature flag operations.
 type Handler struct {
 	svc *Service
@@ -88,5 +99,5 @@ func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": result})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toEvaluateResultResponse(result)})
 }

@@ -19,6 +19,45 @@ import (
 
 var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
+func TestFeatureFlagResponse_Fields(t *testing.T) {
+	flag := &domain.FeatureFlag{
+		ID: "ff-1", Key: "dark-mode", Type: domain.FlagBoolean,
+		Enabled: true, RolloutPercentage: 80,
+	}
+	resp := toFeatureFlagResponse(flag)
+
+	assert.Equal(t, "ff-1", resp.ID)
+	assert.Equal(t, "dark-mode", resp.Key)
+	assert.Equal(t, "boolean", resp.Type)
+	assert.True(t, resp.Enabled)
+	assert.Equal(t, 80, resp.RolloutPercentage)
+
+	// Verify camelCase JSON keys.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"key"`)
+	assert.Contains(t, s, `"type"`)
+	assert.Contains(t, s, `"enabled"`)
+	assert.Contains(t, s, `"rolloutPercentage"`)
+}
+
+func TestEvaluateResultResponse_Fields(t *testing.T) {
+	result := &EvaluateResult{Key: "dark-mode", Enabled: true}
+	resp := toEvaluateResultResponse(result)
+
+	assert.Equal(t, "dark-mode", resp.Key)
+	assert.True(t, resp.Enabled)
+
+	// Verify camelCase JSON keys.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"key"`)
+	assert.Contains(t, s, `"enabled"`)
+}
+
 func setupHandler() (http.Handler, *mem.FlagRepository) {
 	h, r, _ := setupHandlerWithCodec()
 	return h, r
@@ -63,6 +102,17 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
+
+	// Verify camelCase JSON keys (#27n).
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	var dataMap map[string]any
+	require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+	assert.Contains(t, dataMap, "id", "key must be camelCase")
+	assert.Contains(t, dataMap, "key", "key must be camelCase")
+	assert.Contains(t, dataMap, "type", "key must be camelCase")
+	assert.Contains(t, dataMap, "enabled", "key must be camelCase")
+	assert.Contains(t, dataMap, "rolloutPercentage", "key must be camelCase")
 }
 
 func TestHandler_HandleGet_NotFound(t *testing.T) {
@@ -89,6 +139,14 @@ func TestHandler_HandleEvaluate_OK(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
+
+	// Verify camelCase JSON keys (#27n).
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	var dataMap map[string]any
+	require.NoError(t, json.Unmarshal(raw["data"], &dataMap))
+	assert.Contains(t, dataMap, "key", "key must be camelCase")
+	assert.Contains(t, dataMap, "enabled", "key must be camelCase")
 }
 
 func TestHandler_HandleEvaluate_UnknownField(t *testing.T) {

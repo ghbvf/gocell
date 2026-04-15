@@ -2,6 +2,7 @@ package configpublish
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -32,6 +33,45 @@ type stubTxRunner struct{ calls int }
 func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	s.calls++
 	return fn(context.Background())
+}
+
+func TestConfigVersionResponse_Fields(t *testing.T) {
+	now := time.Now()
+	version := &domain.ConfigVersion{
+		ID: "cv-1", ConfigID: "cfg-1", Version: 3, Value: "v3",
+		PublishedAt: &now,
+	}
+	resp := toConfigVersionResponse(version)
+
+	assert.Equal(t, "cv-1", resp.ID)
+	assert.Equal(t, "cfg-1", resp.ConfigID)
+	assert.Equal(t, 3, resp.Version)
+	assert.Equal(t, "v3", resp.Value)
+	require.NotNil(t, resp.PublishedAt)
+	assert.Equal(t, now, *resp.PublishedAt)
+
+	// Verify camelCase JSON keys.
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"id"`)
+	assert.Contains(t, s, `"configId"`)
+	assert.Contains(t, s, `"version"`)
+	assert.Contains(t, s, `"value"`)
+	assert.Contains(t, s, `"publishedAt"`)
+}
+
+func TestConfigVersionResponse_OmitsNilPublishedAt(t *testing.T) {
+	version := &domain.ConfigVersion{
+		ID: "cv-2", ConfigID: "cfg-2", Version: 1, Value: "v1",
+		PublishedAt: nil,
+	}
+	resp := toConfigVersionResponse(version)
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), `"publishedAt"`,
+		"nil PublishedAt must be omitted via omitempty")
 }
 
 // --- handler tests ---

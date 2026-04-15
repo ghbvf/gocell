@@ -158,6 +158,21 @@ func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) O
 	}
 }
 
+// WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
+// the SecurityHeaders middleware. Use this to configure HSTS directives, e.g.:
+//
+//	WithSecurityHeadersOptions(
+//	    middleware.WithHSTSIncludeSubDomains(),
+//	    middleware.WithHSTSPreload(),
+//	)
+//
+// ref: unrolled/secure — configurable HSTS directives via struct fields
+func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
+	return func(r *Router) {
+		r.securityHeadersOpts = append(r.securityHeadersOpts, opts...)
+	}
+}
+
 // WithTrustedProxies configures the set of trusted proxy IPs/CIDRs for
 // X-Forwarded-For header processing. Supports both exact IPs ("192.168.1.1")
 // and CIDR notation ("10.0.0.0/8"). When nil (default), no proxy is trusted
@@ -191,9 +206,10 @@ type Router struct {
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
-	authPublicEndpoints []string
-	bodyLimit           int64
-	trustedProxies      []string
+	authPublicEndpoints  []string
+	securityHeadersOpts  []middleware.SecurityHeadersOption
+	bodyLimit            int64
+	trustedProxies       []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -274,7 +290,7 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 	r.outerMux.Use(
 		middleware.Recovery,
-		middleware.SecurityHeaders,
+		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
 	)
 
 	// Infrastructure endpoints: registered on outerMux before business mount.
