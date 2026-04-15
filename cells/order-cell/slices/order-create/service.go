@@ -105,11 +105,19 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 		return nil, err
 	}
 
-	s.logger.Info("order-create: outbox entry written",
-		slog.String("order_id", order.ID),
-		slog.String("entry_id", entry.ID),
-		slog.String("topic", entry.RoutingTopic()),
-	)
+	if n, ok := s.outboxWriter.(interface{ Noop() bool }); ok && n.Noop() {
+		s.logger.Debug("order-create: outbox entry processed (noop: not persisted)",
+			slog.String("order_id", order.ID),
+			slog.String("entry_id", entry.ID),
+			slog.String("topic", entry.RoutingTopic()),
+		)
+	} else {
+		s.logger.Info("order-create: outbox entry written",
+			slog.String("order_id", order.ID),
+			slog.String("entry_id", entry.ID),
+			slog.String("topic", entry.RoutingTopic()),
+		)
+	}
 	return order, nil
 }
 

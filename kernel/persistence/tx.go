@@ -20,7 +20,11 @@ type TxRunner interface {
 type NoopTxRunner struct{}
 
 // RunInTx calls fn with the provided context (no transaction wrapping).
+// Panics if fn is nil (programming error, ref: net/http.HandleFunc, database/sql.Register).
 func (NoopTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if fn == nil {
+		panic("persistence: nil fn passed to RunInTx")
+	}
 	return fn(ctx)
 }
 

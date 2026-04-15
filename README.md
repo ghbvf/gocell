@@ -204,6 +204,23 @@ curl http://localhost:8080/api/v1/hello
 | [sso-bff](examples/sso-bff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
 | [iot-device](examples/iot-device/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
+## Runtime Modes
+
+GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is rejected):
+
+| Mode | Value | Noop Allowed | Use Case |
+|------|-------|-------------|----------|
+| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `NoopTxRunner`, `DiscardPublisher` accepted | Development, unit tests, examples |
+| `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` | Production (`cmd/core-bundle`) |
+
+```go
+// Production
+asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: cell.DurabilityDurable})
+
+// Development / tests
+asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDemo})
+```
+
 ## Architecture
 
 ```
