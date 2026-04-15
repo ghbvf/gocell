@@ -34,6 +34,12 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return fn(context.Background())
 }
 
+type failingTxRunner struct{ err error }
+
+func (f *failingTxRunner) RunInTx(_ context.Context, _ func(context.Context) error) error {
+	return f.err
+}
+
 // --- tests ---
 
 func TestService_WithOutboxWriter(t *testing.T) {
@@ -106,6 +112,29 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 	assert.True(t, result.Valid)
 	assert.Equal(t, 1, tx.calls, "txRunner should have been called once")
 	require.Len(t, ow.entries, 1, "outbox writer should have received the event within tx")
+}
+
+func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	ow := &stubOutboxWriter{}
+	txErr := fmt.Errorf("db connection lost")
+	ftx := &failingTxRunner{err: txErr}
+	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(),
+		WithOutboxWriter(ow), WithTxManager(ftx))
+
+	chain := domain.NewHashChain(testHMACKey)
+	for i := range 3 {
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		require.NoError(t, repo.Append(context.Background(), entry))
+	}
+
+	result, err := svc.VerifyChain(context.Background(), 0, 10)
+	// TxRunner error must propagate — fn is never called.
+	require.Error(t, err, "txRunner error should propagate")
+	assert.Contains(t, err.Error(), "db connection lost")
+	require.NotNil(t, result, "result should still be returned")
+	assert.True(t, result.Valid, "verification completed before persist")
+	assert.Empty(t, ow.entries, "outbox writer should not be called when txRunner fails")
 }
 
 func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {

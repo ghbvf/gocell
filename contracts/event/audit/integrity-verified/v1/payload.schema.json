@@ -4,9 +4,9 @@
   "type": "object",
   "properties": {
     "valid": { "type": "boolean" },
-    "first_invalid_index": { "type": "integer" },
-    "entries_checked": { "type": "integer" }
+    "firstInvalidIndex": { "type": "integer" },
+    "entriesChecked": { "type": "integer" }
   },
-  "required": ["valid", "first_invalid_index", "entries_checked"],
+  "required": ["valid", "firstInvalidIndex", "entriesChecked"],
   "additionalProperties": false
 }
