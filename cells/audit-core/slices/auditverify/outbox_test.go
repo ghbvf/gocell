@@ -119,7 +119,7 @@ func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 		if i == 1 {
 			entry.Hash = "tampered"
 		}
-		_ = repo.Append(context.Background(), entry)
+		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
 	result, err := svc.VerifyChain(context.Background(), 0, 10)

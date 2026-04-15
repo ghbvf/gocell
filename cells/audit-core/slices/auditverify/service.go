@@ -85,11 +85,14 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 	}
 
 	// Publish verification result via outbox (durable) or direct publish (demo).
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"valid":               valid,
 		"first_invalid_index": firstInvalid,
 		"entries_checked":     len(entries),
 	})
+	if err != nil {
+		return result, fmt.Errorf("audit-verify: marshal payload: %w", err)
+	}
 
 	// Persist + outbox write in a transaction for L2 atomicity.
 	persistFn := s.buildPersistFn(payload)

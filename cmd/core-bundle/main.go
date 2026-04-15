@@ -62,6 +62,15 @@ func main() {
 	// Determine adapter mode early — it controls key loading strategy.
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
 
+	// Strict mode: refuse to start with in-memory fallbacks when the operator
+	// explicitly requested production-grade adapters via GOCELL_ADAPTER_MODE=real.
+	if err := validateAdapterMode(adapterMode); err != nil {
+		slog.Error("adapter mode validation failed",
+			slog.String("adapter_mode", adapterMode),
+			slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	keySet, err := loadKeySet(adapterMode)
@@ -93,16 +102,9 @@ func main() {
 		auditOpts  []auditcore.Option
 	)
 
-	// Strict mode: refuse to start with in-memory fallbacks when the operator
-	// explicitly requested production-grade adapters via GOCELL_ADAPTER_MODE=real.
-	if err := validateAdapterMode(adapterMode); err != nil {
-		slog.Error("adapter mode validation failed",
-			slog.String("adapter_mode", adapterMode),
-			slog.Any("error", err))
-		os.Exit(1)
-	}
-
-	slog.Info("adapter mode: in-memory (development)")
+	slog.Info("adapter mode: in-memory (development)",
+		slog.String("requested", adapterMode),
+		slog.String("effective", "in-memory"))
 	configOpts = append(configOpts, configcore.WithInMemoryDefaults())
 	accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
 	auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
@@ -170,22 +172,22 @@ func main() {
 		"/api/v1/access/sessions/refresh",
 	}
 
+	adapterInfo := map[string]string{
+		"mode":      "in-memory",
+		"storage":   "in-memory",
+		"event_bus": "in-memory",
+	}
 	slog.Info("core-bundle: startup configuration",
-		slog.String("adapter_mode", "in-memory"),
-		slog.String("storage", "in-memory"),
-		slog.String("event_bus", "in-memory"),
-		slog.String("publisher", "in-memory"))
+		slog.String("adapter_mode", adapterInfo["mode"]),
+		slog.String("storage", adapterInfo["storage"]),
+		slog.String("event_bus", adapterInfo["event_bus"]))
 
 	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
-		bootstrap.WithAdapterInfo(map[string]string{
-			"mode":      "in-memory",
-			"storage":   "in-memory",
-			"event_bus": "in-memory",
-		}),
+		bootstrap.WithAdapterInfo(adapterInfo),
 	}
 
 	// Register session store health checker if the repository supports it.
