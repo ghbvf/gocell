@@ -176,7 +176,7 @@ func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    asm := assembly.New(assembly.Config{ID: "my-app"})
+    asm := assembly.New(assembly.Config{ID: "my-app", DurabilityMode: cell.DurabilityDemo})
     asm.Register(mycell.New())
 
     app := bootstrap.New(

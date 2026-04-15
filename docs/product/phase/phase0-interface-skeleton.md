@@ -382,7 +382,7 @@ package gocell
 import "github.com/ghbvf/gocell/kernel/assembly"
 
 func NewAssembly(id string) *assembly.CoreAssembly {
-    return assembly.New(assembly.Config{ID: id})
+    return assembly.New(assembly.Config{ID: id, DurabilityMode: cell.DurabilityDemo})
 }
 ```
 

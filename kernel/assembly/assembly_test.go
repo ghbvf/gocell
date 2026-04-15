@@ -61,6 +61,24 @@ func newEmptyIDCell() *emptyIDCell {
 	}
 }
 
+// durabilityCheckCell calls CheckNotNoop in Init (like real L2 cells do).
+type durabilityCheckCell struct {
+	*cell.BaseCell
+}
+
+func newDurabilityCheckCell(id string) *durabilityCheckCell {
+	return &durabilityCheckCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L2}),
+	}
+}
+
+func (c *durabilityCheckCell) Init(ctx context.Context, deps cell.Dependencies) error {
+	if err := c.BaseCell.Init(ctx, deps); err != nil {
+		return err
+	}
+	return cell.CheckNotNoop(deps.DurabilityMode, c.ID())
+}
+
 // failStartCell passes Init but fails on Start.
 type failStartCell struct {
 	*cell.BaseCell
@@ -98,7 +116,7 @@ func (c *failStopCell) Stop(_ context.Context) error {
 // ---------------------------------------------------------------------------
 
 func TestAssemblyStartStopHealthy(t *testing.T) {
-	a := New(Config{ID: "test-assembly"})
+	a := New(Config{ID: "test-assembly", DurabilityMode: cell.DurabilityDemo})
 
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore, ConsistencyLevel: cell.L1})
 	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "c2", Type: cell.CellTypeEdge, ConsistencyLevel: cell.L2})
@@ -120,7 +138,7 @@ func TestAssemblyStartStopHealthy(t *testing.T) {
 }
 
 func TestAssemblyStopReverseOrder(t *testing.T) {
-	a := New(Config{ID: "order-test"})
+	a := New(Config{ID: "order-test", DurabilityMode: cell.DurabilityDemo})
 
 	var order []string
 	c1 := newOrderCell("first", &order)
@@ -137,7 +155,7 @@ func TestAssemblyStopReverseOrder(t *testing.T) {
 }
 
 func TestAssemblyDuplicateCellID(t *testing.T) {
-	a := New(Config{ID: "dup-test"})
+	a := New(Config{ID: "dup-test", DurabilityMode: cell.DurabilityDemo})
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "same", Type: cell.CellTypeCore})
 	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "same", Type: cell.CellTypeCore})
 
@@ -151,7 +169,7 @@ func TestAssemblyDuplicateCellID(t *testing.T) {
 }
 
 func TestAssemblyEmptyCellID(t *testing.T) {
-	a := New(Config{ID: "empty-id-test"})
+	a := New(Config{ID: "empty-id-test", DurabilityMode: cell.DurabilityDemo})
 
 	err := a.Register(newEmptyIDCell())
 	require.Error(t, err)
@@ -161,7 +179,7 @@ func TestAssemblyEmptyCellID(t *testing.T) {
 }
 
 func TestAssemblyInitFailure(t *testing.T) {
-	a := New(Config{ID: "init-fail"})
+	a := New(Config{ID: "init-fail", DurabilityMode: cell.DurabilityDemo})
 
 	good := cell.NewBaseCell(cell.CellMetadata{ID: "good", Type: cell.CellTypeCore})
 	bad := newFailInitCell("bad")
@@ -183,7 +201,7 @@ func TestAssemblyInitFailure(t *testing.T) {
 }
 
 func TestAssemblyStopWithoutStart(t *testing.T) {
-	a := New(Config{ID: "no-start"})
+	a := New(Config{ID: "no-start", DurabilityMode: cell.DurabilityDemo})
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "c", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 
@@ -192,7 +210,7 @@ func TestAssemblyStopWithoutStart(t *testing.T) {
 }
 
 func TestAssemblyStopOnlyFromStarted(t *testing.T) {
-	a := New(Config{ID: "guard-test"})
+	a := New(Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo})
 	var order []string
 	c := newOrderCell("c1", &order)
 	require.NoError(t, a.Register(c))
@@ -213,13 +231,13 @@ func TestAssemblyStopOnlyFromStarted(t *testing.T) {
 }
 
 func TestAssemblyStopEmpty(t *testing.T) {
-	a := New(Config{ID: "empty"})
+	a := New(Config{ID: "empty", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, a.Stop(context.Background()))
 }
 
 func TestAssemblyStartFailureRollback(t *testing.T) {
 	// ref: uber-go/fx — Start 失败自动 rollback 已启动的 Cell
-	a := New(Config{ID: "start-fail"})
+	a := New(Config{ID: "start-fail", DurabilityMode: cell.DurabilityDemo})
 
 	var order []string
 	good := newOrderCell("good", &order)
@@ -246,7 +264,7 @@ func TestAssemblyStartFailureRollback(t *testing.T) {
 
 func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	// ref: uber-go/fx lifecycle.go — 状态机防止重入
-	a := New(Config{ID: "double-start"})
+	a := New(Config{ID: "double-start", DurabilityMode: cell.DurabilityDemo})
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "c", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.Start(context.Background()))
@@ -256,7 +274,7 @@ func TestAssemblyDoubleStartPrevented(t *testing.T) {
 }
 
 func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
-	a := New(Config{ID: "reg-after-start"})
+	a := New(Config{ID: "reg-after-start", DurabilityMode: cell.DurabilityDemo})
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c1))
 	require.NoError(t, a.Start(context.Background()))
@@ -273,7 +291,7 @@ func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 }
 
 func TestAssemblyStopContinuesOnError(t *testing.T) {
-	a := New(Config{ID: "stop-err"})
+	a := New(Config{ID: "stop-err", DurabilityMode: cell.DurabilityDemo})
 
 	good := cell.NewBaseCell(cell.CellMetadata{ID: "good", Type: cell.CellTypeCore})
 	bad1 := newFailStopCell("bad1")
@@ -299,7 +317,7 @@ func TestAssemblyStopContinuesOnError(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfig(t *testing.T) {
-	a := New(Config{ID: "config-test"})
+	a := New(Config{ID: "config-test", DurabilityMode: cell.DurabilityDemo})
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 
@@ -312,7 +330,7 @@ func TestAssemblyStartWithConfig(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
-	a := New(Config{ID: "double-cfg"})
+	a := New(Config{ID: "double-cfg", DurabilityMode: cell.DurabilityDemo})
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 	require.NoError(t, a.StartWithConfig(context.Background(), nil))
@@ -323,7 +341,7 @@ func TestAssemblyStartWithConfigDoubleStart(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigInitFailure(t *testing.T) {
-	a := New(Config{ID: "init-fail-cfg"})
+	a := New(Config{ID: "init-fail-cfg", DurabilityMode: cell.DurabilityDemo})
 	bad := newFailInitCell("bad")
 	require.NoError(t, a.Register(bad))
 
@@ -332,7 +350,7 @@ func TestAssemblyStartWithConfigInitFailure(t *testing.T) {
 }
 
 func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
-	a := New(Config{ID: "start-fail-cfg"})
+	a := New(Config{ID: "start-fail-cfg", DurabilityMode: cell.DurabilityDemo})
 
 	var order []string
 	good := newOrderCell("good", &order)
@@ -346,7 +364,7 @@ func TestAssemblyStartWithConfigStartFailureRollback(t *testing.T) {
 }
 
 func TestAssemblyCellIDs(t *testing.T) {
-	a := New(Config{ID: "ids-test"})
+	a := New(Config{ID: "ids-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "a", Type: cell.CellTypeCore})))
 	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "b", Type: cell.CellTypeCore})))
 
@@ -355,7 +373,7 @@ func TestAssemblyCellIDs(t *testing.T) {
 }
 
 func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
-	a := New(Config{ID: "concurrent-health"})
+	a := New(Config{ID: "concurrent-health", DurabilityMode: cell.DurabilityDemo})
 
 	// Pre-register some cells.
 	for i := range 5 {
@@ -383,7 +401,7 @@ func TestAssemblyHealthConcurrentWithRegister(t *testing.T) {
 }
 
 func TestAssemblyCellLookup(t *testing.T) {
-	a := New(Config{ID: "lookup-test"})
+	a := New(Config{ID: "lookup-test", DurabilityMode: cell.DurabilityDemo})
 	c := cell.NewBaseCell(cell.CellMetadata{ID: "x", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 
@@ -392,4 +410,15 @@ func TestAssemblyCellLookup(t *testing.T) {
 	assert.Equal(t, "x", found.ID())
 
 	assert.Nil(t, a.Cell("nonexistent"))
+}
+
+func TestAssemblyStart_ZeroDurabilityMode_FailsOnCellThatChecks(t *testing.T) {
+	// Integration: assembly with zero DurabilityMode + cell that calls CheckNotNoop → Start fails.
+	a := New(Config{ID: "test-zero-durability"}) // zero DurabilityMode (unset)
+	c := newDurabilityCheckCell("durability-cell")
+	require.NoError(t, a.Register(c))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DurabilityMode not set")
 }

@@ -52,7 +52,7 @@ func TestBootstrap_RunHappyPath(t *testing.T) {
     ln, err := net.Listen("tcp", "127.0.0.1:0")
     require.NoError(t, err)
     
-    asm := assembly.New(assembly.Config{ID: "test"})
+    asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
     require.NoError(t, asm.Register(newTestCell("cell-1")))
     
     ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
