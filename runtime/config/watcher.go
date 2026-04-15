@@ -28,6 +28,13 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// Event type constants for WatcherCollector.RecordEvent.
+const (
+	EventTypeWrite        = "write"
+	EventTypeCreate       = "create"
+	EventTypeSymlinkPivot = "symlink_pivot"
+)
+
 // WatchEvent carries information about a file change detected by the Watcher.
 type WatchEvent struct {
 	Path         string // Path of the changed file (original, not resolved).
@@ -72,7 +79,8 @@ func WithMaxDebounce(d time.Duration) WatcherOption {
 // WithKeyFilter stores key prefixes on the watcher. Bootstrap can read these
 // via KeyFilters() to decide which cells to notify after a config reload.
 // The watcher itself does not apply key-level filtering (it watches files,
-// not config keys).
+// not config keys). Calling this option multiple times replaces previous
+// prefixes (last-writer-wins).
 func WithKeyFilter(prefixes ...string) WatcherOption {
 	return func(c *watcherConfig) {
 		c.keyFilters = append(c.keyFilters[:0], prefixes...)
@@ -118,7 +126,8 @@ type Watcher struct {
 	lastResolved  string     // last resolved symlink target
 	debounceTimer *time.Timer
 	maxTimer      *time.Timer
-	debounceMu    sync.Mutex     // protects timer manipulation
+	pendingPivot  bool           // true if any coalesced event was a symlink pivot
+	debounceMu    sync.Mutex     // protects timer + pendingPivot manipulation
 	callbackWg    sync.WaitGroup // tracks in-flight callback execution
 	closeErr      error          // cached Close result
 }
@@ -291,16 +300,20 @@ func (w *Watcher) checkSymlinkPivot() bool {
 
 func (w *Watcher) eventType(event fsnotify.Event, symPivot bool) string {
 	if symPivot {
-		return "symlink_pivot"
+		return EventTypeSymlinkPivot
 	}
 	if event.Has(fsnotify.Create) {
-		return "create"
+		return EventTypeCreate
 	}
-	return "write"
+	return EventTypeWrite
 }
 
 // scheduleCallback either fires callbacks immediately (debounce=0) or
 // schedules them after the debounce window using timers.
+//
+// The symPivot flag is tracked via pendingPivot (protected by debounceMu) so
+// that when multiple events are coalesced, the most significant signal (any
+// symlink pivot in the batch) is preserved regardless of which timer fires.
 func (w *Watcher) scheduleCallback(symPivot bool) {
 	if w.cfg.debounce <= 0 {
 		w.fireCallbacks(symPivot)
@@ -310,35 +323,41 @@ func (w *Watcher) scheduleCallback(symPivot bool) {
 	w.debounceMu.Lock()
 	defer w.debounceMu.Unlock()
 
+	// Track the most significant signal across coalesced events.
+	if symPivot {
+		w.pendingPivot = true
+	}
+
 	// Reset debounce timer.
 	if w.debounceTimer != nil {
 		w.debounceTimer.Stop()
 		w.cfg.metrics.RecordDebounceCoalesced()
 	}
-	w.debounceTimer = time.AfterFunc(w.cfg.debounce, func() {
-		w.debounceMu.Lock()
-		w.debounceTimer = nil
-		if w.maxTimer != nil {
-			w.maxTimer.Stop()
-			w.maxTimer = nil
-		}
-		w.debounceMu.Unlock()
-		w.fireCallbacks(symPivot)
-	})
+	w.debounceTimer = time.AfterFunc(w.cfg.debounce, w.firePendingCallbacks)
 
 	// Start max-debounce ceiling timer if not already running.
 	if w.maxTimer == nil && w.cfg.maxDebounce > 0 {
-		w.maxTimer = time.AfterFunc(w.cfg.maxDebounce, func() {
-			w.debounceMu.Lock()
-			if w.debounceTimer != nil {
-				w.debounceTimer.Stop()
-				w.debounceTimer = nil
-			}
-			w.maxTimer = nil
-			w.debounceMu.Unlock()
-			w.fireCallbacks(symPivot)
-		})
+		w.maxTimer = time.AfterFunc(w.cfg.maxDebounce, w.firePendingCallbacks)
 	}
+}
+
+// firePendingCallbacks is invoked by debounce or max-debounce timers. It reads
+// and resets the pendingPivot flag under lock, then fires callbacks.
+func (w *Watcher) firePendingCallbacks() {
+	w.debounceMu.Lock()
+	pivot := w.pendingPivot
+	w.pendingPivot = false
+	// Clear both timers — whichever fired first wins.
+	if w.debounceTimer != nil {
+		w.debounceTimer.Stop()
+		w.debounceTimer = nil
+	}
+	if w.maxTimer != nil {
+		w.maxTimer.Stop()
+		w.maxTimer = nil
+	}
+	w.debounceMu.Unlock()
+	w.fireCallbacks(pivot)
 }
 
 func (w *Watcher) fireCallbacks(symPivot bool) {
@@ -370,7 +389,10 @@ func (w *Watcher) Close() error {
 	w.closeOnce.Do(func() {
 		close(w.done)
 
-		// Stop debounce timers to prevent goroutine leaks.
+		// Stop debounce timers to prevent goroutine leaks. Note: a timer
+		// goroutine may fire between close(done) and timer.Stop() — this is
+		// safe because fireCallbacks does not use w.watcher, and the WaitGroup
+		// drain below will wait for any such in-flight callback to complete.
 		w.debounceMu.Lock()
 		if w.debounceTimer != nil {
 			w.debounceTimer.Stop()
