@@ -272,7 +272,7 @@ type Bootstrap struct {
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
 	// without mutating package-level state (safe for parallel tests).
-	configWatcherFactory func(string) (*config.Watcher, error)
+	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
 }
 
 // New creates a Bootstrap with the given options.

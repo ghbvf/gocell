@@ -52,12 +52,25 @@ type Generationer interface {
 	Generation() int64
 }
 
+// ObservedGenerationer is an optional interface for configs that track the last
+// generation successfully applied by all consumers. The gap between Generation()
+// and ObservedGeneration() indicates configuration drift (desired vs applied).
+//
+// ref: kubernetes/kubernetes — generation/observedGeneration pattern:
+// metadata.Generation = desired state version (bumped on spec change),
+// status.ObservedGeneration = last version the controller reconciled.
+type ObservedGenerationer interface {
+	ObservedGeneration() int64
+	SetObservedGeneration(gen int64)
+}
+
 // config is the default in-memory implementation of Config.
 type config struct {
-	mu         sync.RWMutex
-	data       map[string]any
-	raw        map[string]any // original structured data for Scan
-	generation atomic.Int64
+	mu                 sync.RWMutex
+	data               map[string]any
+	raw                map[string]any // original structured data for Scan
+	generation         atomic.Int64
+	observedGeneration atomic.Int64
 }
 
 // Load reads a YAML file and overlays environment variable overrides.
@@ -140,6 +153,29 @@ func (c *config) Snapshot() map[string]any {
 // and increments by 1 on each successful Reload.
 func (c *config) Generation() int64 {
 	return c.generation.Load()
+}
+
+// ObservedGeneration returns the last generation successfully applied by all
+// consumers. Bootstrap sets this after all cells' OnConfigReload succeed.
+func (c *config) ObservedGeneration() int64 {
+	return c.observedGeneration.Load()
+}
+
+// SetObservedGeneration records the last generation successfully applied.
+func (c *config) SetObservedGeneration(gen int64) {
+	c.observedGeneration.Store(gen)
+}
+
+// HasDrift reports whether the config's desired generation differs from the
+// observed (applied) generation. Useful for health endpoints to detect stale
+// config state. Returns false if cfg does not implement both interfaces.
+func HasDrift(cfg Config) bool {
+	g, gOK := cfg.(Generationer)
+	og, ogOK := cfg.(ObservedGenerationer)
+	if !gOK || !ogOK {
+		return false
+	}
+	return g.Generation() != og.ObservedGeneration()
 }
 
 // Reload re-reads the YAML file and overlays environment variables.

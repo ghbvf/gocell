@@ -868,7 +868,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
-	b.configWatcherFactory = func(string) (*config.Watcher, error) {
+	b.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
 		return nil, errors.New("watcher init failed")
 	}
 
