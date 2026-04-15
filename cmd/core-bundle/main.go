@@ -61,117 +61,85 @@ func validateAdapterMode(mode string) error {
 }
 
 func main() {
-	// Determine adapter mode early — it controls key loading strategy.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := run(ctx); err != nil {
+		slog.Error("application failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run contains all assembly and bootstrap logic, extracted from main() for testability.
+func run(ctx context.Context) error {
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
 
-	// Strict mode: refuse to start with in-memory fallbacks when the operator
-	// explicitly requested production-grade adapters via GOCELL_ADAPTER_MODE=real.
 	if err := validateAdapterMode(adapterMode); err != nil {
-		slog.Error("adapter mode validation failed",
-			slog.String("adapter_mode", adapterMode),
-			slog.Any("error", err))
-		os.Exit(1)
+		return fmt.Errorf("adapter mode: %w", err)
 	}
 
 	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
-		slog.Error("failed to load JWT key set", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load JWT key set: %w", err)
 	}
 
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
 	if err != nil {
-		slog.Error("failed to create JWT issuer", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create JWT issuer: %w", err)
 	}
 	jwtVerifier, err := auth.NewJWTVerifier(keySet)
 	if err != nil {
-		slog.Error("failed to create JWT verifier", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create JWT verifier: %w", err)
 	}
 
-	// Create shared event bus (in-memory by default).
-	// When GOCELL_ADAPTER_MODE=real, a real message broker adapter would replace
-	// this; for now we always use the in-memory event bus as a fallback.
 	eb := eventbus.New()
-
-	// Build cell options based on adapter mode.
-	var (
-		configOpts []configcore.Option
-		accessOpts []accesscore.Option
-		auditOpts  []auditcore.Option
-	)
 
 	slog.Info("adapter mode: in-memory (development)",
 		slog.String("requested", adapterMode),
 		slog.String("effective", "in-memory"))
-	configOpts = append(configOpts, configcore.WithInMemoryDefaults())
-	accessOpts = append(accessOpts, accesscore.WithInMemoryDefaults())
-	auditOpts = append(auditOpts, auditcore.WithInMemoryDefaults())
 
-	// Cursor codecs for pagination — per-cell isolation prevents cross-cell cursor reuse.
 	auditCursorCodec, err := query.NewCursorCodec(
 		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key32!"),
 	)
 	if err != nil {
-		slog.Error("failed to create audit cursor codec", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create audit cursor codec: %w", err)
 	}
 	configCursorCodec, err := query.NewCursorCodec(
 		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key-32b!"),
 	)
 	if err != nil {
-		slog.Error("failed to create config cursor codec", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create config cursor codec: %w", err)
 	}
 
-	// Common options.
-	configOpts = append(configOpts,
+	configCell := configcore.NewConfigCore(
+		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
-	accessOpts = append(accessOpts,
+	accessCell := accesscore.NewAccessCore(
+		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 	)
-	auditOpts = append(auditOpts,
+	auditCell := auditcore.NewAuditCore(
+		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	// Create cells.
-	configCell := configcore.NewConfigCore(configOpts...)
-	accessCell := accesscore.NewAccessCore(accessOpts...)
-	auditCell := auditcore.NewAuditCore(auditOpts...)
-
-	// Create assembly and register cells in dependency order.
 	asm := assembly.New(assembly.Config{ID: "core-bundle"})
 	if err := asm.Register(configCell); err != nil {
-		slog.Error("failed to register config-core", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("register config-core: %w", err)
 	}
 	if err := asm.Register(accessCell); err != nil {
-		slog.Error("failed to register access-core", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("register access-core: %w", err)
 	}
 	if err := asm.Register(auditCell); err != nil {
-		slog.Error("failed to register audit-core", "error", err)
-		os.Exit(1)
-	}
-
-	// Bootstrap the application.
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
-	// Public endpoints declared at composition root — not in runtime/auth defaults.
-	// Only login and refresh are accessible without a valid JWT.
-	publicEndpoints := []string{
-		"/api/v1/access/sessions/login",
-		"/api/v1/access/sessions/refresh",
+		return fmt.Errorf("register audit-core: %w", err)
 	}
 
 	adapterInfo := map[string]string{
@@ -184,20 +152,16 @@ func main() {
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]))
 
-	bootstrapOpts := []bootstrap.Option{
+	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithPublicEndpoints([]string{
+			"/api/v1/access/sessions/login",
+			"/api/v1/access/sessions/refresh",
+		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
-	}
+	)
 
-	// Cell health probes (e.g. session-store) are auto-discovered by bootstrap
-	// via cell.HealthContributor interface — no manual registration needed.
-	app := bootstrap.New(bootstrapOpts...)
-
-	if err := app.Run(ctx); err != nil {
-		slog.Error("application failed", "error", err)
-		os.Exit(1)
-	}
+	return app.Run(ctx)
 }

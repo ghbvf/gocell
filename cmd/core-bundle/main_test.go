@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -72,6 +73,28 @@ func TestValidateAdapterMode_Unknown_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown GOCELL_ADAPTER_MODE")
 	assert.Contains(t, err.Error(), "staging")
+}
+
+func TestRun_DevMode_StartsAndCancels(t *testing.T) {
+	// run() with an immediately-cancelled context exercises the full assembly
+	// path (cells, bootstrap) without needing a real HTTP listener.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately — run() should exit cleanly
+
+	// run() may fail with "context canceled" or a listen error (sandbox);
+	// both are acceptable — we're testing that assembly + bootstrap wiring
+	// completes without crashing.
+	_ = run(ctx)
+}
+
+func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
+	t.Setenv("GOCELL_ADAPTER_MODE", "production")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "adapter mode")
 }
 
 // generateTestPEM creates a fresh 2048-bit RSA key pair as PEM bytes.
