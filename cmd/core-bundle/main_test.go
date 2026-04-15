@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"strings"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"net"
+	"syscall"
 	"testing"
 
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -89,14 +91,23 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// Only context.Canceled and listen/sandbox errors are acceptable.
 	// Any other error signals a real startup regression.
 	if err != nil {
-		msg := err.Error()
-		acceptable := strings.Contains(msg, "context canceled") ||
-			strings.Contains(msg, "operation not permitted") ||
-			strings.Contains(msg, "bind:")
+		acceptable := errors.Is(err, context.Canceled) ||
+			errors.Is(err, syscall.EPERM) ||
+			isBindError(err)
 		if !acceptable {
 			t.Fatalf("unexpected startup error (not context-canceled or sandbox): %v", err)
 		}
 	}
+}
+
+// isBindError reports whether err wraps a net.OpError with Op "listen".
+// This covers "bind: address already in use" and similar listen failures.
+func isBindError(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "listen"
+	}
+	return false
 }
 
 func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {

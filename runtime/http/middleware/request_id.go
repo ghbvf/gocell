@@ -104,9 +104,11 @@ func isSafeID(s string) bool {
 }
 
 // newUUID generates a UUID v4 string.
+// crypto/rand.Read always succeeds in Go 1.24+; it calls runtime.fatal
+// on OS entropy failure rather than returning an error.
 func newUUID() string {
 	var buf [16]byte
-	_, _ = rand.Read(buf[:])
+	rand.Read(buf[:])
 	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
 	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",

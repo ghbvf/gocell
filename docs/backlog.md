@@ -52,7 +52,7 @@
 | 131b | ✅ **BOOTSTRAP-TRUST-TEST-01** bootstrap 信任边界自动接线（`authPublicEndpoints` → tracing + request_id）无集成测试。现有 bootstrap 测试全部依赖 `net.Listen`，需 router-only 测试路径或 mock listener | 2h | `runtime/bootstrap/bootstrap_test.go` | PR#131 review F3-1 | PR#133 |
 | 27n | ✅ **HANDLER-TEST-CAMELCASE-ASSERT** 13 个 handler_test.go 无显式 camelCase key 断言（如 `assert.Contains(body, "createdAt")`），camelCase 合规由 contract_test + schema 守护 | 2h | 12+ `handler_test.go` | PR#126 review | PR#133 |
 | 27k | ✅ **DTO-CONVERTER-UNIT-TEST** 8 个 DTO converter 函数（toXxxResponse）无独立单测，仅靠 handler httptest 间接覆盖。若 converter 增加条件逻辑需补专项测试 | 2h | 6 个 `handler_test.go` | PR#126 review | PR#133 |
-| 20 | **decode 加固** DECODE-STR-01 classifyDecodeError 脆弱性 | 2h | `pkg/httputil/decode.go` | 6B | MG-E |
+| 20 | ✅ **decode 加固** DECODE-STR-01 classifyDecodeError 加固(CutPrefix+guard test) + REQID-RAND-ERR rand.Read 清理 + MAIN-TEST-CLEANUP 类型安全错误匹配 | 2h | `pkg/httputil/decode.go` + `runtime/http/middleware/request_id.go` + `cmd/core-bundle/main_test.go` | 6B | PR#139 |
 | 19 | **CI 增强** T1-7(golangci-lint) + TC-PIN-01(testcontainers 镜像 pin 到 patch 版本，当前全仓用 floating minor tag `3.12-management-alpine`，PR#124 review S4-F1) | 2.5h | `.github/ci.yml` + `adapters/*/integration_test.go` | 6B | MG-F 治理 |
 | 27b | **SLICE-ALLOWEDFILES-01** 全部 slice 默认 allowedFiles 不覆盖 Go 包目录（kebab-case YAML 目录 vs no-dash Go 包目录），需系统性补 allowedFiles 或改 `BaseSlice.AllowedFiles()` 默认逻辑 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review | MG-F |
 | 28a | **AUTH-CACHE-01** session 验证 DB round-trip 缓存: 每请求 `GetByID` 查主库，real adapter 下需 Redis short-TTL（5-15s）session cache + 撤销时主动失效。可选: circuitbreaker 包住 `GetByID`（仅 infra error 触发） | 4h | `cells/access-core/slices/sessionvalidate/service.go` + `adapters/redis/` | PR#127 review | MG-G Auth ops |
@@ -120,6 +120,15 @@
 | **Config 治理** | CFG-KEYFILTER-WIRE-01(KeyFilter bootstrap 接线: cell 通知循环使用 `KeyFilter.Matches()` 选择性通知，需产品确认语义, `runtime/bootstrap/bootstrap.go`) + CFG-ERRCODE-01(runtime/config 包 `fmt.Errorf` 评估是否迁移 errcode — 当前 runtime/ 层统一用 `fmt.Errorf`，仅在 config 错误需面向用户输出时迁移, `runtime/config/watcher.go` + `config.go`) (discovered via PR#132 6-seat review) | 2h |
 | **PR#133 review C3** | F1-ARCH-03(RTR-HSTS-WIRING-TEST router 层 `WithSecurityHeadersOptions` 接线测试, `runtime/http/router/router_test.go`) + F2-SEC-03(TRUST-TRACEPARENT-TEST bootstrap 信任边界测试补 `traceparent` 注入向量, 需 `WithTracer` 设置, `runtime/bootstrap/bootstrap_test.go`) + F3-TEST-01(CONVERTER-NIL-INPUT converter 函数 nil 指针输入测试/文档, 各 `handler_test.go`) + F4-OPS-01(BOOTSTRAP-SECHDR-CONVENIENCE `bootstrap.WithSecurityHeadersOptions` 便利包装, `runtime/bootstrap/bootstrap.go`) (discovered via PR#133 6-seat review) | 3h |
 | **快修合集** | #26(.env.example 补 `GOCELL_S3_REGION=us-east-1`, `.env.example`) + #27(contract CI: order-cell/device-cell contract YAML CI 未校验, `.github/workflows/ci.yml`) + F-7(BUILD-OUTDIR-01 统一 `go build -o bin/` 输出目录) + #17(Hook 增强 WM17-F2-2 ctx 超时 + WM17-F4-3 Prometheus metrics via HookObserver 接口, `kernel/cell/`) + #18(CB 接口+封装清理 CB-IFACE-01 Allow/Report 拆分 + CB-ENCAP-01 消除 gobreaker import, `runtime/resilience/circuitbreaker/`) + #21(Journey 校验 F-5 catalog 不校验引用, `kernel/journey/catalog.go`) | 9h |
+
+### 设计决策记录（PR#140 对标确认）
+
+> 以下 2 项在 PR#140 实施前对标主流开源框架后确认为设计正确，记录于此避免重复审查。
+
+| # | 主题 | 结论 | 对标来源 + 理由 |
+|---|------|------|----------------|
+| A | Request/Trace ID 生成不做 `rand.Read` 错误分支 | ✅ PR#140 | **chi** `middleware/request_id.go`: 同样不检查 `rand.Read` 返回值。**Kratos** `middleware/tracing/*.go`: 核心依赖 tracing 链路，不提供独立 request-id 生成失败模型。**OTel** `sdk/trace/id_generator.go`: ID 生成路径默认无 error 返回通道，强调链路可用性。Go 1.24+ `crypto/rand.Read` 已改为 always-succeed-or-fatal，`_, _ =` 是死代码 |
+| B | JSON unknown field 用字符串匹配 + guard test | ✅ PR#140 | **Gin** `binding/json.go`: 开启 strict 后仍依赖底层错误文本语义。**Echo** `bind.go`: 默认宽松，strict 依赖自定义扩展；框架不提供统一结构化 unknown-field 类型。**go-zero** `rest/httpx/requests.go`: 默认不做 strict unknown-field 分类治理。Go 标准库 `encoding/json` 至 1.25 仍用 `fmt.Errorf("json: unknown field %q", key)`，无 typed error。单点字符串识别 + 守卫测试是稳妥且常见的工程化折中 |
 
 ### 触发条件项（仅在条件满足时做）
 
@@ -200,7 +209,7 @@
 |------|------|------|
 | #27n HANDLER-TEST-CAMELCASE-ASSERT | 2h | 断言 camelCase key |
 | #27k DTO-CONVERTER-UNIT-TEST | 2h | 8 个 converter 补单测 |
-| #20 decode 加固 | 2h | classifyDecodeError 安全 |
+| ✅ #20 decode 加固 + REQID-RAND-ERR + MAIN-TEST-CLEANUP | 2h | classifyDecodeError 安全 + rand.Read 清理 + main_test 类型安全 | PR#139 |
 
 ### Batch F: CI + 治理（2 项，~4.5h，全并行）
 
