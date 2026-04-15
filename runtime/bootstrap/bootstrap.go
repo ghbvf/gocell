@@ -594,7 +594,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// all registrations go through this closure, the panic path in
 	// RegisterChecker is effectively unreachable — the map check here
 	// catches duplicates first and returns a rollback-safe error.
-	registeredCheckerNames := make(map[string]struct{}, len(b.healthCheckers)+2)
+	registeredCheckerNames := make(map[string]struct{})
 	registerHealthChecker := func(name string, fn func() error) error {
 		if _, exists := registeredCheckerNames[name]; exists {
 			return fmt.Errorf("bootstrap: duplicate health checker %q", name)

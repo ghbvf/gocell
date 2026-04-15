@@ -152,12 +152,17 @@ type ConfigChangeEvent struct {
 
 // HealthContributor is optionally implemented by Cells that expose internal
 // component health probes. Bootstrap discovers HealthContributor cells via
-// type assertion and registers each returned checker in /readyz.
+// type assertion after assembly.Start and registers each returned checker
+// in /readyz.
 //
-// HealthCheckers returns a map of named probes (e.g. "session-store" → fn).
-// A nil return or empty map means the cell has no additional probes beyond
-// the base Cell.Health() status. Probe names MUST be unique across all cells;
-// bootstrap fails fast on duplicate names.
+// HealthCheckers is called once during bootstrap startup (post-Init,
+// post-Start, before HTTP listen). It returns a map of named probes
+// (e.g. "session-store" → fn). A nil return or empty map means the cell
+// has no additional probes beyond the base Cell.Health() status. Probe
+// names MUST be unique across all cells; bootstrap fails fast on duplicates.
+//
+// Thread safety: the returned func() error values are called on every
+// /readyz HTTP request and MUST be safe for concurrent invocation.
 //
 // ref: Kubernetes PodSpec — explicit readinessProbe/livenessProbe per container
 // Adopted: explicit named probes. Deviated: returned as map, not declarative YAML.
