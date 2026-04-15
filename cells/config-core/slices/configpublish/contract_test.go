@@ -48,6 +48,8 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
 }
 
 // --- Event contract tests ---

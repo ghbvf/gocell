@@ -211,3 +211,64 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/"+id, nil))
 	assert.Equal(t, http.StatusNoContent, w.Code)
 }
+
+func TestHandlePatch_TypeValidation(t *testing.T) {
+	r := setup()
+
+	// Create a user first.
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"username":"patchuser","email":"p@b.com","password":"Secret123!"}`)))
+	require.Equal(t, http.StatusCreated, w.Code)
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	id := created.Data.ID
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "valid string fields accepted",
+			body:       `{"name":"new-name"}`,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "name as number returns 400",
+			body:       `{"name":123}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:       "email as boolean returns 400",
+			body:       `{"email":true}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "ERR_VALIDATION_FAILED",
+		},
+		{
+			name:       "status as array returns 400",
+			body:       `{"status":["active"]}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "ERR_VALIDATION_FAILED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantCode != "" {
+				assert.Contains(t, w.Body.String(), tc.wantCode)
+			}
+		})
+	}
+}

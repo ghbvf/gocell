@@ -40,6 +40,8 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
 }
 
 // --- Event contract tests ---

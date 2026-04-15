@@ -2,12 +2,14 @@ package identitymanage
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -129,21 +131,30 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	input := UpdateInput{ID: id}
 	if v, ok := raw["name"]; ok {
 		var name string
-		if err := json.Unmarshal(v, &name); err == nil {
-			input.Name = &name
+		if err := json.Unmarshal(v, &name); err != nil {
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'name' must be a string: %v", err))
+			return
 		}
+		input.Name = &name
 	}
 	if v, ok := raw["email"]; ok {
 		var email string
-		if err := json.Unmarshal(v, &email); err == nil {
-			input.Email = &email
+		if err := json.Unmarshal(v, &email); err != nil {
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'email' must be a string: %v", err))
+			return
 		}
+		input.Email = &email
 	}
 	if v, ok := raw["status"]; ok {
 		var status string
-		if err := json.Unmarshal(v, &status); err == nil {
-			input.Status = &status
+		if err := json.Unmarshal(v, &status); err != nil {
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'status' must be a string: %v", err))
+			return
 		}
+		input.Status = &status
 	}
 
 	user, err := h.svc.Update(r.Context(), input)

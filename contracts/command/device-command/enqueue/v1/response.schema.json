@@ -9,9 +9,12 @@
         "id": { "type": "string" },
         "deviceId": { "type": "string" },
         "payload": { "type": "string" },
-        "status": { "type": "string" }
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "ackedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "deviceId", "payload", "status"]
+      "required": ["id", "deviceId", "payload", "status", "createdAt"],
+      "additionalProperties": false
     }
   },
   "required": ["data"]

@@ -1,7 +1,7 @@
 id: http.auth.role.list.v1
 kind: http
 ownerCell: access-core
-consistencyLevel: L1
+consistencyLevel: L0
 lifecycle: active
 endpoints:
   server: access-core

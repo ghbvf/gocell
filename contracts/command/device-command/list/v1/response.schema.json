@@ -15,7 +15,8 @@
           "createdAt": { "type": "string", "format": "date-time" },
           "ackedAt": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "deviceId", "payload", "status", "createdAt"]
+        "required": ["id", "deviceId", "payload", "status", "createdAt"],
+        "additionalProperties": false
       }
     },
     "nextCursor": { "type": "string" },

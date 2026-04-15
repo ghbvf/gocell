@@ -101,7 +101,7 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "command.device-command.enqueue.v1")
 
 	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","payload":"reboot","status":"pending"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","payload":"reboot","status":"pending","createdAt":"2026-01-01T00:00:00Z"}}`))
 	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`))
 }
 
