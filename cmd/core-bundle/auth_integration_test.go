@@ -13,6 +13,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -87,7 +88,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "auth-test"})
+	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))

@@ -20,6 +20,25 @@ type stubReal struct{}
 func TestDurabilityMode_String(t *testing.T) {
 	assert.Equal(t, "demo", DurabilityDemo.String())
 	assert.Equal(t, "durable", DurabilityDurable.String())
+	assert.Equal(t, "unset", DurabilityMode(0).String())
+}
+
+func TestCheckNotNoop_UnsetMode_RejectsAll(t *testing.T) {
+	// Zero-value DurabilityMode (unset) must be rejected regardless of deps,
+	// forcing callers to explicitly choose Demo or Durable.
+	// ref: Vault StoredKeysInvalid=0, gRPC InvalidSecurityLevel=0
+	err := CheckNotNoop(DurabilityMode(0), "test-cell", stubReal{})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.Contains(t, err.Error(), "DurabilityMode not set")
+}
+
+func TestCheckNotNoop_UnsetMode_RejectsEvenWithNoDeps(t *testing.T) {
+	err := CheckNotNoop(DurabilityMode(0), "test-cell")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DurabilityMode not set")
 }
 
 func TestCheckNotNoop_DemoMode_AllowsNoop(t *testing.T) {

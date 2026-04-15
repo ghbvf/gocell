@@ -36,7 +36,7 @@ const (
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
-	DurabilityMode cell.DurabilityMode // Demo (default) or Durable
+	DurabilityMode cell.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of

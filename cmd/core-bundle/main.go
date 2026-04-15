@@ -18,6 +18,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -131,7 +132,7 @@ func run(ctx context.Context) error {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "core-bundle"})
+	asm := assembly.New(assembly.Config{ID: "core-bundle", DurabilityMode: cell.DurabilityDurable})
 	if err := asm.Register(configCell); err != nil {
 		return fmt.Errorf("register config-core: %w", err)
 	}

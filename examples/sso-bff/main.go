@@ -20,6 +20,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -114,7 +115,7 @@ func main() {
 	)
 
 	// Build assembly and register all three Cells.
-	asm := assembly.New(assembly.Config{ID: "sso-bff"})
+	asm := assembly.New(assembly.Config{ID: "sso-bff", DurabilityMode: cell.DurabilityDemo})
 	for _, err := range []error{
 		asm.Register(ac),
 		asm.Register(auc),

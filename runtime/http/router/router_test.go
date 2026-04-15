@@ -40,7 +40,7 @@ func TestRouterImplementsRouteMux(t *testing.T) {
 }
 
 func TestHealthEndpoints(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -646,7 +646,7 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 // --- Infra endpoints bypass RL/CB ---
 
 func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -666,7 +666,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 }
 
 func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -802,7 +802,7 @@ func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
 func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	// Auth middleware is on mux (business routes). Infra endpoints (/healthz, /readyz)
 	// are on outerMux and naturally bypass mux-level auth.
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))

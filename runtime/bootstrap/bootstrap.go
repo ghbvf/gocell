@@ -430,7 +430,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Step 3-4: Initialise and start assembly.
 	asm := b.assembly
 	if asm == nil {
-		asm = assembly.New(assembly.Config{ID: "default"})
+		asm = assembly.New(assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo})
 	}
 
 	// Inject config into assembly dependencies.

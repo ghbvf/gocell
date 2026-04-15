@@ -22,7 +22,7 @@ import "context"
 // ServiceLocator) can be added without changing the Cell.Init signature.
 type Dependencies struct {
 	Config         map[string]any
-	DurabilityMode DurabilityMode // Demo (default) or Durable; see durability.go
+	DurabilityMode DurabilityMode // Required: Demo or Durable (zero value rejected); see durability.go
 }
 
 // VerifySpec describes the verification requirements for a Slice.

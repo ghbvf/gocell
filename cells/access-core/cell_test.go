@@ -83,7 +83,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 }
@@ -98,7 +98,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
@@ -115,7 +115,7 @@ func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -136,7 +136,7 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 		WithTxManager(noopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -148,7 +148,7 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	// Both outboxWriter and txRunner present → should succeed
 	c := newTestCell() // newTestCell includes both
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(context.Background(), deps))
 }
 
@@ -160,7 +160,7 @@ func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		// no publisher, no outbox, no tx
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher")
 }
@@ -173,7 +173,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
 }
 
@@ -181,7 +181,8 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 
 	// Init
@@ -210,7 +211,8 @@ func TestAccessCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -222,7 +224,8 @@ func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -234,7 +237,8 @@ func TestAccessCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -264,7 +268,8 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -372,7 +377,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
@@ -442,7 +447,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
