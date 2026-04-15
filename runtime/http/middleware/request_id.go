@@ -33,6 +33,54 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
+// RequestIDOption configures the RequestIDWithOptions middleware.
+type RequestIDOption func(*requestIDConfig)
+
+type requestIDConfig struct {
+	publicEndpointFn func(*http.Request) bool
+}
+
+// WithReqIDPublicEndpointFn sets a per-request function that determines whether
+// an endpoint is public-facing. For public endpoints, the client-supplied
+// X-Request-Id header is ignored and a fresh UUID is always generated.
+// This prevents untrusted callers from injecting arbitrary request IDs.
+//
+// ref: go-chi/chi — warns to "only use this middleware if you can trust the headers"
+// ref: otelhttp — WithPublicEndpointFn pattern for per-request trust decisions
+func WithReqIDPublicEndpointFn(fn func(*http.Request) bool) RequestIDOption {
+	return func(c *requestIDConfig) { c.publicEndpointFn = fn }
+}
+
+// RequestIDWithOptions creates a RequestID middleware with configurable trust
+// boundary options. The zero-value config preserves backward-compatible behavior
+// (accepts client-supplied X-Request-Id when syntactically safe).
+func RequestIDWithOptions(opts ...RequestIDOption) func(http.Handler) http.Handler {
+	var cfg requestIDConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			isPublic := cfg.publicEndpointFn != nil && cfg.publicEndpointFn(r)
+
+			var id string
+			if isPublic {
+				id = newUUID()
+			} else {
+				id = r.Header.Get(headerRequestID)
+				if id == "" || len(id) > maxRequestIDLen || !isSafeID(id) {
+					id = newUUID()
+				}
+			}
+
+			w.Header().Set(headerRequestID, id)
+			ctx := ctxkeys.WithRequestID(r.Context(), id)
+			ctx = ctxkeys.WithCorrelationID(ctx, id)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // isSafeID reports whether s is non-empty and every byte is in the safe set
 // for observability IDs: ASCII letters, digits, and the separators ._:/-
 // This rejects control characters, whitespace, quotes, brackets and other

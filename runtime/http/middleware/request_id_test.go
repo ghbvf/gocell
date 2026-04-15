@@ -184,3 +184,80 @@ func TestRequestID_UniquenessAcrossRequests(t *testing.T) {
 		ids[id] = true
 	}
 }
+
+// --- Trust boundary tests for RequestIDWithOptions ---
+
+func TestRequestIDWithOptions_PublicEndpoint_IgnoresClientHeader(t *testing.T) {
+	isPublic := func(r *http.Request) bool { return r.URL.Path == "/public" }
+
+	var gotID string
+	handler := RequestIDWithOptions(
+		WithReqIDPublicEndpointFn(isPublic),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID, _ = ctxkeys.RequestIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("X-Request-Id", "attacker-supplied-id")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, "attacker-supplied-id", gotID,
+		"public endpoint must NOT accept client-supplied X-Request-Id")
+	assert.Len(t, gotID, 36, "public endpoint must generate fresh UUID")
+}
+
+func TestRequestIDWithOptions_NonPublicEndpoint_AcceptsClientHeader(t *testing.T) {
+	isPublic := func(r *http.Request) bool { return r.URL.Path == "/public" }
+
+	var gotID string
+	handler := RequestIDWithOptions(
+		WithReqIDPublicEndpointFn(isPublic),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID, _ = ctxkeys.RequestIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal", nil)
+	req.Header.Set("X-Request-Id", "trusted-upstream-id")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, "trusted-upstream-id", gotID,
+		"non-public endpoint must accept valid client X-Request-Id")
+}
+
+func TestRequestIDWithOptions_NilPublicEndpointFn_BackwardCompat(t *testing.T) {
+	var gotID string
+	handler := RequestIDWithOptions()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID, _ = ctxkeys.RequestIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/any", nil)
+	req.Header.Set("X-Request-Id", "legacy-id")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, "legacy-id", gotID,
+		"zero options must preserve backward-compatible behavior")
+}
+
+func TestRequestIDWithOptions_PublicEndpoint_BridgesCorrelationID(t *testing.T) {
+	isPublic := func(r *http.Request) bool { return true }
+
+	var gotReqID, gotCorrID string
+	handler := RequestIDWithOptions(
+		WithReqIDPublicEndpointFn(isPublic),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReqID, _ = ctxkeys.RequestIDFrom(r.Context())
+		gotCorrID, _ = ctxkeys.CorrelationIDFrom(r.Context())
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	req.Header.Set("X-Request-Id", "attacker-id")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Len(t, gotReqID, 36)
+	assert.Equal(t, gotReqID, gotCorrID,
+		"generated request ID must be bridged to CorrelationID")
+}
