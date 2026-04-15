@@ -38,11 +38,6 @@ func WithRepository(r domain.OrderRepository) Option {
 	return func(c *OrderCell) { c.repo = r }
 }
 
-// WithPublisher sets the outbox Publisher for event publishing.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *OrderCell) { c.publisher = p }
-}
-
 // WithOutboxWriter sets the outbox.Writer for transactional event publishing.
 func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *OrderCell) { c.outboxWriter = w }
@@ -62,7 +57,6 @@ func WithLogger(l *slog.Logger) Option {
 type OrderCell struct {
 	*cell.BaseCell
 	repo         domain.OrderRepository
-	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	cursorCodec  *query.CursorCodec

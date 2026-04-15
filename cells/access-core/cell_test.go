@@ -25,15 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopTxRunner is a test double that executes fn directly without a real transaction.
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 // testPassword is a fixed test-only credential used to seed users in E2E tests.
 // Not a real secret — safe to appear in test source code.
 const testPassword = "secret123" //nolint:gosec // test-only credential
@@ -69,7 +60,7 @@ func newTestCell() *AccessCore {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 }
 
@@ -81,7 +72,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithPublisher(eventbus.New()),
 		WithJWTVerifier(testVerifier), // issuer missing
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
@@ -96,7 +87,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer), // verifier missing
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
 	require.Error(t, err)
@@ -133,7 +124,7 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
@@ -369,7 +360,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))
@@ -439,7 +430,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any)}))

@@ -31,6 +31,12 @@ func TestNoopTxRunner_PropagatesError(t *testing.T) {
 	assert.ErrorIs(t, got, want)
 }
 
+func TestNoopTxRunner_NilFnPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		_ = NoopTxRunner{}.RunInTx(context.Background(), nil)
+	})
+}
+
 func TestNoopTxRunner_PassesContext(t *testing.T) {
 	type key struct{}
 	ctx := context.WithValue(context.Background(), key{}, "val")

@@ -1,6 +1,10 @@
 // Package main is the entry point for the todo-order example application.
 // It demonstrates the GoCell "golden path": creating a business Cell with
-// HTTP endpoints and in-memory event publishing.
+// HTTP endpoints and outbox-based event publishing.
+//
+// Demo mode injects NoopWriter + NoopTxRunner for a unified code path.
+// Events are validated but discarded (no real broker). Production mode
+// would inject a real outbox.Writer + persistence.TxRunner instead.
 //
 // Usage:
 //
@@ -20,7 +24,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 func main() {
@@ -28,9 +31,6 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
-
-	// In-memory event bus for demo mode.
-	eb := eventbus.New()
 
 	// Cursor codec for pagination (demo mode).
 	cursorCodec, err := query.NewCursorCodec([]byte("todo-order-cursor-key-32bytes!!"))
@@ -41,10 +41,12 @@ func main() {
 
 	// Create the order cell with in-memory defaults.
 	// Demo mode: NoopWriter + NoopTxRunner → unified outbox code path (zero fork).
+	// Events are validated by NoopWriter then discarded. In production, inject
+	// a real outbox.Writer (e.g., postgres.OutboxWriter) + persistence.TxRunner
+	// (e.g., postgres.TxManager) for durable event delivery via relay.
 	oc := ordercell.NewOrderCell(
 		ordercell.WithOutboxWriter(outbox.NoopWriter{}),
 		ordercell.WithTxManager(persistence.NoopTxRunner{}),
-		ordercell.WithPublisher(eb),
 		ordercell.WithCursorCodec(cursorCodec),
 		ordercell.WithLogger(logger),
 	)
@@ -62,7 +64,6 @@ func main() {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8082"),
 	)
 

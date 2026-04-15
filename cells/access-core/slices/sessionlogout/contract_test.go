@@ -35,14 +35,6 @@ func (w *recordingWriter) Write(_ context.Context, e outbox.Entry) error {
 	return nil
 }
 
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 func seedContractSession(repo *mem.SessionRepository) string {
 	sess, _ := domain.NewSession("usr-1", "at-1", "rt-1", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
@@ -59,7 +51,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	sessID := seedContractSession(sessionRepo)
 	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(&recordingWriter{}), WithTxManager(noopTxRunner{}))
+		WithOutboxWriter(&recordingWriter{}), WithTxManager(persistence.NoopTxRunner{}))
 
 	mux := http.NewServeMux()
 	mux.Handle("DELETE /api/v1/access/sessions/{id}", http.HandlerFunc(NewHandler(svc).HandleLogout))
@@ -83,7 +75,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	writer := &recordingWriter{}
 	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(noopTxRunner{}))
+		WithOutboxWriter(writer), WithTxManager(persistence.NoopTxRunner{}))
 
 	sessID := seedContractSession(sessionRepo)
 
@@ -105,7 +97,7 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(noopTxRunner{}))
+		WithOutboxWriter(failWriter), WithTxManager(persistence.NoopTxRunner{}))
 
 	err := svc.Logout(context.Background(), "sess-1")
 	require.Error(t, err, "Logout must propagate outbox.Write error to preserve L2 atomicity")

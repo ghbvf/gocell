@@ -28,15 +28,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-// noopTxRunner executes fn directly without a real transaction (demo mode).
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -77,7 +68,7 @@ func main() {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithOutboxWriter(nw),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.NoopTxRunner{}),
 		accesscore.WithLogger(logger),
 	)
 
@@ -107,7 +98,7 @@ func main() {
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithOutboxWriter(nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithTxManager(persistence.NoopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
 	)

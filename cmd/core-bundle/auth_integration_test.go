@@ -23,15 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopTxRunner executes fn directly without a real transaction.
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 // TestAuthWiring_RealAssembly_ProtectedRoutes401 boots a real assembly
@@ -69,13 +60,13 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithOutboxWriter(nw),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.NoopTxRunner{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
 		configcore.WithOutboxWriter(nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithTxManager(persistence.NoopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
 	auc := auditcore.NewAuditCore(

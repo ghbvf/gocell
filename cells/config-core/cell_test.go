@@ -22,22 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopTxRunner is a test double that executes fn directly without a real transaction.
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithPublisher(eventbus.New()),
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 }
 
@@ -102,7 +93,7 @@ func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 			opts: []Option{
 				WithInMemoryDefaults(),
 				WithPublisher(eventbus.New()),
-				WithTxManager(noopTxRunner{}),
+				WithTxManager(persistence.NoopTxRunner{}),
 			},
 		},
 	}
