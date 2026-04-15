@@ -1,5 +1,6 @@
 id: audit-verify
 belongsToCell: audit-core
+consistencyLevel: L2
 contractUsages:
   - contract: event.audit.integrity-verified.v1
     role: publish

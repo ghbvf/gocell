@@ -154,6 +154,10 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 // verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
+// Deprecated: Use WithPublicEndpoints instead. WithPublicEndpoints discovers
+// the auth verifier automatically from cells implementing authProvider,
+// eliminating the need for explicit verifier injection at the composition root.
+//
 // publicEndpoints specifies business-route paths that bypass authentication.
 // If nil, no business routes are public (fail-closed). Callers must
 // explicitly list paths like login and token refresh that should be
@@ -611,6 +615,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	for _, id := range asm.CellIDs() {
 		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
 			for name, fn := range hcc.HealthCheckers() {
+				if fn == nil {
+					return rollback(fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name))
+				}
 				if err := registerHealthChecker(name, fn); err != nil {
 					return rollback(err)
 				}

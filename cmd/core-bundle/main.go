@@ -56,7 +56,7 @@ func validateAdapterMode(mode string) error {
 	case "real":
 		return fmt.Errorf("adapter mode %q is not yet supported: real adapter implementations are pending", mode)
 	default:
-		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; valid values: \"\" (dev), \"real\"", mode)
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\" (not yet implemented)", mode)
 	}
 }
 
