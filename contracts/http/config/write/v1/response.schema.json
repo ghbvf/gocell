@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.write.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "sensitive": { "type": "boolean" },
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"]
+}

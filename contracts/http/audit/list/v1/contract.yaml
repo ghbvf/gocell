@@ -1,0 +1,16 @@
+id: http.audit.list.v1
+kind: http
+ownerCell: audit-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: audit-core
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/audit/entries
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

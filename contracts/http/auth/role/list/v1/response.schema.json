@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.role.list.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "resource": { "type": "string" },
+                "action": { "type": "string" }
+              },
+              "required": ["resource", "action"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["id", "name", "permissions"],
+        "additionalProperties": false
+      }
+    },
+    "hasMore": { "type": "boolean" }
+  },
+  "required": ["data", "hasMore"]
+}

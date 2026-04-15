@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.write.v1.request",
+  "type": "object",
+  "properties": {
+    "key": { "type": "string" },
+    "value": { "type": "string" },
+    "sensitive": { "type": "boolean" }
+  },
+  "required": ["key", "value"],
+  "additionalProperties": false
+}

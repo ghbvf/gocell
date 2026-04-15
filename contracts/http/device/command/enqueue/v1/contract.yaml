@@ -1,0 +1,17 @@
+id: http.device.command.enqueue.v1
+kind: http
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: device-cell
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/devices/{id}/commands
+    successStatus: 201
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

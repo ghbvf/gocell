@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.device.command.enqueue.v1.request",
+  "type": "object",
+  "properties": {
+    "payload": { "type": "string" }
+  },
+  "required": ["payload"],
+  "additionalProperties": false
+}

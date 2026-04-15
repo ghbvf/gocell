@@ -8,7 +8,8 @@
       "properties": {
         "status": { "type": "string" }
       },
-      "required": ["status"]
+      "required": ["status"],
+      "additionalProperties": false
     }
   },
   "required": ["data"]

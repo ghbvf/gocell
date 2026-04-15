@@ -5,7 +5,8 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   server: device-cell
-  clients: []
+  clients:
+    - edge-bff
   http:
     method: POST
     path: /api/v1/devices

@@ -50,11 +50,16 @@ type enqueueRequest struct {
 }
 
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
-// No subject-deviceID check: this is an operator/management endpoint where
-// authenticated operators enqueue commands for any device they manage.
-// ListPending and Ack are device-facing (subject == deviceID).
+// This is an operator/management endpoint — only admin or operator roles
+// may enqueue commands. ListPending and Ack are device-facing (subject == deviceID).
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
+
+	// Operator endpoint: require admin or operator role (not self-access).
+	if err := auth.RequireSelfOrRole(r.Context(), "", "admin", "operator"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
 
 	var req enqueueRequest
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {

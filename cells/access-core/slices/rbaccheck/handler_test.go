@@ -94,6 +94,7 @@ func TestHandler(t *testing.T) {
 							Action   string `json:"action"`
 						} `json:"permissions"`
 					} `json:"data"`
+					HasMore bool `json:"hasMore"`
 				}
 				require.NoError(t, json.Unmarshal(body, &resp))
 				require.Len(t, resp.Data, 1)
@@ -101,6 +102,7 @@ func TestHandler(t *testing.T) {
 				require.Len(t, resp.Data[0].Permissions, 2)
 				assert.Equal(t, "users", resp.Data[0].Permissions[0].Resource)
 				assert.Equal(t, "read", resp.Data[0].Permissions[0].Action)
+				assert.False(t, resp.HasMore)
 			},
 		},
 		{

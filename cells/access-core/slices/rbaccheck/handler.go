@@ -70,7 +70,7 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	for i, role := range roles {
 		resp[i] = toRoleResponse(role)
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": resp})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": resp, "hasMore": false})
 }
 
 func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {

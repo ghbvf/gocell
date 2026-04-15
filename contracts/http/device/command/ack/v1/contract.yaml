@@ -1,0 +1,16 @@
+id: http.device.command.ack.v1
+kind: http
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: device-cell
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/devices/{id}/commands/{cmdId}/ack
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

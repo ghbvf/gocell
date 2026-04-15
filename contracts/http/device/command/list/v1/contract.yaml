@@ -1,0 +1,16 @@
+id: http.device.command.list.v1
+kind: http
+ownerCell: device-cell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: device-cell
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/devices/{id}/commands
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

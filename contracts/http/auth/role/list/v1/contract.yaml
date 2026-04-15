@@ -1,0 +1,16 @@
+id: http.auth.role.list.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/roles/{userID}
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json
