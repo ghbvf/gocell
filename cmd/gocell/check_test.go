@@ -104,6 +104,79 @@ func TestValidateContractHealth(t *testing.T) {
 			wantMsg: "response",
 		},
 		{
+			name: "PUT contract missing request schema fails",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					SchemaRefs: metadata.SchemaRefsMeta{
+						Response: "response.schema.json",
+					},
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method: "PUT",
+						},
+					},
+				},
+			},
+			wantErr: true,
+			wantMsg: "request",
+		},
+		{
+			name: "PATCH contract missing request schema fails",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					SchemaRefs: metadata.SchemaRefsMeta{
+						Response: "response.schema.json",
+					},
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method: "PATCH",
+						},
+					},
+				},
+			},
+			wantErr: true,
+			wantMsg: "request",
+		},
+		{
+			name: "GET contract without request schema passes",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					SchemaRefs: metadata.SchemaRefsMeta{
+						Response: "response.schema.json",
+					},
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method: "GET",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple issues reported simultaneously",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:   "http.bad.v1",
+					Kind: "http",
+				},
+			},
+			wantErr: true,
+			wantMsg: "ownerCell",
+		},
+		{
 			name: "http noContent contract without response schema passes",
 			contracts: []*metadata.ContractMeta{
 				{

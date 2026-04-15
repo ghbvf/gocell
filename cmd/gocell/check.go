@@ -116,6 +116,14 @@ func validateContractHealth(contracts []*metadata.ContractMeta) []string {
 			if c.SchemaRefs.Response == "" && !noContent {
 				issues = append(issues, fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID))
 			}
+			// Request schema required for PUT/PATCH (always body-bearing).
+			// POST is excluded: action-style POSTs (publish, ack) are legitimately body-less.
+			if c.Endpoints.HTTP != nil {
+				method := c.Endpoints.HTTP.Method
+				if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
+					issues = append(issues, fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method))
+				}
+			}
 		}
 	}
 
