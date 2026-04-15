@@ -32,17 +32,17 @@ func (m DurabilityMode) String() string {
 	return "demo"
 }
 
-// Noop is a marker interface for test/demo-only implementations.
-// Types that implement Noop are rejected by CheckNotNoop when the
+// Nooper is a marker interface for test/demo-only implementations.
+// Types that implement Nooper are rejected by CheckNotNoop when the
 // assembly runs in DurabilityDurable mode.
 //
 // Kernel noop types (outbox.NoopWriter, outbox.DiscardPublisher,
 // persistence.NoopTxRunner) implement this interface.
-type Noop interface {
-	IsNoop() bool
+type Nooper interface {
+	Noop() bool
 }
 
-// CheckNotNoop returns an error if any dep implements Noop and mode is
+// CheckNotNoop returns an error if any dep implements Nooper and mode is
 // DurabilityDurable. In DurabilityDemo mode, all deps are accepted.
 // nil deps are silently skipped (nil checks belong in the caller).
 func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
@@ -53,7 +53,7 @@ func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
 		if dep == nil {
 			continue
 		}
-		if n, ok := dep.(Noop); ok && n.IsNoop() {
+		if n, ok := dep.(Nooper); ok && n.Noop() {
 			return errcode.New(errcode.ErrCellMissingOutbox,
 				fmt.Sprintf("%s: durable mode rejects %T; inject a real implementation", cellID, dep))
 		}

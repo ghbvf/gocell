@@ -9,12 +9,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// stubNoop implements Noop for testing.
+// stubNoop implements Nooper for testing.
 type stubNoop struct{}
 
-func (stubNoop) IsNoop() bool { return true }
+func (stubNoop) Noop() bool { return true }
 
-// stubReal does not implement Noop.
+// stubReal does not implement Nooper.
 type stubReal struct{}
 
 func TestDurabilityMode_String(t *testing.T) {

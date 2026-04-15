@@ -26,5 +26,5 @@ func (NoopTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) er
 
 var _ TxRunner = NoopTxRunner{}
 
-// IsNoop implements cell.Noop. CheckNotNoop rejects NoopTxRunner in durable mode.
-func (NoopTxRunner) IsNoop() bool { return true }
+// Noop implements cell.Nooper. CheckNotNoop rejects NoopTxRunner in durable mode.
+func (NoopTxRunner) Noop() bool { return true }

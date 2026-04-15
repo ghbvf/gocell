@@ -37,8 +37,8 @@ func TestNoopTxRunner_NilFnPanics(t *testing.T) {
 	})
 }
 
-func TestNoopTxRunner_IsNoop(t *testing.T) {
-	assert.True(t, NoopTxRunner{}.IsNoop())
+func TestNoopTxRunner_Noop(t *testing.T) {
+	assert.True(t, NoopTxRunner{}.Noop())
 }
 
 func TestNoopTxRunner_PassesContext(t *testing.T) {

@@ -192,8 +192,8 @@ func (NoopWriter) WriteBatch(_ context.Context, entries []Entry) error {
 
 var _ BatchWriter = NoopWriter{}
 
-// IsNoop implements cell.Noop. CheckNotNoop rejects NoopWriter in durable mode.
-func (NoopWriter) IsNoop() bool { return true }
+// Noop implements cell.Nooper. CheckNotNoop rejects NoopWriter in durable mode.
+func (NoopWriter) Noop() bool { return true }
 
 // DiscardPublisher is an explicit publisher sink for tests and demos.
 // Unlike NoopWriter, it affects direct-publish flows rather than durable
@@ -215,8 +215,8 @@ func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error
 
 var _ Publisher = DiscardPublisher{}
 
-// IsNoop implements cell.Noop. CheckNotNoop rejects DiscardPublisher in durable mode.
-func (DiscardPublisher) IsNoop() bool { return true }
+// Noop implements cell.Nooper. CheckNotNoop rejects DiscardPublisher in durable mode.
+func (DiscardPublisher) Noop() bool { return true }
 
 // isDiscardPublisher reports whether p is the explicit discard sink.
 // Unexported: concrete-type detection should not leak into the public API.
