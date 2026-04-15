@@ -592,13 +592,14 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	// Register config-drift checker when the config supports generation tracking.
+	// Reuses config.HasDrift to avoid duplicating the generation comparison logic.
 	// Returns unhealthy when desired generation (config reloaded) differs from
 	// observed generation (all cells applied). Transient drift during reload is
 	// absorbed by K8s failureThreshold (default 3 consecutive failures).
 	if g, gOK := cfg.(config.Generationer); gOK {
 		if og, ogOK := cfg.(config.ObservedGenerationer); ogOK {
 			if err := registerHealthChecker(configDriftCheckerName, func() error {
-				if g.Generation() != og.ObservedGeneration() {
+				if config.HasDrift(cfg) {
 					return fmt.Errorf("config drift: generation %d, observed %d",
 						g.Generation(), og.ObservedGeneration())
 				}
