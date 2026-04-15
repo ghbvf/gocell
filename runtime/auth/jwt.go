@@ -11,6 +11,7 @@ import (
 
 // DefaultAccessTokenTTL is the default time-to-live for access tokens issued
 // by JWTIssuer. Shared across session-login, session-refresh, and bootstrap.
+// Callers can override by passing a custom duration to NewJWTIssuer.
 const DefaultAccessTokenTTL = 15 * time.Minute
 
 // JWTVerifier verifies JWT tokens signed with RS256.

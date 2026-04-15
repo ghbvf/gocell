@@ -96,7 +96,11 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}
 
 	// Fetch roles for new access token.
-	roles, _ := s.roleRepo.GetByUserID(ctx, session.UserID)
+	roles, err := s.roleRepo.GetByUserID(ctx, session.UserID)
+	if err != nil {
+		s.logger.Warn("session-refresh: failed to fetch roles",
+			slog.Any("error", err), slog.String("user_id", session.UserID))
+	}
 	roleNames := make([]string, 0, len(roles))
 	for _, r := range roles {
 		roleNames = append(roleNames, r.Name)
