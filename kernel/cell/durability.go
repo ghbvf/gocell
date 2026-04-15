@@ -47,16 +47,27 @@ type Nooper interface {
 	Noop() bool
 }
 
-// CheckNotNoop returns an error if mode is unset (zero value), or if any dep
-// implements Nooper and mode is DurabilityDurable. In DurabilityDemo mode,
-// all deps are accepted. nil deps are silently skipped (nil checks belong
-// in the caller).
-func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
-	if mode == 0 {
+// ValidateMode returns an error if mode is not a known DurabilityMode.
+// Use at assembly-start boundaries to reject misconfiguration early.
+func ValidateMode(mode DurabilityMode) error {
+	switch mode {
+	case DurabilityDemo, DurabilityDurable:
+		return nil
+	default:
 		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("%s: DurabilityMode not set; explicitly choose DurabilityDemo or DurabilityDurable", cellID))
+			fmt.Sprintf("invalid DurabilityMode %d; explicitly choose DurabilityDemo or DurabilityDurable", int(mode)))
 	}
-	if mode != DurabilityDurable {
+}
+
+// CheckNotNoop returns an error if mode is invalid, or if any dep implements
+// Nooper and mode is DurabilityDurable. In DurabilityDemo mode, all deps are
+// accepted. nil deps are silently skipped (nil checks belong in the caller).
+func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
+	if err := ValidateMode(mode); err != nil {
+		return errcode.Wrap(errcode.ErrValidationFailed,
+			fmt.Sprintf("%s: DurabilityMode check", cellID), err)
+	}
+	if mode == DurabilityDemo {
 		return nil
 	}
 	for _, dep := range deps {

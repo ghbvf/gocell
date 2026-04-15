@@ -61,24 +61,6 @@ func newEmptyIDCell() *emptyIDCell {
 	}
 }
 
-// durabilityCheckCell calls CheckNotNoop in Init (like real L2 cells do).
-type durabilityCheckCell struct {
-	*cell.BaseCell
-}
-
-func newDurabilityCheckCell(id string) *durabilityCheckCell {
-	return &durabilityCheckCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L2}),
-	}
-}
-
-func (c *durabilityCheckCell) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
-		return err
-	}
-	return cell.CheckNotNoop(deps.DurabilityMode, c.ID())
-}
-
 // failStartCell passes Init but fails on Start.
 type failStartCell struct {
 	*cell.BaseCell
@@ -412,13 +394,25 @@ func TestAssemblyCellLookup(t *testing.T) {
 	assert.Nil(t, a.Cell("nonexistent"))
 }
 
-func TestAssemblyStart_ZeroDurabilityMode_FailsOnCellThatChecks(t *testing.T) {
-	// Integration: assembly with zero DurabilityMode + cell that calls CheckNotNoop → Start fails.
+func TestAssemblyStart_ZeroDurabilityMode_FailsAtAssemblyLevel(t *testing.T) {
+	// Zero DurabilityMode is rejected at assembly.Start — before any cell.Init runs.
 	a := New(Config{ID: "test-zero-durability"}) // zero DurabilityMode (unset)
-	c := newDurabilityCheckCell("durability-cell")
+	c := cell.NewBaseCell(cell.CellMetadata{ID: "any-cell", Type: cell.CellTypeCore})
 	require.NoError(t, a.Register(c))
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "DurabilityMode not set")
+	assert.Contains(t, err.Error(), "invalid DurabilityMode 0")
+}
+
+func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
+	// Non-zero, non-valid mode (e.g., 99) rejected at assembly level.
+	// ref: Kubernetes allowlist validation, Uber fx fail-fast
+	a := New(Config{ID: "test-invalid-mode", DurabilityMode: cell.DurabilityMode(99)})
+	c := cell.NewBaseCell(cell.CellMetadata{ID: "any-cell", Type: cell.CellTypeCore})
+	require.NoError(t, a.Register(c))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid DurabilityMode 99")
 }

@@ -195,6 +195,14 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		cfgMap = make(map[string]any)
 	}
 
+	if err := cell.ValidateMode(a.cfg.DurabilityMode); err != nil {
+		a.mu.Lock()
+		a.state = stateStopped
+		a.mu.Unlock()
+		return errcode.Wrap(errcode.ErrValidationFailed,
+			fmt.Sprintf("assembly %q", a.id), err)
+	}
+
 	deps := cell.Dependencies{
 		Config:         cfgMap,
 		DurabilityMode: a.cfg.DurabilityMode,
