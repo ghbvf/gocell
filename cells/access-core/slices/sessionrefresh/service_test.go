@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -217,4 +218,44 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	refreshClaims, err := verifier.Verify(context.Background(), pair.RefreshToken)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
+}
+
+// TestService_Refresh_SessionAwareVerifier proves that when the refresh service
+// is wired with a session-aware verifier (sessionvalidate.Service), a revoked
+// session is caught at the JWT verification step — before the DB refresh-token
+// lookup. This is the production wiring established in cell.go.
+func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+
+	// Build a session-aware verifier: JWT signature check + session state check.
+	saVerifier := sessionvalidate.NewService(testVerifier, sessionRepo, slog.Default())
+
+	// Wire refresh service with session-aware verifier (production path).
+	svc := NewService(sessionRepo, roleRepo, testIssuer, saVerifier, slog.Default())
+
+	// Issue a token with sid claim to tie to a session.
+	rt, err := testIssuer.Issue("usr-sa", nil, nil, "sess-sa")
+	require.NoError(t, err)
+
+	sess, err := domain.NewSession("usr-sa", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-sa"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	// Normal refresh should succeed.
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
+
+	// Now revoke the session externally.
+	sess, err = sessionRepo.GetByID(context.Background(), "sess-sa")
+	require.NoError(t, err)
+	sess.Revoke()
+	require.NoError(t, sessionRepo.Update(context.Background(), sess))
+
+	// Attempt refresh with the new (rotated) token — the session-aware verifier
+	// should reject it at the Verify() step because the session is revoked.
+	_, err = svc.Refresh(context.Background(), pair.RefreshToken)
+	assert.Error(t, err, "session-aware verifier should reject revoked session at Verify step")
 }

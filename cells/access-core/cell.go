@@ -202,8 +202,14 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
 
-	// session-refresh
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
+	// session-validate (before session-refresh: provides session-aware verifier)
+	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
+	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
+
+	// session-refresh — uses session-aware verifier (validateSvc) so that
+	// revoked/expired sessions are caught at the JWT verification step,
+	// not just at the DB refresh-token lookup.
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.validateSvc, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 
@@ -218,10 +224,6 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
 	c.AddSlice(cell.NewBaseSlice("session-logout", "access-core", cell.L2))
-
-	// session-validate
-	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
-	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
 
 	// authorization-decide
 	c.authzSvc = authorizationdecide.NewService(c.roleRepo, c.logger)
