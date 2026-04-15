@@ -12,6 +12,11 @@ import (
 
 const msgInvalidRequestBody = "invalid request body"
 
+// unknownFieldPrefix is the error message prefix produced by
+// json.Decoder.DisallowUnknownFields(). Shared with the guard test
+// TestDecodeJSON_GoStdlibUnknownFieldFormat to prevent drift.
+const unknownFieldPrefix = `json: unknown field `
+
 // DecodeJSON reads the request body as JSON into dst.
 // The body must contain exactly one JSON value; trailing content is rejected.
 // Unknown fields are silently ignored to maintain backward compatibility.
@@ -98,7 +103,7 @@ func classifyDecodeError(err error) *errcode.Error {
 		//   fmt.Errorf("json: unknown field %q", key)
 		// No typed alternative exists (verified up to Go 1.25).
 		// Guard test: TestDecodeJSON_GoStdlibUnknownFieldFormat.
-		if after, ok := strings.CutPrefix(err.Error(), `json: unknown field `); ok {
+		if after, ok := strings.CutPrefix(err.Error(), unknownFieldPrefix); ok {
 			field := strings.Trim(after, `"`)
 			return errcode.WithDetails(
 				errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),

@@ -140,8 +140,16 @@ func TestDecodeJSON_GoStdlibUnknownFieldFormat(t *testing.T) {
 	var dst struct{ Name string }
 	err := dec.Decode(&dst)
 	require.Error(t, err)
-	assert.True(t, strings.HasPrefix(err.Error(), "json: unknown field"),
+
+	// Verify the prefix matches what classifyDecodeError uses (shared const).
+	after, ok := strings.CutPrefix(err.Error(), unknownFieldPrefix)
+	require.True(t, ok,
 		"Go stdlib changed unknown-field error format; update classifyDecodeError — got %q", err.Error())
+
+	// Verify field name extraction works (same logic as classifyDecodeError).
+	field := strings.Trim(after, `"`)
+	assert.Equal(t, "bogus", field,
+		"field extraction failed; CutPrefix+Trim logic may need updating — got %q", field)
 }
 
 func TestClassifyDecodeError_UnknownError(t *testing.T) {
