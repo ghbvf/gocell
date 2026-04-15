@@ -490,6 +490,14 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			added, updated, removed := config.Diff(oldSnap, newSnap)
 			if len(added) == 0 && len(updated) == 0 && len(removed) == 0 {
 				slog.Debug("bootstrap: config reloaded but no effective changes")
+				// No-op rewrite: generation incremented by Reload, but all cells
+				// are already at the latest state. Sync observedGeneration to
+				// prevent false drift (HasDrift would otherwise return true).
+				if og, ok := cfg.(config.ObservedGenerationer); ok {
+					if g, gOK := cfg.(config.Generationer); gOK {
+						og.SetObservedGeneration(g.Generation())
+					}
+				}
 				return
 			}
 

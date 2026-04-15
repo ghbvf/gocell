@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -81,6 +82,9 @@ func WithMaxDebounce(d time.Duration) WatcherOption {
 // The watcher itself does not apply key-level filtering (it watches files,
 // not config keys). Calling this option multiple times replaces previous
 // prefixes (last-writer-wins).
+//
+// Note: bootstrap does not yet consume key filters in its reload fanout.
+// This is a building block for selective cell notification (planned: #11 OPS-5).
 func WithKeyFilter(prefixes ...string) WatcherOption {
 	return func(c *watcherConfig) {
 		c.keyFilters = append(c.keyFilters[:0], prefixes...)
@@ -89,6 +93,8 @@ func WithKeyFilter(prefixes ...string) WatcherOption {
 }
 
 // WithMetrics injects a WatcherCollector for recording operational metrics.
+// Bootstrap does not yet pass a collector; inject via a custom
+// configWatcherFactory or wait for bootstrap option wiring (#11 OPS-5).
 func WithMetrics(m WatcherCollector) WatcherOption {
 	return func(c *watcherConfig) {
 		if m != nil {
@@ -108,8 +114,12 @@ func WithDrainTimeout(d time.Duration) WatcherOption {
 // where file-level inotify/kqueue watches would silently break due to inode
 // rebinding.
 //
-// The watcher supports Kubernetes ConfigMap updates via ..data symlink pivot
-// detection (see WithDebounce for coalescing rapid events).
+// The watcher detects Kubernetes ConfigMap updates via ..data symlink pivot
+// (see WithDebounce for coalescing rapid events). Note: symlink pivot is a
+// detection mechanism, not a security boundary. The watcher does not validate
+// that the resolved symlink target stays within a trusted directory — any
+// process with write access to the watched directory can redirect config
+// content. Deploy-time filesystem permissions are the trust boundary.
 type Watcher struct {
 	path       string // original path (reported in WatchEvent)
 	dir        string // parent directory being watched
@@ -128,6 +138,7 @@ type Watcher struct {
 	maxTimer      *time.Timer
 	pendingPivot  bool           // true if any coalesced event was a symlink pivot
 	debounceMu    sync.Mutex     // protects timer + pendingPivot manipulation
+	closed        atomic.Bool    // admission gate: true after Close() starts
 	callbackWg    sync.WaitGroup // tracks in-flight callback execution
 	closeErr      error          // cached Close result
 }
@@ -281,6 +292,9 @@ func (w *Watcher) isRelevantEvent(event fsnotify.Event) (bool, bool) {
 
 // checkSymlinkPivot resolves the watched path and compares against the last
 // known resolved target. Returns true if the target changed (symlink pivot).
+// This is a detection helper — it does not enforce a trust boundary on the
+// resolved path. The actual config content is read by bootstrap's Reload
+// using the original (unresolved) path.
 func (w *Watcher) checkSymlinkPivot() bool {
 	resolved, err := filepath.EvalSymlinks(w.path)
 	if err != nil {
@@ -315,6 +329,12 @@ func (w *Watcher) eventType(event fsnotify.Event, symPivot bool) string {
 // that when multiple events are coalesced, the most significant signal (any
 // symlink pivot in the batch) is preserved regardless of which timer fires.
 func (w *Watcher) scheduleCallback(symPivot bool) {
+	// Admission gate: reject new work after Close() has started. This
+	// prevents WaitGroup Add-after-Wait and post-drain callback execution.
+	if w.closed.Load() {
+		return
+	}
+
 	if w.cfg.debounce <= 0 {
 		w.fireCallbacks(symPivot)
 		return
@@ -344,6 +364,9 @@ func (w *Watcher) scheduleCallback(symPivot bool) {
 // firePendingCallbacks is invoked by debounce or max-debounce timers. It reads
 // and resets the pendingPivot flag under lock, then fires callbacks.
 func (w *Watcher) firePendingCallbacks() {
+	if w.closed.Load() {
+		return
+	}
 	w.debounceMu.Lock()
 	pivot := w.pendingPivot
 	w.pendingPivot = false
@@ -387,12 +410,13 @@ func (w *Watcher) fireCallbacks(symPivot bool) {
 // up to the drain timeout before closing the underlying fsnotify watcher.
 func (w *Watcher) Close() error {
 	w.closeOnce.Do(func() {
+		// Set admission gate first — firePendingCallbacks and scheduleCallback
+		// check this before touching the WaitGroup, preventing Add-after-Wait.
+		w.closed.Store(true)
 		close(w.done)
 
-		// Stop debounce timers to prevent goroutine leaks. Note: a timer
-		// goroutine may fire between close(done) and timer.Stop() — this is
-		// safe because fireCallbacks does not use w.watcher, and the WaitGroup
-		// drain below will wait for any such in-flight callback to complete.
+		// Stop debounce timers to prevent goroutine leaks. Timer goroutines
+		// that were already scheduled will see closed=true and return early.
 		w.debounceMu.Lock()
 		if w.debounceTimer != nil {
 			w.debounceTimer.Stop()
