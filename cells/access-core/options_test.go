@@ -8,7 +8,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,7 +56,7 @@ func TestInit_MissingOutboxWriter(t *testing.T) {
 	c := NewAccessCore(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
 	err := c.Init(context.Background(), deps)
@@ -68,7 +67,7 @@ func TestInit_MissingOutboxWriter(t *testing.T) {
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(noopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any)}
 	err := c.Init(context.Background(), deps)

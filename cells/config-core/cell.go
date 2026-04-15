@@ -126,11 +126,6 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			"config-core durable mode requires both outboxWriter and txRunner")
 	}
 
-	// Durable mode: reject noop implementations (#27c-2).
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "config-core", c.outboxWriter, c.txRunner, c.publisher); err != nil {
-		return err
-	}
-
 	// Demo mode: both nil → require publisher for degraded event delivery.
 	if c.outboxWriter == nil && c.txRunner == nil {
 		if c.publisher == nil {

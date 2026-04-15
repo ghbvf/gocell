@@ -137,11 +137,6 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrCellMissingOutbox, "audit-core (L2) requires outboxWriter injection")
 	}
 
-	// Durable mode: reject noop implementations (#27c-2).
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "audit-core", c.outboxWriter, c.publisher); err != nil {
-		return err
-	}
-
 	// audit-append
 	var appendOpts []auditappend.Option
 	if c.outboxWriter != nil {
