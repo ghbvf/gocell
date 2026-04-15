@@ -137,6 +137,28 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 	assert.Empty(t, ow.entries, "outbox writer should not be called when txRunner fails")
 }
 
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
+	// No outboxWriter → goes through direct-publish path.
+	svc := NewService(repo, testHMACKey, fp, slog.Default())
+
+	chain := domain.NewHashChain(testHMACKey)
+	for i := range 3 {
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		require.NoError(t, repo.Append(context.Background(), entry))
+	}
+
+	result, err := svc.VerifyChain(context.Background(), 0, 10)
+	require.NoError(t, err, "publish failure in demo mode should not fail verify")
+	assert.True(t, result.Valid)
+	assert.Equal(t, 3, result.EntriesChecked)
+}
+
 func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
