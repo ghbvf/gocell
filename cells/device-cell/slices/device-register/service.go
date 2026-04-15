@@ -52,7 +52,10 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 	}
 
 	// L4 Cell uses publisher.Publish directly (no outboxWriter per KG-07).
-	payload, err := json.Marshal(device)
+	payload, err := json.Marshal(map[string]any{
+		"id": device.ID, "name": device.Name,
+		"status": device.Status, "lastSeen": device.LastSeen,
+	})
 	if err != nil {
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil

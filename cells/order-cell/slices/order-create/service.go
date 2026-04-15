@@ -113,7 +113,10 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 		return nil, fmt.Errorf("order-create: persist: %w", err)
 	}
 
-	payload, err := json.Marshal(order)
+	payload, err := json.Marshal(map[string]any{
+		"id": order.ID, "item": order.Item,
+		"status": order.Status, "createdAt": order.CreatedAt,
+	})
 	if err != nil {
 		s.logger.Error("order-create: marshal event failed", slog.Any("error", err))
 		return order, nil // order is created, event publish is best-effort
@@ -130,7 +133,10 @@ func (s *Service) createDemo(ctx context.Context, order *domain.Order) (*domain.
 }
 
 func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, error) {
-	payload, err := json.Marshal(order)
+	payload, err := json.Marshal(map[string]any{
+		"id": order.ID, "item": order.Item,
+		"status": order.Status, "createdAt": order.CreatedAt,
+	})
 	if err != nil {
 		return outbox.Entry{}, fmt.Errorf("order-create: marshal event: %w", err)
 	}

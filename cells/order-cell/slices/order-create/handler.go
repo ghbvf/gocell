@@ -3,8 +3,24 @@ package ordercreate
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
+
+// OrderCreateResponse is the public DTO for the order creation response.
+type OrderCreateResponse struct {
+	ID     string `json:"id"`
+	Item   string `json:"item"`
+	Status string `json:"status"`
+}
+
+func toOrderCreateResponse(o *domain.Order) OrderCreateResponse {
+	return OrderCreateResponse{
+		ID:     o.ID,
+		Item:   o.Item,
+		Status: o.Status,
+	}
+}
 
 // Handler provides HTTP endpoints for order creation.
 type Handler struct {
@@ -35,11 +51,5 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"data": map[string]any{
-			"id":     order.ID,
-			"item":   order.Item,
-			"status": order.Status,
-		},
-	})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toOrderCreateResponse(order)})
 }

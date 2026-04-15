@@ -10,10 +10,10 @@ import (
 
 // Order represents a todo-order aggregate.
 type Order struct {
-	ID        string    `json:"id"`
-	Item      string    `json:"item"`
-	Status    string    `json:"status"` // pending, confirmed
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string
+	Item      string
+	Status    string // pending, confirmed
+	CreatedAt time.Time
 }
 
 // OrderRepository abstracts order persistence.
