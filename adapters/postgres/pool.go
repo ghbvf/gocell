@@ -168,8 +168,12 @@ type PoolStats struct {
 }
 
 // PoolStats returns structured pool statistics suitable for metrics collection
-// and operational dashboards.
+// and operational dashboards. Returns zero-value PoolStats if the pool is not
+// initialized (defensive guard, consistent with Redis adapter pattern).
 func (p *Pool) PoolStats() PoolStats {
+	if p.inner == nil {
+		return PoolStats{}
+	}
 	s := p.inner.Stat()
 	return PoolStats{
 		AcquireCount:            s.AcquireCount(),

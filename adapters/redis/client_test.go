@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -123,6 +124,29 @@ func TestClientPoolStats_NilProvider(t *testing.T) {
 
 	stats := client.PoolStats()
 	assert.Equal(t, PoolStats{}, stats, "mock client must return zero PoolStats")
+}
+
+func TestClientPoolStats_WithProvider(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+	client.statsProvider = &mockPoolStatsProvider{
+		stats: &goredis.PoolStats{
+			Hits:       100,
+			Misses:     5,
+			Timeouts:   1,
+			TotalConns: 10,
+			IdleConns:  7,
+			StaleConns: 2,
+		},
+	}
+
+	stats := client.PoolStats()
+	assert.Equal(t, uint32(100), stats.Hits)
+	assert.Equal(t, uint32(5), stats.Misses)
+	assert.Equal(t, uint32(1), stats.Timeouts)
+	assert.Equal(t, uint32(10), stats.TotalConns)
+	assert.Equal(t, uint32(7), stats.IdleConns)
+	assert.Equal(t, uint32(2), stats.StaleConns)
 }
 
 func TestNewClient_StandaloneEmptyAddr(t *testing.T) {

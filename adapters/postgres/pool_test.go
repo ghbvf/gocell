@@ -135,6 +135,13 @@ func TestPoolStats_ZeroValue(t *testing.T) {
 	assert.Equal(t, int64(0), stats.MaxIdleDestroyCount)
 }
 
+func TestPoolStats_NilInner(t *testing.T) {
+	// Defensive: PoolStats on uninitialized Pool returns zero value, no panic.
+	p := &Pool{}
+	stats := p.PoolStats()
+	assert.Equal(t, PoolStats{}, stats)
+}
+
 func TestNewPool_UnreachableHost(t *testing.T) {
 	if os.Getenv("PG_INTEGRATION") == "" {
 		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")

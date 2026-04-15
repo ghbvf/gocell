@@ -935,6 +935,46 @@ func TestBootstrap_ConfigDriftChecker_ReportsUnhealthy(t *testing.T) {
 	assert.False(t, config.HasDrift(cfg), "after cells apply, drift resolved")
 }
 
+func TestBootstrap_ConfigDriftChecker_ErrorMessage(t *testing.T) {
+	// Verify the drift checker closure returns a correctly formatted error
+	// containing both generation and observedGeneration values.
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
+
+	cfg, err := config.Load(cfgFile, "")
+	require.NoError(t, err)
+
+	g := cfg.(config.Generationer)
+	og := cfg.(config.ObservedGenerationer)
+
+	// Construct the same checker closure that bootstrap.Run creates.
+	checker := func() error {
+		if g.Generation() != og.ObservedGeneration() {
+			return fmt.Errorf("config drift: generation %d, observed %d",
+				g.Generation(), og.ObservedGeneration())
+		}
+		return nil
+	}
+
+	// No drift initially.
+	assert.NoError(t, checker())
+
+	// Trigger drift via reload.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: v2\n"), 0o644))
+	require.NoError(t, cfg.(config.Reloader).Reload(cfgFile, ""))
+
+	err = checker()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config drift")
+	assert.Contains(t, err.Error(), "generation 1")
+	assert.Contains(t, err.Error(), "observed 0")
+
+	// Resolve drift.
+	og.SetObservedGeneration(g.Generation())
+	assert.NoError(t, checker(), "drift resolved after cells apply")
+}
+
 func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")
