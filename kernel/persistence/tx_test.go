@@ -32,7 +32,7 @@ func TestNoopTxRunner_PropagatesError(t *testing.T) {
 }
 
 func TestNoopTxRunner_NilFnPanics(t *testing.T) {
-	assert.Panics(t, func() {
+	assert.PanicsWithValue(t, "persistence: nil fn passed to RunInTx", func() {
 		_ = NoopTxRunner{}.RunInTx(context.Background(), nil)
 	})
 }

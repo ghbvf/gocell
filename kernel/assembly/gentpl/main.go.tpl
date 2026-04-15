@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"{{.Module}}/kernel/assembly"
+	"{{.Module}}/kernel/cell"
 	// Cell imports
 {{- range .Cells}}
 	// TODO: import {{.}} cell package
@@ -16,7 +17,7 @@ import (
 )
 
 func main() {
-	app := assembly.New(assembly.Config{ID: "{{.AssemblyID}}"})
+	app := assembly.New(assembly.Config{ID: "{{.AssemblyID}}", DurabilityMode: cell.DurabilityDemo})
 
 	// Register cells
 {{- range .Cells}}

@@ -2,8 +2,9 @@
 // It bootstraps config-core, access-core, and audit-core with in-memory
 // repositories by default, suitable for development and integration testing.
 //
-// Set GOCELL_ADAPTER_MODE=real to enable real adapter wiring (requires
-// GOCELL_POSTGRES_DSN, GOCELL_REDIS_ADDR, GOCELL_RABBITMQ_URL).
+// DurabilityDurable is set to reject noop placeholders (NoopWriter,
+// NoopTxRunner, DiscardPublisher) even in dev mode. Real adapter wiring
+// (GOCELL_ADAPTER_MODE=real) is not yet implemented.
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -101,13 +103,13 @@ func run(ctx context.Context) error {
 		slog.String("effective", "in-memory"))
 
 	auditCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key32!"),
+		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!"),
 	)
 	if err != nil {
 		return fmt.Errorf("create audit cursor codec: %w", err)
 	}
 	configCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key-32b!"),
+		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"),
 	)
 	if err != nil {
 		return fmt.Errorf("create config cursor codec: %w", err)
@@ -131,7 +133,7 @@ func run(ctx context.Context) error {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "core-bundle"})
+	asm := assembly.New(assembly.Config{ID: "core-bundle", DurabilityMode: cell.DurabilityDurable})
 	if err := asm.Register(configCell); err != nil {
 		return fmt.Errorf("register config-core: %w", err)
 	}

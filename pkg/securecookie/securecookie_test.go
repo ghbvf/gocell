@@ -56,7 +56,8 @@ func TestSecureCookie_TamperedValue(t *testing.T) {
 	require.NoError(t, err)
 
 	mid := len(encoded) / 2
-	tampered := encoded[:mid] + "X" + encoded[mid+1:]
+	// Bit-flip guarantees the byte always changes (fixes 1/64 flaky when encoded[mid] was already 'X').
+	tampered := encoded[:mid] + string(encoded[mid]^1) + encoded[mid+1:]
 
 	_, err = sc.Decode("test", tampered)
 	assert.Error(t, err, "tampered value should fail decode")

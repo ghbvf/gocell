@@ -44,7 +44,8 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 
 	// Init
@@ -73,7 +74,8 @@ func TestAuditCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -90,7 +92,8 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 
 	err := c.Init(ctx, deps)
@@ -107,7 +110,8 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
+		Config:         map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
+		DurabilityMode: cell.DurabilityDemo,
 	}
 
 	require.NoError(t, c.Init(ctx, deps))
@@ -125,7 +129,7 @@ func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -143,7 +147,7 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 		WithTxManager(noopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -158,12 +162,32 @@ func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		// No outboxWriter, no txRunner, no publisher.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
 	assert.Contains(t, err.Error(), "publisher")
+}
+
+func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	deps := cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "durable mode")
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
@@ -174,7 +198,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
@@ -182,7 +206,8 @@ func TestAuditCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -195,7 +220,8 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -222,7 +248,8 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 

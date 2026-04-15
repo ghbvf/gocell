@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // --- test doubles ---
@@ -117,6 +118,15 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, order)
 	assert.Equal(t, 1, txRunner.calls)
+
+	// Document known limitation: stubTxRunner has no rollback, so the order
+	// persists in-memory even though the outbox write failed. With a real
+	// postgres TxManager, the entire transaction (including repo.Create)
+	// would be rolled back. This assertion captures the current demo-mode
+	// behavior and will fail-safe if stubTxRunner gains rollback semantics.
+	orders, listErr := repo.List(context.Background(), query.ListParams{Limit: 10})
+	require.NoError(t, listErr)
+	assert.Len(t, orders, 1, "stubTxRunner: order persists despite outbox failure (no rollback in demo mode)")
 }
 
 func TestService_Create_NoopWriterDemoPath(t *testing.T) {

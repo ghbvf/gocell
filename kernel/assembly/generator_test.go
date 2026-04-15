@@ -125,7 +125,7 @@ func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "sso-bff"}`)
+	assert.Contains(t, content, `assembly.Config{ID: "sso-bff", DurabilityMode: cell.DurabilityDemo}`)
 }
 
 func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
@@ -362,7 +362,7 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "empty"}`)
+	assert.Contains(t, content, `assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo}`)
 	// No cell comments expected
 	assert.NotContains(t, content, "access-core")
 }

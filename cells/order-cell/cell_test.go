@@ -21,7 +21,8 @@ import (
 
 func newTestDeps() cell.Dependencies {
 	return cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 }
 

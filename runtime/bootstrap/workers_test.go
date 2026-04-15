@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +43,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-workers"})
+	asm := assembly.New(assembly.Config{ID: "test-workers", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	w := &countWorker{}

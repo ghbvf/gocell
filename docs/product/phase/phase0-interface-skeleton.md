@@ -379,10 +379,13 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus
 // gocell.go
 package gocell
 
-import "github.com/ghbvf/gocell/kernel/assembly"
+import (
+    "github.com/ghbvf/gocell/kernel/assembly"
+    "github.com/ghbvf/gocell/kernel/cell"
+)
 
 func NewAssembly(id string) *assembly.CoreAssembly {
-    return assembly.New(assembly.Config{ID: id})
+    return assembly.New(assembly.Config{ID: id, DurabilityMode: cell.DurabilityDemo})
 }
 ```
 

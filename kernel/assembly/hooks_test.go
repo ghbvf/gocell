@@ -163,7 +163,7 @@ var _ cell.BeforeStarter = (*onlyBeforeStartCell)(nil)
 // ---------------------------------------------------------------------------
 
 func TestAssemblyHooks_HappyPath(t *testing.T) {
-	a := New(Config{ID: "hooks-happy"})
+	a := New(Config{ID: "hooks-happy", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	a1 := newHookOrderCell("A", &calls, "")
@@ -188,7 +188,7 @@ func TestAssemblyHooks_HappyPath(t *testing.T) {
 }
 
 func TestAssemblyHooks_BeforeStartFailure(t *testing.T) {
-	a := New(Config{ID: "hooks-bs-fail"})
+	a := New(Config{ID: "hooks-bs-fail", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -214,7 +214,7 @@ func TestAssemblyHooks_BeforeStartFailure(t *testing.T) {
 }
 
 func TestAssemblyHooks_AfterStartFailure_RollbackIncludesFailedCell(t *testing.T) {
-	a := New(Config{ID: "hooks-as-fail"})
+	a := New(Config{ID: "hooks-as-fail", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -239,7 +239,7 @@ func TestAssemblyHooks_AfterStartFailure_RollbackIncludesFailedCell(t *testing.T
 }
 
 func TestAssemblyHooks_BeforeStopError_ContinuesAnyway(t *testing.T) {
-	a := New(Config{ID: "hooks-bstop-err"})
+	a := New(Config{ID: "hooks-bstop-err", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -265,7 +265,7 @@ func TestAssemblyHooks_BeforeStopError_ContinuesAnyway(t *testing.T) {
 }
 
 func TestAssemblyHooks_AfterStopError_ContinuesAnyway(t *testing.T) {
-	a := New(Config{ID: "hooks-astop-err"})
+	a := New(Config{ID: "hooks-astop-err", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -289,7 +289,7 @@ func TestAssemblyHooks_AfterStopError_ContinuesAnyway(t *testing.T) {
 }
 
 func TestAssemblyHooks_MixedCells(t *testing.T) {
-	a := New(Config{ID: "hooks-mixed"})
+	a := New(Config{ID: "hooks-mixed", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	hooked1 := newHookOrderCell("H1", &calls, "")
@@ -320,7 +320,7 @@ func TestAssemblyHooks_MixedCells(t *testing.T) {
 }
 
 func TestAssemblyHooks_PartialImplementation(t *testing.T) {
-	a := New(Config{ID: "hooks-partial"})
+	a := New(Config{ID: "hooks-partial", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	partial := newOnlyBeforeStartCell("P", &calls)
@@ -337,7 +337,7 @@ func TestAssemblyHooks_PartialImplementation(t *testing.T) {
 }
 
 func TestAssemblyHooks_StartWithConfig(t *testing.T) {
-	a := New(Config{ID: "hooks-cfg"})
+	a := New(Config{ID: "hooks-cfg", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	h := newHookOrderCell("A", &calls, "")
@@ -358,7 +358,7 @@ func TestAssemblyHooks_StartWithConfig(t *testing.T) {
 }
 
 func TestAssemblyHooks_RollbackHooksBestEffort(t *testing.T) {
-	a := New(Config{ID: "hooks-rb-best"})
+	a := New(Config{ID: "hooks-rb-best", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	// A has BeforeStop that fails — during rollback this should not abort.
@@ -384,7 +384,7 @@ func TestAssemblyHooks_RollbackHooksBestEffort(t *testing.T) {
 
 // F3-2: Start failure (not hook) triggers LIFO rollback with hooks on previously-started cells.
 func TestAssemblyHooks_StartFailure_RollbackUsesHooks(t *testing.T) {
-	a := New(Config{ID: "hooks-start-fail"})
+	a := New(Config{ID: "hooks-start-fail", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -408,7 +408,7 @@ func TestAssemblyHooks_StartFailure_RollbackUsesHooks(t *testing.T) {
 
 // F3-3: Context cancellation is respected by hooks.
 func TestAssemblyHooks_ContextCancellation(t *testing.T) {
-	a := New(Config{ID: "hooks-ctx-cancel"})
+	a := New(Config{ID: "hooks-ctx-cancel", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	// Cell whose BeforeStart checks context.
@@ -436,7 +436,7 @@ func TestAssemblyHooks_ContextCancellation(t *testing.T) {
 
 // F2-1: Panic in hook is recovered and treated as error, not crash.
 func TestAssemblyHooks_PanicRecovery_BeforeStart(t *testing.T) {
-	a := New(Config{ID: "hooks-panic-bs"})
+	a := New(Config{ID: "hooks-panic-bs", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -459,7 +459,7 @@ func TestAssemblyHooks_PanicRecovery_BeforeStart(t *testing.T) {
 }
 
 func TestAssemblyHooks_PanicRecovery_AfterStart(t *testing.T) {
-	a := New(Config{ID: "hooks-panic-as"})
+	a := New(Config{ID: "hooks-panic-as", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -482,7 +482,7 @@ func TestAssemblyHooks_PanicRecovery_AfterStart(t *testing.T) {
 }
 
 func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
-	a := New(Config{ID: "hooks-panic-bstop"})
+	a := New(Config{ID: "hooks-panic-bstop", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")
@@ -506,7 +506,7 @@ func TestAssemblyHooks_PanicRecovery_BeforeStop(t *testing.T) {
 }
 
 func TestAssemblyHooks_PanicRecovery_AfterStop(t *testing.T) {
-	a := New(Config{ID: "hooks-panic-astop"})
+	a := New(Config{ID: "hooks-panic-astop", DurabilityMode: cell.DurabilityDemo})
 	var calls []string
 
 	good := newHookOrderCell("A", &calls, "")

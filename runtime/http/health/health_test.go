@@ -51,7 +51,7 @@ func TestLivezHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test"})
+			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 			c := newStubCell("cell-1")
 			require.NoError(t, asm.Register(c))
 
@@ -109,7 +109,7 @@ func TestReadyzHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "test"})
+			asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 			c := newStubCell("cell-1")
 			require.NoError(t, asm.Register(c))
 
@@ -146,7 +146,7 @@ func TestReadyzHandler(t *testing.T) {
 }
 
 func TestReadyzHandler_MultipleCheckers(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -173,7 +173,7 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 }
 
 func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 
@@ -196,7 +196,7 @@ func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
 }
 
 func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -221,7 +221,7 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -248,7 +248,7 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -275,7 +275,7 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 }
 
 func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -295,7 +295,7 @@ func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
 }
 
 func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
@@ -347,7 +347,7 @@ func TestReadyzVerboseQueryParsing(t *testing.T) {
 }
 
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)
 	h.RegisterChecker("db", func() error { return nil })
 
@@ -357,7 +357,7 @@ func TestRegisterChecker_DuplicatePanics(t *testing.T) {
 }
 
 func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -381,7 +381,7 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test"})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -396,7 +396,7 @@ func TestSetShuttingDown_Idempotent(t *testing.T) {
 }
 
 func TestEmptyAssembly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "empty"})
+	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)
 
 	rec := httptest.NewRecorder()

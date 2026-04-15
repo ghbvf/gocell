@@ -4,6 +4,26 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - DurabilityMode 守护加固
+
+> PR: #284
+> Scope: A2/D2/C1/D1/NIL-PUB-P2/SECURECOOKIE-FLAKY
+
+### Breaking
+
+- **kernel/cell**: `DurabilityMode` zero value is now invalid (unset). All `assembly.Config{}` and `cell.Dependencies{}` must explicitly set `DurabilityMode: cell.DurabilityDemo` or `cell.DurabilityDurable`. Previously, zero-value defaulted to `DurabilityDemo` silently. ref: Vault `StoredKeysInvalid=0`, gRPC `InvalidSecurityLevel=0`.
+
+### Added
+
+- **kernel/cell**: `CheckNotNoop` now rejects zero-value `DurabilityMode` with `ErrValidationFailed`.
+- **cells**: access-core, audit-core, config-core now call `CheckNotNoop` in `Init()`, aligning with order-cell and device-cell.
+- **kernel/persistence**: `NoopTxRunner.RunInTx` panics with descriptive message on nil fn (ref: `net/http.HandleFunc`).
+
+### Fixed
+
+- **cells/order-cell**: outbox log distinguishes noop path (`Debug`) from real write (`Info`).
+- **pkg/securecookie**: `TestSecureCookie_TamperedValue` flaky (1/64 probability) fixed via bit-flip instead of literal "X" replacement.
+
 ## [Unreleased] - Decode 严格化 + 回归锁定
 
 > PR: #89

@@ -36,7 +36,7 @@ const (
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
-	DurabilityMode cell.DurabilityMode // Demo (default) or Durable
+	DurabilityMode cell.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of
@@ -193,6 +193,14 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 
 	if cfgMap == nil {
 		cfgMap = make(map[string]any)
+	}
+
+	if err := cell.ValidateMode(a.cfg.DurabilityMode); err != nil {
+		a.mu.Lock()
+		a.state = stateStopped
+		a.mu.Unlock()
+		return errcode.Wrap(errcode.ErrValidationFailed,
+			fmt.Sprintf("assembly %q", a.id), err)
 	}
 
 	deps := cell.Dependencies{

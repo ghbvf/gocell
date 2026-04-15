@@ -45,7 +45,8 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 
 	// Init
@@ -76,7 +77,8 @@ func TestConfigCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -110,7 +112,7 @@ func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewConfigCore(tt.opts...)
-			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 			require.Error(t, err)
 			var ecErr *errcode.Error
 			require.ErrorAs(t, err, &ecErr)
@@ -119,9 +121,28 @@ func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 	}
 }
 
+func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithPublisher(eventbus.New()),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	deps := cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDurable,
+	}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "durable mode")
+}
+
 func TestConfigCore_InitDemoMode_RequiresPublisher(t *testing.T) {
 	c := NewConfigCore(WithInMemoryDefaults())
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher")
 }
@@ -131,7 +152,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithPublisher(eventbus.New()),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any)})
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
 }
 
@@ -139,7 +160,8 @@ func TestConfigCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -152,7 +174,8 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -182,7 +205,8 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
-		Config: make(map[string]any),
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -281,7 +305,7 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()

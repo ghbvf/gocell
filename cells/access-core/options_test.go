@@ -8,6 +8,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +43,7 @@ func TestHealthCheckers_NilRepo(t *testing.T) {
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := &celltest.StubEventRouter{}
@@ -58,10 +60,30 @@ func TestInit_MissingOutboxWriter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithTxManager(noopTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "txRunner")
+}
+
+func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	deps := cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDurable,
+	}
+	err := c.Init(context.Background(), deps)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+	assert.Contains(t, err.Error(), "durable mode")
 }
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
@@ -69,7 +91,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any)}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")

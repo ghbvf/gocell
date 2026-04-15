@@ -122,7 +122,7 @@ func (c *MyCell) RegisterSubscriptions(sub outbox.Subscriber) {
 ### 6. 注册到 Assembly
 
 ```go
-asm := assembly.New(assembly.Config{ID: "my-app"})
+asm := assembly.New(assembly.Config{ID: "my-app", DurabilityMode: cell.DurabilityDemo})
 asm.Register(mycell.NewMyCell(...))
 ```
 
@@ -166,9 +166,8 @@ func TestMyCell_Lifecycle(t *testing.T) {
     c := NewMyCell(WithInMemoryDefaults())
     ctx := context.Background()
     deps := cell.Dependencies{
-        Cells:     make(map[string]cell.Cell),
-        Contracts: make(map[string]cell.Contract),
-        Config:    make(map[string]any),
+        Config:         make(map[string]any),
+        DurabilityMode: cell.DurabilityDemo,
     }
 
     require.NoError(t, c.Init(ctx, deps))
