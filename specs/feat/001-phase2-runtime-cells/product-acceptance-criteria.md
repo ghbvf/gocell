@@ -44,7 +44,7 @@
 
 ### AC-1.5: SecurityHeaders 中间件
 - **优先级**: P2
-- **验收标准**: 响应头包含 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Strict-Transport-Security: max-age=63072000; includeSubDomains`
+- **验收标准**: 响应头包含 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Strict-Transport-Security: max-age=63072000`。`includeSubDomains` 和 `preload` 通过 `WithHSTSIncludeSubDomains()` / `WithHSTSPreload()` 显式 opt-in（PR#133）
 - **验证方式**: [单元测试]
 - **关联任务**: T-014
 

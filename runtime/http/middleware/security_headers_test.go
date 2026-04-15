@@ -59,6 +59,16 @@ func TestSecurityHeadersWithOptions(t *testing.T) {
 			wantSTS: "max-age=31536000",
 		},
 		{
+			name:    "zero max-age disables HSTS per RFC 6797",
+			opts:    []SecurityHeadersOption{WithHSTSMaxAge(0)},
+			wantSTS: "max-age=0",
+		},
+		{
+			name:    "negative max-age clamped to zero",
+			opts:    []SecurityHeadersOption{WithHSTSMaxAge(-1)},
+			wantSTS: "max-age=0",
+		},
+		{
 			name: "custom max-age with all directives",
 			opts: []SecurityHeadersOption{
 				WithHSTSMaxAge(31536000),

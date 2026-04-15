@@ -21,8 +21,15 @@ type securityHeadersConfig struct {
 }
 
 // WithHSTSMaxAge overrides the default HSTS max-age (63072000 seconds / 2 years).
+// Zero is valid per RFC 6797 (instructs browsers to remove HSTS). Negative
+// values are clamped to zero.
 func WithHSTSMaxAge(seconds int) SecurityHeadersOption {
-	return func(c *securityHeadersConfig) { c.maxAge = seconds }
+	return func(c *securityHeadersConfig) {
+		if seconds < 0 {
+			seconds = 0
+		}
+		c.maxAge = seconds
+	}
 }
 
 // WithHSTSIncludeSubDomains appends the includeSubDomains directive to the
