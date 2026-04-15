@@ -103,13 +103,13 @@ func run(ctx context.Context) error {
 		slog.String("effective", "in-memory"))
 
 	auditCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key32!"),
+		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!"),
 	)
 	if err != nil {
 		return fmt.Errorf("create audit cursor codec: %w", err)
 	}
 	configCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key-32b!"),
+		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"),
 	)
 	if err != nil {
 		return fmt.Errorf("create config cursor codec: %w", err)

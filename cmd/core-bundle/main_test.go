@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"strings"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -39,8 +40,11 @@ func TestLoadKeySet_RealMode_Success(t *testing.T) {
 	assert.NotNil(t, ks)
 }
 
-func TestLoadKeySet_UnknownMode_FallsDev(t *testing.T) {
-	// Typo or unknown value should still work (dev fallback) but logs a warning.
+func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
+	// loadKeySet treats any non-"real" mode as dev (ephemeral key pair).
+	// In practice, validateAdapterMode rejects unknown values before
+	// loadKeySet is called, so this path is only reachable if a new
+	// valid mode is added without updating loadKeySet.
 	ks, err := loadKeySet("reall") // deliberate typo
 	require.NoError(t, err)
 	assert.NotNil(t, ks)
@@ -81,10 +85,18 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — run() should exit cleanly
 
-	// run() may fail with "context canceled" or a listen error (sandbox);
-	// both are acceptable — we're testing that assembly + bootstrap wiring
-	// completes without crashing.
-	_ = run(ctx)
+	err := run(ctx)
+	// Only context.Canceled and listen/sandbox errors are acceptable.
+	// Any other error signals a real startup regression.
+	if err != nil {
+		msg := err.Error()
+		acceptable := strings.Contains(msg, "context canceled") ||
+			strings.Contains(msg, "operation not permitted") ||
+			strings.Contains(msg, "bind:")
+		if !acceptable {
+			t.Fatalf("unexpected startup error (not context-canceled or sandbox): %v", err)
+		}
+	}
 }
 
 func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
