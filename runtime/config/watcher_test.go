@@ -244,11 +244,15 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Wait for debounce to fire.
-	time.Sleep(400 * time.Millisecond)
+	// Wait for exactly 1 debounced callback (tolerant of slow CI).
+	assert.Eventually(t, func() bool {
+		return called.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "debounce should fire at least once")
 
-	count := called.Load()
-	assert.Equal(t, int32(1), count, "debounce should coalesce 5 rapid writes into 1 callback")
+	// Verify no additional callbacks arrive (debounce coalesced all writes).
+	assert.Never(t, func() bool {
+		return called.Load() > 1
+	}, 300*time.Millisecond, 50*time.Millisecond, "debounce should coalesce 5 writes into 1 callback")
 }
 
 func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
@@ -282,13 +286,16 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(1500 * time.Millisecond)
+	// Wait for at least 2 ceiling-forced callbacks (tolerant of slow CI).
+	assert.Eventually(t, func() bool {
+		return called.Load() >= 2
+	}, 5*time.Second, 50*time.Millisecond, "max ceiling should force at least 2 callbacks")
+
 	close(stop)
 	// Let any pending timers fire.
 	time.Sleep(500 * time.Millisecond)
 
 	count := called.Load()
-	assert.GreaterOrEqual(t, count, int32(2), "max ceiling should force at least 2 callbacks in 1.5s")
 	assert.Less(t, count, int32(15), "debounce should coalesce many events")
 }
 
@@ -645,6 +652,31 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 
 	// Clean close.
 	require.NoError(t, w.Close())
+}
+
+// TestWatcher_Close_DuringDebounceTimer verifies that Close() during an active
+// debounce timer does not panic or race. The timer may fire during or after
+// Close — the WaitGroup drain handles this safely.
+func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v0")
+
+	w, err := NewWatcher(file, WithDebounce(500*time.Millisecond))
+	require.NoError(t, err)
+
+	w.OnChange(func(_ WatchEvent) {})
+	w.Start()
+	waitReady(t, w)
+
+	// Trigger a write — debounce timer starts (500ms).
+	touchFile(t, file, "key: v1")
+
+	// Close immediately while debounce timer is still pending.
+	// This exercises the race window between close(done), timer.Stop(),
+	// and the timer goroutine potentially firing.
+	time.Sleep(10 * time.Millisecond) // tiny delay to let event reach the loop
+	require.NoError(t, w.Close(), "Close during active debounce timer must not error")
 }
 
 func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {

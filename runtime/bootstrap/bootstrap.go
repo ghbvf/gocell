@@ -499,6 +499,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				gen = g.Generation()
 			}
 
+			allCellsOK := true
 			for _, id := range asm.CellIDs() {
 				c := asm.Cell(id)
 				cr, ok := c.(cell.ConfigReloader)
@@ -517,6 +518,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
+							allCellsOK = false
 							slog.Error("bootstrap: config reload callback panic",
 								slog.String("cell", id),
 								slog.String("type", fmt.Sprintf("%T", r)))
@@ -525,12 +527,22 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 						}
 					}()
 					if err := cr.OnConfigReload(event); err != nil {
+						allCellsOK = false
 						slog.Error("bootstrap: config reload callback failed",
 							slog.String("cell", id),
 							slog.Any("error", err),
 							slog.Int64("config_generation", gen))
 					}
 				}()
+			}
+
+			// Mark the generation as observed only when all cells applied it
+			// successfully. A gap between Generation and ObservedGeneration
+			// indicates config drift — surfaced via config.HasDrift().
+			if allCellsOK {
+				if og, ok := cfg.(config.ObservedGenerationer); ok {
+					og.SetObservedGeneration(gen)
+				}
 			}
 		})
 		// Start after OnChange is bound so no events are consumed without a handler.
