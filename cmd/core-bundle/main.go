@@ -2,8 +2,9 @@
 // It bootstraps config-core, access-core, and audit-core with in-memory
 // repositories by default, suitable for development and integration testing.
 //
-// Set GOCELL_ADAPTER_MODE=real to enable real adapter wiring (requires
-// GOCELL_POSTGRES_DSN, GOCELL_REDIS_ADDR, GOCELL_RABBITMQ_URL).
+// DurabilityDurable is set to reject noop placeholders (NoopWriter,
+// NoopTxRunner, DiscardPublisher) even in dev mode. Real adapter wiring
+// (GOCELL_ADAPTER_MODE=real) is not yet implemented.
 package main
 
 import (
