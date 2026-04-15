@@ -1,8 +1,11 @@
 id: audit-query
 belongsToCell: audit-core
-contractUsages: []
+contractUsages:
+  - contract: http.audit.list.v1
+    role: serve
 verify:
   unit:
     - unit.audit-query.service
-  contract: []
+  contract:
+    - contract.http.audit.list.v1.serve
   waivers: []

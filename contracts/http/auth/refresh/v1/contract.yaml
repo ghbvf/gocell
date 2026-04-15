@@ -5,7 +5,8 @@ consistencyLevel: L1
 lifecycle: active
 endpoints:
   server: access-core
-  clients: []
+  clients:
+    - edge-bff
   http:
     method: POST
     path: /api/v1/access/sessions/refresh

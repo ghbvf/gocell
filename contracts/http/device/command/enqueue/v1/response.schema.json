@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.device.command.enqueue.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "payload": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "ackedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "deviceId", "payload", "status", "createdAt"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"]
+}

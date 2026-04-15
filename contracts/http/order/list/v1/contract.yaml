@@ -5,7 +5,8 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   server: order-cell
-  clients: []
+  clients:
+    - edge-bff
   http:
     method: GET
     path: /api/v1/orders/

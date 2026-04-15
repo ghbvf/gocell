@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.audit.list.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "eventId": { "type": "string" },
+          "eventType": { "type": "string" },
+          "actorId": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "payload": {}
+        },
+        "required": ["id", "eventId", "eventType", "actorId", "timestamp"],
+        "additionalProperties": false
+      }
+    },
+    "nextCursor": { "type": "string" },
+    "hasMore": { "type": "boolean" }
+  },
+  "required": ["data", "hasMore"]
+}

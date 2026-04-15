@@ -1,7 +1,7 @@
-id: http.config.flags.evaluate.v1
+id: http.config.publish.v1
 kind: http
 ownerCell: config-core
-consistencyLevel: L1
+consistencyLevel: L2
 lifecycle: active
 endpoints:
   server: config-core
@@ -9,9 +9,8 @@ endpoints:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/flags/{key}/evaluate
+    path: /api/v1/config/{key}/publish
     successStatus: 200
     noContent: false
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json

@@ -1,15 +1,15 @@
-id: http.device.register.v1
+id: http.config.write.v1
 kind: http
-ownerCell: device-cell
-consistencyLevel: L4
+ownerCell: config-core
+consistencyLevel: L2
 lifecycle: active
 endpoints:
-  server: device-cell
+  server: config-core
   clients:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/devices
+    path: /api/v1/config/
     successStatus: 201
     noContent: false
 schemaRefs:

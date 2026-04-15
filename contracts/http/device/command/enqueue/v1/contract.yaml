@@ -1,4 +1,4 @@
-id: http.device.register.v1
+id: http.device.command.enqueue.v1
 kind: http
 ownerCell: device-cell
 consistencyLevel: L4
@@ -9,7 +9,7 @@ endpoints:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/devices
+    path: /api/v1/devices/{id}/commands
     successStatus: 201
     noContent: false
 schemaRefs:

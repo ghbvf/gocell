@@ -1,17 +1,16 @@
-id: http.device.status.v1
+id: http.auth.role.check.v1
 kind: http
-ownerCell: device-cell
-consistencyLevel: L4
+ownerCell: access-core
+consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: device-cell
+  server: access-core
   clients:
     - edge-bff
   http:
     method: GET
-    path: /api/v1/devices/{id}/status
+    path: /api/v1/access/roles/{userID}/{roleName}
     successStatus: 200
     noContent: false
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json

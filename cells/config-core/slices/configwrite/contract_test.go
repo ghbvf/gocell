@@ -3,6 +3,9 @@ package configwrite
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
@@ -17,6 +20,29 @@ func newContractService() (*Service, *mem.ConfigRepository, *recordingWriter) {
 		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
 	return svc, repo, writer
 }
+
+// --- HTTP contract test ---
+
+func TestHttpConfigWriteV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.write.v1")
+	svc, _, _ := newContractService()
+
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/", http.HandlerFunc(h.HandleCreate))
+
+	c.ValidateRequest(t, []byte(`{"key":"app.name","value":"myapp","sensitive":false}`))
+	c.MustRejectRequest(t, []byte(`{"key":"k","value":"v","extra":"bad"}`))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// --- Event contract tests ---
 
 func TestEventConfigChangedV1Publish_Create(t *testing.T) {
 	root := contracttest.ContractsRoot()

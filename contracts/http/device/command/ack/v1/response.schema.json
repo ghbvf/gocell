@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.device.command.ack.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"]
+}

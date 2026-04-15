@@ -1,6 +1,12 @@
 id: device-command
 belongsToCell: device-cell
 contractUsages:
+  - contract: http.device.command.enqueue.v1
+    role: serve
+  - contract: http.device.command.list.v1
+    role: serve
+  - contract: http.device.command.ack.v1
+    role: serve
   - contract: command.device-command.enqueue.v1
     role: handle
   - contract: command.device-command.list.v1
@@ -11,6 +17,9 @@ verify:
   unit:
     - unit.device-command.service
   contract:
+    - contract.http.device.command.enqueue.v1.serve
+    - contract.http.device.command.list.v1.serve
+    - contract.http.device.command.ack.v1.serve
     - contract.command.device-command.enqueue.v1.handle
     - contract.command.device-command.list.v1.handle
     - contract.command.device-command.ack.v1.handle

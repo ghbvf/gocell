@@ -3,6 +3,9 @@ package configpublish
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +30,27 @@ func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
 		CreatedAt: now, UpdatedAt: now,
 	})
 }
+
+// --- HTTP contract test ---
+
+func TestHttpConfigPublishV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	svc, repo, _ := newContractService()
+	seedContractEntry(repo, "app.name", "value")
+
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/{key}/publish", http.HandlerFunc(h.HandlePublish))
+
+	rec := httptest.NewRecorder()
+	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
+	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	mux.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// --- Event contract tests ---
 
 func TestEventConfigChangedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()

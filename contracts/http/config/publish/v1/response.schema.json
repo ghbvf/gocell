@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.publish.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "configId": { "type": "string" },
+        "version": { "type": "integer" },
+        "value": { "type": "string" },
+        "publishedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "configId", "version", "value"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"]
+}

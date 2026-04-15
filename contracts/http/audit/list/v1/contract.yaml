@@ -1,17 +1,16 @@
-id: http.device.status.v1
+id: http.audit.list.v1
 kind: http
-ownerCell: device-cell
-consistencyLevel: L4
+ownerCell: audit-core
+consistencyLevel: L2
 lifecycle: active
 endpoints:
-  server: device-cell
+  server: audit-core
   clients:
     - edge-bff
   http:
     method: GET
-    path: /api/v1/devices/{id}/status
+    path: /api/v1/audit/entries
     successStatus: 200
     noContent: false
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json
