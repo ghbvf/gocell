@@ -199,6 +199,29 @@ func TestWaitForSubscription_FallsBackToSleep(t *testing.T) {
 	}
 }
 
+func TestWaitForSubscription_MiddlewareWrappedNonInitializer_FallsBack(t *testing.T) {
+	// This is the exact regression path from PR#141 CI failure:
+	// SubscriberWithMiddleware wraps a non-SubscriberInitializer (e.g.,
+	// InMemoryEventBus). Before the fix, InitializeSubscription returned nil
+	// (false success), skipping the sleep fallback → publish before subscribe
+	// registers → message lost → test timeout.
+	inner := &fakePubSub{} // does NOT implement SubscriberInitializer
+	wrapped := &outbox.SubscriberWithMiddleware{
+		Inner:      inner,
+		Middleware: nil,
+	}
+	ctx := context.Background()
+
+	start := time.Now()
+	waitForSubscription(t, ctx, wrapped, "test.topic", "")
+	elapsed := time.Since(start)
+
+	// Must fall back to sleep, NOT return instantly.
+	if elapsed < 40*time.Millisecond {
+		t.Fatalf("middleware-wrapped non-initializer must fall back to sleep (~50ms), but returned in %v", elapsed)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // collector tests — uses a minimal in-test fake subscriber (no runtime/ import)
 // ---------------------------------------------------------------------------

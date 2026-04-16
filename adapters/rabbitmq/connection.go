@@ -156,7 +156,8 @@ type Config struct {
 	// Default: 1s.
 	ReconnectBaseDelay time.Duration
 
-	// ChannelPoolSize is the maximum number of channels in the pool.
+	// ChannelPoolSize is the maximum number of idle channels in the subscriber
+	// pool. Publisher uses ephemeral channels (not pooled).
 	// Default: 10.
 	ChannelPoolSize int
 
