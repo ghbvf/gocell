@@ -3444,7 +3444,7 @@ func TestOUTGUARD01(t *testing.T) {
 			name: "mixed — only L2+ without durabilityMode warned",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Cells["access-core"].DurabilityMode = "durable"
-				pm.Cells["audit-core"].DurabilityMode = "" // L2, should warn
+				pm.Cells["audit-core"].DurabilityMode = ""    // L2, should warn
 				pm.Cells["shared-crypto"].DurabilityMode = "" // L0, should not warn
 			},
 			wantCount: 1,
