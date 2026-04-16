@@ -853,3 +853,19 @@ func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(1), dp.DiscardCount())
 }
+
+func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
+	// Typed nil: interface is non-nil but underlying pointer is nil.
+	// Must not panic — this is the key regression from value→pointer migration.
+	var p *DiscardPublisher // typed nil
+	var pub Publisher = p   // interface non-nil at Go level
+
+	// Go interface nil semantics: pub != nil because it carries type info.
+	if pub == nil {
+		t.Fatal("typed nil wrapped in interface should not be == nil")
+	}
+	assert.NotPanics(t, func() {
+		_ = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
+	}, "Publish on typed nil must not panic")
+	assert.Equal(t, uint64(0), p.DiscardCount(), "DiscardCount on nil returns 0")
+}

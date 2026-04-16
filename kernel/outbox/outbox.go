@@ -290,7 +290,13 @@ type DiscardPublisher struct {
 }
 
 // Publish logs a discard warning, increments the counter, and returns nil.
+// Safe to call on a nil receiver (typed nil defense).
 func (d *DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error {
+	if d == nil {
+		slog.Default().Warn("outbox: discard publisher dropping message (nil receiver)",
+			slog.String("topic", topic))
+		return nil
+	}
 	d.counter.Add(1)
 	l := d.Logger
 	if l == nil {
@@ -301,7 +307,11 @@ func (d *DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) er
 }
 
 // DiscardCount returns the total number of messages discarded.
+// Returns 0 on a nil receiver.
 func (d *DiscardPublisher) DiscardCount() uint64 {
+	if d == nil {
+		return 0
+	}
 	return d.counter.Load()
 }
 
