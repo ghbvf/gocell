@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -191,4 +192,103 @@ func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	assert.Equal(t, 1, ver.Version)
 	require.Len(t, writer.entries, 1)
 	assert.Equal(t, TopicConfigChanged, writer.entries[0].EventType)
+}
+
+// H2-2 CONFIGPUBLISH-REDACT-01: domain.ConfigVersion must carry the source entry's
+// Sensitive flag so downstream consumers (handler, postgres replay) can redact uniformly.
+func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	svc := NewService(repo, stubPublisher{}, slog.Default())
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	ver, err := svc.Publish(context.Background(), "db.password")
+	require.NoError(t, err)
+	assert.True(t, ver.Sensitive, "snapshot must inherit the source entry's Sensitive flag")
+	assert.Equal(t, "s3cret!", ver.Value, "domain snapshot keeps the raw value; redaction is a DTO concern")
+}
+
+// PR#155 followup F4 (Cx1, P2): service-level rollback NotFound coverage.
+// Asserts the typed error code so handler→HTTP status mapping cannot drift.
+func TestService_Rollback_KeyNotFound(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.Rollback(context.Background(), "missing-key", 1)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "rollback must return a typed errcode.Error")
+	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
+		"missing key must return ErrConfigNotFound (mem repo) for 404 mapping")
+}
+
+func TestService_Rollback_VersionNotFound(t *testing.T) {
+	svc, repo := newTestService()
+	mustSeedEntry(repo, "app.name", "v1") // entry exists; no version published
+
+	_, err := svc.Rollback(context.Background(), "app.name", 99)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
+		"missing version must return ErrConfigNotFound (mem repo) for 404 mapping")
+}
+
+func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	svc := NewService(repo, stubPublisher{}, slog.Default())
+	mustSeedEntry(repo, "app.name", "gocell")
+
+	ver, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+	assert.False(t, ver.Sensitive)
+}
+
+// PR#155 review F1: rollback must restore the snapshot's Sensitive flag onto
+// the live entry so a sensitivity flip between target version and current
+// state cannot leak (sensitive→plain) or over-redact (plain→sensitive).
+func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
+	tests := []struct {
+		name              string
+		seedSensitive     bool
+		flipToSensitiveAt int // 0 = no flip
+		wantSensitive     bool
+	}{
+		{name: "snapshot sensitive, live plain → entry becomes sensitive", seedSensitive: true, flipToSensitiveAt: 0, wantSensitive: true},
+		{name: "snapshot plain, live sensitive → entry becomes plain", seedSensitive: false, flipToSensitiveAt: 1, wantSensitive: false},
+		{name: "snapshot plain, live plain → stays plain", seedSensitive: false, flipToSensitiveAt: 0, wantSensitive: false},
+		{name: "snapshot sensitive, live sensitive → stays sensitive", seedSensitive: true, flipToSensitiveAt: 1, wantSensitive: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := mem.NewConfigRepository()
+			svc := NewService(repo, stubPublisher{}, slog.Default())
+			now := time.Now()
+			require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+				ID: "cfg-x", Key: "app.x", Value: "v1", Sensitive: tt.seedSensitive,
+				Version: 1, CreatedAt: now, UpdatedAt: now,
+			}))
+			// Snapshot v1 with the seeded sensitivity.
+			_, err := svc.Publish(context.Background(), "app.x")
+			require.NoError(t, err)
+
+			// Optionally flip the live entry's sensitivity to differ from the snapshot.
+			if tt.flipToSensitiveAt > 0 {
+				live, err := repo.GetByKey(context.Background(), "app.x")
+				require.NoError(t, err)
+				live.Sensitive = !tt.seedSensitive
+				live.Value = "v-live"
+				require.NoError(t, repo.Update(context.Background(), live))
+			}
+
+			rolled, err := svc.Rollback(context.Background(), "app.x", 1)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSensitive, rolled.Sensitive,
+				"rollback must inherit the snapshot's Sensitive flag, not the live entry's")
+		})
+	}
 }

@@ -8,5 +8,6 @@ type ConfigVersion struct {
 	ConfigID    string
 	Version     int
 	Value       string
+	Sensitive   bool       // inherits ConfigEntry.Sensitive at publish time; drives DTO redaction.
 	PublishedAt *time.Time // nil = not published
 }

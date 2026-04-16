@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.publish.v1.response",
+  "description": "Snapshot of the published config version. When sensitive=true, value is replaced with the literal placeholder \"******\" (dto.RedactedValue) and MUST NOT be reused as input on any write path — fetch the original value via configwrite if you need to round-trip.",
   "type": "object",
   "properties": {
     "data": {
@@ -9,10 +10,17 @@
         "id": { "type": "string" },
         "configId": { "type": "string" },
         "version": { "type": "integer" },
-        "value": { "type": "string" },
+        "value": {
+          "type": "string",
+          "description": "Snapshot value. If sensitive=true, this is the redaction placeholder \"******\", not the real secret."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "description": "True iff the source ConfigEntry is sensitive. When true, value is redacted in this response and clients must NOT echo it back as input."
+        },
         "publishedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "configId", "version", "value"],
+      "required": ["id", "configId", "version", "value", "sensitive"],
       "additionalProperties": false
     }
   },

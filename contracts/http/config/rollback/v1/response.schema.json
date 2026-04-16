@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.rollback.v1.response",
+  "description": "Live ConfigEntry after rollback restored a prior snapshot. When sensitive=true, value is replaced with the literal placeholder \"******\" (dto.RedactedValue) and MUST NOT be reused as input on any write path. The Sensitive flag itself is also restored from the snapshot — if the live entry's sensitivity differs from the snapshot, this response reflects the snapshot's sensitivity.",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "value": {
+          "type": "string",
+          "description": "Live value after rollback. If sensitive=true, this is the redaction placeholder \"******\", not the real secret."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "description": "True iff the rolled-back snapshot was marked sensitive. When true, value is redacted and clients must NOT echo it back as input."
+        },
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"]
+}

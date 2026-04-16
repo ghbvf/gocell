@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.rollback.v1.request",
+  "type": "object",
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["version"],
+  "additionalProperties": false
+}
