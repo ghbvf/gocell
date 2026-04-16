@@ -139,7 +139,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		{http.MethodGet, "/api/v1/flags/"},
 		// Internal admin endpoints (PR-A RBAC closure).
 		{http.MethodPost, "/internal/v1/access/roles/assign"},
-		{http.MethodDelete, "/internal/v1/access/roles/revoke"},
+		{http.MethodPost, "/internal/v1/access/roles/revoke"},
 	}
 
 	for _, tc := range protectedRoutes {
@@ -194,6 +194,24 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	// --- Method drift detection: DELETE /revoke was the old route (PR#143);
+	// after I-04 it moved to POST. Assert DELETE returns 404/405 to catch
+	// any regression if the old handler is re-registered.
+	t.Run("DELETE_revoke_rejected_as_method_drift_guard", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodDelete,
+			fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", addr), nil)
+		require.NoError(t, err)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// Accept either 404 (no route) or 405 (method not allowed).
+		// 401 would indicate the DELETE handler is still registered.
+		assert.NotEqual(t, http.StatusUnauthorized, resp.StatusCode,
+			"DELETE /revoke must not resolve to a protected route; use POST /revoke")
 	})
 
 	cancel()

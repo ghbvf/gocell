@@ -114,9 +114,16 @@ func run(ctx context.Context) error {
 
 	eb := eventbus.New()
 
-	slog.Info("adapter mode: in-memory (development)",
+	// NOTE: Storage adapters (postgres/redis/rabbitmq) are not yet wired even in
+	// "real" mode — only JWT keys + HMAC + cursor keys come from env. Storage is
+	// always in-memory for now. adapterInfo reflects storage state, not mode.
+	effectiveMode := "in-memory"
+	if adapterMode == "real" {
+		effectiveMode = "real-keys-in-memory-storage"
+	}
+	slog.Info("adapter mode",
 		slog.String("requested", adapterMode),
-		slog.String("effective", "in-memory"))
+		slog.String("effective", effectiveMode))
 
 	auditCursorKey, err := loadSecret("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!", adapterMode)
 	if err != nil {
@@ -149,8 +156,11 @@ func run(ctx context.Context) error {
 	}
 
 	// Seed admin role + optional admin user from env vars.
+	// Unsetenv to remove plaintext from /proc/{pid}/environ as soon as possible
+	// (defense-in-depth; Go's string immutability prevents full cleanup).
 	adminUser := os.Getenv("GOCELL_ADMIN_USER")
 	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
+	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
 	switch {
 	case adminUser != "" && adminPass != "":
 		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
@@ -181,16 +191,22 @@ func run(ctx context.Context) error {
 	}
 
 	adapterInfo := map[string]string{
-		"mode":      "in-memory",
-		"storage":   "in-memory",
-		"event_bus": "in-memory",
+		"mode":      effectiveMode,
+		"storage":   "in-memory", // storage adapters pending
+		"event_bus": "in-memory", // event bus adapters pending
 	}
 	slog.Info("core-bundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]))
 
-	app := bootstrap.New(
+	// /readyz?verbose token — required in real mode, optional in dev.
+	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
+	if adapterMode == "real" && verboseToken == "" {
+		return fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
+	}
+
+	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -199,7 +215,14 @@ func run(ctx context.Context) error {
 			"/api/v1/access/sessions/refresh",
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
-	)
+	}
+	if verboseToken != "" {
+		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))
+	} else {
+		slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
+	}
+
+	app := bootstrap.New(bootstrapOpts...)
 
 	return app.Run(ctx)
 }
