@@ -60,6 +60,40 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	return conn, cleanup
 }
 
+// startRabbitMQBroker starts a testcontainers RabbitMQ instance and returns the
+// broker AMQP URL and a cleanup function. Unlike startRabbitMQ it does NOT create
+// a Connection, allowing callers to create independent Connections per-subtest
+// while sharing the (expensive) container lifecycle.
+func startRabbitMQBroker(t *testing.T) (amqpURL string, cleanup func()) {
+	t.Helper()
+	ctx := context.Background()
+
+	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
+	require.NoError(t, err, "start rabbitmq container")
+
+	u, err := container.AmqpURL(ctx)
+	require.NoError(t, err, "get rabbitmq amqp url")
+
+	return u, func() { _ = container.Terminate(ctx) }
+}
+
+// newIntegrationConnection creates a fresh Connection pointing at the given
+// broker URL. The connection is registered for cleanup with t.Cleanup.
+// Use this when a per-subtest Connection is needed against a shared container.
+func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
+	t.Helper()
+	conn, err := NewConnection(Config{
+		URL:                 amqpURL,
+		ChannelPoolSize:     5,
+		ConfirmTimeout:      10 * time.Second,
+		ReconnectMaxBackoff: 5 * time.Second,
+		ReconnectBaseDelay:  500 * time.Millisecond,
+	})
+	require.NoError(t, err, "create per-subtest rabbitmq connection")
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
 type queueInspector interface {
 	QueueInspect(name string) (amqp.Queue, error)
 }
