@@ -12,3 +12,7 @@ verify:
     - contract.http.auth.role.assign.v1.serve
     - contract.http.auth.role.revoke.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/rbac-assign/**
+  - cells/access-core/slices/rbacassign/**

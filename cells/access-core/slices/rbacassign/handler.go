@@ -3,6 +3,7 @@ package rbacassign
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -45,7 +46,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
@@ -71,7 +72,7 @@ func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}

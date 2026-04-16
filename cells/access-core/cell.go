@@ -311,13 +311,12 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 	memRoleRepo, ok := c.roleRepo.(*mem.RoleRepository)
 	if !ok {
-		c.logger.Warn("seed admin: roleRepo is not in-memory, skipping seed")
-		return nil
+		return fmt.Errorf("seed admin requires in-memory role repository; got %T", c.roleRepo)
 	}
 
 	memRoleRepo.SeedRole(&domain.Role{
-		ID:   "admin",
-		Name: "admin",
+		ID:   domain.RoleAdmin,
+		Name: domain.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
@@ -350,7 +349,7 @@ func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 		return fmt.Errorf("persist user: %w", err)
 	}
 
-	if err := c.roleRepo.AssignToUser(ctx, user.ID, "admin"); err != nil {
+	if err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
 		return fmt.Errorf("assign role: %w", err)
 	}
 
