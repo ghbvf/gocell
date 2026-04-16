@@ -3480,3 +3480,42 @@ func TestOUTGUARD01(t *testing.T) {
 		})
 	}
 }
+
+func TestOUTGUARD01_L3_L4_Warning(t *testing.T) {
+	pm := validProject()
+	// Suppress existing L2 warnings.
+	pm.Cells["access-core"].DurabilityMode = "durable"
+	pm.Cells["audit-core"].DurabilityMode = "durable"
+	// Add L3 and L4 cells without durabilityMode.
+	pm.Cells["l3-cell"] = &metadata.CellMeta{
+		ID:               "l3-cell",
+		Type:             "core",
+		ConsistencyLevel: "L3",
+		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l3-cell.startup"}},
+	}
+	pm.Cells["l4-cell"] = &metadata.CellMeta{
+		ID:               "l4-cell",
+		Type:             "core",
+		ConsistencyLevel: "L4",
+		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l4-cell.startup"}},
+	}
+
+	val := NewValidator(pm, ".")
+	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+	assert.Len(t, got, 2, "both L3 and L4 cells should warn")
+}
+
+func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
+	pm := validProject()
+	pm.Cells["access-core"].DurabilityMode = "banana" // invalid value
+	pm.Cells["audit-core"].DurabilityMode = "durable"
+
+	val := NewValidator(pm, ".")
+	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+	assert.Len(t, got, 1, "invalid durabilityMode should produce error")
+	assert.Equal(t, SeverityError, got[0].Severity)
+	assert.Equal(t, IssueInvalid, got[0].IssueType)
+	assert.Contains(t, got[0].Message, "banana")
+}

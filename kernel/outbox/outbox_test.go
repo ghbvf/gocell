@@ -789,3 +789,25 @@ func TestValidateMetadata_Constants(t *testing.T) {
 	assert.Equal(t, 4096, MaxMetadataValueLen)
 	assert.Equal(t, 65536, MaxMetadataTotalSize)
 }
+
+func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
+	// Exactly MaxMetadataKeys keys should pass.
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e.Metadata = make(map[string]string)
+	for i := 0; i < MaxMetadataKeys; i++ {
+		e.Metadata[fmt.Sprintf("k%02d", i)] = "v"
+	}
+	assert.NoError(t, e.Validate(), "exactly MaxMetadataKeys should be valid")
+
+	// Exactly MaxMetadataKeyLen key should pass.
+	e2 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	exactKey := strings.Repeat("k", MaxMetadataKeyLen)
+	e2.Metadata = map[string]string{exactKey: "v"}
+	assert.NoError(t, e2.Validate(), "key at exactly MaxMetadataKeyLen should be valid")
+
+	// Exactly MaxMetadataValueLen value should pass.
+	e3 := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	exactVal := strings.Repeat("v", MaxMetadataValueLen)
+	e3.Metadata = map[string]string{"k": exactVal}
+	assert.NoError(t, e3.Validate(), "value at exactly MaxMetadataValueLen should be valid")
+}

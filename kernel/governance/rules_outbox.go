@@ -19,23 +19,45 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 		if !isL2OrHigher(c.ConsistencyLevel) {
 			continue
 		}
-		if c.DurabilityMode != "" {
+		if c.DurabilityMode == "" {
+			results = append(results, ValidationResult{
+				Code:      "OUTGUARD-01",
+				Severity:  SeverityWarning,
+				IssueType: IssueRequired,
+				File:      cellFile(c.ID),
+				Field:     "durabilityMode",
+				Message: fmt.Sprintf(
+					"cell %q declares %s consistency but has no durabilityMode; "+
+						"set durabilityMode to \"demo\" or \"durable\" so CheckNotNoop "+
+						"can enforce outbox durability at runtime",
+					c.ID, c.ConsistencyLevel),
+			})
 			continue
 		}
-		results = append(results, ValidationResult{
-			Code:      "OUTGUARD-01",
-			Severity:  SeverityWarning,
-			IssueType: IssueRequired,
-			File:      cellFile(c.ID),
-			Field:     "durabilityMode",
-			Message: fmt.Sprintf(
-				"cell %q declares %s consistency but has no durabilityMode; "+
-					"set durabilityMode to \"demo\" or \"durable\" so CheckNotNoop "+
-					"can enforce outbox durability at runtime",
-				c.ID, c.ConsistencyLevel),
-		})
+		if !isValidDurabilityMode(c.DurabilityMode) {
+			results = append(results, ValidationResult{
+				Code:      "OUTGUARD-01",
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      cellFile(c.ID),
+				Field:     "durabilityMode",
+				Message: fmt.Sprintf(
+					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"",
+					c.ID, c.DurabilityMode),
+			})
+		}
 	}
 	return results
+}
+
+// isValidDurabilityMode returns true for recognized durability mode values.
+func isValidDurabilityMode(mode string) bool {
+	switch mode {
+	case "demo", "durable":
+		return true
+	default:
+		return false
+	}
 }
 
 // isL2OrHigher returns true if the consistency level string is L2, L3, or L4.
