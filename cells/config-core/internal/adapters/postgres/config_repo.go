@@ -167,12 +167,12 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 // PublishVersion inserts a config version record.
 func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.ConfigVersion) error {
 	const query = `INSERT INTO config_versions
-		(id, config_id, version, value, published_at)
-		VALUES ($1, $2, $3, $4, $5)`
+		(id, config_id, version, value, sensitive, published_at)
+		VALUES ($1, $2, $3, $4, $5, $6)`
 
 	_, err := r.db.Exec(ctx, query,
 		version.ID, version.ConfigID, version.Version,
-		version.Value, version.PublishedAt,
+		version.Value, version.Sensitive, version.PublishedAt,
 	)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
@@ -185,13 +185,13 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 
 // GetVersion retrieves a specific config version.
 func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error) {
-	const query = `SELECT id, config_id, version, value, published_at
+	const query = `SELECT id, config_id, version, value, sensitive, published_at
 		FROM config_versions WHERE config_id = $1 AND version = $2`
 
 	row := r.db.QueryRow(ctx, query, configID, version)
 
 	var v domain.ConfigVersion
-	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.PublishedAt); err != nil {
+	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
 			fmt.Sprintf("config repo: version not found: %s v%d", configID, version), err)
 	}

@@ -76,6 +76,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 		ConfigID:    entry.ID,
 		Version:     entry.Version,
 		Value:       entry.Value,
+		Sensitive:   entry.Sensitive,
 		PublishedAt: &now,
 	}
 

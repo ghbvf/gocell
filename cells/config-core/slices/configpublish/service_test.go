@@ -192,3 +192,30 @@ func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	require.Len(t, writer.entries, 1)
 	assert.Equal(t, TopicConfigChanged, writer.entries[0].EventType)
 }
+
+// H2-2 CONFIGPUBLISH-REDACT-01: domain.ConfigVersion must carry the source entry's
+// Sensitive flag so downstream consumers (handler, postgres replay) can redact uniformly.
+func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	svc := NewService(repo, stubPublisher{}, slog.Default())
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	ver, err := svc.Publish(context.Background(), "db.password")
+	require.NoError(t, err)
+	assert.True(t, ver.Sensitive, "snapshot must inherit the source entry's Sensitive flag")
+	assert.Equal(t, "s3cret!", ver.Value, "domain snapshot keeps the raw value; redaction is a DTO concern")
+}
+
+func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	svc := NewService(repo, stubPublisher{}, slog.Default())
+	mustSeedEntry(repo, "app.name", "gocell")
+
+	ver, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+	assert.False(t, ver.Sensitive)
+}

@@ -119,6 +119,57 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// H2-2 CONFIGPUBLISH-REDACT-01: sensitive entries must redact `value` and expose
+// the `sensitive` flag in the publish response so downstream logs/UI cannot leak the secret.
+func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/db.password/publish", nil)
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			Value     string `json:"value"`
+			Sensitive bool   `json:"sensitive"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "******", resp.Data.Value, "sensitive value must be redacted in publish response")
+	assert.True(t, resp.Data.Sensitive, "publish response must surface the sensitive flag")
+	assert.NotContains(t, w.Body.String(), "s3cret!", "raw secret must not appear anywhere in the body")
+}
+
+func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-plain", Key: "app.name", Value: "gocell", Sensitive: false,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/app.name/publish", nil)
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			Value     string `json:"value"`
+			Sensitive bool   `json:"sensitive"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "gocell", resp.Data.Value, "non-sensitive value must be returned plaintext")
+	assert.False(t, resp.Data.Sensitive)
+}
+
 func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo, "app.name", "v1")

@@ -50,6 +50,41 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
+	// H2-2 redaction guard: response missing the `sensitive` flag must be rejected
+	// once the schema requires it (lock-in for redaction-aware contract).
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"v","configId":"c","version":1,"value":"plain"}}`))
+}
+
+func TestHttpConfigRollbackV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
+	svc, repo, _ := newContractService()
+	seedContractEntry(repo, "app.name", "value")
+
+	// Publish first to create version 1 so rollback target exists.
+	_, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/{key}/rollback", http.HandlerFunc(h.HandleRollback))
+
+	// Request schema acceptance + rejection.
+	c.ValidateRequest(t, []byte(`{"version":1}`))
+	c.MustRejectRequest(t, []byte(`{"version":0}`))
+	c.MustRejectRequest(t, []byte(`{"version":"1"}`))
+	c.MustRejectRequest(t, []byte(`{}`))
+	c.MustRejectRequest(t, []byte(`{"version":1,"extra":"x"}`))
+
+	// Real-handler exercise: 200 OK + response schema.
+	rec := httptest.NewRecorder()
+	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
 }
 
 // --- Event contract tests ---

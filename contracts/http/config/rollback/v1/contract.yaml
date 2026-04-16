@@ -1,0 +1,17 @@
+id: http.config.rollback.v1
+kind: http
+ownerCell: config-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: config-core
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/config/{key}/rollback
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -180,7 +180,7 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cv-1", "cfg-1", 1, "value", &now},
+			values: []any{"cv-1", "cfg-1", 1, "value", true, &now},
 		},
 	}
 	repo := NewConfigRepository(db)
@@ -191,6 +191,7 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 	assert.Equal(t, "cfg-1", version.ConfigID)
 	assert.Equal(t, 1, version.Version)
 	assert.Equal(t, "value", version.Value)
+	assert.True(t, version.Sensitive)
 }
 
 func TestConfigRepository_GetVersion_NotFound(t *testing.T) {

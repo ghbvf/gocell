@@ -1,19 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "http.config.publish.v1.response",
+  "title": "http.config.rollback.v1.response",
   "type": "object",
   "properties": {
     "data": {
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "configId": { "type": "string" },
-        "version": { "type": "integer" },
+        "key": { "type": "string" },
         "value": { "type": "string" },
         "sensitive": { "type": "boolean" },
-        "publishedAt": { "type": "string", "format": "date-time" }
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "configId", "version", "value", "sensitive"],
+      "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
       "additionalProperties": false
     }
   },

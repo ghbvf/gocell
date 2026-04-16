@@ -10,18 +10,26 @@ import (
 )
 
 // ConfigVersionResponse is the public DTO for ConfigVersion.
+// Sensitive snapshots have Value redacted to dto.RedactedValue; the Sensitive
+// flag is always surfaced so clients can render appropriately (mirrors
+// dto.ToConfigEntryResponse — see H2-2 CONFIGPUBLISH-REDACT-01).
 type ConfigVersionResponse struct {
 	ID          string     `json:"id"`
 	ConfigID    string     `json:"configId"`
 	Version     int        `json:"version"`
 	Value       string     `json:"value"`
+	Sensitive   bool       `json:"sensitive"`
 	PublishedAt *time.Time `json:"publishedAt,omitempty"`
 }
 
 func toConfigVersionResponse(v *domain.ConfigVersion) ConfigVersionResponse {
+	value := v.Value
+	if v.Sensitive {
+		value = dto.RedactedValue
+	}
 	return ConfigVersionResponse{
 		ID: v.ID, ConfigID: v.ConfigID, Version: v.Version,
-		Value: v.Value, PublishedAt: v.PublishedAt,
+		Value: value, Sensitive: v.Sensitive, PublishedAt: v.PublishedAt,
 	}
 }
 
