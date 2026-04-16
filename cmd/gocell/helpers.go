@@ -129,8 +129,17 @@ func evalExistingPrefix(p string) string {
 }
 
 // printResult prints a single validation result in human-readable format.
+// Location is rendered as file[:line[:column]] -> field, with line and column
+// appended only when they are non-zero (the parser fills them in 1-based,
+// so 0 means "unknown").
 func printResult(r governance.ValidationResult) {
 	location := r.File
+	if location != "" && r.Line > 0 {
+		location += fmt.Sprintf(":%d", r.Line)
+		if r.Column > 0 {
+			location += fmt.Sprintf(":%d", r.Column)
+		}
+	}
 	if r.Field != "" {
 		location += " -> " + r.Field
 	}

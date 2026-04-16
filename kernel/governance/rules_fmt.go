@@ -52,14 +52,12 @@ func (v *Validator) validateFMT01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if !validLifecycles[c.Lifecycle] {
-			results = append(results, ValidationResult{
-				Code:      "FMT-01",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "lifecycle",
-				Message:   fmt.Sprintf("contract %q lifecycle %q is not valid (must be draft, active, or deprecated)", c.ID, c.Lifecycle),
-			})
+			results = append(results, v.newResult(
+				"FMT-01", SeverityError, IssueInvalid,
+				contractFile(c.ID),
+				"lifecycle",
+				fmt.Sprintf("contract %q lifecycle %q is not valid (must be draft, active, or deprecated)", c.ID, c.Lifecycle),
+			))
 		}
 	}
 	return results
@@ -70,14 +68,12 @@ func (v *Validator) validateFMT02() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
 		if !validCellTypes[c.Type] {
-			results = append(results, ValidationResult{
-				Code:      "FMT-02",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      cellFile(c.ID),
-				Field:     "type",
-				Message:   fmt.Sprintf("cell %q type %q is not valid (must be core, edge, or support)", c.ID, c.Type),
-			})
+			results = append(results, v.newResult(
+				"FMT-02", SeverityError, IssueInvalid,
+				cellFile(c.ID),
+				"type",
+				fmt.Sprintf("cell %q type %q is not valid (must be core, edge, or support)", c.ID, c.Type),
+			))
 		}
 	}
 	return results
@@ -88,26 +84,22 @@ func (v *Validator) validateFMT03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
 		if _, err := cell.ParseLevel(c.ConsistencyLevel); err != nil {
-			results = append(results, ValidationResult{
-				Code:      "FMT-03",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      cellFile(c.ID),
-				Field:     "consistencyLevel",
-				Message:   fmt.Sprintf("cell %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
-			})
+			results = append(results, v.newResult(
+				"FMT-03", SeverityError, IssueInvalid,
+				cellFile(c.ID),
+				"consistencyLevel",
+				fmt.Sprintf("cell %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
+			))
 		}
 	}
 	for _, c := range v.project.Contracts {
 		if _, err := cell.ParseLevel(c.ConsistencyLevel); err != nil {
-			results = append(results, ValidationResult{
-				Code:      "FMT-03",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "consistencyLevel",
-				Message:   fmt.Sprintf("contract %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
-			})
+			results = append(results, v.newResult(
+				"FMT-03", SeverityError, IssueInvalid,
+				contractFile(c.ID),
+				"consistencyLevel",
+				fmt.Sprintf("contract %q consistencyLevel %q is not valid (must be L0-L4)", c.ID, c.ConsistencyLevel),
+			))
 		}
 	}
 	return results
@@ -123,38 +115,32 @@ func (v *Validator) validateFMT04() []ValidationResult {
 		// Both event and projection contracts require replayable.
 		if kind == cell.ContractEvent || kind == cell.ContractProjection {
 			if c.Replayable == nil {
-				results = append(results, ValidationResult{
-					Code:      "FMT-04",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      contractFile(c.ID),
-					Field:     "replayable",
-					Message:   fmt.Sprintf("%s contract %q must specify replayable", c.Kind, c.ID),
-				})
+				results = append(results, v.newResult(
+					"FMT-04", SeverityError, IssueRequired,
+					contractFile(c.ID),
+					"replayable",
+					fmt.Sprintf("%s contract %q must specify replayable", c.Kind, c.ID),
+				))
 			}
 		}
 
 		// Only event contracts require idempotencyKey and deliverySemantics.
 		if kind == cell.ContractEvent {
 			if c.IdempotencyKey == "" {
-				results = append(results, ValidationResult{
-					Code:      "FMT-04",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      contractFile(c.ID),
-					Field:     "idempotencyKey",
-					Message:   fmt.Sprintf("event contract %q must specify idempotencyKey", c.ID),
-				})
+				results = append(results, v.newResult(
+					"FMT-04", SeverityError, IssueRequired,
+					contractFile(c.ID),
+					"idempotencyKey",
+					fmt.Sprintf("event contract %q must specify idempotencyKey", c.ID),
+				))
 			}
 			if c.DeliverySemantics == "" {
-				results = append(results, ValidationResult{
-					Code:      "FMT-04",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      contractFile(c.ID),
-					Field:     "deliverySemantics",
-					Message:   fmt.Sprintf("event contract %q must specify deliverySemantics", c.ID),
-				})
+				results = append(results, v.newResult(
+					"FMT-04", SeverityError, IssueRequired,
+					contractFile(c.ID),
+					"deliverySemantics",
+					fmt.Sprintf("event contract %q must specify deliverySemantics", c.ID),
+				))
 			}
 		}
 	}
@@ -167,14 +153,12 @@ func (v *Validator) validateFMT05() []ValidationResult {
 	for key, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if !validRoles[cu.Role] {
-				results = append(results, ValidationResult{
-					Code:      "FMT-05",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("contractUsages[%d].role", i),
-					Message:   fmt.Sprintf("role %q is not a valid contract role", cu.Role),
-				})
+				results = append(results, v.newResult(
+					"FMT-05", SeverityError, IssueInvalid,
+					sliceFile(key),
+					fmt.Sprintf("contractUsages[%d].role", i),
+					fmt.Sprintf("role %q is not a valid contract role", cu.Role),
+				))
 			}
 		}
 	}
@@ -190,14 +174,12 @@ func (v *Validator) validateFMT06() []ValidationResult {
 			continue // FMT-03 covers invalid levels
 		}
 		if level != cell.L0 && c.Schema.Primary == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-06",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      cellFile(c.ID),
-				Field:     "schema.primary",
-				Message:   fmt.Sprintf("non-L0 cell %q must have schema.primary", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-06", SeverityError, IssueRequired,
+				cellFile(c.ID),
+				"schema.primary",
+				fmt.Sprintf("non-L0 cell %q must have schema.primary", c.ID),
+			))
 		}
 	}
 	return results
@@ -222,14 +204,12 @@ func (v *Validator) validateFMT07() []ValidationResult {
 			default:
 				field = "endpoints"
 			}
-			results = append(results, ValidationResult{
-				Code:      "FMT-07",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     field,
-				Message:   fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
-			})
+			results = append(results, v.newResult(
+				"FMT-07", SeverityError, IssueRequired,
+				contractFile(c.ID),
+				field,
+				fmt.Sprintf("contract %q (kind %q) must have a provider endpoint", c.ID, c.Kind),
+			))
 		}
 	}
 	return results
@@ -240,14 +220,12 @@ func (v *Validator) validateFMT09() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if !validKinds[c.Kind] {
-			results = append(results, ValidationResult{
-				Code:      "FMT-09",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "kind",
-				Message:   fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
-			})
+			results = append(results, v.newResult(
+				"FMT-09", SeverityError, IssueInvalid,
+				contractFile(c.ID),
+				"kind",
+				fmt.Sprintf("contract %q kind %q is not valid (must be http, event, command, or projection)", c.ID, c.Kind),
+			))
 		}
 	}
 	return results
@@ -280,28 +258,24 @@ func (v *Validator) validateFMT10() []ValidationResult {
 	// Check cell IDs.
 	for _, c := range v.project.Cells {
 		if replacement, ok := bannedFieldNames[c.ID]; ok {
-			results = append(results, ValidationResult{
-				Code:      "FMT-10",
-				Severity:  SeverityError,
-				IssueType: IssueForbidden,
-				File:      cellFile(c.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("cell ID %q is a banned legacy field name; use %q instead", c.ID, replacement),
-			})
+			results = append(results, v.newResult(
+				"FMT-10", SeverityError, IssueForbidden,
+				cellFile(c.ID),
+				"id",
+				fmt.Sprintf("cell ID %q is a banned legacy field name; use %q instead", c.ID, replacement),
+			))
 		}
 	}
 
 	// Check contract IDs for slash-separated format (should be dot-separated).
 	for _, c := range v.project.Contracts {
 		if strings.Contains(c.ID, "/") {
-			results = append(results, ValidationResult{
-				Code:      "FMT-10",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("contract ID %q uses slash separator; must use dot-separated format (e.g., kind.domain.version)", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-10", SeverityError, IssueInvalid,
+				contractFile(c.ID),
+				"id",
+				fmt.Sprintf("contract ID %q uses slash separator; must use dot-separated format (e.g., kind.domain.version)", c.ID),
+			))
 		}
 	}
 
@@ -315,26 +289,22 @@ func (v *Validator) validateFMT08() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		parts := strings.SplitN(c.ID, ".", 2)
 		if len(parts) < 2 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-08",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      contractFile(c.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("contract ID %q format is invalid (missing '.' separator)", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-08", SeverityError, IssueInvalid,
+				contractFile(c.ID),
+				"id",
+				fmt.Sprintf("contract ID %q format is invalid (missing '.' separator)", c.ID),
+			))
 			continue
 		}
 		prefix := parts[0]
 		if prefix != c.Kind {
-			results = append(results, ValidationResult{
-				Code:      "FMT-08",
-				Severity:  SeverityError,
-				IssueType: IssueMismatch,
-				File:      contractFile(c.ID),
-				Field:     "kind",
-				Message:   fmt.Sprintf("contract %q ID prefix %q does not match kind %q", c.ID, prefix, c.Kind),
-			})
+			results = append(results, v.newResult(
+				"FMT-08", SeverityError, IssueMismatch,
+				contractFile(c.ID),
+				"kind",
+				fmt.Sprintf("contract %q ID prefix %q does not match kind %q", c.ID, prefix, c.Kind),
+			))
 		}
 	}
 	return results
@@ -347,34 +317,28 @@ func (v *Validator) validateFMT11() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
 		if c.Owner.Team == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-11",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      cellFile(c.ID),
-				Field:     "owner.team",
-				Message:   fmt.Sprintf("cell %q must have owner.team", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-11", SeverityError, IssueRequired,
+				cellFile(c.ID),
+				"owner.team",
+				fmt.Sprintf("cell %q must have owner.team", c.ID),
+			))
 		}
 		if c.Owner.Role == "" {
-			results = append(results, ValidationResult{
-				Code:      "FMT-11",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      cellFile(c.ID),
-				Field:     "owner.role",
-				Message:   fmt.Sprintf("cell %q must have owner.role", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-11", SeverityError, IssueRequired,
+				cellFile(c.ID),
+				"owner.role",
+				fmt.Sprintf("cell %q must have owner.role", c.ID),
+			))
 		}
 		if len(c.Verify.Smoke) == 0 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-11",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      cellFile(c.ID),
-				Field:     "verify.smoke",
-				Message:   fmt.Sprintf("cell %q must have at least one verify.smoke entry", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-11", SeverityError, IssueRequired,
+				cellFile(c.ID),
+				"verify.smoke",
+				fmt.Sprintf("cell %q must have at least one verify.smoke entry", c.ID),
+			))
 		}
 	}
 	return results
@@ -386,14 +350,12 @@ func (v *Validator) validateFMT12() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
 		if len(s.Verify.Unit) == 0 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-12",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      sliceFile(key),
-				Field:     "verify.unit",
-				Message:   fmt.Sprintf("slice %q must have at least one verify.unit entry", s.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-12", SeverityError, IssueRequired,
+				sliceFile(key),
+				"verify.unit",
+				fmt.Sprintf("slice %q must have at least one verify.unit entry", s.ID),
+			))
 		}
 	}
 	return results
@@ -426,11 +388,12 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 	file := contractFile(c.ID)
 
 	if cell.ContractKind(c.Kind) != cell.ContractHTTP {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
-			File: file, Field: "endpoints.http",
-			Message: fmt.Sprintf("contract %q can only declare endpoints.http when kind is http", c.ID),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueInvalid,
+			file,
+			"endpoints.http",
+			fmt.Sprintf("contract %q can only declare endpoints.http when kind is http", c.ID),
+		)}
 	}
 
 	var results []ValidationResult
@@ -443,54 +406,60 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 
 func (v *Validator) validateFMT13Method(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
 	if h.Method == "" {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
-			File: file, Field: "endpoints.http.method",
-			Message: fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present", c.ID),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueRequired,
+			file,
+			"endpoints.http.method",
+			fmt.Sprintf("http contract %q must specify endpoints.http.method once endpoints.http is present", c.ID),
+		)}
 	}
 	if !validHTTPMethods[strings.ToUpper(h.Method)] {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
-			File: file, Field: "endpoints.http.method",
-			Message: fmt.Sprintf("http contract %q method %q is not supported", c.ID, h.Method),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueInvalid,
+			file,
+			"endpoints.http.method",
+			fmt.Sprintf("http contract %q method %q is not supported", c.ID, h.Method),
+		)}
 	}
 	return nil
 }
 
 func (v *Validator) validateFMT13Path(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
 	if h.Path == "" {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
-			File: file, Field: "endpoints.http.path",
-			Message: fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present", c.ID),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueRequired,
+			file,
+			"endpoints.http.path",
+			fmt.Sprintf("http contract %q must specify endpoints.http.path once endpoints.http is present", c.ID),
+		)}
 	}
 	if !strings.HasPrefix(h.Path, "/") {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
-			File: file, Field: "endpoints.http.path",
-			Message: fmt.Sprintf("http contract %q path %q must start with '/'", c.ID, h.Path),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueInvalid,
+			file,
+			"endpoints.http.path",
+			fmt.Sprintf("http contract %q path %q must start with '/'", c.ID, h.Path),
+		)}
 	}
 	return nil
 }
 
 func (v *Validator) validateFMT13Status(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
 	if h.SuccessStatus == 0 {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueRequired,
-			File: file, Field: "endpoints.http.successStatus",
-			Message: fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present", c.ID),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueRequired,
+			file,
+			"endpoints.http.successStatus",
+			fmt.Sprintf("http contract %q must specify endpoints.http.successStatus once endpoints.http is present", c.ID),
+		)}
 	}
 	if h.SuccessStatus < 200 || h.SuccessStatus > 299 {
-		return []ValidationResult{{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueInvalid,
-			File: file, Field: "endpoints.http.successStatus",
-			Message: fmt.Sprintf("http contract %q successStatus %d must be a 2xx code", c.ID, h.SuccessStatus),
-		}}
+		return []ValidationResult{v.newResult(
+			codeFMT13, SeverityError, IssueInvalid,
+			file,
+			"endpoints.http.successStatus",
+			fmt.Sprintf("http contract %q successStatus %d must be a 2xx code", c.ID, h.SuccessStatus),
+		)}
 	}
 	return nil
 }
@@ -500,34 +469,38 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 
 	if h.NoContent {
 		if h.SuccessStatus != 0 && h.SuccessStatus != 204 {
-			results = append(results, ValidationResult{
-				Code: codeFMT13, Severity: SeverityError, IssueType: IssueMismatch,
-				File: file, Field: "endpoints.http.noContent",
-				Message: fmt.Sprintf("http contract %q with noContent=true must use successStatus 204", c.ID),
-			})
+			results = append(results, v.newResult(
+				codeFMT13, SeverityError, IssueMismatch,
+				file,
+				"endpoints.http.noContent",
+				fmt.Sprintf("http contract %q with noContent=true must use successStatus 204", c.ID),
+			))
 		}
 		if c.SchemaRefs.Response != "" {
-			results = append(results, ValidationResult{
-				Code: codeFMT13, Severity: SeverityError, IssueType: IssueForbidden,
-				File: file, Field: fieldSchemaRefsResponse,
-				Message: fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
-			})
+			results = append(results, v.newResult(
+				codeFMT13, SeverityError, IssueForbidden,
+				file,
+				fieldSchemaRefsResponse,
+				fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
+			))
 		}
 	} else if h.SuccessStatus == 204 {
-		results = append(results, ValidationResult{
-			Code: codeFMT13, Severity: SeverityError, IssueType: IssueMismatch,
-			File: file, Field: "endpoints.http.noContent",
-			Message: fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
-		})
+		results = append(results, v.newResult(
+			codeFMT13, SeverityError, IssueMismatch,
+			file,
+			"endpoints.http.noContent",
+			fmt.Sprintf("http contract %q with successStatus 204 must set noContent=true", c.ID),
+		))
 	}
 
 	// Advisory: noContent=false without schemaRefs.response is likely incomplete.
 	if !h.NoContent && c.SchemaRefs.Response == "" {
-		results = append(results, ValidationResult{
-			Code: codeFMT13, Severity: SeverityWarning, IssueType: IssueRequired,
-			File: file, Field: fieldSchemaRefsResponse,
-			Message: fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
-		})
+		results = append(results, v.newResult(
+			codeFMT13, SeverityWarning, IssueRequired,
+			file,
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
+		))
 	}
 
 	return results
@@ -538,17 +511,15 @@ func (v *Validator) validateFMT14() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
 		if len(s.AllowedFiles) == 0 {
-			results = append(results, ValidationResult{
-				Code:      "FMT-14",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      sliceFile(key),
-				Field:     "allowedFiles",
-				Message: fmt.Sprintf(
+			results = append(results, v.newResult(
+				"FMT-14", SeverityError, IssueRequired,
+				sliceFile(key),
+				"allowedFiles",
+				fmt.Sprintf(
 					"slice %q must declare explicit allowedFiles (e.g., [\"cells/%s/slices/%s/**\"])",
 					s.ID, s.BelongsToCell, s.ID,
 				),
-			})
+			))
 		}
 	}
 	return results
@@ -583,14 +554,12 @@ func (v *Validator) validateFMT15() []ValidationResult {
 			continue
 		}
 		if !hasMoreInRequired(info) {
-			results = append(results, ValidationResult{
-				Code:      "FMT-15",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     fieldSchemaRefsResponse,
-				Message:   fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
-			})
+			results = append(results, v.newResult(
+				"FMT-15", SeverityError, IssueRequired,
+				contractFile(c.ID),
+				fieldSchemaRefsResponse,
+				fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+			))
 		}
 	}
 	return results

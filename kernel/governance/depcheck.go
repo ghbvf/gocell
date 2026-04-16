@@ -24,6 +24,38 @@ func NewDependencyChecker(project *metadata.ProjectMeta) *DependencyChecker {
 	}
 }
 
+// locate returns the 1-based (line, column) of `field` inside `file` using
+// the yaml.Node cache captured by the parser. Mirrors Validator.locate.
+func (dc *DependencyChecker) locate(file, field string) (line, col int) {
+	if file == "" || field == "" {
+		return 0, 0
+	}
+	if dc.project == nil || dc.project.Nodes == nil {
+		return 0, 0
+	}
+	n, ok := dc.project.Nodes[file]
+	if !ok || n == nil {
+		return 0, 0
+	}
+	pos := metadata.Locate(n, field)
+	return pos.Line, pos.Column
+}
+
+// newResult constructs a ValidationResult with Line/Column auto-populated.
+func (dc *DependencyChecker) newResult(code string, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
+	line, col := dc.locate(file, field)
+	return ValidationResult{
+		Code:      code,
+		Severity:  sev,
+		IssueType: typ,
+		File:      file,
+		Field:     field,
+		Message:   msg,
+		Line:      line,
+		Column:    col,
+	}
+}
+
 // Check runs all dependency checks and returns findings.
 func (dc *DependencyChecker) Check() []ValidationResult {
 	if dc.project == nil {
@@ -48,17 +80,15 @@ func (dc *DependencyChecker) checkDEP01() []ValidationResult {
 		}
 		keyCellID := parts[0]
 		if s.BelongsToCell != keyCellID {
-			results = append(results, ValidationResult{
-				Code:      "DEP-01",
-				Severity:  SeverityError,
-				IssueType: IssueMismatch,
-				File:      sliceFile(key),
-				Field:     "belongsToCell",
-				Message: fmt.Sprintf(
+			results = append(results, dc.newResult(
+				"DEP-01", SeverityError, IssueMismatch,
+				sliceFile(key),
+				"belongsToCell",
+				fmt.Sprintf(
 					"slice %q declares belongsToCell %q but is registered under cell %q",
 					s.ID, s.BelongsToCell, keyCellID,
 				),
-			})
+			))
 		}
 	}
 	return results
@@ -84,17 +114,15 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 			}
 			consumers, consErr := dc.contracts.Consumers(cu.Contract)
 			if consErr != nil {
-				results = append(results, ValidationResult{
-					Code:      "DEP-02",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      sliceFile(providerCell + "/" + s.ID),
-					Field:     "contractUsages",
-					Message: fmt.Sprintf(
+				results = append(results, dc.newResult(
+					"DEP-02", SeverityError, IssueInvalid,
+					sliceFile(providerCell+"/"+s.ID),
+					"contractUsages",
+					fmt.Sprintf(
 						"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
 						cu.Contract, consErr,
 					),
-				})
+				))
 				continue
 			}
 			for _, consumerCell := range consumers {
@@ -163,14 +191,12 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 	}
 
 	if len(cycle) > 0 {
-		results = append(results, ValidationResult{
-			Code:      "DEP-02",
-			Severity:  SeverityError,
-			IssueType: IssueForbidden,
-			File:      "project",
-			Field:     "cells",
-			Message:   fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
-		})
+		results = append(results, dc.newResult(
+			"DEP-02", SeverityError, IssueForbidden,
+			"project",
+			"cells",
+			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
+		))
 	}
 	return results
 }
@@ -216,45 +242,39 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 		assemblyID := cellToAssembly[c.ID]
 		if assemblyID == "" {
 			// Cell with L0 dependencies must be assigned to an assembly.
-			results = append(results, ValidationResult{
-				Code:      "DEP-03",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      cellFile(c.ID),
-				Field:     "l0Dependencies",
-				Message: fmt.Sprintf(
+			results = append(results, dc.newResult(
+				"DEP-03", SeverityError, IssueRequired,
+				cellFile(c.ID),
+				"l0Dependencies",
+				fmt.Sprintf(
 					"cell %q has L0 dependencies but is not assigned to any assembly",
 					c.ID,
 				),
-			})
+			))
 			continue
 		}
 		for i, dep := range c.L0Dependencies {
 			depAssembly := cellToAssembly[dep.Cell]
 			if depAssembly == "" {
-				results = append(results, ValidationResult{
-					Code:      "DEP-03",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message: fmt.Sprintf(
+				results = append(results, dc.newResult(
+					"DEP-03", SeverityError, IssueRequired,
+					cellFile(c.ID),
+					fmt.Sprintf("l0Dependencies[%d].cell", i),
+					fmt.Sprintf(
 						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly",
 						c.ID, assemblyID, dep.Cell,
 					),
-				})
+				))
 			} else if assemblyID != depAssembly {
-				results = append(results, ValidationResult{
-					Code:      "DEP-03",
-					Severity:  SeverityError,
-					IssueType: IssueMismatch,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message: fmt.Sprintf(
+				results = append(results, dc.newResult(
+					"DEP-03", SeverityError, IssueMismatch,
+					cellFile(c.ID),
+					fmt.Sprintf("l0Dependencies[%d].cell", i),
+					fmt.Sprintf(
 						"cell %q (assembly %q) has L0 dependency on %q (assembly %q); both must be in the same assembly",
 						c.ID, assemblyID, dep.Cell, depAssembly,
 					),
-				})
+				))
 			}
 		}
 	}

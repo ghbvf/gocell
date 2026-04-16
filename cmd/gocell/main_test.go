@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -464,4 +466,82 @@ func TestPrintResult(t *testing.T) {
 		Code:    "TEST-03",
 		Message: "msg",
 	})
+}
+
+// TestPrintResult_IncludesLineColumn verifies the printed "at" line contains
+// file:line:col when the finding carries a Position.
+func TestPrintResult_IncludesLineColumn(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-10",
+		File:    "cells/x/cell.yaml",
+		Field:   "id",
+		Line:    12,
+		Column:  5,
+		Message: "boom",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if !strings.Contains(out, "cells/x/cell.yaml:12:5") {
+		t.Errorf("printResult output = %q, want file:line:col", out)
+	}
+	if !strings.Contains(out, "-> id") {
+		t.Errorf("printResult output missing '-> id': %q", out)
+	}
+}
+
+// TestPrintResult_OmitsPositionWhenUnknown: when Line==0 the output falls back
+// to the plain "at file -> field" form that previously existed.
+func TestPrintResult_OmitsPositionWhenUnknown(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-11",
+		File:    "cells/x/cell.yaml",
+		Field:   "owner.team",
+		Message: "missing",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if strings.Contains(out, "cells/x/cell.yaml:") {
+		t.Errorf("unexpected position in output %q", out)
+	}
+	if !strings.Contains(out, "cells/x/cell.yaml -> owner.team") {
+		t.Errorf("missing plain 'file -> field' form in %q", out)
+	}
+}
+
+// TestPrintResult_LineOnlyColumnZero: Column==0 should not produce a trailing
+// ":0"; a bare ":line" is acceptable.
+func TestPrintResult_LineOnlyColumnZero(t *testing.T) {
+	r := governance.ValidationResult{
+		Code: "TEST-12", File: "f.yaml", Line: 7,
+		Message: "x",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if !strings.Contains(out, "f.yaml:7") {
+		t.Errorf("expected f.yaml:7 in %q", out)
+	}
+	if strings.Contains(out, "f.yaml:7:0") {
+		t.Errorf("unexpected trailing :0 in %q", out)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected into a string.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
+
+	fn()
+	_ = w.Close()
+	<-done
+	return buf.String()
 }

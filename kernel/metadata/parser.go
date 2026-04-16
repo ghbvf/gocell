@@ -38,6 +38,7 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 		Contracts:  make(map[string]*ContractMeta),
 		Journeys:   make(map[string]*JourneyMeta),
 		Assemblies: make(map[string]*AssemblyMeta),
+		Nodes:      make(map[string]*yaml.Node),
 	}
 
 	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, walkErr error) error {
@@ -122,8 +123,12 @@ func splitPath(path string) []string {
 
 func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m CellMeta
-	if err := unmarshalFile(fsys, path, &m); err != nil {
+	node, err := unmarshalFile(fsys, path, &m)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -143,8 +148,12 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 // If an explicit value is provided but mismatches the path, an error is returned.
 func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m SliceMeta
-	if err := unmarshalFile(fsys, path, &m); err != nil {
+	node, err := unmarshalFile(fsys, path, &m)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -181,8 +190,12 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 // remains empty and governance rules will flag the issue.
 func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m ContractMeta
-	if err := unmarshalFile(fsys, path, &m); err != nil {
+	node, err := unmarshalFile(fsys, path, &m)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -203,8 +216,12 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m JourneyMeta
-	if err := unmarshalFile(fsys, path, &m); err != nil {
+	node, err := unmarshalFile(fsys, path, &m)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -220,8 +237,12 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var m AssemblyMeta
-	if err := unmarshalFile(fsys, path, &m); err != nil {
+	node, err := unmarshalFile(fsys, path, &m)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -237,8 +258,12 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 func (p *Parser) parseStatusBoard(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var entries []StatusBoardEntry
-	if err := unmarshalFile(fsys, path, &entries); err != nil {
+	node, err := unmarshalFile(fsys, path, &entries)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	pm.StatusBoard = entries
 	return nil
@@ -246,41 +271,70 @@ func (p *Parser) parseStatusBoard(fsys fs.FS, path string, pm *ProjectMeta) erro
 
 func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 	var actors []ActorMeta
-	if err := unmarshalFile(fsys, path, &actors); err != nil {
+	node, err := unmarshalFile(fsys, path, &actors)
+	if err != nil {
 		return err
+	}
+	if node != nil {
+		pm.Nodes[path] = node
 	}
 	pm.Actors = actors
 	return nil
 }
 
-// unmarshalFile reads and decodes a YAML file from fsys with strict field
-// checking. Unknown YAML keys that don't map to struct fields are rejected,
-// preventing silent typos in metadata files (e.g., "ownerId" instead of "ownerCell").
-func unmarshalFile(fsys fs.FS, path string, out any) error {
+// unmarshalFile reads and decodes a YAML file from fsys.
+//
+// The decode is two-phase:
+//  1. Decode into a *yaml.Node so the caller can cache it for location lookups
+//     via metadata.Find / metadata.Locate.
+//  2. Decode into `out` through a second Decoder with KnownFields(true) so that
+//     unknown YAML keys (typos such as "ownerId" instead of "ownerCell") are
+//     rejected. yaml.v3's Node.Decode does not inherit KnownFields from the
+//     source Decoder (see yaml.go func (n *Node) Decode), so we re-parse the
+//     bytes rather than calling root.Decode(out).
+//
+// Empty / whitespace-only files are treated as "no content" and return
+// (nil, nil) to preserve the original behaviour of empty actors.yaml or
+// status-board.yaml. Multi-document files are rejected.
+func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
-		return errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("read %s", path), err)
 	}
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(out); err != nil {
-		// yaml.Decoder returns io.EOF for empty/whitespace-only files, whereas
-		// yaml.Unmarshal silently leaves the target at its zero value. Preserve
-		// the old behaviour so that empty actors.yaml / status-board.yaml parse
-		// as empty slices instead of aborting.
+
+	// Phase 1: capture location-preserving AST.
+	var root yaml.Node
+	dec1 := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec1.Decode(&root); err != nil {
 		if err == io.EOF {
-			return nil
+			return nil, nil
 		}
-		return errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}
 	// Reject multi-document YAML files. Metadata files must contain exactly
 	// one document; a second document after "---" would be silently ignored
 	// by a single Decode call.
-	if dec.Decode(new(any)) != io.EOF {
-		return errcode.New(errcode.ErrMetadataInvalid,
+	if dec1.Decode(new(yaml.Node)) != io.EOF {
+		return nil, errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s: unexpected multiple YAML documents", path))
 	}
-	return nil
+
+	// Phase 2: strict decode into target struct. This is where KnownFields(true)
+	// catches typos and yaml.v3 produces "line N: field X not found in type ..."
+	// errors that already carry line numbers.
+	dec2 := yaml.NewDecoder(bytes.NewReader(data))
+	dec2.KnownFields(true)
+	if err := dec2.Decode(out); err != nil {
+		if err == io.EOF {
+			// Unreachable: phase 1 already saw a document, so phase 2 cannot
+			// be empty. Kept defensively to mirror the original behaviour.
+			return &root, nil
+		}
+		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("parse %s", path), err)
+	}
+
+	return &root, nil
 }

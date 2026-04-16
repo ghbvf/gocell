@@ -2,6 +2,8 @@
 // and provides a file-system-based parser to load them into a unified ProjectMeta.
 package metadata
 
+import "gopkg.in/yaml.v3"
+
 // CellMeta maps to cells/{id}/cell.yaml.
 type CellMeta struct {
 	ID               string         `yaml:"id"`
@@ -194,4 +196,9 @@ type ProjectMeta struct {
 	Assemblies  map[string]*AssemblyMeta // keyed by assembly ID
 	StatusBoard []StatusBoardEntry
 	Actors      []ActorMeta
+	// Nodes maps each parsed YAML file path (as walked during ParseFS) to its
+	// root DocumentNode, enabling validator rules to report precise
+	// file:line:column locations. nil when the project was constructed
+	// manually (e.g. in tests); callers must tolerate that case.
+	Nodes map[string]*yaml.Node
 }

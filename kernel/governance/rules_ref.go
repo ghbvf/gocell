@@ -11,14 +11,12 @@ func (v *Validator) validateREF01() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
 		if _, ok := v.project.Cells[s.BelongsToCell]; !ok {
-			results = append(results, ValidationResult{
-				Code:      "REF-01",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      sliceFile(key),
-				Field:     "belongsToCell",
-				Message:   fmt.Sprintf("slice %q references non-existent cell %q", s.ID, s.BelongsToCell),
-			})
+			results = append(results, v.newResult(
+				"REF-01", SeverityError, IssueRefNotFound,
+				sliceFile(key),
+				"belongsToCell",
+				fmt.Sprintf("slice %q references non-existent cell %q", s.ID, s.BelongsToCell),
+			))
 		}
 	}
 	return results
@@ -30,14 +28,12 @@ func (v *Validator) validateREF02() []ValidationResult {
 	for key, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if _, ok := v.project.Contracts[cu.Contract]; !ok {
-				results = append(results, ValidationResult{
-					Code:      "REF-02",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("contractUsages[%d].contract", i),
-					Message:   fmt.Sprintf("slice %q references non-existent contract %q", s.ID, cu.Contract),
-				})
+				results = append(results, v.newResult(
+					"REF-02", SeverityError, IssueRefNotFound,
+					sliceFile(key),
+					fmt.Sprintf("contractUsages[%d].contract", i),
+					fmt.Sprintf("slice %q references non-existent contract %q", s.ID, cu.Contract),
+				))
 			}
 		}
 	}
@@ -49,14 +45,12 @@ func (v *Validator) validateREF03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if _, ok := v.project.Cells[c.OwnerCell]; !ok {
-			results = append(results, ValidationResult{
-				Code:      "REF-03",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      contractFile(c.ID),
-				Field:     "ownerCell",
-				Message:   fmt.Sprintf("contract %q ownerCell %q is not a known cell", c.ID, c.OwnerCell),
-			})
+			results = append(results, v.newResult(
+				"REF-03", SeverityError, IssueRefNotFound,
+				contractFile(c.ID),
+				"ownerCell",
+				fmt.Sprintf("contract %q ownerCell %q is not a known cell", c.ID, c.OwnerCell),
+			))
 		}
 	}
 	return results
@@ -72,14 +66,12 @@ func (v *Validator) validateREF04() []ValidationResult {
 		// The directory name is also key since parser uses m.ID as the key.
 		// We check that c.ID matches the map key.
 		if c.ID != key {
-			results = append(results, ValidationResult{
-				Code:      "REF-04",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      cellFile(key),
-				Field:     "id",
-				Message:   fmt.Sprintf("cell id %q does not match map key %q (expected directory name)", c.ID, key),
-			})
+			results = append(results, v.newResult(
+				"REF-04", SeverityError, IssueRefNotFound,
+				cellFile(key),
+				"id",
+				fmt.Sprintf("cell id %q does not match map key %q (expected directory name)", c.ID, key),
+			))
 		}
 	}
 	return results
@@ -96,14 +88,12 @@ func (v *Validator) validateREF05() []ValidationResult {
 		}
 		expectedSliceID := parts[1]
 		if s.ID != expectedSliceID {
-			results = append(results, ValidationResult{
-				Code:      "REF-05",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      sliceFile(key),
-				Field:     "id",
-				Message:   fmt.Sprintf("slice id %q does not match directory name %q", s.ID, expectedSliceID),
-			})
+			results = append(results, v.newResult(
+				"REF-05", SeverityError, IssueRefNotFound,
+				sliceFile(key),
+				"id",
+				fmt.Sprintf("slice id %q does not match directory name %q", s.ID, expectedSliceID),
+			))
 		}
 	}
 	return results
@@ -115,14 +105,12 @@ func (v *Validator) validateREF06() []ValidationResult {
 	for _, j := range v.project.Journeys {
 		for i, cellRef := range j.Cells {
 			if _, ok := v.project.Cells[cellRef]; !ok {
-				results = append(results, ValidationResult{
-					Code:      "REF-06",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      journeyFile(j.ID),
-					Field:     fmt.Sprintf("cells[%d]", i),
-					Message:   fmt.Sprintf("journey %q references non-existent cell %q", j.ID, cellRef),
-				})
+				results = append(results, v.newResult(
+					"REF-06", SeverityError, IssueRefNotFound,
+					journeyFile(j.ID),
+					fmt.Sprintf("cells[%d]", i),
+					fmt.Sprintf("journey %q references non-existent cell %q", j.ID, cellRef),
+				))
 			}
 		}
 	}
@@ -135,14 +123,12 @@ func (v *Validator) validateREF07() []ValidationResult {
 	for _, j := range v.project.Journeys {
 		for i, cRef := range j.Contracts {
 			if _, ok := v.project.Contracts[cRef]; !ok {
-				results = append(results, ValidationResult{
-					Code:      "REF-07",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      journeyFile(j.ID),
-					Field:     fmt.Sprintf("contracts[%d]", i),
-					Message:   fmt.Sprintf("journey %q references non-existent contract %q", j.ID, cRef),
-				})
+				results = append(results, v.newResult(
+					"REF-07", SeverityError, IssueRefNotFound,
+					journeyFile(j.ID),
+					fmt.Sprintf("contracts[%d]", i),
+					fmt.Sprintf("journey %q references non-existent contract %q", j.ID, cRef),
+				))
 			}
 		}
 	}
@@ -155,14 +141,12 @@ func (v *Validator) validateREF08() []ValidationResult {
 	for _, a := range v.project.Assemblies {
 		for i, cellRef := range a.Cells {
 			if _, ok := v.project.Cells[cellRef]; !ok {
-				results = append(results, ValidationResult{
-					Code:      "REF-08",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      assemblyFile(a.ID),
-					Field:     fmt.Sprintf("cells[%d]", i),
-					Message:   fmt.Sprintf("assembly %q references non-existent cell %q", a.ID, cellRef),
-				})
+				results = append(results, v.newResult(
+					"REF-08", SeverityError, IssueRefNotFound,
+					assemblyFile(a.ID),
+					fmt.Sprintf("cells[%d]", i),
+					fmt.Sprintf("assembly %q references non-existent cell %q", a.ID, cellRef),
+				))
 			}
 		}
 	}
@@ -175,14 +159,12 @@ func (v *Validator) validateREF09() []ValidationResult {
 	for _, c := range v.project.Cells {
 		for i, dep := range c.L0Dependencies {
 			if _, ok := v.project.Cells[dep.Cell]; !ok {
-				results = append(results, ValidationResult{
-					Code:      "REF-09",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message:   fmt.Sprintf("cell %q l0Dependencies references non-existent cell %q", c.ID, dep.Cell),
-				})
+				results = append(results, v.newResult(
+					"REF-09", SeverityError, IssueRefNotFound,
+					cellFile(c.ID),
+					fmt.Sprintf("l0Dependencies[%d].cell", i),
+					fmt.Sprintf("cell %q l0Dependencies references non-existent cell %q", c.ID, dep.Cell),
+				))
 			}
 		}
 	}
@@ -194,14 +176,12 @@ func (v *Validator) validateREF10() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
 		if a.Build.Entrypoint == "" {
-			results = append(results, ValidationResult{
-				Code:      "REF-10",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      assemblyFile(a.ID),
-				Field:     "build.entrypoint",
-				Message:   fmt.Sprintf("assembly %q must have build.entrypoint", a.ID),
-			})
+			results = append(results, v.newResult(
+				"REF-10", SeverityError, IssueRequired,
+				assemblyFile(a.ID),
+				"build.entrypoint",
+				fmt.Sprintf("assembly %q must have build.entrypoint", a.ID),
+			))
 		}
 	}
 	return results
@@ -222,25 +202,21 @@ func (v *Validator) validateREF11() []ValidationResult {
 		repoRoot := repositoryRoot(v.root)
 		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
 		if !isWithinRoot(repoRoot, fullPath) {
-			results = append(results, ValidationResult{
-				Code:      "REF-11",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      assemblyFile(a.ID),
-				Field:     "build.entrypoint",
-				Message:   fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root", a.ID, a.Build.Entrypoint),
-			})
+			results = append(results, v.newResult(
+				"REF-11", SeverityError, IssueInvalid,
+				assemblyFile(a.ID),
+				"build.entrypoint",
+				fmt.Sprintf("assembly %q build.entrypoint %q: path escapes project root", a.ID, a.Build.Entrypoint),
+			))
 			continue
 		}
 		if !v.fileExists(fullPath) {
-			results = append(results, ValidationResult{
-				Code:      "REF-11",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      assemblyFile(a.ID),
-				Field:     "build.entrypoint",
-				Message:   fmt.Sprintf("assembly %q build.entrypoint %q does not exist", a.ID, a.Build.Entrypoint),
-			})
+			results = append(results, v.newResult(
+				"REF-11", SeverityError, IssueRefNotFound,
+				assemblyFile(a.ID),
+				"build.entrypoint",
+				fmt.Sprintf("assembly %q build.entrypoint %q does not exist", a.ID, a.Build.Entrypoint),
+			))
 		}
 	}
 	return results
@@ -280,25 +256,21 @@ func (v *Validator) validateREF12() []ValidationResult {
 			}
 			fullPath := filepath.Join(contractDir, ref.value)
 			if !isWithinRoot(contractDir, fullPath) {
-				results = append(results, ValidationResult{
-					Code:      "REF-12",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      contractFile(c.ID),
-					Field:     ref.field,
-					Message:   fmt.Sprintf("contract %q %s %q: path escapes project root", c.ID, ref.field, ref.value),
-				})
+				results = append(results, v.newResult(
+					"REF-12", SeverityError, IssueInvalid,
+					contractFile(c.ID),
+					ref.field,
+					fmt.Sprintf("contract %q %s %q: path escapes project root", c.ID, ref.field, ref.value),
+				))
 				continue
 			}
 			if !v.fileExists(fullPath) {
-				results = append(results, ValidationResult{
-					Code:      "REF-12",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      contractFile(c.ID),
-					Field:     ref.field,
-					Message:   fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.field, ref.value),
-				})
+				results = append(results, v.newResult(
+					"REF-12", SeverityError, IssueRefNotFound,
+					contractFile(c.ID),
+					ref.field,
+					fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.field, ref.value),
+				))
 			}
 		}
 	}
@@ -314,14 +286,12 @@ func (v *Validator) validateREF13() []ValidationResult {
 			continue // FMT-07 covers missing provider
 		}
 		if !v.actorExists(provider) {
-			results = append(results, ValidationResult{
-				Code:      "REF-13",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      contractFile(c.ID),
-				Field:     "endpoints",
-				Message:   fmt.Sprintf("contract %q provider actor %q is not a known cell or actor", c.ID, provider),
-			})
+			results = append(results, v.newResult(
+				"REF-13", SeverityError, IssueRefNotFound,
+				contractFile(c.ID),
+				"endpoints",
+				fmt.Sprintf("contract %q provider actor %q is not a known cell or actor", c.ID, provider),
+			))
 		}
 	}
 	return results
@@ -338,14 +308,12 @@ func (v *Validator) validateREF14() []ValidationResult {
 				continue
 			}
 			if !v.actorExists(actor) {
-				results = append(results, ValidationResult{
-					Code:      "REF-14",
-					Severity:  SeverityError,
-					IssueType: IssueRefNotFound,
-					File:      contractFile(c.ID),
-					Field:     fmt.Sprintf("endpoints.consumers[%d]", i),
-					Message:   fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor", c.ID, actor),
-				})
+				results = append(results, v.newResult(
+					"REF-14", SeverityError, IssueRefNotFound,
+					contractFile(c.ID),
+					fmt.Sprintf("endpoints.consumers[%d]", i),
+					fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor", c.ID, actor),
+				))
 			}
 		}
 	}
@@ -357,14 +325,12 @@ func (v *Validator) validateREF15() []ValidationResult {
 	var results []ValidationResult
 	for key, a := range v.project.Assemblies {
 		if a.ID != key {
-			results = append(results, ValidationResult{
-				Code:      "REF-15",
-				Severity:  SeverityError,
-				IssueType: IssueMismatch,
-				File:      assemblyFile(key),
-				Field:     "id",
-				Message:   fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, key),
-			})
+			results = append(results, v.newResult(
+				"REF-15", SeverityError, IssueMismatch,
+				assemblyFile(key),
+				"id",
+				fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, key),
+			))
 		}
 	}
 	return results
@@ -384,27 +350,22 @@ func (v *Validator) validateREF16() []ValidationResult {
 	for _, a := range v.project.Assemblies {
 		boundaryPath := filepath.Join(v.root, "assemblies", a.ID, "generated", "boundary.yaml")
 		if !isWithinRoot(v.root, boundaryPath) {
-			results = append(results, ValidationResult{
-				Code:      "REF-16",
-				Severity:  SeverityError,
-				IssueType: IssueInvalid,
-				File:      assemblyFile(a.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("assembly %q boundary.yaml path escapes project root", a.ID),
-			})
+			results = append(results, v.newResult(
+				"REF-16", SeverityError, IssueInvalid,
+				assemblyFile(a.ID),
+				"id",
+				fmt.Sprintf("assembly %q boundary.yaml path escapes project root", a.ID),
+			))
 			continue
 		}
 		if !v.fileExists(boundaryPath) {
-			results = append(results, ValidationResult{
-				Code:      "REF-16",
-				Severity:  SeverityWarning,
-				IssueType: IssueRefNotFound,
-				File:      assemblyFile(a.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
-			})
+			results = append(results, v.newResult(
+				"REF-16", SeverityWarning, IssueRefNotFound,
+				assemblyFile(a.ID),
+				"id",
+				fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
+			))
 		}
 	}
 	return results
 }
-

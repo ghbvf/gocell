@@ -43,6 +43,12 @@ type ValidationResult struct {
 	File      string // YAML file path
 	Field     string // field path within YAML, e.g. "contractUsages[0].role"
 	Message   string
+	// Line and Column locate the offending value inside File. They are 1-based
+	// (matching yaml.v3) and zero when the position is unknown — e.g. the
+	// ProjectMeta was constructed without Nodes, or the field path cannot be
+	// resolved (array index out of range, typo in rule code, etc.).
+	Line   int
+	Column int
 }
 
 // Validator runs all validation rules against a parsed project.
@@ -149,6 +155,42 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateOUTGUARD01()...)
 
 	return results
+}
+
+// locate returns the 1-based (line, column) of `field` inside `file` using
+// the yaml.Node cache captured by the parser. Returns (0, 0) when any
+// precondition is missing (no Nodes, no matching file, unresolvable path).
+// Rules should prefer newResult, which wraps this call.
+func (v *Validator) locate(file, field string) (line, col int) {
+	if file == "" || field == "" {
+		return 0, 0
+	}
+	if v.project == nil || v.project.Nodes == nil {
+		return 0, 0
+	}
+	n, ok := v.project.Nodes[file]
+	if !ok || n == nil {
+		return 0, 0
+	}
+	pos := metadata.Locate(n, field)
+	return pos.Line, pos.Column
+}
+
+// newResult constructs a ValidationResult with Line/Column auto-populated
+// from the yaml.Node cache. Rule implementations should prefer this builder
+// over struct literals so locations stay consistent across all findings.
+func (v *Validator) newResult(code string, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
+	line, col := v.locate(file, field)
+	return ValidationResult{
+		Code:      code,
+		Severity:  sev,
+		IssueType: typ,
+		File:      file,
+		Field:     field,
+		Message:   msg,
+		Line:      line,
+		Column:    col,
+	}
 }
 
 // HasErrors returns true if any result has SeverityError.

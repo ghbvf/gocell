@@ -40,17 +40,15 @@ func (v *Validator) validateVERIFY01() []ValidationResult {
 		for i, cu := range s.ContractUsages {
 			verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
 			if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-01",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("contractUsages[%d]", i),
-					Message: fmt.Sprintf(
+				results = append(results, v.newResult(
+					"VERIFY-01", SeverityError, IssueRequired,
+					sliceFile(key),
+					fmt.Sprintf("contractUsages[%d]", i),
+					fmt.Sprintf(
 						"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
 						cu.Contract, cu.Role, s.ID,
 					),
-				})
+				))
 			}
 		}
 	}
@@ -64,67 +62,55 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	for key, s := range v.project.Slices {
 		for i, w := range s.Verify.Waivers {
 			if w.Contract == "" {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].contract", i),
-					Message:   "waiver.contract is required",
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueRequired,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].contract", i),
+					"waiver.contract is required",
+				))
 			}
 			if w.Owner == "" {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].owner", i),
-					Message:   fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueRequired,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].owner", i),
+					fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+				))
 			}
 			if w.Reason == "" {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].reason", i),
-					Message:   fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueRequired,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].reason", i),
+					fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+				))
 			}
 			if w.ExpiresAt == "" {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueRequired,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					Message:   fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueRequired,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+					fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+				))
 				continue
 			}
 			t, err := time.Parse("2006-01-02", w.ExpiresAt)
 			if err != nil {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					Message:   fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueInvalid,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+					fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
+				))
 				continue
 			}
 			if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-02",
-					Severity:  SeverityError,
-					IssueType: IssueInvalid,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					Message:   fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
-				})
+				results = append(results, v.newResult(
+					"VERIFY-02", SeverityError, IssueInvalid,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+					fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
+				))
 			}
 		}
 	}
@@ -145,17 +131,15 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 				continue // FMT-03 covers invalid levels
 			}
 			if targetLevel != cell.L0 {
-				results = append(results, ValidationResult{
-					Code:      "VERIFY-03",
-					Severity:  SeverityError,
-					IssueType: IssueMismatch,
-					File:      cellFile(c.ID),
-					Field:     fmt.Sprintf("l0Dependencies[%d].cell", i),
-					Message: fmt.Sprintf(
+				results = append(results, v.newResult(
+					"VERIFY-03", SeverityError, IssueMismatch,
+					cellFile(c.ID),
+					fmt.Sprintf("l0Dependencies[%d].cell", i),
+					fmt.Sprintf(
 						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
 						c.ID, dep.Cell, target.ConsistencyLevel,
 					),
-				})
+				))
 			}
 		}
 	}
@@ -198,17 +182,15 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		}
 
 		if !found {
-			results = append(results, ValidationResult{
-				Code:      "VERIFY-04",
-				Severity:  SeverityError,
-				IssueType: IssueRequired,
-				File:      contractFile(c.ID),
-				Field:     "lifecycle",
-				Message: fmt.Sprintf(
+			results = append(results, v.newResult(
+				"VERIFY-04", SeverityError, IssueRequired,
+				contractFile(c.ID),
+				"lifecycle",
+				fmt.Sprintf(
 					"active contract %q has no provider-role slice in cell %q",
 					c.ID, providerID,
 				),
-			})
+			))
 		}
 	}
 	return results
@@ -229,31 +211,27 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	var results []ValidationResult
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		results = append(results, ValidationResult{
-			Code:      "VERIFY-05",
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      file,
-			Field:     field,
-			Message: fmt.Sprintf(
+		results = append(results, v.newResult(
+			"VERIFY-05", SeverityError, IssueInvalid,
+			file,
+			field,
+			fmt.Sprintf(
 				"ref %q must have at least 3 non-empty dot-separated segments", ref,
 			),
-		})
+		))
 		return results
 	}
 
 	prefix := parts[0]
 	if !validRefPrefixes[prefix] {
-		results = append(results, ValidationResult{
-			Code:      "VERIFY-05",
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      file,
-			Field:     field,
-			Message: fmt.Sprintf(
+		results = append(results, v.newResult(
+			"VERIFY-05", SeverityError, IssueInvalid,
+			file,
+			field,
+			fmt.Sprintf(
 				"ref %q has unknown prefix %q; expected journey, smoke, unit, or contract", ref, prefix,
 			),
-		})
+		))
 		return results
 	}
 
@@ -261,16 +239,14 @@ func (v *Validator) validateVerifyRef(ref, file, field string) []ValidationResul
 	if prefix == "smoke" {
 		cellID := parts[1]
 		if _, ok := v.project.Cells[cellID]; !ok {
-			results = append(results, ValidationResult{
-				Code:      "VERIFY-05",
-				Severity:  SeverityError,
-				IssueType: IssueRefNotFound,
-				File:      file,
-				Field:     field,
-				Message: fmt.Sprintf(
+			results = append(results, v.newResult(
+				"VERIFY-05", SeverityError, IssueRefNotFound,
+				file,
+				field,
+				fmt.Sprintf(
 					"smoke ref %q references non-existent cell %q", ref, cellID,
 				),
-			})
+			))
 		}
 	}
 
