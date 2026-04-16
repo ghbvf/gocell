@@ -8,6 +8,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"syscall"
 	"testing"
 
@@ -175,6 +177,78 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN",
 		"real mode must fail fast when verbose token is unset")
+}
+
+// TestRun_RealMode_MissingMetricsToken_FailsFast mirrors the
+// VERBOSE_TOKEN fail-fast pattern: in real mode, unrestricted /metrics
+// would expose cell lifecycle signals anonymously, so GOCELL_METRICS_TOKEN
+// is required before the HTTP server starts.
+func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	// The trip-wire: metrics token is empty.
+	t.Setenv("GOCELL_METRICS_TOKEN", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_METRICS_TOKEN",
+		"real mode must fail fast when metrics token is unset")
+}
+
+func TestMetricsTokenGuard_RejectsMissingToken(t *testing.T) {
+	sentinel := "inner-handler-ran"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(sentinel))
+	})
+	guarded := withMetricsTokenGuard("secret", inner)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	guarded.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.NotContains(t, rec.Body.String(), sentinel, "inner handler must not run without token")
+}
+
+func TestMetricsTokenGuard_RejectsWrongToken(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	guarded := withMetricsTokenGuard("secret", inner)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set(metricsTokenHeader, "wrong")
+	guarded.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}
+
+func TestMetricsTokenGuard_AcceptsCorrectToken(t *testing.T) {
+	sentinel := "inner-handler-ran"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(sentinel))
+	})
+	guarded := withMetricsTokenGuard("secret", inner)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.Header.Set(metricsTokenHeader, "secret")
+	guarded.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), sentinel)
 }
 
 // generateTestPEM creates a fresh 2048-bit RSA key pair as PEM bytes.

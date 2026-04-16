@@ -266,6 +266,39 @@ func WithDisableObservabilityRestore() Option {
 	}
 }
 
+// WithHookTimeout configures the per-hook deadline for the default
+// assembly built when no WithAssembly option is supplied. Zero uses
+// assembly.DefaultHookTimeout. Negative values disable per-hook
+// timeouts entirely.
+//
+// When WithAssembly is used, the pre-built assembly's Config.HookTimeout
+// takes precedence — this option has no effect. For pre-built assemblies,
+// set the value directly on assembly.Config when constructing.
+func WithHookTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.hookTimeout = d
+		b.hookTimeoutSet = true
+	}
+}
+
+// WithHookObserver registers a cell lifecycle hook observer for the
+// default assembly built when no WithAssembly option is supplied.
+//
+// When WithAssembly is used, the pre-built assembly's Config.HookObserver
+// takes precedence — this option has no effect. For pre-built assemblies,
+// set the observer directly on assembly.Config when constructing.
+//
+// A nil observer (including a typed nil wrapping a nil concrete pointer)
+// is equivalent to not calling this option.
+func WithHookObserver(obs cell.LifecycleHookObserver) Option {
+	return func(b *Bootstrap) {
+		if cell.IsNilHookObserver(obs) {
+			return
+		}
+		b.hookObserver = obs
+	}
+}
+
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
 	name string       // unique identifier shown in /readyz?verbose output
@@ -293,6 +326,9 @@ type Bootstrap struct {
 	verboseToken                string            // token for /readyz?verbose access control
 	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+	hookTimeout                 time.Duration // applied when assembly not pre-built
+	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver                cell.LifecycleHookObserver
 	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
@@ -440,7 +476,19 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Step 3-4: Initialise and start assembly.
 	asm := b.assembly
 	if asm == nil {
-		asm = assembly.New(assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo})
+		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
+		if b.hookTimeoutSet {
+			cfg.HookTimeout = b.hookTimeout
+		}
+		if b.hookObserver != nil {
+			cfg.HookObserver = b.hookObserver
+		}
+		asm = assembly.New(cfg)
+	} else if b.hookTimeoutSet || b.hookObserver != nil {
+		// Pre-built assembly owns its own hook config — WithHookTimeout /
+		// WithHookObserver are silently superseded by assembly.Config. Warn
+		// so operators don't spend time debugging why the option had no effect.
+		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
 
 	// Inject config into assembly dependencies.
