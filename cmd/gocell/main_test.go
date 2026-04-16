@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -464,4 +466,130 @@ func TestPrintResult(t *testing.T) {
 		Code:    "TEST-03",
 		Message: "msg",
 	})
+}
+
+// TestPrintResult_IncludesLineColumn verifies the printed output carries the
+// field on the message line and a bare file:line:col on the "at" line — this
+// keeps the jump target clean for IDE click-to-open handlers.
+func TestPrintResult_IncludesLineColumn(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-10",
+		File:    "cells/x/cell.yaml",
+		Field:   "id",
+		Line:    12,
+		Column:  5,
+		Message: "boom",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	// Field moved to the message line.
+	if !strings.Contains(out, "boom (field: id)") {
+		t.Errorf("printResult output missing 'boom (field: id)' on message line: %q", out)
+	}
+	// The "at" line carries only file:line:col — no trailing "-> field".
+	if !strings.Contains(out, "at cells/x/cell.yaml:12:5\n") {
+		t.Errorf("printResult output missing bare 'at file:line:col' line: %q", out)
+	}
+	if strings.Contains(out, "-> id") {
+		t.Errorf("'at' line should not contain '-> field' any more: %q", out)
+	}
+}
+
+// TestPrintResult_OmitsPositionWhenUnknown: when Line==0 the "at" line shows
+// just the file path; the field still lives on the message line.
+func TestPrintResult_OmitsPositionWhenUnknown(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-11",
+		File:    "cells/x/cell.yaml",
+		Field:   "owner.team",
+		Message: "missing",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if strings.Contains(out, "cells/x/cell.yaml:") {
+		t.Errorf("unexpected position in output %q", out)
+	}
+	if !strings.Contains(out, "missing (field: owner.team)") {
+		t.Errorf("field should appear on message line: %q", out)
+	}
+	if !strings.Contains(out, "at cells/x/cell.yaml\n") {
+		t.Errorf("'at' line should be bare file path: %q", out)
+	}
+}
+
+// TestPrintResult_LineOnlyColumnZero: Column==0 should not produce a trailing
+// ":0"; a bare ":line" is acceptable.
+func TestPrintResult_LineOnlyColumnZero(t *testing.T) {
+	r := governance.ValidationResult{
+		Code: "TEST-12", File: "f.yaml", Line: 7,
+		Message: "x",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if !strings.Contains(out, "f.yaml:7") {
+		t.Errorf("expected f.yaml:7 in %q", out)
+	}
+	if strings.Contains(out, "f.yaml:7:0") {
+		t.Errorf("unexpected trailing :0 in %q", out)
+	}
+}
+
+// TestPrintResult_Scope: findings anchored to a virtual scope (e.g. DEP-02
+// cycle across cells) must render as "[scope: ...]" rather than mimicking
+// file:line:col syntax.
+func TestPrintResult_Scope(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "DEP-02",
+		Scope:   "project",
+		Field:   "cells",
+		Message: "circular dependency detected",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if !strings.Contains(out, "at [scope: project]") {
+		t.Errorf("scoped finding should render with '[scope: ...]' marker: %q", out)
+	}
+	// Defensive: the output must not look like a clickable path.
+	if strings.Contains(out, "at project:") || strings.Contains(out, "at project\n") {
+		t.Errorf("scope label must not be rendered as a file path: %q", out)
+	}
+	if !strings.Contains(out, "circular dependency detected (field: cells)") {
+		t.Errorf("field should appear on message line for scoped findings too: %q", out)
+	}
+}
+
+// TestPrintResult_NoFileNoScope: when neither File nor Scope is set, the
+// "at" line is omitted entirely (degenerate but legal input).
+func TestPrintResult_NoFileNoScope(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-13",
+		Message: "bare",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if strings.Contains(out, "at ") {
+		t.Errorf("no 'at' line expected when File and Scope both empty: %q", out)
+	}
+	if !strings.Contains(out, "[TEST-13] bare") {
+		t.Errorf("message still expected: %q", out)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected into a string.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
+
+	fn()
+	_ = w.Close()
+	<-done
+	return buf.String()
 }

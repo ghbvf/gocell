@@ -34,6 +34,20 @@ func consumerFieldName(kind string) string {
 	}
 }
 
+// actorFieldPath returns the locator field path for a property of the given
+// actor ID inside actors.yaml. The root of actors.yaml is a YAML sequence,
+// so the path uses the "[i].field" form so that metadata.Locate can descend
+// into the matching element. Returns "" when the actor is not registered,
+// in which case the caller falls back to Line/Column zero.
+func actorFieldPath(actors []metadata.ActorMeta, actorID, field string) string {
+	for i, a := range actors {
+		if a.ID == actorID {
+			return fmt.Sprintf("[%d].%s", i, field)
+		}
+	}
+	return ""
+}
+
 // contractConsumers returns the consumer cell/actor list for a contract based on its kind.
 func contractConsumers(c *metadata.ContractMeta) []string {
 	switch cell.ContractKind(c.Kind) {

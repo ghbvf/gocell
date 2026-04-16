@@ -14,14 +14,12 @@ func (v *Validator) validateADV01() []ValidationResult {
 
 	for _, j := range v.project.Journeys {
 		if !sbJourneys[j.ID] {
-			results = append(results, ValidationResult{
-				Code:      "ADV-01",
-				Severity:  SeverityWarning,
-				IssueType: IssueRefNotFound,
-				File:      journeyFile(j.ID),
-				Field:     "id",
-				Message:   fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
-			})
+			results = append(results, v.newResult(
+				"ADV-01", SeverityWarning, IssueRefNotFound,
+				journeyFile(j.ID),
+				"id",
+				fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
+			))
 		}
 	}
 	return results
@@ -38,14 +36,12 @@ func (v *Validator) validateADV03() []ValidationResult {
 		}
 		for i, w := range s.Verify.Waivers {
 			if w.Contract != "" && !usedContracts[w.Contract] {
-				results = append(results, ValidationResult{
-					Code:      "ADV-03",
-					Severity:  SeverityWarning,
-					IssueType: IssueRefNotFound,
-					File:      sliceFile(key),
-					Field:     fmt.Sprintf("verify.waivers[%d].contract", i),
-					Message:   fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
-				})
+				results = append(results, v.newResult(
+					"ADV-03", SeverityWarning, IssueRefNotFound,
+					sliceFile(key),
+					fmt.Sprintf("verify.waivers[%d].contract", i),
+					fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
+				))
 			}
 		}
 	}
@@ -53,18 +49,18 @@ func (v *Validator) validateADV03() []ValidationResult {
 }
 
 // validateADV04 checks that status-board entries reference existing journeys.
+// status-board.yaml's root is a YAML sequence (no "entries" wrapper), so the
+// field path uses the locator's root-index form "[i].journeyId".
 func (v *Validator) validateADV04() []ValidationResult {
 	var results []ValidationResult
 	for i, entry := range v.project.StatusBoard {
 		if _, ok := v.project.Journeys[entry.JourneyID]; !ok {
-			results = append(results, ValidationResult{
-				Code:      "ADV-04",
-				Severity:  SeverityWarning,
-				IssueType: IssueRefNotFound,
-				File:      "journeys/status-board.yaml",
-				Field:     fmt.Sprintf("entries[%d].journeyId", i),
-				Message:   fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
-			})
+			results = append(results, v.newResult(
+				"ADV-04", SeverityWarning, IssueRefNotFound,
+				"journeys/status-board.yaml",
+				fmt.Sprintf("[%d].journeyId", i),
+				fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
+			))
 		}
 	}
 	return results
