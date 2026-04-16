@@ -711,6 +711,19 @@ func (s *stubRoleRepo) RemoveFromUser(_ context.Context, userID, roleID string) 
 	delete(s.userRoles[userID], roleID)
 	return nil
 }
+func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) error {
+	count := 0
+	for _, roles := range s.userRoles {
+		if _, ok := roles[roleID]; ok {
+			count++
+		}
+	}
+	if _, holds := s.userRoles[userID][roleID]; holds && count == 1 {
+		return fmt.Errorf("sole holder")
+	}
+	delete(s.userRoles[userID], roleID)
+	return nil
+}
 func (s *stubRoleRepo) CountByRole(_ context.Context, roleID string) (int, error) {
 	count := 0
 	for _, roles := range s.userRoles {
