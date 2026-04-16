@@ -350,10 +350,15 @@ func callHookSafe(fn func() error) (err error, panicked bool) {
 // rollback/error-accumulation paths unchanged.
 //
 // Outcome classification:
-//   - nil error                          → OutcomeSuccess
-//   - panic recovered                    → OutcomePanic
-//   - context.DeadlineExceeded wrapped   → OutcomeTimeout
-//   - any other non-nil error            → OutcomeFailure
+//   - nil error                                            → OutcomeSuccess
+//   - panic recovered                                      → OutcomePanic
+//   - hookCtx deadline fired (regardless of err form)      → OutcomeTimeout
+//   - err wraps context.DeadlineExceeded                   → OutcomeTimeout
+//   - any other non-nil error                              → OutcomeFailure
+//
+// The hookCtx.Err() check catches hooks that create their own child context
+// and return its error (e.g., context.Canceled) when the parent hookCtx
+// deadline fires — errors.Is on the child error would miss the timeout.
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go@master runStartHook — emit
 // event around each hook, record runtime via clock.Now.
@@ -370,10 +375,11 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 	dur := time.Since(start)
 
 	outcome := cell.OutcomeSuccess
+	timedOut := hookCtx.Err() != nil && errors.Is(hookCtx.Err(), context.DeadlineExceeded)
 	switch {
 	case panicked:
 		outcome = cell.OutcomePanic
-	case err != nil && errors.Is(err, context.DeadlineExceeded):
+	case err != nil && (timedOut || errors.Is(err, context.DeadlineExceeded)):
 		outcome = cell.OutcomeTimeout
 	case err != nil:
 		outcome = cell.OutcomeFailure
@@ -395,10 +401,18 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 	defer func() {
 		if r := recover(); r != nil {
+			// Normalise recover() value into an error so the log field name
+			// is consistent with other error paths (slog.Any("error", ...)).
+			var recoveredErr error
+			if asErr, ok := r.(error); ok {
+				recoveredErr = asErr
+			} else {
+				recoveredErr = fmt.Errorf("observer panicked: %v", r)
+			}
 			slog.Error("lifecycle: hook observer panicked",
 				slog.String("cell", e.CellID),
 				slog.String("hook", string(e.Hook)),
-				slog.Any("recover", r))
+				slog.Any("error", recoveredErr))
 		}
 	}()
 	a.cfg.HookObserver.OnHookEvent(e)

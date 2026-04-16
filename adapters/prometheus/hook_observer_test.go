@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -22,26 +23,15 @@ func TestNewHookObserver_RegistersMetrics(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, obs)
 
-	// Verify collectors registered by gathering empty metric families.
-	gathered, err := reg.Gather()
-	require.NoError(t, err)
-	var hookTotal, hookDuration bool
-	for _, mf := range gathered {
-		switch mf.GetName() {
-		case "gocell_cell_hook_total":
-			hookTotal = true
-		case "gocell_cell_hook_duration_seconds":
-			hookDuration = true
-		}
-	}
-	// Counters/histograms without observations gather as empty families — this
-	// assertion passes once the first observation is made, so exercise the path.
+	// Prometheus only exposes a metric family after the first observation —
+	// verify registration by making one observation and then gathering.
 	obs.OnHookEvent(cell.HookEvent{
 		CellID: "c", Hook: cell.HookBeforeStart, Outcome: cell.OutcomeSuccess,
 		Duration: time.Millisecond,
 	})
-	gathered, err = reg.Gather()
+	gathered, err := reg.Gather()
 	require.NoError(t, err)
+	var hookTotal, hookDuration bool
 	for _, mf := range gathered {
 		switch mf.GetName() {
 		case "gocell_cell_hook_total":
@@ -101,7 +91,7 @@ func TestHookObserver_HistogramRecordsDuration(t *testing.T) {
 	obs, err := NewHookObserver(HookObserverConfig{Registry: reg})
 	require.NoError(t, err)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		obs.OnHookEvent(cell.HookEvent{
 			CellID:   "c",
 			Hook:     cell.HookBeforeStart,
@@ -159,5 +149,9 @@ func TestHookObserver_DuplicateRegistrationReturnsError(t *testing.T) {
 	// duplicate metric families). This catches double-wire bugs in bootstrap.
 	_, err = NewHookObserver(HookObserverConfig{Registry: reg})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, err), "expected error type to be identifiable") // sanity
+	// Verify errcode.Wrap preserved the adapter code so callers can route
+	// registration errors separately from config errors.
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "expected errcode.Error in chain")
+	assert.Equal(t, ErrAdapterPromRegister, ec.Code)
 }

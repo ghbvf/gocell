@@ -47,6 +47,9 @@ func (c *HookObserverConfig) defaults() {
 //	{namespace}_cell_hook_duration_seconds{cell_id,hook}      — histogram
 //
 // Cardinality budget: (number of cells) × 4 hooks × 4 outcomes = small.
+// Assumes static cell registration at assembly build time — dynamic or
+// per-tenant cells (e.g. a cell-per-customer topology) would require
+// cardinality budgeting and likely a label aggregation strategy.
 // Duration histogram intentionally omits `outcome` label to keep bucket
 // count bounded — failures and successes share the same time distribution
 // bucket set.

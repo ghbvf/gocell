@@ -121,6 +121,57 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	assert.True(t, seen)
 }
 
+// wrappedCtxCell returns the error from a child context that it creates
+// internally. When the parent hookCtx deadline fires, the child's ctx.Err()
+// is context.Canceled, not context.DeadlineExceeded — this exercises the
+// hookCtx.Err() fallback in invokeHook's outcome classifier.
+type wrappedCtxCell struct {
+	*cell.BaseCell
+}
+
+func newWrappedCtxCell(id string) *wrappedCtxCell {
+	return &wrappedCtxCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *wrappedCtxCell) BeforeStart(parent context.Context) error {
+	// Create a child context tied to the parent's cancellation. When parent
+	// deadline fires, child receives context.Canceled (not DeadlineExceeded).
+	child, cancel := context.WithCancel(parent)
+	defer cancel()
+	<-child.Done()
+	return child.Err() // context.Canceled when parent timed out
+}
+
+var _ cell.BeforeStarter = (*wrappedCtxCell)(nil)
+
+func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
+	obs := &captureObserver{}
+	a := New(Config{
+		ID:             "timeout-wrapped",
+		DurabilityMode: cell.DurabilityDemo,
+		HookTimeout:    20 * time.Millisecond,
+		HookObserver:   obs,
+	})
+	require.NoError(t, a.Register(newWrappedCtxCell("W")))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+
+	var seen bool
+	for _, e := range obs.snapshot() {
+		if e.CellID == "W" && e.Hook == cell.HookBeforeStart {
+			// Hook returned context.Canceled (not DeadlineExceeded), but the
+			// hookCtx hit its deadline, so outcome must be Timeout.
+			assert.Equal(t, cell.OutcomeTimeout, e.Outcome,
+				"hook returned context.Canceled from child ctx; outcome must still be timeout when hookCtx deadline fired")
+			seen = true
+		}
+	}
+	assert.True(t, seen, "expected timeout event for wrapped-ctx cell")
+}
+
 func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	obs := &captureObserver{}
 	a := New(Config{

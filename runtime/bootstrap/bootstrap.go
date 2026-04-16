@@ -480,6 +480,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 			cfg.HookObserver = b.hookObserver
 		}
 		asm = assembly.New(cfg)
+	} else if b.hookTimeoutSet || b.hookObserver != nil {
+		// Pre-built assembly owns its own hook config — WithHookTimeout /
+		// WithHookObserver are silently superseded by assembly.Config. Warn
+		// so operators don't spend time debugging why the option had no effect.
+		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
 
 	// Inject config into assembly dependencies.

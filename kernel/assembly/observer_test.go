@@ -54,7 +54,7 @@ func TestObserver_HappyPath_SuccessOutcomes(t *testing.T) {
 	require.NoError(t, a.Start(context.Background()))
 	require.NoError(t, a.Stop(context.Background()))
 
-	// 4 cells * 4 hooks = 8 events total (A BeforeStart/AfterStart,
+	// 2 cells × 4 hooks = 8 events total (A BeforeStart/AfterStart,
 	// B BeforeStart/AfterStart, B BeforeStop/AfterStop, A BeforeStop/AfterStop).
 	got := summarize(obs.snapshot())
 	want := []string{
@@ -68,10 +68,10 @@ func TestObserver_HappyPath_SuccessOutcomes(t *testing.T) {
 		"A.after_stop=success",
 	}
 	assert.Equal(t, want, got)
-	// Every event should record a non-zero-ish duration (sleep not needed —
-	// at minimum 1 ns should be observable; assert >= 0 + fields populated).
+	// Every event must record a positive duration — a zero value would hide
+	// a bug where invokeHook skipped time.Since(start).
 	for _, e := range obs.snapshot() {
-		assert.GreaterOrEqual(t, e.Duration.Nanoseconds(), int64(0), "duration should be recorded for %s.%s", e.CellID, e.Hook)
+		assert.Positive(t, e.Duration.Nanoseconds(), "duration should be recorded for %s.%s", e.CellID, e.Hook)
 	}
 }
 

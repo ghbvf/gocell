@@ -52,6 +52,9 @@ func (c *hookOrderCell) Stop(ctx context.Context) error {
 	return c.BaseCell.Stop(ctx)
 }
 
+// Hooks intentionally ignore ctx — hookOrderCell verifies phase ordering,
+// not ctx propagation. See slowHookCell in timeout_test.go for ctx-aware
+// coverage (exercises the wrapped hookCtx returned by invokeHook).
 func (c *hookOrderCell) BeforeStart(_ context.Context) error {
 	return c.record("BeforeStart")
 }
