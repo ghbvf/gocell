@@ -391,9 +391,10 @@ type Subscriber interface {
 	Close() error
 }
 
-// ErrInitializerNotSupported is returned by SubscriberWithMiddleware.InitializeSubscription
-// when the inner subscriber does not implement SubscriberInitializer. Callers
-// should fall back to sleep-based waiting on this error.
+// ErrInitializerNotSupported is returned by InitializeSubscription when the
+// underlying subscriber does not support topology pre-declaration. Callers
+// that receive this error should use an alternative readiness mechanism
+// (e.g., polling or timed delay) instead of assuming initialization succeeded.
 var ErrInitializerNotSupported = errors.New("subscriber does not implement SubscriberInitializer")
 
 // SubscriberInitializer is optionally implemented by Subscriber to pre-declare

@@ -3295,6 +3295,21 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 	assert.Nil(t, res.Receipt, "no Receipt when claim fails")
 }
 
+func TestClaimPolicy_Valid(t *testing.T) {
+	assert.True(t, ClaimPolicyFailClosed.Valid())
+	assert.True(t, ClaimPolicyFailOpen.Valid())
+	assert.False(t, ClaimPolicy(99).Valid(), "unknown ClaimPolicy must be invalid")
+}
+
+func TestConsumerBase_InvalidClaimPolicy_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		NewConsumerBase(&mockClaimer{}, ConsumerBaseConfig{
+			ConsumerGroup: "test",
+			ClaimPolicy:   ClaimPolicy(99),
+		})
+	}, "NewConsumerBase must panic on invalid ClaimPolicy")
+}
+
 // =============================================================================
 // retryLoop post-loop ctx.Err() test (S3-02)
 // =============================================================================
@@ -4455,4 +4470,41 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 	default:
 		// Good — pool is empty.
 	}
+}
+
+func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
+	ch := newMockChannel()
+	ch.closeErr = errors.New("channel already closed")
+
+	go func() {
+		for {
+			ch.mu.Lock()
+			npc := ch.notifyPublishCh
+			confirmed := ch.confirmCalled
+			ch.mu.Unlock()
+			if confirmed && npc != nil {
+				select {
+				case npc <- amqp.Confirmation{Ack: true}:
+					return
+				default:
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	mc := &mockConnection{nextCh: ch}
+	conn := &Connection{
+		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: 5 * time.Second},
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   make(chan struct{}),
+		terminalCh:  make(chan struct{}),
+		state:       StateConnected,
+		conn:        mc,
+	}
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{"test":true}`))
+	assert.NoError(t, err, "close error must not mask successful publish result")
 }

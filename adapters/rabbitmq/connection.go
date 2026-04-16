@@ -156,7 +156,8 @@ type Config struct {
 	// Default: 1s.
 	ReconnectBaseDelay time.Duration
 
-	// ChannelPoolSize is the maximum number of channels in the pool.
+	// ChannelPoolSize is the maximum number of idle channels in the subscriber
+	// pool. Publisher uses ephemeral channels (not pooled).
 	// Default: 10.
 	ChannelPoolSize int
 
@@ -609,14 +610,18 @@ func (c *Connection) Health() error {
 }
 
 // PoolStats holds structured channel pool statistics.
+//
+// The channel pool is used by Subscriber only. Publisher uses ephemeral
+// channels (open, confirm, publish, close) that bypass the pool entirely,
+// so IdleChannels does not reflect publisher channel activity.
 type PoolStats struct {
-	ChannelPoolSize int             // configured pool capacity
-	IdleChannels    int             // channels currently idle in pool
+	ChannelPoolSize int             // configured pool capacity (subscriber only)
+	IdleChannels    int             // channels currently idle in pool (subscriber only)
 	State           ConnectionState // current connection lifecycle state
 }
 
 // PoolStats returns structured pool statistics suitable for metrics collection
-// and operational dashboards.
+// and operational dashboards. See PoolStats type doc for scope limitations.
 func (c *Connection) PoolStats() PoolStats {
 	c.mu.RLock()
 	state := c.state
