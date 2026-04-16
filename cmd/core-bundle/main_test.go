@@ -148,6 +148,35 @@ func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "adapter mode")
 }
 
+// TestRun_RealMode_MissingVerboseToken_FailsFast ensures the H1-6
+// READYZ-VERBOSE-TOKEN fail-fast integration point — empty
+// GOCELL_READYZ_VERBOSE_TOKEN in real mode must error out before the
+// HTTP server starts. Guards against reordering inside run() that could
+// bypass the check.
+func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	// Secrets required in real mode (would otherwise fail earlier than
+	// the verbose-token check; we want verbose-token to be the trip-wire).
+	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	// The trip-wire: verbose token is empty.
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN",
+		"real mode must fail fast when verbose token is unset")
+}
+
 // generateTestPEM creates a fresh 2048-bit RSA key pair as PEM bytes.
 func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 	t.Helper()

@@ -472,6 +472,26 @@ func TestReadyz_VerboseToken_NotConfigured(t *testing.T) {
 	assert.True(t, hasCells, "no token configured should allow verbose (backward compat)")
 }
 
+func TestReadyz_VerboseToken_ResetToEmpty(t *testing.T) {
+	// Setting a token then resetting to empty must restore backward-compat
+	// behavior (verbose allowed unconditionally). Guards against a future
+	// regression where SetVerboseToken treats "" as a no-op.
+	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
+	h.SetVerboseToken("")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	// No X-Readyz-Token header — token was cleared.
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.True(t, hasCells, "empty token after reset should restore backward-compat verbose")
+}
+
 func TestEmptyAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)

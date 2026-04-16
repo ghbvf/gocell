@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -148,6 +149,58 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 
 	wg.Wait()
 	assert.NotNil(t, repo) // ensure repo survived concurrent access
+}
+
+// TestRoleRepository_ConcurrentRemoveFromUserIfNotLast verifies that when
+// multiple goroutines concurrently try to revoke the role from the only
+// remaining holders, exactly one admin is preserved. Run with -race to
+// verify the atomic count+delete under write lock.
+func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+
+	// Seed N admin holders, then launch N goroutines each trying to revoke
+	// its own admin role. The atomic guard must keep at least one holder.
+	const holders = 8
+	for i := range holders {
+		require.NoError(t, repo.AssignToUser(ctx, fmt.Sprintf("uid-%d", i), "admin"))
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, holders)
+	for i := range holders {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs <- repo.RemoveFromUserIfNotLast(ctx, fmt.Sprintf("uid-%d", idx), "admin")
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	// Count successes and last-holder rejections.
+	var success, rejected int
+	for err := range errs {
+		if err == nil {
+			success++
+			continue
+		}
+		var ecErr *errcode.Error
+		if errors.As(err, &ecErr) && ecErr.Code == errcode.ErrAuthForbidden {
+			rejected++
+			continue
+		}
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Exactly one holder must remain: success = holders-1, rejected = 1.
+	assert.Equal(t, holders-1, success, "all but the last holder should be removable")
+	assert.Equal(t, 1, rejected, "exactly one revoke must be rejected by last-holder guard")
+
+	count, err := repo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "exactly one admin holder must survive concurrent revokes")
 }
 
 func TestRoleRepository_Create(t *testing.T) {

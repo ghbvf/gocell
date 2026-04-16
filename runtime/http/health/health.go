@@ -189,7 +189,15 @@ func (h *Handler) verboseAllowed(r *http.Request) bool {
 	if token == "" {
 		return true // no token configured — backward compatible
 	}
-	return subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1 {
+		return true
+	}
+	// Token configured but request missing/mismatched. Warn so probing
+	// attempts are observable; don't Error since the request still succeeds
+	// (just without verbose output) and the endpoint is operating as designed.
+	slog.Warn("readyz: verbose token mismatch; suppressing verbose output",
+		slog.String("remote_addr", r.RemoteAddr))
+	return false
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.
