@@ -7,6 +7,7 @@ package outbox
 
 import (
 	"context"
+	"maps"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
@@ -84,7 +85,7 @@ func MergeObservabilityMetadata(ctx context.Context, metadata map[string]string)
 		return metadata
 	}
 
-	merged := cloneMetadata(metadata)
+	merged := CloneMetadata(metadata)
 	for key, value := range additions {
 		if merged[key] == "" {
 			merged[key] = value
@@ -142,13 +143,25 @@ func withContextMetadata(
 	return setter(ctx, value)
 }
 
-func cloneMetadata(metadata map[string]string) map[string]string {
+// CloneMetadata returns an independent copy of metadata so callers can
+// mutate the result without affecting the source. Nil input returns a
+// freshly allocated empty map, which lets callers write unconditionally
+// (no nil guard at every write site).
+//
+// The result has capacity for three extra keys so the common pattern of
+// merging observability IDs on top does not reallocate.
+//
+// Concurrency: CloneMetadata is safe for concurrent use. The returned map
+// is not — callers own it fully and are responsible for any further
+// synchronization.
+//
+// Use this before handing metadata to downstream code that may mutate it
+// (e.g., MergeObservabilityMetadata, test assertions that cache snapshots).
+func CloneMetadata(metadata map[string]string) map[string]string {
 	if metadata == nil {
 		return make(map[string]string, 3)
 	}
 	cloned := make(map[string]string, len(metadata)+3)
-	for key, value := range metadata {
-		cloned[key] = value
-	}
+	maps.Copy(cloned, metadata)
 	return cloned
 }

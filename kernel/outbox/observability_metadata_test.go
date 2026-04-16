@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -198,4 +199,60 @@ func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 	})
 
 	assert.Equal(t, DispositionAck, res.Disposition)
+}
+
+func TestCloneMetadata_NilReturnsEmptyMap(t *testing.T) {
+	got := CloneMetadata(nil)
+	require.NotNil(t, got, "nil input must return a fresh non-nil map so callers can write unconditionally")
+	assert.Empty(t, got)
+}
+
+func TestCloneMetadata_EmptyMap(t *testing.T) {
+	got := CloneMetadata(map[string]string{})
+	require.NotNil(t, got)
+	assert.Empty(t, got)
+}
+
+func TestCloneMetadata_DeepCopy(t *testing.T) {
+	src := map[string]string{
+		"request_id": "req-abc",
+		"custom":     "value",
+	}
+	got := CloneMetadata(src)
+	assert.Equal(t, src, got)
+
+	// Mutating the clone must not affect src — defensive-copy contract.
+	got["request_id"] = "mutated"
+	got["new-key"] = "new-value"
+	assert.Equal(t, "req-abc", src["request_id"], "source must be isolated from clone mutations")
+	_, ok := src["new-key"]
+	assert.False(t, ok, "source must not gain keys added to clone")
+}
+
+func TestCloneMetadata_MutatingSourceDoesNotAffectClone(t *testing.T) {
+	src := map[string]string{"k": "v"}
+	got := CloneMetadata(src)
+	src["k"] = "mutated"
+	src["added"] = "v2"
+	assert.Equal(t, "v", got["k"], "clone must be isolated from source mutations")
+	_, ok := got["added"]
+	assert.False(t, ok)
+}
+
+// ExampleIsReservedMetadataKey demonstrates checking custom metadata keys
+// against the observability-reserved set before writing. Writing to a
+// reserved key would be overwritten by MergeObservabilityMetadata during
+// broker publish, so callers should use IsReservedMetadataKey as a guard
+// or pick a business-specific prefix.
+func ExampleIsReservedMetadataKey() {
+	keys := []string{"trace_id", "request_id", "correlation_id", "tenant_id", "actor"}
+	for _, k := range keys {
+		fmt.Printf("%s reserved=%v\n", k, IsReservedMetadataKey(k))
+	}
+	// Output:
+	// trace_id reserved=true
+	// request_id reserved=true
+	// correlation_id reserved=true
+	// tenant_id reserved=false
+	// actor reserved=false
 }

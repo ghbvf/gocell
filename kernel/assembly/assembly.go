@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -33,10 +34,36 @@ const (
 	stateStopping               // Stop() 正在执行
 )
 
+// DefaultHookTimeout is the per-hook deadline applied when Config.HookTimeout
+// is zero. 30s accommodates slow-starting cells (DB pool warm-up, readiness
+// probes) while still bounding a stuck hook.
+//
+// ref: uber-go/fx app.go@master:L54 DefaultTimeout=15s (assembly-wide).
+// ref: kubernetes-sigs/controller-runtime pkg/manager/internal.go@main:L394-L399
+// GracefulShutdownTimeout default (per-phase, user-configured).
+// GoCell picks 30s as midpoint — cell lifecycle is closer to k8s scope.
+const DefaultHookTimeout = 30 * time.Second
+
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
 	DurabilityMode cell.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
+
+	// HookTimeout bounds every BeforeStart/AfterStart/BeforeStop/AfterStop
+	// hook invocation. Zero uses DefaultHookTimeout. Set to a negative value
+	// to disable per-hook timeouts entirely (hook inherits parent ctx only).
+	//
+	// Semantics: soft-cancel only — when the deadline fires the assembly
+	// records OutcomeTimeout and returns context.DeadlineExceeded to the
+	// caller, but the hook goroutine continues until it observes ctx (GoCell
+	// hooks are synchronous and internal, so a well-behaved hook respects
+	// ctx; a misbehaving hook is detected via the timeout event).
+	HookTimeout time.Duration
+
+	// HookObserver receives one HookEvent per invocation of every lifecycle
+	// hook. Nil uses cell.NopHookObserver{} (allocation-free no-op).
+	// Implementations must not block the caller.
+	HookObserver cell.LifecycleHookObserver
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of
@@ -51,7 +78,18 @@ type CoreAssembly struct {
 }
 
 // New creates a CoreAssembly with the given configuration.
+//
+// If cfg.HookObserver is nil, cell.NopHookObserver{} is substituted so the
+// hook call sites can emit unconditionally.
+// If cfg.HookTimeout is zero, DefaultHookTimeout is applied. Negative value
+// disables per-hook timeout entirely.
 func New(cfg Config) *CoreAssembly {
+	if cfg.HookObserver == nil {
+		cfg.HookObserver = cell.NopHookObserver{}
+	}
+	if cfg.HookTimeout == 0 {
+		cfg.HookTimeout = DefaultHookTimeout
+	}
 	return &CoreAssembly{
 		id:      cfg.ID,
 		cfg:     cfg,
@@ -133,7 +171,7 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []error {
 	var errs []error
 	if bs, ok := c.(cell.BeforeStopper); ok {
-		if err := callHookSafe(func() error { return bs.BeforeStop(ctx) }); err != nil {
+		if err := a.invokeHook(ctx, c.ID(), cell.HookBeforeStop, bs.BeforeStop); err != nil {
 			slog.Warn("lifecycle: BeforeStop failed",
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
@@ -147,7 +185,7 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 			fmt.Sprintf("assembly: stop cell %q", c.ID()), err))
 	}
 	if as, ok := c.(cell.AfterStopper); ok {
-		if err := callHookSafe(func() error { return as.AfterStop(ctx) }); err != nil {
+		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStop, as.AfterStop); err != nil {
 			slog.Warn("lifecycle: AfterStop failed",
 				slog.String("cell", c.ID()), slog.Any("error", err))
 			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
@@ -244,7 +282,7 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 	// BeforeStart hook (optional).
 	if bs, ok := c.(cell.BeforeStarter); ok {
 		slog.Info("lifecycle: BeforeStart", slog.String("cell", c.ID()))
-		if err := callHookSafe(func() error { return bs.BeforeStart(ctx) }); err != nil {
+		if err := a.invokeHook(ctx, c.ID(), cell.HookBeforeStart, bs.BeforeStart); err != nil {
 			a.rollbackCells(ctx, i-1)
 			return a.failStart(c.ID(), "BeforeStart", err)
 		}
@@ -261,7 +299,7 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 	// already succeeded — resources may have been acquired.
 	if as, ok := c.(cell.AfterStarter); ok {
 		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
-		if err := callHookSafe(func() error { return as.AfterStart(ctx) }); err != nil {
+		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStart, as.AfterStart); err != nil {
 			// Stop this cell first — its Start already succeeded.
 			a.stopCellWithHooks(ctx, c) //nolint:errcheck // best-effort, logged inside
 			a.rollbackCells(ctx, i-1)
@@ -288,19 +326,82 @@ func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int) {
 	}
 }
 
-// callHookSafe invokes fn with panic recovery. If fn panics, the panic is
-// converted to an error. This protects the assembly from a single misbehaving
-// cell crashing the entire process.
+// callHookSafe invokes fn with panic recovery. Returns (err, panicked).
+// When the hook panics, panicked is true and err carries the recovered
+// message; outcome classification uses this to distinguish OutcomePanic
+// from OutcomeFailure.
 //
 // ref: runtime/worker/periodic.go runSafe — same panic-to-error pattern
 // ref: runtime/eventrouter/router.go — recover in subscription goroutine
-func callHookSafe(fn func() error) (err error) {
+func callHookSafe(fn func() error) (err error, panicked bool) {
 	defer func() {
 		if r := recover(); r != nil {
+			panicked = true
 			err = fmt.Errorf("lifecycle hook panicked: %v", r)
 		}
 	}()
-	return fn()
+	err = fn()
+	return
+}
+
+// invokeHook wraps ctx with HookTimeout (when > 0), invokes fn with panic
+// recovery, classifies the outcome, and emits a HookEvent to the observer.
+// Returns the hook error (nil on success) so callers can feed it to
+// rollback/error-accumulation paths unchanged.
+//
+// Outcome classification:
+//   - nil error                          → OutcomeSuccess
+//   - panic recovered                    → OutcomePanic
+//   - context.DeadlineExceeded wrapped   → OutcomeTimeout
+//   - any other non-nil error            → OutcomeFailure
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go@master runStartHook — emit
+// event around each hook, record runtime via clock.Now.
+func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell.HookPhase, fn func(context.Context) error) error {
+	hookCtx := ctx
+	if a.cfg.HookTimeout > 0 {
+		var cancel context.CancelFunc
+		hookCtx, cancel = context.WithTimeout(ctx, a.cfg.HookTimeout)
+		defer cancel()
+	}
+
+	start := time.Now()
+	err, panicked := callHookSafe(func() error { return fn(hookCtx) })
+	dur := time.Since(start)
+
+	outcome := cell.OutcomeSuccess
+	switch {
+	case panicked:
+		outcome = cell.OutcomePanic
+	case err != nil && errors.Is(err, context.DeadlineExceeded):
+		outcome = cell.OutcomeTimeout
+	case err != nil:
+		outcome = cell.OutcomeFailure
+	}
+
+	a.emitHookEvent(cell.HookEvent{
+		CellID:   cellID,
+		Hook:     phase,
+		Outcome:  outcome,
+		Duration: dur,
+		Err:      err,
+	})
+	return err
+}
+
+// emitHookEvent dispatches the event to the configured observer with panic
+// isolation. A misbehaving observer must never break the assembly — its
+// panic is logged and swallowed.
+func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("lifecycle: hook observer panicked",
+				slog.String("cell", e.CellID),
+				slog.String("hook", string(e.Hook)),
+				slog.Any("recover", r))
+		}
+	}()
+	a.cfg.HookObserver.OnHookEvent(e)
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.

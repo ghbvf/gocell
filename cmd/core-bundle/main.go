@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
@@ -24,6 +25,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/router"
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // loadSecret loads a secret from the given environment variable. In "real"
@@ -179,7 +183,23 @@ func run(ctx context.Context) error {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "core-bundle", DurabilityMode: cell.DurabilityDurable})
+	// Register cell lifecycle hook metrics on a dedicated Prometheus registry.
+	// The registry is isolated from the default global registry so test runs
+	// and multiple assemblies can coexist without collisions.
+	promRegistry := prom.NewRegistry()
+	hookObserver, err := adapterprom.NewHookObserver(adapterprom.HookObserverConfig{
+		Registry: promRegistry,
+	})
+	if err != nil {
+		return fmt.Errorf("register cell hook observer: %w", err)
+	}
+
+	asm := assembly.New(assembly.Config{
+		ID:             "core-bundle",
+		DurabilityMode: cell.DurabilityDurable,
+		HookObserver:   hookObserver,
+		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
+	})
 	if err := asm.Register(configCell); err != nil {
 		return fmt.Errorf("register config-core: %w", err)
 	}
@@ -215,6 +235,11 @@ func run(ctx context.Context) error {
 			"/api/v1/access/sessions/refresh",
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
+		// Expose cell lifecycle hook metrics on /metrics.
+		// promhttp serves the isolated registry configured above.
+		bootstrap.WithRouterOptions(router.WithMetricsHandler(
+			promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}),
+		)),
 	}
 	if verboseToken != "" {
 		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))
