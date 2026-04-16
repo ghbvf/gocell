@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 
 	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -616,4 +617,26 @@ func TestAccessCore_SeedAdmin_Idempotent(t *testing.T) {
 	require.NoError(t, makeCell().Init(ctx, deps))
 	// Second init should not error (idempotent).
 	require.NoError(t, makeCell().Init(ctx, deps))
+}
+
+// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin type assertion.
+type stubRoleRepo struct{ ports.RoleRepository }
+
+func TestAccessCore_SeedAdmin_NonMemRepo_ReturnsError(t *testing.T) {
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(stubRoleRepo{}),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+		WithSeedAdminRole(),
+	)
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	err := c.Init(ctx, deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "seed admin requires in-memory role repository")
 }

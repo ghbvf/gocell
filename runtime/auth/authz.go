@@ -68,6 +68,8 @@ func hasAnyRole(ctx context.Context, roles []string) bool {
 // Use this instead of RequireSelfOrRole for admin-only endpoints where there
 // is no target resource owner to compare against.
 //
+// Calling with zero roles always returns ErrAuthForbidden (no role can match).
+//
 // Errors:
 //   - ErrAuthUnauthorized: no subject in context (auth middleware did not run)
 //   - ErrAuthForbidden: subject does not hold any of the required roles

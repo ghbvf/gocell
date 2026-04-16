@@ -132,6 +132,13 @@ func TestRequireAnyRole(t *testing.T) {
 			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
+			name:     "empty string subject denied",
+			ctx:      withSubjectAndClaims("", nil),
+			roles:    []string{"admin"},
+			wantErr:  true,
+			wantCode: errcode.ErrAuthUnauthorized,
+		},
+		{
 			name:     "empty required roles denied",
 			ctx:      withSubjectAndClaims("user-1", []string{"admin"}),
 			roles:    nil,

@@ -293,7 +293,8 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbac-check", "access-core", cell.L0))
 
-	// rbac-assign (L0: pure repo operations, no events)
+	// rbac-assign — L0 is correct for in-memory repos (no transaction semantics).
+	// Upgrade to L1 when PostgreSQL adapter is introduced (needs real tx).
 	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.logger)
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	c.AddSlice(cell.NewBaseSlice("rbac-assign", "access-core", cell.L0))
