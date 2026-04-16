@@ -30,12 +30,18 @@ import (
 
 const (
 	// MaxMetadataKeys is the maximum number of key-value pairs in Entry.Metadata.
+	// Typical GoCell entries carry 3-10 keys (trace_id, request_id, correlation_id
+	// plus domain context); 64 provides 6x headroom while keeping serialized
+	// overhead under 1 KB for small entries. OTel allows 128 attributes/span.
 	MaxMetadataKeys = 64
 
 	// MaxMetadataKeyLen is the maximum byte length of a single metadata key.
+	// Measured in bytes (len()), not runes — multi-byte UTF-8 keys are counted
+	// by their wire size, consistent with transport-level limits.
 	MaxMetadataKeyLen = 256
 
 	// MaxMetadataValueLen is the maximum byte length of a single metadata value.
+	// Aligned with NATS MAX_CONTROL_LINE_SIZE (4096). Measured in bytes.
 	MaxMetadataValueLen = 4096
 
 	// MaxMetadataTotalSize is the maximum total byte size of all metadata

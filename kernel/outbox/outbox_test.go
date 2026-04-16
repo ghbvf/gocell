@@ -790,6 +790,16 @@ func TestValidateMetadata_Constants(t *testing.T) {
 	assert.Equal(t, 65536, MaxMetadataTotalSize)
 }
 
+func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
+	// len() returns byte count, not rune count. A 3-byte CJK character
+	// "中" (U+4E2D) counts as 3 bytes toward the key/value limits.
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	cjkKey := strings.Repeat("中", MaxMetadataKeyLen/3) // each char is 3 bytes
+	assert.Less(t, len(cjkKey), MaxMetadataKeyLen+1, "should fit within byte limit")
+	e.Metadata = map[string]string{cjkKey: "value"}
+	assert.NoError(t, e.Validate(), "multi-byte key within byte limit should pass")
+}
+
 func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	// Exactly MaxMetadataKeys keys should pass.
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
