@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-
 // errMsgAuthFailed is the uniform error message for all session validation
 // failures. Using a single message prevents session-state enumeration attacks.
 const errMsgAuthFailed = "invalid or expired authentication token"
@@ -83,4 +82,3 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 
 	return claims, nil
 }
-

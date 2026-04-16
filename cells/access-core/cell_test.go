@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 
-	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -23,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // noopTxRunner is a test double that executes fn directly without a real transaction.
@@ -40,8 +40,8 @@ const testPassword = "secret123" //nolint:gosec // test-only credential
 
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()
-	testIssuer                 = mustIssuer(testKeySet)
-	testVerifier               = mustVerifier(testKeySet)
+	testIssuer       = mustIssuer(testKeySet)
+	testVerifier     = mustVerifier(testKeySet)
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
@@ -257,8 +257,8 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
 	fn(m)
 }
-func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
+func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // initCellWithRouter creates an initialized AccessCore with routes registered

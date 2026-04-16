@@ -274,26 +274,26 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath      string
-	envPrefix       string
-	httpAddr        string
-	assembly        *assembly.CoreAssembly
-	workers         []worker.Worker
-	publisher       outbox.Publisher
-	subscriber      outbox.Subscriber
-	routerOpts          []router.Option
-	authVerifier        auth.TokenVerifier
-	authPublicEndpoints []string
-	authDiscovery       bool // true when WithPublicEndpoints was called
-	shutdownTimeout     time.Duration
-	preShutdownDelay time.Duration
-	listener         net.Listener
-	healthCheckers             []namedChecker
-	adapterInfo                map[string]string // static adapter metadata for /readyz verbose
-	verboseToken               string            // token for /readyz?verbose access control
-	closers                    []io.Closer // middleware dependencies that need shutdown
+	configPath                  string
+	envPrefix                   string
+	httpAddr                    string
+	assembly                    *assembly.CoreAssembly
+	workers                     []worker.Worker
+	publisher                   outbox.Publisher
+	subscriber                  outbox.Subscriber
+	routerOpts                  []router.Option
+	authVerifier                auth.TokenVerifier
+	authPublicEndpoints         []string
+	authDiscovery               bool // true when WithPublicEndpoints was called
+	shutdownTimeout             time.Duration
+	preShutdownDelay            time.Duration
+	listener                    net.Listener
+	healthCheckers              []namedChecker
+	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
+	verboseToken                string            // token for /readyz?verbose access control
+	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
-	runOnce                    sync.Once
+	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures

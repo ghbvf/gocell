@@ -36,7 +36,7 @@ var (
 	_ cell.Cell              = (*AccessCore)(nil)
 	_ cell.HTTPRegistrar     = (*AccessCore)(nil)
 	_ cell.HealthContributor = (*AccessCore)(nil)
-	_ cell.EventRegistrar = (*AccessCore)(nil)
+	_ cell.EventRegistrar    = (*AccessCore)(nil)
 )
 
 // Option configures an AccessCore Cell.
@@ -139,11 +139,11 @@ type AccessCore struct {
 	logoutHandler   *sessionlogout.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
-	validateSvc      *sessionvalidate.Service
-	authzSvc         *authorizationdecide.Service
-	rbacHandler      *rbaccheck.Handler
+	validateSvc       *sessionvalidate.Service
+	authzSvc          *authorizationdecide.Service
+	rbacHandler       *rbaccheck.Handler
 	rbacAssignHandler *rbacassign.Handler
-	configReceiveSvc *configreceive.Service
+	configReceiveSvc  *configreceive.Service
 }
 
 // NewAccessCore creates a new AccessCore Cell.

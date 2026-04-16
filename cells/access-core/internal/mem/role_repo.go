@@ -10,14 +10,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 var _ ports.RoleRepository = (*RoleRepository)(nil)
 
 // RoleRepository is an in-memory implementation of ports.RoleRepository.
 type RoleRepository struct {
 	mu        sync.RWMutex
-	roles     map[string]*domain.Role          // roleID -> role
-	userRoles map[string]map[string]struct{}    // userID -> set of roleIDs
+	roles     map[string]*domain.Role        // roleID -> role
+	userRoles map[string]map[string]struct{} // userID -> set of roleIDs
 }
 
 // NewRoleRepository creates an empty in-memory RoleRepository.

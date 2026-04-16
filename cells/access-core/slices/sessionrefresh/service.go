@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
 	AccessToken  string

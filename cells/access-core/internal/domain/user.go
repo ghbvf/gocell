@@ -7,7 +7,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 // BcryptCost is the shared bcrypt work factor for password hashing across
 // the access-core cell. All password hashing call sites (seed admin, user
 // creation) MUST use this constant for consistency.

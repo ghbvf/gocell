@@ -72,4 +72,3 @@ func TestService_WithTxManager(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.calls)
 }
-

@@ -6,18 +6,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 // Session represents an authenticated user session with tokens and expiry.
 type Session struct {
 	ID                   string
 	UserID               string
 	AccessToken          string
 	RefreshToken         string
-	PreviousRefreshToken string     // tracks the last rotated-out refresh token for reuse detection
+	PreviousRefreshToken string // tracks the last rotated-out refresh token for reuse detection
 	ExpiresAt            time.Time
 	RevokedAt            *time.Time // nil = not revoked
 	CreatedAt            time.Time
-	Version              int64      // optimistic lock version; incremented on each update
+	Version              int64 // optimistic lock version; incremented on each update
 }
 
 // NewSession creates a new session for the given user.
