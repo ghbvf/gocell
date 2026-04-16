@@ -30,6 +30,17 @@ const testEntryID = "test-1"
 // constructor that includes their own warmup delay.
 const subscribeInitDelay = 50 * time.Millisecond
 
+// negativeAssertionWindow bounds how long "no further delivery" assertions
+// wait before returning a pass. 200ms is empirically adequate for the
+// in-memory bus and RabbitMQ adapter (observed ack RTT single-digit ms);
+// select-based fail-fast returns in ms on actual violations, so the window
+// only extends the success path.
+//
+// CI flake guidance: if this window produces false negatives on a busy
+// runner, raise it here (propagates to all negative-assertion call sites)
+// rather than tweaking individual tests.
+const negativeAssertionWindow = 200 * time.Millisecond
+
 // TestPubSub runs the full conformance test suite against the given
 // Publisher/Subscriber implementation. Features control which tests are
 // executed; unsupported features are skipped with t.Skip().
@@ -254,7 +265,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	select {
 	case <-deliveryA:
 		t.Fatal("topic A received an unexpected message (topic B leak)")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(negativeAssertionWindow):
 	}
 
 	cancel()
@@ -363,8 +374,8 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	<-delivery
 	select {
 	case <-delivery:
-		t.Fatal("competing consumers: duplicate delivery detected within 200ms window")
-	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("competing consumers: duplicate delivery detected within %s window", negativeAssertionWindow)
+	case <-time.After(negativeAssertionWindow):
 	}
 
 	got := totalReceived.Load()
@@ -390,8 +401,8 @@ func testDispositionAck(t *testing.T, _ Features, constructor PubSubConstructor)
 	})
 
 	h.publishAndWait([]byte(`{"test":"ack"}`))
-	// fail-fast: 1 prior delivery expected; no redelivery within 200ms window.
-	h.assertNoMoreDeliveries(1, 200*time.Millisecond, "Ack should not cause redelivery")
+	// fail-fast: 1 prior delivery expected; no redelivery within the window.
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow, "Ack should not cause redelivery")
 	assertEqual(t, int32(1), callCount.Load(), "Ack should not cause redelivery")
 	h.teardown()
 }
@@ -441,7 +452,7 @@ func testDispositionReject(t *testing.T, features Features, constructor PubSubCo
 
 	h.publishAndWait([]byte(`{"test":"reject"}`))
 	// fail-fast: 1 prior delivery; Reject should route to DLQ, not retry.
-	h.assertNoMoreDeliveries(1, 200*time.Millisecond, "Reject should route to DLQ, not retry")
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow, "Reject should route to DLQ, not retry")
 	assertEqual(t, int32(1), callCount.Load(), "Reject should route to DLQ, not retry")
 	h.teardown()
 }
@@ -493,7 +504,7 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 
 	h.publishAndWait([]byte(`{"test":"permanent-error"}`))
 	// fail-fast: 1 prior delivery; PermanentError via WrapLegacyHandler should reject.
-	h.assertNoMoreDeliveries(1, 200*time.Millisecond,
+	h.assertNoMoreDeliveries(1, negativeAssertionWindow,
 		"PermanentError via WrapLegacyHandler should cause reject, not retry")
 	assertEqual(t, int32(1), callCount.Load(),
 		"PermanentError via WrapLegacyHandler should cause reject, not retry")

@@ -1117,6 +1117,20 @@ func TestParseFS_EmptyStructFiles(t *testing.T) {
 			wantMsg: "slice id is empty",
 		},
 		{
+			// Explicit `id: ""` path — distinct from the fully-empty case
+			// above: here YAML unmarshal populates a struct with an
+			// explicitly-empty ID field rather than returning a zero-value
+			// struct. Both must yield the same "id is empty" error so the
+			// validation branch covers both code paths.
+			name: "slice.yaml with explicit empty id",
+			fs: fstest.MapFS{
+				"cells/x/slices/y/slice.yaml": &fstest.MapFile{Data: []byte(`id: ""
+belongsToCell: x
+`)},
+			},
+			wantMsg: "slice id is empty",
+		},
+		{
 			name: "empty contract.yaml",
 			fs: fstest.MapFS{
 				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("")},

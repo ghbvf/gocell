@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
@@ -221,13 +222,15 @@ func parseLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 }
 
 // TestService_Query_InvalidCursor_LogsDecode verifies that a malformed cursor
-// produces a structured Info log line with reason=decode and slice=auditquery,
-// without leaking the raw cursor string (aligned with k8s/etcd/MinIO).
+// produces a structured Info log line with reason=decode, slice=auditquery,
+// and request_id propagated from ctx, without leaking the raw cursor string
+// (aligned with k8s/etcd/MinIO).
 func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
 	badCursor := "garbage-token-should-not-appear-in-log"
-	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Cursor: badCursor})
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-test-001")
+	_, err := svc.Query(ctx, ports.AuditFilters{}, query.PageRequest{Cursor: badCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -238,6 +241,7 @@ func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 	assert.Equal(t, "invalid cursor", rec["msg"])
 	assert.Equal(t, "auditquery", rec["slice"])
 	assert.Equal(t, "decode", rec["reason"])
+	assert.Equal(t, "req-test-001", rec["request_id"])
 	assert.NotEmpty(t, rec["error"])
 	assert.NotContains(t, buf.String(), badCursor,
 		"raw cursor string must not appear in log output")
@@ -262,9 +266,11 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	// Reset log buffer so the scope-mismatch assertion sees only the next call.
 	buf.Reset()
 
-	// Replay the cursor under a mismatched scope.
+	// Replay the cursor under a mismatched scope — with a request_id in ctx
+	// to confirm correlation propagation.
 	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
-	_, err = svc.Query(context.Background(), logoutFilters, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
+	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -275,9 +281,24 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	assert.Equal(t, "invalid cursor", rec["msg"])
 	assert.Equal(t, "auditquery", rec["slice"])
 	assert.Equal(t, "scope", rec["reason"])
+	assert.Equal(t, "req-test-002", rec["request_id"])
 	assert.NotEmpty(t, rec["error"])
 	assert.NotContains(t, buf.String(), page1.NextCursor,
 		"raw cursor string must not appear in log output")
+}
+
+// TestService_Query_InvalidCursor_NoRequestID verifies the log record omits
+// request_id when no ID is present in ctx (field is conditional, never "").
+func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
+	svc, _, buf := newTestServiceWithLogBuf()
+
+	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Cursor: "garbage"})
+	require.Error(t, err)
+
+	logs := parseLogLines(t, buf)
+	require.Len(t, logs, 1)
+	_, present := logs[0]["request_id"]
+	assert.False(t, present, "request_id field must be absent when not in ctx")
 }
 
 func TestService_Query_SubsecondFilterContext(t *testing.T) {

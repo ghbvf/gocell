@@ -324,8 +324,9 @@ func TestCollector_ConcurrentPublish(t *testing.T) {
 // variant directly.
 // ---------------------------------------------------------------------------
 
-// harnessConstructor returns a constructor that uses the package-local
-// fakePubSub so harness tests do not depend on real adapters.
+// harnessConstructor returns a PubSubConstructor backed by the supplied
+// in-test fakePubSub, letting unit tests exercise pubSubHarness methods
+// without depending on runtime/eventbus or a real broker adapter.
 func harnessConstructor(bus *fakePubSub) PubSubConstructor {
 	return func(_ *testing.T) (outbox.Publisher, outbox.Subscriber) {
 		return bus, bus
@@ -379,8 +380,12 @@ func TestHarness_CheckNoMoreDeliveries_DetectsRedelivery(t *testing.T) {
 	if !strings.Contains(err.Error(), "unexpected delivery") {
 		t.Fatalf("error should mention 'unexpected delivery', got: %v", err)
 	}
-	if elapsed > 150*time.Millisecond {
-		t.Fatalf("expected fail-fast (<150ms), got %v", elapsed)
+	// Fail-fast upper bound: select should return in ms on unexpected delivery.
+	// 300ms accommodates CI goroutine-scheduling jitter while remaining far
+	// below the full 500ms window (which would indicate the select-fast path
+	// didn't trigger).
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("expected fail-fast (<300ms), got %v", elapsed)
 	}
 	h.teardown()
 }

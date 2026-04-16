@@ -251,6 +251,11 @@ func (c *collector) waitAndGet(timeout time.Duration) []outbox.Entry {
 // deliveryEvents; tests use assertNoMoreDeliveries / checkNoMoreDeliveries to
 // verify "no further delivery" via select+timeout (Watermill pattern) rather
 // than time.Sleep — enabling fail-fast detection of unexpected redeliveries.
+//
+// All struct fields beyond the already-exported Pub/Sub/T/Topic are package-
+// internal; tests in this package may set drainTimeout directly to shorten
+// the prior-delivery drain phase. External callers should not depend on the
+// internal fields.
 type pubSubHarness struct {
 	T              *testing.T
 	Pub            outbox.Publisher
@@ -267,7 +272,10 @@ type pubSubHarness struct {
 // deliveryEventsBuffer is the buffered size of the delivery-tracking channel.
 // Single-message conformance tests expect <10 deliveries; 100 is ample and
 // bounds memory. Non-blocking sends drop overflow to avoid perturbing the
-// handler under test.
+// handler under test — which is safe for tests exercising low delivery counts
+// but means assertNoMoreDeliveries is NOT appropriate for scenarios producing
+// >100 legitimate deliveries in a single subtest (e.g. high-frequency
+// requeue loops); for those, use counter-based assertions directly.
 const deliveryEventsBuffer = 100
 
 // newHarness creates a pubSubHarness from a PubSubConstructor.
@@ -356,6 +364,11 @@ func (h *pubSubHarness) assertNoMoreDeliveries(priorCount int, window time.Durat
 // first drains priorCount events (expected prior deliveries), then blocks for
 // `window` to detect any unexpected redelivery. Returns nil on success; a
 // descriptive error if drain times out or a redelivery arrives.
+//
+// Drain timeout is controlled by h.drainTimeout (default: defaultTimeout);
+// the `window` parameter only bounds the negative-assertion wait after the
+// drain succeeds. Tests may shorten h.drainTimeout to exercise the shortfall
+// error path without waiting the full default.
 func (h *pubSubHarness) checkNoMoreDeliveries(priorCount int, window time.Duration) error {
 	for i := range priorCount {
 		select {
