@@ -259,9 +259,12 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 		t.Fatal("timed out waiting for message on topic A")
 	}
 
-	// Drain the expected topicA delivery, then fail-fast if another arrives
-	// (i.e. a topicB message leaked to topicA subscriber).
+	// Drain the expected topicA delivery. This receive is unbounded-safe: the
+	// handler sends to deliveryA *before* closing doneA, and <-doneA above was
+	// already bounded by defaultTimeout, so deliveryA has a buffered event by
+	// this point. Do NOT reorder the handler logic without re-evaluating.
 	<-deliveryA
+	// Fail-fast if another arrives (i.e. a topicB message leaked to topicA).
 	select {
 	case <-deliveryA:
 		t.Fatal("topic A received an unexpected message (topic B leak)")
@@ -369,9 +372,15 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	// Publish one message.
 	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"competing"}`)))
 
-	// Wait for exactly one delivery, then fail-fast if any duplicate arrives
-	// within the negative-assertion window.
-	<-delivery
+	// Wait for exactly one delivery (bounded — if nothing arrives within
+	// defaultTimeout the test fails fast rather than hanging until the global
+	// go-test deadline), then fail-fast if any duplicate arrives within the
+	// negative-assertion window.
+	select {
+	case <-delivery:
+	case <-time.After(defaultTimeout):
+		t.Fatalf("competing consumers: no delivery within %s (subscriber registration or publish failed)", defaultTimeout)
+	}
 	select {
 	case <-delivery:
 		t.Fatalf("competing consumers: duplicate delivery detected within %s window", negativeAssertionWindow)

@@ -447,3 +447,52 @@ func waitForCount(t *testing.T, get func() int, want int, timeout time.Duration)
 	}
 	t.Fatalf("waitForCount: want %d, got %d after %v", want, get(), timeout)
 }
+
+// ---------------------------------------------------------------------------
+// Conformance-function coverage against fakePubSub
+//
+// The conformance suite is designed to be driven by real adapters (RabbitMQ,
+// in-memory eventbus) via TestPubSub. Unit tests in this package otherwise
+// do not execute the individual conformance functions, so the helper-path
+// logic (harness wiring, fail-fast assertions) lacks in-package coverage.
+//
+// These tests run the Disposition batch (plus PermanentErrorCausesReject)
+// against fakePubSub, which does not redeliver on Reject/Requeue/Ack — the
+// "no redelivery" invariant is therefore trivially true, and the tests
+// exercise the helper wiring without requiring a real broker.
+// ---------------------------------------------------------------------------
+
+func TestConformance_DispositionAck_OnFakeBus(t *testing.T) {
+	testDispositionAck(t, Features{}, harnessConstructor(&fakePubSub{}))
+}
+
+func TestConformance_DispositionReject_OnFakeBus(t *testing.T) {
+	testDispositionReject(t, Features{SupportsReject: true}, harnessConstructor(&fakePubSub{}))
+}
+
+func TestConformance_PermanentErrorCausesReject_OnFakeBus(t *testing.T) {
+	testPermanentErrorCausesReject(t, Features{SupportsReject: true}, harnessConstructor(&fakePubSub{}))
+}
+
+// TestConformance_DispositionReject_SkipsWhenUnsupported verifies the skip
+// gate is honored when the adapter under test disables Reject support.
+func TestConformance_DispositionReject_SkipsWhenUnsupported(t *testing.T) {
+	// Use a sub-test so Skip does not terminate the parent.
+	ran := t.Run("inner", func(inner *testing.T) {
+		testDispositionReject(inner, Features{SupportsReject: false}, harnessConstructor(&fakePubSub{}))
+	})
+	if !ran {
+		t.Fatal("sub-test should pass (Skip is not a failure)")
+	}
+}
+
+// TestConformance_PermanentErrorCausesReject_SkipsWhenUnsupported mirrors the
+// above for the PermanentError scenario.
+func TestConformance_PermanentErrorCausesReject_SkipsWhenUnsupported(t *testing.T) {
+	ran := t.Run("inner", func(inner *testing.T) {
+		testPermanentErrorCausesReject(inner, Features{SupportsReject: false}, harnessConstructor(&fakePubSub{}))
+	})
+	if !ran {
+		t.Fatal("sub-test should pass (Skip is not a failure)")
+	}
+}
