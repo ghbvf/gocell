@@ -129,7 +129,7 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 
 	if userHoldsRole && count == 1 {
 		return errcode.New(errcode.ErrAuthForbidden,
-			fmt.Sprintf("cannot revoke role %q from user %q: sole holder", roleID, userID))
+			fmt.Sprintf("cannot revoke role %q from user %q: this is the only holder; assign the role to another user first", roleID, userID))
 	}
 
 	// Safe to remove (either not the last holder, or user doesn't hold it).

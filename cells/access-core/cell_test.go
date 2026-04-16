@@ -636,6 +636,11 @@ func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "usr-admin-seed", user.ID)
 
+	// Password is hashed at the shared BcryptCost (not the stdlib default of 10).
+	hashCost, err := bcrypt.Cost([]byte(user.PasswordHash))
+	require.NoError(t, err)
+	assert.Equal(t, domain.BcryptCost, hashCost, "seed admin password must use shared BcryptCost")
+
 	// Role assigned.
 	roles, err := roleRepo.GetByUserID(ctx, user.ID)
 	require.NoError(t, err)

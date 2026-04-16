@@ -70,7 +70,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "password is required")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), domain.BcryptCost)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: hash password: %w", err)
 	}

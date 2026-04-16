@@ -39,7 +39,9 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RevokeRequest is the request DTO for role revocation.
+// RevokeRequest is the request DTO for role revocation. Structurally identical
+// to AssignRequest but kept as a separate type to allow schemas to evolve
+// independently (e.g. future RevokeRequest might add `reason` or `effectiveAt`).
 type RevokeRequest struct {
 	UserID string `json:"userId"`
 	RoleID string `json:"roleId"`

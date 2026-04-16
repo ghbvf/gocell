@@ -251,6 +251,7 @@ var codeToStatus = map[errcode.Code]int{
 
 	// --- 409 Conflict ---
 	errcode.ErrAuthUserDuplicate:   http.StatusConflict,
+	errcode.ErrAuthSelfDelete:      http.StatusConflict,
 	errcode.ErrConfigDuplicate:     http.StatusConflict,
 	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
 	errcode.ErrFlagDuplicate:       http.StatusConflict,

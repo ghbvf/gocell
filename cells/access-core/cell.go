@@ -5,6 +5,7 @@ package accesscore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -306,13 +307,20 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// bcryptCost is the bcrypt work factor for password hashing.
-// ref: Ory Kratos BcryptDefaultCost=12, OWASP 2023 minimum recommendation.
-const bcryptCost = 12
+// isUserNotFound returns true when the repository signals "user does not exist".
+// Any other error indicates an infrastructure failure and must propagate.
+func isUserNotFound(err error) bool {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		return ecErr.Code == errcode.ErrAuthUserNotFound
+	}
+	return false
+}
 
-// doSeedAdmin seeds the admin role and optionally creates an admin user.
-// Uses ports.RoleRepository.Create (no type assertion to specific impl).
-// Idempotent: skips if user already exists. Clears password after hashing.
+// doSeedAdmin seeds the admin role and optionally creates an admin user via
+// the standard RoleRepository/UserRepository port interfaces. Idempotent:
+// skips creation if the user already exists. The plaintext password is
+// cleared from memory immediately after bcrypt hashing completes.
 func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 	adminRole := &domain.Role{
 		ID:   domain.RoleAdmin,
@@ -330,15 +338,25 @@ func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 		return nil
 	}
 
-	// Check if user already exists (idempotent).
-	if _, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser); err == nil {
+	// Check if user already exists (idempotent). Classify errors:
+	// - nil error → user exists, skip
+	// - ErrAuthUserNotFound → proceed with creation
+	// - other errors → infrastructure failure, fail-fast (do not mask)
+	_, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser)
+	switch {
+	case err == nil:
 		c.logger.Info("seed: admin user already exists, skipping",
 			slog.String("username", c.seedAdminUser))
 		clear(c.seedAdminPass)
 		return nil
+	case isUserNotFound(err):
+		// Expected — user doesn't exist yet, proceed with creation.
+	default:
+		clear(c.seedAdminPass)
+		return fmt.Errorf("seed: check admin user existence: %w", err)
 	}
 
-	hash, err := bcrypt.GenerateFromPassword(c.seedAdminPass, bcryptCost)
+	hash, err := bcrypt.GenerateFromPassword(c.seedAdminPass, domain.BcryptCost)
 	clear(c.seedAdminPass) // wipe plaintext immediately after hashing
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)

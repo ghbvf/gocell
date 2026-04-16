@@ -197,12 +197,8 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// Prevent admin self-deletion — removing own account would lock out the
 	// operator with no recovery path if this is the last admin.
 	if subject, ok := ctxkeys.SubjectFrom(r.Context()); ok && subject == id {
-		httputil.WriteJSON(w, http.StatusConflict, map[string]any{
-			"error": map[string]any{
-				"code":    "ERR_AUTH_SELF_DELETE",
-				"message": "cannot delete own account",
-			},
-		})
+		httputil.WriteDomainError(r.Context(), w,
+			errcode.New(errcode.ErrAuthSelfDelete, "cannot delete own account"))
 		return
 	}
 
