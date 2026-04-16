@@ -348,12 +348,15 @@ func TestSubscriberWithMiddleware_InitializeSubscription_PropagatesError(t *test
 }
 
 func TestSubscriberWithMiddleware_InitializeSubscription_InnerNotInitializer(t *testing.T) {
-	// Inner does NOT implement SubscriberInitializer — should be a no-op.
+	// Inner does NOT implement SubscriberInitializer — must return
+	// ErrInitializerNotSupported so callers (e.g., waitForSubscription)
+	// can fall back to sleep-based waiting instead of assuming success.
 	inner := &recordingSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	err := sub.InitializeSubscription(context.Background(), "t", "g")
-	assert.NoError(t, err, "should return nil when inner does not support initialization")
+	assert.ErrorIs(t, err, ErrInitializerNotSupported,
+		"must return ErrInitializerNotSupported when inner does not implement SubscriberInitializer")
 }
 
 func TestEntry_RoutingTopic(t *testing.T) {

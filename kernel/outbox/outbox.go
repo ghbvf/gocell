@@ -391,6 +391,11 @@ type Subscriber interface {
 	Close() error
 }
 
+// ErrInitializerNotSupported is returned by SubscriberWithMiddleware.InitializeSubscription
+// when the inner subscriber does not implement SubscriberInitializer. Callers
+// should fall back to sleep-based waiting on this error.
+var ErrInitializerNotSupported = errors.New("subscriber does not implement SubscriberInitializer")
+
 // SubscriberInitializer is optionally implemented by Subscriber to pre-declare
 // broker topology (exchanges, queues, bindings) before Subscribe is called.
 // This allows the conformance harness to publish messages deterministically —
@@ -430,13 +435,14 @@ func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, 
 }
 
 // InitializeSubscription delegates to Inner if it implements SubscriberInitializer.
-// This ensures the deterministic ready-signal is not silently lost when a
-// SubscriberInitializer-capable subscriber is wrapped with middleware.
+// Returns ErrInitializerNotSupported when Inner does not implement the interface,
+// so callers (e.g., outboxtest.waitForSubscription) can fall back to sleep-based
+// waiting instead of assuming initialization succeeded.
 func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
 	if init, ok := s.Inner.(SubscriberInitializer); ok {
 		return init.InitializeSubscription(ctx, topic, consumerGroup)
 	}
-	return nil
+	return ErrInitializerNotSupported
 }
 
 // Close delegates to the inner subscriber.
