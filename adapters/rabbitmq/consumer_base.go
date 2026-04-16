@@ -32,7 +32,15 @@ const (
 	// idempotency receipt. Avoids total consumer stall, but risks duplicate
 	// processing during outage.
 	ClaimPolicyFailOpen
+
+	// claimPolicySentinel is the upper bound for validation. Not exported.
+	claimPolicySentinel
 )
+
+// Valid returns true if the ClaimPolicy is a recognized enum value.
+func (p ClaimPolicy) Valid() bool {
+	return p < claimPolicySentinel
+}
 
 // ConsumerBaseConfig configures ConsumerBase behavior.
 type ConsumerBaseConfig struct {
@@ -78,6 +86,10 @@ type ConsumerBaseConfig struct {
 }
 
 func (c *ConsumerBaseConfig) setDefaults() {
+	if !c.ClaimPolicy.Valid() {
+		panic(fmt.Sprintf("rabbitmq: invalid ClaimPolicy %d, must be ClaimPolicyFailClosed (%d) or ClaimPolicyFailOpen (%d)",
+			c.ClaimPolicy, ClaimPolicyFailClosed, ClaimPolicyFailOpen))
+	}
 	if c.RetryCount <= 0 {
 		c.RetryCount = 3
 	}

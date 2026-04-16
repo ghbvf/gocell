@@ -57,6 +57,12 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 		}
 		testMultipleSubscribers(t, features, constructor)
 	})
+	t.Run("CompetingConsumers", func(t *testing.T) {
+		if features.BroadcastSubscribe {
+			t.Skip("implementation uses broadcast fan-out, not competing consumers")
+		}
+		testCompetingConsumers(t, features, constructor)
+	})
 
 	// Batch 2: Disposition lifecycle
 	t.Run("DispositionAck", func(t *testing.T) {
@@ -289,6 +295,55 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	assertEventually(t, func() bool {
 		return sub1Received.Load() >= 1 && sub2Received.Load() >= 1
 	}, defaultTimeout, 10*time.Millisecond, "both subscribers should receive the message")
+
+	cancel()
+	wg.Wait()
+}
+
+// testCompetingConsumers verifies that when BroadcastSubscribe=false (e.g.,
+// RabbitMQ with a shared queue), a single message is delivered to exactly one
+// of multiple subscribers — not duplicated to all.
+func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstructor) {
+	pub, sub := constructor(t)
+	ctx := context.Background()
+	topic := TestTopic(t)
+
+	var (
+		totalReceived atomic.Int32
+		wg            sync.WaitGroup
+	)
+
+	subCtx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+
+	// Start two competing subscribers on the same topic.
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				totalReceived.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}, "")
+		}()
+	}
+
+	waitForSubscription(t, ctx, sub, topic, "")
+
+	// Publish one message.
+	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"competing"}`)))
+
+	// Wait for at least one delivery.
+	assertEventually(t, func() bool {
+		return totalReceived.Load() >= 1
+	}, defaultTimeout, 10*time.Millisecond, "at least one subscriber should receive the message")
+
+	// Brief window for any duplicate delivery.
+	time.Sleep(200 * time.Millisecond)
+
+	got := totalReceived.Load()
+	assertEqual(t, int32(1), got,
+		fmt.Sprintf("competing consumers: message should be delivered to exactly 1 subscriber, got %d", got))
 
 	cancel()
 	wg.Wait()
