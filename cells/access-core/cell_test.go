@@ -12,9 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 
-	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -24,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // noopTxRunner is a test double that executes fn directly without a real transaction.
@@ -41,8 +40,8 @@ const testPassword = "secret123" //nolint:gosec // test-only credential
 
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()
-	testIssuer                 = mustIssuer(testKeySet)
-	testVerifier               = mustVerifier(testKeySet)
+	testIssuer       = mustIssuer(testKeySet)
+	testVerifier     = mustVerifier(testKeySet)
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
@@ -258,8 +257,8 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
 	fn(m)
 }
-func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
+func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // initCellWithRouter creates an initialized AccessCore with routes registered
@@ -637,6 +636,11 @@ func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "usr-admin-seed", user.ID)
 
+	// Password is hashed at the shared BcryptCost (not the stdlib default of 10).
+	hashCost, err := bcrypt.Cost([]byte(user.PasswordHash))
+	require.NoError(t, err)
+	assert.Equal(t, domain.BcryptCost, hashCost, "seed admin password must use shared BcryptCost")
+
 	// Role assigned.
 	roles, err := roleRepo.GetByUserID(ctx, user.ID)
 	require.NoError(t, err)
@@ -669,24 +673,85 @@ func TestAccessCore_SeedAdmin_Idempotent(t *testing.T) {
 	require.NoError(t, makeCell().Init(ctx, deps))
 }
 
-// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin type assertion.
-type stubRoleRepo struct{ ports.RoleRepository }
+// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin without type assertion.
+type stubRoleRepo struct {
+	roles     map[string]*domain.Role
+	userRoles map[string]map[string]struct{}
+}
 
-func TestAccessCore_SeedAdmin_NonMemRepo_ReturnsError(t *testing.T) {
+func newStubRoleRepo() *stubRoleRepo {
+	return &stubRoleRepo{
+		roles:     make(map[string]*domain.Role),
+		userRoles: make(map[string]map[string]struct{}),
+	}
+}
+func (s *stubRoleRepo) GetByID(_ context.Context, id string) (*domain.Role, error) {
+	r, ok := s.roles[id]
+	if !ok {
+		return nil, fmt.Errorf("not found: %s", id)
+	}
+	return r, nil
+}
+func (s *stubRoleRepo) GetByUserID(_ context.Context, userID string) ([]*domain.Role, error) {
+	var result []*domain.Role
+	for rid := range s.userRoles[userID] {
+		if r, ok := s.roles[rid]; ok {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+func (s *stubRoleRepo) Create(_ context.Context, role *domain.Role) error {
+	s.roles[role.ID] = role
+	return nil
+}
+func (s *stubRoleRepo) AssignToUser(_ context.Context, userID, roleID string) error {
+	if s.userRoles[userID] == nil {
+		s.userRoles[userID] = make(map[string]struct{})
+	}
+	s.userRoles[userID][roleID] = struct{}{}
+	return nil
+}
+func (s *stubRoleRepo) RemoveFromUser(_ context.Context, userID, roleID string) error {
+	delete(s.userRoles[userID], roleID)
+	return nil
+}
+func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) error {
+	count := 0
+	for _, roles := range s.userRoles {
+		if _, ok := roles[roleID]; ok {
+			count++
+		}
+	}
+	if _, holds := s.userRoles[userID][roleID]; holds && count == 1 {
+		return fmt.Errorf("sole holder")
+	}
+	delete(s.userRoles[userID], roleID)
+	return nil
+}
+func (s *stubRoleRepo) CountByRole(_ context.Context, roleID string) (int, error) {
+	count := 0
+	for _, roles := range s.userRoles {
+		if _, ok := roles[roleID]; ok {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// TestAccessCore_SeedAdmin_NonMemRepo_Succeeds verifies that doSeedAdmin works
+// with any RoleRepository implementation (no type assertion to *mem.RoleRepository).
+func TestAccessCore_SeedAdmin_NonMemRepo_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
-		WithRoleRepository(stubRoleRepo{}),
+		WithRoleRepository(newStubRoleRepo()),
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
 		WithSeedAdminRole(),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
-	err := c.Init(ctx, deps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "seed admin requires in-memory role repository")
+	require.NoError(t, c.Init(ctx, deps))
 }

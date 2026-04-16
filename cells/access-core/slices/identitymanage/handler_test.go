@@ -173,6 +173,24 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "DELETE /{id} admin self-delete returns 409",
+			method:     http.MethodDelete,
+			path:       "/admin-1",
+			subject:    "admin-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusConflict,
+		},
+		{
+			// Documents the check order: admin role check (403) fires before
+			// self-delete check (409). Non-admins cannot reach the self-delete guard.
+			name:       "DELETE /{id} non-admin self-delete still returns 403",
+			method:     http.MethodDelete,
+			path:       "/user-1",
+			subject:    "user-1",
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "POST /{id}/lock non-admin returns 403",
 			method:     http.MethodPost,
 			path:       "/user-1/lock",

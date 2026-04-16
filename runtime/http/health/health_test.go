@@ -395,6 +395,103 @@ func TestSetShuttingDown_Idempotent(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
 
+// --- Verbose token protection (READYZ-VERBOSE-TOKEN-01) ---
+
+func newStartedHandler(t *testing.T) *Handler {
+	t.Helper()
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	c := newStubCell("cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+	h := New(asm)
+	h.RegisterChecker("db", func() error { return nil })
+	return h
+}
+
+func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
+	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set("X-Readyz-Token", "secret-token")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.True(t, hasCells, "correct token should expose verbose details")
+}
+
+func TestReadyz_VerboseToken_WrongHeader(t *testing.T) {
+	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set("X-Readyz-Token", "wrong")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.False(t, hasCells, "wrong token should suppress verbose details")
+}
+
+func TestReadyz_VerboseToken_MissingHeader(t *testing.T) {
+	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	// No X-Readyz-Token header.
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.False(t, hasCells, "missing token should suppress verbose details")
+}
+
+func TestReadyz_VerboseToken_NotConfigured(t *testing.T) {
+	h := newStartedHandler(t)
+	// No SetVerboseToken call — backward compatible.
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.True(t, hasCells, "no token configured should allow verbose (backward compat)")
+}
+
+func TestReadyz_VerboseToken_ResetToEmpty(t *testing.T) {
+	// Setting a token then resetting to empty must restore backward-compat
+	// behavior (verbose allowed unconditionally). Guards against a future
+	// regression where SetVerboseToken treats "" as a no-op.
+	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
+	h.SetVerboseToken("")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	// No X-Readyz-Token header — token was cleared.
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	_, hasCells := body["cells"]
+	assert.True(t, hasCells, "empty token after reset should restore backward-compat verbose")
+}
+
 func TestEmptyAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)

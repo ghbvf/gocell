@@ -24,6 +24,7 @@ func newContractHandler() http.Handler {
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
 	_ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
+	_ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	inner := celltest.NewTestMux()
@@ -52,7 +53,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	c.ValidateHTTPResponseRecorder(t, rec)
-	require.Equal(t, 200, rec.Code)
+	require.Equal(t, http.StatusCreated, rec.Code)
 
 	// Reject invalid response shape.
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))

@@ -41,9 +41,9 @@ func TestService_HasRole(t *testing.T) {
 			userID: "usr-2", roleName: "admin", want: false,
 		},
 		{
-			name:    "empty input",
-			setup:   func(_ *mem.RoleRepository) {},
-			userID:  "", roleName: "admin",
+			name:   "empty input",
+			setup:  func(_ *mem.RoleRepository) {},
+			userID: "", roleName: "admin",
 			wantErr: true,
 		},
 	}

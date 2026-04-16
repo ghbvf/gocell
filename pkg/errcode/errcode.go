@@ -59,6 +59,7 @@ const (
 	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
 	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
+	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
 
 	// Config-core cell error codes.
 	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"

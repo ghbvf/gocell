@@ -16,8 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/google/uuid"
 )
 
 const TopicSessionCreated = "event.session.created.v1"

@@ -14,10 +14,10 @@ var _ ports.SessionRepository = (*SessionRepository)(nil)
 
 // SessionRepository is an in-memory implementation of ports.SessionRepository.
 type SessionRepository struct {
-	mu              sync.RWMutex
-	byID            map[string]*domain.Session
-	byRefresh       map[string]*domain.Session
-	byPrevRefresh   map[string]*domain.Session
+	mu            sync.RWMutex
+	byID          map[string]*domain.Session
+	byRefresh     map[string]*domain.Session
+	byPrevRefresh map[string]*domain.Session
 }
 
 // NewSessionRepository creates an empty in-memory SessionRepository.

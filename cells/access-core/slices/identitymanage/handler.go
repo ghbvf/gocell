@@ -9,6 +9,7 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -192,6 +193,15 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
+
+	// Prevent admin self-deletion — removing own account would lock out the
+	// operator with no recovery path if this is the last admin.
+	if subject, ok := ctxkeys.SubjectFrom(r.Context()); ok && subject == id {
+		httputil.WriteDomainError(r.Context(), w,
+			errcode.New(errcode.ErrAuthSelfDelete, "cannot delete own account"))
+		return
+	}
+
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return

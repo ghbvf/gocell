@@ -3,8 +3,8 @@
 // repositories by default, suitable for development and integration testing.
 //
 // DurabilityDurable is set to reject noop placeholders (NoopWriter,
-// NoopTxRunner, DiscardPublisher) even in dev mode. Real adapter wiring
-// (GOCELL_ADAPTER_MODE=real) is not yet implemented.
+// NoopTxRunner, DiscardPublisher) even in dev mode. Set GOCELL_ADAPTER_MODE=real
+// to require all secrets from env vars (fail-fast on missing).
 package main
 
 import (
@@ -26,24 +26,39 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
-func envOrDefault(key, fallback string) []byte {
-	if v := os.Getenv(key); v != "" {
-		return []byte(v)
+// loadSecret loads a secret from the given environment variable. In "real"
+// adapter mode, the env var is required and missing values are a hard error.
+// In dev mode, missing values fall back to devDefault with a warning.
+//
+// ref: Kubernetes two-phase validation — Complete then Validate, both fail-fast.
+func loadSecret(envKey, devDefault, adapterMode string) ([]byte, error) {
+	if v := os.Getenv(envKey); v != "" {
+		return []byte(v), nil
 	}
-	slog.Warn("using dev-only default key; set env var for production", slog.String("var", key))
-	return []byte(fallback)
+	if adapterMode == "real" {
+		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envKey)
+	}
+	slog.Warn("using dev-only default; set env var for production", slog.String("var", envKey))
+	return []byte(devDefault), nil
 }
 
-// loadKeySet returns a KeySet based on the adapter mode.
-// validateAdapterMode must be called before loadKeySet to reject invalid modes.
-// In "real" mode, keys are loaded from environment variables (fail-fast if missing).
-// In dev mode (default), an ephemeral RSA key pair is generated per process.
+// loadKeySet returns a KeySet, preferring environment-provided keys.
+// In "real" adapter mode, env keys are required (fail-fast if missing).
+// In dev mode, env keys are used if available; otherwise an ephemeral RSA
+// key pair is generated per process (tokens invalidated on restart).
+//
+// ref: Kubernetes kube-apiserver refuses to start without --service-account-key-file.
 func loadKeySet(adapterMode string) (*auth.KeySet, error) {
-	if adapterMode == "real" {
-		return auth.LoadKeySetFromEnv()
+	// Prefer env-provided keys regardless of adapter mode.
+	ks, err := auth.LoadKeySetFromEnv()
+	if err == nil {
+		slog.Info("JWT key set loaded from environment variables")
+		return ks, nil
 	}
-	// All other modes use ephemeral dev keys (validateAdapterMode already
-	// rejected unknown values, so only "" reaches here).
+	if adapterMode == "real" {
+		return nil, fmt.Errorf("real adapter mode requires JWT key env vars: %w", err)
+	}
+	// Dev mode: ephemeral keys (acceptable for development only).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey)
@@ -53,12 +68,10 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 // Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
 func validateAdapterMode(mode string) error {
 	switch mode {
-	case "":
+	case "", "real":
 		return nil
-	case "real":
-		return fmt.Errorf("adapter mode %q is not yet supported: real adapter implementations are pending", mode)
 	default:
-		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\" (not yet implemented)", mode)
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\"", mode)
 	}
 }
 
@@ -80,7 +93,10 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("adapter mode: %w", err)
 	}
 
-	hmacKey := envOrDefault("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+	hmacKey, err := loadSecret("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", adapterMode)
+	if err != nil {
+		return fmt.Errorf("HMAC key: %w", err)
+	}
 
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
@@ -98,19 +114,30 @@ func run(ctx context.Context) error {
 
 	eb := eventbus.New()
 
-	slog.Info("adapter mode: in-memory (development)",
+	// NOTE: Storage adapters (postgres/redis/rabbitmq) are not yet wired even in
+	// "real" mode — only JWT keys + HMAC + cursor keys come from env. Storage is
+	// always in-memory for now. adapterInfo reflects storage state, not mode.
+	effectiveMode := "in-memory"
+	if adapterMode == "real" {
+		effectiveMode = "real-keys-in-memory-storage"
+	}
+	slog.Info("adapter mode",
 		slog.String("requested", adapterMode),
-		slog.String("effective", "in-memory"))
+		slog.String("effective", effectiveMode))
 
-	auditCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!"),
-	)
+	auditCursorKey, err := loadSecret("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!", adapterMode)
+	if err != nil {
+		return fmt.Errorf("audit cursor key: %w", err)
+	}
+	auditCursorCodec, err := query.NewCursorCodec(auditCursorKey)
 	if err != nil {
 		return fmt.Errorf("create audit cursor codec: %w", err)
 	}
-	configCursorCodec, err := query.NewCursorCodec(
-		envOrDefault("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"),
-	)
+	configCursorKey, err := loadSecret("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!", adapterMode)
+	if err != nil {
+		return fmt.Errorf("config cursor key: %w", err)
+	}
+	configCursorCodec, err := query.NewCursorCodec(configCursorKey)
 	if err != nil {
 		return fmt.Errorf("create config cursor codec: %w", err)
 	}
@@ -129,8 +156,11 @@ func run(ctx context.Context) error {
 	}
 
 	// Seed admin role + optional admin user from env vars.
+	// Unsetenv to remove plaintext from /proc/{pid}/environ as soon as possible
+	// (defense-in-depth; Go's string immutability prevents full cleanup).
 	adminUser := os.Getenv("GOCELL_ADMIN_USER")
 	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
+	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
 	switch {
 	case adminUser != "" && adminPass != "":
 		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
@@ -161,16 +191,22 @@ func run(ctx context.Context) error {
 	}
 
 	adapterInfo := map[string]string{
-		"mode":      "in-memory",
-		"storage":   "in-memory",
-		"event_bus": "in-memory",
+		"mode":      effectiveMode,
+		"storage":   "in-memory", // storage adapters pending
+		"event_bus": "in-memory", // event bus adapters pending
 	}
 	slog.Info("core-bundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]))
 
-	app := bootstrap.New(
+	// /readyz?verbose token — required in real mode, optional in dev.
+	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
+	if adapterMode == "real" && verboseToken == "" {
+		return fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
+	}
+
+	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -179,7 +215,14 @@ func run(ctx context.Context) error {
 			"/api/v1/access/sessions/refresh",
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
-	)
+	}
+	if verboseToken != "" {
+		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))
+	} else {
+		slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
+	}
+
+	app := bootstrap.New(bootstrapOpts...)
 
 	return app.Run(ctx)
 }

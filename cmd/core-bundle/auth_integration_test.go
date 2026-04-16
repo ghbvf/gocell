@@ -139,7 +139,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		{http.MethodGet, "/api/v1/flags/"},
 		// Internal admin endpoints (PR-A RBAC closure).
 		{http.MethodPost, "/internal/v1/access/roles/assign"},
-		{http.MethodDelete, "/internal/v1/access/roles/revoke"},
+		{http.MethodPost, "/internal/v1/access/roles/revoke"},
 	}
 
 	for _, tc := range protectedRoutes {
@@ -195,6 +195,13 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
+
+	// NOTE: No runtime drift guard for DELETE /revoke. Auth middleware runs
+	// before route dispatch, so an unauthenticated DELETE returns 401
+	// regardless of whether the route is registered — the same status an
+	// unregistered route would also produce. The drift guard is covered by
+	// the positive assertion above (POST /internal/v1/access/roles/revoke
+	// returns 401), which proves POST is the registered handler.
 
 	cancel()
 	select {

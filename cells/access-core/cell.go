@@ -5,6 +5,7 @@ package accesscore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -35,7 +36,7 @@ var (
 	_ cell.Cell              = (*AccessCore)(nil)
 	_ cell.HTTPRegistrar     = (*AccessCore)(nil)
 	_ cell.HealthContributor = (*AccessCore)(nil)
-	_ cell.EventRegistrar = (*AccessCore)(nil)
+	_ cell.EventRegistrar    = (*AccessCore)(nil)
 )
 
 // Option configures an AccessCore Cell.
@@ -104,12 +105,12 @@ func WithSeedAdminRole() Option {
 
 // WithSeedAdmin ensures the "admin" role exists and creates an admin user
 // with the given credentials during Init(). Idempotent: skips if the user
-// already exists.
+// already exists. The password is stored as []byte and cleared after hashing.
 func WithSeedAdmin(username, password string) Option {
 	return func(c *AccessCore) {
 		c.seedAdminRole = true
 		c.seedAdminUser = username
-		c.seedAdminPass = password
+		c.seedAdminPass = []byte(password)
 	}
 }
 
@@ -129,7 +130,7 @@ type AccessCore struct {
 	// Seed admin configuration (set via WithSeedAdmin/WithSeedAdminRole).
 	seedAdminRole bool
 	seedAdminUser string
-	seedAdminPass string
+	seedAdminPass []byte
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -138,11 +139,11 @@ type AccessCore struct {
 	logoutHandler   *sessionlogout.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
-	validateSvc      *sessionvalidate.Service
-	authzSvc         *authorizationdecide.Service
-	rbacHandler      *rbaccheck.Handler
+	validateSvc       *sessionvalidate.Service
+	authzSvc          *authorizationdecide.Service
+	rbacHandler       *rbaccheck.Handler
 	rbacAssignHandler *rbacassign.Handler
-	configReceiveSvc *configreceive.Service
+	configReceiveSvc  *configreceive.Service
 }
 
 // NewAccessCore creates a new AccessCore Cell.
@@ -297,7 +298,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// Upgrade to L1 when PostgreSQL adapter is introduced (needs real tx).
 	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger)
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	c.AddSlice(cell.NewBaseSlice("rbac-assign", "access-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("rbacassign", "access-core", cell.L0))
 
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
@@ -306,36 +307,57 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// doSeedAdmin seeds the admin role and optionally creates an admin user.
-// Requires roleRepo to be a *mem.RoleRepository (for SeedRole access).
-// Idempotent: skips if user already exists.
-func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
-	memRoleRepo, ok := c.roleRepo.(*mem.RoleRepository)
-	if !ok {
-		return fmt.Errorf("seed admin requires in-memory role repository; got %T", c.roleRepo)
+// isUserNotFound returns true when the repository signals "user does not exist".
+// Any other error indicates an infrastructure failure and must propagate.
+func isUserNotFound(err error) bool {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		return ecErr.Code == errcode.ErrAuthUserNotFound
 	}
+	return false
+}
 
-	memRoleRepo.SeedRole(&domain.Role{
+// doSeedAdmin seeds the admin role and optionally creates an admin user via
+// the standard RoleRepository/UserRepository port interfaces. Idempotent:
+// skips creation if the user already exists. The plaintext password is
+// cleared from memory immediately after bcrypt hashing completes.
+func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
+	adminRole := &domain.Role{
 		ID:   domain.RoleAdmin,
 		Name: domain.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
-	})
+	}
+	if err := c.roleRepo.Create(ctx, adminRole); err != nil {
+		return fmt.Errorf("ensure admin role: %w", err)
+	}
 	c.logger.Info("seed: admin role ensured")
 
-	if c.seedAdminUser == "" || c.seedAdminPass == "" {
+	if c.seedAdminUser == "" || len(c.seedAdminPass) == 0 {
 		return nil
 	}
 
-	// Check if user already exists (idempotent).
-	if _, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser); err == nil {
+	// Check if user already exists (idempotent). Classify errors:
+	// - nil error → user exists, skip
+	// - ErrAuthUserNotFound → proceed with creation
+	// - other errors → infrastructure failure, fail-fast (do not mask)
+	_, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser)
+	switch {
+	case err == nil:
 		c.logger.Info("seed: admin user already exists, skipping",
 			slog.String("username", c.seedAdminUser))
+		clear(c.seedAdminPass)
 		return nil
+	case isUserNotFound(err):
+		// Expected — user doesn't exist yet, proceed with creation.
+	default:
+		clear(c.seedAdminPass)
+		return fmt.Errorf("seed: check admin user existence: %w", err)
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(c.seedAdminPass), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword(c.seedAdminPass, domain.BcryptCost)
+	clear(c.seedAdminPass) // wipe plaintext immediately after hashing
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}

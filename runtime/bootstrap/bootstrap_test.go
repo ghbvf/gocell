@@ -103,6 +103,18 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
+func TestNew_WithVerboseToken(t *testing.T) {
+	b := New(WithVerboseToken("secret-123"))
+	assert.Equal(t, "secret-123", b.verboseToken,
+		"WithVerboseToken must populate Bootstrap.verboseToken for health handler wiring")
+}
+
+func TestNew_WithVerboseToken_Empty_DefaultBackwardCompat(t *testing.T) {
+	b := New() // no WithVerboseToken
+	assert.Empty(t, b.verboseToken,
+		"default verboseToken must be empty (backward-compatible: verbose stays open)")
+}
+
 func TestNew_WithTracer(t *testing.T) {
 	tracer := tracing.NewTracer("bootstrap-test")
 	b := New(WithTracer(tracer))

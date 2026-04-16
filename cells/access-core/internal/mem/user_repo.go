@@ -10,13 +10,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 var _ ports.UserRepository = (*UserRepository)(nil)
 
 // UserRepository is an in-memory implementation of ports.UserRepository.
 type UserRepository struct {
-	mu    sync.RWMutex
-	byID  map[string]*domain.User
+	mu     sync.RWMutex
+	byID   map[string]*domain.User
 	byName map[string]*domain.User
 }
 

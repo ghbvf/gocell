@@ -246,6 +246,15 @@ func WithAdapterInfo(info map[string]string) Option {
 	}
 }
 
+// WithVerboseToken sets a token that must be provided via the X-Readyz-Token
+// header to access /readyz?verbose output. When not set, verbose mode is
+// unrestricted (backward compatible).
+func WithVerboseToken(token string) Option {
+	return func(b *Bootstrap) {
+		b.verboseToken = token
+	}
+}
+
 // WithDisableObservabilityRestore prevents the bootstrap from registering
 // ObservabilityContextMiddleware on the event subscriber. When set, consumer
 // handlers will not have request_id/correlation_id/trace_id restored from
@@ -265,25 +274,26 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath      string
-	envPrefix       string
-	httpAddr        string
-	assembly        *assembly.CoreAssembly
-	workers         []worker.Worker
-	publisher       outbox.Publisher
-	subscriber      outbox.Subscriber
-	routerOpts          []router.Option
-	authVerifier        auth.TokenVerifier
-	authPublicEndpoints []string
-	authDiscovery       bool // true when WithPublicEndpoints was called
-	shutdownTimeout     time.Duration
-	preShutdownDelay time.Duration
-	listener         net.Listener
-	healthCheckers             []namedChecker
-	adapterInfo                map[string]string // static adapter metadata for /readyz verbose
-	closers                    []io.Closer // middleware dependencies that need shutdown
+	configPath                  string
+	envPrefix                   string
+	httpAddr                    string
+	assembly                    *assembly.CoreAssembly
+	workers                     []worker.Worker
+	publisher                   outbox.Publisher
+	subscriber                  outbox.Subscriber
+	routerOpts                  []router.Option
+	authVerifier                auth.TokenVerifier
+	authPublicEndpoints         []string
+	authDiscovery               bool // true when WithPublicEndpoints was called
+	shutdownTimeout             time.Duration
+	preShutdownDelay            time.Duration
+	listener                    net.Listener
+	healthCheckers              []namedChecker
+	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
+	verboseToken                string            // token for /readyz?verbose access control
+	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
-	runOnce                    sync.Once
+	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
@@ -588,6 +598,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	hh = health.New(asm)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
+	}
+	if b.verboseToken != "" {
+		hh.SetVerboseToken(b.verboseToken)
 	}
 	// registerHealthChecker wraps hh.RegisterChecker with an error return
 	// instead of a panic on duplicate names. Since hh is local to Run() and

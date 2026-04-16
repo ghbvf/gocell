@@ -292,11 +292,11 @@ type capturingTB struct {
 	errored bool
 }
 
-func (c *capturingTB) Helper()                            {}
-func (c *capturingTB) Errorf(format string, args ...any)  { c.errored = true }
-func (c *capturingTB) Fatalf(format string, args ...any)  { c.errored = true }
-func (c *capturingTB) Logf(format string, args ...any)    {}
-func (c *capturingTB) Name() string                       { return "capturingTB" }
-func (c *capturingTB) Log(args ...any)                    {}
-func (c *capturingTB) Error(args ...any)                  { c.errored = true }
-func (c *capturingTB) Fatal(args ...any)                  { c.errored = true }
+func (c *capturingTB) Helper()                           {}
+func (c *capturingTB) Errorf(format string, args ...any) { c.errored = true }
+func (c *capturingTB) Fatalf(format string, args ...any) { c.errored = true }
+func (c *capturingTB) Logf(format string, args ...any)   {}
+func (c *capturingTB) Name() string                      { return "capturingTB" }
+func (c *capturingTB) Log(args ...any)                   {}
+func (c *capturingTB) Error(args ...any)                 { c.errored = true }
+func (c *capturingTB) Fatal(args ...any)                 { c.errored = true }

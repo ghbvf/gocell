@@ -175,7 +175,7 @@ func TestService_Verify_NilSessionRepo(t *testing.T) {
 // errorSessionRepo simulates infrastructure failures (DB timeout, connection reset).
 type errorSessionRepo struct{}
 
-func (errorSessionRepo) Create(_ context.Context, _ *domain.Session) error   { return nil }
+func (errorSessionRepo) Create(_ context.Context, _ *domain.Session) error { return nil }
 func (errorSessionRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
 	return nil, fmt.Errorf("db connection timeout")
 }
