@@ -184,6 +184,10 @@ func TestWaitForSubscription_UsesInitializerWhenAvailable(t *testing.T) {
 	}
 }
 
+// subscribeInitThreshold is 80% of subscribeInitDelay (50ms). Used as the
+// lower bound in sleep-fallback assertions to tolerate scheduling jitter.
+const subscribeInitThreshold = 40 * time.Millisecond
+
 func TestWaitForSubscription_FallsBackToSleep(t *testing.T) {
 	// fakePubSub does NOT implement SubscriberInitializer.
 	sub := &fakePubSub{}
@@ -194,7 +198,7 @@ func TestWaitForSubscription_FallsBackToSleep(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// Should have slept at least subscribeInitDelay (50ms).
-	if elapsed < 40*time.Millisecond {
+	if elapsed < subscribeInitThreshold {
 		t.Fatalf("expected sleep fallback (~50ms), but returned in %v", elapsed)
 	}
 }
@@ -217,7 +221,7 @@ func TestWaitForSubscription_MiddlewareWrappedNonInitializer_FallsBack(t *testin
 	elapsed := time.Since(start)
 
 	// Must fall back to sleep, NOT return instantly.
-	if elapsed < 40*time.Millisecond {
+	if elapsed < subscribeInitThreshold {
 		t.Fatalf("middleware-wrapped non-initializer must fall back to sleep (~50ms), but returned in %v", elapsed)
 	}
 }

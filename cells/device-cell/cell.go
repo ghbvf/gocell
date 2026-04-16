@@ -104,10 +104,10 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Info("device-cell: using in-memory command repository (demo mode)")
 	}
 
-	// Publisher is required (NIL-PUB-P1). Use DiscardPublisher{} for demo mode.
+	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
 	if c.publisher == nil {
 		return errcode.New(errcode.ErrCellMissingOutbox,
-			"device-cell requires publisher; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+			"device-cell requires publisher; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 	}
 
 	// Durable mode: reject noop publisher (#27c-2).

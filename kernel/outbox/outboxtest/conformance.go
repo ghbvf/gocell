@@ -303,6 +303,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 // testCompetingConsumers verifies that when BroadcastSubscribe=false (e.g.,
 // RabbitMQ with a shared queue), a single message is delivered to exactly one
 // of multiple subscribers — not duplicated to all.
+// Features is unused here; the signature matches the test-registration interface.
 func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
 	ctx := context.Background()
@@ -328,6 +329,10 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 		}()
 	}
 
+	// One waitForSubscription is sufficient for shared-queue brokers: both
+	// competing subscribers consume from the same queue, and topology is
+	// created once. The sleep fallback covers in-memory subscribers where
+	// both goroutines need time to register.
 	waitForSubscription(t, ctx, sub, topic, "")
 
 	// Publish one message.
@@ -338,7 +343,10 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 		return totalReceived.Load() >= 1
 	}, defaultTimeout, 10*time.Millisecond, "at least one subscriber should receive the message")
 
-	// Brief window for any duplicate delivery.
+	// Brief window for any duplicate delivery to surface. 200ms is sufficient
+	// for shared-queue brokers (RabbitMQ, in-memory) where redelivery, if any,
+	// happens within single-digit milliseconds. This is a pragmatic bound, not
+	// a guarantee — a flaky failure here indicates a real duplicate delivery bug.
 	time.Sleep(200 * time.Millisecond)
 
 	got := totalReceived.Load()

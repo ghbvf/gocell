@@ -154,7 +154,7 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.outboxWriter == nil && c.txRunner == nil {
 		if c.publisher == nil {
 			return errcode.New(errcode.ErrCellMissingOutbox,
-				"audit-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+				"audit-core requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 		}
 		if c.ConsistencyLevel() >= cell.L2 {
 			c.logger.Warn("audit-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
