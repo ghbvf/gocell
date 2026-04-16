@@ -81,4 +81,6 @@ type NopHookObserver struct{}
 // Business reason: LifecycleHookObserver is an optional collaborator
 // injected via AssemblyConfig; when unconfigured, the assembly substitutes
 // NopHookObserver to keep the call site unconditional and allocation-free.
-func (NopHookObserver) OnHookEvent(HookEvent) {}
+func (NopHookObserver) OnHookEvent(HookEvent) {
+	// Intentionally empty — null-object pattern, no work to perform.
+}
