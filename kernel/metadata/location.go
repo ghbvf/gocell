@@ -143,27 +143,40 @@ func parseSegment(s string) (pathSegment, error) {
 			return seg, fmt.Errorf("invalid identifier %q", seg.field)
 		}
 	}
-	rest := s[lb:]
+	indices, err := parseIndices(s, s[lb:])
+	if err != nil {
+		return seg, err
+	}
+	seg.indices = indices
+	return seg, nil
+}
+
+// parseIndices walks the "[N][M]..." suffix of a segment and returns the
+// collected non-negative integer indices. `full` is the original segment
+// string used purely for error messages; `rest` is the "[...]..." slice
+// starting with '['.
+func parseIndices(full, rest string) ([]int, error) {
+	var indices []int
 	for len(rest) > 0 {
 		if rest[0] != '[' {
-			return seg, fmt.Errorf("expected '[' in segment %q", s)
+			return nil, fmt.Errorf("expected '[' in segment %q", full)
 		}
 		rb := strings.IndexByte(rest, ']')
 		if rb < 0 {
-			return seg, fmt.Errorf("unclosed '[' in segment %q", s)
+			return nil, fmt.Errorf("unclosed '[' in segment %q", full)
 		}
 		inner := rest[1:rb]
 		if inner == "" {
-			return seg, fmt.Errorf("empty index in segment %q", s)
+			return nil, fmt.Errorf("empty index in segment %q", full)
 		}
 		n, err := strconv.Atoi(inner)
 		if err != nil || n < 0 {
-			return seg, fmt.Errorf("invalid index %q in segment %q", inner, s)
+			return nil, fmt.Errorf("invalid index %q in segment %q", inner, full)
 		}
-		seg.indices = append(seg.indices, n)
+		indices = append(indices, n)
 		rest = rest[rb+1:]
 	}
-	return seg, nil
+	return indices, nil
 }
 
 // isIdent checks [A-Za-z_][A-Za-z0-9_-]*.
