@@ -9,10 +9,11 @@ import (
 
 func TestValidateLabels(t *testing.T) {
 	tests := []struct {
-		name     string
-		expected []string
-		got      metrics.Labels
-		wantErr  bool
+		name        string
+		expected    []string
+		got         metrics.Labels
+		wantErr     bool
+		wantSentinel error // non-nil expected sentinel to assert errors.Is against
 	}{
 		{
 			name:     "exact match",
@@ -50,6 +51,20 @@ func TestValidateLabels(t *testing.T) {
 			got:      metrics.Labels{"cell_id": "x"},
 			wantErr:  true,
 		},
+		{
+			name:         "value with pipe separator rejected",
+			expected:     []string{"pool"},
+			got:          metrics.Labels{"pool": "pg|main"},
+			wantErr:      true,
+			wantSentinel: metrics.ErrLabelValueIllegal,
+		},
+		{
+			name:         "value with equals separator rejected",
+			expected:     []string{"pool"},
+			got:          metrics.Labels{"pool": "foo=bar"},
+			wantErr:      true,
+			wantSentinel: metrics.ErrLabelValueIllegal,
+		},
 	}
 
 	for _, tc := range tests {
@@ -58,8 +73,15 @@ func TestValidateLabels(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("ValidateLabels wantErr=%v got=%v", tc.wantErr, err)
 			}
-			if err != nil && !errors.Is(err, metrics.ErrLabelMismatch) {
-				t.Fatalf("error must wrap ErrLabelMismatch, got %v", err)
+			if err == nil {
+				return
+			}
+			sentinel := tc.wantSentinel
+			if sentinel == nil {
+				sentinel = metrics.ErrLabelMismatch
+			}
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("error must wrap %v, got %v", sentinel, err)
 			}
 		})
 	}

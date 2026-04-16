@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -97,6 +98,13 @@ func (c *Config) defaults() {
 	}
 	if c.DistLockTTL == 0 {
 		c.DistLockTTL = 30 * time.Second
+	}
+	if c.PoolSize == 0 {
+		// Mirror go-redis/v9's own default (10 * GOMAXPROCS) so the
+		// derived `db.client.connection.max` metric reflects the real
+		// pool capacity. Leaving zero here would emit MaxConns=0, which
+		// dashboards interpret as "pool saturated" (used > max).
+		c.PoolSize = 10 * runtime.GOMAXPROCS(0)
 	}
 }
 

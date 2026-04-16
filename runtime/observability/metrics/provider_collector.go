@@ -43,11 +43,11 @@ var _ Collector = (*providerCollector)(nil)
 // labels preserved so operators do not need to re-write their dashboards.
 func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig) (Collector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: Provider is required")
 	}
 	if cfg.CellID == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: CellID is required")
 	}
 	if len(cfg.DurationBuckets) == 0 {

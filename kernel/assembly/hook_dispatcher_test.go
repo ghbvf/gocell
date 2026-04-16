@@ -28,14 +28,13 @@ func TestMain(m *testing.M) {
 		// briefly on fast shutdown; explicit allowlist keeps the main assembly
 		// coverage strict.
 		goleak.IgnoreTopFunction("net/http.(*Transport).dialConnFor"),
-		// Existing assembly tests predate the async dispatcher; many
-		// construct an assembly, drive Start (which may fail intentionally),
-		// and return without calling Stop or Shutdown. Those leaked
-		// dispatcher goroutines are cleaned up by the Go runtime on process
-		// exit and are not production-relevant — the dispatcher exits
-		// deterministically when Stop/Shutdown is called. New tests in this
-		// package should still add `t.Cleanup(a.Shutdown)` to surface
-		// leakage of *their own* assemblies.
+		// TODO(OBS-LEAK-02): remove this allowlist once every New(Config{})
+		// call site in observer_test.go / timeout_test.go / hooks_test.go /
+		// assembly_test.go adds `t.Cleanup(a.Shutdown)`. Those 51 legacy
+		// sites predate the async dispatcher; many Start on the happy path
+		// only and have no paired Stop to drain the worker goroutine. The
+		// ignore is scoped to the dispatcher's run function — any other
+		// leak (net/http, third-party, timers) is still a red test.
 		goleak.IgnoreAnyFunction("github.com/ghbvf/gocell/kernel/assembly.(*hookDispatcher).run"),
 	)
 }
@@ -60,7 +59,7 @@ type spyCounter struct {
 	reason string
 }
 
-func (c *spyCounter) Inc()            { c.Add(1) }
+func (c *spyCounter) Inc() { c.Add(1) }
 func (c *spyCounter) Add(d float64) {
 	c.parent.mu.Lock()
 	c.parent.v[c.reason] += int(d)
@@ -89,10 +88,13 @@ func (p *spyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVe
 }
 
 // blockingObserver blocks on OnHookEvent until the test calls release().
-// Used to exercise slow-sink scenarios deterministically.
+// Used to exercise slow-sink scenarios deterministically. release() is
+// idempotent so tests can both explicitly release AND register release
+// as a cleanup without a double-close panic.
 type blockingObserver struct {
-	received atomic.Int32
-	gate     chan struct{}
+	received    atomic.Int32
+	gate        chan struct{}
+	releaseOnce sync.Once
 }
 
 func newBlockingObserver() *blockingObserver {
@@ -104,7 +106,9 @@ func (b *blockingObserver) OnHookEvent(cell.HookEvent) {
 	<-b.gate
 }
 
-func (b *blockingObserver) release() { close(b.gate) }
+func (b *blockingObserver) release() {
+	b.releaseOnce.Do(func() { close(b.gate) })
+}
 
 func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	// A sink that hangs for 10s must not delay emit() more than a few ms.
@@ -242,6 +246,68 @@ func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
 	t.Cleanup(func() { d.stop(200 * time.Millisecond) })
 
 	require.True(t, d.flush(500*time.Millisecond), "flush on idle dispatcher must succeed")
+}
+
+// TestHookDispatcher_EmitAfterStopCountsQueueFull pins the recovery
+// branch in emit(): sending on a closed channel panics at runtime (not
+// "selected with default" — the send-case fires before default when
+// selected), and that panic must be converted into a queue_full drop so
+// a post-Stop caller never crashes the assembly.
+func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
+	cv := newSpyCounterVec()
+	d, err := newHookDispatcher(cell.NopHookObserver{}, 4, time.Second, &spyProvider{cv: cv})
+	require.NoError(t, err)
+
+	d.stop(200 * time.Millisecond)
+	// At least one emit after stop must still not panic; drop is counted.
+	d.emit(cell.HookEvent{CellID: "after-stop", Hook: cell.HookBeforeStart})
+
+	assert.GreaterOrEqual(t, cv.count(DropReasonQueueFull), 1,
+		"emit after stop must land in queue_full drop counter")
+}
+
+// TestHookDispatcher_FlushAfterStopReturnsTrue locks in the
+// "send-on-closed treated as flush success" branch of flush(). Intent:
+// once the dispatcher has been stopped, the channel is fully drained, so
+// any further fence is semantically satisfied (there is nothing to wait
+// for). Returning false here would make clean-shutdown callers block or
+// retry for no gain.
+func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
+	d, err := newHookDispatcher(cell.NopHookObserver{}, 4, time.Second, nil)
+	require.NoError(t, err)
+	d.stop(200 * time.Millisecond)
+
+	require.True(t, d.flush(200*time.Millisecond),
+		"flush after stop must return true (channel drained, fence is trivially satisfied)")
+}
+
+// TestHookDispatcher_FlushTimeoutThenSuccess exercises the subtle case
+// where a flush call times out while the fence sits in the queue, then a
+// later flush sees the dispatcher catch up and returns true. Pins the
+// shared-timer behaviour documented in flush().
+func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
+	bo := newBlockingObserver()
+	d, err := newHookDispatcher(bo, 2, time.Second, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		bo.release()
+		d.stop(500 * time.Millisecond)
+	})
+
+	d.emit(cell.HookEvent{CellID: "slow", Hook: cell.HookBeforeStart})
+	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+		time.Second, 5*time.Millisecond, "worker should pick up the primed event")
+
+	// Worker is blocked on the sink; flush with a 10ms budget cannot
+	// reach the fence in time.
+	if d.flush(10 * time.Millisecond) {
+		t.Fatal("flush with insufficient budget should return false")
+	}
+
+	bo.release()
+	// Now the worker unblocks; a generous flush must succeed.
+	require.True(t, d.flush(2*time.Second),
+		"flush after sink release should succeed")
 }
 
 // assemblyHookFlush_IntegrationTest exercises the assembly-level contract:

@@ -263,8 +263,8 @@ examples/  ← all layers
 | `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
 | `adapters/rabbitmq` | Publisher, Subscriber, ConsumerBase (DLQ + retry) | `outbox.Publisher`, `outbox.Subscriber` |
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
-| `adapters/otel` | OTel SDK tracer (OTLP gRPC exporter, ctxkeys propagation) | `tracing.Tracer` |
-| `adapters/prometheus` | Prometheus metrics (requests counter + duration histogram) | `metrics.Collector` |
+| `adapters/otel` | OTel SDK tracer + MetricProvider + pool collector (OTLP gRPC exporter, semconv `db.client.connection.*`) | `tracing.Tracer`, `kernel/observability/metrics.Provider` |
+| `adapters/prometheus` | MetricProvider (backs runtime/outbox collectors) + LifecycleHookObserver | `kernel/observability/metrics.Provider`, `cell.LifecycleHookObserver` |
 
 ### Outbox Observability Bridge
 

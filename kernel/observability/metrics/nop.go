@@ -38,7 +38,7 @@ func (v nopHistogramVec) With(l Labels) Histogram {
 
 type nopCounter struct{}
 
-func (nopCounter) Inc()             {}
+func (nopCounter) Inc()              {}
 func (nopCounter) Add(delta float64) {}
 
 type nopHistogram struct{}

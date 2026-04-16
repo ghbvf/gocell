@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // Provider registers metric instruments. Implementations are provided by
@@ -86,18 +87,38 @@ type Histogram interface {
 // converting label-validation errors into structured diagnostics.
 var ErrLabelMismatch = errors.New("metrics: label keys do not match registered LabelNames")
 
+// ErrLabelValueIllegal is returned when a label value contains a separator
+// reserved by the OTel-provider cache key (`|` or `=`). A collision here
+// causes silently-misattributed data points — we prefer a panic at
+// registration time over a wrong-but-present time-series in production.
+var ErrLabelValueIllegal = errors.New("metrics: label value contains reserved separator")
+
+// labelSeparators are characters reserved for the label cache key
+// encoding used by the OTel adapter (adapters/otel/metric_provider.go).
+// Reserving them in the kernel keeps value-encoding rules in one place,
+// so an adapter change cannot silently diverge from the contract.
+const labelSeparators = "|="
+
 // ValidateLabels returns a descriptive error when labels do not exactly
 // cover expected. It compares as sets: any missing, extra, or wrong key
-// is an error. Both nil or empty inputs are considered a match.
+// is an error. Both nil or empty inputs are considered a match. Values
+// containing characters from labelSeparators (`|` or `=`) are rejected
+// because the OTel adapter's per-label-set cache keys them positionally;
+// a value with a separator would collide silently.
 func ValidateLabels(expected []string, got Labels) error {
 	if len(got) != len(expected) {
 		return fmt.Errorf("%w: want %d keys %v, got %d %v",
 			ErrLabelMismatch, len(expected), expected, len(got), sortedKeys(got))
 	}
 	for _, k := range expected {
-		if _, ok := got[k]; !ok {
+		v, ok := got[k]
+		if !ok {
 			return fmt.Errorf("%w: missing key %q (expected %v, got %v)",
 				ErrLabelMismatch, k, expected, sortedKeys(got))
+		}
+		if strings.ContainsAny(v, labelSeparators) {
+			return fmt.Errorf("%w: value for key %q is %q (separators %q reserved by adapter cache)",
+				ErrLabelValueIllegal, k, v, labelSeparators)
 		}
 	}
 	return nil

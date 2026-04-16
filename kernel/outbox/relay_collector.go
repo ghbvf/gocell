@@ -56,10 +56,10 @@ type ProviderRelayCollectorConfig struct {
 // duplicate metric names).
 func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...ProviderRelayCollectorConfig) (RelayCollector, error) {
 	if cellID == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed, "outbox: cellID is required for provider relay collector")
+		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "outbox: cellID is required for provider relay collector")
 	}
 	if p == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "outbox: metrics.Provider is required")
+		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "outbox: metrics.Provider is required")
 	}
 	cfg := ProviderRelayCollectorConfig{}
 	if len(opts) > 0 {
@@ -73,8 +73,8 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 	}
 
 	relayed, err := p.CounterVec(metrics.CounterOpts{
-		Name: "outbox_relayed_total",
-		Help: "Total number of outbox entries processed by the relay, by outcome.",
+		Name:       "outbox_relayed_total",
+		Help:       "Total number of outbox entries processed by the relay, by outcome.",
 		LabelNames: []string{"cell", "outcome"},
 	})
 	if err != nil {
@@ -99,16 +99,16 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		return nil, fmt.Errorf("outbox: register outbox_batch_size: %w", err)
 	}
 	reclaimed, err := p.CounterVec(metrics.CounterOpts{
-		Name: "outbox_reclaimed_total",
-		Help: "Total number of stale entries reclaimed by the relay.",
+		Name:       "outbox_reclaimed_total",
+		Help:       "Total number of stale entries reclaimed by the relay.",
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("outbox: register outbox_reclaimed_total: %w", err)
 	}
 	cleaned, err := p.CounterVec(metrics.CounterOpts{
-		Name: "outbox_cleaned_total",
-		Help: "Total number of entries cleaned up (deleted) by the relay.",
+		Name:       "outbox_cleaned_total",
+		Help:       "Total number of entries cleaned up (deleted) by the relay.",
 		LabelNames: []string{"cell", "status"},
 	})
 	if err != nil {

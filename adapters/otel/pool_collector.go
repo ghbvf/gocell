@@ -10,7 +10,9 @@ import (
 )
 
 // Metric names follow the OTel database semantic conventions:
-//   https://opentelemetry.io/docs/specs/semconv/database/database-metrics/
+//
+//	https://opentelemetry.io/docs/specs/semconv/database/database-metrics/
+//
 // db.client.connection.count is a single UpDownCounter split by state="idle|used";
 // db.client.connection.max is an UpDownCounter for configured pool capacity.
 const (
