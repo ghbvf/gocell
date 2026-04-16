@@ -7,7 +7,14 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// roleAdmin is the role required to publish or rollback a config entry.
+// Mirrors access-core/internal/domain.RoleAdmin which cannot be imported
+// directly (cell-internal). Both must stay in sync — see CLAUDE.md "Cell 之间
+// 只通过 contract 通信".
+const roleAdmin = "admin"
 
 // ConfigVersionResponse is the public DTO for ConfigVersion.
 // Sensitive snapshots have Value redacted to dto.RedactedValue; the Sensitive
@@ -44,7 +51,15 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // HandlePublish handles POST /{key}/publish — publishes a config entry.
+// Admin-only: publishing changes the active config version, a high-risk
+// integrity-affecting operation. Default-deny per K8s/Kratos/go-zero
+// convention; authentication alone is not enough.
 func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), roleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	key := r.PathValue("key")
 
 	version, err := h.svc.Publish(r.Context(), key)
@@ -57,7 +72,14 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleRollback handles POST /{key}/rollback — rolls back a config entry.
+// Admin-only: rollback re-activates a prior snapshot and is at least as
+// privileged as publish. See HandlePublish for the rationale.
 func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), roleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	key := r.PathValue("key")
 
 	var req struct {

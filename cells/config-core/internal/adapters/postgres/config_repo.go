@@ -83,8 +83,16 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 
 	var e domain.ConfigEntry
 	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
-		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
-			fmt.Sprintf("config repo: key not found: %s", key), err)
+		// PR#155 followup F3: Message is the externally visible string for 4xx
+		// (writeErrcodeError pass-through). Keep it identifier-free; the key
+		// goes into InternalMessage which is logged but never written to the
+		// HTTP response. ref: pkg/errcode.Safe.
+		return nil, &errcode.Error{
+			Code:            errcode.ErrConfigRepoNotFound,
+			Message:         "config not found",
+			InternalMessage: fmt.Sprintf("config repo: GetByKey miss key=%s", key),
+			Cause:           err,
+		}
 	}
 
 	return &e, nil
@@ -108,8 +116,9 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 			fmt.Sprintf("config repo: update failed for key %s", entry.Key), err)
 	}
 	if affected == 0 {
-		return errcode.New(errcode.ErrConfigRepoNotFound,
-			fmt.Sprintf("config repo: key not found: %s", entry.Key))
+		return errcode.Safe(errcode.ErrConfigRepoNotFound,
+			"config not found",
+			fmt.Sprintf("config repo: Update miss key=%s", entry.Key))
 	}
 
 	return nil
@@ -125,8 +134,9 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 			fmt.Sprintf("config repo: delete failed for key %s", key), err)
 	}
 	if affected == 0 {
-		return errcode.New(errcode.ErrConfigRepoNotFound,
-			fmt.Sprintf("config repo: key not found: %s", key))
+		return errcode.Safe(errcode.ErrConfigRepoNotFound,
+			"config not found",
+			fmt.Sprintf("config repo: Delete miss key=%s", key))
 	}
 
 	return nil
@@ -192,8 +202,15 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 
 	var v domain.ConfigVersion
 	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt); err != nil {
-		return nil, errcode.Wrap(errcode.ErrConfigRepoNotFound,
-			fmt.Sprintf("config repo: version not found: %s v%d", configID, version), err)
+		// PR#155 followup F3: external Message must not leak the internal config_id
+		// or the requested version (would help an attacker enumerate). Identifiers
+		// stay in InternalMessage + Cause for logs/diagnostics only.
+		return nil, &errcode.Error{
+			Code:            errcode.ErrConfigRepoNotFound,
+			Message:         "config version not found",
+			InternalMessage: fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version),
+			Cause:           err,
+		}
 	}
 
 	return &v, nil

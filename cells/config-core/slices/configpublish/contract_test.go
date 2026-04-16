@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,8 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
-	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req := httptest.NewRequest(c.HTTP.Method, path, nil).
+		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -79,7 +81,8 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	// Real-handler exercise: 200 OK + response schema.
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
-	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`))
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
+		WithContext(auth.TestContext("contract-admin", []string{"admin"}))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)

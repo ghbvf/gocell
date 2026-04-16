@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,6 +209,32 @@ func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ver.Sensitive, "snapshot must inherit the source entry's Sensitive flag")
 	assert.Equal(t, "s3cret!", ver.Value, "domain snapshot keeps the raw value; redaction is a DTO concern")
+}
+
+// PR#155 followup F4 (Cx1, P2): service-level rollback NotFound coverage.
+// Asserts the typed error code so handler→HTTP status mapping cannot drift.
+func TestService_Rollback_KeyNotFound(t *testing.T) {
+	svc, _ := newTestService()
+	_, err := svc.Rollback(context.Background(), "missing-key", 1)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "rollback must return a typed errcode.Error")
+	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
+		"missing key must return ErrConfigNotFound (mem repo) for 404 mapping")
+}
+
+func TestService_Rollback_VersionNotFound(t *testing.T) {
+	svc, repo := newTestService()
+	mustSeedEntry(repo, "app.name", "v1") // entry exists; no version published
+
+	_, err := svc.Rollback(context.Background(), "app.name", 99)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code,
+		"missing version must return ErrConfigNotFound (mem repo) for 404 mapping")
 }
 
 func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
