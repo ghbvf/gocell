@@ -52,6 +52,9 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 		testTopicIsolation(t, features, constructor)
 	})
 	t.Run("MultipleSubscribers", func(t *testing.T) {
+		if !features.BroadcastSubscribe {
+			t.Skip("implementation uses competing consumers, not broadcast fan-out")
+		}
 		testMultipleSubscribers(t, features, constructor)
 	})
 
@@ -220,7 +223,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "")
 	}()
-	time.Sleep(subscribeInitDelay)
+	waitForSubscription(t, ctx, sub, topicA, "")
 
 	// Publish to both topics.
 	assertNoError(t, pub.Publish(ctx, topicB, []byte(`{"topic":"B"}`)))
@@ -232,7 +235,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 		t.Fatal("timed out waiting for message on topic A")
 	}
 
-	// Give a brief window for any leaked messages.
+	// Give a brief window for any leaked messages (negative assertion guard).
 	time.Sleep(100 * time.Millisecond)
 
 	cancel()
@@ -278,7 +281,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		}, "")
 	}()
 
-	time.Sleep(subscribeInitDelay)
+	waitForSubscription(t, ctx, sub, topic, "")
 
 	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"fan-out"}`)))
 
@@ -580,7 +583,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "")
 	}()
-	time.Sleep(subscribeInitDelay)
+	waitForSubscription(t, ctx, sub, topic, "")
 
 	assertNoError(t, sub.Close())
 

@@ -31,6 +31,18 @@ func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byt
 
 var _ Publisher = (*mockPublisher)(nil)
 
+// plainSubscriber implements Subscriber but NOT SubscriberInitializer.
+type plainSubscriber struct{}
+
+func (m *plainSubscriber) Subscribe(context.Context, string, EntryHandler, string) error { return nil }
+func (m *plainSubscriber) Close() error                                                  { return nil }
+
+func TestSubscriberInitializer_IsOptional(t *testing.T) {
+	var sub Subscriber = &plainSubscriber{}
+	_, ok := sub.(SubscriberInitializer)
+	assert.False(t, ok, "plainSubscriber should not implement SubscriberInitializer")
+}
+
 func TestNoopWriter_Write(t *testing.T) {
 	writer := NoopWriter{}
 	err := writer.Write(context.Background(), validEntry("noop"))

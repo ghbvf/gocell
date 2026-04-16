@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/bits"
 	"math/rand/v2"
 	"time"
 
@@ -18,6 +17,21 @@ const (
 	logKeyEventID       = "event_id"
 	logKeyTopic         = "topic"
 	logKeyConsumerGroup = "consumer_group"
+)
+
+// ClaimPolicy controls ConsumerBase behavior when Claimer.Claim() fails.
+type ClaimPolicy uint8
+
+const (
+	// ClaimPolicyFailClosed (default zero-value): retry Claim with exponential
+	// backoff. Safe from duplicates, but consumption stops until the idempotency
+	// backend recovers.
+	ClaimPolicyFailClosed ClaimPolicy = iota
+
+	// ClaimPolicyFailOpen: single Claim attempt; on error, proceed without
+	// idempotency receipt. Avoids total consumer stall, but risks duplicate
+	// processing during outage.
+	ClaimPolicyFailOpen
 )
 
 // ConsumerBaseConfig configures ConsumerBase behavior.
@@ -43,14 +57,10 @@ type ConsumerBaseConfig struct {
 	// Default: 5m (idempotency.DefaultLeaseTTL). Only used with Claimer.
 	LeaseTTL time.Duration
 
-	// ClaimFailOpen controls behavior when Claimer.Claim() fails due to
-	// infrastructure errors (e.g., Redis down).
-	//   true:  proceed without idempotency — avoids total consumer
-	//          stall, but risks duplicate processing during outage.
-	//   false (default): return DispositionRequeue — safe from duplicates, but all
-	//          consumption stops until the idempotency backend recovers.
-	// Must be set explicitly; nil defaults to fail-closed for safety.
-	ClaimFailOpen *bool
+	// ClaimPolicy controls behavior when Claimer.Claim() fails due to
+	// infrastructure errors (e.g., Redis down). See ClaimPolicyFailClosed
+	// (default zero-value) and ClaimPolicyFailOpen for details.
+	ClaimPolicy ClaimPolicy
 
 	// ClaimRetryCount is the max number of Claim() attempts on the fail-closed
 	// path before returning DispositionRequeue to the broker.
@@ -92,21 +102,9 @@ func (c *ConsumerBaseConfig) setDefaults() {
 }
 
 // safeDelay computes base * 2^attempt with overflow protection, capped by maxDelay.
-// Uses bits.Len64 to determine the maximum safe shift, matching the strategy
-// in Connection.backoffDelay.
+// Delegates to the shared exponentialDelay helper.
 func safeDelay(base, maxDelay time.Duration, attempt int) time.Duration {
-	if base <= 0 {
-		return 0
-	}
-	maxSafeShift := 63 - bits.Len64(uint64(base))
-	if attempt > maxSafeShift {
-		return maxDelay
-	}
-	delay := base * (1 << uint(attempt))
-	if delay <= 0 || delay > maxDelay {
-		return maxDelay
-	}
-	return delay
+	return exponentialDelay(base, maxDelay, attempt)
 }
 
 // ConsumerBase wraps an outbox.EntryHandler with two-phase idempotency
@@ -159,12 +157,12 @@ func (cb *ConsumerBase) AsMiddleware() outbox.TopicHandlerMiddleware {
 // The Receipt is threaded through HandleResult — ConsumerBase never calls
 // Commit/Release itself; that is processDelivery's job after broker Ack/Nack.
 //
-// Fail-open (ClaimFailOpen=true): single Claim attempt; on error, proceed
+// Fail-open (ClaimPolicyFailOpen): single Claim attempt; on error, proceed
 // without idempotency — avoids total consumer stall, but risks duplicate
 // processing during outage.
 //
-// Fail-closed (ClaimFailOpen=false or nil, default): all Claim attempts go
-// through claimWithRetry (including the first), so every failure is followed
+// Fail-closed (ClaimPolicyFailClosed, default zero-value): all Claim attempts
+// go through claimWithRetry (including the first), so every failure is followed
 // by exponential backoff + jitter. Safe from duplicates, but all consumption
 // stops until the idempotency backend recovers.
 //
@@ -181,7 +179,7 @@ func (cb *ConsumerBase) Wrap(topic string, handler outbox.EntryHandler) outbox.E
 		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
-		if cb.config.ClaimFailOpen != nil && *cb.config.ClaimFailOpen {
+		if cb.config.ClaimPolicy == ClaimPolicyFailOpen {
 			state, receipt, err := cb.claimer.Claim(ctx, idempotencyKey, cb.config.LeaseTTL, cb.config.IdempotencyTTL)
 			if err != nil {
 				logWithContext(ctx, slog.LevelWarn, "rabbitmq: idempotency claim failed, proceeding without receipt (fail-open)",

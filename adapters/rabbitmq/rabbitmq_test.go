@@ -3147,18 +3147,16 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 }
 
 // =============================================================================
-// ClaimFailOpen config tests
+// ClaimPolicy config tests
 // =============================================================================
-
-func boolPtr(b bool) *bool { return &b }
 
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimFailOpen:      boolPtr(false),
-		ClaimRetryCount:    3,
+		ConsumerGroup:       "test-group",
+		ClaimPolicy:         ClaimPolicyFailClosed,
+		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
 
@@ -3180,7 +3178,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 
 	cb := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
-		ClaimFailOpen: boolPtr(true),
+		ClaimPolicy:   ClaimPolicyFailOpen,
 	})
 
 	handlerCalled := false

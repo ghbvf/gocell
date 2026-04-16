@@ -15,6 +15,26 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+// waitForSubscription replaces time.Sleep(subscribeInitDelay) with a
+// deterministic readiness check when the subscriber implements
+// outbox.SubscriberInitializer. For persistent brokers (e.g., RabbitMQ),
+// InitializeSubscription pre-declares the topology so that published messages
+// are queued before Subscribe starts consuming — eliminating the race.
+// For in-memory implementations that lack InitializeSubscription, it falls
+// back to the brief sleep.
+//
+// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
+func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
+	t.Helper()
+	if init, ok := sub.(outbox.SubscriberInitializer); ok {
+		if err := init.InitializeSubscription(ctx, topic, consumerGroup); err != nil {
+			t.Fatalf("InitializeSubscription(%s, %s): %v", topic, consumerGroup, err)
+		}
+		return
+	}
+	time.Sleep(subscribeInitDelay)
+}
+
 // TestTopic returns a unique topic name scoped to the given test.
 // Prevents cross-test interference when implementations share state.
 func TestTopic(t *testing.T) string {
@@ -114,8 +134,9 @@ func CollectN(
 		_ = sub.Subscribe(subCtx, topic, handler, "")
 	}()
 
-	// Wait for subscription to register (InMemoryEventBus needs a brief delay).
-	time.Sleep(subscribeInitDelay)
+	// Wait for subscription to register. Uses SubscriberInitializer if available,
+	// otherwise falls back to a brief sleep.
+	waitForSubscription(t, ctx, sub, topic, "")
 
 	select {
 	case <-done:
@@ -188,10 +209,10 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 		}
 	}()
 	<-ready
-	// Brief yield to let Subscribe register internally. The ready channel
-	// guarantees the goroutine is running; this yield covers the window
-	// between goroutine start and the Subscribe call's internal registration.
-	time.Sleep(subscribeInitDelay)
+	// Wait for subscription to register. Uses SubscriberInitializer if available,
+	// otherwise falls back to a brief sleep to cover the window between goroutine
+	// start and Subscribe's internal registration.
+	waitForSubscription(t, ctx, sub, topic, "")
 	return c
 }
 
@@ -264,7 +285,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 		}
 	}()
 	<-ready
-	time.Sleep(subscribeInitDelay)
+	waitForSubscription(h.T, ctx, h.Sub, h.Topic, "")
 }
 
 // publishAndWait publishes payload and blocks until signalDone or timeout.
