@@ -51,30 +51,34 @@ func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcra
 	return conn, container, cleanup
 }
 
-// startRabbitMQ is a convenience wrapper that discards the container reference.
+// startRabbitMQ returns a per-test Connection backed by the package-wide
+// shared broker (see testmain_integration_test.go). Only the Connection is
+// torn down via t.Cleanup; the container lives until TestMain exits.
+//
+// Tests that need an isolated broker (because they mutate broker-wide state
+// with rabbitmqctl or container.Exec) must call startRabbitMQWithContainer
+// instead.
 func startRabbitMQ(t *testing.T) (*Connection, func()) {
-	conn, _, cleanup := startRabbitMQWithContainer(t, Config{
+	t.Helper()
+	url := sharedBrokerURL(t)
+	conn, err := NewConnection(Config{
+		URL:                 url,
+		ChannelPoolSize:     5,
+		ConfirmTimeout:      10 * time.Second,
 		ReconnectMaxBackoff: 5 * time.Second,
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
-	return conn, cleanup
+	require.NoError(t, err, "create connection against shared rabbitmq broker")
+	return conn, func() { _ = conn.Close() }
 }
 
-// startRabbitMQBroker starts a testcontainers RabbitMQ instance and returns the
-// broker AMQP URL and a cleanup function. Unlike startRabbitMQ it does NOT create
-// a Connection, allowing callers to create independent Connections per-subtest
-// while sharing the (expensive) container lifecycle.
+// startRabbitMQBroker returns the package-wide shared broker AMQP URL.
+// The cleanup function is a no-op: the shared container is torn down in
+// TestMain. Kept as a named helper so callers (conformance_test.go) can
+// pass the URL to per-subtest Connections via newIntegrationConnection.
 func startRabbitMQBroker(t *testing.T) (amqpURL string, cleanup func()) {
 	t.Helper()
-	ctx := context.Background()
-
-	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "start rabbitmq container")
-
-	u, err := container.AmqpURL(ctx)
-	require.NoError(t, err, "get rabbitmq amqp url")
-
-	return u, func() { _ = container.Terminate(ctx) }
+	return sharedBrokerURL(t), func() {}
 }
 
 // newIntegrationConnection creates a fresh Connection pointing at the given
