@@ -615,9 +615,9 @@ func (c *Connection) Health() error {
 // channels (open, confirm, publish, close) that bypass the pool entirely,
 // so IdleChannels does not reflect publisher channel activity.
 type PoolStats struct {
-	ChannelPoolSize int             // configured pool capacity (subscriber only)
-	IdleChannels    int             // channels currently idle in pool (subscriber only)
-	State           ConnectionState // current connection lifecycle state
+	ChannelPoolSize int             `json:"channelPoolSize"` // configured pool capacity (subscriber only)
+	IdleChannels    int             `json:"idleChannels"`    // channels currently idle in pool (subscriber only)
+	State           ConnectionState `json:"state"`           // current connection lifecycle state
 }
 
 // PoolStats returns structured pool statistics suitable for metrics collection

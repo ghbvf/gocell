@@ -272,7 +272,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	conn.ReleaseChannel(rawCh)
 
 	// --- Create ConsumerBase with short retry ---
-	cb := NewConsumerBase(
+	cb, cbErr := NewConsumerBase(
 		&noopClaimer{},
 		ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-e2e",
@@ -281,6 +281,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 			IdempotencyTTL: time.Hour,
 		},
 	)
+	require.NoError(t, cbErr)
 
 	// --- Start main subscriber with ConsumerBase-wrapped handler ---
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -529,7 +530,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 // returns ClaimAcquired with a noopReceipt.
 type noopClaimer struct{}
 
-func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
+func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
 	return idempotency.ClaimAcquired, &noopReceipt{}, nil
 }
 

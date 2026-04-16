@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -278,32 +279,44 @@ func (NoopWriter) Noop() bool { return true }
 //   - Unit testing Cells that require an outbox.Publisher dependency
 //   - Running demo/example code without a message broker
 //
-// Publish logs a structured warning via slog.Default() and discards the
-// payload. The warning ensures discard behavior is visible in logs.
-type DiscardPublisher struct{}
+// Publish logs a structured warning and discards the payload. The warning
+// ensures discard behavior is visible in logs.
+//
+// ref: go-logr zero-value safe (if sink == nil), slog DiscardHandler
+type DiscardPublisher struct {
+	// Logger is used for discard warnings. If nil, slog.Default() is used.
+	Logger  *slog.Logger
+	counter atomic.Uint64
+}
 
-// Publish logs a discard warning and returns nil.
-func (DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error {
-	slog.Warn("outbox: discard publisher dropping message", slog.String("topic", topic))
+// Publish logs a discard warning, increments the counter, and returns nil.
+func (d *DiscardPublisher) Publish(_ context.Context, topic string, _ []byte) error {
+	d.counter.Add(1)
+	l := d.Logger
+	if l == nil {
+		l = slog.Default()
+	}
+	l.Warn("outbox: discard publisher dropping message", slog.String("topic", topic))
 	return nil
 }
 
-var _ Publisher = DiscardPublisher{}
+// DiscardCount returns the total number of messages discarded.
+func (d *DiscardPublisher) DiscardCount() uint64 {
+	return d.counter.Load()
+}
+
+var _ Publisher = (*DiscardPublisher)(nil)
 
 // Noop implements cell.Nooper. CheckNotNoop rejects DiscardPublisher in durable mode.
-func (DiscardPublisher) Noop() bool { return true }
+func (*DiscardPublisher) Noop() bool { return true }
 
 // isDiscardPublisher reports whether p is the explicit discard sink.
 // Unexported: concrete-type detection should not leak into the public API.
 // Cell/runtime code that needs discard awareness should use cell metadata
 // or DurabilityMode instead of type-switching on Publisher implementations.
 func isDiscardPublisher(p Publisher) bool {
-	switch p.(type) {
-	case DiscardPublisher, *DiscardPublisher:
-		return true
-	default:
-		return false
-	}
+	_, ok := p.(*DiscardPublisher)
+	return ok
 }
 
 // ---------------------------------------------------------------------------
@@ -351,9 +364,12 @@ func (d Disposition) String() string {
 	}
 }
 
-// Deprecated: Use idempotency.Receipt directly. This alias will be removed
-// after all callers migrate (target: Sprint N+2, per project deprecation policy).
-// Canonical ownership now lives in kernel/idempotency.
+// Receipt is the canonical import path for consumer Receipt. Callers should use
+// outbox.Receipt rather than importing kernel/idempotency directly.
+//
+// Implementation note: this is a type alias to idempotency.Receipt so existing
+// code compiles during migration. Once all callers use outbox.Receipt, the alias
+// may be replaced with a standalone interface in a future version.
 type Receipt = idempotency.Receipt
 
 // HandleResult carries the business handler's processing outcome.

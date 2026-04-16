@@ -115,12 +115,12 @@ type poolStatsProvider interface {
 //
 // ref: go-redis PoolStats / redisprometheus — adopted same field set.
 type PoolStats struct {
-	Hits       uint32 // times free connection was found in pool
-	Misses     uint32 // times free connection was NOT found in pool
-	Timeouts   uint32 // times a wait timeout occurred
-	TotalConns uint32 // total connections in pool
-	IdleConns  uint32 // idle connections in pool
-	StaleConns uint32 // stale connections removed from pool
+	Hits       uint32 `json:"hits"`       // times free connection was found in pool
+	Misses     uint32 `json:"misses"`     // times free connection was NOT found in pool
+	Timeouts   uint32 `json:"timeouts"`   // times a wait timeout occurred
+	TotalConns uint32 `json:"totalConns"` // total connections in pool
+	IdleConns  uint32 `json:"idleConns"`  // idle connections in pool
+	StaleConns uint32 `json:"staleConns"` // stale connections removed from pool
 }
 
 // Client wraps a go-redis universal client and provides health checking

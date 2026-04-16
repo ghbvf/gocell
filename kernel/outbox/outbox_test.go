@@ -1,9 +1,11 @@
 package outbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -74,11 +76,11 @@ func TestNoopWriter_Noop(t *testing.T) {
 }
 
 func TestDiscardPublisher_Noop(t *testing.T) {
-	assert.True(t, DiscardPublisher{}.Noop())
+	assert.True(t, (&DiscardPublisher{}).Noop())
 }
 
 func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
-	var publisher Publisher = DiscardPublisher{}
+	var publisher Publisher = &DiscardPublisher{}
 	err := publisher.Publish(context.Background(), "orders.created", []byte(`{"ok":true}`))
 	assert.NoError(t, err)
 	assert.True(t, isDiscardPublisher(publisher))
@@ -820,4 +822,34 @@ func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	exactVal := strings.Repeat("v", MaxMetadataValueLen)
 	e3.Metadata = map[string]string{"k": exactVal}
 	assert.NoError(t, e3.Validate(), "value at exactly MaxMetadataValueLen should be valid")
+}
+
+// --- DiscardPublisher Logger + Counter Tests (DISCARD-OBS-01) ---
+
+func TestDiscardPublisher_Logger_Injection(t *testing.T) {
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	logger := slog.New(handler)
+
+	dp := &DiscardPublisher{Logger: logger}
+	err := dp.Publish(context.Background(), "test.topic", []byte(`{}`))
+	assert.NoError(t, err)
+	assert.Contains(t, buf.String(), "test.topic", "injected logger must capture discard warning")
+}
+
+func TestDiscardPublisher_Counter_Increments(t *testing.T) {
+	dp := &DiscardPublisher{}
+	for range 3 {
+		err := dp.Publish(context.Background(), "t", []byte(`{}`))
+		assert.NoError(t, err)
+	}
+	assert.Equal(t, uint64(3), dp.DiscardCount())
+}
+
+func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
+	// Zero-value DiscardPublisher{} must work without panic.
+	var dp DiscardPublisher
+	err := dp.Publish(context.Background(), "t", []byte(`{}`))
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), dp.DiscardCount())
 }

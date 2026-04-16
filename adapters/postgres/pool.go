@@ -153,18 +153,18 @@ func (p *Pool) Close() {
 // ref: pgxpool Stat() — adopted same field set for operational dashboards
 // and Prometheus/OTel metric collectors.
 type PoolStats struct {
-	AcquireCount            int64
-	AcquireDuration         time.Duration
-	AcquiredConns           int32
-	CanceledAcquireCount    int64
-	ConstructingConns       int32
-	EmptyAcquireCount       int64
-	IdleConns               int32
-	MaxConns                int32
-	TotalConns              int32
-	NewConnsCount           int64
-	MaxLifetimeDestroyCount int64
-	MaxIdleDestroyCount     int64
+	AcquireCount            int64         `json:"acquireCount"`
+	AcquireDuration         time.Duration `json:"acquireDuration"`
+	AcquiredConns           int32         `json:"acquiredConns"`
+	CanceledAcquireCount    int64         `json:"canceledAcquireCount"`
+	ConstructingConns       int32         `json:"constructingConns"`
+	EmptyAcquireCount       int64         `json:"emptyAcquireCount"`
+	IdleConns               int32         `json:"idleConns"`
+	MaxConns                int32         `json:"maxConns"`
+	TotalConns              int32         `json:"totalConns"`
+	NewConnsCount           int64         `json:"newConnsCount"`
+	MaxLifetimeDestroyCount int64         `json:"maxLifetimeDestroyCount"`
+	MaxIdleDestroyCount     int64         `json:"maxIdleDestroyCount"`
 }
 
 // PoolStats returns structured pool statistics suitable for metrics collection

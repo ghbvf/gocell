@@ -215,7 +215,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.outboxWriter == nil && c.txRunner == nil {
 		if c.publisher == nil {
 			return errcode.New(errcode.ErrCellMissingOutbox,
-				"access-core requires publisher or outbox writer; use WithPublisher(outbox.DiscardPublisher{}) for demo mode")
+				"access-core requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 		}
 		if c.ConsistencyLevel() >= cell.L2 {
 			c.logger.Warn("access-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",

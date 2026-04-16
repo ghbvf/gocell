@@ -4,11 +4,11 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // Compile-time check.
-var _ idempotency.Receipt = (*MockReceipt)(nil)
+var _ outbox.Receipt = (*MockReceipt)(nil)
 
 // MockReceipt records Commit/Release calls for assertion in tests.
 // Thread-safe via atomic.Bool.

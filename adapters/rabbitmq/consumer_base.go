@@ -20,6 +20,7 @@ const (
 )
 
 // ClaimPolicy controls ConsumerBase behavior when Claimer.Claim() fails.
+// The zero value (ClaimPolicyFailClosed) is the safe default.
 type ClaimPolicy uint8
 
 const (
@@ -33,7 +34,7 @@ const (
 	// processing during outage.
 	ClaimPolicyFailOpen
 
-	// claimPolicySentinel is the upper bound for validation. Not exported.
+	// claimPolicySentinel must remain last — add new values above this line.
 	claimPolicySentinel
 )
 
@@ -86,10 +87,6 @@ type ConsumerBaseConfig struct {
 }
 
 func (c *ConsumerBaseConfig) setDefaults() {
-	if !c.ClaimPolicy.Valid() {
-		panic(fmt.Sprintf("rabbitmq: invalid ClaimPolicy %d, must be ClaimPolicyFailClosed (%d) or ClaimPolicyFailOpen (%d)",
-			c.ClaimPolicy, ClaimPolicyFailClosed, ClaimPolicyFailOpen))
-	}
 	if c.RetryCount <= 0 {
 		c.RetryCount = 3
 	}
@@ -143,14 +140,22 @@ func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...
 }
 
 // NewConsumerBase creates a ConsumerBase using the two-phase Claimer interface.
-// The returned Receipt is threaded through HandleResult so that the Subscriber
-// can Commit/Release after broker Ack/Nack.
-func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) *ConsumerBase {
+// Returns an error if ConsumerBaseConfig contains invalid values (e.g., unknown
+// ClaimPolicy). The returned Receipt is threaded through HandleResult so that
+// the Subscriber can Commit/Release after broker Ack/Nack.
+//
+// ref: nats-go Connect() (*Conn, error), watermill-amqp NewSubscriber() (*Subscriber, error)
+// — constructors return error, never panic.
+func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) (*ConsumerBase, error) {
+	if !config.ClaimPolicy.Valid() {
+		return nil, fmt.Errorf("rabbitmq: invalid ClaimPolicy %d (valid range: 0..%d)",
+			config.ClaimPolicy, claimPolicySentinel-1)
+	}
 	config.setDefaults()
 	return &ConsumerBase{
 		claimer: claimer,
 		config:  config,
-	}
+	}, nil
 }
 
 // AsMiddleware returns a TopicHandlerMiddleware that applies this
@@ -238,7 +243,7 @@ func (cb *ConsumerBase) claimWithRetry(
 	topic string,
 	entry outbox.Entry,
 	idempotencyKey string,
-) (idempotency.ClaimState, idempotency.Receipt, error) {
+) (idempotency.ClaimState, outbox.Receipt, error) {
 	var lastErr error
 
 	for attempt := 0; attempt < cb.config.ClaimRetryCount; attempt++ {
@@ -289,7 +294,7 @@ func (cb *ConsumerBase) handleClaimState(
 	entry outbox.Entry,
 	handler outbox.EntryHandler,
 	state idempotency.ClaimState,
-	receipt idempotency.Receipt,
+	receipt outbox.Receipt,
 ) outbox.HandleResult {
 	switch state {
 	case idempotency.ClaimDone:
@@ -317,7 +322,7 @@ func (cb *ConsumerBase) handleClaimState(
 }
 
 // requeueResult constructs a Requeue HandleResult with the given error and receipt.
-func requeueResult(err error, receipt idempotency.Receipt) outbox.HandleResult {
+func requeueResult(err error, receipt outbox.Receipt) outbox.HandleResult {
 	return outbox.HandleResult{
 		Disposition: outbox.DispositionRequeue,
 		Err:         err,
@@ -333,7 +338,7 @@ func (cb *ConsumerBase) retryLoop(
 	topic string,
 	entry outbox.Entry,
 	handler outbox.EntryHandler,
-	receipt idempotency.Receipt,
+	receipt outbox.Receipt,
 ) outbox.HandleResult {
 	var lastResult outbox.HandleResult
 	for attempt := range cb.config.RetryCount {
