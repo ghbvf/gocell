@@ -2,6 +2,7 @@ package mem
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
@@ -99,6 +100,39 @@ func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if roles, ok := r.userRoles[userID]; ok {
+		delete(roles, roleID)
+	}
+	return nil
+}
+
+// RemoveFromUserIfNotLast atomically removes the role from the user only if
+// at least one other holder will remain. Holds the write lock for both the
+// count check and the removal to eliminate TOCTOU races.
+func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Count holders under the same lock.
+	count := 0
+	for _, roleIDs := range r.userRoles {
+		if _, ok := roleIDs[roleID]; ok {
+			count++
+		}
+	}
+
+	// Check if user actually holds the role.
+	userHoldsRole := false
+	if roles, ok := r.userRoles[userID]; ok {
+		_, userHoldsRole = roles[roleID]
+	}
+
+	if userHoldsRole && count == 1 {
+		return errcode.New(errcode.ErrAuthForbidden,
+			fmt.Sprintf("cannot revoke role %q from user %q: sole holder", roleID, userID))
+	}
+
+	// Safe to remove (either not the last holder, or user doesn't hold it).
 	if roles, ok := r.userRoles[userID]; ok {
 		delete(roles, roleID)
 	}

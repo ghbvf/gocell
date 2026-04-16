@@ -4,6 +4,7 @@
 package health
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -188,7 +189,7 @@ func (h *Handler) verboseAllowed(r *http.Request) bool {
 	if token == "" {
 		return true // no token configured — backward compatible
 	}
-	return r.Header.Get(VerboseTokenHeader) == token
+	return subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.
