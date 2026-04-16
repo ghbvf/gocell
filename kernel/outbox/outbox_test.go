@@ -857,11 +857,13 @@ func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.
 	// Must not panic — this is the key regression from value→pointer migration.
-	var p *DiscardPublisher // typed nil
+	var p *DiscardPublisher //nolint:staticcheck // SA4023: typed nil used to verify interface-nil semantics below
 	var pub Publisher = p   // interface non-nil at Go level
 
 	// Go interface nil semantics: pub != nil because it carries type info.
-	if pub == nil {
+	// The comparison is tautologically false at compile time; staticcheck
+	// (SA4023) flags it but it documents the invariant the test guards.
+	if pub == nil { //nolint:staticcheck // SA4023: intentional — asserts typed-nil wrapped in interface is not == nil
 		t.Fatal("typed nil wrapped in interface should not be == nil")
 	}
 	assert.NotPanics(t, func() {
