@@ -24,6 +24,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "access-core",
 				Type:             "core",
 				ConsistencyLevel: "L2",
+				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
@@ -32,6 +33,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "audit-core",
 				Type:             "core",
 				ConsistencyLevel: "L2",
+				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.startup"}},
@@ -3415,12 +3417,12 @@ func TestOUTGUARD01(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name: "L2 cell without durabilityMode — warning",
+			name: "L2 cell without durabilityMode — error",
 			setup: func(pm *metadata.ProjectMeta) {
-				// access-core is L2 and has no DurabilityMode set by default.
 				pm.Cells["access-core"].DurabilityMode = ""
+				pm.Cells["audit-core"].DurabilityMode = ""
 			},
-			wantCount: 2, // access-core and audit-core are both L2 without durabilityMode
+			wantCount: 2, // both L2 cells missing durabilityMode
 		},
 		{
 			name: "L2 cell with durabilityMode — no warning",
@@ -3474,7 +3476,7 @@ func TestOUTGUARD01(t *testing.T) {
 			got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
-				assert.Equal(t, SeverityWarning, r.Severity)
+				assert.Equal(t, SeverityError, r.Severity)
 				assert.Equal(t, IssueRequired, r.IssueType)
 			}
 		})
@@ -3504,7 +3506,20 @@ func TestOUTGUARD01_L3_L4_Warning(t *testing.T) {
 
 	val := NewValidator(pm, ".")
 	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
-	assert.Len(t, got, 2, "both L3 and L4 cells should warn")
+	assert.Len(t, got, 2, "both L3 and L4 cells should error")
+}
+
+func TestValidate_OUTGUARD01_Registration(t *testing.T) {
+	// Entry-point test: call Validate() (not validateOUTGUARD01 directly)
+	// and assert OUTGUARD-01 is registered and fires. Prevents silent
+	// deregistration if someone removes the rule from Validate().
+	pm := validProject()
+	pm.Cells["access-core"].DurabilityMode = "" // L2, missing → error
+
+	val := NewValidator(pm, ".")
+	all := val.Validate()
+	got := findByCode(all, "OUTGUARD-01")
+	assert.NotEmpty(t, got, "OUTGUARD-01 must be registered in Validate() entry point")
 }
 
 func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {

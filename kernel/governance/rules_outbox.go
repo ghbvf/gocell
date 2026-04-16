@@ -7,9 +7,9 @@ import "fmt"
 // pattern and should explicitly declare "demo" or "durable" mode so that
 // runtime CheckNotNoop can enforce the correct behaviour.
 //
-// This is an advisory (warning) rule because the runtime CheckNotNoop already
-// catches noop implementations at Init() time. The governance rule shifts
-// detection left to CI time via `gocell validate`.
+// Missing durabilityMode on L2+ cells is SeverityError because the runtime
+// CheckNotNoop is a hard gate — if the author didn't declare intent, CI should
+// catch it before runtime does. Invalid values are also SeverityError.
 //
 // ref: K8s apimachinery validation — required field checks
 // ref: kernel/cell/durability.go — DurabilityMode, CheckNotNoop
@@ -22,7 +22,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 		if c.DurabilityMode == "" {
 			results = append(results, ValidationResult{
 				Code:      "OUTGUARD-01",
-				Severity:  SeverityWarning,
+				Severity:  SeverityError,
 				IssueType: IssueRequired,
 				File:      cellFile(c.ID),
 				Field:     "durabilityMode",

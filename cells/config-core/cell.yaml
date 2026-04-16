@@ -1,6 +1,7 @@
 id: config-core
 type: core
 consistencyLevel: L2
+durabilityMode: durable
 owner:
   team: platform
   role: cell-owner
