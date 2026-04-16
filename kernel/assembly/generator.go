@@ -128,38 +128,40 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 		if consErr != nil {
 			return nil, nil, fmt.Errorf("boundary: resolve consumers for %q: %w", contractID, consErr)
 		}
+		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
+	}
 
-		providerInAssembly := cellSet[provider]
+	exported = sortedKeys(exportedSet)
+	imported = sortedKeys(importedSet)
+	return exported, imported, nil
+}
 
-		// Exported: provider is inside, and either no consumers or at least
-		// one consumer is outside.
-		if providerInAssembly {
-			if len(consumers) == 0 {
-				exportedSet[contractID] = true
-			} else {
-				for _, consumer := range consumers {
-					if !cellSet[consumer] {
-						exportedSet[contractID] = true
-						break
-					}
-				}
-			}
-		}
+// classifyBoundary categorizes a single contract as exported, imported, or internal
+// relative to the assembly cell set.
+func classifyBoundary(contractID, provider string, consumers []string, cellSet, exportedSet, importedSet map[string]bool) {
+	providerInAssembly := cellSet[provider]
 
-		// Imported: at least one consumer is inside, and provider is outside.
-		if !providerInAssembly {
-			for _, consumer := range consumers {
-				if cellSet[consumer] {
-					importedSet[contractID] = true
+	if providerInAssembly {
+		if len(consumers) == 0 {
+			exportedSet[contractID] = true
+		} else {
+			for _, c := range consumers {
+				if !cellSet[c] {
+					exportedSet[contractID] = true
 					break
 				}
 			}
 		}
 	}
 
-	exported = sortedKeys(exportedSet)
-	imported = sortedKeys(importedSet)
-	return exported, imported, nil
+	if !providerInAssembly {
+		for _, c := range consumers {
+			if cellSet[c] {
+				importedSet[contractID] = true
+				break
+			}
+		}
+	}
 }
 
 // collectSmokeTargets gathers all verify.smoke entries from cells in the assembly.
