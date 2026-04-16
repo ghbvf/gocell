@@ -49,6 +49,8 @@ func (v *Validator) validateADV03() []ValidationResult {
 }
 
 // validateADV04 checks that status-board entries reference existing journeys.
+// status-board.yaml's root is a YAML sequence (no "entries" wrapper), so the
+// field path uses the locator's root-index form "[i].journeyId".
 func (v *Validator) validateADV04() []ValidationResult {
 	var results []ValidationResult
 	for i, entry := range v.project.StatusBoard {
@@ -56,7 +58,7 @@ func (v *Validator) validateADV04() []ValidationResult {
 			results = append(results, v.newResult(
 				"ADV-04", SeverityWarning, IssueRefNotFound,
 				"journeys/status-board.yaml",
-				fmt.Sprintf("entries[%d].journeyId", i),
+				fmt.Sprintf("[%d].journeyId", i),
 				fmt.Sprintf("status-board entry references unknown journey %q", entry.JourneyID),
 			))
 		}

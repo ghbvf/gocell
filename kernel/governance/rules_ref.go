@@ -311,7 +311,11 @@ func (v *Validator) validateREF14() []ValidationResult {
 				results = append(results, v.newResult(
 					"REF-14", SeverityError, IssueRefNotFound,
 					contractFile(c.ID),
-					fmt.Sprintf("endpoints.consumers[%d]", i),
+					// The YAML key depends on kind: clients / subscribers /
+					// invokers / readers. Using a logical name "consumers"
+					// here would defeat the locator because it does not exist
+					// in the source file.
+					fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
 					fmt.Sprintf("contract %q consumer actor %q is not a known cell or actor", c.ID, actor),
 				))
 			}

@@ -66,9 +66,11 @@ func Find(root *yaml.Node, path string) (*yaml.Node, error) {
 	}
 
 	for i, seg := range segs {
-		cur, err = stepField(cur, seg.field)
-		if err != nil {
-			return nil, fmt.Errorf("metadata: at %q: %w", pathUpTo(segs, i, -1), err)
+		if seg.field != "" {
+			cur, err = stepField(cur, seg.field)
+			if err != nil {
+				return nil, fmt.Errorf("metadata: at %q: %w", pathUpTo(segs, i, -1), err)
+			}
 		}
 		for j, idx := range seg.indices {
 			cur, err = stepIndex(cur, idx)
@@ -131,9 +133,15 @@ func parseSegment(s string) (pathSegment, error) {
 		seg.field = s
 		return seg, nil
 	}
-	seg.field = s[:lb]
-	if !isIdent(seg.field) {
-		return seg, fmt.Errorf("invalid identifier %q", seg.field)
+	// lb == 0 → pure-index segment like "[0]" or "[0][1]", which is needed
+	// when the YAML document root is itself a sequence (actors.yaml,
+	// journeys/status-board.yaml). seg.field stays empty; Find will skip
+	// stepField and run stepIndex directly against the current node.
+	if lb > 0 {
+		seg.field = s[:lb]
+		if !isIdent(seg.field) {
+			return seg, fmt.Errorf("invalid identifier %q", seg.field)
+		}
 	}
 	rest := s[lb:]
 	for len(rest) > 0 {

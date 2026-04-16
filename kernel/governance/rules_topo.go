@@ -145,7 +145,7 @@ func (v *Validator) validateTOPO04() []ValidationResult {
 			results = append(results, v.newResult(
 				"TOPO-04", SeverityError, IssueInvalid,
 				"actors.yaml",
-				"maxConsistencyLevel",
+				actorFieldPath(v.project.Actors, providerID, "maxConsistencyLevel"),
 				fmt.Sprintf(
 					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
 					c.ID, providerID, rawVal,
@@ -273,7 +273,7 @@ func (v *Validator) checkConsumerActors(
 			results = append(results, v.newResult(
 				"TOPO-07", SeverityError, IssueInvalid,
 				"actors.yaml",
-				"maxConsistencyLevel",
+				actorFieldPath(v.project.Actors, consumerID, "maxConsistencyLevel"),
 				fmt.Sprintf(
 					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
 					c.ID, consumerID, rawVal,

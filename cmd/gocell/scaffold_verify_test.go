@@ -183,4 +183,3 @@ func TestReadModule_MalformedGoMod(t *testing.T) {
 	_, err := readModule(dir)
 	assert.Error(t, err)
 }
-

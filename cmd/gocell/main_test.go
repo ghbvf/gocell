@@ -531,6 +531,45 @@ func TestPrintResult_LineOnlyColumnZero(t *testing.T) {
 	}
 }
 
+// TestPrintResult_Scope: findings anchored to a virtual scope (e.g. DEP-02
+// cycle across cells) must render as "[scope: ...]" rather than mimicking
+// file:line:col syntax.
+func TestPrintResult_Scope(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "DEP-02",
+		Scope:   "project",
+		Field:   "cells",
+		Message: "circular dependency detected",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if !strings.Contains(out, "at [scope: project]") {
+		t.Errorf("scoped finding should render with '[scope: ...]' marker: %q", out)
+	}
+	// Defensive: the output must not look like a clickable path.
+	if strings.Contains(out, "at project:") || strings.Contains(out, "at project\n") {
+		t.Errorf("scope label must not be rendered as a file path: %q", out)
+	}
+	if !strings.Contains(out, "circular dependency detected (field: cells)") {
+		t.Errorf("field should appear on message line for scoped findings too: %q", out)
+	}
+}
+
+// TestPrintResult_NoFileNoScope: when neither File nor Scope is set, the
+// "at" line is omitted entirely (degenerate but legal input).
+func TestPrintResult_NoFileNoScope(t *testing.T) {
+	r := governance.ValidationResult{
+		Code:    "TEST-13",
+		Message: "bare",
+	}
+	out := captureStdout(t, func() { printResult(r) })
+	if strings.Contains(out, "at ") {
+		t.Errorf("no 'at' line expected when File and Scope both empty: %q", out)
+	}
+	if !strings.Contains(out, "[TEST-13] bare") {
+		t.Errorf("message still expected: %q", out)
+	}
+}
+
 // captureStdout runs fn with os.Stdout redirected into a string.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()

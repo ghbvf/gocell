@@ -161,7 +161,10 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 	}
 
 	if len(cycle) > 0 {
-		results = append(results, dc.newResult(
+		// DEP-02 spans the whole cell graph — no single file owns the cycle,
+		// so we emit a scoped result ("project") rather than a fake file
+		// path, which would mislead users into trying to click-jump to it.
+		results = append(results, dc.newScopedResult(
 			"DEP-02", SeverityError, IssueForbidden,
 			"project",
 			"cells",

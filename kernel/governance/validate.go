@@ -36,17 +36,28 @@ const (
 )
 
 // ValidationResult represents a single validation finding.
+//
+// File and Scope are mutually exclusive:
+//   - File identifies a real YAML file; the finding points at a concrete
+//     location (File plus Line/Column) that an IDE can open.
+//   - Scope names a virtual domain ("project", "cross-file", ...) used by
+//     checks that inspect relationships across multiple files and therefore
+//     cannot pin the issue to a single file position. CLI renderers must
+//     avoid showing Scope with a "file:line:col" prefix because doing so
+//     would invite users to try (and fail) to jump to it.
 type ValidationResult struct {
 	Code      string // e.g., "REF-01", "TOPO-03"
 	Severity  Severity
 	IssueType IssueType
-	File      string // YAML file path
+	File      string // YAML file path; empty when Scope is set
+	Scope     string // virtual scope name; empty when File is set
 	Field     string // field path within YAML, e.g. "contractUsages[0].role"
 	Message   string
 	// Line and Column locate the offending value inside File. They are 1-based
 	// (matching yaml.v3) and zero when the position is unknown — e.g. the
-	// ProjectMeta was constructed without Nodes, or the field path cannot be
-	// resolved (array index out of range, typo in rule code, etc.).
+	// ProjectMeta was constructed without FileNodes, or the field path cannot
+	// be resolved (array index out of range, typo in rule code, etc.). They
+	// are always zero when Scope is set.
 	Line   int
 	Column int
 }

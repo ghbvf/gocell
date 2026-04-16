@@ -49,3 +49,19 @@ func (l *locator) newResult(code string, sev Severity, typ IssueType, file, fiel
 		Column:    col,
 	}
 }
+
+// newScopedResult constructs a ValidationResult for checks that span multiple
+// files (or none at all). Pass a virtual scope name (e.g. "project") instead
+// of a file path; Line/Column are always zero because there is no single
+// location to point at. Renderers distinguish Scope from File so users do
+// not mistake the scope label for a jumpable path.
+func (l *locator) newScopedResult(code string, sev Severity, typ IssueType, scope, field, msg string) ValidationResult {
+	return ValidationResult{
+		Code:      code,
+		Severity:  sev,
+		IssueType: typ,
+		Scope:     scope,
+		Field:     field,
+		Message:   msg,
+	}
+}

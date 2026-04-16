@@ -234,6 +234,47 @@ owner:
 	}
 }
 
+// TestFind_RootSequence exercises YAML files whose root is a sequence
+// (actors.yaml, journeys/status-board.yaml). The path must start with
+// "[i]" and may be followed by ".field" descending into the element.
+func TestFind_RootSequence(t *testing.T) {
+	src := `
+- id: first
+  type: external
+- id: second
+  type: external
+`
+	root := mustParseNode(t, src)
+
+	n, err := Find(root, "[0].id")
+	if err != nil {
+		t.Fatalf("Find([0].id) err = %v", err)
+	}
+	if n.Value != "first" {
+		t.Errorf("Find([0].id).Value = %q, want first", n.Value)
+	}
+	if n.Line != 2 {
+		t.Errorf("Find([0].id).Line = %d, want 2", n.Line)
+	}
+
+	n, err = Find(root, "[1].type")
+	if err != nil {
+		t.Fatalf("Find([1].type) err = %v", err)
+	}
+	if n.Value != "external" {
+		t.Errorf("Find([1].type).Value = %q, want external", n.Value)
+	}
+
+	// Pure index without a trailing field returns the mapping node.
+	n, err = Find(root, "[0]")
+	if err != nil {
+		t.Fatalf("Find([0]) err = %v", err)
+	}
+	if n.Kind != yaml.MappingNode {
+		t.Errorf("Find([0]).Kind = %d, want MappingNode", n.Kind)
+	}
+}
+
 // TestFind_EmptyMapping covers the boundary where a mapping exists but has
 // no entries ({}). stepField must report "not found" cleanly — no panic on
 // an empty Content slice.
