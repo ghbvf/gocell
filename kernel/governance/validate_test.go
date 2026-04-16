@@ -24,6 +24,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "access-core",
 				Type:             "core",
 				ConsistencyLevel: "L2",
+				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
@@ -32,6 +33,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:               "audit-core",
 				Type:             "core",
 				ConsistencyLevel: "L2",
+				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.startup"}},
@@ -3404,4 +3406,131 @@ func TestFMT15(t *testing.T) {
 		expected := filepath.Join("/project", "contracts/http/auth/login/v1", "response.schema.json")
 		assert.Equal(t, expected, capturedPath)
 	})
+}
+
+// --- OUTGUARD-01: L2+ durability declaration ---
+
+func TestOUTGUARD01(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name: "L2 cell without durabilityMode — error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = ""
+				pm.Cells["audit-core"].DurabilityMode = ""
+			},
+			wantCount: 2, // both L2 cells missing durabilityMode
+		},
+		{
+			name: "L2 cell with durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+			},
+			wantCount: 0,
+		},
+		{
+			name: "L0 cell without durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				// shared-crypto is L0 — no durability declaration required.
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["shared-crypto"].DurabilityMode = ""
+			},
+			wantCount: 0,
+		},
+		{
+			name: "mixed — only L2+ without durabilityMode warned",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = ""    // L2, should warn
+				pm.Cells["shared-crypto"].DurabilityMode = "" // L0, should not warn
+			},
+			wantCount: 1,
+		},
+		{
+			name: "L1 cell without durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["l1-cell"] = &metadata.CellMeta{
+					ID:               "l1-cell",
+					Type:             "core",
+					ConsistencyLevel: "L1",
+					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueRequired, r.IssueType)
+			}
+		})
+	}
+}
+
+func TestOUTGUARD01_L3_L4_Warning(t *testing.T) {
+	pm := validProject()
+	// Suppress existing L2 warnings.
+	pm.Cells["access-core"].DurabilityMode = "durable"
+	pm.Cells["audit-core"].DurabilityMode = "durable"
+	// Add L3 and L4 cells without durabilityMode.
+	pm.Cells["l3-cell"] = &metadata.CellMeta{
+		ID:               "l3-cell",
+		Type:             "core",
+		ConsistencyLevel: "L3",
+		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l3-cell.startup"}},
+	}
+	pm.Cells["l4-cell"] = &metadata.CellMeta{
+		ID:               "l4-cell",
+		Type:             "core",
+		ConsistencyLevel: "L4",
+		Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l4-cell.startup"}},
+	}
+
+	val := NewValidator(pm, ".")
+	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+	assert.Len(t, got, 2, "both L3 and L4 cells should error")
+}
+
+func TestValidate_OUTGUARD01_Registration(t *testing.T) {
+	// Entry-point test: call Validate() (not validateOUTGUARD01 directly)
+	// and assert OUTGUARD-01 is registered and fires. Prevents silent
+	// deregistration if someone removes the rule from Validate().
+	pm := validProject()
+	pm.Cells["access-core"].DurabilityMode = "" // L2, missing → error
+
+	val := NewValidator(pm, ".")
+	all := val.Validate()
+	got := findByCode(all, "OUTGUARD-01")
+	assert.NotEmpty(t, got, "OUTGUARD-01 must be registered in Validate() entry point")
+}
+
+func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
+	pm := validProject()
+	pm.Cells["access-core"].DurabilityMode = "banana" // invalid value
+	pm.Cells["audit-core"].DurabilityMode = "durable"
+
+	val := NewValidator(pm, ".")
+	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+	assert.Len(t, got, 1, "invalid durabilityMode should produce error")
+	assert.Equal(t, SeverityError, got[0].Severity)
+	assert.Equal(t, IssueInvalid, got[0].IssueType)
+	assert.Contains(t, got[0].Message, "banana")
 }

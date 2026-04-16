@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -516,6 +517,42 @@ func TestCommandEntry_ValidateNew_HasPhaseTimestamps(t *testing.T) {
 	err := entry.ValidateNew()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "phase timestamps")
+}
+
+// --- CommandEntry Metadata Validation Tests (META-SIZE-01) ---
+
+func TestCommandEntry_ValidateNew_MetadataKeyCount_Exceeds(t *testing.T) {
+	now := time.Now()
+	entry := CommandEntry{
+		ID: "cmd-1", DeviceID: "dev-1", CommandType: "reboot",
+		Payload: []byte(`{}`), Status: CommandPending, CreatedAt: now,
+	}
+	entry.Metadata = make(map[string]string)
+	for i := 0; i < MaxMetadataKeys+1; i++ {
+		entry.Metadata[fmt.Sprintf("key-%d", i)] = "v"
+	}
+	err := entry.ValidateNew()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata key count")
+}
+
+func TestCommandEntry_ValidateNew_MetadataWithinLimits(t *testing.T) {
+	now := time.Now()
+	entry := CommandEntry{
+		ID: "cmd-1", DeviceID: "dev-1", CommandType: "reboot",
+		Payload: []byte(`{}`), Status: CommandPending, CreatedAt: now,
+		Metadata: map[string]string{"device_region": "us-west-2"},
+	}
+	assert.NoError(t, entry.ValidateNew())
+}
+
+func TestCommandEntry_ValidateNew_NilMetadata_OK(t *testing.T) {
+	now := time.Now()
+	entry := CommandEntry{
+		ID: "cmd-1", DeviceID: "dev-1", CommandType: "reboot",
+		Payload: []byte(`{}`), Status: CommandPending, CreatedAt: now,
+	}
+	assert.NoError(t, entry.ValidateNew())
 }
 
 // ---------------------------------------------------------------------------

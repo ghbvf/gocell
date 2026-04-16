@@ -267,6 +267,9 @@ func (e *CommandEntry) ValidateNew() error {
 	if e.Timeouts.OverallDeadline < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: OverallDeadline timeout must be non-negative")
 	}
+	if err := validateMetadata(e.Metadata); err != nil {
+		return err
+	}
 	return nil
 }
 

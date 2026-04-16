@@ -7,6 +7,7 @@ type CellMeta struct {
 	ID               string         `yaml:"id"`
 	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
 	ConsistencyLevel string         `yaml:"consistencyLevel"` // "L0"-"L4"
+	DurabilityMode   string         `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
 	Owner            OwnerMeta      `yaml:"owner"`
 	Schema           SchemaMeta     `yaml:"schema"`
 	Verify           CellVerifyMeta `yaml:"verify"`

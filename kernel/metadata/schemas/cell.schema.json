@@ -65,6 +65,11 @@
         }
       }
     },
+    "durabilityMode": {
+      "type": "string",
+      "description": "Outbox durability mode for L2+ cells. Declared so CheckNotNoop can enforce at runtime.",
+      "enum": ["demo", "durable"]
+    },
     "l0Dependencies": {
       "type": "array",
       "description": "Explicit L0 Cell import dependencies. Only declared when importing L0 (pure-computation) cells within the same assembly.",
