@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.role.assign.v1.request",
+  "type": "object",
+  "properties": {
+    "userId": { "type": "string", "minLength": 1 },
+    "roleId": { "type": "string", "minLength": 1 }
+  },
+  "required": ["userId", "roleId"],
+  "additionalProperties": false
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +72,7 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 	body := `{"username":"alice","email":"a@b.com","password":"` + testPassword + `"}`
 	req := httptest.NewRequest(contract.HTTP.Method, contract.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	contract.ValidateHTTPResponseRecorder(t, recorder)
@@ -99,6 +101,7 @@ func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	c.ValidateHTTPResponseRecorder(t, recorder)
@@ -114,6 +117,7 @@ func TestHttpAuthUserGetV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -130,6 +134,7 @@ func TestHttpAuthUserUpdateV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"email":"new@b.com"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -148,8 +153,14 @@ func TestHttpAuthUserPatchV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"name":"Bob"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	// H2-3: validate request schema for PATCH (JSON merge patch).
+	c.ValidateRequest(t, []byte(`{"name":"Bob"}`))
+	c.ValidateRequest(t, []byte(`{"email":"new@b.com"}`))
+	c.ValidateRequest(t, []byte(`{"name":"Bob","email":"new@b.com","status":"active"}`))
 
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
@@ -166,6 +177,7 @@ func TestHttpAuthUserDeleteV1Serve(t *testing.T) {
 	userID := createUserForContractTest(t, handler, createContract)
 	deletePath := strings.Replace(deleteContract.HTTP.Path, "{id}", userID, 1)
 	req := httptest.NewRequest(deleteContract.HTTP.Method, deletePath, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, req)
 	deleteContract.ValidateHTTPResponseRecorder(t, recorder)
@@ -181,6 +193,7 @@ func TestHttpAuthUserLockV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -197,12 +210,14 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	// Lock first
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
 	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 
 	// Unlock
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -239,6 +254,7 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	lockContract.ValidateHTTPResponseRecorder(t, rec)
 

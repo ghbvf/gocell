@@ -120,12 +120,28 @@ func run(ctx context.Context) error {
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
-	accessCell := accesscore.NewAccessCore(
+
+	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-	)
+	}
+
+	// Seed admin role + optional admin user from env vars.
+	adminUser := os.Getenv("GOCELL_ADMIN_USER")
+	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
+	switch {
+	case adminUser != "" && adminPass != "":
+		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
+	case adminUser != "" || adminPass != "":
+		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
+		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
+	default:
+		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
+	}
+
+	accessCell := accesscore.NewAccessCore(accessOpts...)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),

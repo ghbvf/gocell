@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -23,6 +24,13 @@ func setup() http.Handler {
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
+}
+
+// adminCtx returns a context carrying admin credentials for test requests.
+func adminCtx() func(*http.Request) *http.Request {
+	return func(req *http.Request) *http.Request {
+		return req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	}
 }
 
 func TestUserResponse_ExcludesSensitiveFields(t *testing.T) {
@@ -63,6 +71,8 @@ func TestHandler(t *testing.T) {
 		method     string
 		path       string
 		body       string
+		subject    string
+		roles      []string
 		wantStatus int
 		checkBody  func(t *testing.T, body []byte)
 	}{
@@ -71,6 +81,8 @@ func TestHandler(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/",
 			body:       `{"username":"alice","email":"a@b.com","password":"secret123"}`,
+			subject:    "admin-user",
+			roles:      []string{"admin"},
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp map[string]json.RawMessage
@@ -93,12 +105,15 @@ func TestHandler(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/",
 			body:       `{bad json`,
+			subject:    "admin-user",
+			roles:      []string{"admin"},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "GET /{id} nonexistent returns 404",
 			method:     http.MethodGet,
 			path:       "/no-such-id",
+			subject:    "no-such-id", // self-access
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -106,7 +121,70 @@ func TestHandler(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/",
 			body:       `{"username":"alice","email":"a@b.com","password":"secret123","extra":"y"}`,
+			subject:    "admin-user",
+			roles:      []string{"admin"},
 			wantStatus: http.StatusBadRequest,
+		},
+		// Authorization tests (H1-2).
+		{
+			name:       "POST / no auth returns 401",
+			method:     http.MethodPost,
+			path:       "/",
+			body:       `{"username":"alice","email":"a@b.com","password":"secret123"}`,
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "POST / non-admin returns 403",
+			method:     http.MethodPost,
+			path:       "/",
+			body:       `{"username":"alice","email":"a@b.com","password":"secret123"}`,
+			subject:    "user-1",
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "GET /{id} self-access authz passes (user not found)",
+			method:     http.MethodGet,
+			path:       "/self-access-test",
+			subject:    "self-access-test",
+			wantStatus: http.StatusNotFound, // authz passes (self), service returns 404
+		},
+		{
+			name:       "GET /{id} different user non-admin returns 403",
+			method:     http.MethodGet,
+			path:       "/user-1",
+			subject:    "user-2",
+			roles:      []string{"viewer"},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "GET /{id} no auth returns 401",
+			method:     http.MethodGet,
+			path:       "/user-1",
+			subject:    "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "DELETE /{id} non-admin returns 403",
+			method:     http.MethodDelete,
+			path:       "/user-1",
+			subject:    "user-1", // even self cannot delete
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "POST /{id}/lock non-admin returns 403",
+			method:     http.MethodPost,
+			path:       "/user-1/lock",
+			subject:    "user-1",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "POST /{id}/unlock non-admin returns 403",
+			method:     http.MethodPost,
+			path:       "/user-1/unlock",
+			subject:    "user-1",
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
@@ -120,6 +198,9 @@ func TestHandler(t *testing.T) {
 				req = httptest.NewRequest(tc.method, tc.path, nil)
 			}
 			req.Header.Set("Content-Type", "application/json")
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
 			w := httptest.NewRecorder()
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -133,10 +214,11 @@ func TestHandler(t *testing.T) {
 func TestHandler_UpdateUnknownField(t *testing.T) {
 	r := setup()
 
-	// Create a user first
+	// Create a user first (as admin).
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -147,11 +229,12 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
-	// PUT with unknown field should return 400
+	// PUT with unknown field should return 400 (self-access).
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@b.com","extra":"y"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -159,10 +242,11 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 	r := setup()
 
-	// Create a user first
+	// Create a user first (as admin).
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -173,11 +257,12 @@ func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
-	// PATCH with unknown field should succeed (merge patch accepts any key)
+	// PATCH with unknown field should succeed (merge patch accepts any key, self-access).
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code, "PATCH uses DecodeJSON (not strict); unknown fields must be accepted for merge patch semantics")
 }
@@ -185,10 +270,11 @@ func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	r := setup()
 
-	// Create
+	// Create (admin).
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
@@ -201,24 +287,31 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 	id := created.Data.ID
 	require.NotEmpty(t, id)
 
-	// Get
+	// Get (self-access).
 	w = httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+id, nil))
+	getReq := httptest.NewRequest(http.MethodGet, "/"+id, nil)
+	getReq = getReq.WithContext(auth.TestContext(id, nil))
+	r.ServeHTTP(w, getReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Delete
+	// Delete (admin).
 	w = httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/"+id, nil))
+	delReq := httptest.NewRequest(http.MethodDelete, "/"+id, nil)
+	delReq = adminCtx()(delReq)
+	r.ServeHTTP(w, delReq)
 	assert.Equal(t, http.StatusNoContent, w.Code)
 }
 
 func TestHandlePatch_TypeValidation(t *testing.T) {
 	r := setup()
 
-	// Create a user first.
+	// Create a user first (admin).
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/",
-		strings.NewReader(`{"username":"patchuser","email":"p@b.com","password":"Secret123!"}`)))
+	createReq := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"username":"patchuser","email":"p@b.com","password":"Secret123!"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq = adminCtx()(createReq)
+	r.ServeHTTP(w, createReq)
 	require.Equal(t, http.StatusCreated, w.Code)
 	var created struct {
 		Data struct {
@@ -264,6 +357,7 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
+			req = req.WithContext(auth.TestContext(id, nil)) // self-access
 			r.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {

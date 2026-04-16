@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,21 +42,23 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 
 // --- additional handler tests ---
 
+func withAdmin(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+}
+
 func TestHandler_UpdatePUT(t *testing.T) {
 	r := setup()
-	// Create a user first.
 	w := httptest.NewRecorder()
 	body := `{"username":"upd","email":"u@b.com","password":"pass1234"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 
 	id := extractID(t, w.Body.Bytes())
 
-	// PUT update
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/"+id, strings.NewReader(`{"email":"new@b.com"}`))
+	req = withAdmin(httptest.NewRequest(http.MethodPut, "/"+id, strings.NewReader(`{"email":"new@b.com"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -65,7 +68,7 @@ func TestHandler_UpdatePUT(t *testing.T) {
 func TestHandler_UpdatePUT_BadJSON(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/some-id", strings.NewReader("{bad"))
+	req := withAdmin(httptest.NewRequest(http.MethodPut, "/some-id", strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -73,18 +76,16 @@ func TestHandler_UpdatePUT_BadJSON(t *testing.T) {
 
 func TestHandler_PatchUser(t *testing.T) {
 	r := setup()
-	// Create a user.
 	w := httptest.NewRecorder()
 	body := `{"username":"patch","email":"p@b.com","password":"pass1234"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 	id := extractID(t, w.Body.Bytes())
 
-	// PATCH name only
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(`{"name":"newname"}`))
+	req = withAdmin(httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(`{"name":"newname"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -94,7 +95,7 @@ func TestHandler_PatchUser(t *testing.T) {
 func TestHandler_PatchUser_BadJSON(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/some-id", strings.NewReader("{bad"))
+	req := withAdmin(httptest.NewRequest(http.MethodPatch, "/some-id", strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -102,16 +103,15 @@ func TestHandler_PatchUser_BadJSON(t *testing.T) {
 
 func TestHandler_PatchUser_Status(t *testing.T) {
 	r := setup()
-	// Create + PATCH status
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"st","email":"s@b.com","password":"pass1234"}`))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"st","email":"s@b.com","password":"pass1234"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 	id := extractID(t, w.Body.Bytes())
 
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(`{"status":"suspended"}`))
+	req = withAdmin(httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(`{"status":"suspended"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -119,24 +119,21 @@ func TestHandler_PatchUser_Status(t *testing.T) {
 
 func TestHandler_LockUnlock(t *testing.T) {
 	r := setup()
-	// Create
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"lock","email":"l@b.com","password":"pass1234"}`))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"lock","email":"l@b.com","password":"pass1234"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
 	id := extractID(t, w.Body.Bytes())
 
-	// Lock
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/"+id+"/lock", nil)
+	req = withAdmin(httptest.NewRequest(http.MethodPost, "/"+id+"/lock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "locked")
 
-	// Unlock
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/"+id+"/unlock", nil)
+	req = withAdmin(httptest.NewRequest(http.MethodPost, "/"+id+"/unlock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "active")
@@ -145,7 +142,7 @@ func TestHandler_LockUnlock(t *testing.T) {
 func TestHandler_Lock_NotFound(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/no-such-id/lock", nil)
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/no-such-id/lock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -153,7 +150,7 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 func TestHandler_Unlock_NotFound(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/no-such-id/unlock", nil)
+	req := withAdmin(httptest.NewRequest(http.MethodPost, "/no-such-id/unlock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }

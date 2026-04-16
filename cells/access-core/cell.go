@@ -5,14 +5,19 @@ package accesscore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
+	"golang.org/x/crypto/bcrypt"
+
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/access-core/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/access-core/slices/identitymanage"
+	"github.com/ghbvf/gocell/cells/access-core/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout"
@@ -91,6 +96,23 @@ func WithInMemoryDefaults() Option {
 	}
 }
 
+// WithSeedAdminRole ensures the "admin" role exists in the role repository
+// during Init(). Idempotent: re-seeding is a no-op.
+func WithSeedAdminRole() Option {
+	return func(c *AccessCore) { c.seedAdminRole = true }
+}
+
+// WithSeedAdmin ensures the "admin" role exists and creates an admin user
+// with the given credentials during Init(). Idempotent: skips if the user
+// already exists.
+func WithSeedAdmin(username, password string) Option {
+	return func(c *AccessCore) {
+		c.seedAdminRole = true
+		c.seedAdminUser = username
+		c.seedAdminPass = password
+	}
+}
+
 // AccessCore is the access-core Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
@@ -104,6 +126,11 @@ type AccessCore struct {
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
 
+	// Seed admin configuration (set via WithSeedAdmin/WithSeedAdminRole).
+	seedAdminRole bool
+	seedAdminUser string
+	seedAdminPass string
+
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
 	loginHandler    *sessionlogin.Handler
@@ -114,6 +141,7 @@ type AccessCore struct {
 	validateSvc      *sessionvalidate.Service
 	authzSvc         *authorizationdecide.Service
 	rbacHandler      *rbaccheck.Handler
+	rbacAssignHandler *rbacassign.Handler
 	configReceiveSvc *configreceive.Service
 }
 
@@ -165,7 +193,7 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 	return c.authzSvc
 }
 
-// Init constructs all 8 slices.
+// Init constructs all 9 slices.
 func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
@@ -200,6 +228,13 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
+	}
+
+	// Seed admin role and optional admin user.
+	if c.seedAdminRole {
+		if err := c.doSeedAdmin(ctx); err != nil {
+			return fmt.Errorf("access-core seed admin: %w", err)
+		}
 	}
 
 	// identity-manage
@@ -258,10 +293,70 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbac-check", "access-core", cell.L0))
 
+	// rbac-assign — L0 is correct for in-memory repos (no transaction semantics).
+	// Upgrade to L1 when PostgreSQL adapter is introduced (needs real tx).
+	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger)
+	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
+	c.AddSlice(cell.NewBaseSlice("rbac-assign", "access-core", cell.L0))
+
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
 	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
 
+	return nil
+}
+
+// doSeedAdmin seeds the admin role and optionally creates an admin user.
+// Requires roleRepo to be a *mem.RoleRepository (for SeedRole access).
+// Idempotent: skips if user already exists.
+func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
+	memRoleRepo, ok := c.roleRepo.(*mem.RoleRepository)
+	if !ok {
+		return fmt.Errorf("seed admin requires in-memory role repository; got %T", c.roleRepo)
+	}
+
+	memRoleRepo.SeedRole(&domain.Role{
+		ID:   domain.RoleAdmin,
+		Name: domain.RoleAdmin,
+		Permissions: []domain.Permission{
+			{Resource: "*", Action: "*"},
+		},
+	})
+	c.logger.Info("seed: admin role ensured")
+
+	if c.seedAdminUser == "" || c.seedAdminPass == "" {
+		return nil
+	}
+
+	// Check if user already exists (idempotent).
+	if _, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser); err == nil {
+		c.logger.Info("seed: admin user already exists, skipping",
+			slog.String("username", c.seedAdminUser))
+		return nil
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(c.seedAdminPass), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+
+	user, err := domain.NewUser(c.seedAdminUser, c.seedAdminUser+"@gocell.local", string(hash))
+	if err != nil {
+		return fmt.Errorf("create user: %w", err)
+	}
+	user.ID = "usr-admin-seed"
+
+	if err := c.userRepo.Create(ctx, user); err != nil {
+		return fmt.Errorf("persist user: %w", err)
+	}
+
+	if err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
+		return fmt.Errorf("assign role: %w", err)
+	}
+
+	c.logger.Info("seed: admin user created",
+		slog.String("username", c.seedAdminUser),
+		slog.String("user_id", user.ID))
 	return nil
 }
 
@@ -280,6 +375,11 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 
 		// RBAC queries: /api/v1/access/roles
 		sub.Route("/roles", c.rbacHandler.RegisterRoutes)
+	})
+
+	// Internal admin endpoints: /internal/v1/access/roles
+	mux.Route("/internal/v1/access", func(sub cell.RouteMux) {
+		sub.Route("/roles", c.rbacAssignHandler.RegisterRoutes)
 	})
 }
 

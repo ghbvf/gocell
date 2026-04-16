@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 
 	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -187,7 +188,7 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Equal(t, 8, len(c.OwnedSlices()), "should have 8 slices")
+	assert.Equal(t, 9, len(c.OwnedSlices()), "should have 9 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -309,14 +310,41 @@ func TestAccessCore_RouteSessionRefresh(t *testing.T) {
 func TestAccessCore_RouteUserCreate(t *testing.T) {
 	r := initCellWithRouter(t)
 
+	// Admin creates user → 201.
 	body := `{"username":"bob","email":"bob@example.com","password":"secret123"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code,
+		"POST /api/v1/access/users/ with admin should return 201 (got %d)", rec.Code)
+}
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"POST /api/v1/access/users/ should not return 404 (got %d)", rec.Code)
+func TestAccessCore_RouteUserCreate_NoAuth_Returns401(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/",
+		strings.NewReader(`{"username":"x","email":"x@y.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// No auth context.
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/",
+		strings.NewReader(`{"username":"x","email":"x@y.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
 
 func TestAccessCore_RouteSessionLogout(t *testing.T) {
@@ -339,6 +367,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/usr-nonexistent", nil)
+	req = req.WithContext(auth.TestContext("usr-nonexistent", nil)) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code,
@@ -347,11 +376,55 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 		"response should be JSON (handler reached, not chi 404)")
 }
 
+func TestAccessCore_RouteRoleAssign(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Role "admin" is not seeded in newTestCell() → domain-level 404 (role not found).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not router 404)")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_ROLE_NOT_FOUND")
+}
+
+func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// No auth context.
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
+}
+
 func TestAccessCore_RouteRolesList(t *testing.T) {
 	r := initCellWithRouter(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/user-1", nil)
+	req = req.WithContext(auth.TestContext("user-1", nil)) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
@@ -510,4 +583,110 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	_, err = verifier.Verify(ctx, refreshedToken)
 	require.Error(t, err, "refreshed token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
+}
+
+// --- Seed admin tests (H1-5) ---
+
+func TestAccessCore_SeedAdminRole_AlwaysSeeded(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(roleRepo),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+		WithSeedAdminRole(),
+	)
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(ctx, deps))
+
+	role, err := roleRepo.GetByID(ctx, "admin")
+	require.NoError(t, err, "admin role should be seeded")
+	assert.Equal(t, "admin", role.Name)
+}
+
+func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	c := NewAccessCore(
+		WithUserRepository(userRepo),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(roleRepo),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+		WithSeedAdmin("admin", "admin-pass-123"),
+	)
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(ctx, deps))
+
+	// Admin role exists.
+	role, err := roleRepo.GetByID(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, "admin", role.Name)
+
+	// Admin user exists.
+	user, err := userRepo.GetByUsername(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, "usr-admin-seed", user.ID)
+
+	// Role assigned.
+	roles, err := roleRepo.GetByUserID(ctx, user.ID)
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	assert.Equal(t, "admin", roles[0].Name)
+}
+
+func TestAccessCore_SeedAdmin_Idempotent(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	makeCell := func() *AccessCore {
+		return NewAccessCore(
+			WithUserRepository(userRepo),
+			WithSessionRepository(mem.NewSessionRepository()),
+			WithRoleRepository(roleRepo),
+			WithPublisher(eventbus.New()),
+			WithJWTIssuer(testIssuer),
+			WithJWTVerifier(testVerifier),
+			WithOutboxWriter(outbox.NoopWriter{}),
+			WithTxManager(noopTxRunner{}),
+			WithSeedAdmin("admin", "admin-pass-123"),
+		)
+	}
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+
+	// First init seeds admin.
+	require.NoError(t, makeCell().Init(ctx, deps))
+	// Second init should not error (idempotent).
+	require.NoError(t, makeCell().Init(ctx, deps))
+}
+
+// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin type assertion.
+type stubRoleRepo struct{ ports.RoleRepository }
+
+func TestAccessCore_SeedAdmin_NonMemRepo_ReturnsError(t *testing.T) {
+	c := NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(stubRoleRepo{}),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+		WithSeedAdminRole(),
+	)
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	err := c.Init(ctx, deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "seed admin requires in-memory role repository")
 }

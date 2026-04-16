@@ -137,6 +137,9 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		{http.MethodPost, "/api/v1/config/some-key/rollback"},
 		{http.MethodGet, "/api/v1/audit/entries"},
 		{http.MethodGet, "/api/v1/flags/"},
+		// Internal admin endpoints (PR-A RBAC closure).
+		{http.MethodPost, "/internal/v1/access/roles/assign"},
+		{http.MethodDelete, "/internal/v1/access/roles/revoke"},
 	}
 
 	for _, tc := range protectedRoutes {
