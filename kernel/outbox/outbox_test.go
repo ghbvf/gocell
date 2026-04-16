@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -718,4 +719,73 @@ func TestHandleResult_Fields(t *testing.T) {
 	assert.Equal(t, DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
 	assert.Nil(t, res.Receipt)
+}
+
+// --- Metadata Validation Tests (META-SIZE-01) ---
+
+func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e.Metadata = make(map[string]string)
+	for i := 0; i < MaxMetadataKeys+1; i++ {
+		e.Metadata[fmt.Sprintf("key-%d", i)] = "v"
+	}
+	err := e.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata key count")
+}
+
+func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	longKey := strings.Repeat("k", MaxMetadataKeyLen+1)
+	e.Metadata = map[string]string{longKey: "v"}
+	err := e.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata key length")
+}
+
+func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	longVal := strings.Repeat("v", MaxMetadataValueLen+1)
+	e.Metadata = map[string]string{"k": longVal}
+	err := e.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata value length")
+}
+
+func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e.Metadata = make(map[string]string)
+	// Fill with entries that individually fit but exceed total.
+	val := strings.Repeat("x", MaxMetadataValueLen)
+	for i := 0; i < (MaxMetadataTotalSize/MaxMetadataValueLen)+2; i++ {
+		e.Metadata[fmt.Sprintf("k%d", i)] = val
+	}
+	err := e.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata total size")
+}
+
+func TestEntry_Validate_MetadataWithinLimits(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e.Metadata = map[string]string{"trace_id": "abc123", "request_id": "req-456"}
+	assert.NoError(t, e.Validate())
+}
+
+func TestEntry_Validate_NilMetadata_OK(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	assert.NoError(t, e.Validate())
+}
+
+func TestEntry_Validate_EmptyMetadata_OK(t *testing.T) {
+	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
+	e.Metadata = map[string]string{}
+	assert.NoError(t, e.Validate())
+}
+
+func TestValidateMetadata_Constants(t *testing.T) {
+	// Verify constants match documented values.
+	assert.Equal(t, 64, MaxMetadataKeys)
+	assert.Equal(t, 256, MaxMetadataKeyLen)
+	assert.Equal(t, 4096, MaxMetadataValueLen)
+	assert.Equal(t, 65536, MaxMetadataTotalSize)
 }

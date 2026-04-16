@@ -1,0 +1,49 @@
+package governance
+
+import "fmt"
+
+// validateOUTGUARD01 checks that cells with L2+ consistency level declare
+// a durabilityMode in their cell.yaml. L2+ cells use the transactional outbox
+// pattern and should explicitly declare "demo" or "durable" mode so that
+// runtime CheckNotNoop can enforce the correct behaviour.
+//
+// This is an advisory (warning) rule because the runtime CheckNotNoop already
+// catches noop implementations at Init() time. The governance rule shifts
+// detection left to CI time via `gocell validate`.
+//
+// ref: K8s apimachinery validation — required field checks
+// ref: kernel/cell/durability.go — DurabilityMode, CheckNotNoop
+func (v *Validator) validateOUTGUARD01() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		if !isL2OrHigher(c.ConsistencyLevel) {
+			continue
+		}
+		if c.DurabilityMode != "" {
+			continue
+		}
+		results = append(results, ValidationResult{
+			Code:      "OUTGUARD-01",
+			Severity:  SeverityWarning,
+			IssueType: IssueRequired,
+			File:      cellFile(c.ID),
+			Field:     "durabilityMode",
+			Message: fmt.Sprintf(
+				"cell %q declares %s consistency but has no durabilityMode; "+
+					"set durabilityMode to \"demo\" or \"durable\" so CheckNotNoop "+
+					"can enforce outbox durability at runtime",
+				c.ID, c.ConsistencyLevel),
+		})
+	}
+	return results
+}
+
+// isL2OrHigher returns true if the consistency level string is L2, L3, or L4.
+func isL2OrHigher(level string) bool {
+	switch level {
+	case "L2", "L3", "L4":
+		return true
+	default:
+		return false
+	}
+}

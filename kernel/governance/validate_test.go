@@ -3405,3 +3405,78 @@ func TestFMT15(t *testing.T) {
 		assert.Equal(t, expected, capturedPath)
 	})
 }
+
+// --- OUTGUARD-01: L2+ durability declaration ---
+
+func TestOUTGUARD01(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name: "L2 cell without durabilityMode — warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				// access-core is L2 and has no DurabilityMode set by default.
+				pm.Cells["access-core"].DurabilityMode = ""
+			},
+			wantCount: 2, // access-core and audit-core are both L2 without durabilityMode
+		},
+		{
+			name: "L2 cell with durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+			},
+			wantCount: 0,
+		},
+		{
+			name: "L0 cell without durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				// shared-crypto is L0 — no durability declaration required.
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["shared-crypto"].DurabilityMode = ""
+			},
+			wantCount: 0,
+		},
+		{
+			name: "mixed — only L2+ without durabilityMode warned",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "" // L2, should warn
+				pm.Cells["shared-crypto"].DurabilityMode = "" // L0, should not warn
+			},
+			wantCount: 1,
+		},
+		{
+			name: "L1 cell without durabilityMode — no warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Cells["access-core"].DurabilityMode = "durable"
+				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["l1-cell"] = &metadata.CellMeta{
+					ID:               "l1-cell",
+					Type:             "core",
+					ConsistencyLevel: "L1",
+					Owner:            metadata.OwnerMeta{Team: "t", Role: "cell-owner"},
+					Schema:           metadata.SchemaMeta{Primary: "cell_l1"},
+					Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l1-cell.startup"}},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityWarning, r.Severity)
+				assert.Equal(t, IssueRequired, r.IssueType)
+			}
+		})
+	}
+}

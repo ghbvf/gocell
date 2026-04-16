@@ -16,6 +16,67 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Metadata size limits (META-SIZE-01)
+//
+// These constants prevent unbounded metadata from degrading broker throughput
+// or exceeding transport-level control-line limits.
+//
+// ref: OTel sdk/trace/span_limits.go — 128 attributes/span (GoCell uses 64
+//      as a tighter balance between overhead prevention and practical use)
+// ref: NATS server/const.go — MAX_CONTROL_LINE_SIZE = 4096 bytes
+// ref: RabbitMQ — no hard header-size limit, but 64 KB total is a pragmatic
+//      ceiling aligned with most broker implementations
+// ---------------------------------------------------------------------------
+
+const (
+	// MaxMetadataKeys is the maximum number of key-value pairs in Entry.Metadata.
+	MaxMetadataKeys = 64
+
+	// MaxMetadataKeyLen is the maximum byte length of a single metadata key.
+	MaxMetadataKeyLen = 256
+
+	// MaxMetadataValueLen is the maximum byte length of a single metadata value.
+	MaxMetadataValueLen = 4096
+
+	// MaxMetadataTotalSize is the maximum total byte size of all metadata
+	// key-value pairs combined (sum of len(k)+len(v) for each pair).
+	MaxMetadataTotalSize = 65536
+)
+
+// validateMetadata checks metadata map against size limits.
+// nil or empty metadata is valid (no checks needed).
+func validateMetadata(m map[string]string) error {
+	if len(m) == 0 {
+		return nil
+	}
+	if len(m) > MaxMetadataKeys {
+		return fmt.Errorf("outbox: metadata key count %d exceeds max %d", len(m), MaxMetadataKeys)
+	}
+	var total int
+	for k, v := range m {
+		if len(k) > MaxMetadataKeyLen {
+			return fmt.Errorf("outbox: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64))
+		}
+		if len(v) > MaxMetadataValueLen {
+			return fmt.Errorf("outbox: metadata value length %d exceeds max %d (key=%q)", len(v), MaxMetadataValueLen, truncate(k, 64))
+		}
+		total += len(k) + len(v)
+	}
+	if total > MaxMetadataTotalSize {
+		return fmt.Errorf("outbox: metadata total size %d exceeds max %d", total, MaxMetadataTotalSize)
+	}
+	return nil
+}
+
+// truncate returns the first n bytes of s, appending "..." if truncated.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// ---------------------------------------------------------------------------
 // Entry
 // ---------------------------------------------------------------------------
 
@@ -53,7 +114,8 @@ func (e Entry) RoutingTopic() string {
 }
 
 // Validate checks that required fields (ID, Topic or EventType, and Payload)
-// are present. Writers SHOULD call Validate before persisting. (F-OB-03)
+// are present and metadata is within size limits. Writers SHOULD call Validate
+// before persisting. (F-OB-03, META-SIZE-01)
 func (e Entry) Validate() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing ID")
@@ -63,6 +125,9 @@ func (e Entry) Validate() error {
 	}
 	if len(e.Payload) == 0 {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing payload")
+	}
+	if err := validateMetadata(e.Metadata); err != nil {
+		return err
 	}
 	return nil
 }

@@ -145,6 +145,9 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateADV03()...)
 	results = append(results, v.validateADV04()...)
 
+	// Outbox governance rules
+	results = append(results, v.validateOUTGUARD01()...)
+
 	return results
 }
 
