@@ -138,6 +138,51 @@ func TestParseFS_NodesEnableLocate(t *testing.T) {
 	}
 }
 
+// TestParseFS_RejectsMultiDocument verifies the `---`-delimited second
+// document triggers an error rather than being silently ignored by the first
+// Decode call.
+func TestParseFS_RejectsMultiDocument(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(
+			"id: first\n" +
+				"type: core\n" +
+				"consistencyLevel: L1\n" +
+				"owner: {team: t, role: r}\n" +
+				"schema: {primary: tbl}\n" +
+				"verify: {smoke: []}\n" +
+				"---\n" +
+				"id: second\n" +
+				"type: core\n" +
+				"consistencyLevel: L1\n" +
+				"owner: {team: t, role: r}\n" +
+				"schema: {primary: tbl}\n" +
+				"verify: {smoke: []}\n",
+		)},
+	}
+	_, err := NewParser(".").ParseFS(fs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple YAML documents")
+}
+
+// TestParseFS_AcceptsLeadingDocumentMarker: a single document preceded by the
+// "---" document marker is valid YAML and must still parse.
+func TestParseFS_AcceptsLeadingDocumentMarker(t *testing.T) {
+	fs := fstest.MapFS{
+		"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(
+			"---\n" +
+				"id: x\n" +
+				"type: core\n" +
+				"consistencyLevel: L1\n" +
+				"owner: {team: t, role: r}\n" +
+				"schema: {primary: tbl}\n" +
+				"verify: {smoke: []}\n",
+		)},
+	}
+	pm, err := NewParser(".").ParseFS(fs)
+	require.NoError(t, err)
+	assert.NotNil(t, pm.Cells["x"])
+}
+
 // TestParseFS_NodesAbsentWhenEmpty verifies empty optional files are skipped
 // (not stored under Nodes) so downstream lookups stay nil-safe.
 func TestParseFS_NodesAbsentWhenEmpty(t *testing.T) {

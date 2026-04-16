@@ -8,9 +8,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/registry"
 )
 
-// DependencyChecker validates structural dependencies between cells.
+// DependencyChecker validates structural dependencies between cells. It
+// embeds locator so locate/newResult and the project field are shared with
+// Validator via a single implementation.
 type DependencyChecker struct {
-	project   *metadata.ProjectMeta
+	locator
 	cells     *registry.CellRegistry
 	contracts *registry.ContractRegistry
 }
@@ -18,41 +20,9 @@ type DependencyChecker struct {
 // NewDependencyChecker creates a DependencyChecker for the given project metadata.
 func NewDependencyChecker(project *metadata.ProjectMeta) *DependencyChecker {
 	return &DependencyChecker{
-		project:   project,
+		locator:   locator{project: project},
 		cells:     registry.NewCellRegistry(project),
 		contracts: registry.NewContractRegistry(project),
-	}
-}
-
-// locate returns the 1-based (line, column) of `field` inside `file` using
-// the yaml.Node cache captured by the parser. Mirrors Validator.locate.
-func (dc *DependencyChecker) locate(file, field string) (line, col int) {
-	if file == "" || field == "" {
-		return 0, 0
-	}
-	if dc.project == nil || dc.project.Nodes == nil {
-		return 0, 0
-	}
-	n, ok := dc.project.Nodes[file]
-	if !ok || n == nil {
-		return 0, 0
-	}
-	pos := metadata.Locate(n, field)
-	return pos.Line, pos.Column
-}
-
-// newResult constructs a ValidationResult with Line/Column auto-populated.
-func (dc *DependencyChecker) newResult(code string, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
-	line, col := dc.locate(file, field)
-	return ValidationResult{
-		Code:      code,
-		Severity:  sev,
-		IssueType: typ,
-		File:      file,
-		Field:     field,
-		Message:   msg,
-		Line:      line,
-		Column:    col,
 	}
 }
 

@@ -51,9 +51,11 @@ type ValidationResult struct {
 	Column int
 }
 
-// Validator runs all validation rules against a parsed project.
+// Validator runs all validation rules against a parsed project. It embeds
+// locator to share locate/newResult with DependencyChecker and to promote
+// the project field so existing rule code keeps using v.project.* directly.
 type Validator struct {
-	project    *metadata.ProjectMeta
+	locator
 	root       string                            // project root for file existence checks
 	now        func() time.Time                  // clock function (injectable for tests)
 	fileExists func(path string) bool            // file existence check (injectable for tests)
@@ -78,7 +80,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 		actorSet[a.ID] = true
 	}
 	return &Validator{
-		project: project,
+		locator: locator{project: project},
 		root:    root,
 		now:     time.Now,
 		fileExists: func(path string) bool {
@@ -155,42 +157,6 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateOUTGUARD01()...)
 
 	return results
-}
-
-// locate returns the 1-based (line, column) of `field` inside `file` using
-// the yaml.Node cache captured by the parser. Returns (0, 0) when any
-// precondition is missing (no Nodes, no matching file, unresolvable path).
-// Rules should prefer newResult, which wraps this call.
-func (v *Validator) locate(file, field string) (line, col int) {
-	if file == "" || field == "" {
-		return 0, 0
-	}
-	if v.project == nil || v.project.Nodes == nil {
-		return 0, 0
-	}
-	n, ok := v.project.Nodes[file]
-	if !ok || n == nil {
-		return 0, 0
-	}
-	pos := metadata.Locate(n, field)
-	return pos.Line, pos.Column
-}
-
-// newResult constructs a ValidationResult with Line/Column auto-populated
-// from the yaml.Node cache. Rule implementations should prefer this builder
-// over struct literals so locations stay consistent across all findings.
-func (v *Validator) newResult(code string, sev Severity, typ IssueType, file, field, msg string) ValidationResult {
-	line, col := v.locate(file, field)
-	return ValidationResult{
-		Code:      code,
-		Severity:  sev,
-		IssueType: typ,
-		File:      file,
-		Field:     field,
-		Message:   msg,
-		Line:      line,
-		Column:    col,
-	}
 }
 
 // HasErrors returns true if any result has SeverityError.

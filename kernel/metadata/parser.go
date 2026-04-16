@@ -1,3 +1,13 @@
+// ref: gopkg.in/yaml.v3 decode.go — Decoder.Decode initialises a fresh
+// unmarshaller per call. KnownFields is stored on *Decoder and therefore
+// does NOT propagate through Node.Decode (see yaml.go func (n *Node) Decode,
+// which allocates a new internal decoder with default settings). That is
+// why unmarshalFile runs two separate Decoder passes rather than doing
+// `root.Decode(out)` after the AST pass.
+// ref: kubernetes-sigs/yaml UnmarshalStrict — takes a different route
+// (yaml→json→json.Decoder.DisallowUnknownFields). We keep yaml.v3 native
+// because we need yaml.Node line numbers, which the k8s path discards.
+
 package metadata
 
 import (
@@ -282,6 +292,13 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 	return nil
 }
 
+// maxMetadataFileSize caps a single YAML file at 1 MiB. Real metadata files
+// are <50 KB; a 20× headroom guards against adversarial inputs (or the wrong
+// fixture accidentally dropped into cells/ or contracts/) blowing up memory
+// once the yaml.Node AST is retained on ProjectMeta.Nodes for the life of a
+// Validator.
+const maxMetadataFileSize = 1 << 20 // 1 MiB
+
 // unmarshalFile reads and decodes a YAML file from fsys.
 //
 // The decode is two-phase:
@@ -295,12 +312,17 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 //
 // Empty / whitespace-only files are treated as "no content" and return
 // (nil, nil) to preserve the original behaviour of empty actors.yaml or
-// status-board.yaml. Multi-document files are rejected.
+// status-board.yaml. Multi-document files are rejected. Files larger than
+// maxMetadataFileSize are rejected before decoding (see that constant).
 func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("read %s", path), err)
+	}
+	if len(data) > maxMetadataFileSize {
+		return nil, errcode.New(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("parse %s: file size %d bytes exceeds limit %d", path, len(data), maxMetadataFileSize))
 	}
 
 	// Phase 1: capture location-preserving AST.

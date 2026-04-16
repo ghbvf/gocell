@@ -131,3 +131,39 @@ func TestValidationResult_PositionFields(t *testing.T) {
 	assert.Equal(t, 42, r.Line)
 	assert.Equal(t, 7, r.Column)
 }
+
+// TestDependencyChecker_NewResult_AutoFillsLocation mirrors the Validator
+// test to confirm DependencyChecker gets the same location enrichment via
+// the embedded locator.
+func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
+	src := "id: s\n" + // line 1
+		"belongsToCell: ghost\n" + // line 2 — the field we'll locate
+		"contractUsages: []\n" // line 3
+
+	pm := &metadata.ProjectMeta{
+		Slices: map[string]*metadata.SliceMeta{},
+		Nodes: map[string]*yaml.Node{
+			"cells/x/slices/s/slice.yaml": parseNode(t, src),
+		},
+	}
+	dc := NewDependencyChecker(pm)
+
+	r := dc.newResult("DEP-01", SeverityError, IssueMismatch,
+		"cells/x/slices/s/slice.yaml", "belongsToCell",
+		"slice belongsToCell mismatch")
+
+	assert.Equal(t, 2, r.Line)
+	assert.Positive(t, r.Column)
+	assert.Equal(t, "DEP-01", r.Code)
+}
+
+// TestDependencyChecker_Locate_FallsBack verifies the nil-project / missing
+// Nodes fallback shared with Validator.
+func TestDependencyChecker_Locate_FallsBack(t *testing.T) {
+	dc := NewDependencyChecker(nil)
+	// Safe on a nil project (NewDependencyChecker stores it as-is but locate
+	// short-circuits on l.project == nil).
+	line, col := dc.locate("any.yaml", "id")
+	assert.Zero(t, line)
+	assert.Zero(t, col)
+}

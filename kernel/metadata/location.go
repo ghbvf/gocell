@@ -1,3 +1,11 @@
+// ref: gopkg.in/yaml.v3 — Node.Line and Node.Column provide 1-based source
+// positions filled by libyaml during parsing (yaml.go, type Node struct).
+// ref: github.com/goccy/go-yaml/path.go — AST shape (rootNode / selectorNode
+// / indexNode) used as inspiration for the path grammar below. We adopt the
+// node-by-node walk idea but write our own grammar because (a) kernel/ is
+// limited to yaml.v3 + stdlib (no third-party imports), and (b) GoCell only
+// needs a strict subset of JSONPath (no "$", "[*]", ".." or quoted idents).
+
 package metadata
 
 import (
@@ -75,6 +83,10 @@ func Find(root *yaml.Node, path string) (*yaml.Node, error) {
 // Locate is a best-effort convenience that returns the (Line, Column) of the
 // node at `path`, or the zero Position if the path cannot be resolved.
 // Callers that need a precise error should use Find directly.
+//
+// The caller is expected to inspect pos.Known() rather than comparing Line
+// against 0 directly: yaml.v3 emits 1-based positions, so a zero Line here
+// unambiguously means "unresolved", never "line 0".
 func Locate(root *yaml.Node, path string) Position {
 	n, err := Find(root, path)
 	if err != nil || n == nil {

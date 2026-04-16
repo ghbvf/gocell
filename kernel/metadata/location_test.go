@@ -234,6 +234,28 @@ owner:
 	}
 }
 
+// TestFind_EmptyMapping covers the boundary where a mapping exists but has
+// no entries ({}). stepField must report "not found" cleanly — no panic on
+// an empty Content slice.
+func TestFind_EmptyMapping(t *testing.T) {
+	src := `foo: {}`
+	root := mustParseNode(t, src)
+
+	// foo itself resolves to an empty MappingNode.
+	n, err := Find(root, "foo")
+	if err != nil {
+		t.Fatalf("Find(foo) err = %v", err)
+	}
+	if n == nil {
+		t.Fatal("Find(foo) returned nil")
+	}
+
+	// foo.bar must fail with "not found", not panic.
+	if _, err := Find(root, "foo.bar"); err == nil {
+		t.Errorf("Find(foo.bar) in empty mapping err = nil, want not found")
+	}
+}
+
 // TestFind_IdentNames accepts letters/digits/underscore/dash after first char.
 func TestFind_IdentNames(t *testing.T) {
 	src := `
