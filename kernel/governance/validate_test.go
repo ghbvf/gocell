@@ -3387,4 +3387,21 @@ func TestFMT15(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("readFile receives correct schemaPath", func(t *testing.T) {
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+
+		var capturedPath string
+		val := NewValidator(pm, "/project")
+		val.readFile = func(path string) ([]byte, error) {
+			capturedPath = path
+			return []byte(validListSchema), nil
+		}
+		val.validateFMT15()
+
+		// contractDirFromID("http.auth.login.v1") → "contracts/http/auth/login/v1"
+		expected := filepath.Join("/project", "contracts/http/auth/login/v1", "response.schema.json")
+		assert.Equal(t, expected, capturedPath)
+	})
 }

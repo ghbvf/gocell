@@ -95,9 +95,12 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 		cellSet[c] = true
 	}
 
-	exported, imported := g.computeBoundaryContracts(cellSet)
+	exported, imported, err := g.computeBoundaryContracts(cellSet)
+	if err != nil {
+		return nil, err
+	}
 	smokeTargets := g.collectSmokeTargets(cellSet)
-	fingerprint := g.sourceFingerprint(assemblyID)
+	fingerprint := g.sourceFingerprint(assemblyID, exported, imported)
 
 	ctx := boundaryContext{
 		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
@@ -112,14 +115,19 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.
-func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported, imported []string) {
+func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported, imported []string, err error) {
 	exportedSet := make(map[string]bool)
 	importedSet := make(map[string]bool)
 
 	for _, contractID := range g.contracts.AllIDs() {
-		// Errors ignored: AllIDs() guarantees existence; FMT-09 catches invalid kinds.
-		provider, _ := g.contracts.Provider(contractID)
-		consumers, _ := g.contracts.Consumers(contractID)
+		provider, provErr := g.contracts.Provider(contractID)
+		if provErr != nil {
+			return nil, nil, fmt.Errorf("boundary: resolve provider for %q: %w", contractID, provErr)
+		}
+		consumers, consErr := g.contracts.Consumers(contractID)
+		if consErr != nil {
+			return nil, nil, fmt.Errorf("boundary: resolve consumers for %q: %w", contractID, consErr)
+		}
 
 		providerInAssembly := cellSet[provider]
 
@@ -151,7 +159,7 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 
 	exported = sortedKeys(exportedSet)
 	imported = sortedKeys(importedSet)
-	return exported, imported
+	return exported, imported, nil
 }
 
 // collectSmokeTargets gathers all verify.smoke entries from cells in the assembly.
@@ -170,8 +178,9 @@ func (g *Generator) collectSmokeTargets(cellSet map[string]bool) []string {
 
 // sourceFingerprint computes a SHA-256 hex digest of all source YAML for the
 // assembly. It hashes the assembly ID and all related cell IDs in sorted order
-// to produce a deterministic fingerprint.
-func (g *Generator) sourceFingerprint(assemblyID string) string {
+// to produce a deterministic fingerprint. The exported/imported boundary
+// contracts are passed in to avoid recomputing them.
+func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []string) string {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return ""
@@ -208,7 +217,6 @@ func (g *Generator) sourceFingerprint(assemblyID string) string {
 	}
 
 	// Hash boundary contracts so that endpoint changes invalidate the fingerprint.
-	exported, imported := g.computeBoundaryContracts(cellSet)
 	for _, cID := range exported {
 		fmt.Fprintf(h, "export:%s\n", cID)
 	}

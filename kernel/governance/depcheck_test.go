@@ -185,6 +185,42 @@ func TestDEP02_SingleCellNoExternalDeps(t *testing.T) {
 	assert.Empty(t, dep02, "single cell with no deps should produce no DEP-02 errors")
 }
 
+func TestDEP02_UnknownKindWarning(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cell-a": {ID: "cell-a", ConsistencyLevel: "L2"},
+			"cell-b": {ID: "cell-b", ConsistencyLevel: "L2"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"cell-a/slice-x": {
+				ID:            "slice-x",
+				BelongsToCell: "cell-a",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "bad.kind.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"bad.kind.v1": {
+				ID:   "bad.kind.v1",
+				Kind: "grpc", // unknown kind
+				Endpoints: metadata.EndpointsMeta{
+					Server: "cell-a",
+				},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	dc := NewDependencyChecker(project)
+	results := dc.Check()
+	dep02 := findByCode(results, "DEP-02")
+	require.Len(t, dep02, 1)
+	assert.Equal(t, SeverityWarning, dep02[0].Severity)
+	assert.Contains(t, dep02[0].Message, "bad.kind.v1")
+	assert.Contains(t, dep02[0].Message, "dependency graph may be incomplete")
+}
+
 // --- DEP-03: L0 dependencies in same assembly ---
 
 func TestDEP03_SameAssembly(t *testing.T) {

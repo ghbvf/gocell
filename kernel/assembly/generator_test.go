@@ -375,8 +375,12 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	fp1 := gen.sourceFingerprint("sso-bff")
-	fp2 := gen.sourceFingerprint("sso-bff")
+	cellSet := map[string]bool{"access-core": true}
+	exported, imported, err := gen.computeBoundaryContracts(cellSet)
+	require.NoError(t, err)
+
+	fp1 := gen.sourceFingerprint("sso-bff", exported, imported)
+	fp2 := gen.sourceFingerprint("sso-bff", exported, imported)
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.Len(t, fp1, 64)
@@ -386,7 +390,7 @@ func TestSourceFingerprint_NotFoundReturnsEmpty(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	fp := gen.sourceFingerprint("nonexistent")
+	fp := gen.sourceFingerprint("nonexistent", nil, nil)
 	assert.Empty(t, fp)
 }
 
@@ -432,4 +436,26 @@ func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 
 	// projection/config/snapshot/v1: provider=config-core (outside), reader=audit-core (inside) → imported
 	assert.Contains(t, content, "projection/config/snapshot/v1")
+}
+
+// ---------------------------------------------------------------------------
+// Boundary error propagation on unknown contract kind
+// ---------------------------------------------------------------------------
+
+func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
+	project := buildTestProject()
+	project.Contracts["unknown.kind.v1"] = &metadata.ContractMeta{
+		ID:        "unknown.kind.v1",
+		Kind:      "grpc", // unknown kind
+		OwnerCell: "access-core",
+		Endpoints: metadata.EndpointsMeta{Server: "access-core"},
+	}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+
+	_, err := gen.GenerateBoundary("sso-bff")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown.kind.v1")
+
+	var ec *ecErr.Error
+	assert.True(t, errors.As(err, &ec))
 }

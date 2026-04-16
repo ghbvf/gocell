@@ -72,6 +72,7 @@ func (dc *DependencyChecker) checkDEP01() []ValidationResult {
 // yielding a directed edge consumer → provider.
 // Cycle detection uses iterative DFS with three-color marking.
 func (dc *DependencyChecker) checkDEP02() []ValidationResult {
+	var results []ValidationResult
 	// Build adjacency list: consumerCell → set of providerCells.
 	graph := make(map[string]map[string]bool)
 
@@ -81,8 +82,21 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 			if !isProviderRole(cu.Role) {
 				continue
 			}
-			// Error ignored: REF-02 catches missing contracts; FMT-09 catches invalid kinds.
-			consumers, _ := dc.contracts.Consumers(cu.Contract)
+			consumers, consErr := dc.contracts.Consumers(cu.Contract)
+			if consErr != nil {
+				results = append(results, ValidationResult{
+					Code:      "DEP-02",
+					Severity:  SeverityWarning,
+					IssueType: IssueInvalid,
+					File:      sliceFile(providerCell + "/" + s.ID),
+					Field:     "contractUsages",
+					Message: fmt.Sprintf(
+						"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
+						cu.Contract, consErr,
+					),
+				})
+				continue
+			}
 			for _, consumerCell := range consumers {
 				if consumerCell == providerCell {
 					continue // self-edge is not a cross-cell dependency
@@ -143,16 +157,16 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 	}
 
 	if len(cycle) > 0 {
-		return []ValidationResult{{
+		results = append(results, ValidationResult{
 			Code:      "DEP-02",
 			Severity:  SeverityError,
 			IssueType: IssueForbidden,
 			File:      "project",
 			Field:     "cells",
 			Message:   fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
-		}}
+		})
 	}
-	return nil
+	return results
 }
 
 // reconstructCycle traces parent pointers to build the cycle path from
