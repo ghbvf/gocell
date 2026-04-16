@@ -122,11 +122,13 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 	for _, contractID := range g.contracts.AllIDs() {
 		provider, provErr := g.contracts.Provider(contractID)
 		if provErr != nil {
-			return nil, nil, fmt.Errorf("boundary: resolve provider for %q: %w", contractID, provErr)
+			return nil, nil, errcode.Wrap(errcode.ErrValidationFailed,
+				fmt.Sprintf("boundary: resolve provider for %q", contractID), provErr)
 		}
 		consumers, consErr := g.contracts.Consumers(contractID)
 		if consErr != nil {
-			return nil, nil, fmt.Errorf("boundary: resolve consumers for %q: %w", contractID, consErr)
+			return nil, nil, errcode.Wrap(errcode.ErrValidationFailed,
+				fmt.Sprintf("boundary: resolve consumers for %q", contractID), consErr)
 		}
 		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
 	}

@@ -248,7 +248,7 @@ func (s *BaseSlice) AffectedJourneys() []string {
 // SetVerify sets the verification spec.
 func (s *BaseSlice) SetVerify(v VerifySpec) { s.verify = v }
 
-// SetAllowedFiles overrides the default file ownership paths.
+// SetAllowedFiles sets the file ownership paths for this slice.
 func (s *BaseSlice) SetAllowedFiles(files []string) {
 	s.allowed = append([]string(nil), files...)
 }

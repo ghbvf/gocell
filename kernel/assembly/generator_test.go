@@ -457,5 +457,6 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown.kind.v1")
 
 	var ec *ecErr.Error
-	assert.True(t, errors.As(err, &ec))
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
 }

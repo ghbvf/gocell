@@ -75,7 +75,7 @@ verify:
       expiresAt: 2026-06-01
 ```
 
-目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 缺省时按目录约定推导。
+目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
 
 ### Contract
 
