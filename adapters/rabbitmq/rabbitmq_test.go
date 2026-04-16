@@ -4478,13 +4478,20 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 	ch := newMockChannel()
 
-	// Send confirmation asynchronously after NotifyPublish replaces the channel.
-	origNotify := ch.NotifyPublish
-	_ = origNotify
+	// Use context.WithTimeout to prevent goroutine leak if the test
+	// exits before the confirmation is sent (same fix as CloseError test).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+
 	go func() {
 		// Wait until confirmCalled is set (Confirm was called), then the
 		// next NotifyPublish will install a new channel. Poll briefly.
 		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 			ch.mu.Lock()
 			npc := ch.notifyPublishCh
 			confirmed := ch.confirmCalled
