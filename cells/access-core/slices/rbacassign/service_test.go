@@ -115,16 +115,27 @@ func TestService_Revoke(t *testing.T) {
 		wantCode errcode.Code
 	}{
 		{
-			name:   "revoke assigned role",
+			name:   "revoke assigned role with multiple holders",
+			userID: "usr-1",
+			roleID: "admin",
+			setup: func(r *mem.RoleRepository) {
+				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_ = r.AssignToUser(context.Background(), "usr-2", "admin")
+			},
+			wantErr: false,
+		},
+		{
+			name:   "revoke last admin returns error",
 			userID: "usr-1",
 			roleID: "admin",
 			setup: func(r *mem.RoleRepository) {
 				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
-			wantErr: false,
+			wantErr:  true,
+			wantCode: errcode.ErrAuthForbidden,
 		},
 		{
-			name:    "revoke unassigned role is idempotent",
+			name:    "revoke unassigned role with no holders is guarded",
 			userID:  "usr-1",
 			roleID:  "admin",
 			wantErr: false,
@@ -175,6 +186,7 @@ func TestService_Revoke_InvalidatesSessions(t *testing.T) {
 	ctx := context.Background()
 
 	_ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
+	_ = roleRepo.AssignToUser(ctx, "usr-2", "admin") // second admin to pass last-admin guard
 	sess := &domain.Session{ID: "sess-1", UserID: "usr-1"}
 	require.NoError(t, sessionRepo.Create(ctx, sess))
 
@@ -210,6 +222,7 @@ func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	_ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
+	_ = roleRepo.AssignToUser(context.Background(), "usr-2", "admin") // second admin to pass last-admin guard
 
 	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
 	err := svc.Revoke(context.Background(), "usr-1", "admin")

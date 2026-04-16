@@ -173,6 +173,14 @@ func TestHandler(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "DELETE /{id} admin self-delete returns 409",
+			method:     http.MethodDelete,
+			path:       "/admin-1",
+			subject:    "admin-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusConflict,
+		},
+		{
 			name:       "POST /{id}/lock non-admin returns 403",
 			method:     http.MethodPost,
 			path:       "/user-1/lock",

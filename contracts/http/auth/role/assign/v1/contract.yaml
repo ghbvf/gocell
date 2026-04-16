@@ -10,7 +10,7 @@ endpoints:
   http:
     method: POST
     path: /internal/v1/access/roles/assign
-    successStatus: 200
+    successStatus: 201
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

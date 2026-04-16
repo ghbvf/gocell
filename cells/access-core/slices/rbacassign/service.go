@@ -48,9 +48,20 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 
 // Revoke removes a role from a user. Idempotent: revoking a non-assigned role is a no-op.
 // Active sessions are revoked to force re-login with updated JWT roles.
+// Last-admin guard: rejects revocation if the user is the sole holder of the role.
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if userID == "" || roleID == "" {
 		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
+	}
+
+	// Last-admin guard: prevent removing the sole holder of any role.
+	count, err := s.roleRepo.CountByRole(ctx, roleID)
+	if err != nil {
+		return fmt.Errorf("rbac-assign: count role holders: %w", err)
+	}
+	if count == 1 {
+		return errcode.New(errcode.ErrAuthForbidden,
+			fmt.Sprintf("cannot revoke role %q: at least one holder must remain", roleID))
 	}
 
 	if err := s.roleRepo.RemoveFromUser(ctx, userID, roleID); err != nil {

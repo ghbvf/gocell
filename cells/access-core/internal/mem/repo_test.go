@@ -150,6 +150,54 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 	assert.NotNil(t, repo) // ensure repo survived concurrent access
 }
 
+func TestRoleRepository_Create(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	role := &domain.Role{ID: "editor", Name: "editor", Permissions: []domain.Permission{{Resource: "docs", Action: "write"}}}
+	require.NoError(t, repo.Create(ctx, role))
+
+	got, err := repo.GetByID(ctx, "editor")
+	require.NoError(t, err)
+	assert.Equal(t, "editor", got.ID)
+	assert.Len(t, got.Permissions, 1)
+}
+
+func TestRoleRepository_Create_Idempotent(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	role := &domain.Role{ID: "admin", Name: "admin"}
+	require.NoError(t, repo.Create(ctx, role))
+	require.NoError(t, repo.Create(ctx, role)) // second call is no-op
+
+	got, err := repo.GetByID(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, "admin", got.ID)
+}
+
+func TestRoleRepository_CountByRole(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	require.NoError(t, repo.AssignToUser(ctx, "usr-1", "admin"))
+	require.NoError(t, repo.AssignToUser(ctx, "usr-2", "admin"))
+
+	count, err := repo.CountByRole(ctx, "admin")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+}
+
+func TestRoleRepository_CountByRole_None(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	count, err := repo.CountByRole(ctx, "nonexistent")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
 // TestSessionRepository_Update_VersionConflict verifies that updating a session
 // with a stale version returns ErrSessionConflict.
 func TestSessionRepository_Update_VersionConflict(t *testing.T) {

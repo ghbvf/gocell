@@ -37,6 +37,18 @@ func (r *RoleRepository) SeedRole(role *domain.Role) {
 	r.roles[role.ID] = &clone
 }
 
+// Create persists a new role. Idempotent: if a role with the same ID already
+// exists, it is silently overwritten (upsert semantics for seed/bootstrap).
+func (r *RoleRepository) Create(_ context.Context, role *domain.Role) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	clone := *role
+	clone.Permissions = make([]domain.Permission, len(role.Permissions))
+	copy(clone.Permissions, role.Permissions)
+	r.roles[role.ID] = &clone
+	return nil
+}
+
 func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -91,4 +103,18 @@ func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string
 		delete(roles, roleID)
 	}
 	return nil
+}
+
+// CountByRole returns the number of users assigned to the given role.
+func (r *RoleRepository) CountByRole(_ context.Context, roleID string) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, roleIDs := range r.userRoles {
+		if _, ok := roleIDs[roleID]; ok {
+			count++
+		}
+	}
+	return count, nil
 }
