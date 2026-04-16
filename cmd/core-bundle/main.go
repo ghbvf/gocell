@@ -256,7 +256,7 @@ func run(ctx context.Context) error {
 	if adapterMode == "real" && metricsToken == "" {
 		return fmt.Errorf("GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header")
 	}
-	var metricsHandler http.Handler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+	metricsHandler := http.Handler(promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
 	if metricsToken != "" {
 		metricsHandler = withMetricsTokenGuard(metricsToken, metricsHandler)
 	} else {
