@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -129,9 +128,3 @@ func (c *InMemoryCollector) Handler() http.Handler {
 	})
 }
 
-// metricsText formats the counter as a Prometheus-like text line for
-// debugging/testing. Not a full Prometheus exposition format.
-func metricsText(method, route string, status int, count int64) string {
-	return fmt.Sprintf("http_requests_total{method=%q,route=%q,status=%q} %d",
-		method, route, strconv.Itoa(status), count)
-}

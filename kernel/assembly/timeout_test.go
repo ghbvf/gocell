@@ -85,6 +85,9 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "expected DeadlineExceeded, got %v", err)
 
+	// Async dispatcher: drain before reading observer state.
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
+
 	var seen bool
 	for _, e := range obs.snapshot() {
 		if e.CellID == "S" && e.Hook == cell.HookBeforeStart {
@@ -110,6 +113,8 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -212,6 +217,8 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
+
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
 
 	var seen bool
 	for _, e := range obs.snapshot() {

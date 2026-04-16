@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -64,17 +65,41 @@ type Config struct {
 	// hook. Nil uses cell.NopHookObserver{} (allocation-free no-op).
 	// Implementations must not block the caller.
 	HookObserver cell.LifecycleHookObserver
+
+	// HookObserverQueueSize bounds the async dispatcher's pending-event
+	// buffer. Zero uses DefaultHookObserverQueueSize (128). Negative is
+	// clamped to default.
+	HookObserverQueueSize int
+
+	// HookObserverSinkTimeout bounds a single OnHookEvent invocation. When
+	// exceeded, the event is counted as dropped with reason="sink_timeout"
+	// and the dispatcher moves on (the observer goroutine is abandoned).
+	// Zero uses DefaultHookObserverSinkTimeout (5s).
+	HookObserverSinkTimeout time.Duration
+
+	// HookObserverDrainTimeout bounds Stop()'s wait for the dispatcher to
+	// drain remaining events after the channel is closed. Zero uses
+	// DefaultHookObserverDrainTimeout (5s). After drain completion or
+	// timeout, any further emit() calls are counted as queue_full.
+	HookObserverDrainTimeout time.Duration
+
+	// MetricsProvider receives the dispatcher's internal drop / queue-depth
+	// metrics. Nil uses metrics.NopProvider, preserving the prior
+	// zero-dependency default. Wire a real provider to make dropped events
+	// visible in dashboards.
+	MetricsProvider metrics.Provider
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of
 // Cells, starting them in registration order and stopping them in reverse.
 type CoreAssembly struct {
-	mu      sync.Mutex
-	id      string
-	cfg     Config
-	cells   []cell.Cell
-	cellMap map[string]cell.Cell
-	state   assemblyState
+	mu         sync.Mutex
+	id         string
+	cfg        Config
+	cells      []cell.Cell
+	cellMap    map[string]cell.Cell
+	state      assemblyState
+	dispatcher *hookDispatcher // owned; lifecycle tied to New/Stop
 }
 
 // New creates a CoreAssembly with the given configuration.
@@ -94,10 +119,24 @@ func New(cfg Config) *CoreAssembly {
 	if cfg.HookTimeout == 0 {
 		cfg.HookTimeout = DefaultHookTimeout
 	}
+	// Eagerly construct the async dispatcher at New() time (not lazy on first
+	// emit) so its lifetime is deterministic: callers that construct an
+	// assembly and never Start it can still call Stop to drain cleanly, and
+	// goleak-based tests cannot witness a racy lazy-start.
+	dispatcher, err := newHookDispatcher(cfg.HookObserver, cfg.HookObserverQueueSize, cfg.HookObserverSinkTimeout, cfg.MetricsProvider)
+	if err != nil {
+		// newHookDispatcher only fails if metrics registration fails, and
+		// even then it falls back to Nop internally — so this branch is
+		// defensive. Logging + continuing with a fresh Nop dispatcher keeps
+		// New() infallible from callers' perspective.
+		slog.Warn("assembly: hook dispatcher construction failed; continuing without async fan-out",
+			slog.Any("error", err))
+	}
 	return &CoreAssembly{
-		id:      cfg.ID,
-		cfg:     cfg,
-		cellMap: make(map[string]cell.Cell),
+		id:         cfg.ID,
+		cfg:        cfg,
+		cellMap:    make(map[string]cell.Cell),
+		dispatcher: dispatcher,
 	}
 }
 
@@ -164,7 +203,43 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	a.state = stateStopped
 	a.mu.Unlock()
+
+	// Drain the async hook dispatcher after all cells have reported their
+	// AfterStop events so shutdown telemetry lands before the process
+	// exits. The drain is bounded by HookObserverDrainTimeout; a broken
+	// observer does not indefinitely block Stop().
+	if a.dispatcher != nil {
+		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+	}
 	return errors.Join(errs...)
+}
+
+// Shutdown terminates background workers owned by the assembly without
+// running Cell lifecycle stop. Intended for tests and for callers that
+// constructed an assembly via New() but never invoked Start/Stop — it
+// ensures the hook dispatcher goroutine does not linger.
+//
+// Shutdown is safe to call multiple times and is also implicitly invoked
+// as the final step of Stop().
+func (a *CoreAssembly) Shutdown() {
+	if a.dispatcher != nil {
+		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+	}
+}
+
+// FlushHookEvents waits for the async hook dispatcher to process every
+// event emitted so far, bounded by timeout. Returns true if drain
+// completed, false if the timeout fired first. Intended for tests that
+// need to observe deterministic observer state after a Start or Stop
+// that may have failed (failed Start does not drain; only a successful
+// Stop implicitly drains via HookObserverDrainTimeout).
+//
+// Zero timeout is interpreted as one second. Safe to call concurrently.
+func (a *CoreAssembly) FlushHookEvents(timeout time.Duration) bool {
+	if a.dispatcher == nil {
+		return true
+	}
+	return a.dispatcher.flush(timeout)
 }
 
 // stopCellWithHooks executes BeforeStop → Stop → AfterStop for a single cell.
@@ -399,14 +474,23 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 	return err
 }
 
-// emitHookEvent dispatches the event to the configured observer with panic
-// isolation. A misbehaving observer must never break the assembly — its
-// panic is logged and swallowed.
+// emitHookEvent hands off the event to the async dispatcher. The
+// dispatcher owns per-sink timeout + panic isolation + drop accounting so
+// the assembly critical path returns immediately (ref: k8s.io/client-go
+// tools/record/event.go@master — broadcaster fan-out).
+//
+// The fallback sync path below only runs when the dispatcher is nil — a
+// theoretical post-refactor bug, not a production condition — and
+// preserves the previous inline recover so a caller that bypasses New()
+// still gets defense-in-depth.
 func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
+	if a.dispatcher != nil {
+		a.dispatcher.emit(e)
+		return
+	}
+	// Defensive fallback — should not happen when New() is used.
 	defer func() {
 		if r := recover(); r != nil {
-			// Normalise recover() value into an error so the log field name
-			// is consistent with other error paths (slog.Any("error", ...)).
 			var recoveredErr error
 			if asErr, ok := r.(error); ok {
 				recoveredErr = asErr

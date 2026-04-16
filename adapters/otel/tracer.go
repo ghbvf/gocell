@@ -72,6 +72,28 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 	return &Tracer{inner: tp.Tracer(cfg.ServiceName)}, shutdown, nil
 }
 
+// NewTracerFromTracerProvider wraps a caller-owned TracerProvider into a
+// Tracer. The caller retains lifecycle ownership (no shutdown is returned).
+//
+// This constructor exists so advanced callers can compose their own
+// exporter stack (e.g. a fan-out to OTLP + a local in-memory exporter),
+// and so tests can substitute `sdktrace/tracetest.InMemoryExporter` for
+// deterministic assertions on emitted spans without reaching through the
+// OTLP gRPC path.
+//
+// ref: opentelemetry-go sdk/trace/tracetest/recorder.go@main — the SDK's
+// own tests use tracetest.InMemoryExporter composed into a TracerProvider
+// for the same reason.
+func NewTracerFromTracerProvider(tp oteltrace.TracerProvider, serviceName string) (*Tracer, error) {
+	if tp == nil {
+		return nil, errcode.New(ErrAdapterOTelConfig, "otel: TracerProvider is required")
+	}
+	if serviceName == "" {
+		return nil, errcode.New(ErrAdapterOTelConfig, "otel: serviceName is required")
+	}
+	return &Tracer{inner: tp.Tracer(serviceName)}, nil
+}
+
 // Start creates a new span with the given name. The returned context carries
 // the span and its trace/span IDs propagated via ctxkeys.
 func (t *Tracer) Start(ctx context.Context, name string) (context.Context, tracing.Span) {
