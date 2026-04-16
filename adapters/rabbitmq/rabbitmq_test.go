@@ -4394,3 +4394,65 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 	assert.Equal(t, 2, callCount,
 		"handler should be called exactly RetryCount times")
 }
+
+// TestPublisher_Publish_ClosesChannel verifies that Publisher.Publish closes
+// the channel after use instead of returning it to the shared pool.
+// Confirm-mode channels returned to the pool can deadlock the connection
+// reader when reused by subscribers (see PR#141 CI failure analysis).
+//
+// ref: Watermill — publisher and subscriber use completely separate channels,
+// never sharing a pool. Default publisher strategy: open, use, close per publish.
+func TestPublisher_Publish_ClosesChannel(t *testing.T) {
+	ch := newMockChannel()
+
+	// Send confirmation asynchronously after NotifyPublish replaces the channel.
+	origNotify := ch.NotifyPublish
+	_ = origNotify
+	go func() {
+		// Wait until confirmCalled is set (Confirm was called), then the
+		// next NotifyPublish will install a new channel. Poll briefly.
+		for {
+			ch.mu.Lock()
+			npc := ch.notifyPublishCh
+			confirmed := ch.confirmCalled
+			ch.mu.Unlock()
+			if confirmed && npc != nil {
+				select {
+				case npc <- amqp.Confirmation{Ack: true}:
+					return
+				default:
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	mc := &mockConnection{nextCh: ch}
+	conn := &Connection{
+		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: 5 * time.Second},
+		channelPool: make(chan AMQPChannel, 5),
+		closeCh:     make(chan struct{}),
+		connected:   make(chan struct{}),
+		terminalCh:  make(chan struct{}),
+		state:       StateConnected,
+		conn:        mc,
+	}
+
+	pub := NewPublisher(conn)
+	err := pub.Publish(context.Background(), "test.topic", []byte(`{"test":true}`))
+	require.NoError(t, err)
+
+	// Channel must be closed, NOT returned to pool.
+	ch.mu.Lock()
+	closed := ch.closeCalled
+	ch.mu.Unlock()
+	assert.True(t, closed, "Publisher must close the channel after use, not return to shared pool")
+
+	// Pool must be empty — channel was not released back.
+	select {
+	case <-conn.channelPool:
+		t.Fatal("channel was returned to pool; Publisher must close confirm-mode channels")
+	default:
+		// Good — pool is empty.
+	}
+}

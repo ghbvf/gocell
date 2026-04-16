@@ -27,10 +27,14 @@ import (
 func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
 	t.Helper()
 	if init, ok := sub.(outbox.SubscriberInitializer); ok {
-		if err := init.InitializeSubscription(ctx, topic, consumerGroup); err != nil {
+		err := init.InitializeSubscription(ctx, topic, consumerGroup)
+		if err == nil {
+			return // deterministic initialization succeeded
+		}
+		if !errors.Is(err, outbox.ErrInitializerNotSupported) {
 			t.Fatalf("InitializeSubscription(%s, %s): %v", topic, consumerGroup, err)
 		}
-		return
+		// Inner does not support initialization — fall through to sleep.
 	}
 	time.Sleep(subscribeInitDelay)
 }

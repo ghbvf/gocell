@@ -38,7 +38,19 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		}
 		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
-	defer p.conn.ReleaseChannel(ch)
+	// Close the channel after use instead of returning it to the shared pool.
+	// Confirm-mode channels pollute the pool: amqp091-go's connection reader
+	// blocks on confirms.One() if the registered NotifyPublish listener is
+	// full, deadlocking ALL channels on the connection. Watermill uses the
+	// same strategy (ephemeral channel per publish) as the default.
+	//
+	// ref: Watermill defaultChannelProvider — open, use, close per publish.
+	defer func() {
+		if closeErr := ch.Close(); closeErr != nil {
+			slog.Debug("rabbitmq: error closing publish channel",
+				slog.String("error", closeErr.Error()))
+		}
+	}()
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
