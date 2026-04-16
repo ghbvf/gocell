@@ -133,7 +133,8 @@ paths:
 - contractUsages: 契约使用声明（role 按 contract kind 选择: http→serve/call, event→publish/subscribe, command→handle/invoke, projection→provide/read）
 - verify.unit: 单元测试命令
 - verify.contract: 契约测试命令
-- owner/consistencyLevel/allowedFiles: 缺省时继承 cell.yaml
+- owner/consistencyLevel: 缺省时继承 cell.yaml
+- allowedFiles: 必填，声明 slice 文件所有权路径（FMT-14 治理规则强制）
 
 ### CLI 工具
 

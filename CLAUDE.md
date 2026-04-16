@@ -44,7 +44,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 - 每个 Cell 必须有 cell.yaml（必填：id / type / consistencyLevel / owner / schema.primary / verify.smoke）
 - 每个 Slice 必须有 slice.yaml（必填：id / belongsToCell / contractUsages / verify.unit / verify.contract）
-  - owner、consistencyLevel 缺省时继承 cell.yaml；allowedFiles 缺省时按目录约定 `cells/{cell-id}/slices/{slice-id}/**`
+  - owner、consistencyLevel 缺省时继承 cell.yaml；allowedFiles 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）
 - Cell 之间只通过 contract 通信，禁止直接 import 另一个 Cell 的 internal/
   - 例外：L0 Cell（纯计算库）可被同一 assembly 内的兄弟 Cell 直接 import，无需 contract
 - 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只在 `journeys/status-board.yaml`，禁止出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml

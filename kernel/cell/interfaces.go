@@ -99,6 +99,8 @@ type Slice interface {
 	ConsistencyLevel() Level
 	Init(ctx context.Context) error
 	Verify() VerifySpec
+	// AllowedFiles returns the file ownership paths. Returns nil when unset;
+	// callers should treat nil as a configuration error (FMT-14 requires this field).
 	AllowedFiles() []string
 	AffectedJourneys() []string
 }

@@ -6,3 +6,6 @@ verify:
     - unit.{{.ID}}.service
   contract: []
   waivers: []
+
+allowedFiles:
+  - cells/{{.CellID}}/slices/{{.ID}}/**

@@ -544,7 +544,10 @@ func (v *Validator) validateFMT14() []ValidationResult {
 				IssueType: IssueRequired,
 				File:      sliceFile(key),
 				Field:     "allowedFiles",
-				Message:   fmt.Sprintf("slice %q must declare explicit allowedFiles", s.ID),
+				Message: fmt.Sprintf(
+					"slice %q must declare explicit allowedFiles (e.g., [\"cells/%s/slices/%s/**\"])",
+					s.ID, s.BelongsToCell, s.ID,
+				),
 			})
 		}
 	}

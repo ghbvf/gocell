@@ -308,34 +308,24 @@ func TestBaseSliceVerify(t *testing.T) {
 	assert.Equal(t, v, s.Verify())
 }
 
-func TestBaseSliceAllowedFilesDefault(t *testing.T) {
+func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
 	s := NewBaseSlice("login", "access-core", L1)
-	assert.Equal(t, []string{"cells/access-core/slices/login/**"}, s.AllowedFiles())
+	assert.Nil(t, s.AllowedFiles(), "unset AllowedFiles returns nil — convention defaults are metadata-only (FMT-14)")
 }
 
-func TestBaseSliceAllowedFilesKebabNormalization(t *testing.T) {
-	s := NewBaseSlice("session-login", "access-core", L1)
-	got := s.AllowedFiles()
-	assert.Equal(t, []string{
-		"cells/access-core/slices/session-login/**",
-		"cells/access-core/slices/sessionlogin/**",
-	}, got)
-}
-
-func TestBaseSliceAllowedFilesMultipleDashes(t *testing.T) {
-	s := NewBaseSlice("config-receive-ack", "access-core", L1)
-	got := s.AllowedFiles()
-	assert.Equal(t, []string{
-		"cells/access-core/slices/config-receive-ack/**",
-		"cells/access-core/slices/configreceiveack/**",
-	}, got)
-}
-
-func TestBaseSliceAllowedFilesCustom(t *testing.T) {
+func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
 	s := NewBaseSlice("login", "access-core", L1)
-	custom := []string{"custom/path/**"}
+	custom := []string{"cells/access-core/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
+}
+
+func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
+	s := NewBaseSlice("login", "access-core", L1)
+	s.SetAllowedFiles([]string{"a/**", "b/**"})
+	got := s.AllowedFiles()
+	got[0] = "mutated"
+	assert.Equal(t, "a/**", s.AllowedFiles()[0], "AllowedFiles returns a defensive copy")
 }
 
 func TestBaseSliceAffectedJourneys(t *testing.T) {

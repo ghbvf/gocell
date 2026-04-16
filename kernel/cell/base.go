@@ -3,7 +3,6 @@ package cell
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -227,22 +226,16 @@ func (s *BaseSlice) Init(_ context.Context) error { return nil }
 // Verify returns the verification spec for this slice.
 func (s *BaseSlice) Verify() VerifySpec { return s.verify }
 
-// AllowedFiles returns a copy of the file ownership paths. If none have been
-// set explicitly, it returns the default convention paths. For kebab-case
-// slice IDs, both the kebab-case and no-dash variants are returned to cover
-// the dual-directory layout (YAML dir + Go package dir).
+// AllowedFiles returns a copy of the file ownership paths.
+// Returns nil if no paths have been set. Callers that need convention
+// defaults should use gocell scaffold, which generates the initial paths.
 func (s *BaseSlice) AllowedFiles() []string {
-	if len(s.allowed) > 0 {
-		out := make([]string, len(s.allowed))
-		copy(out, s.allowed)
-		return out
+	if len(s.allowed) == 0 {
+		return nil
 	}
-	kebab := fmt.Sprintf("cells/%s/slices/%s/**", s.cellID, s.id)
-	noDash := strings.ReplaceAll(s.id, "-", "")
-	if noDash != s.id {
-		return []string{kebab, fmt.Sprintf("cells/%s/slices/%s/**", s.cellID, noDash)}
-	}
-	return []string{kebab}
+	out := make([]string, len(s.allowed))
+	copy(out, s.allowed)
+	return out
 }
 
 // AffectedJourneys returns a copy of the journey IDs this slice participates in.
@@ -255,7 +248,7 @@ func (s *BaseSlice) AffectedJourneys() []string {
 // SetVerify sets the verification spec.
 func (s *BaseSlice) SetVerify(v VerifySpec) { s.verify = v }
 
-// SetAllowedFiles overrides the default file ownership paths.
+// SetAllowedFiles sets the file ownership paths for this slice.
 func (s *BaseSlice) SetAllowedFiles(files []string) {
 	s.allowed = append([]string(nil), files...)
 }
