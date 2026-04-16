@@ -19,18 +19,24 @@ import (
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
-// startRabbitMQWithContainer launches a testcontainers RabbitMQ instance and
-// returns the Connection, the container (for Exec/Stop operations), and a
-// cleanup function.
-func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcrabbitmq.RabbitMQContainer, func()) {
+// startRabbitMQDedicatedContainer launches a NEW testcontainers RabbitMQ
+// instance used by a single test that must not share broker state with any
+// other test. Examples: rabbitmqctl close_all_connections, container.Exec,
+// container.Stop/Start — any operation that mutates broker-wide state.
+//
+// The returned cleanup terminates both the Connection and the container.
+// Tests that do not mutate broker state should use startRabbitMQ (shared
+// broker) — this helper starts its own container on every call, which is
+// ~5-7s more expensive.
+func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, *tcrabbitmq.RabbitMQContainer, func()) {
 	t.Helper()
 	ctx := context.Background()
 
 	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "start rabbitmq container")
+	require.NoError(t, err, "start dedicated rabbitmq container")
 
 	amqpURL, err := container.AmqpURL(ctx)
-	require.NoError(t, err, "get rabbitmq amqp url")
+	require.NoError(t, err, "get dedicated rabbitmq amqp url")
 
 	config.URL = amqpURL
 	if config.ChannelPoolSize == 0 {
@@ -41,11 +47,13 @@ func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcra
 	}
 
 	conn, err := NewConnection(config)
-	require.NoError(t, err, "create rabbitmq connection")
+	require.NoError(t, err, "create dedicated rabbitmq connection")
 
 	cleanup := func() {
 		_ = conn.Close()
-		_ = container.Terminate(ctx)
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("rabbitmq: dedicated container terminate failed: %v", err)
+		}
 	}
 
 	return conn, container, cleanup
@@ -53,11 +61,14 @@ func startRabbitMQWithContainer(t *testing.T, config Config) (*Connection, *tcra
 
 // startRabbitMQ returns a per-test Connection backed by the package-wide
 // shared broker (see testmain_integration_test.go). Only the Connection is
-// torn down via t.Cleanup; the container lives until TestMain exits.
+// torn down via the returned cleanup; the container lives until TestMain
+// exits.
 //
-// Tests that need an isolated broker (because they mutate broker-wide state
-// with rabbitmqctl or container.Exec) must call startRabbitMQWithContainer
-// instead.
+// Contract: callers MUST NOT mutate broker-wide state. That means no
+// rabbitmqctl, no container.Exec, no container.Stop/Start, no policy
+// changes that outlive the test. All exchange/queue/topic names must be
+// unique per test (use `test.<testname>.*` or TestTopic(t)). Tests that
+// need broker-level isolation must call startRabbitMQDedicatedContainer.
 func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	t.Helper()
 	url := sharedBrokerURL(t)
@@ -72,10 +83,15 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	return conn, func() { _ = conn.Close() }
 }
 
-// startRabbitMQBroker returns the package-wide shared broker AMQP URL.
-// The cleanup function is a no-op: the shared container is torn down in
-// TestMain. Kept as a named helper so callers (conformance_test.go) can
-// pass the URL to per-subtest Connections via newIntegrationConnection.
+// startRabbitMQBroker returns the package-wide shared broker AMQP URL
+// (see sharedBrokerURL in testmain_integration_test.go). The returned
+// cleanup is a no-op: the shared container is torn down in TestMain.
+//
+// Contract: same as startRabbitMQ — callers create their own Connections
+// against this URL (typically via newIntegrationConnection for the
+// per-subtest pattern used by conformance_test.go) and must not mutate
+// broker-wide state. For broker-level isolation, use
+// startRabbitMQDedicatedContainer instead.
 func startRabbitMQBroker(t *testing.T) (amqpURL string, cleanup func()) {
 	t.Helper()
 	return sharedBrokerURL(t), func() {}
@@ -365,7 +381,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 // Uses rabbitmqctl close_all_connections (not container stop/start) to avoid
 // port remapping issues — the broker stays on the same address.
 func TestIntegration_ConnectionRecovery(t *testing.T) {
-	conn, container, cleanup := startRabbitMQWithContainer(t, Config{
+	conn, container, cleanup := startRabbitMQDedicatedContainer(t, Config{
 		ReconnectBaseDelay:  200 * time.Millisecond,
 		ReconnectMaxBackoff: 2 * time.Second,
 	})

@@ -5,6 +5,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"testing"
@@ -30,7 +31,7 @@ import (
 //
 // Tests with broker-wide side effects (TestIntegration_ConnectionRecovery
 // calls rabbitmqctl close_all_connections) MUST continue using
-// startRabbitMQWithContainer to get a dedicated container.
+// startRabbitMQDedicatedContainer to get their own container.
 var (
 	sharedBrokerOnce     sync.Once
 	sharedBrokerInitErr  error
@@ -63,12 +64,22 @@ func sharedBrokerURL(t *testing.T) string {
 		}
 		u, err := container.AmqpURL(ctx)
 		if err != nil {
-			_ = container.Terminate(ctx)
+			if termErr := container.Terminate(ctx); termErr != nil {
+				log.Printf("rabbitmq: shared broker terminate after AmqpURL failure: %v", termErr)
+			}
 			sharedBrokerInitErr = fmt.Errorf("get shared rabbitmq url: %w", err)
 			return
 		}
 		sharedBrokerURLValue = u
-		sharedBrokerShutdown = func() { _ = container.Terminate(ctx) }
+		sharedBrokerShutdown = func() {
+			if err := container.Terminate(ctx); err != nil {
+				// TestMain runs outside any test context, so *testing.T is
+				// unavailable. Emit to stderr so CI log scrapers pick up
+				// cleanup failures (Ryuk fallback handles the actual reap,
+				// but a failure here usually hints at Docker-daemon trouble).
+				log.Printf("rabbitmq: shared broker terminate failed: %v", err)
+			}
+		}
 	})
 	if sharedBrokerInitErr != nil {
 		t.Fatalf("shared broker unavailable: %v", sharedBrokerInitErr)
