@@ -313,3 +313,186 @@ func TestCollector_ConcurrentPublish(t *testing.T) {
 		t.Fatalf("want %d entries, got %d", n, len(collected))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// pubSubHarness.checkNoMoreDeliveries tests
+//
+// The harness exposes two APIs for the "no further delivery" assertion:
+//   - checkNoMoreDeliveries — returns (error) — unit-testable core
+//   - assertNoMoreDeliveries — calls t.Fatalf on error — what conformance tests use
+// testing.TB.private() forbids fakes, so these tests exercise the checkXxx
+// variant directly.
+// ---------------------------------------------------------------------------
+
+// harnessConstructor returns a PubSubConstructor backed by the supplied
+// in-test fakePubSub, letting unit tests exercise pubSubHarness methods
+// without depending on runtime/eventbus or a real broker adapter.
+func harnessConstructor(bus *fakePubSub) PubSubConstructor {
+	return func(_ *testing.T) (outbox.Publisher, outbox.Subscriber) {
+		return bus, bus
+	}
+}
+
+// TestHarness_CheckNoMoreDeliveries_NoLeakReturnsNil verifies that when no
+// redelivery occurs within the window, the check returns nil.
+func TestHarness_CheckNoMoreDeliveries_NoLeakReturnsNil(t *testing.T) {
+	bus := &fakePubSub{}
+	h := newHarness(t, harnessConstructor(bus))
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		h.signalDone()
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	h.publishAndWait([]byte(`{"ok":1}`))
+
+	if err := h.checkNoMoreDeliveries(1, 50*time.Millisecond); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h.teardown()
+}
+
+// TestHarness_CheckNoMoreDeliveries_DetectsRedelivery ensures that when a
+// second delivery arrives during the window, the check returns a non-nil
+// error fast (fail-fast via select, not full-window wait).
+func TestHarness_CheckNoMoreDeliveries_DetectsRedelivery(t *testing.T) {
+	bus := &fakePubSub{}
+	h := newHarness(t, harnessConstructor(bus))
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	// Publish twice: first is expected prior, second simulates redelivery.
+	if err := bus.Publish(context.Background(), h.Topic, []byte(`{"a":1}`)); err != nil {
+		t.Fatalf("publish 1: %v", err)
+	}
+	if err := bus.Publish(context.Background(), h.Topic, []byte(`{"a":2}`)); err != nil {
+		t.Fatalf("publish 2: %v", err)
+	}
+	waitForCount(t, func() int { return len(h.deliveryEvents) }, 2, time.Second)
+
+	start := time.Now()
+	err := h.checkNoMoreDeliveries(1, 500*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected non-nil error for unexpected redelivery")
+	}
+	if !strings.Contains(err.Error(), "unexpected delivery") {
+		t.Fatalf("error should mention 'unexpected delivery', got: %v", err)
+	}
+	// Fail-fast upper bound: select should return in ms on unexpected delivery.
+	// 300ms accommodates CI goroutine-scheduling jitter while remaining far
+	// below the full 500ms window (which would indicate the select-fast path
+	// didn't trigger).
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("expected fail-fast (<300ms), got %v", elapsed)
+	}
+	h.teardown()
+}
+
+// TestHarness_CheckNoMoreDeliveries_DrainTimeout verifies that if fewer
+// prior deliveries arrive than expected, the drain phase times out.
+func TestHarness_CheckNoMoreDeliveries_DrainTimeout(t *testing.T) {
+	bus := &fakePubSub{}
+	h := newHarness(t, harnessConstructor(bus))
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	// Shorten drain timeout — no publish, drain should fail quickly.
+	h.drainTimeout = 50 * time.Millisecond
+
+	err := h.checkNoMoreDeliveries(1, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected drain timeout error")
+	}
+	if !strings.Contains(err.Error(), "expected 1 prior deliveries") {
+		t.Fatalf("error should mention prior-deliveries shortfall, got: %v", err)
+	}
+	h.teardown()
+}
+
+// TestHarness_CheckNoMoreDeliveries_DrainsThenWaits verifies ordering:
+// first N deliveries are drained without triggering the "unexpected" path,
+// even when N>1 and they arrive in quick succession.
+func TestHarness_CheckNoMoreDeliveries_DrainsThenWaits(t *testing.T) {
+	bus := &fakePubSub{}
+	h := newHarness(t, harnessConstructor(bus))
+
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	})
+	// Simulate 3 expected deliveries (competing-consumers scenario).
+	for range 3 {
+		if err := bus.Publish(context.Background(), h.Topic, []byte(`{}`)); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	waitForCount(t, func() int { return len(h.deliveryEvents) }, 3, time.Second)
+
+	if err := h.checkNoMoreDeliveries(3, 50*time.Millisecond); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	h.teardown()
+}
+
+func waitForCount(t *testing.T, get func() int, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if get() >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("waitForCount: want %d, got %d after %v", want, get(), timeout)
+}
+
+// ---------------------------------------------------------------------------
+// Conformance-function coverage against fakePubSub
+//
+// The conformance suite is designed to be driven by real adapters (RabbitMQ,
+// in-memory eventbus) via TestPubSub. Unit tests in this package otherwise
+// do not execute the individual conformance functions, so the helper-path
+// logic (harness wiring, fail-fast assertions) lacks in-package coverage.
+//
+// These tests run the Disposition batch (plus PermanentErrorCausesReject)
+// against fakePubSub, which does not redeliver on Reject/Requeue/Ack — the
+// "no redelivery" invariant is therefore trivially true, and the tests
+// exercise the helper wiring without requiring a real broker.
+// ---------------------------------------------------------------------------
+
+func TestConformance_DispositionAck_OnFakeBus(t *testing.T) {
+	testDispositionAck(t, Features{}, harnessConstructor(&fakePubSub{}))
+}
+
+func TestConformance_DispositionReject_OnFakeBus(t *testing.T) {
+	testDispositionReject(t, Features{SupportsReject: true}, harnessConstructor(&fakePubSub{}))
+}
+
+func TestConformance_PermanentErrorCausesReject_OnFakeBus(t *testing.T) {
+	testPermanentErrorCausesReject(t, Features{SupportsReject: true}, harnessConstructor(&fakePubSub{}))
+}
+
+// TestConformance_DispositionReject_SkipsWhenUnsupported verifies the skip
+// gate is honored when the adapter under test disables Reject support.
+func TestConformance_DispositionReject_SkipsWhenUnsupported(t *testing.T) {
+	// Use a sub-test so Skip does not terminate the parent.
+	ran := t.Run("inner", func(inner *testing.T) {
+		testDispositionReject(inner, Features{SupportsReject: false}, harnessConstructor(&fakePubSub{}))
+	})
+	if !ran {
+		t.Fatal("sub-test should pass (Skip is not a failure)")
+	}
+}
+
+// TestConformance_PermanentErrorCausesReject_SkipsWhenUnsupported mirrors the
+// above for the PermanentError scenario.
+func TestConformance_PermanentErrorCausesReject_SkipsWhenUnsupported(t *testing.T) {
+	ran := t.Run("inner", func(inner *testing.T) {
+		testPermanentErrorCausesReject(inner, Features{SupportsReject: false}, harnessConstructor(&fakePubSub{}))
+	})
+	if !ran {
+		t.Fatal("sub-test should pass (Skip is not a failure)")
+	}
+}

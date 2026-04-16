@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -46,9 +47,11 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
+			s.logInvalidCursor(ctx, "decode", err)
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
 		if err := query.ValidateCursorScope(cur, auditSort, qctx); err != nil {
+			s.logInvalidCursor(ctx, "scope", err)
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
 		cursorValues = cur.Values
@@ -68,4 +71,27 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 	return query.BuildPageResult(entries, pageReq.Limit, s.codec, auditSort, qctx, func(e *domain.AuditEntry) []any {
 		return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
 	})
+}
+
+// logInvalidCursor emits a structured Info record for client-supplied cursor
+// failures. The raw cursor string is intentionally omitted — opaque base64
+// that may encode internal offsets; aligned with k8s apiserver / etcd / MinIO
+// practice (none log continuation-token values).
+//
+// Level is Info (not Warn) because cursor errors are client input failures,
+// not server-side degradation; operators tracking 4xx frequency should rely
+// on metrics rather than log-volume alerts. Cursor failures are logged —
+// rather than silently surfacing via HTTP 400 — because repeated occurrences
+// can indicate a client bug, a stale session, or enumeration probing worth
+// correlating with request IDs during triage.
+func (s *Service) logInvalidCursor(ctx context.Context, reason string, err error) {
+	attrs := []any{
+		"slice", "auditquery",
+		"reason", reason,
+		"error", err.Error(),
+	}
+	if rid, ok := ctxkeys.RequestIDFrom(ctx); ok && rid != "" {
+		attrs = append(attrs, "request_id", rid)
+	}
+	s.logger.Info("invalid cursor", attrs...)
 }

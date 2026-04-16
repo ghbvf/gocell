@@ -253,82 +253,76 @@ verify:
 	assert.Empty(t, pm.Actors)
 }
 
-func TestParseFS_InvalidYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"cells/bad-cell/cell.yaml": &fstest.MapFile{Data: []byte(`{{{ not valid yaml`)},
+// TestParseFS_InvalidYAMLParsing consolidates malformed-YAML coverage across
+// every metadata file category into a single table. Each case produces
+// ERR_METADATA_INVALID with a path prefix identifying the offending file.
+func TestParseFS_InvalidYAMLParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		fs      fstest.MapFS
+		wantMsg string
+	}{
+		{
+			name: "cell.yaml malformed",
+			fs: fstest.MapFS{
+				"cells/bad-cell/cell.yaml": &fstest.MapFile{Data: []byte(`{{{ not valid yaml`)},
+			},
+			wantMsg: "parse cells/bad-cell/cell.yaml",
+		},
+		{
+			name: "slice.yaml malformed",
+			fs: fstest.MapFS{
+				"cells/my-cell/slices/bad-slice/slice.yaml": &fstest.MapFile{Data: []byte(`:::broken`)},
+			},
+			wantMsg: "parse cells/my-cell/slices/bad-slice/slice.yaml",
+		},
+		{
+			name: "contract.yaml malformed",
+			fs: fstest.MapFS{
+				"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`[[[broken`)},
+			},
+			wantMsg: "parse contracts/http/auth/login/v1/contract.yaml",
+		},
+		{
+			name: "journey yaml malformed",
+			fs: fstest.MapFS{
+				"journeys/J-broken.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
+			},
+			wantMsg: "parse journeys/J-broken.yaml",
+		},
+		{
+			name: "assembly yaml malformed",
+			fs: fstest.MapFS{
+				"assemblies/bad/assembly.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
+			},
+			wantMsg: "parse assemblies/bad/assembly.yaml",
+		},
+		{
+			name: "status-board yaml malformed",
+			fs: fstest.MapFS{
+				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
+			},
+			wantMsg: "parse journeys/status-board.yaml",
+		},
+		{
+			name: "actors.yaml malformed",
+			fs: fstest.MapFS{
+				"actors.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
+			},
+			wantMsg: "parse actors.yaml",
+		},
 	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse cells/bad-cell/cell.yaml")
-	assert.Contains(t, err.Error(), "ERR_METADATA_INVALID")
-}
-
-func TestParseFS_InvalidSliceYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"cells/my-cell/slices/bad-slice/slice.yaml": &fstest.MapFile{Data: []byte(`:::broken`)},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewParser("")
+			_, err := p.ParseFS(tt.fs)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+			assert.Contains(t, err.Error(), tt.wantMsg)
+		})
 	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse cells/my-cell/slices/bad-slice/slice.yaml")
-}
-
-func TestParseFS_InvalidContractYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`[[[broken`)},
-	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse contracts/http/auth/login/v1/contract.yaml")
-}
-
-func TestParseFS_InvalidJourneyYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"journeys/J-broken.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
-	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse journeys/J-broken.yaml")
-}
-
-func TestParseFS_InvalidAssemblyYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"assemblies/bad/assembly.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
-	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse assemblies/bad/assembly.yaml")
-}
-
-func TestParseFS_InvalidStatusBoardYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
-	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse journeys/status-board.yaml")
-}
-
-func TestParseFS_InvalidActorsYAML(t *testing.T) {
-	fs := fstest.MapFS{
-		"actors.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
-	}
-
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse actors.yaml")
 }
 
 func TestParseFS_DeepContractPath(t *testing.T) {
@@ -763,81 +757,10 @@ l0Dependencies:
 	assert.Equal(t, "deterministic hashing", cell.L0Dependencies[0].Reason)
 }
 
-// --- empty id validation ---
-
-func TestParseFS_EmptyCellID(t *testing.T) {
-	fs := fstest.MapFS{
-		"cells/empty/cell.yaml": &fstest.MapFile{Data: []byte(`id: ""
-type: core
-consistencyLevel: L1
-owner:
-  team: t
-  role: r
-`)},
-	}
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cell id is empty")
-}
-
-func TestParseFS_EmptySliceID(t *testing.T) {
-	fs := fstest.MapFS{
-		"cells/access-core/slices/empty/slice.yaml": &fstest.MapFile{Data: []byte(`id: ""
-belongsToCell: access-core
-`)},
-	}
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "slice id is empty")
-}
-
-func TestParseFS_EmptyContractID(t *testing.T) {
-	fs := fstest.MapFS{
-		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: ""
-kind: http
-ownerCell: access-core
-consistencyLevel: L1
-lifecycle: active
-`)},
-	}
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "contract id is empty")
-}
-
-func TestParseFS_EmptyJourneyID(t *testing.T) {
-	fs := fstest.MapFS{
-		"journeys/J-empty.yaml": &fstest.MapFile{Data: []byte(`id: ""
-goal: test
-owner:
-  team: t
-  role: r
-cells: []
-`)},
-	}
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "journey id is empty")
-}
-
-func TestParseFS_EmptyAssemblyID(t *testing.T) {
-	fs := fstest.MapFS{
-		"assemblies/empty/assembly.yaml": &fstest.MapFile{Data: []byte(`id: ""
-cells: []
-build:
-  entrypoint: main.go
-  binary: app
-`)},
-	}
-	p := NewParser("")
-	_, err := p.ParseFS(fs)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "assembly id is empty")
-}
+// Note: empty-ID validation across file kinds is covered by
+// TestParseFS_EmptyStructFiles (below). The previous 5 TestParseFS_Empty*ID
+// tests were redundant variants using `id: ""` instead of entirely empty
+// files; both produce the same zero-struct outcome.
 
 func TestParseFS_ContractOwnerCellInferred(t *testing.T) {
 	tests := []struct {
@@ -1185,6 +1108,27 @@ func TestParseFS_EmptyStructFiles(t *testing.T) {
 				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("")},
 			},
 			wantMsg: "cell id is empty",
+		},
+		{
+			name: "empty slice.yaml",
+			fs: fstest.MapFS{
+				"cells/x/slices/y/slice.yaml": &fstest.MapFile{Data: []byte("")},
+			},
+			wantMsg: "slice id is empty",
+		},
+		{
+			// Explicit `id: ""` path — distinct from the fully-empty case
+			// above: here YAML unmarshal populates a struct with an
+			// explicitly-empty ID field rather than returning a zero-value
+			// struct. Both must yield the same "id is empty" error so the
+			// validation branch covers both code paths.
+			name: "slice.yaml with explicit empty id",
+			fs: fstest.MapFS{
+				"cells/x/slices/y/slice.yaml": &fstest.MapFile{Data: []byte(`id: ""
+belongsToCell: x
+`)},
+			},
+			wantMsg: "slice id is empty",
 		},
 		{
 			name: "empty contract.yaml",

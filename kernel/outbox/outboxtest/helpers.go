@@ -246,44 +246,76 @@ func (c *collector) waitAndGet(timeout time.Duration) []outbox.Entry {
 
 // pubSubHarness wires up the common subscribe→publish→wait→teardown pattern
 // used by most single-message conformance tests.
+//
+// Each delivery captured via subscribe() produces one non-blocking send on
+// deliveryEvents; tests use assertNoMoreDeliveries / checkNoMoreDeliveries to
+// verify "no further delivery" via select+timeout (Watermill pattern) rather
+// than time.Sleep — enabling fail-fast detection of unexpected redeliveries.
+//
+// All struct fields beyond the already-exported Pub/Sub/T/Topic are package-
+// internal; tests in this package may set drainTimeout directly to shorten
+// the prior-delivery drain phase. External callers should not depend on the
+// internal fields.
 type pubSubHarness struct {
-	T       *testing.T
-	Pub     outbox.Publisher
-	Sub     outbox.Subscriber
-	Topic   string
-	done    chan struct{}
-	once    sync.Once
-	subDone chan struct{}
-	cancel  context.CancelFunc
+	T              *testing.T
+	Pub            outbox.Publisher
+	Sub            outbox.Subscriber
+	Topic          string
+	done           chan struct{}
+	once           sync.Once
+	subDone        chan struct{}
+	cancel         context.CancelFunc
+	deliveryEvents chan struct{}
+	drainTimeout   time.Duration
 }
+
+// deliveryEventsBuffer is the buffered size of the delivery-tracking channel.
+// Single-message conformance tests expect <10 deliveries; 100 is ample and
+// bounds memory. Non-blocking sends drop overflow to avoid perturbing the
+// handler under test — which is safe for tests exercising low delivery counts
+// but means assertNoMoreDeliveries is NOT appropriate for scenarios producing
+// >100 legitimate deliveries in a single subtest (e.g. high-frequency
+// requeue loops); for those, use counter-based assertions directly.
+const deliveryEventsBuffer = 100
 
 // newHarness creates a pubSubHarness from a PubSubConstructor.
 func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 	t.Helper()
 	pub, sub := constructor(t)
 	return &pubSubHarness{
-		T:       t,
-		Pub:     pub,
-		Sub:     sub,
-		Topic:   TestTopic(t),
-		done:    make(chan struct{}),
-		subDone: make(chan struct{}),
+		T:              t,
+		Pub:            pub,
+		Sub:            sub,
+		Topic:          TestTopic(t),
+		done:           make(chan struct{}),
+		subDone:        make(chan struct{}),
+		deliveryEvents: make(chan struct{}, deliveryEventsBuffer),
+		drainTimeout:   defaultTimeout,
 	}
 }
 
 // subscribe launches a Subscribe goroutine with the given handler.
 // Waits for the goroutine to start and Subscribe to be called.
+// Every handler invocation emits a non-blocking send on deliveryEvents so that
+// negative-assertion helpers can detect redeliveries via select+timeout.
 // Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
+	wrapped := func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		select {
+		case h.deliveryEvents <- struct{}{}:
+		default:
+		}
+		return handler(hctx, entry)
+	}
 	ready := make(chan struct{})
 	go func() {
 		defer close(h.subDone)
 		close(ready)
-		err := h.Sub.Subscribe(ctx, h.Topic, handler, "")
+		err := h.Sub.Subscribe(ctx, h.Topic, wrapped, "")
 		if err != nil && !errors.Is(err, context.Canceled) {
 			h.T.Errorf("unexpected Subscribe error: %v", err)
 		}
@@ -312,6 +344,45 @@ func (h *pubSubHarness) signalDone() {
 func (h *pubSubHarness) teardown() {
 	h.cancel()
 	<-h.subDone
+}
+
+// assertNoMoreDeliveries drains priorCount expected deliveries, then verifies
+// no additional delivery arrives within window. Fails the test via t.Fatalf on
+// drain timeout or unexpected redelivery. This replaces the legacy
+// `time.Sleep(window); assertEqual(counter)` pattern with fail-fast select.
+//
+// ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go — select+time.After
+// negative-assertion pattern.
+func (h *pubSubHarness) assertNoMoreDeliveries(priorCount int, window time.Duration, msg string) {
+	h.T.Helper()
+	if err := h.checkNoMoreDeliveries(priorCount, window); err != nil {
+		h.T.Fatalf("%s: %v", msg, err)
+	}
+}
+
+// checkNoMoreDeliveries is the testable core of assertNoMoreDeliveries. It
+// first drains priorCount events (expected prior deliveries), then blocks for
+// `window` to detect any unexpected redelivery. Returns nil on success; a
+// descriptive error if drain times out or a redelivery arrives.
+//
+// Drain timeout is controlled by h.drainTimeout (default: defaultTimeout);
+// the `window` parameter only bounds the negative-assertion wait after the
+// drain succeeds. Tests may shorten h.drainTimeout to exercise the shortfall
+// error path without waiting the full default.
+func (h *pubSubHarness) checkNoMoreDeliveries(priorCount int, window time.Duration) error {
+	for i := range priorCount {
+		select {
+		case <-h.deliveryEvents:
+		case <-time.After(h.drainTimeout):
+			return fmt.Errorf("expected %d prior deliveries, only got %d", priorCount, i)
+		}
+	}
+	select {
+	case <-h.deliveryEvents:
+		return fmt.Errorf("unexpected delivery within %s", window)
+	case <-time.After(window):
+		return nil
+	}
 }
 
 // ---------------------------------------------------------------------------
