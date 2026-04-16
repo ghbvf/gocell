@@ -46,9 +46,22 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 	if pageReq.Cursor != "" {
 		cur, err := s.codec.Decode(pageReq.Cursor)
 		if err != nil {
+			// Info level: client input error, not server degradation.
+			// Never log the raw cursor string — it is opaque base64 that may
+			// encode internal offsets; aligned with k8s apiserver / etcd / MinIO.
+			s.logger.Info("invalid cursor",
+				"slice", "auditquery",
+				"reason", "decode",
+				"error", err.Error(),
+			)
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
 		if err := query.ValidateCursorScope(cur, auditSort, qctx); err != nil {
+			s.logger.Info("invalid cursor",
+				"slice", "auditquery",
+				"reason", "scope",
+				"error", err.Error(),
+			)
 			return query.PageResult[*domain.AuditEntry]{}, err
 		}
 		cursorValues = cur.Values
