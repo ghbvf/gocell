@@ -48,10 +48,11 @@ type ValidationResult struct {
 // Validator runs all validation rules against a parsed project.
 type Validator struct {
 	project    *metadata.ProjectMeta
-	root       string                 // project root for file existence checks
-	now        func() time.Time       // clock function (injectable for tests)
-	fileExists func(path string) bool // file existence check (injectable for tests)
-	actorSet   map[string]bool        // pre-built set of external actor IDs
+	root       string                              // project root for file existence checks
+	now        func() time.Time                    // clock function (injectable for tests)
+	fileExists func(path string) bool              // file existence check (injectable for tests)
+	readFile   func(path string) ([]byte, error)   // file reader (injectable for tests)
+	actorSet   map[string]bool                     // pre-built set of external actor IDs
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -78,6 +79,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			_, err := os.Stat(path)
 			return err == nil
 		},
+		readFile: os.ReadFile,
 		actorSet: actorSet,
 	}
 }
@@ -135,6 +137,8 @@ func (v *Validator) Validate() []ValidationResult {
 	results = append(results, v.validateFMT11()...)
 	results = append(results, v.validateFMT12()...)
 	results = append(results, v.validateFMT13()...)
+	results = append(results, v.validateFMT14()...)
+	results = append(results, v.validateFMT15()...)
 
 	// Advisory rules
 	results = append(results, v.validateADV01()...)

@@ -11,3 +11,6 @@ verify:
   contract:
     - contract.http.order.get.v1.serve
     - contract.http.order.list.v1.serve
+
+allowedFiles:
+  - cells/order-cell/slices/order-query/**

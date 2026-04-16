@@ -6,3 +6,7 @@ verify:
     - unit.session-validate.service
   contract: []
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/session-validate/**
+  - cells/access-core/slices/sessionvalidate/**

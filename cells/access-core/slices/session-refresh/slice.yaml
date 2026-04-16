@@ -9,3 +9,7 @@ verify:
   contract:
     - contract.http.auth.refresh.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/session-refresh/**
+  - cells/access-core/slices/sessionrefresh/**

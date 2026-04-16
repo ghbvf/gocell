@@ -3,9 +3,11 @@
 package registry
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ContractRegistry provides indexed access to contracts.
@@ -94,23 +96,25 @@ func (r *ContractRegistry) Provider(contractID string) string {
 
 // Consumers returns the consumer actor IDs for a contract.
 // For http: clients, event: subscribers, command: invokers, projection: readers.
-// Returns nil if the contract is not found or kind is unknown.
-func (r *ContractRegistry) Consumers(contractID string) []string {
+// Returns an error if the contract is not found or the kind is unknown.
+func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
 	if c == nil {
-		return nil
+		return nil, errcode.New(errcode.ErrContractNotFound,
+			fmt.Sprintf("contract %q not found in registry", contractID))
 	}
 	switch c.Kind {
 	case "http":
-		return append([]string(nil), c.Endpoints.Clients...)
+		return append([]string(nil), c.Endpoints.Clients...), nil
 	case "event":
-		return append([]string(nil), c.Endpoints.Subscribers...)
+		return append([]string(nil), c.Endpoints.Subscribers...), nil
 	case "command":
-		return append([]string(nil), c.Endpoints.Invokers...)
+		return append([]string(nil), c.Endpoints.Invokers...), nil
 	case "projection":
-		return append([]string(nil), c.Endpoints.Readers...)
+		return append([]string(nil), c.Endpoints.Readers...), nil
 	default:
-		return nil
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown contract kind %q for contract %q", c.Kind, contractID))
 	}
 }
 

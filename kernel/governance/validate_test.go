@@ -61,6 +61,10 @@ func validProject() *metadata.ProjectMeta {
 						"contract.projection.session.active.v1.provide",
 					},
 				},
+				AllowedFiles: []string{
+					"cells/access-core/slices/session-login/**",
+					"cells/access-core/slices/sessionlogin/**",
+				},
 			},
 			"audit-core/audit-write": {
 				ID:            "audit-write",
@@ -71,6 +75,10 @@ func validProject() *metadata.ProjectMeta {
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.audit-write.handler"},
 					Contract: []string{"contract.event.session.created.v1.subscribe"},
+				},
+				AllowedFiles: []string{
+					"cells/audit-core/slices/audit-write/**",
+					"cells/audit-core/slices/auditwrite/**",
 				},
 			},
 		},
@@ -3231,4 +3239,140 @@ func TestREF16(t *testing.T) {
 		got := findByCode(val.validateREF16(), "REF-16")
 		assert.Len(t, got, 2) // both assemblies missing boundary.yaml
 	})
+}
+
+// --- FMT-14: slice allowedFiles required ---
+
+func TestFMT14(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name: "slices with allowedFiles are valid",
+			setup: func(pm *metadata.ProjectMeta) {
+				for _, s := range pm.Slices {
+					s.AllowedFiles = []string{"cells/x/slices/y/**"}
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "slices without allowedFiles trigger errors",
+			setup: func(pm *metadata.ProjectMeta) {
+				for _, s := range pm.Slices {
+					s.AllowedFiles = nil
+				}
+			},
+			wantCount: 2,
+		},
+		{
+			name: "only one slice missing",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Slices["audit-core/audit-write"].AllowedFiles = nil
+			},
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateFMT14(), "FMT-14")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueRequired, r.IssueType)
+				assert.Equal(t, "allowedFiles", r.Field)
+			}
+		})
+	}
+}
+
+// --- FMT-15: list response schema must include hasMore ---
+
+func TestFMT15(t *testing.T) {
+	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","hasMore"]}`
+	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data"]}`
+	singleObject := `{"properties":{"data":{"type":"object"}},"required":["data"]}`
+	invalidJSON := `{not json`
+
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		readFile  func(string) ([]byte, error)
+		wantCount int
+	}{
+		{
+			name: "list schema with hasMore in required",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(validListSchema), nil },
+			wantCount: 0,
+		},
+		{
+			name: "list schema missing hasMore",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
+			wantCount: 1,
+		},
+		{
+			name: "non-list schema skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(singleObject), nil },
+			wantCount: 0,
+		},
+		{
+			name:      "no schemaRefs.response skipped",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			readFile:  nil,
+			wantCount: 0,
+		},
+		{
+			name: "file read error skipped gracefully",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return nil, os.ErrNotExist },
+			wantCount: 0,
+		},
+		{
+			name: "invalid JSON skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(invalidJSON), nil },
+			wantCount: 0,
+		},
+		{
+			name: "non-http contract skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.session.created.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "/fake/root")
+			if tt.readFile != nil {
+				val.readFile = tt.readFile
+			}
+			got := findByCode(val.validateFMT15(), "FMT-15")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+			}
+		})
+	}
 }

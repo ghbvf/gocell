@@ -1,7 +1,9 @@
 package governance
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -525,4 +527,91 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 	}
 
 	return results
+}
+
+// validateFMT14 checks that every slice declares explicit allowedFiles.
+func (v *Validator) validateFMT14() []ValidationResult {
+	var results []ValidationResult
+	for key, s := range v.project.Slices {
+		if len(s.AllowedFiles) == 0 {
+			results = append(results, ValidationResult{
+				Code:      "FMT-14",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      sliceFile(key),
+				Field:     "allowedFiles",
+				Message:   fmt.Sprintf("slice %q must declare explicit allowedFiles", s.ID),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT15 checks that HTTP list-style response schemas include "hasMore"
+// in their required fields. A response is a "list" when properties.data.type is "array".
+// Skipped when root is empty, for non-HTTP contracts, or when the schema file cannot be read.
+func (v *Validator) validateFMT15() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" || c.SchemaRefs.Response == "" {
+			continue
+		}
+		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+		schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
+		if !isWithinRoot(v.root, schemaPath) {
+			continue
+		}
+		data, err := v.readFile(schemaPath)
+		if err != nil {
+			continue // REF-12 handles missing files
+		}
+		if !isListSchema(data) {
+			continue
+		}
+		if !hasMoreInRequired(data) {
+			results = append(results, ValidationResult{
+				Code:      "FMT-15",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      contractFile(c.ID),
+				Field:     "schemaRefs.response",
+				Message:   fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+			})
+		}
+	}
+	return results
+}
+
+// isListSchema checks if a JSON schema has properties.data.type == "array".
+func isListSchema(data []byte) bool {
+	var schema struct {
+		Properties struct {
+			Data struct {
+				Type string `json:"type"`
+			} `json:"data"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return false
+	}
+	return schema.Properties.Data.Type == "array"
+}
+
+// hasMoreInRequired checks if "hasMore" is in the JSON schema required array.
+func hasMoreInRequired(data []byte) bool {
+	var schema struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return false
+	}
+	for _, r := range schema.Required {
+		if r == "hasMore" {
+			return true
+		}
+	}
+	return false
 }
