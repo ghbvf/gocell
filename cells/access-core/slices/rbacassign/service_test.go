@@ -14,16 +14,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func newTestService() (*Service, *mem.RoleRepository) {
-	repo := mem.NewRoleRepository()
-	repo.SeedRole(&domain.Role{
+func newTestService() (*Service, *mem.RoleRepository, *mem.SessionRepository) {
+	roleRepo := mem.NewRoleRepository()
+	roleRepo.SeedRole(&domain.Role{
 		ID:   "admin",
 		Name: "admin",
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
 	})
-	return NewService(repo, slog.Default()), repo
+	sessionRepo := mem.NewSessionRepository()
+	return NewService(roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
 }
 
 func TestService_Assign(t *testing.T) {
@@ -75,7 +76,7 @@ func TestService_Assign(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo, _ := newTestService()
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -144,7 +145,7 @@ func TestService_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo, _ := newTestService()
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -165,4 +166,33 @@ func TestService_Revoke(t *testing.T) {
 			assert.Equal(t, tc.wantCode, ecErr.Code)
 		})
 	}
+}
+
+func TestService_Revoke_InvalidatesSessions(t *testing.T) {
+	svc, roleRepo, sessionRepo := newTestService()
+	ctx := context.Background()
+
+	_ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
+	sess := &domain.Session{ID: "sess-1", UserID: "usr-1"}
+	require.NoError(t, sessionRepo.Create(ctx, sess))
+
+	require.NoError(t, svc.Revoke(ctx, "usr-1", "admin"))
+
+	s, err := sessionRepo.GetByID(ctx, "sess-1")
+	require.NoError(t, err)
+	assert.True(t, s.IsRevoked(), "session must be revoked after role change")
+}
+
+func TestService_Assign_InvalidatesSessions(t *testing.T) {
+	svc, _, sessionRepo := newTestService()
+	ctx := context.Background()
+
+	sess := &domain.Session{ID: "sess-2", UserID: "usr-2"}
+	require.NoError(t, sessionRepo.Create(ctx, sess))
+
+	require.NoError(t, svc.Assign(ctx, "usr-2", "admin"))
+
+	s, err := sessionRepo.GetByID(ctx, "sess-2")
+	require.NoError(t, err)
+	assert.True(t, s.IsRevoked(), "session must be revoked after role assignment")
 }

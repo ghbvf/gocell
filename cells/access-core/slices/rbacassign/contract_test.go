@@ -25,7 +25,7 @@ func newContractHandler() http.Handler {
 	})
 	_ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
 
-	svc := NewService(roleRepo, slog.Default())
+	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	inner := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(inner)
 

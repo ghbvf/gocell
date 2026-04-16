@@ -131,9 +131,13 @@ func run(ctx context.Context) error {
 	// Seed admin role + optional admin user from env vars.
 	adminUser := os.Getenv("GOCELL_ADMIN_USER")
 	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
-	if adminUser != "" && adminPass != "" {
+	switch {
+	case adminUser != "" && adminPass != "":
 		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
-	} else {
+	case adminUser != "" || adminPass != "":
+		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
+		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
+	default:
 		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
 	}
 

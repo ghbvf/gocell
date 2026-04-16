@@ -26,7 +26,7 @@ func setupHandler() (http.Handler, *mem.RoleRepository) {
 	})
 	_ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
 
-	svc := NewService(roleRepo, slog.Default())
+	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux, roleRepo

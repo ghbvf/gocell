@@ -11,13 +11,16 @@ import (
 
 // Service handles RBAC role assignment and revocation (L0 — pure repo operations).
 type Service struct {
-	roleRepo ports.RoleRepository
-	logger   *slog.Logger
+	roleRepo    ports.RoleRepository
+	sessionRepo ports.SessionRepository
+	logger      *slog.Logger
 }
 
 // NewService creates a new rbac-assign service.
-func NewService(roleRepo ports.RoleRepository, logger *slog.Logger) *Service {
-	return &Service{roleRepo: roleRepo, logger: logger}
+// sessionRepo is used to revoke active sessions on role change so that
+// the JWT (which embeds roles) is forced to refresh.
+func NewService(roleRepo ports.RoleRepository, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
+	return &Service{roleRepo: roleRepo, sessionRepo: sessionRepo, logger: logger}
 }
 
 // Assign assigns a role to a user. Idempotent: re-assignment is a no-op.
@@ -30,6 +33,12 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 		return fmt.Errorf("rbac-assign: assign: %w", err)
 	}
 
+	// Revoke active sessions so user must re-login to get updated JWT roles.
+	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
+		s.logger.Error("rbac-assign: failed to revoke sessions after role assign",
+			slog.Any("error", err), slog.String("user_id", userID))
+	}
+
 	s.logger.Info("role assigned",
 		slog.String("user_id", userID),
 		slog.String("role_id", roleID))
@@ -37,6 +46,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 }
 
 // Revoke removes a role from a user. Idempotent: revoking a non-assigned role is a no-op.
+// Active sessions are revoked to force re-login with updated JWT roles.
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if userID == "" || roleID == "" {
 		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
@@ -44,6 +54,12 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 
 	if err := s.roleRepo.RemoveFromUser(ctx, userID, roleID); err != nil {
 		return fmt.Errorf("rbac-assign: revoke: %w", err)
+	}
+
+	// Revoke active sessions so user must re-login to get updated JWT roles.
+	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
+		s.logger.Error("rbac-assign: failed to revoke sessions after role revoke",
+			slog.Any("error", err), slog.String("user_id", userID))
 	}
 
 	s.logger.Info("role revoked",
