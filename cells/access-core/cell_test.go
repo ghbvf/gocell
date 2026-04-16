@@ -310,15 +310,41 @@ func TestAccessCore_RouteSessionRefresh(t *testing.T) {
 func TestAccessCore_RouteUserCreate(t *testing.T) {
 	r := initCellWithRouter(t)
 
+	// Admin creates user → 201.
 	body := `{"username":"bob","email":"bob@example.com","password":"secret123"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code,
+		"POST /api/v1/access/users/ with admin should return 201 (got %d)", rec.Code)
+}
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"POST /api/v1/access/users/ should not return 404 (got %d)", rec.Code)
+func TestAccessCore_RouteUserCreate_NoAuth_Returns401(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/",
+		strings.NewReader(`{"username":"x","email":"x@y.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// No auth context.
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/",
+		strings.NewReader(`{"username":"x","email":"x@y.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
 
 func TestAccessCore_RouteSessionLogout(t *testing.T) {
@@ -353,8 +379,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouter(t)
 
-	// Verify route is reachable. Role "admin" is not seeded in newTestCell(),
-	// so we expect a domain-level 404 (role not found) — NOT a router-level 404.
+	// Role "admin" is not seeded in newTestCell() → domain-level 404 (role not found).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
@@ -362,11 +387,36 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	// Domain-level 404 has JSON body with error code; router-level 404 doesn't.
-	if rec.Code == http.StatusNotFound {
-		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
-			"response should be JSON (handler reached, not router 404)")
-	}
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not router 404)")
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_ROLE_NOT_FOUND")
+}
+
+func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	// No auth context.
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
 
 func TestAccessCore_RouteRolesList(t *testing.T) {

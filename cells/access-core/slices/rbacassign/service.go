@@ -34,9 +34,10 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	}
 
 	// Revoke active sessions so user must re-login to get updated JWT roles.
+	// Fail-closed: if session revocation fails, the role change is not reported
+	// as successful to prevent stale-role window.
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
-		s.logger.Error("rbac-assign: failed to revoke sessions after role assign",
-			slog.Any("error", err), slog.String("user_id", userID))
+		return fmt.Errorf("rbac-assign: assign succeeded but session revoke failed: %w", err)
 	}
 
 	s.logger.Info("role assigned",
@@ -57,9 +58,10 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	}
 
 	// Revoke active sessions so user must re-login to get updated JWT roles.
+	// Fail-closed: if session revocation fails, the role change is not reported
+	// as successful to prevent stale-role window.
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
-		s.logger.Error("rbac-assign: failed to revoke sessions after role revoke",
-			slog.Any("error", err), slog.String("user_id", userID))
+		return fmt.Errorf("rbac-assign: revoke succeeded but session revoke failed: %w", err)
 	}
 
 	s.logger.Info("role revoked",

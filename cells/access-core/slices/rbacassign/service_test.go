@@ -3,6 +3,7 @@ package rbacassign
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -195,4 +197,32 @@ func TestService_Assign_InvalidatesSessions(t *testing.T) {
 	s, err := sessionRepo.GetByID(ctx, "sess-2")
 	require.NoError(t, err)
 	assert.True(t, s.IsRevoked(), "session must be revoked after role assignment")
+}
+
+// failingSessionRepo returns an error on RevokeByUserID to test fail-closed behavior.
+type failingSessionRepo struct{ ports.SessionRepository }
+
+func (failingSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
+	return fmt.Errorf("session store unavailable")
+}
+
+func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	_ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
+
+	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
+	err := svc.Revoke(context.Background(), "usr-1", "admin")
+	require.Error(t, err, "revoke must fail-closed when session revocation fails")
+	assert.Contains(t, err.Error(), "session revoke failed")
+}
+
+func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+
+	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
+	err := svc.Assign(context.Background(), "usr-1", "admin")
+	require.Error(t, err, "assign must fail-closed when session revocation fails")
+	assert.Contains(t, err.Error(), "session revoke failed")
 }
