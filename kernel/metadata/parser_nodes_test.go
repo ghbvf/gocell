@@ -10,7 +10,7 @@ import (
 )
 
 // TestParseFS_NodesPopulated verifies that ParseFS records a DocumentNode
-// for every parsed YAML file into ProjectMeta.Nodes, enabling downstream
+// for every parsed YAML file into ProjectMeta.FileNodes, enabling downstream
 // validators to report file:line:column locations.
 func TestParseFS_NodesPopulated(t *testing.T) {
 	fs := fstest.MapFS{
@@ -73,7 +73,7 @@ build:
 	p := NewParser(".")
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
-	require.NotNil(t, pm.Nodes, "pm.Nodes must be populated")
+	require.NotNil(t, pm.FileNodes, "pm.FileNodes must be populated")
 
 	wantFiles := []string{
 		"cells/x/cell.yaml",
@@ -85,7 +85,7 @@ build:
 		"journeys/status-board.yaml",
 	}
 	for _, path := range wantFiles {
-		n, ok := pm.Nodes[path]
+		n, ok := pm.FileNodes[path]
 		if !ok {
 			t.Errorf("missing Node for %s", path)
 			continue
@@ -117,7 +117,7 @@ func TestParseFS_NodesEnableLocate(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	root := pm.Nodes["cells/x/cell.yaml"]
+	root := pm.FileNodes["cells/x/cell.yaml"]
 	require.NotNil(t, root)
 
 	// Top-level field line numbers.
@@ -184,7 +184,7 @@ func TestParseFS_AcceptsLeadingDocumentMarker(t *testing.T) {
 }
 
 // TestParseFS_NodesAbsentWhenEmpty verifies empty optional files are skipped
-// (not stored under Nodes) so downstream lookups stay nil-safe.
+// (not stored under FileNodes) so downstream lookups stay nil-safe.
 func TestParseFS_NodesAbsentWhenEmpty(t *testing.T) {
 	fs := fstest.MapFS{
 		"actors.yaml":                &fstest.MapFile{Data: []byte("")},
@@ -194,8 +194,8 @@ func TestParseFS_NodesAbsentWhenEmpty(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	_, haveActors := pm.Nodes["actors.yaml"]
-	_, haveStatus := pm.Nodes["journeys/status-board.yaml"]
-	assert.False(t, haveActors, "empty actors.yaml should not populate Nodes")
-	assert.False(t, haveStatus, "empty status-board.yaml should not populate Nodes")
+	_, haveActors := pm.FileNodes["actors.yaml"]
+	_, haveStatus := pm.FileNodes["journeys/status-board.yaml"]
+	assert.False(t, haveActors, "empty actors.yaml should not populate FileNodes")
+	assert.False(t, haveStatus, "empty status-board.yaml should not populate FileNodes")
 }

@@ -129,22 +129,27 @@ func evalExistingPrefix(p string) string {
 }
 
 // printResult prints a single validation result in human-readable format.
-// Location is rendered as file[:line[:column]] -> field, with line and column
-// appended only when they are non-zero (the parser fills them in 1-based,
-// so 0 means "unknown").
+//
+// The field name is appended to the message line so that the "at" line
+// contains only file[:line[:column]]. This shape matches the file:line:col
+// prefix recognised by IDE / terminal "click-to-open" features (GoLand,
+// VS Code, iTerm2) without noise interrupting the jump target.
 func printResult(r governance.ValidationResult) {
+	msg := r.Message
+	if r.Field != "" {
+		msg += fmt.Sprintf(" (field: %s)", r.Field)
+	}
+	fmt.Printf("  [%s] %s\n", r.Code, msg)
+
+	if r.File == "" {
+		return
+	}
 	location := r.File
-	if location != "" && r.Line > 0 {
+	if r.Line > 0 {
 		location += fmt.Sprintf(":%d", r.Line)
 		if r.Column > 0 {
 			location += fmt.Sprintf(":%d", r.Column)
 		}
 	}
-	if r.Field != "" {
-		location += " -> " + r.Field
-	}
-	fmt.Printf("  [%s] %s\n", r.Code, r.Message)
-	if location != "" {
-		fmt.Printf("         at %s\n", location)
-	}
+	fmt.Printf("         at %s\n", location)
 }

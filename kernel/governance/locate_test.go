@@ -27,7 +27,7 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
-		Nodes: map[string]*yaml.Node{
+		FileNodes: map[string]*yaml.Node{
 			"cells/access-core/cell.yaml": parseNode(t, src),
 		},
 	}
@@ -42,25 +42,25 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 	assert.Positive(t, col, "owner.team column")
 }
 
-// TestValidator_Locate_Fallbacks: empty file, empty field, missing Nodes,
+// TestValidator_Locate_Fallbacks: empty file, empty field, missing FileNodes,
 // missing file entry, and missing field all return (0, 0).
 func TestValidator_Locate_Fallbacks(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
 	v := NewValidator(pm, "")
 
-	// Nodes map entirely absent.
+	// FileNodes map entirely absent.
 	line, col := v.locate("foo.yaml", "id")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
 
-	// Nodes map present but empty.
-	pm.Nodes = map[string]*yaml.Node{}
+	// FileNodes map present but empty.
+	pm.FileNodes = map[string]*yaml.Node{}
 	line, col = v.locate("foo.yaml", "id")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
 
 	// File present but field not found.
-	pm.Nodes["foo.yaml"] = parseNode(t, "id: x\n")
+	pm.FileNodes["foo.yaml"] = parseNode(t, "id: x\n")
 	line, col = v.locate("foo.yaml", "nope")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
@@ -86,7 +86,7 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{},
-		Nodes: map[string]*yaml.Node{
+		FileNodes: map[string]*yaml.Node{
 			"cells/x/slices/s/slice.yaml": parseNode(t, src),
 		},
 	}
@@ -142,7 +142,7 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{},
-		Nodes: map[string]*yaml.Node{
+		FileNodes: map[string]*yaml.Node{
 			"cells/x/slices/s/slice.yaml": parseNode(t, src),
 		},
 	}
@@ -158,7 +158,7 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 }
 
 // TestDependencyChecker_Locate_FallsBack verifies the nil-project / missing
-// Nodes fallback shared with Validator.
+// FileNodes fallback shared with Validator.
 func TestDependencyChecker_Locate_FallsBack(t *testing.T) {
 	dc := NewDependencyChecker(nil)
 	// Safe on a nil project (NewDependencyChecker stores it as-is but locate

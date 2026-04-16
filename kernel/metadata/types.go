@@ -196,9 +196,9 @@ type ProjectMeta struct {
 	Assemblies  map[string]*AssemblyMeta // keyed by assembly ID
 	StatusBoard []StatusBoardEntry
 	Actors      []ActorMeta
-	// Nodes maps each parsed YAML file path (as walked during ParseFS) to its
+	// FileNodes maps each parsed YAML file path (as walked during ParseFS) to its
 	// root DocumentNode, enabling validator rules to report precise
 	// file:line:column locations. nil when the project was constructed
 	// manually (e.g. in tests); callers must tolerate that case.
-	Nodes map[string]*yaml.Node
+	FileNodes map[string]*yaml.Node
 }

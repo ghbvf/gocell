@@ -468,8 +468,9 @@ func TestPrintResult(t *testing.T) {
 	})
 }
 
-// TestPrintResult_IncludesLineColumn verifies the printed "at" line contains
-// file:line:col when the finding carries a Position.
+// TestPrintResult_IncludesLineColumn verifies the printed output carries the
+// field on the message line and a bare file:line:col on the "at" line — this
+// keeps the jump target clean for IDE click-to-open handlers.
 func TestPrintResult_IncludesLineColumn(t *testing.T) {
 	r := governance.ValidationResult{
 		Code:    "TEST-10",
@@ -480,16 +481,21 @@ func TestPrintResult_IncludesLineColumn(t *testing.T) {
 		Message: "boom",
 	}
 	out := captureStdout(t, func() { printResult(r) })
-	if !strings.Contains(out, "cells/x/cell.yaml:12:5") {
-		t.Errorf("printResult output = %q, want file:line:col", out)
+	// Field moved to the message line.
+	if !strings.Contains(out, "boom (field: id)") {
+		t.Errorf("printResult output missing 'boom (field: id)' on message line: %q", out)
 	}
-	if !strings.Contains(out, "-> id") {
-		t.Errorf("printResult output missing '-> id': %q", out)
+	// The "at" line carries only file:line:col — no trailing "-> field".
+	if !strings.Contains(out, "at cells/x/cell.yaml:12:5\n") {
+		t.Errorf("printResult output missing bare 'at file:line:col' line: %q", out)
+	}
+	if strings.Contains(out, "-> id") {
+		t.Errorf("'at' line should not contain '-> field' any more: %q", out)
 	}
 }
 
-// TestPrintResult_OmitsPositionWhenUnknown: when Line==0 the output falls back
-// to the plain "at file -> field" form that previously existed.
+// TestPrintResult_OmitsPositionWhenUnknown: when Line==0 the "at" line shows
+// just the file path; the field still lives on the message line.
 func TestPrintResult_OmitsPositionWhenUnknown(t *testing.T) {
 	r := governance.ValidationResult{
 		Code:    "TEST-11",
@@ -501,8 +507,11 @@ func TestPrintResult_OmitsPositionWhenUnknown(t *testing.T) {
 	if strings.Contains(out, "cells/x/cell.yaml:") {
 		t.Errorf("unexpected position in output %q", out)
 	}
-	if !strings.Contains(out, "cells/x/cell.yaml -> owner.team") {
-		t.Errorf("missing plain 'file -> field' form in %q", out)
+	if !strings.Contains(out, "missing (field: owner.team)") {
+		t.Errorf("field should appear on message line: %q", out)
+	}
+	if !strings.Contains(out, "at cells/x/cell.yaml\n") {
+		t.Errorf("'at' line should be bare file path: %q", out)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 )
 
 // TestParseFS_RejectsOversizeFile guards the 1 MiB ceiling on metadata YAML
-// files. ProjectMeta.Nodes retains the full AST for the life of the
+// files. ProjectMeta.FileNodes retains the full AST for the life of the
 // Validator, so an oversized file would inflate live memory 2–3×.
 func TestParseFS_RejectsOversizeFile(t *testing.T) {
 	// Build a ~1.1 MiB cell.yaml by padding the description field.

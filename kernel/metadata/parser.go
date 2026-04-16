@@ -48,7 +48,7 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 		Contracts:  make(map[string]*ContractMeta),
 		Journeys:   make(map[string]*JourneyMeta),
 		Assemblies: make(map[string]*AssemblyMeta),
-		Nodes:      make(map[string]*yaml.Node),
+		FileNodes:  make(map[string]*yaml.Node),
 	}
 
 	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, walkErr error) error {
@@ -138,7 +138,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -163,7 +163,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -205,7 +205,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -231,7 +231,7 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -252,7 +252,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	if m.ID == "" {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -273,7 +273,7 @@ func (p *Parser) parseStatusBoard(fsys fs.FS, path string, pm *ProjectMeta) erro
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	pm.StatusBoard = entries
 	return nil
@@ -286,7 +286,7 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return err
 	}
 	if node != nil {
-		pm.Nodes[path] = node
+		pm.FileNodes[path] = node
 	}
 	pm.Actors = actors
 	return nil
@@ -295,7 +295,7 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 // maxMetadataFileSize caps a single YAML file at 1 MiB. Real metadata files
 // are <50 KB; a 20× headroom guards against adversarial inputs (or the wrong
 // fixture accidentally dropped into cells/ or contracts/) blowing up memory
-// once the yaml.Node AST is retained on ProjectMeta.Nodes for the life of a
+// once the yaml.Node AST is retained on ProjectMeta.FileNodes for the life of a
 // Validator.
 const maxMetadataFileSize = 1 << 20 // 1 MiB
 
