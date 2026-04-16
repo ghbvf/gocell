@@ -12,7 +12,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 
 	"golang.org/x/crypto/bcrypt"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -669,24 +668,72 @@ func TestAccessCore_SeedAdmin_Idempotent(t *testing.T) {
 	require.NoError(t, makeCell().Init(ctx, deps))
 }
 
-// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin type assertion.
-type stubRoleRepo struct{ ports.RoleRepository }
+// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin without type assertion.
+type stubRoleRepo struct {
+	roles     map[string]*domain.Role
+	userRoles map[string]map[string]struct{}
+}
 
-func TestAccessCore_SeedAdmin_NonMemRepo_ReturnsError(t *testing.T) {
+func newStubRoleRepo() *stubRoleRepo {
+	return &stubRoleRepo{
+		roles:     make(map[string]*domain.Role),
+		userRoles: make(map[string]map[string]struct{}),
+	}
+}
+func (s *stubRoleRepo) GetByID(_ context.Context, id string) (*domain.Role, error) {
+	r, ok := s.roles[id]
+	if !ok {
+		return nil, fmt.Errorf("not found: %s", id)
+	}
+	return r, nil
+}
+func (s *stubRoleRepo) GetByUserID(_ context.Context, userID string) ([]*domain.Role, error) {
+	var result []*domain.Role
+	for rid := range s.userRoles[userID] {
+		if r, ok := s.roles[rid]; ok {
+			result = append(result, r)
+		}
+	}
+	return result, nil
+}
+func (s *stubRoleRepo) Create(_ context.Context, role *domain.Role) error {
+	s.roles[role.ID] = role
+	return nil
+}
+func (s *stubRoleRepo) AssignToUser(_ context.Context, userID, roleID string) error {
+	if s.userRoles[userID] == nil {
+		s.userRoles[userID] = make(map[string]struct{})
+	}
+	s.userRoles[userID][roleID] = struct{}{}
+	return nil
+}
+func (s *stubRoleRepo) RemoveFromUser(_ context.Context, userID, roleID string) error {
+	delete(s.userRoles[userID], roleID)
+	return nil
+}
+func (s *stubRoleRepo) CountByRole(_ context.Context, roleID string) (int, error) {
+	count := 0
+	for _, roles := range s.userRoles {
+		if _, ok := roles[roleID]; ok {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// TestAccessCore_SeedAdmin_NonMemRepo_Succeeds verifies that doSeedAdmin works
+// with any RoleRepository implementation (no type assertion to *mem.RoleRepository).
+func TestAccessCore_SeedAdmin_NonMemRepo_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
-		WithRoleRepository(stubRoleRepo{}),
+		WithRoleRepository(newStubRoleRepo()),
 		WithPublisher(eventbus.New()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
 		WithSeedAdminRole(),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
-	err := c.Init(ctx, deps)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "seed admin requires in-memory role repository")
+	require.NoError(t, c.Init(ctx, deps))
 }

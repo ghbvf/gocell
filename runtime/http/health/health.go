@@ -19,6 +19,10 @@ import (
 // check as unhealthy.
 type Checker func() error
 
+// VerboseTokenHeader is the HTTP header used to authenticate /readyz?verbose
+// requests when a verbose token is configured via SetVerboseToken.
+const VerboseTokenHeader = "X-Readyz-Token"
+
 // Handler exposes /healthz and /readyz endpoints.
 type Handler struct {
 	assembly *assembly.CoreAssembly
@@ -26,6 +30,7 @@ type Handler struct {
 	mu           sync.RWMutex
 	checkers     map[string]Checker
 	adapterInfo  map[string]string // static adapter metadata for verbose output
+	verboseToken string            // if non-empty, require this token for verbose output
 	shuttingDown atomic.Bool
 }
 
@@ -47,6 +52,19 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 		panic(fmt.Sprintf("health: duplicate checker name %q", name))
 	}
 	h.checkers[name] = fn
+}
+
+// SetVerboseToken sets a bearer token that must be provided via the
+// X-Readyz-Token header to access /readyz?verbose output. When empty (default),
+// verbose mode is unrestricted for backward compatibility.
+//
+// ref: Kubernetes withholds error reasons in verbose output but exposes check
+// names. GoCell goes further: the entire verbose block (cell names, dependency
+// names) is gated behind a token when configured.
+func (h *Handler) SetVerboseToken(token string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.verboseToken = token
 }
 
 // SetAdapterInfo sets static adapter metadata that is included in /readyz
@@ -84,8 +102,8 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // dependency breakdown is returned only when the request enables verbose mode.
 //
 // Security: verbose=true exposes internal topology (cell names, dependency
-// names). When the health port is publicly reachable, restrict ?verbose at
-// the ingress layer or enable a future WithVerboseToken bootstrap option.
+// names). Use SetVerboseToken to require an X-Readyz-Token header for verbose
+// access, or restrict ?verbose at the ingress layer.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.shuttingDown.Load() {
@@ -94,7 +112,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			})
 			return
 		}
-		verbose := readyzVerbose(r)
+		verbose := h.verboseAllowed(r)
 		cellHealth := h.assembly.Health()
 
 		var cells map[string]string
@@ -155,6 +173,22 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 
 		writeJSON(w, httpStatus, response)
 	}
+}
+
+// verboseAllowed returns true when the request is allowed to see verbose output.
+// When a verbose token is configured, the request must include a matching
+// X-Readyz-Token header in addition to the ?verbose query parameter.
+func (h *Handler) verboseAllowed(r *http.Request) bool {
+	if !readyzVerbose(r) {
+		return false
+	}
+	h.mu.RLock()
+	token := h.verboseToken
+	h.mu.RUnlock()
+	if token == "" {
+		return true // no token configured — backward compatible
+	}
+	return r.Header.Get(VerboseTokenHeader) == token
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.

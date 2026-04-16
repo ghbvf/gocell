@@ -42,11 +42,11 @@ func TestHandler_Assign(t *testing.T) {
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "admin assigns role returns 200",
+			name:       "admin assigns role returns 201",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
 			subject:    "usr-1",
 			roles:      []string{"admin"},
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
 					Data struct {
@@ -118,6 +118,7 @@ func TestHandler_Assign(t *testing.T) {
 func TestHandler_Revoke(t *testing.T) {
 	tests := []struct {
 		name       string
+		setup      func(*mem.RoleRepository) // extra setup before request
 		body       string
 		subject    string
 		roles      []string
@@ -125,7 +126,11 @@ func TestHandler_Revoke(t *testing.T) {
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "admin revokes role returns 200",
+			name: "admin revokes role returns 200 (multiple holders)",
+			setup: func(r *mem.RoleRepository) {
+				// Ensure 2 admins so last-admin guard doesn't block.
+				_ = r.AssignToUser(context.Background(), "usr-2", "admin")
+			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-1",
 			roles:      []string{"admin"},
@@ -145,6 +150,13 @@ func TestHandler_Revoke(t *testing.T) {
 			},
 		},
 		{
+			name:       "revoke last admin returns 403",
+			body:       `{"userId":"usr-1","roleId":"admin"}`,
+			subject:    "usr-1",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-2",
@@ -161,8 +173,11 @@ func TestHandler_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := setupHandler()
-			req := httptest.NewRequest(http.MethodDelete, "/revoke", strings.NewReader(tc.body))
+			h, roleRepo := setupHandler()
+			if tc.setup != nil {
+				tc.setup(roleRepo)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/revoke", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))

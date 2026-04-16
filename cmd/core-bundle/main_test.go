@@ -17,7 +17,20 @@ import (
 )
 
 func TestLoadKeySet_DevMode(t *testing.T) {
+	t.Setenv(auth.EnvJWTPrivateKey, "")
+	t.Setenv(auth.EnvJWTPublicKey, "")
 	ks, err := loadKeySet("")
+	require.NoError(t, err)
+	assert.NotNil(t, ks)
+}
+
+func TestLoadKeySet_DevMode_PrefersEnvKeys(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+
+	ks, err := loadKeySet("") // dev mode, but env keys provided
 	require.NoError(t, err)
 	assert.NotNil(t, ks)
 }
@@ -52,22 +65,37 @@ func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
 	assert.NotNil(t, ks)
 }
 
-func TestEnvOrDefault_WithEnv(t *testing.T) {
+func TestLoadSecret_WithEnv(t *testing.T) {
 	t.Setenv("TEST_KEY_FOR_ENVDEFAULT", "actual-value")
-	got := envOrDefault("TEST_KEY_FOR_ENVDEFAULT", "fallback")
+	got, err := loadSecret("TEST_KEY_FOR_ENVDEFAULT", "fallback", "")
+	require.NoError(t, err)
 	assert.Equal(t, []byte("actual-value"), got)
 }
 
-func TestEnvOrDefault_Fallback(t *testing.T) {
+func TestLoadSecret_DevMode_Fallback(t *testing.T) {
 	t.Setenv("TEST_KEY_FOR_ENVDEFAULT_MISS", "")
-	got := envOrDefault("TEST_KEY_FOR_ENVDEFAULT_MISS", "fallback")
+	got, err := loadSecret("TEST_KEY_FOR_ENVDEFAULT_MISS", "fallback", "")
+	require.NoError(t, err)
 	assert.Equal(t, []byte("fallback"), got)
 }
 
-func TestValidateAdapterMode_Real_ReturnsError(t *testing.T) {
-	err := validateAdapterMode("real")
+func TestLoadSecret_RealMode_MissingEnv(t *testing.T) {
+	t.Setenv("TEST_KEY_REAL_MISS", "")
+	_, err := loadSecret("TEST_KEY_REAL_MISS", "fallback", "real")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not yet supported")
+	assert.Contains(t, err.Error(), "TEST_KEY_REAL_MISS")
+	assert.Contains(t, err.Error(), "real")
+}
+
+func TestLoadSecret_RealMode_WithEnv(t *testing.T) {
+	t.Setenv("TEST_KEY_REAL_OK", "prod-secret")
+	got, err := loadSecret("TEST_KEY_REAL_OK", "fallback", "real")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("prod-secret"), got)
+}
+
+func TestValidateAdapterMode_Real_Accepted(t *testing.T) {
+	require.NoError(t, validateAdapterMode("real"))
 }
 
 func TestValidateAdapterMode_InMemory_OK(t *testing.T) {

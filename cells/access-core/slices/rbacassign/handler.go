@@ -39,10 +39,16 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// RevokeRequest is the request DTO for role revocation.
+type RevokeRequest struct {
+	UserID string `json:"userId"`
+	RoleID string `json:"roleId"`
+}
+
 // RegisterRoutes registers rbac-assign routes on the given mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	mux.Handle("POST /assign", http.HandlerFunc(h.handleAssign))
-	mux.Handle("DELETE /revoke", http.HandlerFunc(h.handleRevoke))
+	mux.Handle("POST /revoke", http.HandlerFunc(h.handleRevoke))
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +68,7 @@ func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
 		"data": AssignResponse{
 			UserID:   req.UserID,
 			RoleID:   req.RoleID,
@@ -77,7 +83,7 @@ func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req AssignRequest
+	var req RevokeRequest
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return

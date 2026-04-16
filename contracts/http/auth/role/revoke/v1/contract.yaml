@@ -8,7 +8,7 @@ endpoints:
   clients:
     - edge-bff
   http:
-    method: DELETE
+    method: POST
     path: /internal/v1/access/roles/revoke
     successStatus: 200
 schemaRefs:

@@ -104,12 +104,12 @@ func WithSeedAdminRole() Option {
 
 // WithSeedAdmin ensures the "admin" role exists and creates an admin user
 // with the given credentials during Init(). Idempotent: skips if the user
-// already exists.
+// already exists. The password is stored as []byte and cleared after hashing.
 func WithSeedAdmin(username, password string) Option {
 	return func(c *AccessCore) {
 		c.seedAdminRole = true
 		c.seedAdminUser = username
-		c.seedAdminPass = password
+		c.seedAdminPass = []byte(password)
 	}
 }
 
@@ -129,7 +129,7 @@ type AccessCore struct {
 	// Seed admin configuration (set via WithSeedAdmin/WithSeedAdminRole).
 	seedAdminRole bool
 	seedAdminUser string
-	seedAdminPass string
+	seedAdminPass []byte
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -297,7 +297,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// Upgrade to L1 when PostgreSQL adapter is introduced (needs real tx).
 	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger)
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	c.AddSlice(cell.NewBaseSlice("rbac-assign", "access-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("rbacassign", "access-core", cell.L0))
 
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
@@ -306,25 +306,27 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// doSeedAdmin seeds the admin role and optionally creates an admin user.
-// Requires roleRepo to be a *mem.RoleRepository (for SeedRole access).
-// Idempotent: skips if user already exists.
-func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
-	memRoleRepo, ok := c.roleRepo.(*mem.RoleRepository)
-	if !ok {
-		return fmt.Errorf("seed admin requires in-memory role repository; got %T", c.roleRepo)
-	}
+// bcryptCost is the bcrypt work factor for password hashing.
+// ref: Ory Kratos BcryptDefaultCost=12, OWASP 2023 minimum recommendation.
+const bcryptCost = 12
 
-	memRoleRepo.SeedRole(&domain.Role{
+// doSeedAdmin seeds the admin role and optionally creates an admin user.
+// Uses ports.RoleRepository.Create (no type assertion to specific impl).
+// Idempotent: skips if user already exists. Clears password after hashing.
+func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
+	adminRole := &domain.Role{
 		ID:   domain.RoleAdmin,
 		Name: domain.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
-	})
+	}
+	if err := c.roleRepo.Create(ctx, adminRole); err != nil {
+		return fmt.Errorf("ensure admin role: %w", err)
+	}
 	c.logger.Info("seed: admin role ensured")
 
-	if c.seedAdminUser == "" || c.seedAdminPass == "" {
+	if c.seedAdminUser == "" || len(c.seedAdminPass) == 0 {
 		return nil
 	}
 
@@ -332,10 +334,12 @@ func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 	if _, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser); err == nil {
 		c.logger.Info("seed: admin user already exists, skipping",
 			slog.String("username", c.seedAdminUser))
+		clear(c.seedAdminPass)
 		return nil
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(c.seedAdminPass), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword(c.seedAdminPass, bcryptCost)
+	clear(c.seedAdminPass) // wipe plaintext immediately after hashing
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
