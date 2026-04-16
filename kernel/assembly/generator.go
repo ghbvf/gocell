@@ -117,8 +117,8 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 	importedSet := make(map[string]bool)
 
 	for _, contractID := range g.contracts.AllIDs() {
-		provider := g.contracts.Provider(contractID)
-		// Error ignored: AllIDs() guarantees existence; FMT-09 catches invalid kinds.
+		// Errors ignored: AllIDs() guarantees existence; FMT-09 catches invalid kinds.
+		provider, _ := g.contracts.Provider(contractID)
 		consumers, _ := g.contracts.Consumers(contractID)
 
 		providerInAssembly := cellSet[provider]

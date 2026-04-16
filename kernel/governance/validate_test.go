@@ -3359,12 +3359,24 @@ func TestFMT15(t *testing.T) {
 			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
 			wantCount: 0,
 		},
+		{
+			name: "empty root skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
+			wantCount: 0, // root="" causes early return
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "/fake/root")
+			root := "/fake/root"
+			if tt.name == "empty root skipped" {
+				root = ""
+			}
+			val := NewValidator(pm, root)
 			if tt.readFile != nil {
 				val.readFile = tt.readFile
 			}
