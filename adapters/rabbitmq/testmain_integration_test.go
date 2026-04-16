@@ -8,8 +8,12 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/docker/go-connections/nat"
+	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/ghbvf/gocell/tests/testutil"
 )
@@ -41,7 +45,18 @@ func sharedBrokerURL(t *testing.T) string {
 	t.Helper()
 	sharedBrokerOnce.Do(func() {
 		ctx := context.Background()
-		container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
+		// tcrabbitmq.Run's default wait strategy only watches for the
+		// "Server startup complete" log pattern. On Docker Desktop for Mac
+		// the port forwarder can lag behind that signal, causing AmqpURL /
+		// PortEndpoint to return `port "5672/tcp" not found` for a brief
+		// window. Add an explicit port-listening wait so the container is
+		// not considered ready until the mapped port is actually reachable.
+		container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage,
+			testcontainers.WithAdditionalWaitStrategy(
+				wait.ForListeningPort(nat.Port(tcrabbitmq.DefaultAMQPPort)).
+					WithStartupTimeout(30*time.Second),
+			),
+		)
 		if err != nil {
 			sharedBrokerInitErr = fmt.Errorf("start shared rabbitmq container: %w", err)
 			return
