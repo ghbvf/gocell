@@ -70,6 +70,13 @@ func (s ConnectionState) String() string {
 	}
 }
 
+// MarshalText implements encoding.TextMarshaler so that JSON serialization
+// of PoolStats.State produces a human-readable string ("connected") instead
+// of a numeric uint8 value.
+func (s ConnectionState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
 // isPermanentDialError returns true if the error from Dial indicates a
 // permanent condition that will not resolve by retrying.
 //

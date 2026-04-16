@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -147,6 +148,17 @@ func TestClientPoolStats_WithProvider(t *testing.T) {
 	assert.Equal(t, uint32(10), stats.TotalConns)
 	assert.Equal(t, uint32(7), stats.IdleConns)
 	assert.Equal(t, uint32(2), stats.StaleConns)
+}
+
+func TestPoolStats_JSON_CamelCase(t *testing.T) {
+	stats := PoolStats{Hits: 10, Misses: 2, TotalConns: 5, IdleConns: 3}
+	b, err := json.Marshal(stats)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"hits"`)
+	assert.Contains(t, s, `"misses"`)
+	assert.Contains(t, s, `"totalConns"`)
+	assert.Contains(t, s, `"idleConns"`)
 }
 
 func TestNewClient_StandaloneEmptyAddr(t *testing.T) {

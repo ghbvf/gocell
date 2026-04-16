@@ -406,6 +406,16 @@ func TestConnection_PoolStats_Empty(t *testing.T) {
 	assert.Equal(t, StateConnected, stats.State)
 }
 
+func TestPoolStats_JSON_CamelCase(t *testing.T) {
+	stats := PoolStats{ChannelPoolSize: 10, IdleChannels: 3, State: StateConnected}
+	b, err := json.Marshal(stats)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"channelPoolSize"`)
+	assert.Contains(t, s, `"idleChannels"`)
+	assert.Contains(t, s, `"state":"connected"`) // MarshalText, not numeric
+}
+
 func TestConnection_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 

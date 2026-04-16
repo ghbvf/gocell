@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -133,6 +134,16 @@ func TestPoolStats_ZeroValue(t *testing.T) {
 	assert.Equal(t, int64(0), stats.NewConnsCount)
 	assert.Equal(t, int64(0), stats.MaxLifetimeDestroyCount)
 	assert.Equal(t, int64(0), stats.MaxIdleDestroyCount)
+}
+
+func TestPoolStats_JSON_CamelCase(t *testing.T) {
+	stats := PoolStats{AcquireCount: 5, IdleConns: 2, TotalConns: 10}
+	b, err := json.Marshal(stats)
+	require.NoError(t, err)
+	s := string(b)
+	assert.Contains(t, s, `"acquireCount"`)
+	assert.Contains(t, s, `"idleConns"`)
+	assert.Contains(t, s, `"totalConns"`)
 }
 
 func TestPoolStats_NilInner(t *testing.T) {
