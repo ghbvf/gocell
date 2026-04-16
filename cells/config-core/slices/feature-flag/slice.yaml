@@ -15,3 +15,7 @@ verify:
     - contract.http.config.flags.get.v1.serve
     - contract.http.config.flags.evaluate.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/feature-flag/**
+  - cells/config-core/slices/featureflag/**

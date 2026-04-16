@@ -313,6 +313,24 @@ func TestBaseSliceAllowedFilesDefault(t *testing.T) {
 	assert.Equal(t, []string{"cells/access-core/slices/login/**"}, s.AllowedFiles())
 }
 
+func TestBaseSliceAllowedFilesKebabNormalization(t *testing.T) {
+	s := NewBaseSlice("session-login", "access-core", L1)
+	got := s.AllowedFiles()
+	assert.Equal(t, []string{
+		"cells/access-core/slices/session-login/**",
+		"cells/access-core/slices/sessionlogin/**",
+	}, got)
+}
+
+func TestBaseSliceAllowedFilesMultipleDashes(t *testing.T) {
+	s := NewBaseSlice("config-receive-ack", "access-core", L1)
+	got := s.AllowedFiles()
+	assert.Equal(t, []string{
+		"cells/access-core/slices/config-receive-ack/**",
+		"cells/access-core/slices/configreceiveack/**",
+	}, got)
+}
+
 func TestBaseSliceAllowedFilesCustom(t *testing.T) {
 	s := NewBaseSlice("login", "access-core", L1)
 	custom := []string{"custom/path/**"}

@@ -81,7 +81,8 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 			if !isProviderRole(cu.Role) {
 				continue
 			}
-			consumers := dc.contracts.Consumers(cu.Contract)
+			// Error ignored: REF-02 catches missing contracts; FMT-09 catches invalid kinds.
+			consumers, _ := dc.contracts.Consumers(cu.Contract)
 			for _, consumerCell := range consumers {
 				if consumerCell == providerCell {
 					continue // self-edge is not a cross-cell dependency

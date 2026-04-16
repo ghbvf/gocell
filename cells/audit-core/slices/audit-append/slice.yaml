@@ -27,3 +27,7 @@ verify:
     - contract.event.config.changed.v1.subscribe
     - contract.event.config.rollback.v1.subscribe
   waivers: []
+
+allowedFiles:
+  - cells/audit-core/slices/audit-append/**
+  - cells/audit-core/slices/auditappend/**

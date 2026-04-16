@@ -12,3 +12,7 @@ verify:
     - contract.http.config.write.v1.serve
     - contract.event.config.changed.v1.publish
   waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/config-write/**
+  - cells/config-core/slices/configwrite/**

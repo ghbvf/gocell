@@ -1,7 +1,9 @@
 package governance
 
 import (
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -397,8 +399,12 @@ func (v *Validator) validateFMT12() []ValidationResult {
 	return results
 }
 
-// codeFMT13 is the rule code for HTTP transport metadata validation.
-const codeFMT13 = "FMT-13"
+const (
+	// codeFMT13 is the rule code for HTTP transport metadata validation.
+	codeFMT13 = "FMT-13"
+	// fieldSchemaRefsResponse is the shared field path for response schema findings.
+	fieldSchemaRefsResponse = "schemaRefs.response"
+)
 
 // validateFMT13 checks optional HTTP transport metadata on migrated HTTP contracts.
 // Legacy HTTP contracts may omit endpoints.http entirely, but once present it must
@@ -503,7 +509,7 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 		if c.SchemaRefs.Response != "" {
 			results = append(results, ValidationResult{
 				Code: codeFMT13, Severity: SeverityError, IssueType: IssueForbidden,
-				File: file, Field: "schemaRefs.response",
+				File: file, Field: fieldSchemaRefsResponse,
 				Message: fmt.Sprintf("http contract %q with noContent=true must not declare schemaRefs.response", c.ID),
 			})
 		}
@@ -519,10 +525,104 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 	if !h.NoContent && c.SchemaRefs.Response == "" {
 		results = append(results, ValidationResult{
 			Code: codeFMT13, Severity: SeverityWarning, IssueType: IssueRequired,
-			File: file, Field: "schemaRefs.response",
+			File: file, Field: fieldSchemaRefsResponse,
 			Message: fmt.Sprintf("http contract %q with noContent=false should declare schemaRefs.response", c.ID),
 		})
 	}
 
 	return results
+}
+
+// validateFMT14 checks that every slice declares explicit allowedFiles.
+func (v *Validator) validateFMT14() []ValidationResult {
+	var results []ValidationResult
+	for key, s := range v.project.Slices {
+		if len(s.AllowedFiles) == 0 {
+			results = append(results, ValidationResult{
+				Code:      "FMT-14",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      sliceFile(key),
+				Field:     "allowedFiles",
+				Message:   fmt.Sprintf("slice %q must declare explicit allowedFiles", s.ID),
+			})
+		}
+	}
+	return results
+}
+
+// validateFMT15 checks that HTTP list-style response schemas include "hasMore"
+// in their required fields. A response is a "list" when properties.data.type is "array".
+// Skipped when root is empty, for non-HTTP contracts, or when the schema file cannot be read.
+func (v *Validator) validateFMT15() []ValidationResult {
+	if v.root == "" {
+		return nil
+	}
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" || c.SchemaRefs.Response == "" {
+			continue
+		}
+		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+		schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
+		if !isWithinRoot(v.root, schemaPath) {
+			continue
+		}
+		data, err := v.readFile(schemaPath)
+		if err != nil {
+			continue // REF-12 handles missing files
+		}
+		info, ok := parseResponseSchema(data)
+		if !ok {
+			continue
+		}
+		if !isListSchema(info) {
+			continue
+		}
+		if !hasMoreInRequired(info) {
+			results = append(results, ValidationResult{
+				Code:      "FMT-15",
+				Severity:  SeverityError,
+				IssueType: IssueRequired,
+				File:      contractFile(c.ID),
+				Field:     fieldSchemaRefsResponse,
+				Message:   fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+			})
+		}
+	}
+	return results
+}
+
+// responseSchemaInfo holds the subset of JSON Schema fields needed for list-lint checks.
+type responseSchemaInfo struct {
+	Properties struct {
+		Data struct {
+			Type string `json:"type"`
+		} `json:"data"`
+	} `json:"properties"`
+	Required []string `json:"required"`
+}
+
+// parseResponseSchema unmarshals the minimal fields needed for list-lint checks.
+func parseResponseSchema(data []byte) (responseSchemaInfo, bool) {
+	var info responseSchemaInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return info, false
+	}
+	return info, true
+}
+
+// isListSchema checks if a JSON schema has properties.data.type == "array".
+func isListSchema(info responseSchemaInfo) bool {
+	return info.Properties.Data.Type == "array"
+}
+
+// hasMoreInRequired checks if "hasMore" is in the JSON schema required array.
+func hasMoreInRequired(info responseSchemaInfo) bool {
+	for _, r := range info.Required {
+		if r == "hasMore" {
+			return true
+		}
+	}
+	return false
 }

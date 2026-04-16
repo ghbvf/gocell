@@ -18,3 +18,7 @@ verify:
       owner: platform-team
       reason: 只读配置调用，集成测试已覆盖
       expiresAt: 2026-06-01
+
+allowedFiles:
+  - cells/access-core/slices/session-login/**
+  - cells/access-core/slices/sessionlogin/**

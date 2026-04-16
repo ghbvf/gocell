@@ -6,3 +6,7 @@ verify:
     - unit.audit-archive.service
   contract: []
   waivers: []
+
+allowedFiles:
+  - cells/audit-core/slices/audit-archive/**
+  - cells/audit-core/slices/auditarchive/**

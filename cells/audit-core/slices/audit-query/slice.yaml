@@ -9,3 +9,7 @@ verify:
   contract:
     - contract.http.audit.list.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/audit-core/slices/audit-query/**
+  - cells/audit-core/slices/auditquery/**

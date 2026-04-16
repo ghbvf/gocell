@@ -33,3 +33,7 @@ verify:
     - contract.http.auth.user.lock.v1.serve
     - contract.http.auth.user.unlock.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/identity-manage/**
+  - cells/access-core/slices/identitymanage/**

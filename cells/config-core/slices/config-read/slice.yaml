@@ -9,3 +9,7 @@ verify:
   contract:
     - contract.http.config.get.v1.serve
   waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/config-read/**
+  - cells/config-core/slices/configread/**

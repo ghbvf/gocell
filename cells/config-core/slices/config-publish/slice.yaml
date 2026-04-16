@@ -15,3 +15,7 @@ verify:
     - contract.event.config.changed.v1.publish
     - contract.event.config.rollback.v1.publish
   waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/config-publish/**
+  - cells/config-core/slices/configpublish/**

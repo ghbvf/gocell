@@ -11,3 +11,6 @@ verify:
   contract:
     - contract.http.device.register.v1.serve
     - contract.event.device-registered.v1.publish
+
+allowedFiles:
+  - cells/device-cell/slices/device-register/**

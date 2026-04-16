@@ -9,3 +9,7 @@ verify:
   contract:
     - contract.event.config.changed.v1.subscribe
   waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/config-subscribe/**
+  - cells/config-core/slices/configsubscribe/**

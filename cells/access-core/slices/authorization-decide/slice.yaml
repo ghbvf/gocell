@@ -6,3 +6,7 @@ verify:
     - unit.authorization-decide.service
   contract: []
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/authorization-decide/**
+  - cells/access-core/slices/authorizationdecide/**

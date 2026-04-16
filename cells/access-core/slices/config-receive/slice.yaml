@@ -8,3 +8,7 @@ verify:
     - unit.config-receive.service
   contract:
     - contract.event.config.changed.v1.subscribe
+
+allowedFiles:
+  - cells/access-core/slices/config-receive/**
+  - cells/access-core/slices/configreceive/**

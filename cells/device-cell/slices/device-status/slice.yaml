@@ -8,3 +8,6 @@ verify:
     - unit.device-status.service
   contract:
     - contract.http.device.status.v1.serve
+
+allowedFiles:
+  - cells/device-cell/slices/device-status/**

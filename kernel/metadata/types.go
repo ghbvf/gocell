@@ -42,6 +42,7 @@ type SliceMeta struct {
 	BelongsToCell  string          `yaml:"belongsToCell"`
 	ContractUsages []ContractUsage `yaml:"contractUsages"`
 	Verify         SliceVerifyMeta `yaml:"verify"`
+	AllowedFiles   []string        `yaml:"allowedFiles,omitempty"`
 }
 
 // ContractUsage declares a Slice's participation in a Contract.

@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // testProject returns a ProjectMeta with realistic test data:
@@ -162,14 +164,26 @@ func TestContractRegistry_Provider(t *testing.T) {
 		{"event provider is publisher", "event-session-created-v1", "access-core"},
 		{"command provider is handler", "command-audit-archive-v1", "audit-core"},
 		{"projection provider is provider", "projection-audit-summary-v1", "audit-core"},
-		{"not found returns empty", "nonexistent", ""},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, reg.Provider(tt.contractID))
+			got, err := reg.Provider(tt.contractID)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestContractRegistry_Provider_NotFound(t *testing.T) {
+	reg := registry.NewContractRegistry(testProject())
+	got, err := reg.Provider("nonexistent")
+	require.Error(t, err)
+	assert.Equal(t, "", got)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrContractNotFound, ec.Code)
 }
 
 func TestContractRegistry_Consumers(t *testing.T) {
@@ -182,15 +196,26 @@ func TestContractRegistry_Consumers(t *testing.T) {
 		{"event consumers are subscribers", "event-session-created-v1", []string{"audit-core", "config-core"}},
 		{"command consumers are invokers", "command-audit-archive-v1", []string{"access-core"}},
 		{"projection consumers are readers", "projection-audit-summary-v1", []string{"access-core", "config-core"}},
-		{"not found returns nil", "nonexistent", nil},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reg.Consumers(tt.contractID)
+			got, err := reg.Consumers(tt.contractID)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestContractRegistry_Consumers_NotFound(t *testing.T) {
+	reg := registry.NewContractRegistry(testProject())
+	got, err := reg.Consumers("nonexistent")
+	require.Error(t, err)
+	assert.Nil(t, got)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrContractNotFound, ec.Code)
 }
 
 func TestContractRegistry_AllIDs(t *testing.T) {
@@ -226,8 +251,10 @@ func TestContractRegistry_EmptyProject(t *testing.T) {
 			assert.Nil(t, reg.Get("any"))
 			assert.Empty(t, reg.ByKind("http"))
 			assert.Empty(t, reg.ByOwner("any"))
-			assert.Equal(t, "", reg.Provider("any"))
-			assert.Nil(t, reg.Consumers("any"))
+			_, providerErr := reg.Provider("any")
+			require.Error(t, providerErr)
+			_, consumersErr := reg.Consumers("any")
+			require.Error(t, consumersErr)
 			assert.Empty(t, reg.AllIDs())
 		})
 	}
@@ -326,7 +353,14 @@ func TestContractRegistry_Provider_UnknownKind(t *testing.T) {
 		},
 	}
 	reg := registry.NewContractRegistry(proj)
-	assert.Equal(t, "", reg.Provider("grpc-unknown-v1"))
+	got, err := reg.Provider("grpc-unknown-v1")
+	require.Error(t, err)
+	assert.Equal(t, "", got)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "grpc")
 }
 
 func TestContractRegistry_Consumers_UnknownKind(t *testing.T) {
@@ -339,7 +373,14 @@ func TestContractRegistry_Consumers_UnknownKind(t *testing.T) {
 		},
 	}
 	reg := registry.NewContractRegistry(proj)
-	assert.Nil(t, reg.Consumers("grpc-unknown-v1"))
+	got, err := reg.Consumers("grpc-unknown-v1")
+	require.Error(t, err)
+	assert.Nil(t, got)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "grpc")
 }
 
 func TestContractRegistry_NilContractInMap(t *testing.T) {
@@ -418,12 +459,14 @@ func TestContractRegistry_ByKind_DeepCopy(t *testing.T) {
 
 func TestContractRegistry_Consumers_DeepCopy(t *testing.T) {
 	reg := registry.NewContractRegistry(testProject())
-	got := reg.Consumers("http-auth-login-v1")
+	got, err := reg.Consumers("http-auth-login-v1")
+	require.NoError(t, err)
 	require.NotEmpty(t, got)
 
 	got[0] = "MUTATED"
 
-	fresh := reg.Consumers("http-auth-login-v1")
+	fresh, err := reg.Consumers("http-auth-login-v1")
+	require.NoError(t, err)
 	assert.NotEqual(t, "MUTATED", fresh[0])
 }
 

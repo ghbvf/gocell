@@ -12,3 +12,7 @@ verify:
     - contract.http.auth.session.delete.v1.serve
     - contract.event.session.revoked.v1.publish
   waivers: []
+
+allowedFiles:
+  - cells/access-core/slices/session-logout/**
+  - cells/access-core/slices/sessionlogout/**
