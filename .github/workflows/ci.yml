@@ -53,37 +53,32 @@ jobs:
           fi
           echo "PASS: no internal import violations"
 
-      # Kernel coverage gate: parse the coverage profile produced by Test above
-      # instead of re-running `go test -cover ./kernel/...` (which took ~4s and
-      # duplicated work already captured by -coverpkg=./...).
+      # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
+      # deliberately — it is not a duplicate of the Test step. The Test step
+      # uses `-coverpkg=./...` whose merged profile loses per-package fidelity
+      # (cells/adapters test binaries dilute kernel counts). The gate needs
+      # in-package kernel coverage, which requires a standalone run.
       - name: Kernel coverage gate
         run: |
+          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
           awk '
-            NR == 1 { next }
-            index($1, "github.com/ghbvf/gocell/kernel/") != 1 { next }
-            index($1, "outboxtest") > 0 || index($1, "celltest") > 0 { next }
-            {
-              split($1, a, ":")
-              file = a[1]
-              n = split(file, parts, "/")
-              pkg = parts[1]
-              for (i = 2; i < n; i++) pkg = pkg "/" parts[i]
-              total[pkg] += $2
-              if ($3 > 0) covered[pkg] += $2
-            }
-            END {
-              fail = 0
-              for (pkg in total) {
-                pct = (covered[pkg] * 100.0) / total[pkg]
-                printf "%s: %.1f%%\n", pkg, pct
-                if (pct < 90) {
-                  printf "FAIL: %s coverage %.1f%% < 90%%\n", pkg, pct
-                  fail = 1
-                }
+            /coverage: \[no statements\]/ { next }
+            /outboxtest/ { next }
+            /celltest/ { next }
+            /coverage:/ {
+              cov = $0
+              sub(/^.*coverage: /, "", cov)
+              sub(/% of statements.*$/, "", cov)
+              if (cov == $0) {
+                print "FAIL: could not parse coverage line: " $0;
+                exit 1
               }
-              exit fail
+              if (cov + 0 < 90) {
+                print "FAIL: " $2 " coverage " cov "% < 90%";
+                exit 1
+              }
             }
-          ' coverage.out
+          ' /tmp/kernel-cov.txt
           echo "PASS: kernel coverage >= 90%"
 
       - name: Upload coverage profile
