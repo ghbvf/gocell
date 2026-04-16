@@ -97,8 +97,8 @@ func (v *promHistogramVec) With(l metrics.Labels) metrics.Histogram {
 
 type promCounter struct{ inner prom.Counter }
 
-func (c promCounter) Inc()             { c.inner.Inc() }
-func (c promCounter) Add(d float64)    { c.inner.Add(d) }
+func (c promCounter) Inc()          { c.inner.Inc() }
+func (c promCounter) Add(d float64) { c.inner.Add(d) }
 
 type promHistogram struct{ inner prom.Observer }
 

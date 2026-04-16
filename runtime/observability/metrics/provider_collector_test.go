@@ -109,8 +109,10 @@ type spyCounter struct {
 	labels kernelmetrics.Labels
 }
 
-func (c spyCounter) Inc()            { c.Add(1) }
-func (c spyCounter) Add(d float64)   { c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyOp{labels: c.labels, value: d}) }
+func (c spyCounter) Inc() { c.Add(1) }
+func (c spyCounter) Add(d float64) {
+	c.parent.counterOps[c.name] = append(c.parent.counterOps[c.name], spyOp{labels: c.labels, value: d})
+}
 
 type spyHistogram struct {
 	parent *spyProvider

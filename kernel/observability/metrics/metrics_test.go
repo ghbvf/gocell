@@ -9,10 +9,10 @@ import (
 
 func TestValidateLabels(t *testing.T) {
 	tests := []struct {
-		name        string
-		expected    []string
-		got         metrics.Labels
-		wantErr     bool
+		name         string
+		expected     []string
+		got          metrics.Labels
+		wantErr      bool
 		wantSentinel error // non-nil expected sentinel to assert errors.Is against
 	}{
 		{
@@ -154,6 +154,6 @@ func TestNopProvider_AcceptsEmptyLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CounterVec: %v", err)
 	}
-	cv.With(nil).Inc()            // nil labels OK
+	cv.With(nil).Inc()               // nil labels OK
 	cv.With(metrics.Labels{}).Add(1) // empty map OK
 }
