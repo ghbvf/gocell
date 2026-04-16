@@ -84,7 +84,11 @@ type CoreAssembly struct {
 // If cfg.HookTimeout is zero, DefaultHookTimeout is applied. Negative value
 // disables per-hook timeout entirely.
 func New(cfg Config) *CoreAssembly {
-	if cfg.HookObserver == nil {
+	// Normalise nil + typed-nil (interface wrapping a nil pointer) to
+	// NopHookObserver. A typed nil that slips through would dispatch to a
+	// nil receiver on every hook and only manifest as panic-recover log
+	// spam from emitHookEvent.
+	if cell.IsNilHookObserver(cfg.HookObserver) {
 		cfg.HookObserver = cell.NopHookObserver{}
 	}
 	if cfg.HookTimeout == 0 {

@@ -91,6 +91,10 @@ func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 			"prometheus hook observer: register cell_hook_total", err)
 	}
 	if err := cfg.Registry.Register(hookDuration); err != nil {
+		// Rollback the first collector to keep construction atomic — otherwise
+		// a retry with the same registry would fail with "already registered"
+		// on hookTotal and leak a dangling half-registered observer.
+		cfg.Registry.Unregister(hookTotal)
 		return nil, errcode.Wrap(ErrAdapterPromRegister,
 			"prometheus hook observer: register cell_hook_duration_seconds", err)
 	}

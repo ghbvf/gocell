@@ -141,6 +141,39 @@ func TestHookObserver_CustomNamespace(t *testing.T) {
 	assert.True(t, seen, "expected myapp_cell_hook_total to be registered")
 }
 
+// hookDurationCollector replicates the histogram name used by NewHookObserver
+// so we can pre-register it on the registry and force the second Register
+// step inside NewHookObserver to fail with AlreadyRegisteredError.
+func preregisterHookDuration(t *testing.T, reg *prom.Registry, namespace string) {
+	t.Helper()
+	h := prom.NewHistogramVec(prom.HistogramOpts{
+		Namespace: namespace,
+		Name:      "cell_hook_duration_seconds",
+		Help:      "Duration of cell lifecycle hook invocations in seconds.",
+		Buckets:   DefaultHookDurationBuckets,
+	}, []string{"cell_id", "hook"})
+	require.NoError(t, reg.Register(h))
+}
+
+func TestHookObserver_SecondRegisterFailure_RollsBackFirst(t *testing.T) {
+	reg := prom.NewRegistry()
+	// Pre-register the histogram so NewHookObserver's second Register step fails.
+	preregisterHookDuration(t, reg, "gocell")
+
+	_, err := NewHookObserver(HookObserverConfig{Registry: reg})
+	require.Error(t, err, "second registration must fail when histogram name is taken")
+
+	// Proof of atomic rollback: counter must NOT be in the registry —
+	// otherwise a retry on the same registry would fail with AlreadyRegistered
+	// on cell_hook_total, trapping the caller in a half-registered state.
+	gathered, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range gathered {
+		assert.NotEqual(t, "gocell_cell_hook_total", mf.GetName(),
+			"cell_hook_total must be unregistered after second-step failure")
+	}
+}
+
 func TestHookObserver_DuplicateRegistrationReturnsError(t *testing.T) {
 	reg := prom.NewRegistry()
 	_, err := NewHookObserver(HookObserverConfig{Registry: reg})

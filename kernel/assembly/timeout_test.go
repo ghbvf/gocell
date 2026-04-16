@@ -146,6 +146,60 @@ func (c *wrappedCtxCell) BeforeStart(parent context.Context) error {
 
 var _ cell.BeforeStarter = (*wrappedCtxCell)(nil)
 
+// deadlineCheckCell records whether the ctx passed to BeforeStart carries a
+// deadline. Used to prove HookTimeout<0 disables ctx wrapping.
+type deadlineCheckCell struct {
+	*cell.BaseCell
+	hasDeadline bool
+	deadline    time.Time
+}
+
+func newDeadlineCheckCell(id string) *deadlineCheckCell {
+	return &deadlineCheckCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *deadlineCheckCell) BeforeStart(ctx context.Context) error {
+	c.deadline, c.hasDeadline = ctx.Deadline()
+	return nil
+}
+
+var _ cell.BeforeStarter = (*deadlineCheckCell)(nil)
+
+func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
+	// HookTimeout < 0 must pass the caller's ctx through unwrapped — hooks
+	// see no deadline. This locks the documented semantics of WithHookTimeout
+	// godoc ("Negative values disable per-hook timeouts entirely") against
+	// accidental regression.
+	dc := newDeadlineCheckCell("D")
+	a := New(Config{
+		ID:             "no-deadline",
+		DurabilityMode: cell.DurabilityDemo,
+		HookTimeout:    -1,
+	})
+	require.NoError(t, a.Register(dc))
+	require.NoError(t, a.Start(context.Background()))
+
+	assert.False(t, dc.hasDeadline,
+		"HookTimeout=-1 must pass ctx through unwrapped, got deadline=%v", dc.deadline)
+}
+
+func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
+	// Counter-test: HookTimeout>0 MUST wrap ctx with a deadline.
+	dc := newDeadlineCheckCell("D")
+	a := New(Config{
+		ID:             "with-deadline",
+		DurabilityMode: cell.DurabilityDemo,
+		HookTimeout:    5 * time.Second,
+	})
+	require.NoError(t, a.Register(dc))
+	require.NoError(t, a.Start(context.Background()))
+
+	assert.True(t, dc.hasDeadline,
+		"HookTimeout=5s must wrap ctx with a deadline")
+}
+
 func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	obs := &captureObserver{}
 	a := New(Config{

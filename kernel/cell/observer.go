@@ -1,6 +1,9 @@
 package cell
 
-import "time"
+import (
+	"reflect"
+	"time"
+)
 
 // HookPhase identifies a specific lifecycle hook invocation site.
 //
@@ -83,4 +86,25 @@ type NopHookObserver struct{}
 // NopHookObserver to keep the call site unconditional and allocation-free.
 func (NopHookObserver) OnHookEvent(HookEvent) {
 	// Intentionally empty — null-object pattern, no work to perform.
+}
+
+// IsNilHookObserver reports whether obs is effectively nil, including the
+// Go typed-nil pitfall where an interface value wraps a nil concrete
+// pointer. A bare `obs == nil` check misses typed nil and would leave the
+// assembly dispatching to a nil receiver on every hook, which
+// emitHookEvent's defer-recover would catch but log as repeated panics.
+//
+// Use this at configuration boundaries (option functions, assembly.New) to
+// normalise an unreliable caller-supplied observer to NopHookObserver.
+func IsNilHookObserver(obs LifecycleHookObserver) bool {
+	if obs == nil {
+		return true
+	}
+	v := reflect.ValueOf(obs)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return v.IsNil()
+	default:
+		return false
+	}
 }

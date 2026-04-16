@@ -97,3 +97,16 @@ func TestLifecycleHookObserver_CustomImpl(t *testing.T) {
 	assert.Equal(t, HookBeforeStart, obs.events[0].Hook)
 	assert.Equal(t, HookAfterStart, obs.events[1].Hook)
 }
+
+func TestIsNilHookObserver(t *testing.T) {
+	// Bare nil (both interface value and concrete value are nil).
+	assert.True(t, IsNilHookObserver(nil), "bare nil is nil")
+
+	// Typed nil (interface wraps a nil concrete pointer) — classic Go pitfall.
+	var typedNil *recordingObserver
+	assert.True(t, IsNilHookObserver(typedNil), "typed nil pointer must be treated as nil")
+
+	// Non-nil implementations.
+	assert.False(t, IsNilHookObserver(&recordingObserver{}), "valid pointer is not nil")
+	assert.False(t, IsNilHookObserver(NopHookObserver{}), "zero-value struct is not nil")
+}

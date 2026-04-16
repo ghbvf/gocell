@@ -9,8 +9,10 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -66,6 +68,26 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
 	return auth.NewKeySet(privKey, pubKey)
+}
+
+// metricsTokenHeader names the request header used to authenticate
+// /metrics scrapers when a token is configured. Mirrors the X-Readyz-Token
+// convention for /readyz?verbose — keeping the same shape for all
+// control-plane endpoints lets operators standardise scraper config.
+const metricsTokenHeader = "X-Metrics-Token"
+
+// withMetricsTokenGuard wraps h so requests without a matching
+// X-Metrics-Token header are rejected with 401 Unauthorized. Uses
+// crypto/subtle.ConstantTimeCompare to avoid timing side channels on
+// token comparison.
+func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get(metricsTokenHeader)), []byte(token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
@@ -226,6 +248,21 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
 	}
 
+	// /metrics token — required in real mode to avoid anonymous exposure of
+	// cell lifecycle signals (cell_id / hook / outcome labels reveal internal
+	// topology). In dev mode, unrestricted to keep local debugging friction low.
+	// ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
+	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
+	if adapterMode == "real" && metricsToken == "" {
+		return fmt.Errorf("GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header")
+	}
+	var metricsHandler http.Handler = promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{})
+	if metricsToken != "" {
+		metricsHandler = withMetricsTokenGuard(metricsToken, metricsHandler)
+	} else {
+		slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
+	}
+
 	bootstrapOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
@@ -236,10 +273,9 @@ func run(ctx context.Context) error {
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		// Expose cell lifecycle hook metrics on /metrics.
-		// promhttp serves the isolated registry configured above.
-		bootstrap.WithRouterOptions(router.WithMetricsHandler(
-			promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}),
-		)),
+		// promhttp serves the isolated registry configured above; the
+		// handler is wrapped with token guard when GOCELL_METRICS_TOKEN is set.
+		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
 	}
 	if verboseToken != "" {
 		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))

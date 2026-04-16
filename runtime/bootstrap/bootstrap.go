@@ -288,9 +288,13 @@ func WithHookTimeout(d time.Duration) Option {
 // takes precedence — this option has no effect. For pre-built assemblies,
 // set the observer directly on assembly.Config when constructing.
 //
-// A nil observer is equivalent to not calling this option.
+// A nil observer (including a typed nil wrapping a nil concrete pointer)
+// is equivalent to not calling this option.
 func WithHookObserver(obs cell.LifecycleHookObserver) Option {
 	return func(b *Bootstrap) {
+		if cell.IsNilHookObserver(obs) {
+			return
+		}
 		b.hookObserver = obs
 	}
 }
