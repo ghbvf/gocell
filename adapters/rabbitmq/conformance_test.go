@@ -53,13 +53,14 @@ func (p *envelopingPublisher) Publish(ctx context.Context, topic string, payload
 //   - BlockingSubscribe:  true  — Subscribe blocks until ctx cancelled.
 //   - BroadcastSubscribe: false — same queue = competing consumers, not fan-out.
 func TestRabbitMQ_Conformance(t *testing.T) {
-	// A single Connection is shared across all sub-tests. Each sub-test creates
-	// its own Subscriber (with independent channels and lifecycle). This is safe
-	// because Subscriber.Close only closes that subscriber's tracked channels,
-	// not the shared Connection. Topic names are unique per test (TestTopic),
-	// so exchange/queue declarations do not collide across sub-tests.
-	conn, cleanup := startRabbitMQ(t)
-	t.Cleanup(cleanup)
+	// One testcontainer is shared (it is expensive to start) but each subtest
+	// receives its own independent Connection. This prevents a prior subtest's
+	// teardown (e.g. SubscribeBlocksUntilCancel) from leaving the shared
+	// Connection in a reconnecting state that causes the next subtest's
+	// InitializeSubscription → acquireChannel call to fail with
+	// ERR_ADAPTER_AMQP_CONNECT "connection not available".
+	brokerURL, containerCleanup := startRabbitMQBroker(t)
+	t.Cleanup(containerCleanup)
 
 	outboxtest.TestPubSub(t, outboxtest.Features{
 		GuaranteedOrder:    true,
@@ -69,6 +70,10 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 		BlockingSubscribe:  true,
 		BroadcastSubscribe: false,
 	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
+		// Fresh Connection per subtest: isolates connection state so one
+		// subtest's teardown cannot bleed into the next.
+		conn := newIntegrationConnection(t, brokerURL)
+
 		pub := NewPublisher(conn)
 		sub := NewSubscriber(conn, SubscriberConfig{
 			DLXExchange:     "test.dlx",
