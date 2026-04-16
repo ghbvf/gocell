@@ -429,6 +429,16 @@ func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, 
 	return s.Inner.Subscribe(ctx, topic, wrapped, consumerGroup)
 }
 
+// InitializeSubscription delegates to Inner if it implements SubscriberInitializer.
+// This ensures the deterministic ready-signal is not silently lost when a
+// SubscriberInitializer-capable subscriber is wrapped with middleware.
+func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	if init, ok := s.Inner.(SubscriberInitializer); ok {
+		return init.InitializeSubscription(ctx, topic, consumerGroup)
+	}
+	return nil
+}
+
 // Close delegates to the inner subscriber.
 func (s *SubscriberWithMiddleware) Close() error {
 	return s.Inner.Close()

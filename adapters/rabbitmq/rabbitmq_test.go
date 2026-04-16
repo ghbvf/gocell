@@ -1255,6 +1255,74 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 
 func TestSubscriber_InterfaceCompliance(t *testing.T) {
 	var _ outbox.Subscriber = (*Subscriber)(nil)
+	var _ outbox.SubscriberInitializer = (*Subscriber)(nil)
+}
+
+func TestSubscriber_InitializeSubscription_DeclaresTopology(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.nextCh = ch
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "cg-1")
+	require.NoError(t, err)
+
+	// Verify topology was declared: 2 exchanges (main + DLX), 1 queue, 1 binding.
+	assert.Equal(t, []string{"test.topic", "test.dlx"}, ch.exchangesDeclared)
+	assert.Equal(t, []string{"cg-1.test.topic"}, ch.queuesDeclared)
+	assert.Equal(t, []string{"cg-1.test.topic->test.topic"}, ch.queueBindings)
+
+	// Verify DLX args on the queue.
+	require.Len(t, ch.queueDeclareArgs, 1)
+	assert.Equal(t, "test.dlx", ch.queueDeclareArgs[0]["x-dead-letter-exchange"])
+}
+
+func TestSubscriber_InitializeSubscription_EmptyDLX_ReturnsError(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: ""})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DLXExchange is required")
+}
+
+func TestSubscriber_InitializeSubscription_AcquireChannelFailure(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	// Close the connection to make AcquireChannel fail.
+	_ = conn.Close()
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	assert.Error(t, err)
+}
+
+func TestSubscriber_InitializeSubscription_ExchangeDeclareFailure(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.exchangeDeclareErr = errors.New("exchange declare failed")
+	mockConn.nextCh = ch
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "declare exchange")
+}
+
+func TestSubscriber_InitializeSubscription_EmptyGroup_DefaultsToTopic(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.nextCh = ch
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "my.topic", "")
+	require.NoError(t, err)
+
+	// Empty group → queue name = topic.
+	assert.Equal(t, []string{"my.topic"}, ch.queuesDeclared)
 }
 
 func TestSubscriberConfig_Defaults(t *testing.T) {
