@@ -141,7 +141,15 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 
 // declareTopology declares the exchange, DLX, queue, and binding on the given
 // channel. All operations are idempotent — safe to call multiple times.
+//
+// Precondition: s.config.DLXExchange must be non-empty. Both call sites
+// (Subscribe, InitializeSubscription) validate this, but the guard here
+// prevents accidental misuse from future code paths.
 func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) error {
+	if s.config.DLXExchange == "" {
+		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
+	}
+
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
 		return fmt.Errorf("rabbitmq: declare exchange: %w", err)

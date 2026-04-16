@@ -48,7 +48,9 @@ type mockChannel struct {
 	exchangeDeclareErr error
 	queuesDeclared     []string
 	queueDeclareArgs   []amqp.Table
+	queueDeclareErr    error
 	queueBindings      []string
+	queueBindErr       error
 
 	notifyPublishCh chan amqp.Confirmation
 
@@ -126,6 +128,9 @@ func (m *mockChannel) ExchangeDeclare(name, kind string, durable, autoDelete, in
 func (m *mockChannel) QueueDeclare(name string, durable, autoDelete, exclusive, noWait bool, args amqp.Table) (amqp.Queue, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.queueDeclareErr != nil {
+		return amqp.Queue{}, m.queueDeclareErr
+	}
 	m.queuesDeclared = append(m.queuesDeclared, name)
 	m.queueDeclareArgs = append(m.queueDeclareArgs, args)
 	return amqp.Queue{Name: name}, nil
@@ -134,6 +139,9 @@ func (m *mockChannel) QueueDeclare(name string, durable, autoDelete, exclusive, 
 func (m *mockChannel) QueueBind(name, key, exchange string, noWait bool, args amqp.Table) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.queueBindErr != nil {
+		return m.queueBindErr
+	}
 	m.queueBindings = append(m.queueBindings, name+"->"+exchange)
 	return nil
 }
@@ -1309,6 +1317,32 @@ func TestSubscriber_InitializeSubscription_ExchangeDeclareFailure(t *testing.T) 
 	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "declare exchange")
+}
+
+func TestSubscriber_InitializeSubscription_QueueDeclareFailure(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.queueDeclareErr = errors.New("queue declare failed")
+	mockConn.nextCh = ch
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "declare queue")
+}
+
+func TestSubscriber_InitializeSubscription_QueueBindFailure(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.queueBindErr = errors.New("queue bind failed")
+	mockConn.nextCh = ch
+
+	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
+
+	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bind queue")
 }
 
 func TestSubscriber_InitializeSubscription_EmptyGroup_DefaultsToTopic(t *testing.T) {

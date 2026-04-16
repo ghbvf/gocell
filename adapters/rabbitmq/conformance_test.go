@@ -53,6 +53,11 @@ func (p *envelopingPublisher) Publish(ctx context.Context, topic string, payload
 //   - BlockingSubscribe:  true  — Subscribe blocks until ctx cancelled.
 //   - BroadcastSubscribe: false — same queue = competing consumers, not fan-out.
 func TestRabbitMQ_Conformance(t *testing.T) {
+	// A single Connection is shared across all sub-tests. Each sub-test creates
+	// its own Subscriber (with independent channels and lifecycle). This is safe
+	// because Subscriber.Close only closes that subscriber's tracked channels,
+	// not the shared Connection. Topic names are unique per test (TestTopic),
+	// so exchange/queue declarations do not collide across sub-tests.
 	conn, cleanup := startRabbitMQ(t)
 	t.Cleanup(cleanup)
 

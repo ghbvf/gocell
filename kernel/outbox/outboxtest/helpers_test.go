@@ -149,6 +149,57 @@ func TestFeatures_SetDefaults_PreservesExplicit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// waitForSubscription tests
+// ---------------------------------------------------------------------------
+
+// fakeInitializerSub implements both Subscriber and SubscriberInitializer.
+type fakeInitializerSub struct {
+	fakePubSub
+	initCalled bool
+	initTopic  string
+	initGroup  string
+}
+
+func (f *fakeInitializerSub) InitializeSubscription(_ context.Context, topic, group string) error {
+	f.initCalled = true
+	f.initTopic = topic
+	f.initGroup = group
+	return nil
+}
+
+func TestWaitForSubscription_UsesInitializerWhenAvailable(t *testing.T) {
+	sub := &fakeInitializerSub{}
+	ctx := context.Background()
+
+	waitForSubscription(t, ctx, sub, "my.topic", "cg-1")
+
+	if !sub.initCalled {
+		t.Fatal("expected InitializeSubscription to be called")
+	}
+	if sub.initTopic != "my.topic" {
+		t.Fatalf("want topic 'my.topic', got %q", sub.initTopic)
+	}
+	if sub.initGroup != "cg-1" {
+		t.Fatalf("want group 'cg-1', got %q", sub.initGroup)
+	}
+}
+
+func TestWaitForSubscription_FallsBackToSleep(t *testing.T) {
+	// fakePubSub does NOT implement SubscriberInitializer.
+	sub := &fakePubSub{}
+	ctx := context.Background()
+
+	start := time.Now()
+	waitForSubscription(t, ctx, sub, "any.topic", "")
+	elapsed := time.Since(start)
+
+	// Should have slept at least subscribeInitDelay (50ms).
+	if elapsed < 40*time.Millisecond {
+		t.Fatalf("expected sleep fallback (~50ms), but returned in %v", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // collector tests — uses a minimal in-test fake subscriber (no runtime/ import)
 // ---------------------------------------------------------------------------
 
