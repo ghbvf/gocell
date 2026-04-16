@@ -128,6 +128,12 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	}
 
 	entry.Value = ver.Value
+	// Restore the snapshot's sensitivity so a rolled-back entry inherits the
+	// redaction policy that was in force at the snapshot time. Otherwise a
+	// sensitivity flip between the target version and the live entry would
+	// either leak a secret (entry was sensitive, snapshot was plain) or
+	// over-redact a public value (snapshot was sensitive, entry is now plain).
+	entry.Sensitive = ver.Sensitive
 	entry.Version++
 	entry.UpdatedAt = time.Now()
 

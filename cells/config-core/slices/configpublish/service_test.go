@@ -219,3 +219,49 @@ func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ver.Sensitive)
 }
+
+// PR#155 review F1: rollback must restore the snapshot's Sensitive flag onto
+// the live entry so a sensitivity flip between target version and current
+// state cannot leak (sensitive→plain) or over-redact (plain→sensitive).
+func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
+	tests := []struct {
+		name              string
+		seedSensitive     bool
+		flipToSensitiveAt int // 0 = no flip
+		wantSensitive     bool
+	}{
+		{name: "snapshot sensitive, live plain → entry becomes sensitive", seedSensitive: true, flipToSensitiveAt: 0, wantSensitive: true},
+		{name: "snapshot plain, live sensitive → entry becomes plain", seedSensitive: false, flipToSensitiveAt: 1, wantSensitive: false},
+		{name: "snapshot plain, live plain → stays plain", seedSensitive: false, flipToSensitiveAt: 0, wantSensitive: false},
+		{name: "snapshot sensitive, live sensitive → stays sensitive", seedSensitive: true, flipToSensitiveAt: 1, wantSensitive: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := mem.NewConfigRepository()
+			svc := NewService(repo, stubPublisher{}, slog.Default())
+			now := time.Now()
+			require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+				ID: "cfg-x", Key: "app.x", Value: "v1", Sensitive: tt.seedSensitive,
+				Version: 1, CreatedAt: now, UpdatedAt: now,
+			}))
+			// Snapshot v1 with the seeded sensitivity.
+			_, err := svc.Publish(context.Background(), "app.x")
+			require.NoError(t, err)
+
+			// Optionally flip the live entry's sensitivity to differ from the snapshot.
+			if tt.flipToSensitiveAt > 0 {
+				live, err := repo.GetByKey(context.Background(), "app.x")
+				require.NoError(t, err)
+				live.Sensitive = !tt.seedSensitive
+				live.Value = "v-live"
+				require.NoError(t, repo.Update(context.Background(), live))
+			}
+
+			rolled, err := svc.Rollback(context.Background(), "app.x", 1)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSensitive, rolled.Sensitive,
+				"rollback must inherit the snapshot's Sensitive flag, not the live entry's")
+		})
+	}
+}

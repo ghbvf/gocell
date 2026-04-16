@@ -157,23 +157,42 @@ func TestConfigRepository_List(t *testing.T) {
 }
 
 func TestConfigRepository_PublishVersion(t *testing.T) {
-	db := &mockDB{}
-	repo := NewConfigRepository(db)
-
-	now := time.Now()
-	version := &domain.ConfigVersion{
-		ID:          "cv-1",
-		ConfigID:    "cfg-1",
-		Version:     1,
-		Value:       "published value",
-		PublishedAt: &now,
+	// PR#155 review F5: assert the sensitive flag is actually bound as the 5th
+	// positional argument so a future drop of that arg from r.db.Exec would fail.
+	tests := []struct {
+		name      string
+		sensitive bool
+	}{
+		{name: "non-sensitive", sensitive: false},
+		{name: "sensitive", sensitive: true},
 	}
 
-	err := repo.PublishVersion(context.Background(), version)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &mockDB{}
+			repo := NewConfigRepository(db)
 
-	require.Len(t, db.execCalls, 1)
-	assert.Contains(t, db.execCalls[0].sql, "INSERT INTO config_versions")
+			now := time.Now()
+			version := &domain.ConfigVersion{
+				ID:          "cv-1",
+				ConfigID:    "cfg-1",
+				Version:     1,
+				Value:       "published value",
+				Sensitive:   tt.sensitive,
+				PublishedAt: &now,
+			}
+
+			err := repo.PublishVersion(context.Background(), version)
+			require.NoError(t, err)
+
+			require.Len(t, db.execCalls, 1)
+			assert.Contains(t, db.execCalls[0].sql, "INSERT INTO config_versions")
+			require.GreaterOrEqual(t, len(db.execCalls[0].args), 6,
+				"PublishVersion must bind 6 args: id, configId, version, value, sensitive, publishedAt")
+			assert.Equal(t, tt.sensitive, db.execCalls[0].args[4],
+				"5th positional arg must be ConfigVersion.Sensitive")
+		})
+	}
 }
 
 func TestConfigRepository_GetVersion(t *testing.T) {

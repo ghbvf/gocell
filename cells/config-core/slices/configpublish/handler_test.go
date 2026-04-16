@@ -58,6 +58,8 @@ func TestConfigVersionResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"configId"`)
 	assert.Contains(t, s, `"version"`)
 	assert.Contains(t, s, `"value"`)
+	// PR#155 review F3: lock the sensitive JSON tag so removing it would fail here.
+	assert.Contains(t, s, `"sensitive"`)
 	assert.Contains(t, s, `"publishedAt"`)
 }
 
@@ -185,6 +187,39 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// PR#155 review F2: rollback response must redact the value when the snapshot
+// was sensitive, mirroring the publish response guarantee.
+func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
+	handler, repo := setupHandler()
+	now := time.Now()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	}))
+	// Publish v1 carries Sensitive=true into the snapshot.
+	svc := NewService(repo, eventbus.New(), slog.Default())
+	_, err := svc.Publish(context.Background(), "db.password")
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/db.password/rollback",
+		strings.NewReader(`{"version":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			Value     string `json:"value"`
+			Sensitive bool   `json:"sensitive"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "******", resp.Data.Value, "rollback response must redact sensitive snapshot value")
+	assert.True(t, resp.Data.Sensitive)
+	assert.NotContains(t, w.Body.String(), "s3cret!", "raw secret must not appear anywhere in the rollback body")
 }
 
 func TestHandler_HandleRollback_UnknownField(t *testing.T) {
