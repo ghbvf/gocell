@@ -216,7 +216,7 @@ func TestDEP02_UnknownKindWarning(t *testing.T) {
 	results := dc.Check()
 	dep02 := findByCode(results, "DEP-02")
 	require.Len(t, dep02, 1)
-	assert.Equal(t, SeverityWarning, dep02[0].Severity)
+	assert.Equal(t, SeverityError, dep02[0].Severity)
 	assert.Equal(t, IssueInvalid, dep02[0].IssueType)
 	assert.Contains(t, dep02[0].Message, "bad.kind.v1")
 	assert.Contains(t, dep02[0].Message, "dependency graph may be incomplete")

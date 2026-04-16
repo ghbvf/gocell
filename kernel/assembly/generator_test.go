@@ -375,7 +375,7 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	cellSet := map[string]bool{"access-core": true}
+	cellSet := map[string]bool{"access-core": true, "audit-core": true}
 	exported, imported, err := gen.computeBoundaryContracts(cellSet)
 	require.NoError(t, err)
 

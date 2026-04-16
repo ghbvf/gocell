@@ -86,7 +86,7 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 			if consErr != nil {
 				results = append(results, ValidationResult{
 					Code:      "DEP-02",
-					Severity:  SeverityWarning,
+					Severity:  SeverityError,
 					IssueType: IssueInvalid,
 					File:      sliceFile(providerCell + "/" + s.ID),
 					Field:     "contractUsages",
@@ -114,6 +114,12 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 		if graph[cellID] == nil {
 			graph[cellID] = make(map[string]bool)
 		}
+	}
+
+	// If any consumer resolution failed, the graph is incomplete and cycle
+	// detection would produce unreliable results. Return errors immediately.
+	if len(results) > 0 {
+		return results
 	}
 
 	// Three-color DFS cycle detection.
