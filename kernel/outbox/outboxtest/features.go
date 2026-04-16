@@ -27,6 +27,13 @@ type Features struct {
 	// BlockingSubscribe means Subscribe blocks until ctx is cancelled.
 	BlockingSubscribe bool
 
+	// BroadcastSubscribe indicates that multiple Subscribe calls on the same
+	// topic from the same Subscriber instance deliver a copy to EVERY handler
+	// (fan-out). When false, multiple subscribers on the same topic compete
+	// for messages (round-robin); testMultipleSubscribers is skipped.
+	// InMemoryEventBus: true. RabbitMQ (same queue without explicit group): false.
+	BroadcastSubscribe bool
+
 	// MessageCount is how many messages to use in bulk tests.
 	// Default: 100 (short mode: 10).
 	MessageCount int

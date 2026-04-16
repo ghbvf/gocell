@@ -48,8 +48,11 @@ func isRecoverableAMQPError(err error) bool {
 	return false
 }
 
-// Compile-time interface check.
-var _ outbox.Subscriber = (*Subscriber)(nil)
+// Compile-time interface checks.
+var (
+	_ outbox.Subscriber            = (*Subscriber)(nil)
+	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
+)
 
 // SubscriberConfig configures how a Subscriber consumes messages.
 type SubscriberConfig struct {
@@ -134,6 +137,71 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 		return s.config.ConsumerGroup + "." + topic
 	}
 	return topic
+}
+
+// declareTopology declares the exchange, DLX, queue, and binding on the given
+// channel. All operations are idempotent — safe to call multiple times.
+//
+// Precondition: s.config.DLXExchange must be non-empty. Both call sites
+// (Subscribe, InitializeSubscription) validate this, but the guard here
+// prevents accidental misuse from future code paths.
+func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) error {
+	if s.config.DLXExchange == "" {
+		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
+	}
+
+	// Declare exchange idempotently.
+	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare exchange: %w", err)
+	}
+
+	// Declare the dead-letter exchange to ensure it exists before binding.
+	// Uses "direct" type so rejected messages are routed by DLXRoutingKey.
+	if err := ch.ExchangeDeclare(s.config.DLXExchange, "direct", true, false, false, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: declare DLX exchange: %w", err)
+	}
+
+	// Build queue arguments for dead-letter routing.
+	queueArgs := amqp.Table{
+		"x-dead-letter-exchange": s.config.DLXExchange,
+	}
+	if s.config.DLXRoutingKey != "" {
+		queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
+	}
+
+	// Declare queue.
+	if _, err := ch.QueueDeclare(queueName, true, false, false, false, queueArgs); err != nil {
+		return fmt.Errorf("rabbitmq: declare queue: %w", err)
+	}
+
+	// Bind queue to exchange.
+	if err := ch.QueueBind(queueName, "", topic, false, nil); err != nil {
+		return fmt.Errorf("rabbitmq: bind queue: %w", err)
+	}
+
+	return nil
+}
+
+// InitializeSubscription pre-declares the AMQP topology (exchange, DLX, queue,
+// binding) for the given topic and consumer group. After this returns, messages
+// published to the topic are queued by the broker — even before Subscribe
+// starts consuming. This enables deterministic conformance testing without sleep.
+//
+// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
+func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	if s.config.DLXExchange == "" {
+		return errcode.New(ErrAdapterAMQPSubscribe,
+			"rabbitmq: DLXExchange is required for InitializeSubscription")
+	}
+
+	ch, err := s.conn.AcquireChannel()
+	if err != nil {
+		return fmt.Errorf("rabbitmq: acquire channel for init: %w", err)
+	}
+	defer s.conn.ReleaseChannel(ch)
+
+	queueName := s.resolveQueueName(topic, consumerGroup)
+	return s.declareTopology(ch, topic, queueName)
 }
 
 // Subscribe registers a handler for the given topic and blocks until ctx is
@@ -277,33 +345,9 @@ func (s *Subscriber) subscribeOnce(
 		return setupErr("rabbitmq: set qos", ErrAdapterAMQPSubscribe, err)
 	}
 
-	// Declare exchange idempotently.
-	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
-		return setupErr("rabbitmq: declare exchange", ErrAdapterAMQPSubscribe, err)
-	}
-
-	// Declare the dead-letter exchange to ensure it exists before binding.
-	// Uses "direct" type so rejected messages are routed by DLXRoutingKey.
-	if err := ch.ExchangeDeclare(s.config.DLXExchange, "direct", true, false, false, false, nil); err != nil {
-		return setupErr("rabbitmq: declare DLX exchange", ErrAdapterAMQPSubscribe, err)
-	}
-
-	// Build queue arguments for dead-letter routing.
-	queueArgs := amqp.Table{
-		"x-dead-letter-exchange": s.config.DLXExchange,
-	}
-	if s.config.DLXRoutingKey != "" {
-		queueArgs["x-dead-letter-routing-key"] = s.config.DLXRoutingKey
-	}
-
-	// Declare queue.
-	if _, err = ch.QueueDeclare(queueName, true, false, false, false, queueArgs); err != nil {
-		return setupErr("rabbitmq: declare queue", ErrAdapterAMQPSubscribe, err)
-	}
-
-	// Bind queue to exchange.
-	if err := ch.QueueBind(queueName, "", topic, false, nil); err != nil {
-		return setupErr("rabbitmq: bind queue", ErrAdapterAMQPSubscribe, err)
+	// Declare topology (exchange, DLX, queue, binding) — idempotent.
+	if err := s.declareTopology(ch, topic, queueName); err != nil {
+		return setupErr("rabbitmq: declare topology", ErrAdapterAMQPSubscribe, err)
 	}
 
 	consumerTag := fmt.Sprintf("cg-%s-%s", queueName, topic)

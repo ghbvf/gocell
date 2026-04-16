@@ -71,7 +71,7 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `RetryBaseDelay` | duration | no | 1s | Initial delay for exponential backoff retries |
 | `IdempotencyTTL` | duration | no | 24h | TTL for idempotency done-keys |
 | `LeaseTTL` | duration | no | 5m | Processing-lease TTL for Claimer backend |
-| `ClaimFailOpen` | *bool | no | nil (fail-closed) | `true`: proceed without idempotency on Claim failure; `false`/nil: requeue until backend recovers |
+| `ClaimPolicy` | ClaimPolicy | no | ClaimPolicyFailClosed (zero-value) | `ClaimPolicyFailOpen`: proceed without idempotency on Claim failure; `ClaimPolicyFailClosed`: requeue until backend recovers |
 | `ClaimRetryCount` | int | no | RetryCount | Max Claim() attempts on the fail-closed path |
 | `ClaimRetryBaseDelay` | duration | no | RetryBaseDelay | Initial backoff between Claim() retries |
 | `MaxRetryDelay` | duration | no | 30s | Cap for exponential backoff delay |

@@ -31,6 +31,18 @@ func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byt
 
 var _ Publisher = (*mockPublisher)(nil)
 
+// plainSubscriber implements Subscriber but NOT SubscriberInitializer.
+type plainSubscriber struct{}
+
+func (m *plainSubscriber) Subscribe(context.Context, string, EntryHandler, string) error { return nil }
+func (m *plainSubscriber) Close() error                                                  { return nil }
+
+func TestSubscriberInitializer_IsOptional(t *testing.T) {
+	var sub Subscriber = &plainSubscriber{}
+	_, ok := sub.(SubscriberInitializer)
+	assert.False(t, ok, "plainSubscriber should not implement SubscriberInitializer")
+}
+
 func TestNoopWriter_Write(t *testing.T) {
 	writer := NoopWriter{}
 	err := writer.Write(context.Background(), validEntry("noop"))
@@ -291,6 +303,57 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	assert.Equal(t, DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
 	assert.False(t, handlerCalled)
+}
+
+// --- SubscriberWithMiddleware + SubscriberInitializer forwarding (F1-1) ---
+
+// initializerSubscriber implements both Subscriber and SubscriberInitializer.
+type initializerSubscriber struct {
+	recordingSubscriber
+	initCalled bool
+	initTopic  string
+	initGroup  string
+	initErr    error
+}
+
+func (s *initializerSubscriber) InitializeSubscription(_ context.Context, topic, consumerGroup string) error {
+	s.initCalled = true
+	s.initTopic = topic
+	s.initGroup = consumerGroup
+	return s.initErr
+}
+
+func TestSubscriberWithMiddleware_ForwardsSubscriberInitializer(t *testing.T) {
+	inner := &initializerSubscriber{}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	// SubscriberWithMiddleware must implement SubscriberInitializer.
+	init, ok := Subscriber(sub).(SubscriberInitializer)
+	assert.True(t, ok, "SubscriberWithMiddleware should implement SubscriberInitializer")
+
+	err := init.InitializeSubscription(context.Background(), "test.topic", "cg-1")
+	assert.NoError(t, err)
+	assert.True(t, inner.initCalled)
+	assert.Equal(t, "test.topic", inner.initTopic)
+	assert.Equal(t, "cg-1", inner.initGroup)
+}
+
+func TestSubscriberWithMiddleware_InitializeSubscription_PropagatesError(t *testing.T) {
+	inner := &initializerSubscriber{initErr: errors.New("init failed")}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	err := sub.InitializeSubscription(context.Background(), "t", "g")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "init failed")
+}
+
+func TestSubscriberWithMiddleware_InitializeSubscription_InnerNotInitializer(t *testing.T) {
+	// Inner does NOT implement SubscriberInitializer — should be a no-op.
+	inner := &recordingSubscriber{}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	err := sub.InitializeSubscription(context.Background(), "t", "g")
+	assert.NoError(t, err, "should return nil when inner does not support initialization")
 }
 
 func TestEntry_RoutingTopic(t *testing.T) {

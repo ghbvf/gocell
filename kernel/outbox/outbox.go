@@ -391,6 +391,20 @@ type Subscriber interface {
 	Close() error
 }
 
+// SubscriberInitializer is optionally implemented by Subscriber to pre-declare
+// broker topology (exchanges, queues, bindings) before Subscribe is called.
+// This allows the conformance harness to publish messages deterministically —
+// with a persistent broker, messages are queued even before Subscribe starts
+// consuming.
+//
+// Implementations that do not support pre-initialization (e.g., in-memory)
+// need not implement this interface; the harness falls back to a brief sleep.
+//
+// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
+type SubscriberInitializer interface {
+	InitializeSubscription(ctx context.Context, topic, consumerGroup string) error
+}
+
 // TopicHandlerMiddleware transforms an EntryHandler, receiving the topic name.
 // It is the event-consumer analogue of HTTP middleware.
 type TopicHandlerMiddleware func(topic string, next EntryHandler) EntryHandler
@@ -413,6 +427,16 @@ func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, 
 		wrapped = s.Middleware[i](topic, wrapped)
 	}
 	return s.Inner.Subscribe(ctx, topic, wrapped, consumerGroup)
+}
+
+// InitializeSubscription delegates to Inner if it implements SubscriberInitializer.
+// This ensures the deterministic ready-signal is not silently lost when a
+// SubscriberInitializer-capable subscriber is wrapped with middleware.
+func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	if init, ok := s.Inner.(SubscriberInitializer); ok {
+		return init.InitializeSubscription(ctx, topic, consumerGroup)
+	}
+	return nil
 }
 
 // Close delegates to the inner subscriber.

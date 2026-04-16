@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/bits"
 	"math/rand/v2"
 	"net"
 	"net/url"
@@ -472,31 +471,15 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 // capped result is always in [0.75*max, max]. This prevents thundering-herd
 // at the cap while keeping ReconnectMaxBackoff as a true upper bound.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	maxBackoff := c.config.ReconnectMaxBackoff
-	base := c.config.ReconnectBaseDelay
-
-	// Compute max safe exponent: 63 - bits needed to represent base.
-	// This adapts to any ReconnectBaseDelay (1ns → exp 62, 1s → exp 33).
-	maxSafeShift := 63 - bits.Len64(uint64(base))
-	if attempt > maxSafeShift {
-		return addDownJitter(maxBackoff)
-	}
-
-	delay := base * time.Duration(1<<uint(attempt))
-	if delay <= 0 { // overflow guard
-		return addDownJitter(maxBackoff)
-	}
-
-	if delay >= maxBackoff {
-		// Capped region: apply downward-only jitter [0.75*max, max] to prevent
-		// thundering-herd while keeping maxBackoff as a true upper bound.
-		return addDownJitter(maxBackoff)
+	delay := exponentialDelay(c.config.ReconnectBaseDelay, c.config.ReconnectMaxBackoff, attempt)
+	if delay >= c.config.ReconnectMaxBackoff {
+		return addDownJitter(c.config.ReconnectMaxBackoff)
 	}
 
 	// Uncapped region: jitter on actual delay. Cap any overshoot from +25%.
 	withJitter := addJitter(delay)
-	if withJitter > maxBackoff {
-		return maxBackoff
+	if withJitter > c.config.ReconnectMaxBackoff {
+		return c.config.ReconnectMaxBackoff
 	}
 	return withJitter
 }
