@@ -1,0 +1,14 @@
+id: rbac-assign
+belongsToCell: access-core
+contractUsages:
+  - contract: http.auth.role.assign.v1
+    role: serve
+  - contract: http.auth.role.revoke.v1
+    role: serve
+verify:
+  unit:
+    - unit.rbac-assign.service
+  contract:
+    - contract.http.auth.role.assign.v1.serve
+    - contract.http.auth.role.revoke.v1.serve
+  waivers: []

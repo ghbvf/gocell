@@ -120,12 +120,24 @@ func run(ctx context.Context) error {
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
-	accessCell := accesscore.NewAccessCore(
+
+	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-	)
+	}
+
+	// Seed admin role + optional admin user from env vars.
+	adminUser := os.Getenv("GOCELL_ADMIN_USER")
+	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
+	if adminUser != "" && adminPass != "" {
+		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
+	} else {
+		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
+	}
+
+	accessCell := accesscore.NewAccessCore(accessOpts...)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),

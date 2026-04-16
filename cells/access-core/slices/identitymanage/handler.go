@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // StatusResponse is a single-field DTO for lock/unlock responses.
@@ -63,6 +64,11 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Email    string `json:"email"`
@@ -86,6 +92,11 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := auth.RequireSelfOrRole(r.Context(), id, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -96,6 +107,11 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := auth.RequireSelfOrRole(r.Context(), id, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -118,6 +134,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if err := auth.RequireSelfOrRole(r.Context(), id, "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
 
 	// JSON merge patch: only fields present in the JSON body are updated.
 	// Patchable fields: name, email, status. Other fields are silently ignored.
@@ -166,6 +186,11 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	id := r.PathValue("id")
 	if err := h.svc.Delete(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -175,6 +200,11 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	id := r.PathValue("id")
 	if err := h.svc.Lock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -184,6 +214,11 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), "admin"); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	id := r.PathValue("id")
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)

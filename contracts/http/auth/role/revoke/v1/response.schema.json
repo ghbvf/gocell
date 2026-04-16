@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.role.revoke.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "roleId": { "type": "string" },
+        "revoked": { "type": "boolean" }
+      },
+      "required": ["userId", "roleId", "revoked"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["data"],
+  "additionalProperties": false
+}

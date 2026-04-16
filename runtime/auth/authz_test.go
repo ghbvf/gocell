@@ -90,6 +90,71 @@ func TestRequireSelfOrRole(t *testing.T) {
 	}
 }
 
+func TestRequireAnyRole(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		roles    []string
+		wantErr  bool
+		wantCode errcode.Code
+	}{
+		{
+			name:    "admin role allowed",
+			ctx:     withSubjectAndClaims("user-1", []string{"admin"}),
+			roles:   []string{"admin"},
+			wantErr: false,
+		},
+		{
+			name:    "second role matches",
+			ctx:     withSubjectAndClaims("user-1", []string{"operator"}),
+			roles:   []string{"admin", "operator"},
+			wantErr: false,
+		},
+		{
+			name:     "no matching role denied",
+			ctx:      withSubjectAndClaims("user-1", []string{"viewer"}),
+			roles:    []string{"admin"},
+			wantErr:  true,
+			wantCode: errcode.ErrAuthForbidden,
+		},
+		{
+			name:     "no roles in claims denied",
+			ctx:      withSubjectAndClaims("user-1", nil),
+			roles:    []string{"admin"},
+			wantErr:  true,
+			wantCode: errcode.ErrAuthForbidden,
+		},
+		{
+			name:     "missing subject denied",
+			ctx:      context.Background(),
+			roles:    []string{"admin"},
+			wantErr:  true,
+			wantCode: errcode.ErrAuthUnauthorized,
+		},
+		{
+			name:     "empty required roles denied",
+			ctx:      withSubjectAndClaims("user-1", []string{"admin"}),
+			roles:    nil,
+			wantErr:  true,
+			wantCode: errcode.ErrAuthForbidden,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RequireAnyRole(tc.ctx, tc.roles...)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, tc.wantCode, ecErr.Code)
+		})
+	}
+}
+
 func withSubjectAndClaims(subject string, roles []string) context.Context {
 	ctx := ctxkeys.WithSubject(context.Background(), subject)
 	ctx = WithClaims(ctx, Claims{Subject: subject, Roles: roles})

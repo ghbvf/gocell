@@ -1,0 +1,16 @@
+id: http.auth.role.assign.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /internal/v1/access/roles/assign
+    successStatus: 200
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

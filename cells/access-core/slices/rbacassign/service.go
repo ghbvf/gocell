@@ -1,0 +1,53 @@
+package rbacassign
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+// Service handles RBAC role assignment and revocation (L0 — pure repo operations).
+type Service struct {
+	roleRepo ports.RoleRepository
+	logger   *slog.Logger
+}
+
+// NewService creates a new rbac-assign service.
+func NewService(roleRepo ports.RoleRepository, logger *slog.Logger) *Service {
+	return &Service{roleRepo: roleRepo, logger: logger}
+}
+
+// Assign assigns a role to a user. Idempotent: re-assignment is a no-op.
+func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
+	if userID == "" || roleID == "" {
+		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
+	}
+
+	if err := s.roleRepo.AssignToUser(ctx, userID, roleID); err != nil {
+		return fmt.Errorf("rbac-assign: assign: %w", err)
+	}
+
+	s.logger.Info("role assigned",
+		slog.String("user_id", userID),
+		slog.String("role_id", roleID))
+	return nil
+}
+
+// Revoke removes a role from a user. Idempotent: revoking a non-assigned role is a no-op.
+func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
+	if userID == "" || roleID == "" {
+		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
+	}
+
+	if err := s.roleRepo.RemoveFromUser(ctx, userID, roleID); err != nil {
+		return fmt.Errorf("rbac-assign: revoke: %w", err)
+	}
+
+	s.logger.Info("role revoked",
+		slog.String("user_id", userID),
+		slog.String("role_id", roleID))
+	return nil
+}
