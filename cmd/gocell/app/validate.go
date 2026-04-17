@@ -12,14 +12,15 @@ import (
 // Parses all metadata, runs validate-meta and depcheck.
 // exit 0 = pass, exit 1 = errors found.
 //
-// --fail-fast controls output, not traversal: the validator always evaluates all
-// rules; only the printed output is short-circuited. With the flag set, only the
-// first error encountered is printed and banners/summary are suppressed.
+// --fail-fast: true short-circuit. The validator and the dependency checker
+// stop at the first rule that produces a SeverityError — subsequent rules do
+// not run, which is the point of the flag for CI pipelines over large repos.
+// Output is also trimmed to a single error line.
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
-		"print only the first error encountered and skip banners/summary; the validator still evaluates all rules (this flag controls output, not traversal)")
+		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -40,27 +41,30 @@ func runValidate(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	// Run validation rules.
 	validator := governance.NewValidator(project, rootDir)
-	valResults := validator.Validate()
-
-	// Run dependency checks.
 	depChecker := governance.NewDependencyChecker(project)
-	depResults := depChecker.Check()
-
-	// Merge all results.
-	allResults := append(valResults, depResults...)
 
 	if *failFast {
-		if firstErr := firstError(allResults); firstErr != nil {
-			formatResultsFailFast(allResults)
+		// True bailout: validator first (most errors originate there); if it
+		// already flagged an error, depcheck is skipped entirely.
+		valResults := validator.ValidateFailFast()
+		if firstErr := firstError(valResults); firstErr != nil {
+			formatResultsFailFast(valResults)
+			return fmt.Errorf("validation failed: %s", firstErr.Code)
+		}
+		depResults := depChecker.CheckFailFast()
+		if firstErr := firstError(depResults); firstErr != nil {
+			formatResultsFailFast(depResults)
 			return fmt.Errorf("validation failed: %s", firstErr.Code)
 		}
 		fmt.Println("OK: no errors.")
 		return nil
 	}
 
-	// Output results.
+	valResults := validator.Validate()
+	depResults := depChecker.Check()
+	allResults := append(valResults, depResults...)
+
 	formatResults(allResults)
 
 	// Summary.

@@ -10,21 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These happy-path tests now go through runScaffoldWithRoot so they can run
+// against t.TempDir without needing os.Chdir — see F-SEC-03 in review PR#164.
+
 func TestRunScaffoldCell_Success(t *testing.T) {
 	dir := t.TempDir()
-	// Create minimal project structure for scaffolder.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
 
-	// Save and restore cwd.
-	orig, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(orig) })
-	require.NoError(t, os.Chdir(dir))
-
-	err := runScaffold([]string{"cell", "--id=test-cell", "--team=squad"})
+	err := runScaffoldWithRoot(dir,
+		[]string{"cell", "--id=test-cell", "--team=squad"})
 	require.NoError(t, err)
 
-	// Verify cell.yaml was created.
 	_, statErr := os.Stat(filepath.Join(dir, "cells", "test-cell", "cell.yaml"))
 	assert.NoError(t, statErr)
 }
@@ -32,41 +30,35 @@ func TestRunScaffoldCell_Success(t *testing.T) {
 func TestRunScaffoldSlice_Success(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cells", "test-cell", "slices"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "test-cell", "cell.yaml"),
 		[]byte("id: test-cell\ntype: core\n"), 0o644))
 
-	orig, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(orig) })
-	require.NoError(t, os.Chdir(dir))
-
-	err := runScaffold([]string{"slice", "--id=my-slice", "--cell=test-cell"})
+	err := runScaffoldWithRoot(dir,
+		[]string{"slice", "--id=my-slice", "--cell=test-cell"})
 	require.NoError(t, err)
 }
 
 func TestRunScaffoldContract_Success(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
 
-	orig, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(orig) })
-	require.NoError(t, os.Chdir(dir))
-
-	err := runScaffold([]string{"contract", "--id=http.test.v1", "--kind=http", "--owner=test-cell"})
+	err := runScaffoldWithRoot(dir,
+		[]string{"contract", "--id=http.test.v1", "--kind=http", "--owner=test-cell"})
 	require.NoError(t, err)
 }
 
 func TestRunScaffoldJourney_Success(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
 
-	orig, _ := os.Getwd()
-	t.Cleanup(func() { os.Chdir(orig) })
-	require.NoError(t, os.Chdir(dir))
-
-	err := runScaffold([]string{"journey", "--id=J-test", "--goal=test goal", "--team=squad", "--cells=a,b"})
+	err := runScaffoldWithRoot(dir,
+		[]string{"journey", "--id=J-test", "--goal=test goal", "--team=squad", "--cells=a,b"})
 	require.NoError(t, err)
 }
 

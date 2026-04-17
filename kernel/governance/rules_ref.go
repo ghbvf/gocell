@@ -201,7 +201,7 @@ func (v *Validator) validateREF11() []ValidationResult {
 		// The entrypoint path is relative to the repository root (parent of go.mod directory).
 		repoRoot := repositoryRoot(v.root)
 		fullPath := filepath.Join(repoRoot, a.Build.Entrypoint)
-		if !isWithinRoot(repoRoot, fullPath) {
+		if !IsWithinRoot(repoRoot, fullPath) {
 			results = append(results, v.newResult(
 				"REF-11", SeverityError, IssueInvalid,
 				assemblyFile(a.ID),
@@ -255,7 +255,7 @@ func (v *Validator) validateREF12() []ValidationResult {
 				continue
 			}
 			fullPath := filepath.Join(contractDir, ref.value)
-			if !isWithinRoot(contractDir, fullPath) {
+			if !IsWithinRoot(contractDir, fullPath) {
 				results = append(results, v.newResult(
 					"REF-12", SeverityError, IssueInvalid,
 					contractFile(c.ID),
@@ -353,7 +353,7 @@ func (v *Validator) validateREF16() []ValidationResult {
 	var results []ValidationResult
 	for _, a := range v.project.Assemblies {
 		boundaryPath := filepath.Join(v.root, "assemblies", a.ID, "generated", "boundary.yaml")
-		if !isWithinRoot(v.root, boundaryPath) {
+		if !IsWithinRoot(v.root, boundaryPath) {
 			results = append(results, v.newResult(
 				"REF-16", SeverityError, IssueInvalid,
 				assemblyFile(a.ID),

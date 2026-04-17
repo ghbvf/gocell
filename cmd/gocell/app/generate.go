@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -104,7 +105,7 @@ func generateAssembly(args []string) error {
 // verifying the path stays within root. label is used to identify the caller
 // in error messages (e.g. "assembly X build.entrypoint Y").
 func writeGeneratedFile(root, outPath string, content []byte, label string) error {
-	if !isWithinRoot(root, outPath) {
+	if !governance.IsWithinRoot(root, outPath) {
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {

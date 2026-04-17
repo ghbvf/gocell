@@ -539,7 +539,7 @@ func (v *Validator) validateFMT15() []ValidationResult {
 		}
 		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
 		schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
-		if !isWithinRoot(v.root, schemaPath) {
+		if !IsWithinRoot(v.root, schemaPath) {
 			continue
 		}
 		data, err := v.readFile(schemaPath)

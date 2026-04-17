@@ -132,10 +132,13 @@ func repositoryRoot(root string) string {
 	return absRoot
 }
 
-// isWithinRoot checks that target resolves to a path inside root.
+// IsWithinRoot checks that target resolves to a path inside root.
 // Both sides are normalized to absolute paths, and symlinks are resolved
 // when possible, to prevent both relative-path and symlink-based bypasses.
-func isWithinRoot(root, target string) bool {
+//
+// Exported so cmd/gocell and other callers share a single implementation
+// rather than carrying a duplicate with a hand-maintained `// SYNC:` note.
+func IsWithinRoot(root, target string) bool {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return false
@@ -155,16 +158,16 @@ func isWithinRoot(root, target string) bool {
 	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
 		absTarget = resolved
 	} else {
-		absTarget = evalExistingPrefix(absTarget)
+		absTarget = EvalExistingPrefix(absTarget)
 	}
 	cleanRoot := absRoot + string(os.PathSeparator)
 	return strings.HasPrefix(absTarget, cleanRoot) || absTarget == absRoot
 }
 
-// evalExistingPrefix resolves symlinks on the longest existing ancestor of p,
+// EvalExistingPrefix resolves symlinks on the longest existing ancestor of p,
 // then appends the non-existent suffix. This handles platforms where
 // intermediate directories are symlinks (e.g., macOS /tmp → /private/tmp).
-func evalExistingPrefix(p string) string {
+func EvalExistingPrefix(p string) string {
 	if resolved, err := filepath.EvalSymlinks(p); err == nil {
 		return resolved
 	}
@@ -172,7 +175,7 @@ func evalExistingPrefix(p string) string {
 	if parent == p {
 		return p // filesystem root, stop recursion
 	}
-	return filepath.Join(evalExistingPrefix(parent), filepath.Base(p))
+	return filepath.Join(EvalExistingPrefix(parent), filepath.Base(p))
 }
 
 // --- actor helpers ---

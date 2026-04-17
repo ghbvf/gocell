@@ -99,47 +99,6 @@ func formatResults(results []governance.ValidationResult) {
 	}
 }
 
-// isWithinRoot checks that target resolves to a path inside root.
-// Both sides are normalized to absolute paths, and symlinks are resolved
-// when possible, to prevent both relative-path and symlink-based bypasses.
-// SYNC: kernel/governance/helpers.go:isWithinRoot — keep in sync.
-func isWithinRoot(root, target string) bool {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return false
-	}
-	absTarget, err := filepath.Abs(target)
-	if err != nil {
-		return false
-	}
-	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
-		absTarget = resolved
-	} else {
-		// Resolve longest existing ancestor for non-existent paths.
-		absTarget = evalExistingPrefix(absTarget)
-	}
-	cleanRoot := absRoot + string(os.PathSeparator)
-	return strings.HasPrefix(absTarget, cleanRoot) || absTarget == absRoot
-}
-
-// evalExistingPrefix resolves symlinks on the longest existing ancestor of p,
-// then appends the non-existent suffix. This handles platforms where
-// intermediate directories are symlinks (e.g., macOS /tmp → /private/tmp).
-// SYNC: kernel/governance/helpers.go:evalExistingPrefix — keep in sync.
-func evalExistingPrefix(p string) string {
-	if resolved, err := filepath.EvalSymlinks(p); err == nil {
-		return resolved
-	}
-	parent := filepath.Dir(p)
-	if parent == p {
-		return p
-	}
-	return filepath.Join(evalExistingPrefix(parent), filepath.Base(p))
-}
-
 // printResult prints a single validation result in human-readable format.
 //
 // Output shape differs by what the finding is anchored to:

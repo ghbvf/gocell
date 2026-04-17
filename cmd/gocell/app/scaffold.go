@@ -28,17 +28,28 @@ const (
 // --dry-run validates opts and detects path conflicts without writing files;
 // CI pre-commit hooks can use it to fail fast on bad inputs.
 func runScaffold(args []string) error {
+	// Check args shape before resolving project root — lets callers
+	// (and tests) hit the usage error path without a valid cwd/go.mod.
+	if len(args) < 1 {
+		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey> [flags]")
+	}
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf("cannot find project root: %w", err)
+	}
+	return runScaffoldWithRoot(root, args)
+}
+
+// runScaffoldWithRoot dispatches a scaffold sub-command against an explicit
+// project root — decoupling the dispatch from process cwd so tests can drive
+// a temp directory without os.Chdir (which serialises the whole test binary).
+func runScaffoldWithRoot(root string, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey> [flags]")
 	}
 
 	subtype := args[0]
 	subArgs := args[1:]
-
-	root, err := findRoot()
-	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
-	}
 
 	switch subtype {
 	case "cell":
@@ -54,13 +65,23 @@ func runScaffold(args []string) error {
 	}
 }
 
+// scaffoldReport carries everything reportScaffold needs. Using a struct
+// instead of positional params makes call sites self-describing and safer
+// against future additions (e.g. a template-version field).
+type scaffoldReport struct {
+	DryRun bool
+	Kind   string // "cell" | "slice" | "contract" | "journey"
+	ID     string // user-visible identifier
+	Target string // path that was or would have been written
+}
+
 // reportScaffold prints the standard success line, switching prefix in dry-run.
-func reportScaffold(dryRun bool, kind, id, target string) {
-	if dryRun {
-		fmt.Printf("(dry-run) Would create %s %s at %s\n", kind, id, target)
+func reportScaffold(r scaffoldReport) {
+	if r.DryRun {
+		fmt.Printf("(dry-run) Would create %s %s at %s\n", r.Kind, r.ID, r.Target)
 		return
 	}
-	fmt.Printf("Created %s %s at %s\n", kind, id, target)
+	fmt.Printf("Created %s %s at %s\n", r.Kind, r.ID, r.Target)
 }
 
 func scaffoldCell(root string, args []string) error {
@@ -91,8 +112,12 @@ func scaffoldCell(root string, args []string) error {
 		return err
 	}
 
-	target := filepath.Join("cells", *id, "cell.yaml")
-	reportScaffold(*dryRun, "cell", *id, target)
+	reportScaffold(scaffoldReport{
+		DryRun: *dryRun,
+		Kind:   "cell",
+		ID:     *id,
+		Target: filepath.Join("cells", *id, "cell.yaml"),
+	})
 	return nil
 }
 
@@ -120,8 +145,12 @@ func scaffoldSlice(root string, args []string) error {
 		return err
 	}
 
-	target := filepath.Join("cells", *cellID, "slices", *id, "slice.yaml")
-	reportScaffold(*dryRun, "slice", *cellID+"/"+*id, target)
+	reportScaffold(scaffoldReport{
+		DryRun: *dryRun,
+		Kind:   "slice",
+		ID:     *cellID + "/" + *id,
+		Target: filepath.Join("cells", *cellID, "slices", *id, "slice.yaml"),
+	})
 	return nil
 }
 
@@ -157,8 +186,12 @@ func scaffoldContract(root string, args []string) error {
 	// Contract ID format: {kind}.{domain...}.{version}
 	pathParts := append([]string{"contracts"}, strings.Split(*id, ".")...)
 	pathParts = append(pathParts, "contract.yaml")
-	target := filepath.Join(pathParts...)
-	reportScaffold(*dryRun, "contract", *id, target)
+	reportScaffold(scaffoldReport{
+		DryRun: *dryRun,
+		Kind:   "contract",
+		ID:     *id,
+		Target: filepath.Join(pathParts...),
+	})
 	return nil
 }
 
@@ -206,7 +239,11 @@ func scaffoldJourney(root string, args []string) error {
 	if !strings.HasPrefix(fileID, "J-") {
 		fileID = "J-" + fileID
 	}
-	target := filepath.Join("journeys", fileID+".yaml")
-	reportScaffold(*dryRun, "journey", *id, target)
+	reportScaffold(scaffoldReport{
+		DryRun: *dryRun,
+		Kind:   "journey",
+		ID:     *id,
+		Target: filepath.Join("journeys", fileID+".yaml"),
+	})
 	return nil
 }

@@ -48,30 +48,30 @@ func TestDispatch_Contract(t *testing.T) {
 		stdoutNotSub []string // substrings that must NOT appear on stdout
 	}{
 		{
-			name:      "no args prints usage to stdout and returns 1",
+			name:      "no args prints usage to stdout and returns ExitUsage",
 			args:      []string{},
-			wantExit:  1,
+			wantExit:  ExitUsage,
 			stdoutSub: []string{"Usage: gocell", "validate", "scaffold"},
 			// Usage itself is not an error condition, so nothing on stderr.
 		},
 		{
-			name:      "unknown command goes to stderr, usage to stdout, returns 1",
+			name:      "unknown command returns ExitUsage (distinct from runtime error)",
 			args:      []string{"bogus-command"},
-			wantExit:  1,
+			wantExit:  ExitUsage,
 			stdoutSub: []string{"Usage: gocell"},
 			stderrSub: []string{"unknown command: bogus-command"},
 		},
 		{
-			name:         "sub-command error goes to stderr, NOT stdout, returns 1",
+			name:         "sub-command error returns ExitRuntime, stderr carries error",
 			args:         []string{"scaffold"}, // missing sub-kind → runScaffold returns error
-			wantExit:     1,
+			wantExit:     ExitRuntime,
 			stderrSub:    []string{"error:", "usage: gocell scaffold"},
 			stdoutNotSub: []string{"error:"},
 		},
 		{
-			name:     "scaffold unknown kind returns 1 via sub-command error path",
+			name:     "scaffold unknown kind returns ExitRuntime via sub-command error path",
 			args:     []string{"scaffold", "not-a-kind"},
-			wantExit: 1,
+			wantExit: ExitRuntime,
 			stderrSub: []string{
 				"error:",
 				"unknown scaffold type",
@@ -107,7 +107,7 @@ func TestDispatch_SuccessPath_ExitZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	exit, stdout, stderr := captureDispatch(t, []string{"validate", "--root", dir})
-	assert.Equal(t, 0, exit, "stderr=%q", stderr)
+	assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
 	assert.Empty(t, strings.TrimSpace(stderr), "nothing on stderr for success")
 	assert.Contains(t, stdout, "Validation complete:", "summary line expected")
 }

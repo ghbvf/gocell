@@ -2433,7 +2433,7 @@ func TestActorExists(t *testing.T) {
 	assert.False(t, val.actorExists("nonexistent"), "unknown ID should not exist")
 }
 
-// --- S1: isWithinRoot path traversal guard ---
+// --- S1: IsWithinRoot path traversal guard ---
 
 func TestIsWithinRoot(t *testing.T) {
 	tests := []struct {
@@ -2448,7 +2448,7 @@ func TestIsWithinRoot(t *testing.T) {
 		{"dot-dot escapes", "/project/src", "/project/src/../etc/passwd", false},
 		{"different tree", "/project/src", "/other/place", false},
 	}
-	// Also test relative paths (P1 fix: isWithinRoot must handle relative root).
+	// Also test relative paths (P1 fix: IsWithinRoot must handle relative root).
 	cwd, err := os.Getwd()
 	require.NoError(t, err)
 	tests = append(tests, struct {
@@ -2464,7 +2464,7 @@ func TestIsWithinRoot(t *testing.T) {
 	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := isWithinRoot(tt.root, tt.target)
+			got := IsWithinRoot(tt.root, tt.target)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -2483,7 +2483,7 @@ func TestIsWithinRoot_Symlink(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, symlink))
 
 	target := filepath.Join(symlink, "secret.yaml")
-	assert.False(t, isWithinRoot(root, target), "symlink target outside root should be rejected")
+	assert.False(t, IsWithinRoot(root, target), "symlink target outside root should be rejected")
 }
 
 // --- S1: REF-11 path traversal ---
