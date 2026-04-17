@@ -30,15 +30,30 @@ The password resets every time the server restarts (in-memory only).
 
 ## API Walkthrough
 
-### 1. Create a user
+### 1. Login as seed admin
+
+```bash
+curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<password from startup log>"}' | jq
+```
+
+Save the returned `accessToken` as your admin token:
+
+```bash
+export ADMIN_TOKEN="<accessToken from admin login>"
+```
+
+### 2. Create a user (requires admin)
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/users \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"username":"alice","password":"P@ssw0rd123","email":"alice@example.com"}' | jq
 ```
 
-### 2. Login (create session)
+### 3. Login as alice
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
@@ -46,53 +61,51 @@ curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -d '{"username":"alice","password":"P@ssw0rd123"}' | jq
 ```
 
-Save the returned `accessToken` and `refreshToken` for subsequent calls.
-
-### 3. Refresh token
+Save alice's tokens:
 
 ```bash
-export ACCESS_TOKEN="<accessToken from login>"
-export REFRESH_TOKEN="<refreshToken from login>"
+export ACCESS_TOKEN="<accessToken from alice login>"
+export REFRESH_TOKEN="<refreshToken from alice login>"
+```
 
+### 4. Refresh token
+
+The refresh endpoint is public (no Authorization header required).
+
+```bash
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/refresh \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}" | jq
 ```
 
-### 4. List users
-
-```bash
-curl -s http://localhost:8081/api/v1/access/users \
-  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
-```
-
-### 4b. Get user profile
+### 5. Get user profile
 
 ```bash
 curl -s http://localhost:8081/api/v1/access/users/{userId} \
   -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
-### 5. Logout (delete session)
+(Replace `{userId}` with the `id` from step 2's response.)
+
+### 6. Logout (delete session)
 
 The session ID is embedded in the `accessToken` JWT claims under the `sid` field.
-You can extract it with: `SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sid)`
 
 ```bash
-# 204 No Content — no response body
+SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sid)
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://localhost:8081/api/v1/access/sessions/$SESSION_ID
 ```
 
-### 6. Query audit entries
+### 7. Query audit entries
 
 ```bash
-curl -s http://localhost:8081/api/v1/audit/entries | jq
+curl -s http://localhost:8081/api/v1/audit/entries \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq '.data[] | {action: .eventType, at: .timestamp}'
 ```
 
-### 7. Create a config entry
+### 8. Create a config entry
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/config/ \
@@ -100,7 +113,7 @@ curl -s -X POST http://localhost:8081/api/v1/config/ \
   -d '{"key":"site.title","value":"My SSO Portal"}' | jq
 ```
 
-### 8. Update a config entry
+### 9. Update a config entry
 
 ```bash
 curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
@@ -108,24 +121,16 @@ curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -d '{"value":"SSO Portal v2"}' | jq
 ```
 
-### 9. Read a config entry
+### 10. Read a config entry
 
 ```bash
 curl -s http://localhost:8081/api/v1/config/site.title | jq
 ```
 
-### 10. List feature flags
+### 11. List feature flags
 
 ```bash
 curl -s http://localhost:8081/api/v1/flags | jq
-```
-
-### 11. Verify audit trail after login/logout
-
-```bash
-# After performing login + logout, check that audit entries were recorded
-curl -s http://localhost:8081/api/v1/audit/entries \
-  -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.data[] | {action: .eventType, at: .timestamp}'
 ```
 
 ### 12. Health checks

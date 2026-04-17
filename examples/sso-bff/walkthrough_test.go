@@ -122,6 +122,7 @@ func TestWalkthrough(t *testing.T) {
 
 	base := srv.URL
 
+	var adminToken string
 	var accessToken, refreshToken string
 
 	t.Run("seed user can login and returns accessToken+refreshToken", func(t *testing.T) {
@@ -146,15 +147,66 @@ func TestWalkthrough(t *testing.T) {
 		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include refreshToken (not sessionId)")
 		assert.NotEmpty(t, envelope.Data.ExpiresAt, "response must include expiresAt")
 
+		adminToken = envelope.Data.AccessToken
+	})
+
+	// Guard: remaining subtests need a valid admin token.
+	require.NotEmpty(t, adminToken, "adminToken must be set by admin login subtest")
+
+	t.Run("admin can create a new user", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			base+"/api/v1/access/users",
+			strings.NewReader(`{"username":"alice","password":"P@ssw0rd123","email":"alice@example.com"}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode,
+			"POST /users with admin token must return 201 Created")
+
+		var envelope struct {
+			Data struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		assert.NotEmpty(t, envelope.Data.ID, "created user must have an id")
+	})
+
+	t.Run("alice can login and returns accessToken+refreshToken", func(t *testing.T) {
+		body := `{"username":"alice","password":"P@ssw0rd123"}`
+		resp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
+			"application/json", strings.NewReader(body))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode,
+			"alice login must return 201 Created")
+
+		var envelope struct {
+			Data struct {
+				AccessToken  string `json:"accessToken"`
+				RefreshToken string `json:"refreshToken"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		assert.NotEmpty(t, envelope.Data.AccessToken, "response must include accessToken")
+		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include refreshToken")
+
 		accessToken = envelope.Data.AccessToken
 		refreshToken = envelope.Data.RefreshToken
 	})
 
-	// Guard: remaining subtests need valid tokens.
-	require.NotEmpty(t, accessToken, "accessToken must be set by login subtest")
-	require.NotEmpty(t, refreshToken, "refreshToken must be set by login subtest")
+	// Guard: remaining subtests need valid alice tokens.
+	require.NotEmpty(t, accessToken, "accessToken must be set by alice login subtest")
+	require.NotEmpty(t, refreshToken, "refreshToken must be set by alice login subtest")
 
-	t.Run("refresh using refreshToken field returns new token pair", func(t *testing.T) {
+	t.Run("refresh using refreshToken field works without Authorization header", func(t *testing.T) {
 		payload := fmt.Sprintf(`{"refreshToken":%q}`, refreshToken)
 		req, err := http.NewRequestWithContext(context.Background(),
 			http.MethodPost,
@@ -162,7 +214,7 @@ func TestWalkthrough(t *testing.T) {
 			strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+accessToken)
+		// No Authorization header — refresh is a public endpoint.
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
@@ -211,30 +263,15 @@ func TestWalkthrough(t *testing.T) {
 			"logout response body must be empty (piping to jq would fail otherwise)")
 	})
 
-	t.Run("audit entries contain timestamp field not createdAt", func(t *testing.T) {
-		// Re-login to get a fresh token after logout invalidated the previous session.
-		loginBody := fmt.Sprintf(`{"username":"admin","password":%q}`, testPass)
-		loginResp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
-			"application/json", strings.NewReader(loginBody))
-		require.NoError(t, err)
-		defer loginResp.Body.Close()
-		require.Equal(t, http.StatusCreated, loginResp.StatusCode)
-
-		var loginEnvelope struct {
-			Data struct {
-				AccessToken string `json:"accessToken"`
-			} `json:"data"`
-		}
-		require.NoError(t, json.NewDecoder(loginResp.Body).Decode(&loginEnvelope))
-		freshToken := loginEnvelope.Data.AccessToken
-		require.NotEmpty(t, freshToken)
-
+	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {
+		// Use the admin token — alice's session was logged out, but adminToken
+		// session is still active. Admin can query audit entries for any actor.
 		req, err := http.NewRequestWithContext(context.Background(),
 			http.MethodGet,
 			base+"/api/v1/audit/entries",
 			http.NoBody)
 		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+freshToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
