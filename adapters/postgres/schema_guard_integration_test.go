@@ -28,6 +28,46 @@ func TestVerifyExpectedVersion_Integration(t *testing.T) {
 	assert.NoError(t, err, "VerifyExpectedVersion should return nil after full Up()")
 }
 
+// TestDetectInvalidIndexes_WithInjectedInvalid verifies that DetectInvalidIndexes
+// returns the name of an index that has been manually marked as invalid via
+// a direct UPDATE on pg_index. This requires superuser (testcontainers PG
+// default user is superuser).
+func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Apply migrations to create tables/indexes.
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_invalid_idx")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply")
+
+	// Verify no INVALID indexes before injection.
+	before, err := DetectInvalidIndexes(ctx, pool)
+	require.NoError(t, err)
+	assert.Empty(t, before, "should have no invalid indexes before injection")
+
+	// Inject an INVALID index by marking idx_outbox_pending_v2 as invalid.
+	// We use pg_index system catalog directly (requires superuser).
+	_, execErr := pool.DB().Exec(ctx,
+		`UPDATE pg_index SET indisvalid = false
+		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+	require.NoError(t, execErr, "injecting invalid index must succeed (requires superuser)")
+
+	// DetectInvalidIndexes should now report it.
+	after, err := DetectInvalidIndexes(ctx, pool)
+	require.NoError(t, err)
+	assert.NotEmpty(t, after, "should detect the injected invalid index")
+	assert.Contains(t, after, "idx_outbox_pending_v2",
+		"invalid index list should contain the injected index")
+
+	// Restore the index to valid state so container cleanup is clean.
+	_, _ = pool.DB().Exec(ctx,
+		`UPDATE pg_index SET indisvalid = true
+		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+}
+
 // TestVerifyExpectedVersion_DBLagged_Integration verifies that when the DB
 // schema is behind the binary (DB version < FS max), VerifyExpectedVersion
 // returns an error containing "schema version mismatch".
