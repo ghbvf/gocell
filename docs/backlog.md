@@ -57,8 +57,9 @@
 |---|------|------|------|------|
 | A1 | **READYZ-BROKER-HEALTH-01** (Cx3): `Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关。对标 K8s readiness probe | 2h | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` + `runtime/http/health/` | 2026-04-18 外部审查 |
 | A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
-| A3 | **RL-INT-01** (🟡 可延后): Relay PG 集成测试 | 2h | `adapters/postgres/outbox_relay_test.go` | PR#46 review |
-| A4 | **RL-MIG-01** (🟠 条件延后，首次 prod migration 前必做): `CREATE INDEX CONCURRENTLY` online-safe 索引 | 2h | `adapters/postgres/migrations/` | PR#46 review |
+| ~~A3~~ | ✅ **RL-INT-01**: Relay PG 集成测试（5 个 testcontainers PG+RMQ 测试：happy-path、transient publish failure retry、dead-letter、concurrent claim no double-publish、clean shutdown via reclaimStale recovery）。真实 broker TCP 断连/恢复职责归属 `adapters/rabbitmq/integration_test.go::TestIntegration_ConnectionRecovery`（`rabbitmqctl close_all_connections`）；AMQP 501 reclassification 由 `adapters/rabbitmq/rabbitmq_test.go::TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely` 单测覆盖。 | — | `adapters/postgres/outbox_relay_integration_test.go` | PR-PG-HARDEN |
+| ~~A4~~ | ✅ **RL-MIG-01**: `CREATE INDEX CONCURRENTLY` online-safe 索引 + INVALID index pre-check at `Migrator.Up` boundary（startup-time detection as defense-in-depth）+ migrations/README.md 规范 | — | `adapters/postgres/migrations/` + `migrator.go` | PR-PG-HARDEN |
+| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 006_add_config_versions_config_id_index.sql + TestMigration006 | — | adapters/postgres/migrations/006_*.sql | PR-PG-HARDEN |
 | A5 | **RL-SUB-01** (🟡 可延后): 入站 ID 校验（空/过长 message ID） | 1h | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **#31 RabbitMQ backoff + FailOpen enum 清理** (🟡 可延后) | 2h | `adapters/rabbitmq/` | Wave 2 残留 |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
@@ -66,7 +67,7 @@
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
 | A11 | **OUTBOX-RELAY-WIRE-PG-01** (P1, Cx3): `GOCELL_CELL_ADAPTER_MODE=postgres` 时 core-bundle 未启动 outbox relay worker；config 变更事件写入 `outbox_entries` 后停滞，消费者永远收不到，持续积压。修法：relay 作为 bootstrap OnStart/OnStop worker 显式接入，补 PG 模式 write→relay→RMQ→subscriber 端到端回归测试。搭车 PR-C2（PR-C2 e2e 依赖此修复才能通过）| 2h（接线）+ PR-C2 测试 | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | 2026-04-18 静态审查 |
-| A12 | **READYZ-PG-SCHEMA-01** (P1, Cx2): postgres readiness 只做 `pool.Ping()`，不验证 `config_entries`/`config_versions` 表是否存在；readyz 先绿、真实请求因缺表/migration 漂移再失败。修法：readyz 加 schema probe（`SELECT 1 FROM config_entries LIMIT 1`）或 migration version 检查，或启动期 fail-fast | 1h | `cmd/core-bundle/main.go` + `adapters/postgres/pool.go` | 2026-04-18 静态审查，搭车 PR-A-HARDEN |
+| ~~A12~~ | ✅ **READYZ-PG-SCHEMA-01**: 启动期 fail-fast — VerifyExpectedVersion 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | `adapters/postgres/schema_guard.go` + `cmd/core-bundle/main.go` | PR-PG-HARDEN |
 
 ### slice / cell 收口
 
@@ -184,7 +185,7 @@
 | T4 | **CB-RESILIENCE-PACKAGE-01** 把 `Allower` / `CircuitBreakerRetryAfter` 从 `runtime/http/middleware` 迁移到 `runtime/resilience/circuitbreaker/` 独立包 | 4h | 出现第二个非 HTTP 的 CB 消费方 |
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
-| T7 | **CONFIG-VERSIONS-CONFIG-ID-INDEX** (P2, Cx1, 🟠 触发条件项): `config_versions` 表缺少 `config_id` 单列索引（`idx_config_versions_config_id`）；当前版本历史查询走 `idx_config_versions_config_version` 复合索引可覆盖，但若出现 SELECT * WHERE config_id=? 无 version 条件的扫描则退化为全表扫描。来源: PR#169 review F-D-2 | 0.5h | `adapters/postgres/migrations/006_*.sql`（新建）| >100w 行或 EXPLAIN 出现 seq scan 时触发 |
+| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 新增 migration 006 创建 `idx_config_versions_config_id`（CONCURRENTLY + no-transaction） | — | `adapters/postgres/migrations/006_add_config_versions_config_id_index.sql` | PR-PG-HARDEN |
 
 ---
 

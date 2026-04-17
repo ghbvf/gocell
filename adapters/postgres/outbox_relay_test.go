@@ -1041,3 +1041,279 @@ func TestRelay_NilMetrics_UsesNoop(t *testing.T) {
 	err = relay.deletePublishedBefore(context.Background(), cutoff)
 	assert.NoError(t, err, "deletePublishedBefore with nil Metrics (noop) must not panic")
 }
+
+// ---------------------------------------------------------------------------
+// Additional error-path coverage for claim (B-EXTRA)
+// ---------------------------------------------------------------------------
+
+// mockRowsWithIterErr wraps mockRows but returns an error from Err().
+type mockRowsWithIterErr struct {
+	*mockRows
+	iterErr error
+}
+
+func (r *mockRowsWithIterErr) Err() error { return r.iterErr }
+
+// mockDBTXIterErr is a relayDB whose transactions return rows with an Err().
+type mockDBTXIterErr struct {
+	iterErr error
+}
+
+func (m *mockDBTXIterErr) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return pgconn.NewCommandTag("UPDATE 0"), nil
+}
+
+func (m *mockDBTXIterErr) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	return &mockRowsWithIterErr{
+		mockRows: &mockRows{entries: nil},
+		iterErr:  m.iterErr,
+	}, nil
+}
+
+func (m *mockDBTXIterErr) Begin(_ context.Context) (pgx.Tx, error) {
+	return &mockRelayTxIterErr{db: m}, nil
+}
+
+type mockRelayTxIterErr struct {
+	db *mockDBTXIterErr
+}
+
+func (t *mockRelayTxIterErr) Begin(_ context.Context) (pgx.Tx, error) { return t, nil }
+func (t *mockRelayTxIterErr) Commit(_ context.Context) error          { return nil }
+func (t *mockRelayTxIterErr) Rollback(_ context.Context) error        { return nil }
+func (t *mockRelayTxIterErr) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+func (t *mockRelayTxIterErr) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
+func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+func (t *mockRelayTxIterErr) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
+	return nil, nil
+}
+func (t *mockRelayTxIterErr) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return t.db.Exec(ctx, sql, args...)
+}
+func (t *mockRelayTxIterErr) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return t.db.Query(ctx, sql, args...)
+}
+func (t *mockRelayTxIterErr) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return nil }
+func (t *mockRelayTxIterErr) Conn() *pgx.Conn                                        { return nil }
+
+// TestRelay_Claim_ScanError verifies that a scan error in claim is propagated.
+func TestRelay_Claim_ScanError(t *testing.T) {
+	// Provide a row with wrong value count to trigger scan error (S3-F4).
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: []mockRowData{
+			{values: []any{"too-few-fields"}},
+		}},
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	_, err := relay.claim(context.Background())
+	require.Error(t, err, "scan error must be propagated from claim")
+	assert.Contains(t, err.Error(), "claim scan failed",
+		"error must include context prefix")
+}
+
+// TestRelay_Claim_RowsIterError verifies that a rows iteration error is propagated.
+func TestRelay_Claim_RowsIterError(t *testing.T) {
+	sentinel := errors.New("rows iteration error")
+	db := &mockDBTXIterErr{iterErr: sentinel}
+	relay := &OutboxRelay{
+		db:     db,
+		pub:    &mockPublisher{},
+		config: DefaultRelayConfig(),
+	}
+	_, err := relay.claim(context.Background())
+	require.Error(t, err, "rows iteration error must be propagated from claim")
+	assert.Contains(t, err.Error(), "claim rows iteration failed",
+		"error must include context prefix")
+}
+
+// TestRelay_Claim_CommitError verifies that a commit error in claim is propagated.
+func TestRelay_Claim_CommitError(t *testing.T) {
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: nil}, // empty batch
+		commitErr: errors.New("commit failed"),
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	_, err := relay.claim(context.Background())
+	require.Error(t, err, "commit error in claim must be propagated")
+	assert.Contains(t, err.Error(), "claim commit failed",
+		"error must include context prefix")
+}
+
+// TestRelay_WriteBack_ExecError_MarkPublished verifies that an exec error
+// while marking an entry as published is returned from writeBack.
+func TestRelay_WriteBack_ExecError_MarkPublished(t *testing.T) {
+	e := makeRelayEntry("e-exec-fail", "order.created", 0)
+	db := &mockDBTX{
+		execErr: errors.New("exec failed"),
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	results := []publishResult{{entry: e, err: nil}} // publish success
+	_, err := relay.writeBack(context.Background(), results)
+	require.Error(t, err, "exec error must be propagated from writeBack mark published")
+	assert.Contains(t, err.Error(), "writeBack mark published",
+		"error must include context prefix")
+}
+
+// TestRelay_WriteBack_ExecError_MarkDead verifies that an exec error while
+// marking a dead-lettered entry is returned from writeBack.
+func TestRelay_WriteBack_ExecError_MarkDead(t *testing.T) {
+	// Attempts=4, MaxAttempts=5 → newAttempts=5 >= max → dead path.
+	e := makeRelayEntry("e-dead-exec", "order.created", 4)
+	db := &mockDBTX{
+		execErr: errors.New("exec dead failed"),
+	}
+	cfg := DefaultRelayConfig()
+	cfg.MaxAttempts = 5
+	relay := NewOutboxRelay(db, &mockPublisher{}, cfg)
+
+	results := []publishResult{{entry: e, err: errors.New("publish error")}}
+	_, err := relay.writeBack(context.Background(), results)
+	require.Error(t, err, "exec error must be propagated from writeBack mark dead")
+	assert.Contains(t, err.Error(), "writeBack mark dead",
+		"error must include context prefix")
+}
+
+// TestRelay_WriteBack_ExecError_MarkRetry verifies that an exec error while
+// marking an entry for retry is returned from writeBack.
+func TestRelay_WriteBack_ExecError_MarkRetry(t *testing.T) {
+	// Attempts=0, MaxAttempts=5 → newAttempts=1 < max → retry path.
+	e := makeRelayEntry("e-retry-exec", "order.created", 0)
+	db := &mockDBTX{
+		execErr: errors.New("exec retry failed"),
+	}
+	cfg := DefaultRelayConfig()
+	relay := NewOutboxRelay(db, &mockPublisher{}, cfg)
+
+	results := []publishResult{{entry: e, err: errors.New("publish error")}}
+	_, err := relay.writeBack(context.Background(), results)
+	require.Error(t, err, "exec error must be propagated from writeBack mark retry")
+	assert.Contains(t, err.Error(), "writeBack mark retry",
+		"error must include context prefix")
+}
+
+// TestCappedDelay_Zero verifies that cappedDelay returns 0 for non-positive input.
+func TestCappedDelay_Zero(t *testing.T) {
+	relay := NewOutboxRelay(&mockDBTX{}, &mockPublisher{}, DefaultRelayConfig())
+	assert.Equal(t, time.Duration(0), relay.cappedDelay(0),
+		"cappedDelay(0) must return 0")
+	assert.Equal(t, time.Duration(0), relay.cappedDelay(-1*time.Second),
+		"cappedDelay(negative) must return 0")
+}
+
+// TestRelay_PublishAll_MarshalError verifies that a marshal error on an entry
+// is captured in the publishResult rather than propagated.
+func TestRelay_PublishAll_MarshalError(t *testing.T) {
+	// json.RawMessage with invalid JSON triggers json.Marshal failure.
+	e := makeRelayEntry("e-marshal-err", "order.created", 0)
+	e.Payload = []byte(`{invalid json`)
+
+	relay := NewOutboxRelay(&mockDBTX{}, &mockPublisher{}, DefaultRelayConfig())
+	results := relay.publishAll(context.Background(), []relayEntry{e})
+
+	require.Len(t, results, 1)
+	require.Error(t, results[0].err, "marshal error must be captured in publishResult")
+}
+
+// TestRelay_ReclaimStale_ExecError verifies that an exec error in reclaimStale
+// is propagated to the caller.
+func TestRelay_ReclaimStale_ExecError(t *testing.T) {
+	db := &mockDBTX{
+		execErr: errors.New("exec reclaim failed"),
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	err := relay.reclaimStale(context.Background())
+	require.Error(t, err, "exec error must be propagated from reclaimStale")
+	assert.Contains(t, err.Error(), "reclaimStale failed",
+		"error must include context prefix")
+}
+
+// TestRelay_DeletePublishedBefore_ExecError_Published verifies that an exec
+// error on the published-entries delete query is propagated.
+func TestRelay_DeletePublishedBefore_ExecError_Published(t *testing.T) {
+	db := &mockDBTX{
+		execErr: errors.New("delete published exec failed"),
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	err := relay.deletePublishedBefore(context.Background(), time.Now())
+	require.Error(t, err, "exec error must be propagated from deletePublishedBefore")
+	assert.Contains(t, err.Error(), "delete published entries failed",
+		"error must include context prefix")
+}
+
+// mockDBTXNthExecErr is a relayDB that succeeds on the first N execs and then
+// returns an error. Used to test the dead-entries error path in deletePublishedBefore
+// where the published-entries loop succeeds but the dead-entries loop fails.
+type mockDBTXNthExecErr struct {
+	mu      sync.Mutex
+	callsOK int // number of successful Exec calls before returning err
+	calls   int
+	err     error
+}
+
+func (m *mockDBTXNthExecErr) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.calls > m.callsOK {
+		return pgconn.NewCommandTag(""), m.err
+	}
+	return pgconn.NewCommandTag("DELETE 0"), nil
+}
+
+func (m *mockDBTXNthExecErr) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	return &mockRows{}, nil
+}
+
+func (m *mockDBTXNthExecErr) Begin(_ context.Context) (pgx.Tx, error) {
+	return nil, errors.New("not used")
+}
+
+// TestRelay_Claim_InvalidMetadataJSON verifies that a metadata JSON unmarshal
+// warning does not cause claim to fail; the entry is still returned.
+func TestRelay_Claim_InvalidMetadataJSON(t *testing.T) {
+	// Build a mockRowData with invalid JSON in the metadata column.
+	e := makeRelayEntry("e-bad-meta", "order.created", 0)
+	row := mockRowData{
+		values: []any{
+			e.ID, e.AggregateID, e.AggregateType, e.EventType,
+			e.Topic, e.Payload,
+			[]byte(`{invalid-json`), // invalid metadata JSON
+			e.CreatedAt, e.Attempts,
+		},
+	}
+	db := &mockDBTX{
+		queryRows: &mockRows{entries: []mockRowData{row}},
+	}
+	relay := NewOutboxRelay(db, &mockPublisher{}, DefaultRelayConfig())
+
+	entries, err := relay.claim(context.Background())
+	require.NoError(t, err, "invalid metadata JSON must not fail claim")
+	require.Len(t, entries, 1, "entry with invalid metadata must still be returned")
+	assert.Nil(t, entries[0].Metadata, "metadata must be nil when unmarshal fails")
+}
+
+// TestRelay_DeletePublishedBefore_ExecError_Dead verifies that an exec error
+// on the dead-entries delete query is propagated (after the published loop succeeds).
+func TestRelay_DeletePublishedBefore_ExecError_Dead(t *testing.T) {
+	db := &mockDBTXNthExecErr{
+		callsOK: 1, // first exec (published query) succeeds → DELETE 0 → breaks loop
+		err:     errors.New("delete dead exec failed"),
+	}
+	relay := &OutboxRelay{
+		db:     db,
+		pub:    &mockPublisher{},
+		config: DefaultRelayConfig(),
+	}
+
+	err := relay.deletePublishedBefore(context.Background(), time.Now())
+	require.Error(t, err, "exec error must be propagated from deletePublishedBefore dead path")
+	assert.Contains(t, err.Error(), "delete dead entries failed",
+		"error must include context prefix")
+}
