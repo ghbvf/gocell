@@ -290,6 +290,9 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		if err != nil {
 			return mode, nil, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
 		}
+		// Any failure after NewPool must close the pool locally — the caller
+		// only defers Close on successful return. K2's post-acquire failure
+		// boundary (metrics registration) would otherwise leak DB connections.
 		outboxWriter := adapterpg.NewOutboxWriter()
 		txMgr := adapterpg.NewTxManager(pool)
 		// Wire K2 relay metrics into production relay (OBS-RELAY-REGISTER-ATOMIC-01).
@@ -298,6 +301,7 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		relayCfg := adapterpg.DefaultRelayConfig()
 		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
 		if rmErr != nil {
+			pool.Close()
 			return mode, nil, nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
