@@ -149,13 +149,21 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // before Metrics, protecting downstream handlers from cascade failures.
 // When the circuit opens, requests are rejected with 503 Service Unavailable.
 //
-// The CircuitBreakerPolicy interface is defined in runtime/http/middleware.
+// A nil cb is rejected by NewE so the circuit breaker is never silently absent
+// when the caller intended to enable it.
+//
+// The Allower interface is defined in runtime/http/middleware.
 // Use adapters/circuitbreaker.New() for a sony/gobreaker implementation.
 //
 // ref: go-zero — circuit breaker as default middleware when configured
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
-func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
+// ref: kubernetes/kubernetes apiserver — option fail-fast at startup
+func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(r *Router) {
+		if cb == nil || middleware.IsTypedNilAllower(cb) {
+			r.circuitBreakerNil = true
+			return
+		}
 		r.circuitBreaker = cb
 	}
 }
@@ -235,7 +243,8 @@ type Router struct {
 	tracingOpts         []middleware.TracingOption
 	requestIDOpts       []middleware.RequestIDOption
 	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.CircuitBreakerPolicy
+	circuitBreaker      middleware.Allower
+	circuitBreakerNil   bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
 	authVerifier        auth.TokenVerifier
 	authPublicEndpoints []string
 	authMetrics         *auth.AuthMetrics
@@ -290,6 +299,12 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 
 	r.applyPublicEndpoints()
+
+	// Fail-fast: nil circuit breaker means the operator called
+	// WithCircuitBreaker(nil) which would silently skip CB installation.
+	if r.circuitBreakerNil {
+		return nil, fmt.Errorf("router: circuit breaker must not be nil")
+	}
 
 	// Fail-fast: validate and construct the proxy checker once. The validated
 	// checker is passed to RealIPFromChecker so proxies are only parsed once.

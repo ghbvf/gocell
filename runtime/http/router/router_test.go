@@ -595,18 +595,18 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 
 // --- Circuit breaker wiring ---
 
-// routerTestBreaker is a minimal CircuitBreakerPolicy for router integration tests.
+// routerTestBreaker is a minimal Allower for router integration tests.
 type routerTestBreaker struct {
 	allowErr error
 	called   bool
 }
 
-func (b *routerTestBreaker) Allow() (func(bool), error) {
+func (b *routerTestBreaker) Allow() (bool, func(error)) {
 	b.called = true
 	if b.allowErr != nil {
-		return nil, b.allowErr
+		return false, nil
 	}
-	return func(bool) {}, nil
+	return true, func(error) {}
 }
 
 func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
@@ -641,6 +641,24 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+}
+
+func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
+	// A bare nil interface value must cause NewE to return an error so that
+	// Bootstrap.Run fails fast instead of silently skipping CB protection.
+	_, err := NewE(WithCircuitBreaker(nil))
+	require.Error(t, err, "nil interface Allower must return error from NewE")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
+	// A typed-nil (*routerTestBreaker)(nil) must also be rejected: the interface
+	// value is non-nil but the underlying pointer is nil, so calling Allow()
+	// on it would panic at runtime.
+	var cb *routerTestBreaker // typed nil
+	_, err := NewE(WithCircuitBreaker(cb))
+	require.Error(t, err, "typed-nil Allower must return error from NewE")
+	assert.Contains(t, err.Error(), "circuit breaker")
 }
 
 // --- Infra endpoints bypass RL/CB ---

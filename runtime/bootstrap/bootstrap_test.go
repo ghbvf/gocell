@@ -836,6 +836,33 @@ func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "must not be nil")
 }
 
+// mockAllowerForBootstrap is a minimal Allower used only in bootstrap option tests.
+type mockAllowerForBootstrap struct{}
+
+func (m *mockAllowerForBootstrap) Allow() (bool, func(error)) {
+	return true, func(error) {}
+}
+
+func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
+	// A bare nil interface must cause Run() to fail-fast with a descriptive
+	// error rather than silently leaving the service without CB protection.
+	b := New(WithCircuitBreaker(nil))
+	err := b.Run(context.Background())
+	require.Error(t, err, "nil interface Allower must return error from Run")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
+	// A typed-nil (*mockAllowerForBootstrap)(nil) has a non-nil interface value
+	// but a nil underlying pointer. Calling Allow() on it would panic at runtime.
+	// Bootstrap must detect and reject it just like a bare nil.
+	var cb *mockAllowerForBootstrap // typed nil
+	b := New(WithCircuitBreaker(cb))
+	err := b.Run(context.Background())
+	require.Error(t, err, "typed-nil Allower must return error from Run")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
 func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -3291,4 +3318,22 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Circuit breaker nil option detection (P1-A fail-fast)
+// ---------------------------------------------------------------------------
+
+func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "cb-nil-test", DurabilityMode: cell.DurabilityDemo})
+	tc := newTestCell("cb-nil-cell")
+	require.NoError(t, asm.Register(tc))
+
+	b := New(
+		WithAssembly(asm),
+		WithCircuitBreaker(nil),
+	)
+	err := b.Run(context.Background())
+	require.Error(t, err, "nil Allower must cause Run to return an error")
+	assert.Contains(t, err.Error(), "circuit breaker")
 }
