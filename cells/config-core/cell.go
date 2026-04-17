@@ -138,27 +138,43 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 }
 
 // Init constructs all 5 slices and registers them.
-// TODO(PR-R-BOOT-COGNIT): split into validateDeps / buildCursorCodec / per-slice builders.
-//
-//nolint:gocognit
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
+	if err := c.validateOutboxDeps(deps); err != nil {
+		return err
+	}
+	if err := c.ensureCursorCodec(deps); err != nil {
+		return err
+	}
 
-	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
-	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
+	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+	c.initWriteSlice()
+	if err := c.initReadSlice(runMode); err != nil {
+		return err
+	}
+	c.initPublishSlice(runMode)
+	c.initSubscribeSlice()
+	if err := c.initFlagSlice(runMode); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateOutboxDeps enforces the XOR constraint (outboxWriter + txRunner
+// must be both present or both absent) and rejects noop implementations in
+// durable mode.
+func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies) error {
+	// XOR constraint: both present = durable mode; both absent = demo mode.
 	if (c.outboxWriter == nil) != (c.txRunner == nil) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
 			"config-core durable mode requires both outboxWriter and txRunner")
 	}
-
-	// Durable mode: reject noop implementations.
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "config-core", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
 	}
-
-	// Demo mode: both nil → require publisher for degraded event delivery.
+	// Demo mode: require publisher for degraded event delivery.
 	if c.outboxWriter == nil && c.txRunner == nil {
 		if c.publisher == nil {
 			return errcode.New(errcode.ErrCellMissingOutbox,
@@ -170,77 +186,83 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				slog.Int("consistency_level", int(c.ConsistencyLevel())))
 		}
 	}
+	return nil
+}
 
-	// config-write slice
-	var writeOpts []configwrite.Option
+// ensureCursorCodec sets a default cursor codec in demo mode or returns an
+// error in durable mode when no codec was injected.
+// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
+func (c *ConfigCore) ensureCursorCodec(deps cell.Dependencies) error {
+	if c.cursorCodec != nil {
+		return nil
+	}
+	if deps.DurabilityMode == cell.DurabilityDurable {
+		return errcode.New(errcode.ErrCellMissingCodec,
+			"config-core durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+	}
+	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse.
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-CONFIG-CORE-key-32!!"))
+	if err != nil {
+		return err
+	}
+	c.cursorCodec = codec
+	c.logger.Warn("config-core: using default cursor codec (demo mode)",
+		slog.String("cell", c.ID()))
+	return nil
+}
+
+func (c *ConfigCore) initWriteSlice() {
+	var opts []configwrite.Option
 	if c.outboxWriter != nil {
-		writeOpts = append(writeOpts, configwrite.WithOutboxWriter(c.outboxWriter))
+		opts = append(opts, configwrite.WithOutboxWriter(c.outboxWriter))
 	}
 	if c.txRunner != nil {
-		writeOpts = append(writeOpts, configwrite.WithTxManager(c.txRunner))
+		opts = append(opts, configwrite.WithTxManager(c.txRunner))
 	}
-	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, writeOpts...)
+	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("config-write", "config-core", cell.L2))
+}
 
-	// Default cursor codec for pagination if not injected. Durable mode
-	// refuses the public demo-key fallback — an assembly that forgets to
-	// wire a production codec must fail closed, not silently sign cursors
-	// with a key that ships in the source tree.
-	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
-	if c.cursorCodec == nil {
-		if deps.DurabilityMode == cell.DurabilityDurable {
-			return errcode.New(errcode.ErrCellMissingCodec,
-				"config-core durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
-		}
-		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
-		codec, err := query.NewCursorCodec([]byte("gocell-demo-CONFIG-CORE-key-32!!"))
-		if err != nil {
-			return err
-		}
-		c.cursorCodec = codec
-		c.logger.Warn("config-core: using default cursor codec (demo mode)",
-			slog.String("cell", c.ID()))
-	}
-
-	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
-
-	// config-read slice
+func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	readSvc, err := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
 	if err != nil {
 		return fmt.Errorf("config-read: %w", err)
 	}
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
+	return nil
+}
 
-	// config-publish slice
-	var publishOpts []configpublish.Option
+func (c *ConfigCore) initPublishSlice(runMode query.RunMode) {
+	var opts []configpublish.Option
 	if c.outboxWriter != nil {
-		publishOpts = append(publishOpts, configpublish.WithOutboxWriter(c.outboxWriter))
+		opts = append(opts, configpublish.WithOutboxWriter(c.outboxWriter))
 	}
 	if c.txRunner != nil {
-		publishOpts = append(publishOpts, configpublish.WithTxManager(c.txRunner))
+		opts = append(opts, configpublish.WithTxManager(c.txRunner))
 	}
 	// Publisher fail-open is keyed off the same cell-level RunMode that config-read /
 	// feature-flag consume; durable stays fail-closed by construction (zero-value RunModeProd).
-	// Do not re-derive this from DurabilityMode here — call RunModeForDemo once (above).
-	publishOpts = append(publishOpts, configpublish.WithRunMode(runMode))
-	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
+	// Do not re-derive this from DurabilityMode here — call RunModeForDemo once in Init.
+	opts = append(opts, configpublish.WithRunMode(runMode))
+	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
+}
 
-	// config-subscribe slice
+func (c *ConfigCore) initSubscribeSlice() {
 	c.subscribeSvc = configsubscribe.NewService(c.logger)
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
+}
 
-	// feature-flag slice
+func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 	flagSvc, err := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
 	if err != nil {
 		return fmt.Errorf("feature-flag: %w", err)
 	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
-
 	return nil
 }
 

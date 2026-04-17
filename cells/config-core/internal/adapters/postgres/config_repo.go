@@ -42,7 +42,7 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 // ConfigRepository implements ports.ConfigRepository using PostgreSQL.
 type ConfigRepository struct {
-	db      DBTX    // set when constructed directly with a fixed DBTX (test path)
+	db      DBTX     // set when constructed directly with a fixed DBTX (test path)
 	session *Session // set when constructed from a Session (production path)
 }
 
