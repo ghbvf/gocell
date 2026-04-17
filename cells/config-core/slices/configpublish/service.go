@@ -168,7 +168,8 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return fn(ctx)
 }
 
-// publishEvent writes to the outbox (durable) or directly via publisher (demo).
+// publishEvent writes to the outbox (L2 durable) or directly via publisher
+// (fallback when outboxWriter is nil, e.g. demo assemblies using DiscardPublisher).
 // No RunMode fail-open needed: demo mode injects DiscardPublisher which never
 // errors by contract, so any publisher failure is a real infrastructure problem
 // that must surface. Read slices use RunMode to handle stale cursor tokens —
