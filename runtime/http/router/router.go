@@ -10,6 +10,7 @@ package router
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 
@@ -115,6 +116,10 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 // For asymmetric policies (e.g., auth bypass without trace root), use the
 // individual WithTracingOptions / WithRequestIDOptions / WithAuthMiddleware
 // options instead.
+//
+// Note: bootstrap.WithPublicEndpoints wraps this option with auth-provider
+// discovery logic. Use this router-level option for standalone router usage
+// outside bootstrap (e.g., in tests or custom server setups).
 //
 // ref: go-zero rest/server.go — single-point route group auth config
 // ref: otelhttp config.go — WithPublicEndpointFn per-request detection
@@ -282,6 +287,9 @@ func NewE(opts ...Option) (*Router, error) {
 	// ref: go-zero rest/server.go — single-point route group auth config
 	// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
 	if len(r.publicEndpoints) > 0 {
+		if len(r.tracingOpts) > 0 {
+			slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
+		}
 		publicSet := make(map[string]bool, len(r.publicEndpoints))
 		for _, p := range r.publicEndpoints {
 			publicSet[path.Clean(p)] = true
