@@ -49,9 +49,12 @@ func TestRegisterPoolMetrics_EmitsIdleAndUsed(t *testing.T) {
 
 	idleUsed := map[string]int64{}
 	maxPerPool := map[string]int64{}
+	timeoutsPerPool := map[string]int64{}
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
-			if m.Name != "db.client.connection.count" && m.Name != "db.client.connection.max" {
+			switch m.Name {
+			case "db.client.connection.count", "db.client.connection.max", "db.client.connection.timeouts":
+			default:
 				continue
 			}
 			sum, ok := m.Data.(metricdata.Sum[int64])
@@ -61,11 +64,15 @@ func TestRegisterPoolMetrics_EmitsIdleAndUsed(t *testing.T) {
 			for _, dp := range sum.DataPoints {
 				pool, _ := dp.Attributes.Value("db.client.connection.pool.name")
 				state, hasState := dp.Attributes.Value("db.client.connection.state")
-				if m.Name == "db.client.connection.count" && hasState {
-					idleUsed[pool.AsString()+":"+state.AsString()] = dp.Value
-				}
-				if m.Name == "db.client.connection.max" {
+				switch m.Name {
+				case "db.client.connection.count":
+					if hasState {
+						idleUsed[pool.AsString()+":"+state.AsString()] = dp.Value
+					}
+				case "db.client.connection.max":
 					maxPerPool[pool.AsString()] = dp.Value
+				case "db.client.connection.timeouts":
+					timeoutsPerPool[pool.AsString()] = dp.Value
 				}
 			}
 		}
@@ -79,6 +86,9 @@ func TestRegisterPoolMetrics_EmitsIdleAndUsed(t *testing.T) {
 	}
 	if maxPerPool["pg-main"] != 20 || maxPerPool["redis-main"] != 8 {
 		t.Errorf("max per pool mismatch: %+v", maxPerPool)
+	}
+	if timeoutsPerPool["pg-main"] != 1 || timeoutsPerPool["redis-main"] != 0 {
+		t.Errorf("timeouts per pool mismatch: %+v", timeoutsPerPool)
 	}
 }
 

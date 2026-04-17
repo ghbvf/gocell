@@ -60,7 +60,8 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 		LabelNames: []string{"method", "route", "status", "cell"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runtime/observability/metrics: register http_requests_total: %w", err)
+		return nil, fmt.Errorf("runtime/observability/metrics: register http_requests_total "+
+			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
 	}
 	dur, err := p.HistogramVec(kernelmetrics.HistogramOpts{
 		Name:       "http_request_duration_seconds",
@@ -69,7 +70,8 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 		Buckets:    cfg.DurationBuckets,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runtime/observability/metrics: register http_request_duration_seconds: %w", err)
+		return nil, fmt.Errorf("runtime/observability/metrics: register http_request_duration_seconds "+
+			"(likely duplicate — another collector on this Provider may already own the name): %w", err)
 	}
 
 	return &providerCollector{cellID: cfg.CellID, requests: reqs, duration: dur}, nil

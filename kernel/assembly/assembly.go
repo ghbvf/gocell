@@ -123,7 +123,12 @@ func New(cfg Config) *CoreAssembly {
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Stop to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher, err := newHookDispatcher(cfg.HookObserver, cfg.HookObserverQueueSize, cfg.HookObserverSinkTimeout, cfg.MetricsProvider)
+	dispatcher, err := newHookDispatcher(dispatcherConfig{
+		Observer:    cfg.HookObserver,
+		QueueSize:   cfg.HookObserverQueueSize,
+		SinkTimeout: cfg.HookObserverSinkTimeout,
+		Provider:    cfg.MetricsProvider,
+	})
 	if err != nil {
 		// newHookDispatcher only fails if metrics registration fails, and
 		// even then it falls back to Nop internally — so this branch is

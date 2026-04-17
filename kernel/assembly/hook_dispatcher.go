@@ -19,8 +19,10 @@ const (
 	DefaultHookObserverDrainTimeout = 5 * time.Second
 )
 
-// Drop reasons emitted as label values on gocell_hook_observer_dropped_total.
-// Exported for operators and reviewers grepping dashboard configs.
+// Drop reason label values emitted on gocell_hook_observer_dropped_total.
+// Exported so downstream tests (and operators wiring Grafana variables)
+// can refer to the reason string by symbolic name instead of duplicating
+// the literal — a rename of the literal flips every call site at once.
 const (
 	DropReasonQueueFull     = "queue_full"
 	DropReasonSinkTimeout   = "sink_timeout"
@@ -67,21 +69,43 @@ type hookDispatcher struct {
 	done        chan struct{} // closed when the worker loop exits
 }
 
-// newHookDispatcher constructs + eagerly starts a dispatcher. observer must
-// be non-nil (assembly substitutes cell.NopHookObserver for caller nil).
-// provider may be nil; it falls back to metrics.NopProvider.
-func newHookDispatcher(observer cell.LifecycleHookObserver, queueSize int, sinkTimeout time.Duration, provider metrics.Provider) (*hookDispatcher, error) {
-	if queueSize <= 0 {
-		queueSize = DefaultHookObserverQueueSize
+// dispatcherConfig bundles the knobs of newHookDispatcher so the
+// constructor has one parameter instead of four. The struct also makes
+// new knobs (drain policy, reason-label customisation …) backward
+// compatible — adding a field can't silently reorder arguments at call
+// sites.
+//
+// ref: Go std-lib convention (net/http.Server, sql.TxOptions) — options
+// structs are preferred over positional parameters once the knob count
+// reaches 3-4.
+type dispatcherConfig struct {
+	// Observer receives HookEvents. Required (assembly substitutes
+	// NopHookObserver when caller passed nil).
+	Observer cell.LifecycleHookObserver
+	// QueueSize bounds the pending event buffer. Zero / negative uses
+	// DefaultHookObserverQueueSize.
+	QueueSize int
+	// SinkTimeout bounds one OnHookEvent call. Zero / negative uses
+	// DefaultHookObserverSinkTimeout.
+	SinkTimeout time.Duration
+	// Provider backs drop/queue-depth metrics. Nil falls back to
+	// metrics.NopProvider — dispatcher still works, emissions go nowhere.
+	Provider metrics.Provider
+}
+
+// newHookDispatcher constructs + eagerly starts a dispatcher.
+func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
+	if cfg.QueueSize <= 0 {
+		cfg.QueueSize = DefaultHookObserverQueueSize
 	}
-	if sinkTimeout <= 0 {
-		sinkTimeout = DefaultHookObserverSinkTimeout
+	if cfg.SinkTimeout <= 0 {
+		cfg.SinkTimeout = DefaultHookObserverSinkTimeout
 	}
-	if provider == nil {
-		provider = metrics.NopProvider{}
+	if cfg.Provider == nil {
+		cfg.Provider = metrics.NopProvider{}
 	}
 
-	dropped, err := provider.CounterVec(metrics.CounterOpts{
+	dropped, err := cfg.Provider.CounterVec(metrics.CounterOpts{
 		Name:       "gocell_hook_observer_dropped_total",
 		Help:       "Total number of hook events dropped by the async hook dispatcher, partitioned by reason.",
 		LabelNames: []string{"reason"},
@@ -97,9 +121,9 @@ func newHookDispatcher(observer cell.LifecycleHookObserver, queueSize int, sinkT
 	}
 
 	d := &hookDispatcher{
-		ch:          make(chan hookItem, queueSize),
-		observer:    observer,
-		sinkTimeout: sinkTimeout,
+		ch:          make(chan hookItem, cfg.QueueSize),
+		observer:    cfg.Observer,
+		sinkTimeout: cfg.SinkTimeout,
 		dropped:     dropped,
 		done:        make(chan struct{}),
 	}
@@ -162,6 +186,12 @@ func (d *hookDispatcher) flush(timeout time.Duration) (ok bool) {
 
 	// Use a single Timer for both enqueue and wait-for-fence legs so a
 	// flush against a slow worker still respects the caller's budget.
+	// Semantics subtlety: whichever leg first selects on Timer.C consumes
+	// the event; if enqueue uses most of the budget, the wait-for-fence
+	// leg may see an already-drained channel and immediately return
+	// false. Tests pass timeouts >= 500ms (see hook_dispatcher_test.go)
+	// to stay comfortably above this pathology. Callers that need
+	// independent budgets can call flush twice.
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 

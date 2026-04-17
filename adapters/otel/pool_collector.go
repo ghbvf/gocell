@@ -14,7 +14,8 @@ import (
 //	https://opentelemetry.io/docs/specs/semconv/database/database-metrics/
 //
 // db.client.connection.count is a single UpDownCounter split by state="idle|used";
-// db.client.connection.max is an UpDownCounter for configured pool capacity.
+// db.client.connection.max is an UpDownCounter for configured pool capacity;
+// db.client.connection.timeouts is a Counter tracking failed-acquire waits.
 //
 // SCOPE — this collector is for **database connection pools only**
 // (adapters/postgres, adapters/redis). Do NOT pass the rabbitmq channel
@@ -23,8 +24,9 @@ import (
 // produces misleading dashboards. Use RegisterMessagingChannelMetrics
 // (messaging_channel_collector.go) for that case.
 const (
-	metricNameConnCount = "db.client.connection.count"
-	metricNameConnMax   = "db.client.connection.max"
+	metricNameConnCount    = "db.client.connection.count"
+	metricNameConnMax      = "db.client.connection.max"
+	metricNameConnTimeouts = "db.client.connection.timeouts"
 
 	attrPoolName = "db.client.connection.pool.name"
 	attrState    = "db.client.connection.state"
@@ -74,6 +76,20 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 			"otel pool collector: create "+metricNameConnMax, err)
 	}
 
+	// db.client.connection.timeouts is a monotonically increasing Counter
+	// — we read Snapshot.WaitCount on each callback (pgxpool's
+	// EmptyAcquireCount, go-redis's Timeouts) which is already a cumulative
+	// total, so an ObservableCounter lines up 1:1 with semantics.
+	connTimeouts, err := meter.Int64ObservableCounter(
+		metricNameConnTimeouts,
+		otelmetric.WithDescription("Cumulative number of pool-acquire waits that timed out or short-circuited (adapter-specific: pgxpool EmptyAcquireCount, go-redis Timeouts)."),
+		otelmetric.WithUnit("{timeout}"),
+	)
+	if err != nil {
+		return nil, errcode.Wrap(ErrAdapterOTelInit,
+			"otel pool collector: create "+metricNameConnTimeouts, err)
+	}
+
 	// Snapshot each statter during the callback; OTel calls this on every
 	// collect cycle so the numbers always reflect the latest pool state.
 	reg, err := meter.RegisterCallback(
@@ -88,11 +104,14 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 					otelmetric.WithAttributes(poolAttr, attribute.String(attrState, stateUsed)))
 				o.ObserveInt64(connMax, snap.MaxConns,
 					otelmetric.WithAttributes(poolAttr))
+				o.ObserveInt64(connTimeouts, snap.WaitCount,
+					otelmetric.WithAttributes(poolAttr))
 			}
 			return nil
 		},
 		connCount,
 		connMax,
+		connTimeouts,
 	)
 	if err != nil {
 		return nil, errcode.Wrap(ErrAdapterOTelInit,
