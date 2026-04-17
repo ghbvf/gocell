@@ -197,7 +197,7 @@
 |------|------|----------|------|
 | **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/access-core/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
 | **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/access-core/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
-| **VALIDATE-EVIDENCE-CI-01** (P2, Cx2, 🟡 可延后): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR；PR template 增"metadata gate"勾选项 | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
+| **VALIDATE-EVIDENCE-CI-01** (P2, Cx2, 根治声明-代码漂移): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR；PR template 增"metadata gate"勾选项 | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
 | **GOCELL-VALIDATE-FMT-REDESIGN** (P3, 搭车): `printResult` 改为 `[CODE] msg (field: X) / at file:line:col` 两行格式支持 IDE 点击跳转 — 已在 Phase K PR-K-VALIDATOR 搭车覆盖 | — | — | PR#152 follow-up |
 
 ### PR-S-RBAC-OUTBOX: 角色变更 outbox 化（6h，可选升级为 Phase X）
