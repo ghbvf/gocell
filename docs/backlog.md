@@ -1,25 +1,30 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/`。
-> 更新日期: 2026-04-16
+> 更新日期: 2026-04-17
 > Batch 1-5: ✅ 全部完成 (PR#67-114, 48 PRs)
-> Wave 1 进行中: ✅ PR#116-138 (23 PRs 已合入)
+> Wave 1: ✅ 全部完成 (PR#116-142+146, Batch A-EF 全部合入)
+> Post-Wave 1: PR#141+143-148+150-157 已合入（TPUB+RMQ+RBAC closure+outbox fixes+kernel governance+rabbitmq conformance isolation+access-core 安全加固+validator 诊断定位+CI 并行化+hook 生命周期+config rollback 契约+OBS-B test determinism+OBS-A provider-neutral metrics）
+> PR#154 ✅ kernel hook 生命周期超时 + HookObserver + outbox metadata DX（WM17-F2-2/F4-3 + OBS-DX-01 + OBS-DOC-01）
+> PR#155 ✅ config-core rollback 契约 + publish redaction（H2-1 + H2-2 + AUTHZ-WRITE-CONFIG-01 + ERROR-MSG-SCRUB-01 + ROLLBACK-NEGPATH-TEST-01 + SCHEMA-SENSITIVE-DESC-01）
+> PR#156 ✅ PR-R-OBS-B: test determinism + cursor log（CONFORMANCE-SLEEP-01 + OBS-TABLE-01 + CURSOR-P2-02）
+> PR#157 ✅ PR-R-OBS-A: provider-neutral metrics + async hook dispatcher + pool statter（OBS-METRIC-01 + OTEL-COV-01 + HOOK-OBSERVER-ASYNC-01 + OBS-LEAK-02 + OBS-POOLSTATS-WAITCOUNT-01 + OBS-HOOK-DISPATCHER-CFG-01）
+> PR#149 已被 PR#151 取代（access-core 安全加固 + READYZ，已合入）
 > PR#129 (Sentinel DSN redaction) / PR#130 (Bolt journey catalog) — 外部 PR，未合入
 > 旧版备份: `docs/reviews/archive/20260415-backlog-pre-pr127-cleanup.md`
 
 ---
 
-## Wave 1: 待做
+## Wave 1: ✅ 全部完成
 
-> 已合入 PR#116-128。剩余按优先级分层：P1 正确性 → MUST（v1.0 阻塞项）→ SHOULD（建议 v1.0 前做）。
-> DEFER 项已移至 Batch 8。
+> 已合入 PR#116-142+146。DEFER 项已移至 Batch 8。
 
 ### P1 正确性
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
 | 5 | **AUTH-DX-01** README + seed 用户 + sso-bff walkthrough: auth 已拦截全部业务路由，README 失效；sso-bff README 缺 refresh/GET user/event 消费 demo (P4-P1-6)。具体漂移: refresh curl 发 `sessionId` 实际需 `refreshToken`；logout 204 空 body 管道 jq 失败；audit jq 用 `.createdAt` 实为 `.Timestamp` | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
-| 6 | **TPUB-01** TestPubSub 真实 adapter 认证: conformance harness 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
+| 6 | ✅ **TPUB-01** TestPubSub 真实 adapter 认证: conformance harness 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B | PR#141 |
 
 ### 运维 + 基础设施
 
@@ -68,8 +73,8 @@
 | # | 任务 | 前置 | 工时 |
 |---|------|------|------|
 | 28 | **SOL-B-01** Claimer lease 续租 | L4 API ✅ | 4h |
-| 31 | **RabbitMQ 代码清理** backoff + FailOpen enum | RMQ ✅ | 3h |
-| 32 | **cursor 可观测** invalid 结构化日志 | cursor (#15 B8) | 1h |
+| 31 | ✅ **RabbitMQ 代码清理** backoff + FailOpen enum → ClaimPolicy typed enum | RMQ ✅ | 3h | PR#141 |
+| 32 | ✅ **cursor 可观测** invalid 结构化日志（CURSOR-P2-02）| cursor (#15 B8) | 1h | PR#156 |
 | 33 | **WM-35** BFF handler 接入 cookie session ★ | WM-2-F1 ✅ | **2d** |
 
 ## Wave 3: Auth 收尾
@@ -94,7 +99,7 @@
 ## 关键路径
 
 ```
-★ Auth 链: WM-2-F1 ✅ → WM-35 (2d) → WM-36 (1.5d) → Review (2d) = 剩余 5.5 工作日
+★ Auth 链: WM-2-F1 ✅ → WM-35 (2d) → WM-36 (1.5d) → H1(0.5d) → H2(0.5d) → FEAT(1d) → README(0.5d) → Review(2d) = 剩余 8 工作日
 ```
 
 ---
@@ -106,13 +111,18 @@
 
 | PR 组 | 任务 | 工时 |
 |-------|------|------|
-| **OBS 全家桶** | META-SIZE-01(Metadata key 数/大小上限) + ✅ OBS-TABLE-01 PR-R-OBS-B(kernel/metadata parser_test.go 合并 7 个 invalid-YAML 测试为 table-driven，删除 5 个被 EmptyStructFiles 覆盖的 EmptyID 测试) + OBS-METRIC-01(bridge counter/histogram) + OBS-DX-01(cloneMetadata 导出 + wrapper 清理 + godoc) + OBS-DOC-01(IsReservedMetadataKey usage example) + #23(OTel 覆盖率 OTEL-COV-01 testcontainers 集成测试, `adapters/otel/`) + ✅ CONFORMANCE-SLEEP-01 PR-R-OBS-B(conformance.go 5 处 time.Sleep+count → harness.assertNoMoreDeliveries pure select，对齐 Watermill; buffer=100 non-blocking send 避免干扰被测行为) + HOOK-OBSERVER-ASYNC-01(LifecycleHookObserver 独立超时 + 异步有界队列) | 7h → 5h |
-| **Outbox 治理** | OUTBOX-GUARD-01(NoopWriter/DiscardPublisher lint 约束) + DISCARD-OBS-01(DiscardPublisher Logger 注入 + counter) + OUTBOX-RECEIPT-01(`outbox.Receipt` alias 全仓迁移 `idempotency.Receipt`) | 4h |
+| **OBS 全家桶** | ~~META-SIZE-01~~ ✅ PR#147 + ✅ OBS-TABLE-01 PR#156(kernel/metadata parser_test.go 合并 7 个 invalid-YAML 测试为 table-driven，删除 5 个被 EmptyStructFiles 覆盖的 EmptyID 测试) + ✅ OBS-METRIC-01 PR#157(provider-neutral metrics.Provider + prom/otel adapter + HTTP/Relay collector 迁移 + bootstrap.WithMetricsProvider + default-assembly wiring) + ✅ OBS-DX-01 PR#154(CloneMetadata 导出 + godoc) + ✅ OBS-DOC-01 PR#154(ExampleIsReservedMetadataKey) + ✅ #23 OTEL-COV-01 PR#157(mock OTLP via ManualReader + tracetest.InMemoryExporter, 覆盖 metrics + trace) + ✅ CONFORMANCE-SLEEP-01 PR#156(conformance.go 5 处 time.Sleep+count → harness.assertNoMoreDeliveries pure select，对齐 Watermill; buffer=100 non-blocking send 避免干扰被测行为) + ✅ HOOK-OBSERVER-ASYNC-01 PR#157(kernel/assembly/hook_dispatcher.go: 异步有界队列 + per-sink timeout + drop counter via Provider + goleak + failed-start cleanup via bootstrap Shutdown teardown) | 7h → 0h |
+| **OBS 全家桶 follow-up** | ✅ OBS-LEAK-02 PR#157(`newTestAssembly(t, cfg)` helper + 51 sites 迁移，移除 goleak allowlist) + ✅ OBS-POOLSTATS-WAITCOUNT-01 PR#157(`db.client.connection.timeouts` ObservableCounter) + OBS-RELAY-REGISTER-ATOMIC-01(Cx3, P2): `outbox.NewProviderRelayCollector` 5 个 metric 顺序 register，3 失败则前 2 半注册；需 Provider.Unregister 支持或文档化契约 (discovered via PR#157 review S3-05) + ✅ OBS-HOOK-DISPATCHER-CFG-01 PR#157(`dispatcherConfig{}` 替代位置参数) + OBS-HTTP-COLLECTOR-AUTOWIRE-01(Cx3, P2): bootstrap.WithMetricsProvider 不自动为默认 HTTP 中间件构造 `NewProviderCollector`；需设计 WithHTTPCollectorCellID 或 auto-wire (discovered via PR#157 review S4-01) + OBS-LGTM-INTEGRATION-01(Cx3, P2): 添加 `//go:build integration` tag 的夜间 OTel collector 真实 OTLP 协议兼容性测试（grafana/otel-lgtm 或 otel-collector-contrib）; 防止 OTLP protobuf 版本不兼容 (discovered via PR#157 review S6-04) | 7h → 3h |
+| **Outbox 治理** | ~~OUTBOX-GUARD-01~~ ✅ PR#147 + ~~DISCARD-OBS-01~~ ✅ PR#148 + ~~OUTBOX-RECEIPT-01~~ ✅ PR#148 | 4h → 0h |
 | **order-cell 收口** | ✅ ORDER-DEMO-01 PR#136(统一 outbox 路径) + ✅ NIL-PUB-P2 PR#136(Init() fail-fast) + ✅ CheckNotNoop PR#137 | 2h → 0h |
-| **Cursor 全家桶** | #15(cursor 回归矩阵 CURSOR-TEST-01 + CUR-HDL-01: 5 个分页入口补 malformed/missing-scope/cross-context 三类回归, `cells/*/handler_test.go` + `service_test.go`) + WM-6-F6(泛型 cursor helper)/F7(cursor 日志收口)/F1(prod guard) + TX-NIL-01(nil-safe 注释) + ✅ #27e(NOOP-TX-SHARED-01 PR#136: `kernel/persistence.NoopTxRunner`) + ✅ #32 CURSOR-P2-02 PR-R-OBS-B(auditquery cursor decode/scope 失败加 Info 结构化日志，字段 slice/reason/error；对齐 k8s/etcd/MinIO 不记录原串) | 8.5h → 7h |
-| **metadata parser** | META-67-01(strict unknown-field reject) + META-67-02(位置信息错误报告) + META-67-03(cross-file 引用校验) | 2.5h |
+| **Cursor 全家桶** | #15(cursor 回归矩阵 CURSOR-TEST-01 + CUR-HDL-01: 5 个分页入口补 malformed/missing-scope/cross-context 三类回归, `cells/*/handler_test.go` + `service_test.go`) + WM-6-F6(泛型 cursor helper)/F7(cursor 日志收口)/F1(prod guard) + TX-NIL-01(nil-safe 注释) + ✅ #27e(NOOP-TX-SHARED-01 PR#136: `kernel/persistence.NoopTxRunner`) + ✅ #32 CURSOR-P2-02 PR#156(auditquery cursor decode/scope 失败加 Info 结构化日志，字段 slice/reason/error；对齐 k8s/etcd/MinIO 不记录原串) | 8.5h → 6.5h |
+| **metadata parser** | ✅ META-67-01 PR#142 (parser.go KnownFields(true)) + ✅ META-67-03 PR#142 (governance/rules_ref.go REF-01..REF-16) + ✅ META-67-02 PR#152 (two-phase decode + Position{Line,Column} + governance/locator.go + printResult :line:col) + **METADATA-PERF-BENCH-01** (Cx3, P1): `BenchmarkParseFS_500Files` 性能基准 + goccy/go-yaml 单次解码迁移成本评估，对比当前 yaml.v3 双解码（每文件 2 pass）。前置: 构造 500+ MapFS fixture (discovered via PR#152 seat-4) | 2.5h → 4h |
+| **metadata API 收敛** | METADATA-PROJECTLOC-IFACE-01 (Cx3, P2): `ProjectMeta.FileNodes map[string]*yaml.Node` 把 yaml.v3 AST 泄漏到 kernel/governance + cmd。应提取 `ProjectLocator interface { Locate(file, path string) Position }` 或 `pm.Locate(file, path) Position` 方法，隐藏 AST 细节。涉及 kernel/metadata + kernel/governance + cmd/gocell (discovered via PR#152 seat-1) | 3h |
+| **validator 机器输出** | OUTPUT-JSON-SARIF-01 (Cx3, P1): `gocell validate` 缺机器可读输出通道（JSON / SARIF），当前文本 `file:line:col -> field` 格式虽人类友好但不承诺脚本稳定。需统一诊断模型（单一 Issue struct → 多 printer 映射），文本格式声明为非稳定。对标：golangci-lint / staticcheck / ESLint / kubectl print flags / test2json。涉及 cmd/gocell + kernel/governance 序列化 (discovered via PR#152 round-2 review) | 6h |
 | **auth 增强** | WM-2-F2(HMAC replay 防护) + WM-2-F3(auth metrics) + AUTH-SIGNER-01(`SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey`，需自定义 jwt SigningMethod，前置: golang-jwt v6 或 wrapper) + RBAC-LAST-ADMIN-GUARD(service.Revoke 检查剩余 admin 数量，需 `CountByRole` 加入 RoleRepository 接口, `cells/access-core/slices/rbacassign/service.go`) (discovered via PR#143 review 2.3) | 7h |
 | **rbac-assign 治理** | RBAC-REVOKE-POST-01: `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题（`cells/access-core/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml`）(discovered via PR#143 review 6.2) | 1h |
+| **Internal 信任边界** | INTERNAL-LISTENER-01: `/internal/v1/` 路由与公网 API 共用 listener + Bearer JWT 鉴权链，信任边界仅靠路径前缀。应为 internal 路由建独立 listener 或 service-token/mTLS 策略。涉及 `runtime/bootstrap/bootstrap.go` + cell 路由注册拆分 (discovered via PR#143 review F1, Cx4) | 4-8h |
+| **Seed 接口抽象** | SEED-ROLE-IFACE-01: `doSeedAdmin` 依赖 `*mem.RoleRepository` type assertion 调用 `SeedRole()`。应在 `ports.RoleRepository` 新增 `SeedRole(ctx, *Role) error` 方法，或提取独立 `bootstrap.Seeder` 接口。前置: PG-DOMAIN-REPO (discovered via PR#143 review F2, Cx3) | 2h |
 | **auth 测试 DX** | AUTH-SLOG-01(KeySet/servicetoken 注入 slog.Handler 替代全局 `slog.SetDefault`，消除并行测试风险) + AUTH-NOWFUNC-01(`var nowFunc` 包级状态改为实例字段注入) | 3h |
 | **access-core 重构** | P3-TD-11 domain 模型拆分 User/Session/Role（前置: Wave 1 #13 Session TOCTOU ✅ PR#119） | 4h |
 | **集成测试补全** | P4-TD-05(outbox 全链路) + RL-INT-01(Relay PG 集成) + P2-T-02(audit e2e) | 6h |
@@ -125,17 +135,20 @@
 | **PR#133 review C3** | F1-ARCH-03(RTR-HSTS-WIRING-TEST router 层 `WithSecurityHeadersOptions` 接线测试) + F2-SEC-03(TRUST-TRACEPARENT-TEST bootstrap 信任边界测试补 `traceparent` 注入向量) + F3-TEST-01(CONVERTER-NIL-INPUT converter 函数 nil 指针输入测试) + F4-OPS-01(BOOTSTRAP-SECHDR-CONVENIENCE 便利包装) (discovered via PR#133 6-seat review) | 3h |
 | **序列化边界收敛** | EVENT-PAYLOAD-TYPED-01: sessionlogin/sessionlogout/configwrite/configpublish/auditappend/auditverify 事件 payload `map[string]any` → typed event struct (对齐 cell-patterns.md 北极星) (discovered via PR#133 re-review) | 3h |
 | **统一健康注册** | ✅ HEALTH-CONTRIBUTOR-01 PR#135: `kernel/cell.HealthContributor` 接口 + bootstrap 自动发现 + access-core 实现 + 删除 main.go 手工接线 | 3h → 0h |
-| **PoolStats DX** | POOLSTATS-IFACE-01(三个 adapter PoolStats 无公共接口，OTel collector 需 per-adapter switch — 等 OTel 需求明确后设计公共 `TotalConns()/IdleConns()` 子接口) + POOLSTATS-JSON-01(PoolStats struct 缺 `json:"camelCase"` tags — 当前无 JSON 序列化场景，等 `/debug/poolstats` 端点需求时补加, `adapters/postgres/pool.go` + `adapters/redis/client.go` + `adapters/rabbitmq/connection.go`) (discovered via PR#134 review C3-F1, C3-F4) | 1.5h |
+| **PoolStats DX** | POOLSTATS-IFACE-01(三个 adapter PoolStats 无公共接口，OTel collector 需 per-adapter switch — 等 OTel 需求明确后设计公共 `TotalConns()/IdleConns()` 子接口) + ~~POOLSTATS-JSON-01~~ ✅ PR#148(json tags + ConnectionState.MarshalText + roundtrip tests) | 1.5h → 0.5h |
 | **PR#135 review C2-C3** | ✅ BOOTSTRAP-ADAPTERINFO-TEST-01 PR#135 + ✅ VALIDATE-MODE-ALLOWLIST-01 PR#135 + ✅ AUDIT-VERIFY-CAMELCASE-01 PR#135 + ✅ AUDIT-VERIFY-LEVEL-01 PR#135(audit-verify L0→L2: 实际写 outbox+txRunner 是 L2 行为，所有 peer slice 均 L2+；slice level 无运行时强制，仅改善元数据准确性) + ✅ TXRUNNER-FAIL-TEST-01 PR#135 (discovered via PR#135 6-seat review) | 3h → 1h |
-| **Readyz 安全** | READYZ-VERBOSE-TOKEN-01: `/readyz?verbose` 暴露内部拓扑(cell 名、dependency 名)，health.go godoc 已标注风险。当 health 端口公开可达时，需在 ingress 层限制 `?verbose` 或增加 `WithVerboseToken` bootstrap 选项 (pre-existing, confirmed during PR#134 review) | 2h |
+| **Readyz 安全** | ✅ READYZ-VERBOSE-TOKEN-01 PR#151（rebased from #149）: `WithVerboseToken` bootstrap 选项 + `X-Readyz-Token` header + constant-time 比较 + main.go `GOCELL_READYZ_VERBOSE_TOKEN` 接线（real 模式必填） | 2h → 0h |
 | **Bootstrap 发现机制加固** | ✅ AUTH-DISCOVERY-MULTI-PROVIDER-01 PR#135: 多 authProvider cell 发现循环从 first-wins+break 改为全量扫描+冲突 fail-fast | 1h → 0h |
-| **Flaky test** | ✅ SECURECOOKIE-TAMPER-FLAKY-01: 位翻转修复（`encoded[mid]^1`），PR#137 | 0.5h → 0h |
+| **Flaky test** | ✅ SECURECOOKIE-TAMPER-FLAKY-01: 位翻转修复（`encoded[mid]^1`），PR#137 + ✅ RMQ-CONFORMANCE-ISOLATION-01 PR#150（#230）: `TestRabbitMQ_Conformance` 每个 subtest 独立 Connection 隔离（shared conn teardown reconnect 窗口导致下一 subtest `acquire channel` fail-fast），root cause 确认 + `-count=3` 验证 | 0.5h → 0h |
 | **Registry 健壮性** | ✅ REGISTRY-CONSUMERS-UNKNOWN-KIND-01: Consumers() + Provider() 签名改为 `(T, error)`，unknown kind / not found 返回 typed error（`ErrContractNotFound` / `ErrValidationFailed`）。PR#142 | 1.5h → 0h |
-| **快修合集** | #26(.env.example 补 `GOCELL_S3_REGION=us-east-1`, `.env.example`) + ✅ #27(contract CI PR#139) + F-7(BUILD-OUTDIR-01 统一 `go build -o bin/` 输出目录) + #17(Hook 增强 WM17-F2-2 ctx 超时 + WM17-F4-3 Prometheus metrics via HookObserver 接口, `kernel/cell/`) + #18(CB 接口+封装清理 CB-IFACE-01 Allow/Report 拆分 + CB-ENCAP-01 消除 gobreaker import, `runtime/resilience/circuitbreaker/`) + ~~#21(Journey 校验 F-5 catalog 不校验引用)~~ stale: REF-06+REF-07 已覆盖 journey cell/contract 引用校验 | 9h |
+| **快修合集** | #26(.env.example 补 `GOCELL_S3_REGION=us-east-1`, `.env.example`) + ✅ #27(contract CI PR#139) + F-7(BUILD-OUTDIR-01 统一 `go build -o bin/` 输出目录) + ✅ #17 Hook 增强 PR#154(WM17-F2-2 per-hook ctx.WithTimeout + WM17-F4-3 LifecycleHookObserver + Prometheus impl 在 `adapters/prometheus/`) + #18(CB 接口+封装清理 CB-IFACE-01 Allow/Report 拆分 + CB-ENCAP-01 消除 gobreaker import, `runtime/resilience/circuitbreaker/`) + ~~#21(Journey 校验 F-5 catalog 不校验引用)~~ stale: REF-06+REF-07 已覆盖 journey cell/contract 引用校验 + ✅ **GOCELL-VALIDATE-FMT-REDESIGN** PR#152 follow-up: `printResult` 改为 `[CODE] msg (field: X) / at file:line:col` 两行，`at` 行纯净支持 IDE 点击跳转 | 9h → 6h |
 | **CI 供应链加固** | CI-DIGEST-01(testcontainers 镜像 tag+digest 双固定) + CI-LINT-PIN-01(golangci-lint 版本固定到 patch 级 + dependabot 自动升级) (discovered via PR#139 review P2-3) | 2h |
-| **PG 域 Repository** | PG-DOMAIN-REPO: 5 个域 Repository 的 PostgreSQL 实现（User/Session/Role/Device/Command）。当前全部只有 `cells/*/internal/mem/` 内存实现，无持久化——重启后数据丢失。`adapters/postgres/` 已有 outbox_writer/tx_manager/migrator 基础设施可参考 | 3-5d |
+| **PG 域 Repository** | PG-DOMAIN-REPO: 5 个域 Repository 的 PostgreSQL 实现（User/Session/Role/Device/Command）。当前全部只有 `cells/*/internal/mem/` 内存实现，无持久化——重启后数据丢失。`adapters/postgres/` 已有 outbox_writer/tx_manager/migrator 基础设施可参考。**前置准备（可并行）**: ① 4 个 migration DDL（users/sessions/roles/devices+commands，Session version 乐观锁 + Role permissions JSONB 策略）；② `ports.RoleRepository` 补 `CreateRole` 方法（当前缺 Create，seed 路径靠 type assertion）；③ **CONFIG-VERSIONS-MIGRATION-01** (discovered via PR#155 review F4, Cx2): `cells/config-core/internal/adapters/postgres/config_repo.go::PublishVersion` / `GetVersion` 引用 `config_versions(id, config_id, version, value, sensitive, published_at)` 表，但 `adapters/postgres/migrations/` 仅有 outbox 三个 migration，无 `config_entries` / `config_versions` DDL。当前 postgres adapter 仅被 mock 测试覆盖，运行时未接线（`cmd/core-bundle/main.go` 注释 "Storage is always in-memory for now"）。PG-DOMAIN-REPO 落地时必须同时新增 `004_create_config_entries_and_versions.sql`：`config_entries(id, key, value, sensitive boolean not null default false, version, created_at, updated_at)` + `config_versions(id, config_id, version, value, sensitive boolean not null default false, published_at)`，否则切换 postgres 模式即崩。**落地后联动**（必须同 PR 或紧邻 PR 完成，防止元数据/代码漂移）: ① **RBAC-ASSIGN-LEVEL-UPGRADE-01**: `cells/access-core/cell.go:300` `cell.L0` → `cell.L1`（真实事务语义，comment 已标注 "Upgrade to L1 when PostgreSQL adapter is introduced"）；② **SEED-ROLE-IFACE-01**: `doSeedAdmin` 去掉 `*mem.RoleRepository` type assertion（见本表 Seed 接口抽象行）；③ **ACCESS-LEVEL-AUDIT-01**: access-core 其余 slice（sessionlogin/sessionrefresh/sessionlogout/identitymanage）重新审视 L1/L2 声明是否匹配真实事务语义，校正 slice.yaml `consistencyLevel` 与 `AddSlice` 参数；④ **AUTH-CACHE-01 激活**: 原标记为可选（见 Wave 1 SHOULD #28a），PG 落地后升级为必做——真实 DB round-trip 触发 session cache 必要性，需补 Redis short-TTL session cache + 撤销失效路径 | 3-5d |
 | **系统拓扑自省** | SYSTEM-TOPOLOGY-API: `GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON。当前前端被迫用 js-yaml 直接读取后端 YAML 文件拼接拓扑图。可基于 `kernel/registry` 现有数据构建 | 4h |
-| **PR#142 review defer** | R2-KERNEL-SLOG-01: generator.go/depcheck.go `_, _ :=` 忽略 Consumers()/Provider() error，kernel/ 无 slog 先例故未加日志。等 kernel/ 引入 slog 时补 `slog.Warn` (discovered via PR#142 6-seat review #2) + R4-ALLOWEDFILES-EMPTY-ID: `AllowedFiles()` 对空 ID 产出 `cells/x/slices//**`（双斜杠），parser 保证 ID 非空故不触发，等 `AllowedFiles()` 被治理规则消费时补 guard (discovered via PR#142 review #4) + R5-FMT15-PATH-ASSERT: FMT-15 测试 mock readFile 不验证 schemaPath 参数，`contractDirFromID` 有独立测试覆盖，低优先级 (discovered via PR#142 review #5) | 1.5h |
+| **PR#142 review defer** | ✅ R2-KERNEL-SLOG-01(generator/depcheck 错误传播 fail-fast) + R4-ALLOWEDFILES-EMPTY-ID(默认推导移除) + R5-FMT15-PATH-ASSERT(schemaPath 断言) + P1#3(allowedFiles 模型统一为 required)。PR#146 | 1.5h → 0h |
+| **PR#155 review CI evidence** | VALIDATE-EVIDENCE-CI-01 (Cx2, P2): PR 提交时缺少 `gocell validate` / `check contract-health` 通过的机器化证据，reviewer 仅能凭 commit message 信任。**处理方案**: ① CI workflow 新增独立 `metadata-check` job（`go run ./cmd/gocell validate` + `check contract-health`），失败阻断 PR；② PR template 增加 "metadata gate" 勾选项；③ 若已有 build-test 覆盖，仅需在该 job 顶部加这两条命令并把输出 upload 为 artifact。**根因**: cell-patterns.md 明确"新增 contracts/ 文件后必须运行 validate"是开发者手动职责，未上 CI gate。开源对比：buf check / openapi-cli 都有独立 lint job (discovered via PR#155 review F7) | 1h |
+| **PR#155 6-seat review followup** | ✅ AUTHZ-WRITE-CONFIG-01 PR#155 (F1, Cx2, P1): publish + rollback handler 增加 `auth.RequireAnyRole(ctx, "admin")` + 401/403/200 测试 + happy-path 测试统一注入 admin 上下文。根因：高风险写端点仅靠全局 JWT 认证，缺角色守卫，违反 K8s/Kratos/go-zero 默认拒绝原则。+ ✅ ERROR-MSG-SCRUB-01 PR#155 (F3, Cx1, P1): postgres adapter 4xx Message 不再泄漏内部 id/version，转用 `errcode.Safe` / `Error{InternalMessage:...}` 二段式（公共 `"config not found"` + 内部 `config repo: GetByKey miss key=...`）。+ ✅ ROLLBACK-NEGPATH-TEST-01 PR#155 (F4, Cx1, P2): rollback 补 `KeyNotFound` / `VersionNotFound` service+handler 测试，断言 errcode 类型 + 响应 body 不含内部前缀。+ ✅ SCHEMA-SENSITIVE-DESC-01 PR#155 (F5, Cx1, P2): publish/v1 + rollback/v1 response.schema.json 增加 description 字段说明 `sensitive=true` 时 `value` 为占位符不可回写。 | 4h → 0h | PR#155 |
+| **PR#157 post-merge 6-seat review followup** | **AUTHZ-WRITE-CONFIG-WRITE-01** (P1, Cx2, 阻塞): `cells/config-core/slices/configwrite/handler.go` create/update/delete 三端点无 `auth.RequireAnyRole(ctx, "admin")`，与 `configpublish` 的 publish/rollback 已有 admin gate 不一致（同一资源域授权策略漂移）。PR#155 只补了 publish/rollback，write 侧遗漏。**修复**: 复用 `configpublish/handler.go` 的 `roleAdmin` const 模式（或提取到 `cells/config-core/internal/dto/authz.go` 共享），三端点入口加 gate + 401/403/200 测试。根因：授权策略分散在端点实现层，缺统一动作模型或中间件级入口。对标 K8s/Kratos/go-zero 统一授权属性。+ **CONFIG-DEMO-FAILOPEN-01** (P1, Cx2, 阻塞): `cells/config-core/slices/configpublish/service.go:188-194` demo 模式 publisher 发布失败仅 `s.logger.Warn` 后 `return nil`，与 cell.yaml 声明 L2 一致性不符（L2 要求 outbox-fact 不丢）。**修复**: durable 模式下去掉 fail-open，统一路径都上抛发布错误；demo fail-open 仅保留在显式 `DiscardPublisher{}` 或 `Assembly.Mode == Demo` 的 assembly。对标 Watermill Forwarder/outbox fail-closed、Temporal 重试策略不吞错。+ **REPO-SCAN-CLASSIFY-01** (P2, Cx2, 高优先): `cells/config-core/internal/adapters/postgres/config_repo.go::GetByKey`(85-96) / `GetVersion`(204-212) 把所有 Scan 错误（含连接断开、驱动异常）映射为 `ErrConfigRepoNotFound`。**修复**: `errors.Is(err, sql.ErrNoRows)` 判 not found，其他错误返回 `ErrInternal` 并保留 `InternalMessage`；PR#155 的 message scrub 不变。+ **CONTRACT-ERROR-SCHEMA-01** (P2, Cx1): `contracts/http/config/publish/v1/contract.yaml` + `contracts/http/config/rollback/v1/contract.yaml` 仅声明 2xx 成功壳，未声明 401/403 错误体 schema（`{"error": {"code", "message", "details"}}`）。**修复**: 在两个 contract.yaml 的 `responses` 新增 401/403 entries 引用共享错误 schema；对齐 `pkg/errcode` 结构 + `error-handling.md` 规范。对标 Kubernetes Status / Kratos 统一错误 / go-zero error contract。discovered via PR#157 post-merge 六席位审查 (2026-04-17) | 6h |
 
 ### 设计决策记录（PR#137 review 确认，不修）
 
@@ -168,6 +181,22 @@
 | 5.3 | `TestContext` 从非 `_test.go` 文件导出 | 不修 | 跨包测试需要（`cells/access-core/` 测试引用 `runtime/auth`）。`_test.go` 中的函数是 package-scoped 无法跨包调用。替代方案 `authtest` 子包增加维护负担但无实质收益 |
 | 6.1 | POST /assign 返回 200 而非 201 | 不修 | 幂等操作返回 200（Casbin 模式：re-assignment is no-op）。contract.yaml 声明 `successStatus: 200` 一致。201 暗示每次创建新资源，不符合幂等语义 |
 
+### 设计决策记录（PR#146 review 确认，不修）
+
+> 以下 1 项在 PR#146 审查中提出，经根因分析后确认为设计正确，记录于此避免重复审查。
+
+| # | Finding | 结论 | 理由 |
+|---|---------|------|------|
+| I2 | computeBoundaryContracts 遍历全量 contracts，无关 assembly 的 unknown-kind 导致生成失败 | 不修 | generator 必须遍历全量 contracts 才能发现 imported contracts（provider 在 assembly 外、consumer 在内）。scope 预过滤需先 resolve provider/consumers，而 resolve 本身是可能失败的操作——形成循环依赖。FMT-09 在 validate 阶段已保证所有 kinds 合法，generator fail-fast 是正确的 defense-in-depth。对标: K8s code-generator 上游标记预过滤但也 fail-fast；go-zero goctl 调用方传已缩减 spec；Kratos Wire 编译期保证图完整 |
+
+### 设计决策记录（PR#155 review 确认，不修）
+
+> 以下 1 项在 PR#155 审查中提出，经根因分析后确认为项目惯例，不修。
+
+| # | Finding | 结论 | 理由 |
+|---|---------|------|------|
+| F6 | `slices/*/slice.yaml` 的 `allowedFiles` 同时列出 kebab 目录（`config-publish/`）和 no-dash 目录（`configpublish/`） | 不修 | 全项目统一惯例：YAML 元数据放 kebab 目录、Go 包目录用 no-dash（CLAUDE.md "Cell 开发规则"），所有 slice 都是双路径。FMT-14 治理规则已守护这种结构，单一化反而违反约定。`gocell scaffold slice` 模板默认产出双路径条目 |
+
 ### 触发条件项（仅在条件满足时做）
 
 | # | 任务 | 工时 | 触发条件 |
@@ -194,7 +223,7 @@
 ## Wave 1 执行顺序（7 批次，每批 3-4 项并行）
 
 > ✅ A(PR#131) → ✅ B(PR#133) → ✅ C(PR#135+136+137) → ✅ D(PR#138) → EF
-> 剩余: EF (SHOULD) + P1 穿插
+> ✅ 全部完成（含 Batch A-EF + P1 穿插）
 
 ### Batch A: ✅ 安全加固 — PR#131
 
@@ -204,7 +233,7 @@
 
 ### Batch D: ✅ 契约完整性 — PR#138
 
-### Batch EF: pkg 加固 + CI + 治理（6 项，~9.5h）
+### Batch EF: ✅ pkg 加固 + CI + 治理 — PR#139+140+142+146
 
 > PR: MG-EF。#28a 降级 Batch 8。
 
@@ -219,7 +248,7 @@
 | 任务 | 工时 | 备注 |
 |------|------|------|
 | #5 AUTH-DX-01 README | 4h | 最后做（反映最终 API 状态）|
-| #6 TPUB-01 TestPubSub | 4h | 无依赖，随时可做 |
+| ✅ #6 TPUB-01 TestPubSub | 4h | PR#141（+PR#144 fix +PR#145 review fix）|
 | ✅ #10 Watcher 核心增强 | 7h | PR#132 |
 | ✅ #11 Watcher 状态面 + 连接池指标 | 4h | PR#132 + PR#134 |
 
@@ -230,24 +259,38 @@
 ```
 已完成:
   Batch 1-5: ✅ PR#67-114 (48 PRs)
-  Wave 1 已合入: PR#116-138 (23 PRs)
+  Wave 1: ✅ 全部完成
     Batch A: ✅ PR#131
     Batch B: ✅ PR#133
     Batch C: ✅ PR#135+136+137
     Batch D: ✅ PR#138
+    Batch EF: ✅ PR#139+140+142+146
     #10+#11: ✅ PR#132+PR#134
+  P1 穿插:
+    #6 TPUB+#31 RMQ: ✅ PR#141 (+PR#144 fix +PR#145 review fix)
+  Post-Wave 3:
+    PR-H1 部分: ✅ PR#143 (H1-2 IDENTITY-AUTHZ + H1-4 ROLE-ASSIGN + H1-5 SEED-ADMIN + H2-3 PATCH-CONTRACT)
+    PR-H1 安全加固: ✅ PR#151 (H1-1 PROD-KEY-FAILFAST + H1-6 READYZ-VERBOSE-TOKEN，rebased from #149)
+  底座加固 Phase 1 部分:
+    PR-K-META: ✅ PR#142(META-67-01+03) + PR#152(META-67-02 file:line:col)
+    PR-K-OUTBOX: ✅ PR#147(META-SIZE-01+OUTBOX-GUARD-01) + PR#148(DISCARD-OBS-01+OUTBOX-RECEIPT-01)
+    PR-K-CELL: ✅ PR#142(#27b SLICE-ALLOWEDFILES-01+CONTRACT-LIST-LINT-01) + PR#154(#17 WM17-F2-2+F4-3) + PR#157(HOOK-OBSERVER-ASYNC-01 hook_dispatcher)
+    PR-R-OBS: ✅ PR#154(OBS-DX-01+OBS-DOC-01) + PR#156(OBS-TABLE-01+CONFORMANCE-SLEEP-01+CURSOR-P2-02) + PR#157(OBS-METRIC-01 provider-neutral metrics + OTEL-COV-01 + OBS-LEAK-02 + OBS-POOLSTATS-WAITCOUNT-01 + OBS-HOOK-DISPATCHER-CFG-01)
+  契约补全:
+    PR-H2: ✅ PR#143(H2-3 IDENTITY-PATCH) + PR#155(H2-1 CONFIG-ROLLBACK + H2-2 CONFIGPUBLISH-REDACT + AUTHZ-WRITE-CONFIG + ERROR-MSG-SCRUB + SCHEMA-SENSITIVE-DESC)
+  CI:
+    PR#153: ✅ integration 与 build-test 并行 + SonarCloud 独立 job + rabbitmq testcontainer 包内共享（wall time ~40% 下降）
 
-Wave 1 MUST 路径: ✅ 全部完成（Batch A-D）
-  Batch EF: ✅ PR#139+140+142
-Wave 1 剩余:
-  SHOULD (Batch EF):   ✅ 全部完成
-  P1 (穿插):           ~8h — #5 README(4h) + #6 TestPubSub(4h)
-  Batch 8 (v1.0 后):   ~66h — 不阻塞发布（含 PG-DOMAIN-REPO 3-5d + SYSTEM-TOPOLOGY-API 4h）
-Post-Wave 3 新增:
-  PR-H1 安全加固:       ~8h（含 ROLE-ASSIGN-API 2h + SEED-ADMIN 1h）
-  PR-FEAT 功能补全:     ~8h（Device List 3h + Flag Write 3h + List Lint 2h）
+剩余:
+  P1 (穿插):           ~4h — #5 README(4h)
+  PR-H1 安全加固:       ✅ 全部完成（H1-1+H1-2+H1-3+H1-4+H1-5+H1-6）
+  PR-H2 契约补全:       ✅ 全部完成（H2-1+H2-2 PR#155 / H2-3 PR#143）
+  PR-FEAT 功能补全:     ~6h — Device List(3h) + Flag Write(3h)（List Lint ✅ PR#142）
+  Wave 2: #28 SOL-B-01(4h) + ~~#32 cursor~~ ✅ PR#156 + #33 WM-35(2d)
+  Wave 3: #34 WM-36(1.5d)
+  Batch 8 (v1.0 后):   ~48h — 不阻塞发布（扣除 PR#154-157 完成项）
 
-关键路径: WM-2-F1 ✅ → WM-35 (2d) → WM-36 (1.5d) → H1+H2+FEAT (3d) → README (0.5d) → Review (2d) = 剩余 9 工作日
+关键路径: WM-35 (2d) → WM-36 (1.5d) → H2(0.5d) → FEAT(1d) → README(0.5d) → Review(2d) = 剩余 ~7 工作日
 ```
 
 ---
@@ -257,23 +300,25 @@ Post-Wave 3 新增:
 > 按 PR 级别组织。所有问题已验证代码现状。
 > 前置: Wave 3 (WM-35 + WM-36) 完成后执行。
 
-### PR-H1: 安全加固（P0+P1，~8h，v1.0 阻塞）
+### PR-H1: 安全加固（P0+P1，~3.5h 剩余，v1.0 阻塞）— H1-2/4/5 ✅ PR#143
 
 | # | 模块 | 问题 | 前置 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|------|------|
-| H1-1 | cmd/core-bundle | **PROD-KEY-FAILFAST** P0: `loadKeySet` dev 模式用 `MustGenerateTestKeyPair` 生成临时密钥，`validateAdapterMode` 已拒绝 `real` 但未拒绝空值——空值走 dev 分支。生产误配时密钥可预测、重启后 token 失效。需拆分 dev/prod 启动路径，生产缺密钥直接 fail-fast | Wave 3 | 2h | `cmd/core-bundle/main.go` | PR#137-138 集成审查 P0 |
-| H1-2 | cells/access-core | **IDENTITY-AUTHZ-01** P1: identitymanage handler（lock/unlock/PATCH/DELETE）仅鉴权无授权，任何有效 token 可执行管理操作。需加 `RequireRole("admin")` 或 `RequireSelfOrRole` | Wave 3 | 1.5h | `cells/access-core/slices/identitymanage/handler.go` | PR#137-138 集成审查 P1 |
-| H1-3 | kernel/cell | **DURABLE-NIL-GUARD** P1: `CheckNotNoop` 只拒绝 Nooper 标记类型，不拒绝 nil——DurabilityDurable 下 nil 依赖可旁路，L2 cell 仍可以 demo 语义运行。需在 L2 cell Init() 增加 durable+nil 必填校验 | Wave 3 | 1.5h | `kernel/cell/durability.go` + 5 个 `cell.go` | PR#137-138 集成审查 P1 |
-| H1-4 | cells/access-core | **ROLE-ASSIGN-API** P1: `AssignToUser` 仅存在 repo 层接口（`ports/role_repo.go:13`）和 mem 实现（`mem/role_repo.go:71`），无 HTTP handler 暴露。新建 `rbacassign` slice：`POST /internal/v1/roles/assign` + `DELETE /internal/v1/roles/revoke`，仅 `RequireRole("admin")` 可调用。**必须与 H1-2 同 PR**——否则 H1-2 加了 `RequireRole("admin")` 后无法分配角色，形成死锁 | Wave 3 | 2h | `cells/access-core/slices/rbacassign/` + `contracts/http/auth/role/assign/v1/` | backend_issues.md #3 |
-| H1-5 | cmd/core-bundle | **SEED-ADMIN** P1: 启动时检测 admin 角色不存在则自动创建 seed admin（用户名/密码来自环境变量 `GOCELL_ADMIN_USER` / `GOCELL_ADMIN_PASS`，无环境变量则跳过）。打破"先有鸡还是先有蛋"死锁，H1-2 + H1-4 的前提 | Wave 3 | 1h | `cmd/core-bundle/main.go` + `cells/access-core/internal/mem/` | backend_issues.md #3 |
+| H1-1 | cmd/core-bundle | ✅ **PROD-KEY-FAILFAST** P0: `loadKeySet` 改为先尝试 env key，real 模式下 fail-fast；`validateAdapterMode` 接受 `real`；`loadSecret` 取代 `envOrDefault` 并在 real 模式必填。PR#151（rebased from #149） | Wave 3 | 2h | `cmd/core-bundle/main.go` | PR#137-138 集成审查 P0 | PR#151（rebased from #149） |
+| H1-2 | cells/access-core | ✅ **IDENTITY-AUTHZ-01** P1: identitymanage handler 7 端点授权守护（create/delete/lock/unlock → admin-only; get/update/patch → self-or-admin）+ `RequireAnyRole` auth helper | Wave 3 | 1.5h | `cells/access-core/slices/identitymanage/handler.go` | PR#137-138 集成审查 P1 | PR#143 |
+| H1-3 | kernel/cell | ✅ **DURABLE-NIL-GUARD** P1: 5 个 L2 cell（access-core/audit-core/config-core/order-cell/device-cell）Init() 全部含显式 nil XOR guard + `CheckNotNoop` 拒绝 Nooper，durable+nil 旁路闭合。kernel 层 `CheckNotNoop` 文档明确 "nil checks belong in the caller"，caller 职责已履行 | Wave 3 | 完成于 PR#135/#136/#137（L2-HARD-GATE + BOOTSTRAP-STRICT-MODE + guard hardening） | `cells/*/cell.go` | PR#137-138 集成审查 P1 |
+| H1-6 | runtime/http/health + cmd/core-bundle | ✅ **READYZ-VERBOSE-TOKEN** P1: `WithVerboseToken` 选项 + constant-time token 比较 + `X-Readyz-Token` header 守卫 + main.go 接线 `GOCELL_READYZ_VERBOSE_TOKEN`（real 模式必填）PR#151（rebased from #149） | Wave 3 | 2.5h | `runtime/http/health/health.go` + `runtime/bootstrap/bootstrap.go` + `cmd/core-bundle/main.go` | PR#134 review + PR#149 review round 2 | PR#151（rebased from #149） |
+| H1-7 | cells/access-core | **RBAC-OUTBOX-MIGRATION** P2: `rbacassign.Service` 当前是"角色变更 → 会话失效"双写（partial-commit 窗口在错误日志中可观测）。迁移到 transactional outbox 模式：角色变更 + `role.assigned.v1` / `role.revoked.v1` 事件原子写入，consumer 异步失效 session。ref: Watermill outbox pattern | H1-8 outbox consumer 基础设施 | 6h | `cells/access-core/slices/rbacassign/service.go` + `cells/access-core/slices/sessionlogout/consumer.go`（新）+ contract event schemas | PR#149 review round 2 |
+| H1-4 | cells/access-core | ✅ **ROLE-ASSIGN-API** P1: `rbacassign` slice — `POST /internal/v1/access/roles/assign` + `DELETE /internal/v1/access/roles/revoke`（admin-only, L0, idempotent）+ contracts | Wave 3 | 2h | `cells/access-core/slices/rbacassign/` + `contracts/http/auth/role/assign/v1/` | backend_issues.md #3 | PR#143 |
+| H1-5 | cmd/core-bundle | ✅ **SEED-ADMIN** P1: `WithSeedAdmin(user, pass)` / `WithSeedAdminRole()` bootstrap options，从 `GOCELL_ADMIN_USER`/`GOCELL_ADMIN_PASS` 环境变量读取 | Wave 3 | 1h | `cmd/core-bundle/main.go` + `cells/access-core/internal/mem/` | backend_issues.md #3 | PR#143 |
 
-### PR-H2: 契约补全（P1，~2h，v1.0 前建议）
+### PR-H2: 契约补全（P1，✅ 全部完成）— H2-1+H2-2 ✅ PR#155 / H2-3 ✅ PR#143
 
 | # | 模块 | 问题 | 前置 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|------|------|
-| H2-1 | contracts/config-core | **CONFIG-ROLLBACK-CONTRACT** P1: `cell.go:214` 注册了 `POST /{key}/rollback` 路由，有 handler_test 覆盖，但无 HTTP contract + schema + contract_test。路由暴露但契约体系无定义，变更无法被自动拦截 | PR-H1 | 1.5h | `contracts/http/config/rollback/v1/` + `cells/config-core/slices/configpublish/contract_test.go` + `slice.yaml` | PR#137-138 集成审查 P1 |
-| H2-2 | contracts/config-core | **CONFIGPUBLISH-REDACT-01** P1: publish 响应 schema required `value` 明文字段，未复用 configwrite 的 `RedactedValue` 脱敏逻辑。和 H2-1 同改 configpublish | 无 | 0.5h | `cells/config-core/slices/configpublish/handler.go` + `contracts/http/config/publish/v1/response.schema.json` | PR#138 review + 集成审查 |
-| H2-3 | contracts/access-core | **IDENTITY-PATCH-CONTRACT** P2: identitymanage PATCH 无 contract schema（#27s 遗漏），未知字段策略未在 schema 层声明。补 request/response schema + contract_test | 无 | 1h | `contracts/http/auth/identity/patch/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` | PR#138 review P2 |
+| H2-1 | contracts/config-core | ✅ **CONFIG-ROLLBACK-CONTRACT** P1: `cell.go:214` 注册了 `POST /{key}/rollback` 路由，有 handler_test 覆盖，但无 HTTP contract + schema + contract_test。路由暴露但契约体系无定义，变更无法被自动拦截。PR#155 | PR-H1 | 1.5h | `contracts/http/config/rollback/v1/` + `cells/config-core/slices/configpublish/contract_test.go` + `slice.yaml` | PR#137-138 集成审查 P1 | PR#155 |
+| H2-2 | contracts/config-core | ✅ **CONFIGPUBLISH-REDACT-01** P1: publish 响应 schema required `value` 明文字段，未复用 configwrite 的 `RedactedValue` 脱敏逻辑。同改 ConfigVersion.Sensitive 字段 + DTO redaction + Rollback 也复用 snapshot 的 Sensitive flag（PR#155 review F1）。PR#155 | 无 | 0.5h | `cells/config-core/internal/domain/version.go` + `cells/config-core/slices/configpublish/handler.go` + `service.go` + `contracts/http/config/publish/v1/response.schema.json` | PR#138 review + 集成审查 | PR#155 |
+| H2-3 | contracts/access-core | ✅ **IDENTITY-PATCH-CONTRACT** P2: identitymanage PATCH request schema validation + contract_test | 无 | 1h | `contracts/http/auth/identity/patch/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` | PR#138 review P2 | PR#143 |
 
 > H2-1 和 H2-2 同改 configpublish slice，一个 PR。
 
@@ -287,7 +332,7 @@ Post-Wave 3 新增:
 | FEAT-2 | cells/config-core | **FLAG-WRITE-API** P1: config-core feature flag 仅有 GET + Evaluate，无写入能力。管理界面 feature flag 开关不可操作。新增 `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | PR-H2 | 3h | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
 | FEAT-3 | kernel/governance | **CONTRACT-LIST-LINT-01** `gocell check contract-health` 增加 list 响应格式检查：response schema 含 `data: array` 时必须同时包含 `nextCursor` + `hasMore`（对齐 `api-versioning.md` 规定的 `{"data": [...], "nextCursor": "...", "hasMore": bool}` 格式）。与 FEAT-1 搭车——lint 规则上线时立即守护新 list 端点 | 无 | 2h | `kernel/governance/` | PR#138 review P1-3 + PR#141 review |
 
-### PR-EF: pkg 加固 + CI + 治理（SHOULD，~8.5h，v1.0 前建议）
+### PR-EF: ✅ pkg 加固 + CI + 治理 — PR#139+140+142
 
 | # | 模块 | 问题 | 前置 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|------|------|
@@ -301,11 +346,11 @@ Post-Wave 3 新增:
 |---|------|------|------|------|------|------|
 | R-1 | docs | **#5 AUTH-DX-01** README + seed 用户 + sso-bff walkthrough | PR-H1（反映最终 API） | 4h | `README.md` + `examples/sso-bff/README.md` | 6B + P4 review |
 
-### PR-TPUB: 独立穿插（P1，~4h，随时可做）
+### PR-TPUB: ✅ 已完成 — PR#141 (+PR#144 fix +PR#145 review fix)
 
 | # | 模块 | 问题 | 前置 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|------|------|
-| T-1 | kernel/outbox | **#6 TPUB-01** TestPubSub 真实 adapter 认证 | 无 | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
+| T-1 | kernel/outbox | ✅ **#6 TPUB-01** TestPubSub conformance harness + RabbitMQ conformance + backoff 统一 + ClaimPolicy enum | 无 | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B | PR#141 |
 
 ### 执行顺序
 
@@ -314,11 +359,8 @@ Wave 2 (WM-35 BFF handler, 2d)
      ↓
 Wave 3 (WM-36 SecureCookie, 1.5d)
      ↓
-  PR-H1 安全加固 (P0+P1, 含 ROLE-ASSIGN + SEED-ADMIN, 阻塞 v1.0)  ─┐
-  PR-TPUB (#6, 独立并行)                                             ─┤ 并行
-  PR-EF pkg+CI+治理 (SHOULD, 独立并行)                                ─┘
-       ↓
-  PR-H2 契约补全 (依赖 H1)
+  PR-H1 安全加固 (P0+P1, H1-1+H1-3 剩余, 阻塞 v1.0)  ─┐
+  PR-H2 契约补全 (H2-1+H2-2 剩余, 依赖 H1)             ─┘ 可串行一个 PR
        ↓
   PR-FEAT 功能补全 (Device List + Flag Write, 依赖 H2)
        ↓

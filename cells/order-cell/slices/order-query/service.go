@@ -39,34 +39,19 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.Order, error)
 
 // List returns a paginated page of orders.
 func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.Order], error) {
-	pageReq.Normalize()
-
 	qctx := query.QueryContext("endpoint", "order-query")
-
-	var cursorValues []any
-	if pageReq.Cursor != "" {
-		cur, err := s.codec.Decode(pageReq.Cursor)
-		if err != nil {
-			return query.PageResult[*domain.Order]{}, err
-		}
-		if err := query.ValidateCursorScope(cur, orderSort, qctx); err != nil {
-			return query.PageResult[*domain.Order]{}, err
-		}
-		cursorValues = cur.Values
-	}
-
-	params := query.ListParams{
-		Limit:        pageReq.Limit,
-		CursorValues: cursorValues,
-		Sort:         orderSort,
-	}
-
-	orders, err := s.repo.List(ctx, params)
-	if err != nil {
-		return query.PageResult[*domain.Order]{}, err
-	}
-
-	return query.BuildPageResult(orders, pageReq.Limit, s.codec, orderSort, qctx, func(o *domain.Order) []any {
-		return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Order]{
+		Codec:    s.codec,
+		Request:  pageReq,
+		Sort:     orderSort,
+		QueryCtx: qctx,
+		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Order, error) {
+			return s.repo.List(ctx, params)
+		},
+		Extract: func(o *domain.Order) []any {
+			return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
+		},
+		OnCursorErr: query.LogCursorError(s.logger, "order-query"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }

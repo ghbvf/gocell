@@ -99,6 +99,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
+	// txRunner nil-safe: nil means no transaction support (query-only or demo mode).
 	if s.txRunner != nil {
 		if err := s.txRunner.RunInTx(ctx, persistAndPublish); err != nil {
 			return err

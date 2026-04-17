@@ -178,14 +178,37 @@ func TestHandleList_ExceedsMaxLimit(t *testing.T) {
 }
 
 func TestHandleList_InvalidCursor(t *testing.T) {
-	h, _ := newTestHandler(&domain.Order{ID: "ord-1", Item: "x", Status: "pending"})
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?cursor=garbage", nil)
+	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 
-	h.HandleList(rec, req)
+	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
+	missingFieldsToken, _ := codec.Encode(query.Cursor{Values: []any{"v1", "v2"}})
+	crossContextToken, _ := codec.Encode(query.Cursor{
+		Values:  []any{"v1", "v2"},
+		Scope:   query.SortScope(wrongSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	})
 
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Contains(t, rec.Body.String(), "ERR_CURSOR_INVALID")
+	tests := []struct {
+		name   string
+		cursor string
+	}{
+		{"garbage token", "not-a-valid-cursor!!!"},
+		{"missing scope and context", missingFieldsToken},
+		{"cross-context replay", crossContextToken},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newTestHandler(&domain.Order{ID: "ord-1", Item: "x", Status: "pending"})
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?cursor="+tc.cursor, nil)
+
+			h.HandleList(rec, req)
+
+			assert.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), "ERR_CURSOR_INVALID")
+		})
+	}
 }
 
 func TestHandleList_Empty(t *testing.T) {

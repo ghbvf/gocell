@@ -52,35 +52,24 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag
 
 // List returns a paginated page of feature flags.
 func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.FeatureFlag], error) {
-	pageReq.Normalize()
-
 	qctx := query.QueryContext("endpoint", "feature-flag")
-
-	var cursorValues []any
-	if pageReq.Cursor != "" {
-		cur, err := s.codec.Decode(pageReq.Cursor)
-		if err != nil {
-			return query.PageResult[*domain.FeatureFlag]{}, err
-		}
-		if err := query.ValidateCursorScope(cur, flagSort, qctx); err != nil {
-			return query.PageResult[*domain.FeatureFlag]{}, err
-		}
-		cursorValues = cur.Values
-	}
-
-	params := query.ListParams{
-		Limit:        pageReq.Limit,
-		CursorValues: cursorValues,
-		Sort:         flagSort,
-	}
-
-	flags, err := s.repo.List(ctx, params)
-	if err != nil {
-		return query.PageResult[*domain.FeatureFlag]{}, fmt.Errorf("feature-flag: list: %w", err)
-	}
-
-	return query.BuildPageResult(flags, pageReq.Limit, s.codec, flagSort, qctx, func(f *domain.FeatureFlag) []any {
-		return []any{f.Key, f.ID}
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.FeatureFlag]{
+		Codec:    s.codec,
+		Request:  pageReq,
+		Sort:     flagSort,
+		QueryCtx: qctx,
+		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
+			flags, err := s.repo.List(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("feature-flag: list: %w", err)
+			}
+			return flags, nil
+		},
+		Extract: func(f *domain.FeatureFlag) []any {
+			return []any{f.Key, f.ID}
+		},
+		OnCursorErr: query.LogCursorError(s.logger, "featureflag"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }
 
