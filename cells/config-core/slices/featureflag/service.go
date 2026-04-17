@@ -27,17 +27,21 @@ type EvaluateResult struct {
 
 // Service implements feature flag business logic.
 type Service struct {
-	repo   ports.FlagRepository
-	codec  *query.CursorCodec
-	logger *slog.Logger
+	repo    ports.FlagRepository
+	codec   *query.CursorCodec
+	logger  *slog.Logger
+	runMode query.RunMode
 }
 
-// NewService creates a feature-flag Service.
-func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
+// NewService creates a feature-flag Service. runMode controls cursor
+// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
+// assembly declares DurabilityDemo.
+func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
 	return &Service{
-		repo:   repo,
-		codec:  codec,
-		logger: logger,
+		repo:    repo,
+		codec:   codec,
+		logger:  logger,
+		runMode: runMode,
 	}
 }
 
@@ -69,7 +73,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{f.Key, f.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "featureflag"),
-		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
+		RunMode:     s.runMode,
 	})
 }
 

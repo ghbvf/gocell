@@ -2,7 +2,8 @@ package query
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // CursorPhase identifies the cursor validation stage that failed.
@@ -31,11 +32,15 @@ type PagedQueryConfig[T any] struct {
 	Extract func(T) []any
 	// OnCursorErr is called when cursor decode or scope validation fails; nil is safe.
 	OnCursorErr CursorErrorFunc
-	// DemoMode when true causes cursor decode failures to fall back to the
-	// first page instead of returning an error. Scope/context mismatches
-	// always return an error regardless of DemoMode (they indicate a client
-	// bug, not a stale key). Set to codec.IsDemoKey(KnownDemoKeys()...).
-	DemoMode bool
+	// RunMode controls fail-open vs fail-closed semantics. Zero value is
+	// RunModeProd (fail-closed) so callers who forget to set this get strict
+	// cursor validation. RunModeDemo only absorbs decode failures (stale key
+	// after restart); scope/context mismatches still return an error because
+	// they indicate a client bug.
+	//
+	// ref: ThreeDotsLabs/watermill — noop is injected at call site, not
+	// inferred from data. Callers declare the mode explicitly.
+	RunMode RunMode
 }
 
 // ExecutePagedQuery normalizes the request, decodes and validates the cursor,
@@ -43,7 +48,8 @@ type PagedQueryConfig[T any] struct {
 // pattern repeated across 5 service List methods.
 func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (PageResult[T], error) {
 	if cfg.Codec == nil || cfg.Fetch == nil || cfg.Extract == nil {
-		return PageResult[T]{}, fmt.Errorf("paged query: Codec, Fetch, and Extract must not be nil")
+		return PageResult[T]{}, errcode.New(errcode.ErrInternal,
+			"paged query misconfigured: Codec, Fetch, and Extract must not be nil")
 	}
 	cfg.Request.Normalize()
 
@@ -70,10 +76,10 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 }
 
 // resolveCursor decodes and validates the cursor token. Returns the keyset
-// values for the next page, or (nil, true, nil) when DemoMode absorbs a
-// stale cursor and the caller should fall back to the first page.
+// values for the next page, or (nil, true, nil) when RunMode is Demo and a
+// decode failure should fall back to the first page.
 //
-// DemoMode only absorbs decode failures (stale key after server restart).
+// RunModeDemo only absorbs decode failures (stale key after server restart).
 // Scope/context mismatches always return an error because they indicate a
 // client bug (cross-endpoint cursor reuse), not a transient key issue.
 func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, bool, error) {
@@ -84,7 +90,7 @@ func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, 
 	cur, err := cfg.Codec.Decode(cfg.Request.Cursor)
 	if err != nil {
 		reportCursorErr(ctx, cfg.OnCursorErr, CursorPhaseDecode, err)
-		if cfg.DemoMode {
+		if cfg.RunMode.IsDemo() {
 			return nil, true, nil
 		}
 		return nil, false, err

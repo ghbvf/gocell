@@ -49,11 +49,17 @@ func (stubPublisher) Publish(_ context.Context, _ string, _ []byte) error { retu
 
 var _ outbox.Publisher = stubPublisher{}
 
+type failingPublisher struct{ err error }
+
+func (p failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return p.err }
+
+var _ outbox.Publisher = failingPublisher{}
+
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger), repo
+	return NewService(repo, eb, logger, WithDemoFailOpen(true)), repo
 }
 
 func newDurableTestService() (*Service, *mem.ConfigRepository, *recordingWriter) {
@@ -149,6 +155,35 @@ func TestService_Rollback(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- CONFIG-DEMO-FAILOPEN-01: publisher error must propagate in prod mode ---
+
+// TestService_Publish_PublisherError_ProdMode_PropagatesError asserts that
+// when the service is wired without an outbox writer (publisher-only path)
+// and NOT configured for demo fail-open, a publisher failure surfaces as an
+// error. L2 cell declares transactional atomicity; silently swallowing the
+// error would violate that contract.
+// ref: watermill/components/forwarder — publish failure wraps+returns.
+func TestService_Publish_PublisherError_ProdMode_PropagatesError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker unavailable")}
+	svc := NewService(repo, pub, slog.Default()) // no WithDemoFailOpen → fail-closed
+
+	mustSeedEntry(repo, "k", "v1")
+	_, err := svc.Publish(context.Background(), "k")
+	require.Error(t, err, "prod-mode publisher failure must propagate")
+	assert.Contains(t, err.Error(), "broker unavailable")
+}
+
+func TestService_Publish_PublisherError_DemoMode_SwallowsError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker unavailable")}
+	svc := NewService(repo, pub, slog.Default(), WithDemoFailOpen(true))
+
+	mustSeedEntry(repo, "k", "v1")
+	_, err := svc.Publish(context.Background(), "k")
+	require.NoError(t, err, "demo fail-open must swallow publisher failure")
 }
 
 // --- #27d OUTBOX-WRITE-ERR-01: outbox.Write error must propagate ---

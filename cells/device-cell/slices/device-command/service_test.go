@@ -23,7 +23,7 @@ func testCodec() *query.CursorCodec {
 func newTestService() (*Service, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
-	return NewService(cmdRepo, devRepo, testCodec(), slog.Default()), devRepo, cmdRepo
+	return NewService(cmdRepo, devRepo, testCodec(), slog.Default(), query.RunModeProd), devRepo, cmdRepo
 }
 
 func seedDevice(repo *mem.DeviceRepository, id, name string) {

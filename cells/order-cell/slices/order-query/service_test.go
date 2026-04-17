@@ -55,7 +55,7 @@ func TestService_GetByID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := seedRepo(tt.seed...)
-			svc := NewService(repo, testCodec(), slog.Default())
+			svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 			order, err := svc.GetByID(context.Background(), tt.id)
 			if tt.wantErr {
@@ -85,7 +85,7 @@ func TestService_List_FirstPage(t *testing.T) {
 		})
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 	result, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestService_List_WithCursor(t *testing.T) {
 		})
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 	// Get first page
 	page1, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
@@ -125,7 +125,7 @@ func TestService_List_WithCursor(t *testing.T) {
 
 func TestService_List_InvalidCursor(t *testing.T) {
 	repo := seedRepo()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 	_, err := svc.List(context.Background(), query.PageRequest{Cursor: "garbage-token"})
 	require.Error(t, err)
@@ -141,7 +141,7 @@ func TestService_List_LastPage(t *testing.T) {
 		{ID: "ord-01", Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestService_List_LastPage(t *testing.T) {
 
 func TestService_List_Empty(t *testing.T) {
 	repo := seedRepo()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 
 	result, err := svc.List(context.Background(), query.PageRequest{})
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 		ID: "ord-1", Item: "a", Status: "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 
 	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
 	require.Error(t, err)
@@ -205,7 +205,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 		ID: "ord-1", Item: "a", Status: "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 
 	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
 	require.Error(t, err)

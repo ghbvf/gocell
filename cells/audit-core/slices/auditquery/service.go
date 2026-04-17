@@ -21,14 +21,17 @@ var auditSort = []query.SortColumn{
 
 // Service implements audit query business logic.
 type Service struct {
-	repo   ports.AuditRepository
-	codec  *query.CursorCodec
-	logger *slog.Logger
+	repo    ports.AuditRepository
+	codec   *query.CursorCodec
+	logger  *slog.Logger
+	runMode query.RunMode
 }
 
-// NewService creates an audit-query Service.
-func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
-	return &Service{repo: repo, codec: codec, logger: logger}
+// NewService creates an audit-query Service. runMode controls cursor
+// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
+// assembly declares DurabilityDemo.
+func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+	return &Service{repo: repo, codec: codec, logger: logger, runMode: runMode}
 }
 
 // Query returns a paginated page of audit entries matching the given filters.
@@ -55,6 +58,6 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 			return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "auditquery"),
-		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
+		RunMode:     s.runMode,
 	})
 }

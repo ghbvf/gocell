@@ -168,8 +168,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			slog.String("cell", c.ID()))
 	}
 
+	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+
 	// config-read slice
-	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger)
+	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
@@ -181,6 +183,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.txRunner != nil {
 		publishOpts = append(publishOpts, configpublish.WithTxManager(c.txRunner))
 	}
+	// Only demo assemblies may swallow publisher errors; durable stays fail-closed.
+	if deps.DurabilityMode == cell.DurabilityDemo {
+		publishOpts = append(publishOpts, configpublish.WithDemoFailOpen(true))
+	}
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
@@ -190,7 +196,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
 
 	// feature-flag slice
-	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger)
+	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
 

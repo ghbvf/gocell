@@ -20,7 +20,7 @@ func newTestService() (*Service, *mem.FlagRepository) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
 	codec, _ := query.NewCursorCodec(key)
-	return NewService(repo, codec, logger), repo
+	return NewService(repo, codec, logger, query.RunModeProd), repo
 }
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, enabled bool, pct int) {
@@ -113,7 +113,7 @@ func TestService_List_InvalidCursor(t *testing.T) {
 func TestService_List_ScopeMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 
 	differentSort := []query.SortColumn{
 		{Name: "created_at", Direction: query.SortDESC},
@@ -138,7 +138,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 func TestService_List_ContextMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 
 	cur := query.Cursor{
 		Values:  []any{"some-key", "some-id"},
@@ -187,7 +187,7 @@ func TestService_Evaluate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "boolean enabled",
+			name:    "boolean enabled",
 			flagKey: "feat", subject: "user-1",
 			setup: func(repo *mem.FlagRepository) {
 				_ = repo.Create(context.Background(), &domain.FeatureFlag{
@@ -197,13 +197,13 @@ func TestService_Evaluate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "empty key",
+			name:    "empty key",
 			flagKey: "", subject: "user-1",
 			setup:   func(_ *mem.FlagRepository) {},
 			wantErr: true,
 		},
 		{
-			name: "empty subject",
+			name:    "empty subject",
 			flagKey: "feat", subject: "",
 			setup:   func(_ *mem.FlagRepository) {},
 			wantErr: true,

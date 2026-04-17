@@ -26,7 +26,7 @@ func TestToAuditEntryResponse_NilInput(t *testing.T) {
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 
 	tests := []struct {
@@ -83,7 +83,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 
 	w := httptest.NewRecorder()
@@ -97,7 +97,7 @@ func TestHandleQuery_InvalidLimit(t *testing.T) {
 
 func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 
 	w := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -191,7 +191,7 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := mem.NewAuditRepository()
-			svc := NewService(repo, testCodec(), slog.Default())
+			svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 			h := NewHandler(svc)
 
 			w := httptest.NewRecorder()
@@ -231,7 +231,7 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 // Trust boundary tests (#27q)
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 
 	// Seed entries for two actors

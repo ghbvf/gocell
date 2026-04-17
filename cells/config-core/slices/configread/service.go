@@ -19,17 +19,21 @@ var configSort = []query.SortColumn{
 
 // Service implements config read business logic.
 type Service struct {
-	repo   ports.ConfigRepository
-	codec  *query.CursorCodec
-	logger *slog.Logger
+	repo    ports.ConfigRepository
+	codec   *query.CursorCodec
+	logger  *slog.Logger
+	runMode query.RunMode
 }
 
-// NewService creates a config-read Service.
-func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
+// NewService creates a config-read Service. runMode controls cursor
+// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
+// assembly declares DurabilityDemo.
+func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
 	return &Service{
-		repo:   repo,
-		codec:  codec,
-		logger: logger,
+		repo:    repo,
+		codec:   codec,
+		logger:  logger,
+		runMode: runMode,
 	}
 }
 
@@ -61,6 +65,6 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{e.Key, e.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "configread"),
-		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
+		RunMode:     s.runMode,
 	})
 }

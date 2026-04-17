@@ -132,7 +132,8 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// device-command slice
-	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger)
+	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	c.commandHandler = devicecommand.NewHandler(commandSvc)
 	c.AddSlice(cell.NewBaseSlice("device-command", "device-cell", cell.L4))
 

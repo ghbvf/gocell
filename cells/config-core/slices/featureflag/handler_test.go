@@ -78,7 +78,7 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.HandleList)
@@ -247,8 +247,8 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 		for _, item := range data {
 			m := item.(map[string]any)
 			id, ok := m["id"].(string)
-				require.True(t, ok, "response item should have string 'id' field")
-				allIDs = append(allIDs, id)
+			require.True(t, ok, "response item should have string 'id' field")
+			allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)

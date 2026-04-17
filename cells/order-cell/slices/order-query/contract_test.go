@@ -22,7 +22,7 @@ func newContractQueryHandler(orders ...*domain.Order) http.Handler {
 		_ = repo.Create(context.Background(), order)
 	}
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("q"), 32))
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/orders/", http.HandlerFunc(h.HandleList))

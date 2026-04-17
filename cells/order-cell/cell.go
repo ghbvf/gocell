@@ -130,7 +130,8 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// order-query slice
-	querySvc := orderquery.NewService(c.repo, c.cursorCodec, c.logger)
+	querySvc := orderquery.NewService(c.repo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("order-query", "order-cell", cell.L0))
 

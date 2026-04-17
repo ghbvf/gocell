@@ -102,8 +102,8 @@ type AuditCore struct {
 func NewAuditCore(opts ...Option) *AuditCore {
 	c := &AuditCore{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
-			ID:               "audit-core",
-			Type:             cell.CellTypeCore,
+			ID:   "audit-core",
+			Type: cell.CellTypeCore,
 			// L2: 对外 contract (audit.appended, integrity-verified) 都是本地事务 + outbox 发布。
 			// 订阅跨 cell 事件是 slice 级行为 (audit-append L3)，不升 cell 级别 — 同 config-core 模式。
 			ConsistencyLevel: cell.L2,
@@ -197,7 +197,8 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// audit-query
-	querySvc := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger)
+	querySvc := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	c.queryHandler = auditquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
 
