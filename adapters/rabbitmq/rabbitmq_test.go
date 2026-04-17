@@ -668,160 +668,18 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "reconnectLoop should have reconnected")
 }
 
-func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
-	// Full cycle: connect → disconnect → permanent error → loop exits.
-	var mu sync.Mutex
-	dialCount := 0
-	mock := newMockConnection()
-	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+// NOTE: TestConnection_ReconnectLoop_PermanentError_ExitsLoop deleted (A.1).
+// Runtime reconnect never exits on permanent classification; permanent errors
+// surface only at NewConnection time (see TestNewConnection_PermanentDialError).
+//
+// NOTE: TestConnection_MaxReconnectAttempts_Exceeded deleted (A.1).
+// MaxReconnectAttempts is now a retained-but-ignored field; reconnect is
+// always unbounded until closeCh fires. The successor test is
+// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
 
-	dialFunc := func(url string) (AMQPConnection, error) {
-		mu.Lock()
-		dialCount++
-		n := dialCount
-		mu.Unlock()
-		if n == 1 {
-			return mock, nil
-		}
-		return nil, permanentErr
-	}
-
-	conn, err := NewConnection(Config{
-		URL:                 "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
-	}, WithDialFunc(dialFunc))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
-		mock.mu.Lock()
-		defer mock.mu.Unlock()
-		return mock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
-
-	// Trigger disconnect.
-	mock.mu.Lock()
-	ch := mock.notifyCloseCh
-	mock.isClosed = true
-	mock.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
-
-	// Wait for permanent error to be hit.
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return dialCount >= 2
-	}, 2*time.Second, 10*time.Millisecond, "reconnect should have attempted dial")
-
-	// After permanent error, WaitConnected should return the permanent error
-	// immediately (not block until ctx timeout).
-	require.Eventually(t, func() bool {
-		return conn.Health(context.Background()) != nil
-	}, 2*time.Second, time.Millisecond, "terminal state should be set")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	waitErr := conn.WaitConnected(ctx)
-	require.Error(t, waitErr, "WaitConnected must return error after permanent failure")
-
-	var ecErr *errcode.Error
-	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
-		"WaitConnected should return permanent error code, not generic connect error")
-
-	// Health should also reflect terminal state.
-	healthErr := conn.Health(context.Background())
-	require.Error(t, healthErr)
-	require.True(t, errors.As(healthErr, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
-
-	// AcquireChannel should also return permanent error (not generic connect error).
-	_, acqErr := conn.AcquireChannel()
-	require.Error(t, acqErr)
-	require.True(t, errors.As(acqErr, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
-}
-
-func TestConnection_MaxReconnectAttempts_Exceeded(t *testing.T) {
-	// connect → disconnect → 2 recoverable dial failures → terminal state.
-	var mu sync.Mutex
-	dialCount := 0
-	mock := newMockConnection()
-	recoverableErr := errors.New("connection refused")
-
-	dialFunc := func(url string) (AMQPConnection, error) {
-		mu.Lock()
-		dialCount++
-		n := dialCount
-		mu.Unlock()
-		if n == 1 {
-			return mock, nil
-		}
-		// All subsequent dials fail with a recoverable error.
-		return nil, recoverableErr
-	}
-
-	conn, err := NewConnection(Config{
-		URL:                  "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:      2,
-		ReconnectBaseDelay:   1 * time.Millisecond,
-		ReconnectMaxBackoff:  5 * time.Millisecond,
-		MaxReconnectAttempts: 2,
-	}, WithDialFunc(dialFunc))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
-		mock.mu.Lock()
-		defer mock.mu.Unlock()
-		return mock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
-
-	// Trigger disconnect.
-	mock.mu.Lock()
-	ch := mock.notifyCloseCh
-	mock.isClosed = true
-	mock.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
-
-	// Wait for at least 2 reconnect dial attempts (plus the initial).
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return dialCount >= 3 // 1 initial + 2 reconnect attempts
-	}, 2*time.Second, time.Millisecond, "reconnect should have attempted 2 dials")
-
-	// Wait for terminal state (permanentErr set by reconnectLoop).
-	require.Eventually(t, func() bool {
-		conn.mu.RLock()
-		defer conn.mu.RUnlock()
-		return conn.permanentErr != nil
-	}, 2*time.Second, time.Millisecond, "terminal state should be set after max attempts")
-
-	// WaitConnected should return permanent error.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	waitErr := conn.WaitConnected(ctx)
-	require.Error(t, waitErr, "WaitConnected must return error after max attempts exceeded")
-
-	var ecErr *errcode.Error
-	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
-		"WaitConnected should return reconnect-exhausted error code")
-
-	// Health should also reflect terminal state.
-	healthErr := conn.Health(context.Background())
-	require.Error(t, healthErr)
-	require.True(t, errors.As(healthErr, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code)
-}
-
-func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
-	// MaxReconnectAttempts=0 (default) → fail twice then succeed → recovers.
+func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T) {
+	// A.1 behavior: after disconnect, reconnectLoop keeps retrying transient
+	// errors indefinitely and eventually recovers without any attempt cap.
 	var mu sync.Mutex
 	dialCount := 0
 	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
@@ -845,11 +703,10 @@ func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
 	}
 
 	conn, err := NewConnection(Config{
-		URL:                  "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:      2,
-		ReconnectBaseDelay:   1 * time.Millisecond,
-		ReconnectMaxBackoff:  5 * time.Millisecond,
-		MaxReconnectAttempts: 0, // unlimited
+		URL:                 "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:     2,
+		ReconnectBaseDelay:  1 * time.Millisecond,
+		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer conn.Close()
@@ -884,7 +741,7 @@ func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	waitErr := conn.WaitConnected(ctx)
-	require.NoError(t, waitErr, "WaitConnected should succeed with unlimited reconnect attempts")
+	require.NoError(t, waitErr, "WaitConnected should succeed with unbounded reconnect attempts (A.1)")
 }
 
 func TestIsPermanentDialError(t *testing.T) {
@@ -1030,31 +887,10 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
-func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
-	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
-
-	conn := &Connection{
-		config: Config{
-			URL:                 "amqp://test:test@localhost:5672/",
-			ReconnectBaseDelay:  1 * time.Millisecond,
-			ReconnectMaxBackoff: 5 * time.Millisecond,
-		},
-		dial: func(url string) (AMQPConnection, error) {
-			return nil, permanentErr
-		},
-		closeCh:    make(chan struct{}),
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-	}
-
-	ok, err := conn.reconnectWithBackoff()
-	assert.False(t, ok, "must return false on permanent dial error")
-	assert.Error(t, err, "must return the permanent error")
-
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
-}
+// NOTE: TestConnection_ReconnectWithBackoff_PermanentError deleted (A.1 semantics).
+// Runtime reconnect no longer classifies errors as permanent; permanent dial
+// errors surface only at NewConnection time. See
+// TestNewConnection_PermanentDialError for startup-path permanent classification.
 
 func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
 	var mu sync.Mutex
@@ -1080,9 +916,7 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 		terminalCh: make(chan struct{}),
 	}
 
-	ok, err := conn.reconnectWithBackoff()
-	assert.True(t, ok, "must return true after successful reconnect")
-	assert.NoError(t, err)
+	assert.True(t, conn.reconnectWithBackoff(), "must return true after successful reconnect")
 
 	mu.Lock()
 	assert.Equal(t, 3, dialCount, "should have tried 3 times (2 failures + 1 success)")
@@ -1105,26 +939,82 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		terminalCh: make(chan struct{}),
 	}
 
-	type result struct {
-		ok  bool
-		err error
-	}
-	done := make(chan result, 1)
+	done := make(chan bool, 1)
 	go func() {
-		ok, err := conn.reconnectWithBackoff()
-		done <- result{ok, err}
+		done <- conn.reconnectWithBackoff()
 	}()
 
 	time.Sleep(50 * time.Millisecond)
 	close(closeCh)
 
 	select {
-	case r := <-done:
-		assert.False(t, r.ok, "must return false when closeCh fires")
-		assert.NoError(t, r.err, "clean shutdown, no permanent error")
+	case ok := <-done:
+		assert.False(t, ok, "must return false when closeCh fires")
 	case <-time.After(2 * time.Second):
 		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
 	}
+}
+
+// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely
+// verifies A.1 semantics: once established, reconnect keeps retrying through
+// transient dial errors (including those that the amqp091-go library wraps as
+// *amqp.Error with Recover=false such as AMQP 501 from mid-handshake TCP
+// resets during a broker restart). Only closeCh stops the loop.
+func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t *testing.T) {
+	var mu sync.Mutex
+	dialCount := 0
+	// amqp091-go converts mid-handshake TCP resets to amqp.Error{Code: 501, Recover: false}.
+	// Pre-A.1 this was classified as permanent; post-A.1 it is retried.
+	transientAMQP501 := &amqp.Error{Code: 501, Reason: "read: connection reset by peer", Recover: false}
+
+	closeCh := make(chan struct{})
+	conn := &Connection{
+		config: Config{
+			URL:                 "amqp://test:test@localhost:5672/",
+			ReconnectBaseDelay:  1 * time.Millisecond,
+			ReconnectMaxBackoff: 5 * time.Millisecond,
+		},
+		dial: func(url string) (AMQPConnection, error) {
+			mu.Lock()
+			dialCount++
+			mu.Unlock()
+			return nil, transientAMQP501
+		},
+		closeCh:    closeCh,
+		connected:  make(chan struct{}),
+		terminalCh: make(chan struct{}),
+	}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- conn.reconnectWithBackoff()
+	}()
+
+	// Wait until at least a few attempts have been made to prove the loop keeps trying.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := dialCount
+		mu.Unlock()
+		if n >= 5 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	close(closeCh)
+
+	select {
+	case ok := <-done:
+		assert.False(t, ok, "must return false when closeCh fires")
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.GreaterOrEqual(t, dialCount, 5,
+		"must have retried at least 5 times through transient AMQP 501 error (A.1 unbounded retry)")
 }
 
 // =============================================================================
@@ -3732,77 +3622,9 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
 }
 
-// =============================================================================
-// MaxReconnectAttempts=1 boundary test (S3 P2)
-// =============================================================================
-
-func TestConnection_MaxReconnectAttempts_One(t *testing.T) {
-	// MaxReconnectAttempts=1: after exactly 1 reconnect attempt, should enter terminal state.
-	var mu sync.Mutex
-	dialCount := 0
-	mock := newMockConnection()
-	recoverableErr := errors.New("connection refused")
-
-	dialFunc := func(url string) (AMQPConnection, error) {
-		mu.Lock()
-		dialCount++
-		n := dialCount
-		mu.Unlock()
-		if n == 1 {
-			return mock, nil
-		}
-		return nil, recoverableErr
-	}
-
-	conn, err := NewConnection(Config{
-		URL:                  "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:      2,
-		ReconnectBaseDelay:   1 * time.Millisecond,
-		ReconnectMaxBackoff:  5 * time.Millisecond,
-		MaxReconnectAttempts: 1,
-	}, WithDialFunc(dialFunc))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
-		mock.mu.Lock()
-		defer mock.mu.Unlock()
-		return mock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond, "reconnectLoop did not call NotifyClose")
-
-	// Trigger disconnect.
-	mock.mu.Lock()
-	ch := mock.notifyCloseCh
-	mock.isClosed = true
-	mock.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
-
-	// Wait for exactly 1 reconnect attempt (total dials: 1 initial + 1 reconnect = 2).
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return dialCount >= 2
-	}, 2*time.Second, time.Millisecond, "reconnect should have attempted 1 dial")
-
-	// Wait for terminal state.
-	require.Eventually(t, func() bool {
-		conn.mu.RLock()
-		defer conn.mu.RUnlock()
-		return conn.permanentErr != nil
-	}, 2*time.Second, time.Millisecond, "terminal state should be set after 1 attempt")
-
-	// WaitConnected should return permanent error.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	waitErr := conn.WaitConnected(ctx)
-	require.Error(t, waitErr, "WaitConnected must return error after max attempts exceeded")
-
-	var ecErr *errcode.Error
-	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
-		"WaitConnected should return reconnect-exhausted error code")
-}
+// NOTE: TestConnection_MaxReconnectAttempts_One deleted (A.1 semantics).
+// Reconnect has no attempt cap; successor behavior is covered by
+// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
 
 // =============================================================================
 // safeDelay boundary tests (S3 P2)
@@ -3990,84 +3812,10 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	}, 2*time.Second, time.Millisecond, "Health() should return nil after successful reconnect")
 }
 
-// =============================================================================
-// RMQ-75-02 supplemental: permanent error takes priority over exhaustion
-// =============================================================================
-
-func TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion(t *testing.T) {
-	// Scenario: MaxReconnectAttempts=10 but first reconnect dial returns a
-	// permanent error (amqp.Error{Recover:false}). Connection should enter
-	// terminal state with ErrAdapterAMQPConnectPermanent, NOT ErrAdapterAMQPReconnectExhausted.
-	var mu sync.Mutex
-	dialCount := 0
-	mock := newMockConnection()
-	permanentErr := &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
-
-	dialFunc := func(url string) (AMQPConnection, error) {
-		mu.Lock()
-		dialCount++
-		n := dialCount
-		mu.Unlock()
-		if n == 1 {
-			return mock, nil
-		}
-		return nil, permanentErr
-	}
-
-	conn, err := NewConnection(Config{
-		URL:                  "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:      2,
-		ReconnectBaseDelay:   1 * time.Millisecond,
-		ReconnectMaxBackoff:  5 * time.Millisecond,
-		MaxReconnectAttempts: 10, // generous limit — but permanent should short-circuit
-	}, WithDialFunc(dialFunc))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	// Wait for reconnectLoop to register NotifyClose.
-	require.Eventually(t, func() bool {
-		mock.mu.Lock()
-		defer mock.mu.Unlock()
-		return mock.notifyCloseCh != nil
-	}, time.Second, time.Millisecond)
-
-	// Trigger disconnect.
-	mock.mu.Lock()
-	ch := mock.notifyCloseCh
-	mock.isClosed = true
-	mock.mu.Unlock()
-	ch <- &amqp.Error{Code: 320, Reason: "CONNECTION_FORCED", Recover: true}
-
-	// Wait for terminal state.
-	require.Eventually(t, func() bool {
-		conn.mu.RLock()
-		defer conn.mu.RUnlock()
-		return conn.permanentErr != nil
-	}, 2*time.Second, time.Millisecond, "terminal state should be set")
-
-	// Verify: should be exactly 2 dials (1 initial + 1 reconnect that hit permanent).
-	mu.Lock()
-	finalDialCount := dialCount
-	mu.Unlock()
-	assert.Equal(t, 2, finalDialCount,
-		"permanent error should stop immediately on first reconnect attempt, not retry up to MaxReconnectAttempts")
-
-	// Verify error code is ConnectPermanent, not ReconnectExhausted.
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer waitCancel()
-	waitErr := conn.WaitConnected(waitCtx)
-	require.Error(t, waitErr)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(waitErr, &ecErr), "error should be errcode.Error")
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code,
-		"permanent error must take priority over MaxReconnectAttempts exhaustion")
-
-	// Health should also report ConnectPermanent.
-	healthErr := conn.Health(context.Background())
-	require.Error(t, healthErr)
-	require.True(t, errors.As(healthErr, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
-}
+// NOTE: TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion deleted (A.1).
+// Runtime reconnect no longer distinguishes permanent vs transient; all errors
+// are retried indefinitely. Startup-time permanent classification is covered
+// by TestNewConnection_PermanentDialError.
 
 // =============================================================================
 // RMQ-RACE-01: WaitConnected stale channel re-validation

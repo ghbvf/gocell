@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +59,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger, WithRunMode(query.RunModeDemo)), repo
+	return NewService(repo, eb, logger), repo
 }
 
 func newDurableTestService() (*Service, *mem.ConfigRepository, *recordingWriter) {
@@ -158,33 +157,22 @@ func TestService_Rollback(t *testing.T) {
 	}
 }
 
-// --- CONFIG-DEMO-FAILOPEN-01: publisher error must propagate in prod mode ---
+// --- publisher errors propagate (no fail-open on write path) ---
 
-// TestService_Publish_PublisherError_ProdMode_PropagatesError asserts that
-// when the service is wired without an outbox writer (publisher-only path)
-// and NOT configured for demo fail-open, a publisher failure surfaces as an
-// error. L2 cell declares transactional atomicity; silently swallowing the
-// error would violate that contract.
+// TestService_Publish_PublisherError_Propagates asserts that a publisher failure
+// on the publisher-only path (no outboxWriter) surfaces as an error.
+// L2 cell declares transactional atomicity; silently swallowing the error
+// would violate that contract.
 // ref: watermill/components/forwarder — publish failure wraps+returns.
-func TestService_Publish_PublisherError_ProdMode_PropagatesError(t *testing.T) {
+func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default()) // zero-value RunMode = RunModeProd → fail-closed
+	svc := NewService(repo, pub, slog.Default()) // no outboxWriter → publisher path; error propagates
 
 	mustSeedEntry(repo, "k", "v1")
 	_, err := svc.Publish(context.Background(), "k")
-	require.Error(t, err, "prod-mode publisher failure must propagate")
+	require.Error(t, err, "publisher failure must propagate")
 	assert.Contains(t, err.Error(), "broker unavailable")
-}
-
-func TestService_Publish_PublisherError_DemoMode_SwallowsError(t *testing.T) {
-	repo := mem.NewConfigRepository()
-	pub := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default(), WithRunMode(query.RunModeDemo))
-
-	mustSeedEntry(repo, "k", "v1")
-	_, err := svc.Publish(context.Background(), "k")
-	require.NoError(t, err, "demo fail-open must swallow publisher failure")
 }
 
 // --- #27d OUTBOX-WRITE-ERR-01: outbox.Write error must propagate ---

@@ -16,7 +16,7 @@ GoCell 在两个抽象层上有"模式"（mode）概念：
 
 两个枚举互有对应关系（demo↔demo、durable↔prod），但**不是同一个概念**：
 - `DurabilityMode` 描述整个 Cell 的 L2 写路径；
-- `RunMode` 只描述 `pkg/query.ExecutePagedQuery` 与 `configpublish.WithRunMode` 消费者的"容错姿态"。
+- `RunMode` 只描述 `pkg/query.ExecutePagedQuery`（即 config-read / feature-flag cursor 降级）的"容错姿态"。
 
 问题：这两层在何处、由谁、如何做翻译？错误地散落到 slice/handler/repository 会让 demo 语义四处漂移，回归审查困难，也违反分层规则（`pkg/` 不能依赖 `kernel/`）。
 
@@ -45,7 +45,7 @@ pkg/       允许依赖: 标准库         禁止依赖: kernel/ cells/ runtime/
    - 重新观察 `DurabilityMode`（`pkg/` 本就无法感知）
    - 为 `bool` 参数额外加 `demoFailOpen`、`isDemo` 等并行旗标
 
-违反第 3 条会出现"两个真相源"，例如 PR#165 之前的 `configpublish.WithDemoFailOpen(bool)` 与 `RunMode` 重复表达同一信号。PR-P-QUERY 已合并为单一 `WithRunMode(query.RunMode)`。
+违反第 3 条会出现"两个真相源"，例如 PR#165 之前的 `configpublish.WithDemoFailOpen(bool)` 与 `RunMode` 重复表达同一信号。PR-P-QUERY 已合并为单一 `WithRunMode(query.RunMode)`；PR#175 进一步将 `configpublish.WithRunMode` 彻底删除（`DiscardPublisher` 永不报错，fail-open 为死代码），`RunMode` 消费方收窄为 config-read / feature-flag。
 
 ## 对标
 
@@ -65,8 +65,9 @@ pkg/       允许依赖: 标准库         禁止依赖: kernel/ cells/ runtime/
 
 - 引入：`pkg/query/runmode.go`（`RunModeForDemo` godoc 现含 "Do not extend" 警告）
 - 统一 configpublish：`WithDemoFailOpen` 删除，改用 `WithRunMode`（PR-P-QUERY）
+- PR#175：`configpublish.WithRunMode` 删除（死代码），write path 不再有 RunMode 消费
 - 调用点：
-  - `cells/config-core/cell.go::Init` — 单次翻译，下发给 config-read / feature-flag / config-publish
+  - `cells/config-core/cell.go::Init` — 单次翻译，下发给 config-read / feature-flag（config-publish 已移除）
   - `cells/audit-core/cell.go::Init`
   - `cells/order-cell/cell.go::Init`
   - `cells/device-cell/cell.go::Init`

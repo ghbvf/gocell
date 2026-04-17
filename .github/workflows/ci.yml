@@ -90,17 +90,30 @@ jobs:
 
   sonarcloud:
     runs-on: ubuntu-latest
-    needs: build-test
-    # Split from build-test so the scan does not block integration-test or
-    # other gates; build-test still produces the coverage profile this job
-    # consumes via the coverage-profile artifact.
+    needs: [build-test, integration-test]
+    # Depends on both build-test (unit coverage) and integration-test
+    # (integration coverage) so SonarCloud receives the merged profile.
+    # This ensures new code in DB-path branches (schema_guard, outbox_relay)
+    # counts toward the coverage gate.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Download coverage profile
+      - name: Download unit coverage profile
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: coverage-profile
+
+      - name: Download integration coverage profile
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-integration-profile
+
+      - name: Merge coverage profiles
+        run: |
+          # Concatenate: keep header from unit profile, append data lines from
+          # integration profile (skip the "mode:" header line to avoid duplicate).
+          cat coverage.out > coverage-merged.out
+          tail -n +2 coverage-integration.out >> coverage-merged.out
 
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -136,5 +149,12 @@ jobs:
 
       - name: Integration tests (testcontainers)
         # cmd/core-bundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
-        # that require PG+RMQ testcontainers. Include it here so A11 e2e tests are exercised in CI.
-        run: go test -tags=integration ./adapters/... ./tests/integration/... ./cmd/core-bundle/... -count=1 -timeout 15m
+        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/core-bundle/... -count=1 -timeout 15m
+
+      - name: Upload integration coverage profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-integration-profile
+          path: coverage-integration.out
+          retention-days: 1

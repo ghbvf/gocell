@@ -172,12 +172,22 @@ type Config struct {
 	// Default: 5s.
 	ConfirmTimeout time.Duration
 
-	// MaxReconnectAttempts limits the number of reconnection attempts after
-	// a connection is lost. 0 (default) means unlimited reconnection.
-	// When the limit is reached, the connection enters terminal state.
+	// MaxReconnectAttempts is retained for field compatibility but ignored.
+	// Runtime reconnect is always unbounded (A.1 semantics): once a Connection
+	// has successfully established at least once, loss of connectivity triggers
+	// indefinite retry with capped exponential backoff until Close() is called
+	// or the connection recovers.
 	//
-	// Production recommendation: 30-60 with the default 30s max backoff
-	// gives ~15-30 minutes of retry before entering terminal state.
+	// Operational recovery escape hatch: orchestrators (k8s readinessProbe
+	// against /readyz) restart the pod if reconnect cannot succeed within the
+	// deployment's SLO, rather than the Connection self-terminating.
+	//
+	// Permanent errors (bad credentials, TLS, URI parse) are detected at
+	// NewConnection time — fail-fast at startup — and do not apply at runtime.
+	//
+	// ref: ThreeDotsLabs/watermill-amqp ConnectionWrapper.reconnect uses
+	// backoff.Retry() with no attempt cap; it stops only on Close() or
+	// backoff.Permanent() wrapping of the sentinel close condition.
 	MaxReconnectAttempts int
 }
 
@@ -388,38 +398,41 @@ func (c *Connection) reconnectLoop() {
 		// Drain the channel pool on disconnect.
 		c.drainChannelPool()
 
-		ok, permErr := c.reconnectWithBackoff()
-		if ok {
+		if c.reconnectWithBackoff() {
 			c.mu.Lock()
 			c.state = StateConnected
 			close(c.connected)
 			c.mu.Unlock()
-		} else if permErr != nil {
-			// Terminal state: permanent dial error. Signal all WaitConnected callers.
-			c.mu.Lock()
-			c.state = StateTerminal
-			c.permanentErr = permErr
-			close(c.terminalCh)
-			c.mu.Unlock()
-			return
 		} else {
-			// closeCh fired — clean shutdown, no terminal error.
+			// closeCh fired — clean shutdown.
 			return
 		}
 	}
 }
 
-// reconnectWithBackoff attempts to re-establish the connection with exponential
-// backoff. Returns (true, nil) on success, (false, err) on permanent failure,
-// or (false, nil) if closeCh fired (clean shutdown).
+// reconnectWithBackoff attempts to re-establish the connection with capped
+// exponential backoff. It retries indefinitely until the connection is
+// recovered or Close() is called (closeCh fired).
 //
-//nolint:gocognit // pre-existing complexity; tracked in backlog Batch 8
-func (c *Connection) reconnectWithBackoff() (bool, error) {
+// A.1 semantics (post-PR#173): transient dial errors during reconnect never
+// cause the connection to give up. Permanent errors (bad credentials, TLS,
+// URI) surface only at NewConnection time and fail fast at startup; once the
+// Connection has successfully established at least once, we assume operational
+// recovery is possible and keep trying. Operators rely on k8s readinessProbe
+// (via /readyz → Health() == errHealthReconnecting) to restart the pod if the
+// outage exceeds the deployment's SLO.
+//
+// Returns true when the connection was successfully re-established, false when
+// closeCh fired (clean shutdown).
+//
+// ref: ThreeDotsLabs/watermill-amqp ConnectionWrapper.reconnect — same
+// unbounded retry pattern, stops only on Closed() or backoff.Permanent().
+func (c *Connection) reconnectWithBackoff() bool {
 	attempt := 0
 	for {
 		select {
 		case <-c.closeCh:
-			return false, nil
+			return false
 		default:
 		}
 
@@ -430,45 +443,21 @@ func (c *Connection) reconnectWithBackoff() (bool, error) {
 
 		select {
 		case <-c.closeCh:
-			return false, nil
+			return false
 		case <-time.After(delay):
 		}
 
 		if err := c.connect(); err != nil {
-			// Unwrap the errcode wrapper to inspect the underlying dial error.
-			var ecErr *errcode.Error
-			dialErr := err
-			if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
-				dialErr = ecErr.Unwrap()
-			}
-
-			if isPermanentDialError(dialErr) {
-				permErr := errcode.Wrap(ErrAdapterAMQPConnectPermanent,
-					"rabbitmq: permanent connection error, giving up", c.sanitizeDialError(err))
-				slog.Error("rabbitmq: permanent connection error, giving up",
-					slog.Int("attempt", attempt+1),
-					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
-				return false, permErr
-			}
-
-			slog.Warn("rabbitmq: reconnect failed (recoverable), will retry",
+			slog.Warn("rabbitmq: reconnect failed, retrying indefinitely",
 				slog.Int("attempt", attempt+1),
 				slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
 			attempt++
-			if c.config.MaxReconnectAttempts > 0 && attempt >= c.config.MaxReconnectAttempts {
-				slog.Error("rabbitmq: max reconnect attempts exceeded, entering terminal state",
-					slog.Int("max_attempts", c.config.MaxReconnectAttempts),
-					slog.Int("attempt", attempt),
-					slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
-				return false, errcode.Wrap(ErrAdapterAMQPReconnectExhausted,
-					fmt.Sprintf("rabbitmq: max reconnect attempts (%d) exceeded", c.config.MaxReconnectAttempts), c.sanitizeDialError(err))
-			}
 			continue
 		}
 
 		slog.Info("rabbitmq: reconnected successfully",
 			slog.Int("attempts", attempt+1))
-		return true, nil
+		return true
 	}
 }
 

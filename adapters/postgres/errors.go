@@ -21,4 +21,8 @@ const (
 
 	// ErrAdapterPGPublish indicates the outbox relay failed to publish an entry.
 	ErrAdapterPGPublish errcode.Code = "ERR_ADAPTER_PG_PUBLISH"
+
+	// ErrAdapterPGSchemaMismatch indicates the DB schema version does not match
+	// the expected version derived from the embedded migration files.
+	ErrAdapterPGSchemaMismatch errcode.Code = "ERR_ADAPTER_PG_SCHEMA_MISMATCH"
 )
