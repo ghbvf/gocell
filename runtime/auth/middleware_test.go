@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -270,6 +272,25 @@ func TestRequireRole_AuthorizerError(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	verifier := &mockVerifier{err: errors.New("token expired")}
+	handler := AuthMiddleware(verifier, nil, WithLogger(logger))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("should not be called")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer bad-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, buf.String(), "token verification failed")
 }
 
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {

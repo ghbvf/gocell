@@ -392,12 +392,9 @@ func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
 func TestKeySet_LifecycleLog_Activation(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	orig := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(orig)
 
 	priv, pub := generateTestKeyPair(t)
-	_, err := NewKeySet(priv, pub)
+	_, err := NewKeySet(priv, pub, WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -408,9 +405,6 @@ func TestKeySet_LifecycleLog_Activation(t *testing.T) {
 func TestKeySet_LifecycleLog_VerificationOnly(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	orig := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(orig)
 
 	priv1, pub1 := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
@@ -421,7 +415,7 @@ func TestKeySet_LifecycleLog_VerificationOnly(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	_, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk}, WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -430,6 +424,9 @@ func TestKeySet_LifecycleLog_VerificationOnly(t *testing.T) {
 }
 
 func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
 	priv1, pub1 := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
 
@@ -440,17 +437,14 @@ func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
 		ExpiresAt: baseTime.Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk}, WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	// Advance clock past expiry.
 	ks.now = func() time.Time { return baseTime.Add(2 * time.Hour) }
 
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	orig := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(orig)
+	// Reset buffer so only PruneExpired log is captured.
+	buf.Reset()
 
 	ks.PruneExpired()
 

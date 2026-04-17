@@ -20,17 +20,35 @@ const DefaultAccessTokenTTL = 15 * time.Minute
 // Adopted: KeyFunc-based verification, Claims extraction from context.
 // Deviated: RS256 pinned (no configurable signing method), refuses HS256/none.
 // Extended: kid-based key lookup from VerificationKeyStore (RFC 7638 thumbprint).
+//
+// ref: golang-jwt/jwt v5 parser_option.go -- WithTimeFunc for clock injection.
 type JWTVerifier struct {
-	keys VerificationKeyStore
+	keys       VerificationKeyStore
+	parserOpts []jwt.ParserOption
+}
+
+// JWTVerifierOption configures a JWTVerifier.
+type JWTVerifierOption func(*JWTVerifier)
+
+// WithVerifierClock overrides the time source used for token expiry validation.
+// Delegates to golang-jwt/jwt v5's WithTimeFunc ParserOption.
+func WithVerifierClock(fn func() time.Time) JWTVerifierOption {
+	return func(v *JWTVerifier) {
+		v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(fn))
+	}
 }
 
 // NewJWTVerifier creates a JWTVerifier that validates tokens by looking up the
 // signing key from the VerificationKeyStore using the token's kid header.
-func NewJWTVerifier(keys VerificationKeyStore) (*JWTVerifier, error) {
+func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTVerifier, error) {
 	if keys == nil {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
-	return &JWTVerifier{keys: keys}, nil
+	v := &JWTVerifier{keys: keys}
+	for _, o := range opts {
+		o(v)
+	}
+	return v, nil
 }
 
 // Verify validates the token string and returns Claims on success.
@@ -63,7 +81,7 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 			return nil, fmt.Errorf("key lookup failed for kid %s: %w", kid, err)
 		}
 		return pub, nil
-	})
+	}, v.parserOpts...)
 	if err != nil {
 		return Claims{}, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
@@ -85,18 +103,32 @@ type JWTIssuer struct {
 	keys   SigningKeyProvider
 	issuer string
 	ttl    time.Duration
+	now    func() time.Time
+}
+
+// JWTIssuerOption configures a JWTIssuer.
+type JWTIssuerOption func(*JWTIssuer)
+
+// WithIssuerClock overrides the time source used for iat/exp claim generation.
+func WithIssuerClock(fn func() time.Time) JWTIssuerOption {
+	return func(i *JWTIssuer) { i.now = fn }
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
-func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration) (*JWTIssuer, error) {
+func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opts ...JWTIssuerOption) (*JWTIssuer, error) {
 	if keys == nil {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
-	return &JWTIssuer{
+	i := &JWTIssuer{
 		keys:   keys,
 		issuer: issuer,
 		ttl:    ttl,
-	}, nil
+		now:    time.Now,
+	}
+	for _, o := range opts {
+		o(i)
+	}
+	return i, nil
 }
 
 // Issue creates a signed JWT token for the given subject and roles.
@@ -107,7 +139,7 @@ func (i *JWTIssuer) Issue(subject string, roles []string, audience []string, ses
 	if i.keys.SigningKey() == nil {
 		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
-	now := time.Now()
+	now := i.now()
 	claims := jwt.MapClaims{
 		"sub": subject,
 		"iss": i.issuer,

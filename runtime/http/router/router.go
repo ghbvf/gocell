@@ -158,6 +158,13 @@ func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) O
 	}
 }
 
+// WithAuthMetrics sets the AuthMetrics instance used by AuthMiddleware when wired
+// via WithAuthMiddleware. When provided, JWT verification outcomes are recorded
+// against the shared metrics backend.
+func WithAuthMetrics(m *auth.AuthMetrics) Option {
+	return func(r *Router) { r.authMetrics = m }
+}
+
 // WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
 // the SecurityHeaders middleware. Use this to configure HSTS directives, e.g.:
 //
@@ -195,18 +202,19 @@ func WithTrustedProxies(proxies []string) Option {
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux            *chi.Mux
-	mux                 *chi.Mux
-	healthHandler       *health.Handler
-	metricsCollector    metrics.Collector
-	metricsHandler      http.Handler
-	tracer              tracing.Tracer
-	tracingOpts         []middleware.TracingOption
-	requestIDOpts       []middleware.RequestIDOption
-	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.CircuitBreakerPolicy
-	authVerifier        auth.TokenVerifier
+	outerMux             *chi.Mux
+	mux                  *chi.Mux
+	healthHandler        *health.Handler
+	metricsCollector     metrics.Collector
+	metricsHandler       http.Handler
+	tracer               tracing.Tracer
+	tracingOpts          []middleware.TracingOption
+	requestIDOpts        []middleware.RequestIDOption
+	rateLimiter          middleware.RateLimiter
+	circuitBreaker       middleware.CircuitBreakerPolicy
+	authVerifier         auth.TokenVerifier
 	authPublicEndpoints  []string
+	authMetrics          *auth.AuthMetrics
 	securityHeadersOpts  []middleware.SecurityHeadersOption
 	bodyLimit            int64
 	trustedProxies       []string
@@ -321,7 +329,11 @@ func NewE(opts ...Option) (*Router, error) {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints))
+		var authOpts []auth.AuthOption
+		if r.authMetrics != nil {
+			authOpts = append(authOpts, auth.WithMetrics(r.authMetrics))
+		}
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, authOpts...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 

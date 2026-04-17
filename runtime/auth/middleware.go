@@ -1,10 +1,10 @@
 package auth
 
 import (
-	"log/slog"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -28,7 +28,12 @@ var DefaultPublicEndpoints = []string{}
 // publicEndpoints specifies paths that bypass authentication. If nil,
 // DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
 // matching, consistent with other security middleware in this package.
-func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.Handler) http.Handler {
+func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
+	cfg := defaultAuthConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	publicPaths := publicEndpoints
 	if publicPaths == nil {
 		publicPaths = DefaultPublicEndpoints
@@ -48,23 +53,28 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 
 			token := extractBearerToken(r)
 			if token == "" {
+				cfg.metrics.recordTokenVerify("failure", "missing", 0)
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 				return
 			}
 
+			start := time.Now()
 			claims, err := verifier.Verify(r.Context(), token)
 			if err != nil {
-				slog.Error("token verification failed",
-					slog.Any("error", err),
-					slog.String("path", r.URL.Path),
-					slog.String("remote_addr", r.RemoteAddr),
+				cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
+				cfg.logger.Error("token verification failed",
+					"error", err,
+					"path", r.URL.Path,
+					"remote_addr", r.RemoteAddr,
 				)
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 				return
 			}
+			cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
 
 			ctx := WithClaims(r.Context(), claims)
 			ctx = ctxkeys.WithSubject(ctx, claims.Subject)
+			ctx = withLogger(ctx, cfg.logger)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -101,9 +111,9 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 				for _, role := range roles {
 					allowed, err := authorizer.Authorize(r.Context(), sub, r.URL.Path, role)
 					if err != nil {
-						slog.Error("authorization check failed",
-							slog.Any("error", err),
-							slog.String("subject", sub),
+						loggerFrom(r.Context()).Error("authorization check failed",
+							"error", err,
+							"subject", sub,
 						)
 						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 						return
