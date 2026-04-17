@@ -42,20 +42,6 @@ func IssueTestTokenWithIntent(signingKey *rsa.PrivateKey, intent auth.TokenInten
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = auth.Thumbprint(&signingKey.PublicKey)
-	token.Header["typ"] = typHeaderForIntent(intent)
+	token.Header["typ"] = auth.TypHeaderForIntent(intent)
 	return token.SignedString(signingKey)
-}
-
-// typHeaderForIntent maps a TokenIntent to its JOSE typ header value.
-// Mirrors runtime/auth.jwtTypForIntent (kept private there) so helpers in this
-// test package can build synthetic tokens that pass JWTVerifier.VerifyIntent.
-func typHeaderForIntent(intent auth.TokenIntent) string {
-	switch intent {
-	case auth.TokenIntentAccess:
-		return "at+jwt"
-	case auth.TokenIntentRefresh:
-		return "refresh+jwt"
-	default:
-		return ""
-	}
 }

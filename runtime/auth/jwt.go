@@ -33,6 +33,14 @@ const (
 // jwtTypForIntent returns the JOSE typ header value corresponding to intent.
 // Returns empty string for unknown intents; callers must validate intent first.
 func jwtTypForIntent(intent TokenIntent) string {
+	return TypHeaderForIntent(intent)
+}
+
+// TypHeaderForIntent is the exported form of jwtTypForIntent, intended for
+// test harnesses in sibling packages that need to build synthetic JWTs whose
+// JOSE typ header matches what VerifyIntent expects. Production code should
+// not call this — JWTIssuer.Issue writes the correct typ header automatically.
+func TypHeaderForIntent(intent TokenIntent) string {
 	switch intent {
 	case TokenIntentAccess:
 		return jwtTypAccess

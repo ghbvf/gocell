@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 	"path"
 	"strings"
@@ -23,13 +22,19 @@ import (
 var DefaultPublicEndpoints = []string{}
 
 // AuthMiddleware extracts a Bearer token from the Authorization header,
-// verifies it using the provided TokenVerifier, and stores the resulting
-// Claims in the request context. On failure, it returns a 401 JSON response.
+// verifies it using the provided IntentTokenVerifier (always enforcing
+// token_use=access for business endpoints), and stores the resulting Claims
+// in the request context. On failure, it returns a 401 JSON response.
+//
+// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
+// access-vs-refresh distinction is a hard safety invariant — any verifier
+// plugged into business routes must be able to enforce it at the type level,
+// so we refuse to compile call sites that pass an intent-unaware verifier.
 //
 // publicEndpoints specifies paths that bypass authentication. If nil,
 // DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
 // matching, consistent with other security middleware in this package.
-func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
+func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
 	cfg := defaultAuthConfig()
 	for _, o := range opts {
 		o(&cfg)
@@ -65,7 +70,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...Au
 // signature invalidity or expiry. The specific failure reason is observable
 // via the "reason" label on the auth_token_verify_total metric (ops-only
 // signal) and in structured logs; it is never forwarded to the HTTP response.
-func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier TokenVerifier, cfg authConfig) {
+func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier IntentTokenVerifier, cfg authConfig) {
 	token := extractBearerToken(r)
 	if token == "" {
 		cfg.metrics.recordTokenVerifyCounter("failure", "missing")
@@ -74,7 +79,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	}
 
 	start := time.Now()
-	claims, err := verifyAccessToken(r.Context(), verifier, token)
+	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
 	if err != nil {
 		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
 		cfg.logger.Error("token verification failed",
@@ -91,17 +96,6 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
-}
-
-// verifyAccessToken dispatches verification through IntentTokenVerifier when
-// available (enforcing token_use=access) and falls back to plain Verify for
-// legacy test doubles. Intent-mismatch errors are collapsed to the generic
-// 401 response by the caller to prevent token-type enumeration.
-func verifyAccessToken(ctx context.Context, verifier TokenVerifier, token string) (Claims, error) {
-	if iv, ok := verifier.(IntentTokenVerifier); ok {
-		return iv.VerifyIntent(ctx, token, TokenIntentAccess)
-	}
-	return verifier.Verify(ctx, token)
 }
 
 // RequireRole checks that the authenticated subject has at least one of the

@@ -2229,7 +2229,7 @@ func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
 	}))
 }
 
-// bootstrapTestVerifier is a minimal TokenVerifier for bootstrap tests.
+// bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
 type bootstrapTestVerifier struct {
 	claims    auth.Claims
 	err       error
@@ -2237,6 +2237,11 @@ type bootstrapTestVerifier struct {
 }
 
 func (v *bootstrapTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+	v.callCount.Add(1)
+	return v.claims, v.err
+}
+
+func (v *bootstrapTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
 	v.callCount.Add(1)
 	return v.claims, v.err
 }
@@ -2627,20 +2632,20 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 // --- Auth Provider discovery (post-Init cell discovery) ---
 
-// authProviderCell implements HTTPRegistrar and exposes a TokenVerifier.
+// authProviderCell implements HTTPRegistrar and exposes an IntentTokenVerifier.
 type authProviderCell struct {
 	*cell.BaseCell
-	verifier auth.TokenVerifier
+	verifier auth.IntentTokenVerifier
 }
 
-func newAuthProviderCell(id string, verifier auth.TokenVerifier) *authProviderCell {
+func newAuthProviderCell(id string, verifier auth.IntentTokenVerifier) *authProviderCell {
 	return &authProviderCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
 		verifier: verifier,
 	}
 }
 
-func (c *authProviderCell) TokenVerifier() auth.TokenVerifier {
+func (c *authProviderCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
@@ -3165,12 +3170,12 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 // traceCapturingCell registers routes that capture the trace_id from context.
 type traceCapturingCell struct {
 	*cell.BaseCell
-	verifier     auth.TokenVerifier
+	verifier     auth.IntentTokenVerifier
 	gotPublic    chan string
 	gotProtected chan string
 }
 
-func newTraceCapturingCell(id string, verifier auth.TokenVerifier) *traceCapturingCell {
+func newTraceCapturingCell(id string, verifier auth.IntentTokenVerifier) *traceCapturingCell {
 	return &traceCapturingCell{
 		BaseCell:     cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
 		verifier:     verifier,
@@ -3179,7 +3184,7 @@ func newTraceCapturingCell(id string, verifier auth.TokenVerifier) *traceCapturi
 	}
 }
 
-func (c *traceCapturingCell) TokenVerifier() auth.TokenVerifier {
+func (c *traceCapturingCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 

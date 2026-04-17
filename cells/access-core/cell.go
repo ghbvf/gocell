@@ -181,8 +181,10 @@ func (c *AccessCore) HealthCheckers() map[string]func() error {
 	return checkers
 }
 
-// TokenVerifier returns the session-validate service (implements auth.TokenVerifier).
-func (c *AccessCore) TokenVerifier() auth.TokenVerifier {
+// TokenVerifier returns the session-validate service. It satisfies
+// auth.IntentTokenVerifier so it can be plugged into AuthMiddleware without
+// a runtime type assertion.
+func (c *AccessCore) TokenVerifier() auth.IntentTokenVerifier {
 	if c.validateSvc == nil {
 		return nil
 	}

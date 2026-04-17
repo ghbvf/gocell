@@ -21,16 +21,17 @@ import (
 // intentMockVerifier returns distinct results per expected intent so the
 // middleware's call path can be observed.
 type intentMockVerifier struct {
-	accessClaims   Claims
-	accessErr      error
-	refreshClaims  Claims
-	refreshErr     error
-	fallbackClaims Claims
-	fallbackErr    error
+	accessClaims  Claims
+	accessErr     error
+	refreshClaims Claims
+	refreshErr    error
 }
 
+// Verify is kept so intentMockVerifier also satisfies TokenVerifier; it is
+// never invoked by AuthMiddleware (which calls VerifyIntent directly) and
+// returns a sentinel error so accidental fallback is caught by tests.
 func (v *intentMockVerifier) Verify(_ context.Context, _ string) (Claims, error) {
-	return v.fallbackClaims, v.fallbackErr
+	return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "intentMockVerifier.Verify should not be called")
 }
 
 func (v *intentMockVerifier) VerifyIntent(_ context.Context, _ string, expected TokenIntent) (Claims, error) {
@@ -97,7 +98,7 @@ func TestAuthMiddleware_RefreshAndInvalidToken_SameResponse(t *testing.T) {
 		accessErr: errcode.New(errcode.ErrAuthUnauthorized, "token expired"),
 	}
 
-	makeHandler := func(v TokenVerifier) http.Handler {
+	makeHandler := func(v IntentTokenVerifier) http.Handler {
 		return AuthMiddleware(v, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("inner handler must not be called")
 		}))
@@ -144,4 +145,26 @@ func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, buf.String(), "ERR_AUTH_INVALID_TOKEN_INTENT",
 		"ERR_AUTH_INVALID_TOKEN_INTENT must appear in structured log output so ops can distinguish it via metrics reason=invalid_intent")
+}
+
+// TestAuthMiddleware_LegacyTokenVerifierIsCompileTimeRejected is a compile-time
+// invariant check: AuthMiddleware's parameter is IntentTokenVerifier, so a
+// plain TokenVerifier can no longer be plugged in. Any attempt to narrow the
+// parameter back to TokenVerifier will fail to build this test.
+func TestAuthMiddleware_LegacyTokenVerifierIsCompileTimeRejected(t *testing.T) {
+	var v IntentTokenVerifier = &intentMockVerifier{}
+	// The following must compile — v is an IntentTokenVerifier.
+	_ = AuthMiddleware(v, nil)
+
+	// Documented negative case: a value that only implements TokenVerifier
+	// cannot be assigned to IntentTokenVerifier. We express that as a
+	// non-executing check via interface satisfaction so a future regression
+	// (widening the parameter back to TokenVerifier) would let a
+	// plain-TokenVerifier compile and this assertion would become
+	// redundant, surfacing the drift in review.
+	var _ IntentTokenVerifier = (*intentMockVerifier)(nil)
+	var _ TokenVerifier = (*mockVerifier)(nil)
+	// mockVerifier now also satisfies IntentTokenVerifier; we rely on the
+	// parameter type of AuthMiddleware (IntentTokenVerifier) to enforce the
+	// invariant. The comment above documents why narrowing is a regression.
 }

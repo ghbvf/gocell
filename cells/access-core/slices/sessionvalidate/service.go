@@ -1,5 +1,5 @@
 // Package sessionvalidate implements the session-validate slice: verifies
-// access tokens and returns Claims. Implements runtime/auth.TokenVerifier.
+// access tokens and returns Claims. Implements runtime/auth.IntentTokenVerifier.
 package sessionvalidate
 
 import (
@@ -16,8 +16,10 @@ import (
 // failures. Using a single message prevents session-state enumeration attacks.
 const errMsgAuthFailed = "invalid or expired authentication token"
 
-// Compile-time check: Service implements auth.TokenVerifier.
-var _ auth.TokenVerifier = (*Service)(nil)
+// Compile-time check: Service satisfies runtime/auth.IntentTokenVerifier so it
+// can be plugged into AuthMiddleware (which now demands intent-aware verifiers
+// by signature).
+var _ auth.IntentTokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
@@ -41,6 +43,20 @@ func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepo
 // All failure modes map to the uniform errMsgAuthFailed response to prevent
 // token-type and session-state enumeration.
 func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
+	return s.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
+}
+
+// VerifyIntent validates an access token. This service is intentionally
+// scoped to access tokens (session-revocation checks presume a business
+// endpoint), so any expected intent other than TokenIntentAccess is rejected
+// as ErrAuthInvalidTokenIntent. Callers needing refresh-token validation must
+// use the underlying JWTVerifier directly (see sessionrefresh).
+func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected auth.TokenIntent) (auth.Claims, error) {
+	if expected != auth.TokenIntentAccess {
+		s.logger.Warn("session-validate: unsupported intent",
+			slog.String("expected", string(expected)))
+		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
+	}
 	claims, err := s.verifyJWTWithIntent(ctx, tokenStr)
 	if err != nil {
 		return auth.Claims{}, err
