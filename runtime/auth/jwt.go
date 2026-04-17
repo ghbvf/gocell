@@ -118,7 +118,8 @@ func (v *JWTVerifier) Verify(ctx context.Context, tokenStr string) (Claims, erro
 // /auth/refresh endpoint (expected=refresh).
 func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expected TokenIntent) (Claims, error) {
 	if !expected.IsValid() {
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			fmt.Sprintf("unknown expected intent %q", string(expected)))
 	}
 	claims, header, err := v.parseAndVerify(ctx, tokenStr)
@@ -126,20 +127,24 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 		return Claims{}, err
 	}
 	if !claims.TokenUse.IsValid() {
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			"token_use claim missing or unknown")
 	}
 	headerIntent, ok := intentForJWTTyp(stringFromHeader(header, "typ"))
 	if !ok {
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			"typ header missing or unknown")
 	}
 	if headerIntent != claims.TokenUse {
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			"typ header and token_use claim disagree")
 	}
 	if claims.TokenUse != expected {
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			fmt.Sprintf("token_use=%q does not match expected %q",
 				string(claims.TokenUse), string(expected)))
 	}
@@ -262,7 +267,8 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 // session for revocation support.
 func (i *JWTIssuer) Issue(intent TokenIntent, subject string, roles []string, audience []string, sessionID string) (string, error) {
 	if !intent.IsValid() {
-		return "", errcode.New(errcode.ErrAuthInvalidTokenIntent,
+		return "", errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token intent validation failed",
 			fmt.Sprintf("unknown token intent %q", string(intent)))
 	}
 	if i.keys.SigningKey() == nil {
