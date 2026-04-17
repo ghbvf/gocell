@@ -76,6 +76,9 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	if len(tableName) > 0 && tableName[0] != "" {
 		tbl = tableName[0]
 	}
+	if err := validateIdentifier(tbl); err != nil {
+		return err
+	}
 
 	expected, err := ExpectedVersion(fsys)
 	if err != nil {
@@ -116,13 +119,23 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	return nil
 }
 
+// InvalidIndex describes an index that is marked as invalid in pg_index.
+// Invalid indexes can occur when CREATE INDEX CONCURRENTLY is interrupted.
+type InvalidIndex struct {
+	// Index is the qualified name of the invalid index (e.g. "public.idx_foo").
+	Index string
+	// Table is the qualified name of the table the index belongs to.
+	Table string
+}
+
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid
 // (indisvalid = false). These can occur when CREATE INDEX CONCURRENTLY is
 // interrupted. The caller should log a warning and consider manual cleanup.
 //
 // Returns an empty slice when no invalid indexes are found.
-func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]string, error) {
-	const q = `SELECT indexrelid::regclass::text
+func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, error) {
+	const q = `SELECT indexrelid::regclass::text AS index_name,
+		indrelid::regclass::text AS table_name
 		FROM pg_index
 		WHERE NOT indisvalid`
 
@@ -133,19 +146,19 @@ func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]string, error) {
 	}
 	defer rows.Close()
 
-	var names []string
+	var results []InvalidIndex
 	for rows.Next() {
-		var name string
-		if scanErr := rows.Scan(&name); scanErr != nil {
+		var idx InvalidIndex
+		if scanErr := rows.Scan(&idx.Index, &idx.Table); scanErr != nil {
 			return nil, errcode.Wrap(ErrAdapterPGQuery,
-				"schema_guard: scan invalid index name", scanErr)
+				"schema_guard: scan invalid index", scanErr)
 		}
-		names = append(names, name)
+		results = append(results, idx)
 	}
 	if rows.Err() != nil {
 		return nil, errcode.Wrap(ErrAdapterPGQuery,
 			"schema_guard: iterate invalid indexes", rows.Err())
 	}
 
-	return names, nil
+	return results, nil
 }

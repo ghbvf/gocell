@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -168,8 +169,12 @@ func TestIntegration_OutboxRelay_HappyPath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestIntegration_OutboxRelay_BrokerDisconnectRetry verifies that when the
-// publisher fails (simulated by a DiscardPublisher that errors on first
-// calls then succeeds), the relay retries and eventually publishes.
+// publisher fails transiently, the relay retries and eventually publishes.
+// Publish failures are simulated by countingPublisher (fails for first N calls,
+// then succeeds). This covers the retry-and-recover logic path.
+// Note: true broker TCP-disconnect testing (container Stop/Start) is out of
+// scope here; the RabbitMQ reconnect path is exercised in
+// adapters/rabbitmq/integration_test.go.
 func TestIntegration_OutboxRelay_BrokerDisconnectRetry(t *testing.T) {
 	pool, _, _, cleanup := setupPGAndRMQ(t)
 	defer cleanup()
@@ -316,9 +321,12 @@ func TestIntegration_OutboxRelay_ConcurrentRelayNoDoubleClaim(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestIntegration_OutboxRelay_CleanShutdownMidPublish verifies that when
-// Stop() is called while entries are being processed, claimed entries are
-// released back to 'pending' by reclaimStale (or never reach 'claiming'
-// permanent state). After relay stops, no entry should remain in 'claiming'.
+// Stop() is called while entries are being processed, claimed entries do NOT
+// remain permanently stuck in the 'claiming' state.
+// Note: Stop() does NOT immediately release claims; reclaimStale (TTL-based
+// recovery) is responsible for picking up stuck 'claiming' entries after
+// claimTTL + ReclaimInterval elapses. This test waits for that recovery window
+// and then asserts no entries remain in 'claiming'.
 func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 	pool, pub, _, cleanup := setupPGAndRMQ(t)
 	defer cleanup()
@@ -358,7 +366,7 @@ func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 	relayCancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stopCancel()
-	_ = relay.Stop(stopCtx)
+	require.NoError(t, relay.Stop(stopCtx), "relay.Stop should return nil")
 
 	// After claimTTL, reclaimStale should recover any stuck 'claiming' entries.
 	// Wait for reclaimStale to run (ClaimTTL + 2*ReclaimInterval).
