@@ -275,6 +275,12 @@ func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Op
 	}
 }
 
+// jwtAudience is the expected audience for all tokens issued by this assembly.
+// It must match the audience written by sessionlogin/sessionrefresh services
+// ([]string{"gocell"}). Tokens carrying a different aud are rejected by
+// VerifyIntent per RFC 8725 §3.3.
+const jwtAudience = "gocell"
+
 // jwtDeps groups JWT signing and verification components built at startup.
 type jwtDeps struct {
 	issuer   *auth.JWTIssuer
@@ -292,7 +298,10 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT issuer: %w", err)
 	}
-	verifier, err := auth.NewJWTVerifier(keySet)
+	// WithExpectedAudiences enforces RFC 8725 §3.3 audience validation in
+	// VerifyIntent: tokens whose aud claim does not contain jwtAudience are
+	// rejected with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
+	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(jwtAudience))
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
 	}

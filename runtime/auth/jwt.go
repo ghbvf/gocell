@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -73,12 +74,29 @@ func intentForJWTTyp(typ string) (TokenIntent, bool) {
 //
 // ref: golang-jwt/jwt v5 parser_option.go -- WithTimeFunc for clock injection.
 type JWTVerifier struct {
-	keys       VerificationKeyStore
-	parserOpts []jwt.ParserOption
+	keys              VerificationKeyStore
+	parserOpts        []jwt.ParserOption
+	expectedAudiences []string
 }
 
 // JWTVerifierOption configures a JWTVerifier.
 type JWTVerifierOption func(*JWTVerifier)
+
+// WithExpectedAudiences configures VerifyIntent to enforce that the token's
+// aud claim contains at least one of the given audience strings per RFC 8725
+// §3.3 ("recipients MUST validate the aud claim"). Production deployments MUST
+// supply at least one expected audience matching what JWTIssuer.Issue writes.
+//
+// When not configured (default), VerifyIntent skips the audience check for
+// backward compatibility. Verify() is never affected — audience enforcement is
+// intentionally scoped to VerifyIntent only.
+//
+// ref: RFC 8725 §3.3, RFC 7519 §4.1.3 (aud may be string or array)
+func WithExpectedAudiences(audiences ...string) JWTVerifierOption {
+	return func(v *JWTVerifier) {
+		v.expectedAudiences = append(v.expectedAudiences, audiences...)
+	}
+}
 
 // WithVerifierClock overrides the time source used for token expiry validation.
 // Delegates to golang-jwt/jwt v5's WithTimeFunc ParserOption.
@@ -156,7 +174,29 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 			fmt.Sprintf("token_use=%q does not match expected %q",
 				string(claims.TokenUse), string(expected)))
 	}
+	// Audience validation (RFC 8725 §3.3): when expectedAudiences is configured,
+	// at least one must appear in the token's aud claim. The check is intentionally
+	// placed after intent validation so intent-mismatch errors remain distinguishable
+	// in structured logs (ops signal) even when audience would also fail.
+	if len(v.expectedAudiences) > 0 && !audContainsAny(claims.Audience, v.expectedAudiences) {
+		return Claims{}, errcode.Safe(errcode.ErrAuthUnauthorized,
+			"token audience validation failed",
+			fmt.Sprintf("aud %v does not satisfy expected audience(s) %v",
+				claims.Audience, v.expectedAudiences))
+	}
 	return claims, nil
+}
+
+// audContainsAny reports whether any element of expected appears in aud.
+// Per RFC 7519 §4.1.3 the aud claim may be a single string or an array;
+// Claims.Audience always normalises it to []string (see parseAudience).
+func audContainsAny(aud, expected []string) bool {
+	for _, e := range expected {
+		if slices.Contains(aud, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // stringFromHeader returns a string-typed JOSE header value or empty string.
