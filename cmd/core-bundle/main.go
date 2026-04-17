@@ -93,8 +93,22 @@ func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
 // loadCursorCodec loads a cursor HMAC secret from envName (with a dev-only
 // fallback to devDefault) and constructs a CursorCodec. In "real" adapter
 // mode the secret must be set and must not match a well-known demo value.
+//
+// When prevEnvName is non-empty and that env var is set, the value is loaded
+// as the previous (verification-only) key to enable the kube-apiserver-style
+// rotation lifecycle: decode tries current first, then previous. The previous
+// key is subject to the same demo-key guard as current; failures at any stage
+// are fail-fast (no silent fallback to single-key mode). If the previous env
+// is unset, the codec is constructed in single-key mode.
+//
 // label is used in wrapping error messages.
-func loadCursorCodec(adapterMode, envName, devDefault, label string) (*query.CursorCodec, error) {
+//
+// ref: kube-apiserver --service-account-signing-key-file (single current) +
+// --service-account-key-file (multi verification) — same signing/verification
+// split applied to cursor HMAC tokens.
+// ref: gorilla/securecookie CodecsFromPairs — ordered key list, first match
+// wins during decode.
+func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string) (*query.CursorCodec, error) {
 	key, err := loadSecret(envName, devDefault, adapterMode)
 	if err != nil {
 		return nil, fmt.Errorf("%s cursor key: %w", label, err)
@@ -102,9 +116,26 @@ func loadCursorCodec(adapterMode, envName, devDefault, label string) (*query.Cur
 	if err := rejectDemoKey(adapterMode, envName, key); err != nil {
 		return nil, err
 	}
-	codec, err := query.NewCursorCodec(key)
+
+	var prevKey []byte
+	if prevEnvName != "" {
+		if v := os.Getenv(prevEnvName); v != "" {
+			prevKey = []byte(v)
+			if err := rejectDemoKey(adapterMode, prevEnvName, prevKey); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	codec, err := query.NewCursorCodec(key, prevKey)
 	if err != nil {
 		return nil, fmt.Errorf("create %s cursor codec: %w", label, err)
+	}
+	if len(prevKey) > 0 {
+		slog.Info("cursor key rotation active",
+			slog.String("label", label),
+			slog.String("current_env", envName),
+			slog.String("previous_env", prevEnvName))
 	}
 	return codec, nil
 }
@@ -173,11 +204,15 @@ func run(ctx context.Context) error {
 		slog.String("requested", adapterMode),
 		slog.String("effective", effectiveMode))
 
-	auditCursorCodec, err := loadCursorCodec(adapterMode, "GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!", "audit")
+	auditCursorCodec, err := loadCursorCodec(adapterMode,
+		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
+		"core-bundle-audit-cursor-key-32!", "audit")
 	if err != nil {
 		return err
 	}
-	configCursorCodec, err := loadCursorCodec(adapterMode, "GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!", "config")
+	configCursorCodec, err := loadCursorCodec(adapterMode,
+		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
+		"core-bundle-cfg-cursor-key--32b!", "config")
 	if err != nil {
 		return err
 	}

@@ -14,14 +14,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-
 // Compile-time check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 // ConfigRepository is an in-memory implementation of ports.ConfigRepository.
 type ConfigRepository struct {
 	mu       sync.RWMutex
-	entries  map[string]*domain.ConfigEntry   // key -> entry
+	entries  map[string]*domain.ConfigEntry     // key -> entry
 	versions map[string][]*domain.ConfigVersion // configID -> versions
 }
 

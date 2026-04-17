@@ -333,5 +333,5 @@ func (r *mockRowSet) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *mockRowSet) Close() {}
+func (r *mockRowSet) Close()     {}
 func (r *mockRowSet) Err() error { return nil }

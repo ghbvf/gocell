@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,7 +60,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger, WithDemoFailOpen(true)), repo
+	return NewService(repo, eb, logger, WithRunMode(query.RunModeDemo)), repo
 }
 
 func newDurableTestService() (*Service, *mem.ConfigRepository, *recordingWriter) {
@@ -168,7 +169,7 @@ func TestService_Rollback(t *testing.T) {
 func TestService_Publish_PublisherError_ProdMode_PropagatesError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default()) // no WithDemoFailOpen → fail-closed
+	svc := NewService(repo, pub, slog.Default()) // zero-value RunMode = RunModeProd → fail-closed
 
 	mustSeedEntry(repo, "k", "v1")
 	_, err := svc.Publish(context.Background(), "k")
@@ -179,7 +180,7 @@ func TestService_Publish_PublisherError_ProdMode_PropagatesError(t *testing.T) {
 func TestService_Publish_PublisherError_DemoMode_SwallowsError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default(), WithDemoFailOpen(true))
+	svc := NewService(repo, pub, slog.Default(), WithRunMode(query.RunModeDemo))
 
 	mustSeedEntry(repo, "k", "v1")
 	_, err := svc.Publish(context.Background(), "k")

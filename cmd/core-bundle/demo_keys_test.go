@@ -64,3 +64,33 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 		})
 	}
 }
+
+// TestCellDemoKeys_AreAllInWellKnownDemoKeys guards against a cell being added
+// with a new per-cell demo codec key (cells/*/cell.go) without the value also
+// appearing in wellKnownDemoKeys. Without this guard, a cell that forgets
+// WithCursorCodec in real mode would still sign cursors with a public key.
+//
+// Keep this list in sync with cells/*/cell.go initCursorCodec / Init paths.
+func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
+	// Per-cell demo keys hard-coded in each cell's Init/initCursorCodec.
+	// When a new cell is added with its own demo key, append here AND in
+	// demo_keys.go wellKnownDemoKeys (append-only rule applies).
+	cellDemoKeys := []string{
+		"gocell-demo-AUDIT--CORE-key-32!!", // cells/audit-core/cell.go
+		"gocell-demo-CONFIG-CORE-key-32!!", // cells/config-core/cell.go
+		"gocell-demo-ORDER-CELL-key-32b!!", // cells/order-cell/cell.go
+		"gocell-demo-DEVICE-CELL-key-32!!", // cells/device-cell/cell.go
+	}
+	wellKnownSet := make(map[string]bool, len(wellKnownDemoKeys))
+	for _, k := range wellKnownDemoKeys {
+		wellKnownSet[k] = true
+	}
+	for _, ck := range cellDemoKeys {
+		ck := ck
+		t.Run(ck, func(t *testing.T) {
+			if !wellKnownSet[ck] {
+				t.Errorf("cell demo key %q not in wellKnownDemoKeys — real mode will accept it; add to demo_keys.go", ck)
+			}
+		})
+	}
+}

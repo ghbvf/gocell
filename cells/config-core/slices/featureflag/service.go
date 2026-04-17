@@ -36,13 +36,21 @@ type Service struct {
 // NewService creates a feature-flag Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
-func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+//
+// codec must be non-nil — pagination cannot be served without a cursor codec.
+// Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
+// so the cell Init() can propagate a structured error instead of a runtime panic.
+func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+	if codec == nil {
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"featureflag: cursor codec is required")
+	}
 	return &Service{
 		repo:    repo,
 		codec:   codec,
 		logger:  logger,
 		runMode: runMode,
-	}
+	}, nil
 }
 
 // GetByKey retrieves a feature flag by key.

@@ -52,7 +52,10 @@ func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 		_ = repo.Create(context.Background(), o)
 	}
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 	return NewHandler(svc), repo
 }
 
@@ -259,8 +262,8 @@ func TestHandleList_Pagination_FullTraversal(t *testing.T) {
 		for _, item := range data {
 			m := item.(map[string]any)
 			id, ok := m["id"].(string)
-				require.True(t, ok, "response item should have string 'id' field")
-				allIDs = append(allIDs, id)
+			require.True(t, ok, "response item should have string 'id' field")
+			allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)

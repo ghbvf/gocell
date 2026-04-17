@@ -34,14 +34,23 @@ type Service struct {
 // NewService creates a device-command Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
-func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+//
+// codec must be non-nil — pagination (list pending commands) cannot be served
+// without a cursor codec. Passing nil is a caller programming error;
+// NewService returns errcode.ErrCellMissingCodec so the cell Init() can
+// propagate a structured error instead of a runtime panic.
+func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+	if codec == nil {
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"device-command: cursor codec is required")
+	}
 	return &Service{
 		cmdRepo:    cmdRepo,
 		deviceRepo: deviceRepo,
 		codec:      codec,
 		logger:     logger,
 		runMode:    runMode,
-	}
+	}, nil
 }
 
 // Enqueue creates a new pending command for the given device.

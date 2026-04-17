@@ -29,8 +29,8 @@
 | P1-3 | **PUBLIC-ENDPOINT-METHOD-MATCH-01** (Cx3, 🟡 可延后): 公共端点匹配为 path-only，不含 method 维度（latent risk）。升级为 `"METHOD /path"` 格式（向后兼容：无 method 前缀匹配所有 method）| 4h | `runtime/http/router/router.go` + `runtime/auth/middleware.go` + `runtime/bootstrap/bootstrap.go` + 调用方 | PR#158 six-seat review |
 | P1-4 | **OUTPUT-JSON-SARIF-01** (Cx3, 🟡 可延后): `gocell validate` 缺机器可读输出通道（JSON/SARIF）。统一诊断模型（单一 `Issue` struct → 多 printer 映射）。对标 golangci-lint / staticcheck / ESLint / kubectl print flags | 6h | `cmd/gocell/` + `kernel/governance/` 序列化 | PR#152 round-2 review |
 | P1-5 | **METADATA-PERF-BENCH-01** (Cx3, 🟡 可延后): `BenchmarkParseFS_500Files` 性能基准 + goccy/go-yaml 单次解码迁移成本评估 | 4h | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
-| P1-6 | **PR#160 PR-X2 pkg/query 稳定性** (Cx2): codec nil 构造期 fail-fast（Service 层）+ `ParsePageRequest` cursor 长度上限 + `PR#165 F1-2` `WithDemoFailOpen` 与 `query.RunMode` 语义整合 + `PR#165 F3-1` `loadCursorCodec` helper 单测 + `PR#165 F5-1` `RunModeForDemo` godoc "Do not extend" 警告 | 3h | `pkg/query/` + `cmd/core-bundle/` + `cells/*/slices/*/service.go` | PR#160 六席位 + PR#165 reviewer |
-| P1-7 | **PR#160 PR-X3 cursor key rotation 接线** (Cx2, 🟡 可延后): `NewCursorCodec(current, previous)` 启动接线 + `GOCELL_CURSOR_PREVIOUS_SIGNING_KEY` 双 env + 轮换兼容回归。对标 K8s `--service-account-key-file`、gorilla/securecookie `CodecsFromPairs`。依赖 P1-6 | 4h | `pkg/query/codec.go` + `cmd/core-bundle/main.go` | PR#160 六席位 |
+| ~~P1-6~~ | ~~**PR#160 PR-X2 pkg/query 稳定性**~~ ✅ PR-P-QUERY: codec nil Service 层 fail-fast（5 slice 各自 panic）/ `ParsePageRequest` cursor 长度上限 / `WithDemoFailOpen`→`WithRunMode` 整合 / `loadCursorCodec` wrap 链单测 / `RunModeForDemo` godoc "Do not extend" 警告 | — | — | PR-P-QUERY 合入 |
+| ~~P1-7~~ | ~~**PR#160 PR-X3 cursor key rotation 接线**~~ ✅ PR-P-QUERY: `NewCursorCodec(current, previous)` 接线 + `GOCELL_{AUDIT,CONFIG}_CURSOR_PREVIOUS_KEY` 双 env + 轮换生效 slog.Info + 7 条 loadCursorCodec 测试覆盖 3 步 rotation lifecycle | — | — | PR-P-QUERY 合入 |
 | P1-8 | **FEAT-1 DEVICE-LIST-API**: 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步触发 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
 | P1-9 | **FEAT-2 FLAG-WRITE-API**: `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
 | P1-10 | **#5 AUTH-DX-01 README** + seed 用户 + sso-bff walkthrough。具体漂移: refresh curl `sessionId`→`refreshToken`；logout 204 空 body jq 失败；audit `.createdAt` 实为 `.Timestamp`。**前置**: 等 P0/P1 auth 面最终形态稳定 | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
@@ -75,15 +75,16 @@
 | S4 | **EVENT-PAYLOAD-TYPED-01** (Cx2): sessionlogin/sessionlogout/configwrite/configpublish/auditappend/auditverify 事件 payload `map[string]any` → typed event struct | 3h | 6 个 `service.go` + event contract schemas | PR#133 re-review |
 | S5 | **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/access-core/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
 | S6 | **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/access-core/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
-| S7 | **VALIDATE-EVIDENCE-CI-01** (Cx2, 🟡 可延后): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
+| S7 | **VALIDATE-EVIDENCE-CI-01** (Cx2, 根治声明-代码漂移): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
 | S8 | **H1-7 RBAC-OUTBOX-MIGRATION**: `rbacassign.Service` "角色变更 → 会话失效"双写 → transactional outbox 原子写入 + consumer 异步失效 session。前置 outbox consumer 基础设施 | 6h | `cells/access-core/slices/rbacassign/service.go` + `cells/access-core/slices/sessionlogout/consumer.go`（新）+ contract event schemas | PR#149 review round 2 |
 | S9 | **AUTH-LEGACY-TOKEN-STRICT-01** (Cx2, 🟡 可延后): PR#162 已删 2-part 分支；本项改为增 strict 模式开关 + 淘汰计划 + legacy 占比 metrics 看板。待产品确认迁移窗口 | 1h | `runtime/auth/servicetoken.go` | PR#159 外部审查 |
+| S10 | **MODE-SEMANTIC-SPLIT-01** (Cx2, 🟡 可延后): 读路径 `query.RunMode`（cursor 容错）与写路径 `configpublish.WithRunMode`（publisher fail-open）当前共用同一枚举，为后续任一方向演进埋下耦合。保留"Init 单点翻译"前提，新增写路径独立类型（如 `configpublish.PublishFailureMode` with `FailClosed`/`FailOpen`），Cell Init 并行映射 `DurabilityMode → (RunMode, PublishFailureMode)` 后注入。触发条件：任一方向需要新增非二元模式值时。对标 Uber fx Provide/Decorate — 每个决策独立类型注入。 | 3h | `pkg/query/runmode.go` + `cells/config-core/slices/configpublish/service.go` + 4 处 `cell.go` Init | PR#167 round-2 review（finding 3 改进项，发现时建议暂缓） |
 
 ### 发布 + 文档
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| F1 | **ADR-RUNMODE-TRANSLATION-01** (Cx1): 记录 `kernel/cell.DurabilityMode → pkg/query.RunMode` 分层翻译模式 — pkg 不 import kernel，cell 构造期翻译；对标 go-zero `ServiceConf.Mode` | 1h | `docs/architecture/` 新 ADR | PR#165 reviewer F1-1 |
+| ~~F1~~ | ~~**ADR-RUNMODE-TRANSLATION-01**~~ ✅ PR-P-QUERY: `docs/architecture/202604180100-adr-runmode-translation.md` 记录 pkg 不依赖 kernel、cell Init 单次翻译、禁止二次翻译，对标 go-zero `ServiceConf.Mode` | — | — | PR-P-QUERY 合入 |
 | F2 | **SYSTEM-TOPOLOGY-API** (🟡 可延后): `GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON；基于 `kernel/registry` | 4h | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 | F3 | **P2-T-02 audit e2e 测试**: Journey 级验收 | 2h | `journeys/` + integration test | 历史 Batch 8 |
 | F4 | Review cells/ | 4h | — | Wave 4 |

@@ -20,10 +20,25 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
+func TestNewService_NilCodec_ReturnsError(t *testing.T) {
+	devRepo := mem.NewDeviceRepository()
+	cmdRepo := mem.NewCommandRepository()
+	svc, err := NewService(cmdRepo, devRepo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+}
+
 func newTestService() (*Service, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
-	return NewService(cmdRepo, devRepo, testCodec(), slog.Default(), query.RunModeProd), devRepo, cmdRepo
+	svc, err := NewService(cmdRepo, devRepo, testCodec(), slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, devRepo, cmdRepo
 }
 
 func seedDevice(repo *mem.DeviceRepository, id, name string) {

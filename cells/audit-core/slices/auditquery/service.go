@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -30,8 +31,16 @@ type Service struct {
 // NewService creates an audit-query Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
-func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
-	return &Service{repo: repo, codec: codec, logger: logger, runMode: runMode}
+//
+// codec must be non-nil — pagination cannot be served without a cursor codec.
+// Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
+// so the cell Init() can propagate a structured error instead of a runtime panic.
+func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+	if codec == nil {
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"auditquery: cursor codec is required")
+	}
+	return &Service{repo: repo, codec: codec, logger: logger, runMode: runMode}, nil
 }
 
 // Query returns a paginated page of audit entries matching the given filters.
