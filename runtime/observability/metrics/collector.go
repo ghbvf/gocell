@@ -1,6 +1,9 @@
 // Package metrics provides HTTP request instrumentation interfaces and an
-// in-memory implementation. Production deployments should use an adapter
-// (e.g., adapters/prometheus) that implements the Collector interface.
+// in-memory implementation. Production deployments wire
+// NewProviderCollector against a kernel/observability/metrics.Provider
+// (backed by adapters/prometheus or adapters/otel); InMemoryCollector is
+// retained for dev / tests that want an observable collector without
+// reaching for a Provider.
 package metrics
 
 import (
@@ -8,7 +11,6 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -93,7 +95,8 @@ func (c *InMemoryCollector) Snapshot() Snapshot {
 }
 
 // Handler returns an http.Handler that serves metrics as JSON.
-// For Prometheus-compatible output, use adapters/prometheus.
+// For Prometheus-compatible output, wire adapters/prometheus.NewMetricProvider
+// into NewProviderCollector and serve the registry via promhttp.
 func (c *InMemoryCollector) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		snap := c.Snapshot()
@@ -129,9 +132,3 @@ func (c *InMemoryCollector) Handler() http.Handler {
 	})
 }
 
-// metricsText formats the counter as a Prometheus-like text line for
-// debugging/testing. Not a full Prometheus exposition format.
-func metricsText(method, route string, status int, count int64) string {
-	return fmt.Sprintf("http_requests_total{method=%q,route=%q,status=%q} %d",
-		method, route, strconv.Itoa(status), count)
-}

@@ -88,6 +88,14 @@ const (
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
 
+	// Observability configuration error.
+	// Raised by kernel / runtime observability constructors when a
+	// required dependency (Provider, cellID) is missing or malformed.
+	// Semantically an initialisation error — distinct from
+	// ErrValidationFailed (user-input validation) so operators can route
+	// the two through different dashboards.
+	ErrObservabilityConfigInvalid Code = "ERR_OBSERVABILITY_CONFIG_INVALID"
+
 	// WebSocket runtime error codes.
 	ErrWSConnNotFound   Code = "ERR_WS_CONN_NOT_FOUND"
 	ErrWSAlreadyStarted Code = "ERR_WS_ALREADY_STARTED"

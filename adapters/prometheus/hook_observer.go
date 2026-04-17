@@ -55,7 +55,9 @@ func (c *HookObserverConfig) defaults() {
 // bucket set.
 //
 // ref: uber-go/fx fxevent/logger.go@master — single-method observer pattern.
-// ref: adapters/prometheus/collector.go — CounterVec/HistogramVec style.
+// ref: adapters/prometheus/metric_provider.go — shares the CounterVec /
+// HistogramVec style this observer predates; any new adapter-level
+// Prometheus metric should go through MetricProvider instead.
 type HookObserver struct {
 	hookTotal    *prom.CounterVec
 	hookDuration *prom.HistogramVec

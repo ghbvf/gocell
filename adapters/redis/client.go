@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -62,6 +63,13 @@ type Config struct {
 
 	// DistLockTTL is the default TTL for distributed locks. Defaults to 30s.
 	DistLockTTL time.Duration
+
+	// PoolSize is the maximum number of connections go-redis is allowed to
+	// maintain. Zero leaves go-redis's default (10 * GOMAXPROCS). Set this
+	// explicitly for workloads whose steady-state checkouts would exceed
+	// the library default — required for meaningful
+	// db.client.connection.max emissions on the pool stats collector.
+	PoolSize int
 }
 
 // LogValue implements slog.LogValuer so that Config can be safely passed
@@ -90,6 +98,13 @@ func (c *Config) defaults() {
 	}
 	if c.DistLockTTL == 0 {
 		c.DistLockTTL = 30 * time.Second
+	}
+	if c.PoolSize == 0 {
+		// Mirror go-redis/v9's own default (10 * GOMAXPROCS) so the
+		// derived `db.client.connection.max` metric reflects the real
+		// pool capacity. Leaving zero here would emit MaxConns=0, which
+		// dashboards interpret as "pool saturated" (used > max).
+		c.PoolSize = 10 * runtime.GOMAXPROCS(0)
 	}
 }
 
@@ -163,6 +178,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 			DialTimeout:   cfg.DialTimeout,
 			ReadTimeout:   cfg.ReadTimeout,
 			WriteTimeout:  cfg.WriteTimeout,
+			PoolSize:      cfg.PoolSize,
 		})
 		rdb = fc
 		statsProvider = fc
@@ -174,6 +190,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 			DialTimeout:  cfg.DialTimeout,
 			ReadTimeout:  cfg.ReadTimeout,
 			WriteTimeout: cfg.WriteTimeout,
+			PoolSize:     cfg.PoolSize,
 		})
 		rdb = rc
 		statsProvider = rc

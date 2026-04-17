@@ -55,25 +55,25 @@ var (
 
 func TestHookTimeout_DefaultApplied(t *testing.T) {
 	// Config with HookTimeout=0 should use DefaultHookTimeout.
-	a := New(Config{ID: "timeout-default", DurabilityMode: cell.DurabilityDemo})
+	a := newTestAssembly(t, Config{ID: "timeout-default", DurabilityMode: cell.DurabilityDemo})
 	assert.Equal(t, DefaultHookTimeout, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_CustomValue(t *testing.T) {
-	a := New(Config{ID: "timeout-custom", DurabilityMode: cell.DurabilityDemo, HookTimeout: 5 * time.Second})
+	a := newTestAssembly(t, Config{ID: "timeout-custom", DurabilityMode: cell.DurabilityDemo, HookTimeout: 5 * time.Second})
 	assert.Equal(t, 5*time.Second, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_NegativeDisables(t *testing.T) {
 	// Negative value must pass through untouched so the hook inherits parent ctx.
-	a := New(Config{ID: "timeout-neg", DurabilityMode: cell.DurabilityDemo, HookTimeout: -1})
+	a := newTestAssembly(t, Config{ID: "timeout-neg", DurabilityMode: cell.DurabilityDemo, HookTimeout: -1})
 	assert.Equal(t, time.Duration(-1), a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	obs := &captureObserver{}
 	// Tight 20ms deadline so the test runs fast.
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "timeout-bs",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    20 * time.Millisecond,
@@ -84,6 +84,9 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "expected DeadlineExceeded, got %v", err)
+
+	// Async dispatcher: drain before reading observer state.
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -99,7 +102,7 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 
 func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	obs := &captureObserver{}
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "timeout-as",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    20 * time.Millisecond,
@@ -110,6 +113,8 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -173,7 +178,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 	// godoc ("Negative values disable per-hook timeouts entirely") against
 	// accidental regression.
 	dc := newDeadlineCheckCell("D")
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "no-deadline",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    -1,
@@ -188,7 +193,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 	// Counter-test: HookTimeout>0 MUST wrap ctx with a deadline.
 	dc := newDeadlineCheckCell("D")
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "with-deadline",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    5 * time.Second,
@@ -202,7 +207,7 @@ func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 
 func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	obs := &captureObserver{}
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "timeout-wrapped",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    20 * time.Millisecond,
@@ -212,6 +217,8 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
+
+	require.True(t, a.FlushHookEvents(500*time.Millisecond))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -228,7 +235,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 
 func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	obs := &captureObserver{}
-	a := New(Config{
+	a := newTestAssembly(t, Config{
 		ID:             "timeout-stop",
 		DurabilityMode: cell.DurabilityDemo,
 		HookTimeout:    20 * time.Millisecond,

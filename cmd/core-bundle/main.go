@@ -216,10 +216,23 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("register cell hook observer: %w", err)
 	}
 
+	// Expose the Prometheus registry to kernel modules via the
+	// provider-neutral metrics.Provider surface. The assembly dispatcher
+	// uses it for drop counters; bootstrap exposes it for caller-registered
+	// metrics (e.g. pool collectors wired from real adapter topologies).
+	metricProvider, err := adapterprom.NewMetricProvider(adapterprom.MetricProviderConfig{
+		Registry:  promRegistry,
+		Namespace: "gocell",
+	})
+	if err != nil {
+		return fmt.Errorf("build metrics provider: %w", err)
+	}
+
 	asm := assembly.New(assembly.Config{
-		ID:             "core-bundle",
-		DurabilityMode: cell.DurabilityDurable,
-		HookObserver:   hookObserver,
+		ID:              "core-bundle",
+		DurabilityMode:  cell.DurabilityDurable,
+		HookObserver:    hookObserver,
+		MetricsProvider: metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
 	})
 	if err := asm.Register(configCell); err != nil {
@@ -276,6 +289,10 @@ func run(ctx context.Context) error {
 		// promhttp serves the isolated registry configured above; the
 		// handler is wrapped with token guard when GOCELL_METRICS_TOKEN is set.
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
+		// Share the same Provider with bootstrap so any future metric
+		// registrar (HTTP collector, relay collector, pool collector)
+		// lands on one Prometheus registry.
+		bootstrap.WithMetricsProvider(metricProvider),
 	}
 	if verboseToken != "" {
 		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))

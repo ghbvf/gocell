@@ -23,6 +23,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -281,6 +282,27 @@ func WithHookTimeout(d time.Duration) Option {
 	}
 }
 
+// WithMetricsProvider registers a provider-neutral metrics backend used by
+// components that need to emit counters/histograms through a common
+// abstraction (hook dispatcher drop counters, OTel pool-stats collector,
+// custom caller-registered metrics). Pass nil or omit the option to use
+// kernel/observability/metrics.NopProvider (no emission).
+//
+// Callers can read b.MetricsProvider() to register additional metrics
+// against the same backend — useful when cmd/* builds both an HTTP
+// Collector and a relay Collector on the same Provider instance.
+//
+// ref: opentelemetry-go otel.GetMeterProvider@main — single global
+// provider entry point; GoCell exposes it per-Bootstrap instance to avoid
+// mutable global state.
+func WithMetricsProvider(p kernelmetrics.Provider) Option {
+	return func(b *Bootstrap) {
+		if p != nil {
+			b.metricsProvider = p
+		}
+	}
+}
+
 // WithHookObserver registers a cell lifecycle hook observer for the
 // default assembly built when no WithAssembly option is supplied.
 //
@@ -329,6 +351,7 @@ type Bootstrap struct {
 	hookTimeout                 time.Duration // applied when assembly not pre-built
 	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                cell.LifecycleHookObserver
+	metricsProvider             kernelmetrics.Provider
 	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
@@ -343,11 +366,25 @@ func New(opts ...Option) *Bootstrap {
 		httpAddr:             ":8080",
 		shutdownTimeout:      shutdown.DefaultTimeout,
 		configWatcherFactory: config.NewWatcher,
+		metricsProvider:      kernelmetrics.NopProvider{},
 	}
 	for _, o := range opts {
 		o(b)
 	}
 	return b
+}
+
+// MetricsProvider returns the configured provider-neutral metrics backend.
+// The returned Provider is never nil; when no WithMetricsProvider option is
+// used the NopProvider default surfaces, so callers can register metrics
+// unconditionally.
+func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
+	if b.metricsProvider == nil {
+		// Defensive: if a future refactor clears the field post-New, keep the
+		// contract of never returning nil so call sites can omit nil checks.
+		return kernelmetrics.NopProvider{}
+	}
+	return b.metricsProvider
 }
 
 // Run executes the full startup sequence. It blocks until ctx is cancelled
@@ -483,6 +520,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if b.hookObserver != nil {
 			cfg.HookObserver = b.hookObserver
 		}
+		// Thread the bootstrap-level Provider into the default assembly so
+		// the hook dispatcher's drop / queue metrics flow to the same
+		// registry as the rest of the application without forcing each
+		// caller to construct their own assembly. Pre-built assemblies
+		// (b.assembly != nil) already own their MetricsProvider through
+		// assembly.Config — we must not clobber it.
+		if b.metricsProvider != nil {
+			cfg.MetricsProvider = b.metricsProvider
+		}
 		asm = assembly.New(cfg)
 	} else if b.hookTimeoutSet || b.hookObserver != nil {
 		// Pre-built assembly owns its own hook config — WithHookTimeout /
@@ -490,6 +536,23 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		// so operators don't spend time debugging why the option had no effect.
 		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
+
+	// Register an unconditional Shutdown teardown BEFORE StartWithConfig.
+	// CoreAssembly.New() eagerly spawns the hook-dispatcher goroutine;
+	// if Start fails the goroutine stays alive until someone calls
+	// Shutdown/Stop. Placing this teardown first in the slice ensures the
+	// rollback LIFO sequence reaches it even when every later teardown
+	// succeeds. Shutdown is idempotent (sync.Once); after Stop runs the
+	// second call is a no-op.
+	//
+	// ref: uber-go/fx app.go Rollback — every component registered in
+	// forward order must be torn down in reverse even if the next step
+	// never succeeded. Runaway background goroutines are the canonical
+	// symptom of skipping this rule.
+	teardowns = append(teardowns, func(_ context.Context) error {
+		asm.Shutdown()
+		return nil
+	})
 
 	// Inject config into assembly dependencies.
 	cfgMap := snapshotConfig(cfg)

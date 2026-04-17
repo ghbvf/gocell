@@ -282,6 +282,12 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthKeyMissing:    http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStarted:  http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStopped:  http.StatusInternalServerError,
+	// Observability init failures (missing Provider, missing CellID) —
+	// these originate from composition-root misconfiguration and never
+	// escape via HTTP in practice, but the exhaustive test requires every
+	// errcode.Code to map. 500 is the conservative choice: if one ever
+	// reaches the HTTP layer, it signals an internal setup bug.
+	errcode.ErrObservabilityConfigInvalid: http.StatusInternalServerError,
 
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,
