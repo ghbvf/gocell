@@ -447,6 +447,12 @@ func callHookSafe(fn func() error) (err error, panicked bool) {
 // ref: uber-go/fx internal/lifecycle/lifecycle.go@master runStartHook — emit
 // event around each hook, record runtime via clock.Now.
 func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell.HookPhase, fn func(context.Context) error) error {
+	// Start the wall-clock before WithTimeout so Duration spans the full
+	// ctx-setup + hook-execution window. Otherwise time.Now() runs slightly
+	// after the deadline timer arms, making Duration < HookTimeout even when
+	// the hook blocked until the deadline fired — breaks assertions like
+	// Duration >= HookTimeout under scheduling jitter.
+	start := time.Now()
 	hookCtx := ctx
 	if a.cfg.HookTimeout > 0 {
 		var cancel context.CancelFunc
@@ -454,7 +460,6 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 		defer cancel()
 	}
 
-	start := time.Now()
 	err, panicked := callHookSafe(func() error { return fn(hookCtx) })
 	dur := time.Since(start)
 
