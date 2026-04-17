@@ -181,42 +181,63 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 		c.Issuer = iss
 	}
 
-	// Parse audience (can be string or []interface{}).
-	switch aud := mc["aud"].(type) {
-	case string:
-		c.Audience = []string{aud}
-	case []any:
-		for _, a := range aud {
-			if s, ok := a.(string); ok {
-				c.Audience = append(c.Audience, s)
-			}
-		}
-	}
-
-	// Parse roles ([]interface{}).
-	if roles, ok := mc["roles"].([]any); ok {
-		for _, r := range roles {
-			if s, ok := r.(string); ok {
-				c.Roles = append(c.Roles, s)
-			}
-		}
-	}
-
-	// Parse timestamps.
-	if exp, ok := mc["exp"].(float64); ok {
-		c.ExpiresAt = time.Unix(int64(exp), 0)
-	}
-	if iat, ok := mc["iat"].(float64); ok {
-		c.IssuedAt = time.Unix(int64(iat), 0)
-	}
-
-	// Collect extra claims.
-	standard := map[string]bool{"sub": true, "iss": true, "aud": true, "exp": true, "iat": true, "nbf": true, "roles": true}
-	for k, v := range mc {
-		if !standard[k] {
-			c.Extra[k] = v
-		}
-	}
+	c.Audience = parseAudience(mc["aud"])
+	c.Roles = parseStringSlice(mc["roles"])
+	c.ExpiresAt = parseUnixTime(mc["exp"])
+	c.IssuedAt = parseUnixTime(mc["iat"])
+	c.Extra = collectExtraClaims(mc)
 
 	return c
+}
+
+func parseAudience(v any) []string {
+	switch aud := v.(type) {
+	case string:
+		return []string{aud}
+	case []any:
+		return filterStrings(aud)
+	default:
+		return nil
+	}
+}
+
+func parseStringSlice(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	return filterStrings(arr)
+}
+
+func filterStrings(arr []any) []string {
+	var out []string
+	for _, a := range arr {
+		if s, ok := a.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func parseUnixTime(v any) time.Time {
+	f, ok := v.(float64)
+	if !ok {
+		return time.Time{}
+	}
+	return time.Unix(int64(f), 0)
+}
+
+var standardClaims = map[string]bool{
+	"sub": true, "iss": true, "aud": true,
+	"exp": true, "iat": true, "nbf": true, "roles": true,
+}
+
+func collectExtraClaims(mc jwt.MapClaims) map[string]any {
+	extra := make(map[string]any)
+	for k, v := range mc {
+		if !standardClaims[k] {
+			extra[k] = v
+		}
+	}
+	return extra
 }

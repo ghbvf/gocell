@@ -91,43 +91,62 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			claims, ok := ClaimsFrom(r.Context())
-			if !ok {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
-				return
-			}
-
-			// Check if any of the user's roles match the required roles.
-			for _, role := range claims.Roles {
-				if roleSet[role] {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-
-			// If an Authorizer is provided, try policy-based authorization.
-			if authorizer != nil {
-				sub := claims.Subject
-				for _, role := range roles {
-					allowed, err := authorizer.Authorize(r.Context(), sub, r.URL.Path, role)
-					if err != nil {
-						loggerFrom(r.Context()).Error("authorization check failed",
-							"error", err,
-							"subject", sub,
-						)
-						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
-						return
-					}
-					if allowed {
-						next.ServeHTTP(w, r)
-						return
-					}
-				}
-			}
-
-			httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+			handleRequireRole(authorizer, roles, roleSet, next, w, r)
 		})
 	}
+}
+
+func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string]bool, next http.Handler, w http.ResponseWriter, r *http.Request) {
+	claims, ok := ClaimsFrom(r.Context())
+	if !ok {
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
+		return
+	}
+
+	if hasMatchingRole(claims, roleSet) {
+		next.ServeHTTP(w, r)
+		return
+	}
+
+	if authorizer != nil {
+		allowed, err := checkAuthorizer(authorizer, r, claims.Subject, roles)
+		if err != nil {
+			loggerFrom(r.Context()).Error("authorization check failed",
+				"error", err,
+				"subject", claims.Subject,
+			)
+			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+			return
+		}
+		if allowed {
+			next.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+}
+
+func hasMatchingRole(claims Claims, roleSet map[string]bool) bool {
+	for _, role := range claims.Roles {
+		if roleSet[role] {
+			return true
+		}
+	}
+	return false
+}
+
+func checkAuthorizer(authorizer Authorizer, r *http.Request, subject string, roles []string) (bool, error) {
+	for _, role := range roles {
+		allowed, err := authorizer.Authorize(r.Context(), subject, r.URL.Path, role)
+		if err != nil {
+			return false, err
+		}
+		if allowed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func extractBearerToken(r *http.Request) string {

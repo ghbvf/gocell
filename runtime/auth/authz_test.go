@@ -15,12 +15,12 @@ import (
 
 func TestRequireSelfOrRole(t *testing.T) {
 	tests := []struct {
-		name       string
-		ctx        context.Context
-		targetID   string
-		roles      []string
-		wantErr    bool
-		wantCode   errcode.Code
+		name     string
+		ctx      context.Context
+		targetID string
+		roles    []string
+		wantErr  bool
+		wantCode errcode.Code
 	}{
 		{
 			name:     "self-access allowed",
