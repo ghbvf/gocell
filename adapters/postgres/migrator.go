@@ -108,19 +108,17 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 // version, not after; same principle as Atlas lint gate.
 // ref: golang-migrate Source.Read — validate preconditions before applying.
 func (m *Migrator) Up(ctx context.Context) error {
-	if m.pool != nil {
-		invalid, err := DetectInvalidIndexes(ctx, m.pool)
-		if err != nil {
-			return errcode.Wrap(ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
+	invalid, err := DetectInvalidIndexes(ctx, m.pool)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
+	}
+	if len(invalid) > 0 {
+		names := make([]string, len(invalid))
+		for i, idx := range invalid {
+			names[i] = idx.Index
 		}
-		if len(invalid) > 0 {
-			names := make([]string, len(invalid))
-			for i, idx := range invalid {
-				names[i] = idx.Index
-			}
-			return errcode.New(ErrAdapterPGMigrate,
-				fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v; manual cleanup required before proceeding", len(invalid), names))
-		}
+		return errcode.New(ErrAdapterPGMigrate,
+			fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v; manual cleanup required before proceeding", len(invalid), names))
 	}
 	if _, err := m.provider.Up(ctx); err != nil {
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: apply migrations", err)
