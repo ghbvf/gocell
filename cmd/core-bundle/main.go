@@ -116,7 +116,7 @@ func validateAdapterMode(mode string) error {
 	case "", "real":
 		return nil
 	default:
-		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\"", mode)
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (unset = dev) or \"real\"", mode)
 	}
 }
 

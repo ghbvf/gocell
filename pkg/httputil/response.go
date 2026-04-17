@@ -275,6 +275,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAdapterPGNoTx:     http.StatusInternalServerError,
 	errcode.ErrTestExecution:     http.StatusInternalServerError,
 	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
+	errcode.ErrCellMissingCodec:  http.StatusInternalServerError,
 	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
 	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
 	errcode.ErrAuditRepoQuery:    http.StatusInternalServerError,

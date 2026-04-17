@@ -32,6 +32,7 @@ const (
 	ErrZeroTestMatch    Code = "ERR_ZERO_TEST_MATCH"
 	ErrBusClosed          Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrCellMissingCodec   Code = "ERR_CELL_MISSING_CODEC"
 	ErrSessionNotFound    Code = "ERR_SESSION_NOT_FOUND"
 	ErrSessionConflict    Code = "ERR_SESSION_CONFLICT"
 	ErrOrderNotFound      Code = "ERR_ORDER_NOT_FOUND"

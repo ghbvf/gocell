@@ -16,6 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -342,4 +344,123 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
 		"feature-flag cursor must be rejected by config-read endpoint")
+}
+
+// TestConfigCore_InitDurable_RejectsMissingCursorCodec locks the fail-fast
+// behavior introduced with RunMode wiring: a durable assembly that forgets
+// to inject a production cursor codec must not silently fall back to the
+// public demo key baked into the source tree.
+func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
+	c := NewConfigCore(
+		WithConfigRepository(mem.NewConfigRepository()),
+		WithFlagRepository(mem.NewFlagRepository()),
+		WithPublisher(eventbus.New()),
+		WithOutboxWriter(&recordingConfigWriter{}),
+		WithTxManager(noopTxRunner{}),
+		// No WithCursorCodec — durable mode must refuse the demo fallback.
+	)
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+	assert.Contains(t, err.Error(), "cursor codec")
+}
+
+// TestConfigCore_Wiring_PublisherFailure_DemoVsDurable exercises the
+// ConfigCore.Init → WithDemoFailOpen wiring end-to-end through HTTP. A
+// publisher-only path with a failing publisher must:
+//   - DurabilityDemo: swallow the publisher error (200 OK)
+//   - DurabilityDurable: propagate the error (500)
+//
+// This is the contract that PR#165 introduced but was previously only
+// covered at the service layer; the wiring in ConfigCore.Init toggling
+// WithDemoFailOpen was untested.
+func TestConfigCore_Wiring_PublisherFailure_DemoVsDurable(t *testing.T) {
+	t.Parallel()
+	productionKey := []byte("wiring-test-cfg-cursor-key-32b!!")
+
+	tests := []struct {
+		name       string
+		mode       cell.DurabilityMode
+		path       string
+		wantStatus int
+	}{
+		{"demo swallows publisher error on publish", cell.DurabilityDemo, "/api/v1/config/flag-wiring/publish", http.StatusOK},
+		{"demo swallows publisher error on rollback", cell.DurabilityDemo, "/api/v1/config/flag-wiring/rollback", http.StatusOK},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := mem.NewConfigRepository()
+			seedConfigEntry(t, repo, "flag-wiring", "v1")
+			// Pre-create a version for rollback path.
+			mustPublish(t, repo, "flag-wiring")
+
+			c := NewConfigCore(
+				WithConfigRepository(repo),
+				WithFlagRepository(mem.NewFlagRepository()),
+				WithPublisher(failingPub{err: fmt.Errorf("broker unavailable")}),
+				WithCursorCodec(mustNewCfgCodec(t, productionKey)),
+				// No outbox — exercises the publisher-only path.
+			)
+			require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+				Config:         map[string]any{},
+				DurabilityMode: tc.mode,
+			}))
+
+			r := router.New()
+			c.RegisterRoutes(r)
+
+			rec := httptest.NewRecorder()
+			ctx := auth.TestContext("admin-user", []string{"admin"})
+			body := strings.NewReader(`{"version":1}`)
+			req := httptest.NewRequest(http.MethodPost, tc.path, body).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(rec, req)
+
+			assert.Equalf(t, tc.wantStatus, rec.Code,
+				"mode=%s body=%s", tc.mode, rec.Body.String())
+		})
+	}
+}
+
+// recordingConfigWriter is a minimal outbox.Writer test double that is not a
+// Nooper — durable mode requires a non-noop writer.
+type recordingConfigWriter struct{ entries []outbox.Entry }
+
+func (w *recordingConfigWriter) Write(_ context.Context, entry outbox.Entry) error {
+	w.entries = append(w.entries, entry)
+	return nil
+}
+
+type failingPub struct{ err error }
+
+func (p failingPub) Publish(_ context.Context, _ string, _ []byte) error { return p.err }
+
+func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
+	t.Helper()
+	codec, err := query.NewCursorCodec(key)
+	require.NoError(t, err)
+	return codec
+}
+
+func seedConfigEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {
+	t.Helper()
+	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
+	}))
+}
+
+func mustPublish(t *testing.T, repo *mem.ConfigRepository, key string) {
+	t.Helper()
+	entry, err := repo.GetByKey(context.Background(), key)
+	require.NoError(t, err)
+	require.NoError(t, repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+		ID: "ver-seed-" + key, ConfigID: entry.ID, Version: entry.Version, Value: entry.Value,
+	}))
 }

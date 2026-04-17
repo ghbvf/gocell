@@ -191,8 +191,12 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.archiveSvc = auditarchive.NewService()
 	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L1))
 
-	// Default cursor codec for pagination if not injected.
-	if err := c.initCursorCodec(); err != nil {
+	// Default cursor codec for pagination if not injected. Durable mode
+	// refuses the public demo-key fallback — an assembly that forgets to
+	// wire a production codec must fail closed, not silently sign cursors
+	// with a key that ships in the source tree.
+	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
+	if err := c.initCursorCodec(deps.DurabilityMode); err != nil {
 		return err
 	}
 
@@ -205,10 +209,16 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// initCursorCodec initialises the cursor codec with a demo key if not injected.
-func (c *AuditCore) initCursorCodec() error {
+// initCursorCodec initialises the cursor codec with a demo key if not
+// injected. In DurabilityDurable mode the demo fallback is refused — callers
+// must inject a production codec via WithCursorCodec.
+func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 	if c.cursorCodec != nil {
 		return nil
+	}
+	if mode == cell.DurabilityDurable {
+		return errcode.New(errcode.ErrCellMissingCodec,
+			"audit-core durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
 	}
 	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
