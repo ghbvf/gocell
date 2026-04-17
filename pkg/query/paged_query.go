@@ -46,28 +46,12 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 	}
 	cfg.Request.Normalize()
 
-	var cursorValues []any
-	if cfg.Request.Cursor != "" {
-		cur, err := cfg.Codec.Decode(cfg.Request.Cursor)
-		if err != nil {
-			if cfg.OnCursorErr != nil {
-				cfg.OnCursorErr(ctx, CursorPhaseDecode, err)
-			}
-			if cfg.DemoMode {
-				return fetchFirstPage(ctx, cfg)
-			}
-			return PageResult[T]{}, err
-		}
-		if err := ValidateCursorScope(cur, cfg.Sort, cfg.QueryCtx); err != nil {
-			if cfg.OnCursorErr != nil {
-				cfg.OnCursorErr(ctx, CursorPhaseScope, err)
-			}
-			if cfg.DemoMode {
-				return fetchFirstPage(ctx, cfg)
-			}
-			return PageResult[T]{}, err
-		}
-		cursorValues = cur.Values
+	cursorValues, fallback, err := resolveCursor(ctx, cfg)
+	if err != nil {
+		return PageResult[T]{}, err
+	}
+	if fallback {
+		return fetchFirstPage(ctx, cfg)
 	}
 
 	params := ListParams{
@@ -82,6 +66,40 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 	}
 
 	return BuildPageResult(items, cfg.Request.Limit, cfg.Codec, cfg.Sort, cfg.QueryCtx, cfg.Extract)
+}
+
+// resolveCursor decodes and validates the cursor token. Returns the keyset
+// values for the next page, or (nil, true, nil) when DemoMode absorbs a
+// stale cursor and the caller should fall back to the first page.
+func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, bool, error) {
+	if cfg.Request.Cursor == "" {
+		return nil, false, nil
+	}
+
+	cur, err := cfg.Codec.Decode(cfg.Request.Cursor)
+	if err != nil {
+		reportCursorErr(ctx, cfg.OnCursorErr, CursorPhaseDecode, err)
+		if cfg.DemoMode {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+
+	if err := ValidateCursorScope(cur, cfg.Sort, cfg.QueryCtx); err != nil {
+		reportCursorErr(ctx, cfg.OnCursorErr, CursorPhaseScope, err)
+		if cfg.DemoMode {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+
+	return cur.Values, false, nil
+}
+
+func reportCursorErr(ctx context.Context, fn CursorErrorFunc, phase string, err error) {
+	if fn != nil {
+		fn(ctx, phase, err)
+	}
 }
 
 func fetchFirstPage[T any](ctx context.Context, cfg PagedQueryConfig[T]) (PageResult[T], error) {
