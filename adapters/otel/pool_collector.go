@@ -15,6 +15,13 @@ import (
 //
 // db.client.connection.count is a single UpDownCounter split by state="idle|used";
 // db.client.connection.max is an UpDownCounter for configured pool capacity.
+//
+// SCOPE — this collector is for **database connection pools only**
+// (adapters/postgres, adapters/redis). Do NOT pass the rabbitmq channel
+// pool statter here: amqp channels inside a single TCP connection are not
+// database connections, and emitting them through db.client.connection.*
+// produces misleading dashboards. Use RegisterMessagingChannelMetrics
+// (messaging_channel_collector.go) for that case.
 const (
 	metricNameConnCount = "db.client.connection.count"
 	metricNameConnMax   = "db.client.connection.max"

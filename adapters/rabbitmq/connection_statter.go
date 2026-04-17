@@ -2,33 +2,51 @@ package rabbitmq
 
 import "github.com/ghbvf/gocell/runtime/observability/poolstats"
 
-// Statter returns a poolstats.Statter bound to this Connection with the
-// supplied human-readable name (e.g. "rabbitmq-outbox"). The OTel pool
-// collector consumes Statter snapshots to emit uniform
-// db.client.connection.* metrics across every GoCell adapter.
+// ChannelStatter returns a poolstats.Statter bound to this Connection's
+// subscriber channel pool, with the supplied human-readable name
+// (e.g. "rabbitmq-outbox"). The Snapshot shape is shared with database
+// pools but the underlying resource is **AMQP channels inside one TCP
+// connection**, not TCP connections.
 //
-// Scope note: the rabbitmq adapter manages a **channel pool** inside one
-// AMQP connection — TotalConns counts channels, not connections. The
-// publisher bypasses the pool and uses ephemeral channels (Publisher
-// opens/confirms/closes per publish), so this statter only reflects
-// subscriber channel pool utilisation. The AMQP library does not track a
-// "wait queue" for channel acquisition (Connection.Channel() blocks on
-// the broker, not on the pool), so WaitCount is always 0.
+// IMPORTANT — consume this statter via
+// adapters/otel.RegisterMessagingChannelMetrics (messaging semantics),
+// NOT RegisterPoolMetrics (db.client.connection.* semantics). Feeding a
+// channel-pool snapshot into the DB collector emits misleading
+// db.client.connection.count{state=…} time series and corrupts dashboard
+// capacity signalling — the kind of silent semantic drift that only
+// surfaces during an incident.
 //
-// ref: rabbitmq/amqp091-go — no built-in wait counter; channel pool is
-// maintained by our adapter at adapters/rabbitmq/connection.go.
-func (c *Connection) Statter(name string) poolstats.Statter {
-	return &rabbitPoolStatter{conn: c, name: name}
+// Scope — publisher channels are ephemeral (open/confirm/publish/close
+// per publish) and bypass the pool entirely, so the snapshot reflects
+// only the subscriber channel pool. amqp091-go does not track a wait
+// queue for channel acquisition (Connection.Channel() blocks on the
+// broker, not on the pool), so WaitCount is always 0.
+//
+// ref: rabbitmq/amqp091-go channel pool (adapter-local at
+// adapters/rabbitmq/connection.go). OpenTelemetry semconv database-metrics
+// / messaging-metrics specs separate DB connection pools from messaging
+// channels explicitly — no upstream convention justifies collapsing the
+// two into one metric family.
+func (c *Connection) ChannelStatter(name string) poolstats.Statter {
+	return &rabbitChannelStatter{conn: c, name: name}
 }
 
-type rabbitPoolStatter struct {
+// Deprecated: use ChannelStatter. The old name implied uniform database
+// pool semantics. A caller that routed the returned statter through
+// RegisterPoolMetrics was emitting semantically wrong
+// db.client.connection.* time series.
+func (c *Connection) Statter(name string) poolstats.Statter {
+	return c.ChannelStatter(name)
+}
+
+type rabbitChannelStatter struct {
 	conn *Connection
 	name string
 }
 
-func (s *rabbitPoolStatter) PoolName() string { return s.name }
+func (s *rabbitChannelStatter) PoolName() string { return s.name }
 
-func (s *rabbitPoolStatter) Snapshot() poolstats.Snapshot {
+func (s *rabbitChannelStatter) Snapshot() poolstats.Snapshot {
 	if s.conn == nil {
 		return poolstats.Snapshot{}
 	}
@@ -38,6 +56,6 @@ func (s *rabbitPoolStatter) Snapshot() poolstats.Snapshot {
 		IdleConns:  int64(stats.IdleChannels),
 		UsedConns:  int64(stats.ChannelPoolSize - stats.IdleChannels),
 		MaxConns:   int64(stats.ChannelPoolSize),
-		WaitCount:  0, // amqp091 has no wait queue; see package doc above.
+		WaitCount:  0, // amqp091 has no wait queue; see godoc above.
 	}
 }

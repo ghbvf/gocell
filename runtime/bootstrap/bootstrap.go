@@ -520,6 +520,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if b.hookObserver != nil {
 			cfg.HookObserver = b.hookObserver
 		}
+		// Thread the bootstrap-level Provider into the default assembly so
+		// the hook dispatcher's drop / queue metrics flow to the same
+		// registry as the rest of the application without forcing each
+		// caller to construct their own assembly. Pre-built assemblies
+		// (b.assembly != nil) already own their MetricsProvider through
+		// assembly.Config — we must not clobber it.
+		if b.metricsProvider != nil {
+			cfg.MetricsProvider = b.metricsProvider
+		}
 		asm = assembly.New(cfg)
 	} else if b.hookTimeoutSet || b.hookObserver != nil {
 		// Pre-built assembly owns its own hook config — WithHookTimeout /
@@ -527,6 +536,23 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		// so operators don't spend time debugging why the option had no effect.
 		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
+
+	// Register an unconditional Shutdown teardown BEFORE StartWithConfig.
+	// CoreAssembly.New() eagerly spawns the hook-dispatcher goroutine;
+	// if Start fails the goroutine stays alive until someone calls
+	// Shutdown/Stop. Placing this teardown first in the slice ensures the
+	// rollback LIFO sequence reaches it even when every later teardown
+	// succeeds. Shutdown is idempotent (sync.Once); after Stop runs the
+	// second call is a no-op.
+	//
+	// ref: uber-go/fx app.go Rollback — every component registered in
+	// forward order must be torn down in reverse even if the next step
+	// never succeeded. Runaway background goroutines are the canonical
+	// symptom of skipping this rule.
+	teardowns = append(teardowns, func(_ context.Context) error {
+		asm.Shutdown()
+		return nil
+	})
 
 	// Inject config into assembly dependencies.
 	cfgMap := snapshotConfig(cfg)

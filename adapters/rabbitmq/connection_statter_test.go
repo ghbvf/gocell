@@ -12,7 +12,7 @@ func TestConnection_Statter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	// supported (method would panic), but tests that exercise the
 	// statter-returned object with a nil inner must not panic on
 	// Snapshot. Construct via the factory with a nil connection sentinel:
-	s := (&rabbitPoolStatter{conn: c, name: "rmq-nil"})
+	s := (&rabbitChannelStatter{conn: c, name: "rmq-nil"})
 	if s.PoolName() != "rmq-nil" {
 		t.Fatalf("PoolName = %q, want rmq-nil", s.PoolName())
 	}
@@ -50,4 +50,4 @@ func TestConnection_Statter_MapsChannelPoolStats(t *testing.T) {
 	}
 }
 
-var _ poolstats.Statter = (*rabbitPoolStatter)(nil)
+var _ poolstats.Statter = (*rabbitChannelStatter)(nil)
