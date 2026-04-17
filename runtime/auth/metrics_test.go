@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,6 +59,7 @@ func TestClassifyTokenError(t *testing.T) {
 		{"kid error", fmt.Errorf("token verification failed: missing kid header"), "invalid_kid"},
 		{"wrong alg", fmt.Errorf("token verification failed: unexpected signing method: HS256"), "wrong_alg"},
 		{"other", fmt.Errorf("something unexpected"), "invalid_token"},
+		{"invalid_intent", errcode.New(errcode.ErrAuthInvalidTokenIntent, "x"), "invalid_intent"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
