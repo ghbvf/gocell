@@ -53,6 +53,11 @@ type mockChannel struct {
 	queueBindErr       error
 
 	notifyPublishCh chan amqp.Confirmation
+	// autoAck pushes {Ack: true} into the publisher's confirm channel the
+	// moment NotifyPublish runs, so Publish* tests don't need a polling
+	// goroutine to fake the broker confirmation. Buffered send (publisher
+	// allocates chan with cap 1) — never blocks.
+	autoAck bool
 
 	ackCalled  bool
 	ackTag     uint64
@@ -110,8 +115,15 @@ func (m *mockChannel) Confirm(noWait bool) error {
 
 func (m *mockChannel) NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Confirmation {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.notifyPublishCh = confirm
+	autoAck := m.autoAck
+	m.mu.Unlock()
+	if autoAck {
+		select {
+		case confirm <- amqp.Confirmation{Ack: true}:
+		default:
+		}
+	}
 	return confirm
 }
 
@@ -4487,35 +4499,7 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 // never sharing a pool. Default publisher strategy: open, use, close per publish.
 func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 	ch := newMockChannel()
-
-	// Use context.WithTimeout to prevent goroutine leak if the test
-	// exits before the confirmation is sent (same fix as CloseError test).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
-
-	go func() {
-		// Wait until confirmCalled is set (Confirm was called), then the
-		// next NotifyPublish will install a new channel. Poll briefly.
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			ch.mu.Lock()
-			npc := ch.notifyPublishCh
-			confirmed := ch.confirmCalled
-			ch.mu.Unlock()
-			if confirmed && npc != nil {
-				select {
-				case npc <- amqp.Confirmation{Ack: true}:
-					return
-				default:
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	ch.autoAck = true
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
@@ -4550,34 +4534,7 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 	ch := newMockChannel()
 	ch.closeErr = errors.New("channel already closed")
-
-	// Use context.WithTimeout to prevent goroutine leak if the test
-	// exits before the confirmation is sent (e.g., on early failure).
-	// Pattern ref: NATS channel+timeout, Sarama goleak.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			ch.mu.Lock()
-			npc := ch.notifyPublishCh
-			confirmed := ch.confirmCalled
-			ch.mu.Unlock()
-			if confirmed && npc != nil {
-				select {
-				case npc <- amqp.Confirmation{Ack: true}:
-					return
-				default:
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	ch.autoAck = true
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
