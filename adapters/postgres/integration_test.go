@@ -215,32 +215,26 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// First Down() rolls back 003 (status columns), table still exists.
+		// Down() rolls back one migration at a time. With 5 migrations applied,
+		// call Down() 5 times to fully revert. The outbox_entries table disappears
+		// after rolling back 001 (the last iteration).
+		for i := 5; i > 1; i-- {
+			err := migrator.Down(ctx)
+			require.NoError(t, err, "Down() should roll back migration %d without error", i)
+
+			var exists bool
+			err = pool.DB().QueryRow(ctx,
+				"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
+				Scan(&exists)
+			require.NoError(t, err)
+			assert.True(t, exists, "outbox_entries table should still exist after rolling back migration %d", i)
+		}
+
+		// Final Down() rolls back 001 (drops outbox_entries table).
 		err := migrator.Down(ctx)
-		require.NoError(t, err, "Down() should roll back migration 003")
-
-		// Table still exists after rolling back only 003.
-		var exists bool
-		err = pool.DB().QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
-			Scan(&exists)
-		require.NoError(t, err)
-		assert.True(t, exists, "outbox_entries table should still exist after rolling back 003")
-
-		// Second Down() rolls back 002 (drop topic column), table still exists.
-		err = migrator.Down(ctx)
-		require.NoError(t, err, "Down() should roll back migration 002")
-
-		err = pool.DB().QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
-			Scan(&exists)
-		require.NoError(t, err)
-		assert.True(t, exists, "outbox_entries table should still exist after rolling back 002")
-
-		// Third Down() rolls back 001 (drop table).
-		err = migrator.Down(ctx)
 		require.NoError(t, err, "Down() should roll back migration 001")
 
+		var exists bool
 		err = pool.DB().QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
 			Scan(&exists)
@@ -348,6 +342,63 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0, count, "outbox entry should not persist after tx rollback")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// B-1: TestMigrator_Applies004_WithConcurrentlyIndexes
+// ---------------------------------------------------------------------------
+
+// TestMigrator_Applies004_WithConcurrentlyIndexes verifies that migration 004
+// (config_entries + config_versions) is applied correctly and that both tables
+// and their indexes exist. Also verifies that running migrator.Up() twice is
+// idempotent (no duplicate-table error).
+// ref: pressly/goose -- +goose no transaction + CREATE INDEX CONCURRENTLY.
+func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_004")
+	require.NoError(t, err)
+
+	// First Up: applies all 5 migrations including 004.
+	require.NoError(t, migrator.Up(ctx), "first Up() must succeed")
+
+	// Verify config_entries table exists.
+	var configEntriesExists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'config_entries')").
+		Scan(&configEntriesExists)
+	require.NoError(t, err)
+	assert.True(t, configEntriesExists, "config_entries table must exist after migration 004")
+
+	// Verify config_versions table exists.
+	var configVersionsExists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'config_versions')").
+		Scan(&configVersionsExists)
+	require.NoError(t, err)
+	assert.True(t, configVersionsExists, "config_versions table must exist after migration 004")
+
+	// Verify keyset index on config_entries.
+	var keyIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_config_entries_key_id')").
+		Scan(&keyIdxExists)
+	require.NoError(t, err)
+	assert.True(t, keyIdxExists, "idx_config_entries_key_id must exist after migration 004")
+
+	// Verify version index on config_versions.
+	var verIdxExists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_config_versions_config_version')").
+		Scan(&verIdxExists)
+	require.NoError(t, err)
+	assert.True(t, verIdxExists, "idx_config_versions_config_version must exist after migration 004")
+
+	// Idempotent: second Up() must be a no-op.
+	require.NoError(t, migrator.Up(ctx), "second Up() must be idempotent (no error)")
 }
 
 // Target: adapters/postgres coverage >= 80%
