@@ -1,14 +1,25 @@
 //go:build integration
 
-// Package main — e2e regression test for A11 (OUTBOX-RELAY-WIRE-PG-01).
+// Package main — e2e regression test for A11 (OUTBOX-RELAY-WIRE-PG-01) + F1
+// (PG→in-memory-eventbus envelope unwrap).
 //
-// Before the fix, cmd/core-bundle in GOCELL_CELL_ADAPTER_MODE=postgres created
-// the outbox writer but never started the relay worker. Config publish events
-// written to outbox_entries stalled indefinitely — PG mode was broken end-to-end.
+// Before A11, cmd/core-bundle in GOCELL_CELL_ADAPTER_MODE=postgres created the
+// outbox writer but never started the relay worker. Config publish events
+// written to outbox_entries stalled indefinitely — PG mode was broken.
 //
-// Fix: buildConfigCoreOpts now returns a worker.Worker for the relay in PG mode.
-// main() registers it via bootstrap.WithWorkers, which starts it in Step 8 and
-// stops it LIFO on shutdown.
+// Before F1, the relay wrapped payloads in an outboxMessage envelope and
+// pushed them to the in-memory eventbus which did NOT unwrap; subscribers
+// parsed the envelope as business payload, saw empty Action, and silently
+// ACKed unknown-action events. The first version of this test accidentally
+// bypassed the bug by injecting a RabbitMQ publisher (which DOES unwrap),
+// so the test passed while production was broken.
+//
+// Current form exercises the REAL production path:
+//   - Publisher passed to buildConfigCoreOpts is the in-memory eventbus `eb`
+//     (matching cmd/core-bundle/main.go:492).
+//   - Subscription is registered on the same `eb` and asserts the received
+//     Entry.Payload parses as a business event (action/key/value), which
+//     requires the F1 envelope-unwrap fix to work.
 package main
 
 import (
@@ -18,14 +29,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	adaptermq "github.com/ghbvf/gocell/adapters/rabbitmq"
-	"github.com/testcontainers/testcontainers-go"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
@@ -41,27 +49,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// TestOutboxE2E_PGMode_WriteToSubscribe is a regression test for A11
-// (OUTBOX-RELAY-WIRE-PG-01). Before the fix, GOCELL_CELL_ADAPTER_MODE=postgres
-// created the outbox writer but never started the relay, so config publish
-// events would stall in outbox_entries indefinitely.
+// configChangedBusinessPayload is the business event shape that
+// cells/config-core/slices/configsubscribe/service.go expects. If the relay's
+// wire envelope reaches subscribers unwrapped (F1 bug), these fields will all
+// be empty and the regression guard fires.
+type configChangedBusinessPayload struct {
+	Action string `json:"action"`
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+}
+
+// TestOutboxE2E_PGMode_WriteToSubscribe is the combined A11 + F1 regression
+// guard. It exercises the SHIPPED production path: in-memory eventbus is the
+// relay publisher (no RabbitMQ in core-bundle today), a subscriber on the
+// same bus must see business payloads, and the bundle must start/stop via
+// bootstrap.WithWorkers lifecycle.
 //
-// The test starts PG + RMQ testcontainers, assembles core-bundle with PG mode
-// and a real RMQ publisher/relay, publishes a config via HTTP, subscribes to
-// RMQ, and asserts the event arrives within 30s.
-//
-// Chain: HTTP publish → PG outbox_entries → OutboxRelay → RMQ exchange → subscriber
+// Chain under test: HTTP publish → config-core WriteService (L2) → outbox_entries
+//                   → OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
+//                   → subscriber handler receives business payload.
 func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	testutil.RequireDocker(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// --- Step 1: Start testcontainers ---
+	// --- Step 1: Start PG testcontainer (RMQ is NOT used by core-bundle today) ---
 	pgContainer, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),
@@ -75,25 +90,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		}
 	})
 
-	rmqContainer, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage,
-		// Wait for both log signal and port availability to handle Docker Desktop
-		// port-forwarder lag (mirrors testmain_integration_test.go in adapters/rabbitmq).
-		testcontainers.WithAdditionalWaitStrategy(
-			wait.ForListeningPort(nat.Port(tcrabbitmq.DefaultAMQPPort)).
-				WithStartupTimeout(30*time.Second),
-		),
-	)
-	require.NoError(t, err, "start rabbitmq container")
-	t.Cleanup(func() {
-		if err := rmqContainer.Terminate(context.Background()); err != nil {
-			t.Logf("WARN: rabbitmq container terminate failed: %v", err)
-		}
-	})
-
-	// --- Step 2: Connect to PG and run migrations ---
-	// Migrations run directly against the container before buildConfigCoreOpts
-	// opens its own pool (buildConfigCoreOpts does not run migrations — that
-	// is caller responsibility; see comment on adapterpg.NewPool).
+	// --- Step 2: Apply migrations via a short-lived pool ---
 	pgConnStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
@@ -102,43 +99,54 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
-	migrationPool.Close() // buildConfigCoreOpts opens its own pool
+	migrationPool.Close()
 
-	// --- Step 3: Connect to RMQ ---
-	amqpURL, err := rmqContainer.AmqpURL(ctx)
-	require.NoError(t, err)
-
-	rmqConn, err := adaptermq.NewConnection(adaptermq.Config{
-		URL:             amqpURL,
-		ChannelPoolSize: 5,
-		ConfirmTimeout:  10 * time.Second,
-	})
-	require.NoError(t, err, "create rabbitmq connection")
-	t.Cleanup(func() { _ = rmqConn.Close() })
-
-	// --- Step 4: Exercise the REAL production path buildConfigCoreOpts ---
-	// This is the regression guard for A11: if buildConfigCoreOpts ever stops
-	// returning a relay worker in postgres mode, the NotNil assertion below
-	// fires and we fail before even booting the assembly. Prior to this
-	// refactor the test manually built the relay, which silently masked any
-	// regression in the production wiring.
-	rmqPublisher := adaptermq.NewPublisher(rmqConn)
+	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
+	eb := eventbus.New()
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", pgConnStr)
 
 	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err :=
-		buildConfigCoreOpts(ctx, rmqPublisher, kernelmetrics.NopProvider{})
+		buildConfigCoreOpts(ctx, eb, kernelmetrics.NopProvider{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	require.Equal(t, "postgres", cellAdapterMode, "cell adapter mode must be postgres")
 	require.NotNil(t, relayWorker,
-		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil relay "+
-			"worker in postgres mode; if this fails, the PG outbox→RMQ wire was "+
-			"disconnected in production code")
+		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil relay worker in PG mode")
 	require.NotNil(t, pgPool, "PG pool must be returned in postgres mode")
 	t.Cleanup(pgPool.Close)
 
-	eb := eventbus.New()
+	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
+	// This is the F1 regression guard: if the bus forwards envelope-wrapped
+	// bytes as-is, the business payload parse below gets empty fields.
+	const topic = "event.config.changed.v1"
+
+	type received struct {
+		entry   outbox.Entry
+		payload configChangedBusinessPayload
+		parsed  bool
+	}
+	var (
+		recvs  []received
+		recvMu sync.Mutex
+	)
+
+	subCtx, subCancel := context.WithCancel(ctx)
+	defer subCancel()
+	go func() {
+		_ = eb.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			var p configChangedBusinessPayload
+			err := json.Unmarshal(e.Payload, &p)
+			recvMu.Lock()
+			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
+			recvMu.Unlock()
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "e2e-test")
+	}()
+	// Give subscriber goroutine a moment to register before first publish.
+	time.Sleep(50 * time.Millisecond)
+
+	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
@@ -178,39 +186,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
 
-	// --- Step 5: Subscribe to RMQ before starting the bundle ---
-	// Subscribe early so the exchange/queue topology is declared before any events.
-	const topic = "event.config.changed.v1"
-	const dlxExchange = "dlx.e2e-test"
-
-	var receivedCount atomic.Int32
-
-	rmqSubConn, err := adaptermq.NewConnection(adaptermq.Config{
-		URL:             amqpURL,
-		ChannelPoolSize: 5,
-		ConfirmTimeout:  10 * time.Second,
-	})
-	require.NoError(t, err, "create subscriber rabbitmq connection")
-	t.Cleanup(func() { _ = rmqSubConn.Close() })
-
-	subscriber := adaptermq.NewSubscriber(rmqSubConn, adaptermq.SubscriberConfig{
-		ConsumerGroup: "e2e-test",
-		DLXExchange:   dlxExchange,
-	})
-	t.Cleanup(func() { _ = subscriber.Close() })
-
-	// Subscribe in a background goroutine; the handler increments receivedCount.
-	subCtx, subCancel := context.WithCancel(ctx)
-	defer subCancel()
-	subErrCh := make(chan error, 1)
-	go func() {
-		handler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			receivedCount.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-		subErrCh <- subscriber.Subscribe(subCtx, topic, handler, "e2e-test")
-	}()
-
 	// --- Step 6: Boot the assembly with the relay worker ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -224,10 +199,9 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			"/api/v1/access/sessions/login",
 			"/api/v1/access/sessions/refresh",
 		}),
-		// A11 regression guard: relayWorker came from buildConfigCoreOpts
-		// above — not from a manual adapterpg.NewOutboxRelay call. If the
-		// production wiring ever stops producing a relay worker, the
-		// require.NotNil in Step 4 fires before we get here.
+		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
+		// not from a manual adapterpg.NewOutboxRelay call. If the production
+		// wiring stops producing a relay worker, require.NotNil above fires.
 		bootstrap.WithWorkers(relayWorker),
 	)
 
@@ -238,7 +212,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	addr := ln.Addr().String()
 	baseURL := "http://" + addr
 
-	// Wait for HTTP server ready.
 	require.Eventually(t, func() bool {
 		resp, err := http.Get(fmt.Sprintf("%s/healthz", baseURL))
 		if err != nil {
@@ -248,23 +221,40 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 10*time.Second, 100*time.Millisecond, "HTTP server must become ready")
 
-	// --- Step 7: Login to get a token for the config publish HTTP call ---
+	// --- Step 7: Drive HTTP requests ---
 	token := loginAdmin(t, baseURL, "admin", "adminpass")
-
-	// --- Step 8: Create a config entry ---
 	createConfig(t, baseURL, token, "e2e.test.key", "e2e-value")
-
-	// --- Step 9: Publish the config entry via HTTP ---
 	publishConfig(t, baseURL, token, "e2e.test.key")
 
-	// --- Step 10: Assert the event arrives at RMQ subscriber within 30s ---
+	// --- Step 8: Assert subscriber received a PARSED business payload ---
+	// This is the combined A11 + F1 regression guard. Failure modes:
+	//   - No events at all → A11 regression (relay not started)
+	//   - Events arrive but parsed == false OR all fields empty → F1 regression
+	//     (envelope not unwrapped; subscriber sees envelope shape)
 	require.Eventually(t, func() bool {
-		return receivedCount.Load() > 0
+		recvMu.Lock()
+		defer recvMu.Unlock()
+		for _, r := range recvs {
+			if r.parsed && r.payload.Key == "e2e.test.key" &&
+				(r.payload.Action == "created" || r.payload.Action == "updated" ||
+					r.payload.Action == "published") {
+				return true
+			}
+		}
+		return false
 	}, 30*time.Second, 200*time.Millisecond,
-		"event.config.changed.v1 must arrive at RMQ subscriber within 30s — "+
-			"regression guard for A11: relay must be started via bootstrap.WithWorkers")
+		"A11+F1 regression guard: business payload with action/key must reach subscriber; "+
+			"empty Action or missing Key indicates relay→eventbus envelope was not unwrapped")
 
-	// --- Teardown: stop app cleanly ---
+	// Additional diagnostic: list what actually arrived in case the above fails.
+	recvMu.Lock()
+	for i, r := range recvs {
+		t.Logf("recv[%d]: parsed=%v payload=%+v entry.EventType=%q entry.ID=%q",
+			i, r.parsed, r.payload, r.entry.EventType, r.entry.ID)
+	}
+	recvMu.Unlock()
+
+	// --- Teardown ---
 	appCancel()
 	select {
 	case err := <-appErrCh:
@@ -281,7 +271,7 @@ func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must succeed (returns 201 Created per sessionlogin contract)")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must succeed (201 Created per sessionlogin contract)")
 
 	var result struct {
 		Data struct {

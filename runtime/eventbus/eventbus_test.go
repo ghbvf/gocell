@@ -14,6 +14,116 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestPublish_EnvelopePayload_UnwrappedBeforeDelivery guards the F1 fix:
+// when a relay publishes an outboxMessage envelope (JSON object with id,
+// eventType, payload fields), the bus must unwrap it so subscribers see the
+// business payload in Entry.Payload.
+//
+// Regression: before the unwrap, PG-mode cells (using the in-memory bus as
+// their relay publisher) delivered the envelope as-is; subscribers parsed
+// envelope fields as business fields and silently ACKed unknown actions.
+func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var got outbox.Entry
+	var mu sync.Mutex
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "test.envelope.topic",
+			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				mu.Lock()
+				got = e
+				mu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}, "")
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Envelope wrapping a business payload (action/key/value), mirroring the
+	// shape produced by adapters/postgres/outbox_relay.go publishAll.
+	envelope := []byte(`{
+		"id": "ent-123",
+		"aggregateId": "agg-1",
+		"aggregateType": "config",
+		"eventType": "test.envelope.topic",
+		"topic": "test.envelope.topic",
+		"payload": {"action":"created","key":"k1","value":"v1"},
+		"metadata": {"request_id":"req-42"},
+		"createdAt": "2026-04-18T00:00:00Z"
+	}`)
+	require.NoError(t, bus.Publish(context.Background(), "test.envelope.topic", envelope))
+
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return got.ID != ""
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	// The subscriber must see the UNWRAPPED business payload, not the envelope.
+	assert.JSONEq(t, `{"action":"created","key":"k1","value":"v1"}`, string(got.Payload),
+		"subscriber must receive business payload after envelope unwrap")
+	// Envelope metadata fields must be preserved on the Entry for observability.
+	assert.Equal(t, "ent-123", got.ID)
+	assert.Equal(t, "agg-1", got.AggregateID)
+	assert.Equal(t, "config", got.AggregateType)
+	assert.Equal(t, "test.envelope.topic", got.EventType)
+	assert.Equal(t, map[string]string{"request_id": "req-42"}, got.Metadata)
+}
+
+// TestPublish_NonEnvelopePayload_ForwardedUnchanged documents the fallback:
+// direct publish paths (cells calling bus.Publish with a business payload)
+// keep their pre-F1 semantics — the bus stamps an evt-{uuid} ID and forwards
+// the payload byte-for-byte.
+func TestPublish_NonEnvelopePayload_ForwardedUnchanged(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close() }()
+
+	var got outbox.Entry
+	var mu sync.Mutex
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, "test.direct.topic",
+			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				mu.Lock()
+				got = e
+				mu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}, "")
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Business payload without id/eventType — must NOT be treated as envelope.
+	direct := []byte(`{"action":"updated","key":"k2","value":"v2"}`)
+	require.NoError(t, bus.Publish(context.Background(), "test.direct.topic", direct))
+
+	assert.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return got.ID != ""
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, direct, got.Payload, "non-envelope payload must be forwarded unchanged")
+	assert.Contains(t, got.ID, "evt-", "bus stamps evt-{uuid} id for direct publish")
+	assert.Equal(t, "test.direct.topic", got.EventType, "event type defaults to topic for direct publish")
+}
+
 func TestPublishSubscribe(t *testing.T) {
 	bus := New(WithBufferSize(16))
 	defer func() { _ = bus.Close() }()
