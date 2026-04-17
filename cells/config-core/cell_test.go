@@ -196,8 +196,8 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
 	fn(m)
 }
-func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
+func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // initCellWithRouter creates an initialized ConfigCore with routes registered
@@ -275,6 +275,7 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(auth.TestContext("admin-test", []string{"admin"}))
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
 	}

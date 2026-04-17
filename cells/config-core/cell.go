@@ -23,8 +23,8 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell          = (*ConfigCore)(nil)
-	_ cell.HTTPRegistrar = (*ConfigCore)(nil)
+	_ cell.Cell           = (*ConfigCore)(nil)
+	_ cell.HTTPRegistrar  = (*ConfigCore)(nil)
 	_ cell.EventRegistrar = (*ConfigCore)(nil)
 )
 
@@ -87,11 +87,11 @@ type ConfigCore struct {
 	logger       *slog.Logger
 
 	// Slice services and handlers.
-	writeHandler     *configwrite.Handler
-	readHandler      *configread.Handler
-	publishHandler   *configpublish.Handler
-	flagHandler      *featureflag.Handler
-	subscribeSvc     *configsubscribe.Service
+	writeHandler   *configwrite.Handler
+	readHandler    *configread.Handler
+	publishHandler *configpublish.Handler
+	flagHandler    *featureflag.Handler
+	subscribeSvc   *configsubscribe.Service
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
@@ -114,6 +114,9 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 }
 
 // Init constructs all 5 slices and registers them.
+// TODO(PR-R-BOOT-COGNIT): split into validateDeps / buildCursorCodec / per-slice builders.
+//
+//nolint:gocognit
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
