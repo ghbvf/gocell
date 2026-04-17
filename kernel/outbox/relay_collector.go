@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -72,14 +73,33 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		cfg.BatchBuckets = DefaultRelayBatchBuckets
 	}
 
+	// registered tracks successfully registered collectors in order. On any
+	// partial failure the rollback function unregisters them in LIFO order so
+	// the Provider is left in a clean state, allowing the caller to retry
+	// construction without "duplicate collector" errors.
+	var registered []metrics.Collector
+	rollback := func(origErr error) error {
+		for i := len(registered) - 1; i >= 0; i-- {
+			if rbErr := p.Unregister(registered[i]); rbErr != nil {
+				slog.Error("outbox: unregister during rollback failed",
+					slog.Any("error", rbErr),
+					slog.String("cell", cellID),
+				)
+			}
+		}
+		return origErr
+	}
+
 	relayed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_relayed_total",
 		Help:       "Total number of outbox entries processed by the relay, by outcome.",
 		LabelNames: []string{"cell", "outcome"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("outbox: register outbox_relayed_total: %w", err)
+		return nil, rollback(fmt.Errorf("outbox: register outbox_relayed_total: %w", err))
 	}
+	registered = append(registered, relayed)
+
 	pollDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "outbox_poll_duration_seconds",
 		Help:       "Duration of each relay poll phase in seconds.",
@@ -87,8 +107,10 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		Buckets:    cfg.PollBuckets,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("outbox: register outbox_poll_duration_seconds: %w", err)
+		return nil, rollback(fmt.Errorf("outbox: register outbox_poll_duration_seconds: %w", err))
 	}
+	registered = append(registered, pollDuration)
+
 	batchSize, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "outbox_batch_size",
 		Help:       "Number of entries claimed per relay poll cycle.",
@@ -96,23 +118,27 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		Buckets:    cfg.BatchBuckets,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("outbox: register outbox_batch_size: %w", err)
+		return nil, rollback(fmt.Errorf("outbox: register outbox_batch_size: %w", err))
 	}
+	registered = append(registered, batchSize)
+
 	reclaimed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_reclaimed_total",
 		Help:       "Total number of stale entries reclaimed by the relay.",
 		LabelNames: []string{"cell"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("outbox: register outbox_reclaimed_total: %w", err)
+		return nil, rollback(fmt.Errorf("outbox: register outbox_reclaimed_total: %w", err))
 	}
+	registered = append(registered, reclaimed)
+
 	cleaned, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_cleaned_total",
 		Help:       "Total number of entries cleaned up (deleted) by the relay.",
 		LabelNames: []string{"cell", "status"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("outbox: register outbox_cleaned_total: %w", err)
+		return nil, rollback(fmt.Errorf("outbox: register outbox_cleaned_total: %w", err))
 	}
 
 	return &providerRelayCollector{

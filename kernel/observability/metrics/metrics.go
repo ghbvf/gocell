@@ -18,6 +18,28 @@ import (
 	"strings"
 )
 
+// Collector is a handle to a registered metric family (counter or histogram
+// vec). It is returned by CounterVec/HistogramVec and accepted by Unregister.
+//
+// Callers obtain Collector values only via Provider.CounterVec and
+// Provider.HistogramVec; passing other values to Unregister is undefined
+// behaviour (implementations may silently no-op or return an error).
+//
+// Both CounterVec and HistogramVec embed Collector so that the return values
+// of CounterVec/HistogramVec can be passed directly to Unregister without
+// explicit type assertions.
+//
+// ref: prometheus/client_golang prometheus/collector.go — Collector is the
+// registration unit. GoCell's Collector is a thinner typed handle that keeps
+// kernel code free of Prometheus imports.
+type Collector interface {
+	// Registered marks implementations that were returned by
+	// CounterVec/HistogramVec and may be passed to Provider.Unregister.
+	// All concrete vec types (prom, otel, nop, test spy) implement this
+	// method; external code must not implement Collector directly.
+	Registered() bool
+}
+
 // Provider registers metric instruments. Implementations are provided by
 // adapters/ (prometheus, otel). Kernel code accepts a Provider interface
 // value; at wire time (runtime/bootstrap, cmd/*), a concrete backend is
@@ -29,6 +51,19 @@ import (
 type Provider interface {
 	CounterVec(opts CounterOpts) (CounterVec, error)
 	HistogramVec(opts HistogramOpts) (HistogramVec, error)
+	// Unregister removes a previously registered collector from the provider's
+	// registry. It is safe for concurrent use and idempotent — unregistering a
+	// collector that was never registered (or already unregistered) returns nil
+	// without error.
+	//
+	// Implementations must maintain the invariant that a collector successfully
+	// Unregistered can be re-registered via CounterVec/HistogramVec under the
+	// same name without conflict.
+	//
+	// ref: prometheus/client_golang Registry.Unregister — bool return simplified
+	// to error for GoCell consistency (nil = success or not-found; non-nil =
+	// hard failure).
+	Unregister(c Collector) error
 }
 
 // CounterOpts declares a counter metric family.
@@ -60,12 +95,20 @@ type Labels map[string]string
 // CounterVec returns a pre-bound Counter given a label set. Implementations
 // panic (via MustValidateLabels) when Labels does not exactly match the
 // LabelNames set at registration.
+//
+// CounterVec embeds Collector so that callers can pass it directly to
+// Provider.Unregister without an explicit type cast.
 type CounterVec interface {
+	Collector
 	With(Labels) Counter
 }
 
 // HistogramVec returns a pre-bound Histogram given a label set.
+//
+// HistogramVec embeds Collector so that callers can pass it directly to
+// Provider.Unregister without an explicit type cast.
 type HistogramVec interface {
+	Collector
 	With(Labels) Histogram
 }
 

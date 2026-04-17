@@ -54,6 +54,12 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	}, nil
 }
 
+// Unregister is a no-op for the OTel provider. OTel instruments are
+// registered with the MeterProvider at SDK level; individual instrument
+// deregistration is not part of the OTel API. Returns nil (idempotent,
+// per the Unregister contract).
+func (p *MetricProvider) Unregister(_ metrics.Collector) error { return nil }
+
 // HistogramVec creates a Float64Histogram. Explicit Buckets propagate
 // to OTel as aggregation preferences; callers that want richer aggregation
 // (exponential, quantile) must build their MeterProvider with the relevant
@@ -136,6 +142,7 @@ type otelCounterVec struct {
 	cache  *attrCache
 }
 
+func (v *otelCounterVec) Registered() bool { return true }
 func (v *otelCounterVec) With(l metrics.Labels) metrics.Counter {
 	metrics.MustValidateLabels(v.labels, l)
 	return &otelCounter{
@@ -150,6 +157,7 @@ type otelHistogramVec struct {
 	cache  *attrCache
 }
 
+func (v *otelHistogramVec) Registered() bool { return true }
 func (v *otelHistogramVec) With(l metrics.Labels) metrics.Histogram {
 	metrics.MustValidateLabels(v.labels, l)
 	return &otelHistogram{

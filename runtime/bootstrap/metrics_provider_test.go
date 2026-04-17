@@ -42,5 +42,6 @@ func (recordingProvider) CounterVec(_ kernelmetrics.CounterOpts) (kernelmetrics.
 func (recordingProvider) HistogramVec(_ kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
 	return kernelmetrics.NopProvider{}.HistogramVec(kernelmetrics.HistogramOpts{})
 }
+func (recordingProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
 
 var _ kernelmetrics.Provider = recordingProvider{}

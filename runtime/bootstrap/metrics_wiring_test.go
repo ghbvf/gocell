@@ -39,6 +39,8 @@ func (s *registrationSpy) HistogramVec(opts kernelmetrics.HistogramOpts) (kernel
 	return s.nop.HistogramVec(opts)
 }
 
+func (s *registrationSpy) Unregister(_ kernelmetrics.Collector) error { return nil }
+
 func (s *registrationSpy) counters() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

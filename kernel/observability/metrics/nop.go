@@ -22,8 +22,13 @@ func (NopProvider) HistogramVec(opts HistogramOpts) (HistogramVec, error) {
 	return nopHistogramVec{labels: append([]string(nil), opts.LabelNames...)}, nil
 }
 
+// Unregister is a no-op; the NopProvider does not maintain a registry.
+// Returns nil (idempotent, as per the Unregister contract).
+func (NopProvider) Unregister(_ Collector) error { return nil }
+
 type nopCounterVec struct{ labels []string }
 
+func (v nopCounterVec) Registered() bool { return true }
 func (v nopCounterVec) With(l Labels) Counter {
 	MustValidateLabels(v.labels, l)
 	return nopCounter{}
@@ -31,6 +36,7 @@ func (v nopCounterVec) With(l Labels) Counter {
 
 type nopHistogramVec struct{ labels []string }
 
+func (v nopHistogramVec) Registered() bool { return true }
 func (v nopHistogramVec) With(l Labels) Histogram {
 	MustValidateLabels(v.labels, l)
 	return nopHistogram{}

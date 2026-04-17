@@ -1,6 +1,8 @@
 package prometheus
 
 import (
+	"sync"
+
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -25,8 +27,14 @@ type MetricProviderConfig struct {
 // *prom.Registry. Every CounterVec/HistogramVec returned is registered on
 // the configured registry; duplicate registration surfaces as an
 // ErrAdapterPromRegister error, not a panic.
+//
+// Unregister is safe for concurrent use: it uses a RWMutex to protect the
+// internal registry-to-collector map so rollback from NewProviderRelayCollector
+// can be called from any goroutine.
 type MetricProvider struct {
-	cfg MetricProviderConfig
+	cfg  MetricProviderConfig
+	mu   sync.RWMutex
+	vecs map[metrics.Collector]prom.Collector // kernel vec handle → prom Collector
 }
 
 // Compile-time check: MetricProvider satisfies metrics.Provider.
@@ -40,7 +48,10 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 	if cfg.Registry == nil {
 		return nil, errcode.New(ErrAdapterPromConfig, "prometheus metric provider: Registry is required")
 	}
-	return &MetricProvider{cfg: cfg}, nil
+	return &MetricProvider{
+		cfg:  cfg,
+		vecs: make(map[metrics.Collector]prom.Collector),
+	}, nil
 }
 
 // CounterVec registers and returns a CounterVec bound to the provider's
@@ -56,7 +67,11 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 		return nil, errcode.Wrap(ErrAdapterPromRegister,
 			"prometheus metric provider: register counter "+opts.Name, err)
 	}
-	return &promCounterVec{inner: cv, labels: append([]string(nil), opts.LabelNames...)}, nil
+	vec := &promCounterVec{inner: cv, labels: append([]string(nil), opts.LabelNames...)}
+	p.mu.Lock()
+	p.vecs[vec] = cv
+	p.mu.Unlock()
+	return vec, nil
 }
 
 // HistogramVec registers and returns a HistogramVec bound to the provider's
@@ -72,7 +87,33 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 		return nil, errcode.Wrap(ErrAdapterPromRegister,
 			"prometheus metric provider: register histogram "+opts.Name, err)
 	}
-	return &promHistogramVec{inner: hv, labels: append([]string(nil), opts.LabelNames...)}, nil
+	vec := &promHistogramVec{inner: hv, labels: append([]string(nil), opts.LabelNames...)}
+	p.mu.Lock()
+	p.vecs[vec] = hv
+	p.mu.Unlock()
+	return vec, nil
+}
+
+// Unregister removes a previously registered collector from the Prometheus
+// registry. It is idempotent — passing an unknown Collector (or one already
+// unregistered) returns nil. Concurrent calls are safe.
+//
+// ref: prometheus/client_golang prometheus/registry.go — Registry.Unregister
+// returns bool; we convert "not found" to nil so callers treat it as a no-op.
+func (p *MetricProvider) Unregister(c metrics.Collector) error {
+	p.mu.Lock()
+	promColl, ok := p.vecs[c]
+	if ok {
+		delete(p.vecs, c)
+	}
+	p.mu.Unlock()
+
+	if !ok {
+		// Idempotent: collector was never registered or already removed.
+		return nil
+	}
+	p.cfg.Registry.Unregister(promColl)
+	return nil
 }
 
 type promCounterVec struct {
@@ -80,6 +121,7 @@ type promCounterVec struct {
 	labels []string // Expected label-name set, validated on every With().
 }
 
+func (v *promCounterVec) Registered() bool { return true }
 func (v *promCounterVec) With(l metrics.Labels) metrics.Counter {
 	metrics.MustValidateLabels(v.labels, l)
 	return promCounter{inner: v.inner.With(prom.Labels(l))}
@@ -90,6 +132,7 @@ type promHistogramVec struct {
 	labels []string
 }
 
+func (v *promHistogramVec) Registered() bool { return true }
 func (v *promHistogramVec) With(l metrics.Labels) metrics.Histogram {
 	metrics.MustValidateLabels(v.labels, l)
 	return promHistogram{inner: v.inner.With(prom.Labels(l))}
