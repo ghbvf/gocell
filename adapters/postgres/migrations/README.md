@@ -13,14 +13,24 @@
 
 已有示例：`004_create_config_entries_and_versions.sql`、`005_recreate_outbox_pending_concurrent.sql`。
 
-## 规则 2：`no transaction` migration 不能混用事务内和事务外语句
+## 规则 2：`no transaction` migration 的原子性边界
 
-标记了 `-- +goose no transaction` 的文件，其中的语句会在无事务上下文执行。
-**禁止**在同一文件中混合：
-- `BEGIN` / `COMMIT` / `ROLLBACK` 等显式事务控制语句
-- 既有 CONCURRENTLY 操作又有事务型 DDL（如 `CREATE TABLE`、`ALTER TABLE`）
+标记了 `-- +goose no transaction` 的文件，其中所有语句均在**无显式事务上下文**中逐条执行。
+PostgreSQL 在此模式下：
+- `CREATE INDEX CONCURRENTLY` / `DROP INDEX CONCURRENTLY`：**只能**在 no-transaction 模式执行
+- `CREATE TABLE` / `ALTER TABLE` / DML：可混合在同一文件中（每条语句仍是原子的）
+- `BEGIN` / `COMMIT` / `ROLLBACK`：**禁止**出现（goose 不会再包一层事务，显式事务语句会破坏 migration 生命周期）
 
-若需两类操作，拆分为两个独立 migration 文件。
+混用 CREATE TABLE + CREATE INDEX CONCURRENTLY 是 **允许的模式**（见 `004_create_config_entries_and_versions.sql`：建表 + 建索引在同一文件），PostgreSQL 语义层面合法。
+
+**但必须接受的取舍——无文件级原子性**：
+- 若文件中第 N 条语句失败，前 N-1 条已生效，后续语句不再执行。goose 版本号**不推进**，但数据库处于"半迁移"状态。
+- 作者必须保证每条语句都用 `IF NOT EXISTS` / `IF EXISTS` 幂等措辞，以便直接重跑 migration。
+- 如果某步失败可能留下 INVALID 索引（见规则 5），重跑前需按规则 5 清理。
+
+何时应拆分为两个 migration：
+- 后一步依赖前一步的**事务性提交可见性**（罕见，大多数 DDL 可见性在 no-transaction 模式下也无问题）
+- 需要显式 `BEGIN/COMMIT` 的批量 DML（则该 migration 应完全不含 CONCURRENTLY，走事务型文件）
 
 ## 规则 3：down 路径对称使用 `DROP INDEX CONCURRENTLY`
 
