@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -54,7 +55,12 @@ func WithMaxNonceEntries(n int) InMemoryNonceOption {
 }
 
 // NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge.
-func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) *InMemoryNonceStore {
+// maxAge must be positive; a zero or negative value makes replay protection
+// ineffective and is rejected with an error.
+func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*InMemoryNonceStore, error) {
+	if maxAge <= 0 {
+		return nil, fmt.Errorf("auth: nonce store maxAge must be positive, got %v", maxAge)
+	}
 	s := &InMemoryNonceStore{
 		seen:       make(map[string]time.Time),
 		maxAge:     maxAge,
@@ -64,7 +70,7 @@ func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) *I
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	return s, nil
 }
 
 // CheckAndMark checks whether nonce has been seen within its TTL window. If

@@ -53,7 +53,7 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...Au
 
 			token := extractBearerToken(r)
 			if token == "" {
-				cfg.metrics.recordTokenVerify("failure", "missing", 0)
+				cfg.metrics.recordTokenVerifyCounter("failure", "missing")
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 				return
 			}
@@ -141,4 +141,3 @@ func extractBearerToken(r *http.Request) string {
 	}
 	return strings.TrimSpace(parts[1])
 }
-

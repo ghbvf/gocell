@@ -32,9 +32,12 @@ type JWTVerifierOption func(*JWTVerifier)
 
 // WithVerifierClock overrides the time source used for token expiry validation.
 // Delegates to golang-jwt/jwt v5's WithTimeFunc ParserOption.
+// A nil fn is ignored; the verifier uses time.Now by default.
 func WithVerifierClock(fn func() time.Time) JWTVerifierOption {
 	return func(v *JWTVerifier) {
-		v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(fn))
+		if fn != nil {
+			v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(fn))
+		}
 	}
 }
 
@@ -110,8 +113,13 @@ type JWTIssuer struct {
 type JWTIssuerOption func(*JWTIssuer)
 
 // WithIssuerClock overrides the time source used for iat/exp claim generation.
+// A nil fn is ignored; the issuer uses time.Now by default.
 func WithIssuerClock(fn func() time.Time) JWTIssuerOption {
-	return func(i *JWTIssuer) { i.now = fn }
+	return func(i *JWTIssuer) {
+		if fn != nil {
+			i.now = fn
+		}
+	}
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.

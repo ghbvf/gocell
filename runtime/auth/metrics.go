@@ -72,6 +72,16 @@ func (m *AuthMetrics) recordTokenVerify(result, reason string, duration time.Dur
 	m.tokenVerifyDuration.With(metrics.Labels{"result": result}).Observe(duration.Seconds())
 }
 
+// recordTokenVerifyCounter increments the token verify counter without recording
+// a duration. Used for early-exit paths (e.g. missing token) where no
+// verification work was performed and a 0 duration would pollute the histogram.
+func (m *AuthMetrics) recordTokenVerifyCounter(result, reason string) {
+	if m == nil {
+		return
+	}
+	m.tokenVerifyTotal.With(metrics.Labels{"result": result, "reason": reason}).Inc()
+}
+
 func (m *AuthMetrics) recordServiceVerify(result, reason string) {
 	if m == nil {
 		return

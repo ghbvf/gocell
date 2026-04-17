@@ -202,22 +202,22 @@ func WithTrustedProxies(proxies []string) Option {
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux             *chi.Mux
-	mux                  *chi.Mux
-	healthHandler        *health.Handler
-	metricsCollector     metrics.Collector
-	metricsHandler       http.Handler
-	tracer               tracing.Tracer
-	tracingOpts          []middleware.TracingOption
-	requestIDOpts        []middleware.RequestIDOption
-	rateLimiter          middleware.RateLimiter
-	circuitBreaker       middleware.CircuitBreakerPolicy
-	authVerifier         auth.TokenVerifier
-	authPublicEndpoints  []string
-	authMetrics          *auth.AuthMetrics
-	securityHeadersOpts  []middleware.SecurityHeadersOption
-	bodyLimit            int64
-	trustedProxies       []string
+	outerMux            *chi.Mux
+	mux                 *chi.Mux
+	healthHandler       *health.Handler
+	metricsCollector    metrics.Collector
+	metricsHandler      http.Handler
+	tracer              tracing.Tracer
+	tracingOpts         []middleware.TracingOption
+	requestIDOpts       []middleware.RequestIDOption
+	rateLimiter         middleware.RateLimiter
+	circuitBreaker      middleware.CircuitBreakerPolicy
+	authVerifier        auth.TokenVerifier
+	authPublicEndpoints []string
+	authMetrics         *auth.AuthMetrics
+	securityHeadersOpts []middleware.SecurityHeadersOption
+	bodyLimit           int64
+	trustedProxies      []string
 }
 
 // New creates a Router with default middleware and optional configuration.

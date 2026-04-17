@@ -596,3 +596,21 @@ func TestLoadKeysFromEnv_PKCS8(t *testing.T) {
 	assert.NotNil(t, priv)
 	assert.NotNil(t, pub)
 }
+
+func TestWithIssuerClock_NilIgnored(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "test", time.Hour, WithIssuerClock(nil))
+	require.NoError(t, err)
+	// Should use time.Now (default), not panic.
+	token, err := issuer.Issue("user-1", nil, nil, "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, token)
+}
+
+func TestWithVerifierClock_NilIgnored(t *testing.T) {
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks, WithVerifierClock(nil))
+	require.NoError(t, err)
+	// Should not panic on construction.
+	assert.NotNil(t, verifier)
+}

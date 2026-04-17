@@ -13,14 +13,16 @@ import (
 )
 
 func TestInMemoryNonceStore_FirstUseSucceeds(t *testing.T) {
-	store := NewInMemoryNonceStore(5 * time.Minute)
-	err := store.CheckAndMark(context.Background(), "nonce-abc")
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
+	err = store.CheckAndMark(context.Background(), "nonce-abc")
 	require.NoError(t, err)
 }
 
 func TestInMemoryNonceStore_ReplayRejected(t *testing.T) {
-	store := NewInMemoryNonceStore(5 * time.Minute)
-	err := store.CheckAndMark(context.Background(), "nonce-xyz")
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
+	err = store.CheckAndMark(context.Background(), "nonce-xyz")
 	require.NoError(t, err)
 
 	err = store.CheckAndMark(context.Background(), "nonce-xyz")
@@ -28,9 +30,10 @@ func TestInMemoryNonceStore_ReplayRejected(t *testing.T) {
 }
 
 func TestInMemoryNonceStore_DifferentNoncesSucceed(t *testing.T) {
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 
-	err := store.CheckAndMark(context.Background(), "nonce-1")
+	err = store.CheckAndMark(context.Background(), "nonce-1")
 	require.NoError(t, err)
 
 	err = store.CheckAndMark(context.Background(), "nonce-2")
@@ -39,9 +42,10 @@ func TestInMemoryNonceStore_DifferentNoncesSucceed(t *testing.T) {
 
 func TestInMemoryNonceStore_ExpiredNonceAllowsReuse(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	store := NewInMemoryNonceStore(5*time.Minute, WithNonceClock(func() time.Time { return now }))
+	store, err := NewInMemoryNonceStore(5*time.Minute, WithNonceClock(func() time.Time { return now }))
+	require.NoError(t, err)
 
-	err := store.CheckAndMark(context.Background(), "nonce-exp")
+	err = store.CheckAndMark(context.Background(), "nonce-exp")
 	require.NoError(t, err)
 
 	// Advance clock past maxAge.
@@ -52,7 +56,8 @@ func TestInMemoryNonceStore_ExpiredNonceAllowsReuse(t *testing.T) {
 }
 
 func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 	const n = 100
 	var wg sync.WaitGroup
 	wg.Add(n)
@@ -71,10 +76,11 @@ func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
 func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	// Use a low maxEntries cap so the prune triggers after 10 entries.
-	store := NewInMemoryNonceStore(1*time.Second,
+	store, err := NewInMemoryNonceStore(1*time.Second,
 		WithNonceClock(func() time.Time { return now }),
 		WithMaxNonceEntries(10),
 	)
+	require.NoError(t, err)
 
 	// Insert 10 entries; all will expire quickly.
 	for i := 0; i < 10; i++ {
@@ -88,7 +94,7 @@ func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	now = now.Add(2 * time.Second)
 
 	// Insert one more entry; this triggers the lazy prune because len >= maxEntries.
-	err := store.CheckAndMark(context.Background(), "trigger-prune")
+	err = store.CheckAndMark(context.Background(), "trigger-prune")
 	require.NoError(t, err)
 
 	// Map should have shrunk: only the new entry remains.
@@ -101,7 +107,8 @@ func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 }
 
 func TestInMemoryNonceStore_ConcurrentSameNonce_ExactlyOneSucceeds(t *testing.T) {
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 	const goroutines = 50
 	var (
 		successes atomic.Int32
@@ -124,4 +131,15 @@ func TestInMemoryNonceStore_ConcurrentSameNonce_ExactlyOneSucceeds(t *testing.T)
 	wg.Wait()
 	assert.Equal(t, int32(1), successes.Load(), "exactly one goroutine should succeed")
 	assert.Equal(t, int32(goroutines-1), failures.Load(), "all others should fail")
+}
+
+func TestNewInMemoryNonceStore_ZeroMaxAge_Fails(t *testing.T) {
+	_, err := NewInMemoryNonceStore(0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "positive")
+}
+
+func TestNewInMemoryNonceStore_NegativeMaxAge_Fails(t *testing.T) {
+	_, err := NewInMemoryNonceStore(-time.Second)
+	require.Error(t, err)
 }

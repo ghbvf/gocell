@@ -72,7 +72,7 @@ func TestHMACKeyRing_Current_ReturnsCopy(t *testing.T) {
 func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
 	ring := mustTestRing(t, testSecretNew, testSecretOld)
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 
 	singleRing := mustTestRing(t, testSecretNew, "")
 	handler := mustTestServiceHandler(t, singleRing, func() time.Time { return now })
@@ -89,7 +89,7 @@ func TestHMACKeyRing_VerifyWithPrevious(t *testing.T) {
 	now := time.Now()
 
 	oldRing := mustTestRing(t, testSecretOld, "")
-	token := GenerateServiceToken(oldRing, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(oldRing, http.MethodGet, "/api", "", now)
 
 	newRing := mustTestRing(t, testSecretNew, testSecretOld)
 	handler := mustTestServiceHandler(t, newRing, func() time.Time { return now })
@@ -106,7 +106,7 @@ func TestHMACKeyRing_RejectUnknownSecret(t *testing.T) {
 	now := time.Now()
 
 	unknownRing := mustTestRing(t, testSecretUnk, "")
-	token := GenerateServiceToken(unknownRing, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(unknownRing, http.MethodGet, "/api", "", now)
 
 	ring := mustTestRing(t, testSecretNew, testSecretOld)
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
@@ -123,7 +123,7 @@ func TestHMACKeyRing_SingleSecretMode(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testSecretOne, "")
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -138,7 +138,7 @@ func TestHMACKeyRing_SameSecretBothPositions(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testSecretSam, testSecretSam)
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -171,7 +171,7 @@ func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
 }
 
 func TestGenerateServiceToken_NilRing(t *testing.T) {
-	token := GenerateServiceToken(nil, "GET", "/api", time.Now())
+	token := GenerateServiceToken(nil, "GET", "/api", "", time.Now())
 	assert.Empty(t, token)
 }
 
@@ -225,7 +225,7 @@ func TestLoadHMACKeyRingFromEnv_MissingCurrentFails(t *testing.T) {
 func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", now)
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -276,7 +276,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/other", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/other", "", now)
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -305,7 +305,7 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
 	oldTime := now.Add(-6 * time.Minute)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", oldTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", oldTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -320,7 +320,7 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
 	boundaryTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", boundaryTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", boundaryTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -335,7 +335,7 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	recentTime := now.Add(-4*time.Minute - 59*time.Second)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", recentTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", recentTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -350,7 +350,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
 	futureTime := now.Add(6 * time.Minute)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", futureTime)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", futureTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -379,8 +379,8 @@ func TestGenerateServiceToken_Deterministic(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, http.MethodPost, "/api", ts)
-	t2 := GenerateServiceToken(ring, http.MethodPost, "/api", ts)
+	t1 := GenerateServiceToken(ring, http.MethodPost, "/api", "", ts)
+	t2 := GenerateServiceToken(ring, http.MethodPost, "/api", "", ts)
 
 	parts1 := strings.SplitN(t1, ":", 3)
 	parts2 := strings.SplitN(t2, ":", 3)
@@ -391,14 +391,14 @@ func TestGenerateServiceToken_Deterministic(t *testing.T) {
 	assert.NotEqual(t, parts1[1], parts2[1], "nonces must differ between calls")
 
 	// Different method produces a different HMAC (nonces also differ).
-	t3 := GenerateServiceToken(ring, http.MethodGet, "/api", ts)
+	t3 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
 	assert.NotEqual(t, t1, t3)
 }
 
 func TestGenerateServiceToken_IncludesNonce(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	ts := time.Unix(1700000000, 0)
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", ts)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
 
 	parts := strings.SplitN(token, ":", 3)
 	require.Len(t, parts, 3, "token must have 3 colon-separated parts")
@@ -410,8 +410,8 @@ func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, http.MethodGet, "/api", ts)
-	t2 := GenerateServiceToken(ring, http.MethodGet, "/api", ts)
+	t1 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
+	t2 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
 
 	parts1 := strings.SplitN(t1, ":", 3)
 	parts2 := strings.SplitN(t2, ":", 3)
@@ -425,7 +425,8 @@ func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
 		WithNonceStore(store),
@@ -433,7 +434,7 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
 
 	// First use — accepted.
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
@@ -453,7 +454,8 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
 		WithNonceStore(store),
@@ -461,8 +463,8 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token1 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", now)
-	token2 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", now)
+	token1 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
+	token2 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
 	req1.Header.Set("Authorization", "ServiceToken "+token1)
@@ -483,7 +485,7 @@ func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	// No nonce store — backward-compat mode.
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
 	req1.Header.Set("Authorization", "ServiceToken "+token)
@@ -506,10 +508,11 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_StillWorks(t *testing.T) {
 	// Craft a legacy 2-part token manually.
 	tsStr := strconv.FormatInt(now.Unix(), 10)
 	mac := hmac.New(sha256.New, ring.Current())
-	_, _ = mac.Write([]byte(fmt.Sprintf("%s %s %s", http.MethodGet, "/legacy/path", tsStr)))
+	fmt.Fprintf(mac, "%s %s %s", http.MethodGet, "/legacy/path", tsStr)
 	legacyToken := tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
 
-	store := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
 		WithNonceStore(store),
@@ -531,7 +534,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -552,4 +555,32 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	handler.ServeHTTP(rec2, req2)
 	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
+}
+
+func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+
+	// Sign with query=foo=bar
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", "foo=bar", now)
+	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+
+	// Same path+query should succeed.
+	req := httptest.NewRequest(http.MethodGet, "/api?foo=bar", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Different query should fail.
+	req2 := httptest.NewRequest(http.MethodGet, "/api?foo=baz", nil)
+	req2.Header.Set("Authorization", "ServiceToken "+token)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
+}
+
+func TestCanonicalQuery_SortsKeys(t *testing.T) {
+	assert.Equal(t, "a=1&b=2", canonicalQuery("b=2&a=1"))
+	assert.Equal(t, "", canonicalQuery(""))
 }
