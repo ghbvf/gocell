@@ -115,6 +115,9 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 }
 
 // Init constructs all 5 slices and registers them.
+// TODO(PR-R-BOOT-COGNIT): split into validateDeps / buildCursorCodec / per-slice builders.
+//
+//nolint:gocognit
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err

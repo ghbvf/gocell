@@ -5,6 +5,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Handler provides HTTP endpoints for config write operations.
@@ -19,6 +20,11 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleCreate handles POST / — creates a new config entry.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	var req struct {
 		Key       string `json:"key"`
 		Value     string `json:"value"`
@@ -40,6 +46,11 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdate handles PUT /{key} — updates an existing config entry.
 func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	key := r.PathValue("key")
 
 	var req struct {
@@ -61,6 +72,11 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete handles DELETE /{key} — deletes a config entry.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
 	key := r.PathValue("key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {

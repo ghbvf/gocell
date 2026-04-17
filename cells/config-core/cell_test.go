@@ -275,6 +275,7 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(auth.TestContext("admin-test", []string{"admin"}))
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusCreated, rec.Code, "setup: create config entry %d", i)
 	}

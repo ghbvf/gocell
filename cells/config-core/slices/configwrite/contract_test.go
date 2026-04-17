@@ -2,14 +2,18 @@ package configwrite
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,10 +42,54 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
+}
+
+// TestHttpConfigWriteV1_AuthzNegative validates the 401/403 failure semantics
+// that are part of the http.config.write.v1 interface contract. These paths
+// are tested here alongside the happy-path contract test so that auth-guard
+// regressions are caught at the contract boundary, not just in unit tests.
+func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
+	svc, _, _ := newContractService()
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/", http.HandlerFunc(h.HandleCreate))
+	body := `{"key":"app.name","value":"myapp"}`
+
+	cases := []struct {
+		name        string
+		injectAuth  bool
+		subject     string
+		roles       []string
+		wantStatus  int
+		wantErrCode string
+	}{
+		{"no_auth", false, "", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", true, "user-1", []string{"viewer"}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/config/", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.injectAuth {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			mux.ServeHTTP(rec, req)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			var resp struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+		})
+	}
 }
 
 // --- Event contract tests ---

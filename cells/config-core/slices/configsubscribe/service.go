@@ -46,7 +46,7 @@ type Service struct {
 // NewService creates a config-subscribe Service.
 func NewService(logger *slog.Logger) *Service {
 	return &Service{
-		cache: &Cache{values: make(map[string]string)},
+		cache:  &Cache{values: make(map[string]string)},
 		logger: logger,
 	}
 }
