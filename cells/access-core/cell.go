@@ -266,10 +266,11 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
 
-	// session-refresh — uses session-aware verifier (validateSvc) so that
-	// revoked/expired sessions are caught at the JWT verification step,
-	// not just at the DB refresh-token lookup.
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.validateSvc, c.logger)
+	// session-refresh uses jwtVerifier directly (not validateSvc) because
+	// validateSvc hard-requires token_use=access and would reject every
+	// refresh token. sessionrefresh still enforces session revocation via
+	// sessionRepo + Session.IsRevoked checks after JWT verification.
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 

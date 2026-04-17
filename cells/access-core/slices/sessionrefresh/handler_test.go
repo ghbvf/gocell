@@ -16,12 +16,13 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // testIssuer/testVerifier are declared in service_test.go
 
 func issueRefreshToken(userID string) string {
-	tok, _ := testIssuer.Issue(userID, nil, []string{"gocell"}, "sess-handler-test")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, userID, nil, []string{"gocell"}, "sess-handler-test")
 	return tok
 }
 

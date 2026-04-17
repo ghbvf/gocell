@@ -119,12 +119,12 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 	sessionID := "sess" + "-" + uuid.NewString()
 
-	accessToken, err := s.issueToken(user.ID, roleNames, sessionID)
+	accessToken, err := s.issueAccessToken(user.ID, roleNames, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue access token: %w", err)
 	}
 
-	refreshToken, err := s.issueToken(user.ID, nil, sessionID)
+	refreshToken, err := s.issueRefreshToken(user.ID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue refresh token: %w", err)
 	}
@@ -188,6 +188,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(subject, roles, []string{"gocell"}, sessionID)
+// issueAccessToken signs a short-lived JWT with intent=access for calling
+// business endpoints. Access tokens carry roles for RBAC decisions.
+func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{"gocell"}, sessionID)
+}
+
+// issueRefreshToken signs a longer-lived JWT with intent=refresh. Refresh
+// tokens do not carry roles: they are consumed only by /auth/refresh, which
+// looks up the current roles from the session's user on each rotation.
+func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{"gocell"}, sessionID)
 }

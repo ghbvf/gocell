@@ -63,10 +63,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, errcode.New(errcode.ErrAuthRefreshInvalidInput, "refresh token is required")
 	}
 
-	// Verify the refresh token JWT signature via RS256 verifier.
-	_, err := s.verifier.Verify(ctx, refreshToken)
-	if err != nil {
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
+	if err := s.verifyRefreshToken(ctx, refreshToken); err != nil {
+		return nil, err
 	}
 
 	// Look up the session by current refresh token.
@@ -108,12 +106,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	now := time.Now()
 	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 
-	accessToken, err := s.issueToken(session.UserID, roleNames, session.ID)
+	accessToken, err := s.issueAccessToken(session.UserID, roleNames, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
 
-	newRefreshToken, err := s.issueToken(session.UserID, nil, session.ID)
+	newRefreshToken, err := s.issueRefreshToken(session.UserID, session.ID)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
@@ -137,6 +135,35 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}, nil
 }
 
-func (s *Service) issueToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(subject, roles, []string{"gocell"}, sessionID)
+// verifyRefreshToken checks the JWT signature AND requires token_use=refresh
+// when the underlying verifier supports it. Intent-mismatch errors (e.g., an
+// access token submitted to /auth/refresh) are collapsed into the generic
+// ErrAuthRefreshFailed response so clients cannot distinguish "wrong token
+// type" from "bad token" (enumeration defense). Falls back to plain Verify
+// when the verifier is a legacy TokenVerifier used only by some unit tests;
+// production wiring always injects an IntentTokenVerifier.
+func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) error {
+	var verifyErr error
+	if iv, ok := s.verifier.(auth.IntentTokenVerifier); ok {
+		_, verifyErr = iv.VerifyIntent(ctx, refreshToken, auth.TokenIntentRefresh)
+	} else {
+		_, verifyErr = s.verifier.Verify(ctx, refreshToken)
+	}
+	if verifyErr != nil {
+		s.logger.Warn("session-refresh: refresh token verification failed",
+			slog.Any("error", verifyErr))
+		return errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
+	}
+	return nil
+}
+
+// issueAccessToken signs a short-lived JWT with intent=access carrying roles.
+func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{"gocell"}, sessionID)
+}
+
+// issueRefreshToken signs a JWT with intent=refresh. Refresh tokens carry no
+// roles: /auth/refresh refetches roles from the session's user on rotation.
+func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{"gocell"}, sessionID)
 }

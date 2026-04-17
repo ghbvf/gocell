@@ -9,16 +9,15 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var (
-	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
-	testIssuer                 *auth.JWTIssuer
-	testVerifier               *auth.JWTVerifier
+	testKeySet, _, _ = auth.MustNewTestKeySet()
+	testIssuer       *auth.JWTIssuer
+	testVerifier     *auth.JWTVerifier
 )
 
 func init() {
@@ -40,7 +39,7 @@ func newTestService() (*Service, *mem.SessionRepository) {
 }
 
 func issueTestToken(sub string) string {
-	tok, _ := testIssuer.Issue(sub, nil, nil, "")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, nil, nil, "")
 	return tok
 }
 
@@ -143,7 +142,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 	require.NoError(t, err)
 	otherIssuer, err := auth.NewJWTIssuer(otherKS, "gocell-access-core", time.Hour)
 	require.NoError(t, err)
-	tokenStr, _ := otherIssuer.Issue("usr-1", nil, nil, "")
+	tokenStr, _ := otherIssuer.Issue(auth.TokenIntentRefresh, "usr-1", nil, nil, "")
 
 	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
@@ -220,22 +219,21 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
 }
 
-// TestService_Refresh_SessionAwareVerifier proves that when the refresh service
-// is wired with a session-aware verifier (sessionvalidate.Service), a revoked
-// session is caught at the JWT verification step — before the DB refresh-token
-// lookup. This is the production wiring established in cell.go.
+// TestService_Refresh_SessionAwareVerifier proves that sessionrefresh still
+// catches revoked sessions even when wired with the raw JWTVerifier (the
+// production wiring since PR-P0-AUTH-INTENT dropped the sessionvalidate-based
+// verifier, which hard-requires token_use=access and cannot validate refresh
+// tokens). Revocation is now enforced by the refresh service's own
+// sessionRepo lookup + Session.IsRevoked check.
 func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 
-	// Build a session-aware verifier: JWT signature check + session state check.
-	saVerifier := sessionvalidate.NewService(testVerifier, sessionRepo, slog.Default())
-
-	// Wire refresh service with session-aware verifier (production path).
-	svc := NewService(sessionRepo, roleRepo, testIssuer, saVerifier, slog.Default())
+	// Wire refresh service with the intent-aware JWT verifier (production path).
+	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
-	rt, err := testIssuer.Issue("usr-sa", nil, nil, "sess-sa")
+	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", nil, nil, "sess-sa")
 	require.NoError(t, err)
 
 	sess, err := domain.NewSession("usr-sa", "at", rt, time.Now().Add(time.Hour))
