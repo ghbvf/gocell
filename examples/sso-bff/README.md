@@ -19,15 +19,14 @@ The server starts on `:8081`.
 
 ## Seed User
 
-The demo starts with a pre-seeded admin user:
+On startup, a random admin password is generated and printed to the console:
 
-| Field    | Value          |
-|----------|----------------|
-| Username | `admin`        |
-| Password | `P@ssw0rd123`  |
-| Role     | `admin`        |
+```
+{"level":"INFO","msg":"sso-bff: seed admin ready — use these credentials to log in","username":"admin","password":"<random>","note":"dev-only, resets on restart"}
+```
 
-You can create additional users via the API (see step 1 below), or use the seed user directly from step 2.
+Copy the `password` value from the log and use it in the walkthrough below.
+The password resets every time the server restarts (in-memory only).
 
 ## API Walkthrough
 

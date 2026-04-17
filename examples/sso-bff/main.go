@@ -10,6 +10,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -28,6 +30,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
+
+func generateDevPassword() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		panic("failed to generate dev password: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
 
 // noopTxRunner executes fn directly without a real transaction (demo mode).
 type noopTxRunner struct{}
@@ -71,10 +81,14 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
+	// Dev-only: generate a random admin password and print it to the startup log.
+	// The in-memory store resets on every restart, so this is safe for local development.
+	seedAdminPass := generateDevPassword()
+
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithSeedAdmin("admin", "P@ssw0rd123"),
+		accesscore.WithSeedAdmin("admin", seedAdminPass),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -146,9 +160,10 @@ func main() {
 		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
-	logger.Info("sso-bff: seed user ready",
+	logger.Info("sso-bff: seed admin ready — use these credentials to log in",
 		slog.String("username", "admin"),
-		slog.String("password", "P@ssw0rd123 (dev only)"),
+		slog.String("password", seedAdminPass),
+		slog.String("note", "dev-only, resets on restart"),
 	)
 	logger.Info("sso-bff: starting on :8081",
 		slog.String("mode", "in-memory"),

@@ -47,7 +47,9 @@ var _ persistence.TxRunner = walkthroughTxRunner{}
 
 // buildWalkthroughServer constructs an in-memory test server that mirrors
 // sso-bff main.go but uses httptest.NewServer for port-free testing.
-func buildWalkthroughServer(t *testing.T) (*httptest.Server, func()) {
+// seedPass is the admin password injected via WithSeedAdmin; callers control
+// the value so tests remain deterministic without relying on hardcoded strings.
+func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, func()) {
 	t.Helper()
 
 	eb := eventbus.New()
@@ -71,7 +73,7 @@ func buildWalkthroughServer(t *testing.T) (*httptest.Server, func()) {
 		accesscore.WithOutboxWriter(nw),
 		accesscore.WithTxManager(walkthroughTxRunner{}),
 		accesscore.WithLogger(slog.Default()),
-		accesscore.WithSeedAdmin("admin", "P@ssw0rd123"),
+		accesscore.WithSeedAdmin("admin", seedPass),
 	)
 
 	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")
@@ -114,7 +116,8 @@ func buildWalkthroughServer(t *testing.T) (*httptest.Server, func()) {
 
 // TestWalkthrough exercises the complete sso-bff API walkthrough.
 func TestWalkthrough(t *testing.T) {
-	srv, cleanup := buildWalkthroughServer(t)
+	testPass := generateDevPassword()
+	srv, cleanup := buildWalkthroughServer(t, testPass)
 	defer cleanup()
 
 	base := srv.URL
@@ -122,7 +125,7 @@ func TestWalkthrough(t *testing.T) {
 	var accessToken, refreshToken string
 
 	t.Run("seed user can login and returns accessToken+refreshToken", func(t *testing.T) {
-		body := `{"username":"admin","password":"P@ssw0rd123"}`
+		body := fmt.Sprintf(`{"username":"admin","password":%q}`, testPass)
 		resp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
 			"application/json", strings.NewReader(body))
 		require.NoError(t, err)
@@ -210,7 +213,7 @@ func TestWalkthrough(t *testing.T) {
 
 	t.Run("audit entries contain timestamp field not createdAt", func(t *testing.T) {
 		// Re-login to get a fresh token after logout invalidated the previous session.
-		loginBody := `{"username":"admin","password":"P@ssw0rd123"}`
+		loginBody := fmt.Sprintf(`{"username":"admin","password":%q}`, testPass)
 		loginResp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
 			"application/json", strings.NewReader(loginBody))
 		require.NoError(t, err)
