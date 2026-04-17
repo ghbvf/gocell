@@ -12,6 +12,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -28,6 +30,14 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 var _ persistence.TxRunner = noopTxRunner{}
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
+
+// mustNewCodec constructs a CursorCodec with the given key or fails the test.
+func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {
+	t.Helper()
+	codec, err := query.NewCursorCodec(key)
+	require.NoError(t, err)
+	return codec
+}
 
 func newTestCell() *AuditCore {
 	return NewAuditCore(
@@ -262,4 +272,105 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/audit/entries should not return 404 (got %d)", rec.Code)
+}
+
+// TestInit_DurableMode_RejectsMissingCursorCodec locks the fail-fast
+// behavior introduced with RunMode wiring: a durable assembly that forgets
+// to inject a production cursor codec must not silently fall back to the
+// public demo key baked into the source tree. Paired with
+// TestAuditCore_Wiring_StaleCursor_DemoVsDurable below which exercises the
+// same wiring when a codec *is* provided.
+func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithPublisher(eventbus.New()),
+		WithHMACKey(testHMACKey),
+		WithOutboxWriter(&recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
+		WithTxManager(noopTxRunner{}),
+		// No WithCursorCodec — durable mode must refuse the demo fallback.
+	)
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+	assert.Contains(t, err.Error(), "cursor codec")
+}
+
+// TestAuditCore_Wiring_StaleCursor_DemoVsDurable is a wiring-level
+// regression: it exercises DurabilityMode → cell.Init → service →
+// ExecutePagedQuery with a garbage cursor and asserts that demo silently
+// returns the first page while durable returns ErrCursorInvalid. This
+// branch was previously only covered at the pkg/query helper level.
+// An admin identity is injected via auth.TestContext because the
+// audit-query handler calls auth.RequireSelfOrRole.
+func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
+	t.Parallel()
+	productionKey := []byte("wiring-test-audit-cursor-key-32b")
+
+	tests := []struct {
+		name       string
+		mode       cell.DurabilityMode
+		outbox     outbox.Writer
+		tx         persistence.TxRunner
+		wantStatus int
+	}{
+		{
+			name:       "durable refuses stale cursor",
+			mode:       cell.DurabilityDurable,
+			outbox:     &recordingWriter{},
+			tx:         noopTxRunner{},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "demo returns first page",
+			mode:       cell.DurabilityDemo,
+			outbox:     outbox.NoopWriter{},
+			tx:         noopTxRunner{},
+			wantStatus: http.StatusOK,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := NewAuditCore(
+				WithAuditRepository(mem.NewAuditRepository()),
+				WithArchiveStore(mem.NewArchiveStore()),
+				WithPublisher(eventbus.New()),
+				WithHMACKey(testHMACKey),
+				WithOutboxWriter(tc.outbox),
+				WithTxManager(tc.tx),
+				WithCursorCodec(mustNewCodec(t, productionKey)),
+			)
+			require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+				Config:         map[string]any{},
+				DurabilityMode: tc.mode,
+			}))
+
+			r := router.New()
+			c.RegisterRoutes(r)
+
+			rec := httptest.NewRecorder()
+			ctx := auth.TestContext("admin-user", []string{"admin"})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor=garbage-token", nil).WithContext(ctx)
+			r.ServeHTTP(rec, req)
+
+			assert.Equalf(t, tc.wantStatus, rec.Code,
+				"unexpected status for mode=%s body=%s", tc.mode, rec.Body.String())
+		})
+	}
+}
+
+// recordingWriter is a minimal outbox.Writer test double that is not a
+// Nooper — durable mode requires a non-noop writer.
+type recordingWriter struct{ entries []outbox.Entry }
+
+func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
+	w.entries = append(w.entries, entry)
+	return nil
 }

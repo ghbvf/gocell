@@ -108,6 +108,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrAdapterPGNoTx, http.StatusInternalServerError},
 		{errcode.ErrTestExecution, http.StatusInternalServerError},
 		{errcode.ErrCellMissingOutbox, http.StatusInternalServerError},
+		{errcode.ErrCellMissingCodec, http.StatusInternalServerError},
 
 		// 503 Service Unavailable
 		{errcode.ErrCircuitOpen, http.StatusServiceUnavailable},

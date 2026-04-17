@@ -28,15 +28,19 @@ type Service struct {
 	deviceRepo domain.DeviceRepository
 	codec      *query.CursorCodec
 	logger     *slog.Logger
+	runMode    query.RunMode
 }
 
-// NewService creates a device-command Service.
-func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
+// NewService creates a device-command Service. runMode controls cursor
+// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
+// assembly declares DurabilityDemo.
+func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
 	return &Service{
 		cmdRepo:    cmdRepo,
 		deviceRepo: deviceRepo,
 		codec:      codec,
 		logger:     logger,
+		runMode:    runMode,
 	}
 }
 
@@ -94,7 +98,7 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 			return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "device-command"),
-		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
+		RunMode:     s.runMode,
 	})
 }
 

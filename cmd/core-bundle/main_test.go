@@ -111,6 +111,18 @@ func TestValidateAdapterMode_Unknown_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "staging")
 }
 
+// TestValidateAdapterMode_DevLiteralRejected locks down the documented
+// semantics: dev is spelled as the *empty* value, not the string "dev".
+// Operators who copy the .env.example template literally must not find a
+// surprising mode to accept. Guards against regression if someone adds a
+// "dev" alias without updating the .env.example comment in the same change.
+func TestValidateAdapterMode_DevLiteralRejected(t *testing.T) {
+	err := validateAdapterMode("dev")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown GOCELL_ADAPTER_MODE")
+	assert.Contains(t, err.Error(), "dev")
+}
+
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-cancelled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
@@ -268,4 +280,67 @@ func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 		Bytes: pubBytes,
 	})
 	return privPEM, pubPEM
+}
+
+// TestRun_RealMode_DemoKey_FailsFast locks the rejectDemoKey wiring: for
+// each env channel (HMAC key + two cursor keys), injecting a well-known
+// demo value must abort run() before the HTTP server starts. Guards
+// against reordering that would let demo secrets leak into real mode.
+// ref: K8s kube-apiserver — refuses to start with insecure signing material.
+func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
+	freshHMAC := "prod-hmac-key-replace-32bytes!!!"
+	freshAudit := "audit-cursor-key-32-bytes-padded!"
+	freshConfig := "config-cursor-key-32b-padded-xx!"
+	freshService := "service-secret-32-bytes-xxxxxx!!"
+
+	type envPatch struct {
+		name, value string
+	}
+	tests := []struct {
+		name  string
+		patch envPatch
+		want  string
+	}{
+		{
+			name:  "HMAC demo literal rejected",
+			patch: envPatch{"GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!"},
+			want:  "GOCELL_HMAC_KEY",
+		},
+		{
+			name:  "audit cursor demo literal rejected",
+			patch: envPatch{"GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!"},
+			want:  "GOCELL_AUDIT_CURSOR_KEY",
+		},
+		{
+			name:  "config cursor demo literal rejected",
+			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"},
+			want:  "GOCELL_CONFIG_CURSOR_KEY",
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			privPEM, pubPEM := generateTestPEM(t)
+			t.Setenv("GOCELL_ADAPTER_MODE", "real")
+			t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+			t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+			t.Setenv(auth.EnvJWTPrevPublicKey, "")
+			t.Setenv("GOCELL_HMAC_KEY", freshHMAC)
+			t.Setenv("GOCELL_AUDIT_CURSOR_KEY", freshAudit)
+			t.Setenv("GOCELL_CONFIG_CURSOR_KEY", freshConfig)
+			t.Setenv("GOCELL_SERVICE_SECRET", freshService)
+			t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+			// Trip-wire: replace just one env with a well-known demo value.
+			t.Setenv(tc.patch.name, tc.patch.value)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			err := run(ctx)
+			require.Error(t, err, "real mode must reject env=%s with demo value", tc.patch.name)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.Contains(t, err.Error(), "well-known demo key")
+		})
+	}
 }

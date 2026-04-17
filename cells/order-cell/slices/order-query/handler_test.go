@@ -52,7 +52,7 @@ func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 		_ = repo.Create(context.Background(), o)
 	}
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	return NewHandler(svc), repo
 }
 

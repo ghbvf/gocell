@@ -90,6 +90,25 @@ func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
 	})
 }
 
+// loadCursorCodec loads a cursor HMAC secret from envName (with a dev-only
+// fallback to devDefault) and constructs a CursorCodec. In "real" adapter
+// mode the secret must be set and must not match a well-known demo value.
+// label is used in wrapping error messages.
+func loadCursorCodec(adapterMode, envName, devDefault, label string) (*query.CursorCodec, error) {
+	key, err := loadSecret(envName, devDefault, adapterMode)
+	if err != nil {
+		return nil, fmt.Errorf("%s cursor key: %w", label, err)
+	}
+	if err := rejectDemoKey(adapterMode, envName, key); err != nil {
+		return nil, err
+	}
+	codec, err := query.NewCursorCodec(key)
+	if err != nil {
+		return nil, fmt.Errorf("create %s cursor codec: %w", label, err)
+	}
+	return codec, nil
+}
+
 // validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
 // Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
 func validateAdapterMode(mode string) error {
@@ -97,7 +116,7 @@ func validateAdapterMode(mode string) error {
 	case "", "real":
 		return nil
 	default:
-		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (dev), \"real\"", mode)
+		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (unset = dev) or \"real\"", mode)
 	}
 }
 
@@ -122,6 +141,9 @@ func run(ctx context.Context) error {
 	hmacKey, err := loadSecret("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", adapterMode)
 	if err != nil {
 		return fmt.Errorf("HMAC key: %w", err)
+	}
+	if err := rejectDemoKey(adapterMode, "GOCELL_HMAC_KEY", hmacKey); err != nil {
+		return err
 	}
 
 	keySet, err := loadKeySet(adapterMode)
@@ -151,21 +173,13 @@ func run(ctx context.Context) error {
 		slog.String("requested", adapterMode),
 		slog.String("effective", effectiveMode))
 
-	auditCursorKey, err := loadSecret("GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!", adapterMode)
+	auditCursorCodec, err := loadCursorCodec(adapterMode, "GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!", "audit")
 	if err != nil {
-		return fmt.Errorf("audit cursor key: %w", err)
+		return err
 	}
-	auditCursorCodec, err := query.NewCursorCodec(auditCursorKey)
+	configCursorCodec, err := loadCursorCodec(adapterMode, "GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!", "config")
 	if err != nil {
-		return fmt.Errorf("create audit cursor codec: %w", err)
-	}
-	configCursorKey, err := loadSecret("GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!", adapterMode)
-	if err != nil {
-		return fmt.Errorf("config cursor key: %w", err)
-	}
-	configCursorCodec, err := query.NewCursorCodec(configCursorKey)
-	if err != nil {
-		return fmt.Errorf("create config cursor codec: %w", err)
+		return err
 	}
 
 	configCell := configcore.NewConfigCore(

@@ -156,8 +156,16 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("config-write", "config-core", cell.L2))
 
-	// Default cursor codec for pagination if not injected.
+	// Default cursor codec for pagination if not injected. Durable mode
+	// refuses the public demo-key fallback — an assembly that forgets to
+	// wire a production codec must fail closed, not silently sign cursors
+	// with a key that ships in the source tree.
+	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
+		if deps.DurabilityMode == cell.DurabilityDurable {
+			return errcode.New(errcode.ErrCellMissingCodec,
+				"config-core durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+		}
 		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-CONFIG-CORE-key-32!!"))
 		if err != nil {
@@ -168,8 +176,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			slog.String("cell", c.ID()))
 	}
 
+	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+
 	// config-read slice
-	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger)
+	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
@@ -181,6 +191,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.txRunner != nil {
 		publishOpts = append(publishOpts, configpublish.WithTxManager(c.txRunner))
 	}
+	// Only demo assemblies may swallow publisher errors; durable stays fail-closed.
+	if deps.DurabilityMode == cell.DurabilityDemo {
+		publishOpts = append(publishOpts, configpublish.WithDemoFailOpen(true))
+	}
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
@@ -190,7 +204,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
 
 	// feature-flag slice
-	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger)
+	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
 

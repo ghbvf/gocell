@@ -37,6 +37,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
+// WithDemoFailOpen controls whether publisher-only failures are swallowed.
+// Default is false (fail-closed): publisher errors propagate to the caller so
+// that L2 atomicity is preserved. Set to true only in assemblies that inject
+// outbox.DiscardPublisher{} for demo / local-dev use. Setting it true in
+// durable mode violates the cell's L2 consistency contract.
+// ref: watermill/components/forwarder — publish failures always wrap+return.
+func WithDemoFailOpen(allow bool) Option {
+	return func(s *Service) { s.demoFailOpen = allow }
+}
+
 // Service implements config publish/rollback business logic.
 type Service struct {
 	repo         ports.ConfigRepository
@@ -44,9 +54,12 @@ type Service struct {
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	logger       *slog.Logger
+	demoFailOpen bool
 }
 
-// NewService creates a config-publish Service.
+// NewService creates a config-publish Service. By default publisher errors
+// propagate (fail-closed); demo assemblies can opt-in to the legacy
+// Warn+swallow behavior via WithDemoFailOpen(true).
 func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		repo:      repo,
@@ -186,11 +199,15 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 		}
 		return nil
 	}
-	// Demo mode: publisher failure is logged but not propagated since
-	// demo mode does not guarantee L2 atomicity.
+	// Publisher-only path (no outbox). Fail-closed by default to keep L2
+	// atomicity honest; demo assemblies opt-in via WithDemoFailOpen(true).
 	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
-		s.logger.Warn("config-publish: failed to publish event (demo mode)",
-			slog.Any("error", err), slog.String("key", key))
+		if s.demoFailOpen {
+			s.logger.Warn("config-publish: publisher failed (demo fail-open)",
+				slog.Any("error", err), slog.String("key", key), slog.String("topic", topic))
+			return nil
+		}
+		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
 	}
 	return nil
 }

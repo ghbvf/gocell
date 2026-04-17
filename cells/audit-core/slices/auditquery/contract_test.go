@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -19,7 +20,7 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 	for _, e := range entries {
 		_ = repo.Append(context.Background(), e)
 	}
-	svc := NewService(repo, testCodec(), slog.Default())
+	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/audit/entries", http.HandlerFunc(h.HandleQuery))

@@ -18,17 +18,21 @@ var orderSort = []query.SortColumn{
 
 // Service handles order query business logic.
 type Service struct {
-	repo   domain.OrderRepository
-	codec  *query.CursorCodec
-	logger *slog.Logger
+	repo    domain.OrderRepository
+	codec   *query.CursorCodec
+	logger  *slog.Logger
+	runMode query.RunMode
 }
 
-// NewService creates an order-query Service.
-func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
+// NewService creates an order-query Service. runMode controls cursor
+// fail-open vs fail-closed semantics; pass query.RunModeProd unless the
+// assembly declares DurabilityDemo.
+func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
 	return &Service{
-		repo:   repo,
-		codec:  codec,
-		logger: logger,
+		repo:    repo,
+		codec:   codec,
+		logger:  logger,
+		runMode: runMode,
 	}
 }
 
@@ -52,6 +56,6 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "order-query"),
-		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
+		RunMode:     s.runMode,
 	})
 }

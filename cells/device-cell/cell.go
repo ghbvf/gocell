@@ -120,8 +120,16 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("device-register", "device-cell", cell.L4))
 
-	// Default cursor codec for pagination if not injected.
+	// Default cursor codec for pagination if not injected. Durable mode
+	// refuses the public demo-key fallback — an assembly that forgets to
+	// wire a production codec must fail closed, not silently sign cursors
+	// with a key that ships in the source tree.
+	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
+		if deps.DurabilityMode == cell.DurabilityDurable {
+			return errcode.New(errcode.ErrCellMissingCodec,
+				"device-cell durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+		}
 		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
 		if err != nil {
@@ -132,7 +140,8 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// device-command slice
-	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger)
+	commandSvc := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	c.commandHandler = devicecommand.NewHandler(commandSvc)
 	c.AddSlice(cell.NewBaseSlice("device-command", "device-cell", cell.L4))
 

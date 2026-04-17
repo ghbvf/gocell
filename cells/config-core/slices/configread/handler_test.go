@@ -20,7 +20,7 @@ import (
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc := NewService(repo, codec, slog.Default())
+	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	mux := http.NewServeMux()
 	h := NewHandler(svc)
 	mux.HandleFunc("GET /{key}", h.HandleGet)
@@ -153,8 +153,8 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 		for _, item := range data {
 			m := item.(map[string]any)
 			id, ok := m["id"].(string)
-				require.True(t, ok, "response item should have string 'id' field")
-				allIDs = append(allIDs, id)
+			require.True(t, ok, "response item should have string 'id' field")
+			allIDs = append(allIDs, id)
 		}
 
 		hasMore := resp["hasMore"].(bool)

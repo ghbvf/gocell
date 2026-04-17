@@ -27,7 +27,7 @@ func testCodec() *query.CursorCodec {
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testCodec(), slog.Default()), repo
+	return NewService(repo, testCodec(), slog.Default(), query.RunModeProd), repo
 }
 
 func seedEntry(repo *mem.AuditRepository, id, eventType, actorID string, ts time.Time) {
@@ -201,7 +201,7 @@ func newTestServiceWithLogBuf() (*Service, *mem.AuditRepository, *bytes.Buffer) 
 	repo := mem.NewAuditRepository()
 	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return NewService(repo, testCodec(), logger), repo, buf
+	return NewService(repo, testCodec(), logger, query.RunModeProd), repo, buf
 }
 
 // parseLogLines parses each non-empty newline-delimited JSON record in buf.

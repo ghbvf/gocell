@@ -290,7 +290,7 @@ func TestExecutePagedQuery_NormalizesLimit(t *testing.T) {
 	assert.Len(t, result.Items, DefaultPageSize)
 }
 
-func TestExecutePagedQuery_DemoMode_StaleCursor_ReturnsFirstPage(t *testing.T) {
+func TestExecutePagedQuery_RunModeDemo_StaleCursor_ReturnsFirstPage(t *testing.T) {
 	codec := newTestCodec(t)
 	items := []testItem{
 		{Name: "apple", ID: "1"},
@@ -300,20 +300,25 @@ func TestExecutePagedQuery_DemoMode_StaleCursor_ReturnsFirstPage(t *testing.T) {
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
 		Codec: codec, Request: PageRequest{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
-		DemoMode: true,
+		RunMode: RunModeDemo,
 	})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
 }
 
-func TestExecutePagedQuery_DemoMode_False_StaleCursor_ReturnsError(t *testing.T) {
+// TestExecutePagedQuery_RunModeProd_StaleCursor_ReturnsError guards the
+// fail-closed default: with RunMode unset (zero value = Prod) a garbage
+// cursor must return ErrCursorInvalid, not fall back to the first page.
+// ref: kubernetes/kubernetes apiserver storage/continue.go — decode failure → 400
+// ref: pilagod/gorm-cursor-paginator — decode failure → ErrInvalidCursor
+func TestExecutePagedQuery_RunModeProd_StaleCursor_ReturnsError(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
 		Codec: codec, Request: PageRequest{Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
-		DemoMode: false,
+		// RunMode unset — zero value must be RunModeProd (fail-closed).
 	})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -321,7 +326,11 @@ func TestExecutePagedQuery_DemoMode_False_StaleCursor_ReturnsError(t *testing.T)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
-func TestExecutePagedQuery_DemoMode_ScopeMismatch_StillRejects(t *testing.T) {
+// TestExecutePagedQuery_RunModeDemo_ScopeMismatch_StillRejects asserts that
+// demo mode only absorbs decode failures, not scope/context mismatches.
+// Scope mismatch indicates a client bug (cross-endpoint cursor reuse), which
+// must surface as an error even in demo mode.
+func TestExecutePagedQuery_RunModeDemo_ScopeMismatch_StillRejects(t *testing.T) {
 	codec := newTestCodec(t)
 	differentSort := []SortColumn{{Name: "other", Direction: SortDESC}}
 	cur := Cursor{
@@ -335,7 +344,7 @@ func TestExecutePagedQuery_DemoMode_ScopeMismatch_StillRejects(t *testing.T) {
 	_, err = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
 		Codec: codec, Request: PageRequest{Limit: 10, Cursor: token}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
-		DemoMode: true,
+		RunMode: RunModeDemo,
 	})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -343,7 +352,7 @@ func TestExecutePagedQuery_DemoMode_ScopeMismatch_StillRejects(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
-func TestExecutePagedQuery_DemoMode_FetchError_Propagated(t *testing.T) {
+func TestExecutePagedQuery_RunModeDemo_FetchError_Propagated(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
@@ -352,9 +361,52 @@ func TestExecutePagedQuery_DemoMode_FetchError_Propagated(t *testing.T) {
 		Fetch: func(context.Context, ListParams) ([]testItem, error) {
 			return nil, fmt.Errorf("db connection refused")
 		},
-		Extract:  testExtract,
-		DemoMode: true,
+		Extract: testExtract,
+		RunMode: RunModeDemo,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "db connection refused")
+}
+
+// TestExecutePagedQuery_NilDependencies asserts the helper returns an
+// errcode.ErrInternal (not a bare fmt.Errorf) when required fields are missing.
+func TestExecutePagedQuery_NilDependencies(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cfg  PagedQueryConfig[testItem]
+	}{
+		{
+			name: "nil Codec",
+			cfg: PagedQueryConfig[testItem]{
+				Fetch:   makeFetcher(nil),
+				Extract: testExtract,
+			},
+		},
+		{
+			name: "nil Fetch",
+			cfg: PagedQueryConfig[testItem]{
+				Codec:   newTestCodec(t),
+				Extract: testExtract,
+			},
+		},
+		{
+			name: "nil Extract",
+			cfg: PagedQueryConfig[testItem]{
+				Codec: newTestCodec(t),
+				Fetch: makeFetcher(nil),
+			},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ExecutePagedQuery(context.Background(), tc.cfg)
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrInternal, ecErr.Code)
+		})
+	}
 }

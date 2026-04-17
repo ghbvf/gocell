@@ -18,7 +18,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	logger := slog.Default()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	return NewService(repo, codec, logger), repo
+	return NewService(repo, codec, logger, query.RunModeProd), repo
 }
 
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {

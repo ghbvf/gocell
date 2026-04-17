@@ -414,3 +414,42 @@ func TestCursorCodec_RoundTrip_WithScope(t *testing.T) {
 	assert.Equal(t, cur.Scope, decoded.Scope)
 	assert.Equal(t, cur.Values, decoded.Values)
 }
+
+// TestCursorCodec_Decode_TooLong rejects oversize cursor tokens to bound
+// decode work. Without an upper bound an attacker can force unbounded
+// base64 + HMAC work by supplying megabyte-sized cursors.
+// ref: kubernetes apiserver 4 KiB continue-token guidance.
+func TestCursorCodec_Decode_TooLong(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	oversize := make([]byte, MaxCursorTokenBytes+1)
+	for i := range oversize {
+		oversize[i] = 'A'
+	}
+	_, err = codec.Decode(string(oversize))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "cursor token exceeds maximum length", ecErr.Details["reason"])
+}
+
+// TestCursorCodec_Decode_MaxLengthBoundary confirms the exact-limit cursor
+// is not rejected by the length guard (only the signature check fails).
+func TestCursorCodec_Decode_MaxLengthBoundary(t *testing.T) {
+	codec, err := NewCursorCodec(testKey())
+	require.NoError(t, err)
+
+	atLimit := make([]byte, MaxCursorTokenBytes)
+	for i := range atLimit {
+		atLimit[i] = 'A'
+	}
+	_, err = codec.Decode(string(atLimit))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	// Must not be rejected by the length guard.
+	assert.NotEqual(t, "cursor token exceeds maximum length", ecErr.Details["reason"])
+}

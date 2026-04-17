@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -266,4 +267,26 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestDeviceCell_DurableMode_RejectsMissingCursorCodec locks the fail-fast
+// behavior introduced with RunMode wiring: a durable assembly that forgets
+// to inject a production cursor codec must not silently fall back to the
+// public demo key baked into the source tree.
+func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
+	c := NewDeviceCell(
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithCommandRepository(mem.NewCommandRepository()),
+		WithPublisher(eventbus.New()),
+		// No WithCursorCodec — durable mode must refuse the demo fallback.
+	)
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+	assert.Contains(t, err.Error(), "cursor codec")
 }
