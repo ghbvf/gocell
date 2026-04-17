@@ -1,10 +1,15 @@
 package auth
 
 // middleware_aud_test.go: HTTP route-level audience regression tests.
-// These tests exercise the full AuthMiddleware → JWTVerifier chain via
-// httptest.ResponseRecorder, ensuring that wrong-audience and missing-audience
-// bearer tokens are rejected BEFORE reaching any handler — not just at the
-// VerifyIntent helper level.
+//
+// TestAuthMiddleware_* (first two) exercise the full AuthMiddleware →
+// JWTVerifier chain via httptest.ResponseRecorder, ensuring that
+// wrong/missing-audience tokens are rejected before reaching any handler.
+//
+// TestAuthMiddleware_WrongAudience_RefreshPath_Returns401 tests the refresh
+// path pattern, where production code calls verifier.VerifyIntent directly
+// (refresh endpoints extract the bearer token and call VerifyIntent themselves,
+// rather than relying on AuthMiddleware).
 
 import (
 	"net/http"
@@ -73,9 +78,9 @@ func TestAuthMiddleware_WrongAudience_RefreshPath_Returns401(t *testing.T) {
 	token, err := issuer.Issue(TokenIntentRefresh, "alice", nil, []string{"other-service"}, "")
 	require.NoError(t, err)
 
-	// Simulate a refresh endpoint: uses VerifyIntent(refresh) directly.
-	// This tests that audience enforcement propagates into VerifyIntent when
-	// called by application code (not just by AuthMiddleware).
+	// Mirrors the production refresh-endpoint pattern: the handler extracts the
+	// bearer token and calls VerifyIntent directly (AuthMiddleware is not in the
+	// chain for refresh paths). Validates that audience enforcement holds there too.
 	refreshHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := r.Header.Get("Authorization")
 		if len(bearer) > 7 {

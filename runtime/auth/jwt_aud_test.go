@@ -10,12 +10,15 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // makeTokenWithAud issues a signed token carrying the given audience slice.
@@ -98,6 +101,10 @@ func TestNewJWTVerifier_NoAudiences_ReturnsError(t *testing.T) {
 	_, err := NewJWTVerifier(ks)
 	require.Error(t, err, "NewJWTVerifier without WithExpectedAudiences must return an error")
 	assert.Contains(t, err.Error(), "audience")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error")
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code,
+		"construction error must use ErrAuthVerifierConfig, not ErrAuthKeyInvalid")
 }
 
 // TestJWTVerifier_VerifyIntent_AcceptsMultipleAudiencesWhenOneMatches verifies

@@ -126,7 +126,7 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 		o(v)
 	}
 	if len(v.expectedAudiences) == 0 {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.New(errcode.ErrAuthVerifierConfig,
 			"JWT verifier requires at least one expected audience (WithExpectedAudiences); RFC 8725 §3.3")
 	}
 	return v, nil
