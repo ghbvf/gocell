@@ -631,3 +631,94 @@ func TestCanonicalQuery_SortsKeys(t *testing.T) {
 	assert.Equal(t, "a=1&b=2", canonicalQuery("b=2&a=1"))
 	assert.Equal(t, "", canonicalQuery(""))
 }
+
+// spyCounterVec records each (result, reason) pair observed via Inc().
+type spyCounterVec struct {
+	labels   []string
+	recorded []spyRecord
+}
+
+type spyRecord struct {
+	result string
+	reason string
+}
+
+func (v *spyCounterVec) With(l metrics.Labels) metrics.Counter {
+	metrics.MustValidateLabels(v.labels, l)
+	return &spyCounter{vec: v, result: l["result"], reason: l["reason"]}
+}
+
+type spyCounter struct {
+	vec    *spyCounterVec
+	result string
+	reason string
+}
+
+func (c *spyCounter) Inc() {
+	c.vec.recorded = append(c.vec.recorded, spyRecord{result: c.result, reason: c.reason})
+}
+func (c *spyCounter) Add(_ float64) {}
+
+// spyProvider is a metrics.Provider that returns a spyCounterVec for the
+// service-token counter and no-ops for everything else.
+type spyProvider struct {
+	svcVec *spyCounterVec
+}
+
+func newSpyProvider() *spyProvider {
+	return &spyProvider{
+		svcVec: &spyCounterVec{labels: []string{"result", "reason"}},
+	}
+}
+
+func (p *spyProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	if opts.Name == "auth_service_token_verify_total" {
+		return p.svcVec, nil
+	}
+	return metrics.NopProvider{}.CounterVec(opts)
+}
+
+func (p *spyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return metrics.NopProvider{}.HistogramVec(opts)
+}
+
+func (p *spyProvider) assertServiceVerify(t *testing.T, result, reason string) {
+	t.Helper()
+	for _, r := range p.svcVec.recorded {
+		if r.result == result && r.reason == reason {
+			return
+		}
+	}
+	t.Errorf("expected service verify record {result=%q reason=%q}, got %v",
+		result, reason, p.svcVec.recorded)
+}
+
+// TestServiceToken_LegacyTwoPart_MetricLabel verifies that a 2-part legacy token
+// ({timestamp}:{hex_hmac}, no nonce) is rejected with HTTP 401 AND records the
+// metric label "legacy_format" (not "invalid_format").
+func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Unix(1700000000, 0)
+
+	spy := newSpyProvider()
+	am, err := NewAuthMetrics(spy)
+	require.NoError(t, err)
+
+	legacyToken := legacyTwoPartToken(testSecret, http.MethodGet, "/internal/v1/test", now)
+
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: 2-part token must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/test", nil)
+	req.Header.Set("Authorization", "ServiceToken "+legacyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
+	spy.assertServiceVerify(t, "failure", "legacy_format")
+}
