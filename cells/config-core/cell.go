@@ -155,7 +155,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
 	}
-	c.initPublishSlice(runMode)
+	c.initPublishSlice()
 	c.initSubscribeSlice()
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
@@ -235,7 +235,7 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	return nil
 }
 
-func (c *ConfigCore) initPublishSlice(runMode query.RunMode) {
+func (c *ConfigCore) initPublishSlice() {
 	var opts []configpublish.Option
 	if c.outboxWriter != nil {
 		opts = append(opts, configpublish.WithOutboxWriter(c.outboxWriter))
@@ -243,10 +243,6 @@ func (c *ConfigCore) initPublishSlice(runMode query.RunMode) {
 	if c.txRunner != nil {
 		opts = append(opts, configpublish.WithTxManager(c.txRunner))
 	}
-	// Publisher fail-open is keyed off the same cell-level RunMode that config-read /
-	// feature-flag consume; durable stays fail-closed by construction (zero-value RunModeProd).
-	// Do not re-derive this from DurabilityMode here — call RunModeForDemo once in Init.
-	opts = append(opts, configpublish.WithRunMode(runMode))
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
