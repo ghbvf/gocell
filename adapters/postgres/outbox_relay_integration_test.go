@@ -126,10 +126,23 @@ func TestIntegration_OutboxRelay_HappyPath(t *testing.T) {
 	const topic = "relay.happypath.v1"
 
 	// Subscribe to the exchange to count received messages.
-	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{})
+	// DLXExchange is required by the Subscriber API (Nack without DLX silently
+	// discards messages, so the subscriber enforces it at construction time).
+	subCfg := rabbitmq.SubscriberConfig{
+		DLXExchange: "relay.happypath.dlx",
+	}
+	sub := rabbitmq.NewSubscriber(rmqConn, subCfg)
 	var received atomic.Int32
 	subCtx, subCancel := context.WithCancel(context.Background())
 	defer subCancel()
+
+	// InitializeSubscription synchronously declares the exchange, DLX, queue
+	// and binding before the relay publishes — avoids the race where messages
+	// are published to a fanout exchange with no bound queue and are silently
+	// dropped by RabbitMQ (fanout exchanges do not buffer for unbound queues).
+	require.NoError(t,
+		sub.InitializeSubscription(subCtx, topic, "cg-test-happypath"),
+		"subscription topology must be pre-declared")
 
 	go func() {
 		_ = sub.Subscribe(subCtx, topic, func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
@@ -156,12 +169,15 @@ func TestIntegration_OutboxRelay_HappyPath(t *testing.T) {
 	// Wait for entry to be published.
 	waitForStatus(t, pool, entryID, "published", 15*time.Second)
 
-	// Give subscriber a moment to receive.
-	time.Sleep(500 * time.Millisecond)
-	relayCancel()
-
-	assert.GreaterOrEqual(t, received.Load(), int32(1),
+	// Use Eventually so the subscriber goroutine has time to consume the message.
+	// The relay marks the entry as 'published' before the subscriber processes
+	// the delivery, so we poll instead of using a fixed sleep.
+	assert.Eventually(t, func() bool {
+		return received.Load() >= 1
+	}, 10*time.Second, 100*time.Millisecond,
 		"subscriber should have received at least one message")
+
+	relayCancel()
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +341,9 @@ func TestIntegration_OutboxRelay_ConcurrentRelayNoDoubleClaim(t *testing.T) {
 // remain permanently stuck in the 'claiming' state.
 // Note: Stop() does NOT immediately release claims; reclaimStale (TTL-based
 // recovery) is responsible for picking up stuck 'claiming' entries after
-// claimTTL + ReclaimInterval elapses. This test waits for that recovery window
-// and then asserts no entries remain in 'claiming'.
+// claimTTL + ReclaimInterval elapses. A second relay instance is started after
+// the first one stops to run reclaimStale — this simulates a pod restart or
+// rolling update scenario where a new relay takes over from a crashed one.
 func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 	pool, pub, _, cleanup := setupPGAndRMQ(t)
 	defer cleanup()
@@ -353,7 +370,7 @@ func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 	cfg.PollInterval = 50 * time.Millisecond
 	cfg.BatchSize = entryCount
 	cfg.MaxAttempts = 5
-	cfg.ClaimTTL = 2 * time.Second  // short TTL so reclaimStale runs quickly
+	cfg.ClaimTTL = 2 * time.Second // short TTL so reclaimStale runs quickly
 	cfg.ReclaimInterval = 500 * time.Millisecond
 
 	relay := NewOutboxRelay(pool.DB(), slowPub, cfg)
@@ -361,16 +378,33 @@ func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 
 	go func() { _ = relay.Start(relayCtx) }()
 
-	// Let relay run briefly then stop.
+	// Let relay run briefly then stop (while some entries are still 'claiming').
 	time.Sleep(200 * time.Millisecond)
 	relayCancel()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stopCancel()
 	require.NoError(t, relay.Stop(stopCtx), "relay.Stop should return nil")
 
-	// After claimTTL, reclaimStale should recover any stuck 'claiming' entries.
-	// Wait for reclaimStale to run (ClaimTTL + 2*ReclaimInterval).
-	time.Sleep(cfg.ClaimTTL + 2*cfg.ReclaimInterval + 500*time.Millisecond)
+	// Start a second relay (simulating pod restart / takeover).
+	// Its reclaimLoop will recover any entries stuck in 'claiming' once
+	// ClaimTTL elapses. The second relay uses the real publisher so recovered
+	// entries can be completed; it does not need a subscriber for this assertion.
+	cfg2 := DefaultRelayConfig()
+	cfg2.PollInterval = 100 * time.Millisecond
+	cfg2.BatchSize = entryCount
+	cfg2.MaxAttempts = 5
+	cfg2.ClaimTTL = 2 * time.Second
+	cfg2.ReclaimInterval = 300 * time.Millisecond
+
+	relay2 := NewOutboxRelay(pool.DB(), pub, cfg2)
+	relay2Ctx, relay2Cancel := context.WithCancel(context.Background())
+	defer relay2Cancel()
+	go func() { _ = relay2.Start(relay2Ctx) }()
+
+	// Wait for reclaimStale to run on relay2 (ClaimTTL + 2*ReclaimInterval + buffer).
+	// After this window, all entries should have left 'claiming'.
+	time.Sleep(cfg2.ClaimTTL + 2*cfg2.ReclaimInterval + 500*time.Millisecond)
+	relay2Cancel()
 
 	// No entries should be permanently stuck in 'claiming'.
 	var claimingCount int
