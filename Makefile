@@ -27,6 +27,7 @@ cover:
 clean:
 	rm -rf bin/
 	rm -f coverage.out
+	rm -f gocell core-bundle iot-device sso-bff todo-order
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle

@@ -11,11 +11,15 @@ import (
 // runValidate implements: gocell validate [--root <path>]
 // Parses all metadata, runs validate-meta and depcheck.
 // exit 0 = pass, exit 1 = errors found.
+//
+// --fail-fast controls output, not traversal: the validator always evaluates all
+// rules; only the printed output is short-circuited. With the flag set, only the
+// first error encountered is printed and banners/summary are suppressed.
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
-		"print only the first error and exit; skip warnings and summary (CI-friendly)")
+		"print only the first error encountered and skip banners/summary; the validator still evaluates all rules (this flag controls output, not traversal)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,6 +56,7 @@ func runValidate(args []string) error {
 			formatResultsFailFast(allResults)
 			return fmt.Errorf("validation failed: %s", firstErr.Code)
 		}
+		fmt.Println("OK: no errors.")
 		return nil
 	}
 

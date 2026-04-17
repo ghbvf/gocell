@@ -560,6 +560,49 @@ func TestPathTraversal(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// WithDryRun
+// ---------------------------------------------------------------------------
+
+// TestScaffolder_WithDryRun_NoFileWritten verifies that dry-run mode skips
+// all filesystem writes while still returning nil on valid opts.
+func TestScaffolder_WithDryRun_NoFileWritten(t *testing.T) {
+	root := t.TempDir()
+	s := New(root).WithDryRun(true)
+
+	require.NoError(t, s.CreateCell(CellOpts{ID: "dry-cell", OwnerTeam: "squad"}))
+
+	_, err := os.Stat(filepath.Join(root, "cells", "dry-cell", "cell.yaml"))
+	assert.True(t, os.IsNotExist(err), "dry-run must not write cell.yaml")
+}
+
+// TestScaffolder_WithDryRun_StillReportsConflict verifies that a pre-existing
+// target path causes ErrScaffoldConflict even when dryRun is true.
+func TestScaffolder_WithDryRun_StillReportsConflict(t *testing.T) {
+	root := t.TempDir()
+
+	// Create the target that would conflict.
+	cellDir := filepath.Join(root, "cells", "exists-cell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
+		[]byte("id: exists-cell\n"), 0o644))
+
+	s := New(root).WithDryRun(true)
+	err := s.CreateCell(CellOpts{ID: "exists-cell", OwnerTeam: "squad"})
+	requireErrCode(t, err, ErrScaffoldConflict)
+}
+
+// TestScaffolder_WithDryRun_StillValidatesOpts verifies that invalid opts
+// (missing required fields) are still rejected in dry-run mode before any I/O.
+func TestScaffolder_WithDryRun_StillValidatesOpts(t *testing.T) {
+	root := t.TempDir()
+	s := New(root).WithDryRun(true)
+
+	// Missing OwnerTeam — must fail regardless of dryRun.
+	err := s.CreateCell(CellOpts{ID: "no-team"})
+	requireErrCode(t, err, ErrScaffoldInvalidOpts)
+}
+
+// ---------------------------------------------------------------------------
 // Template embedding
 // ---------------------------------------------------------------------------
 

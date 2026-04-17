@@ -51,7 +51,7 @@ func reportScaffold(dryRun bool, kind, id, target string) {
 		fmt.Printf("(dry-run) Would create %s %s at %s\n", kind, id, target)
 		return
 	}
-	fmt.Printf("Created %s: %s\n", kind, id)
+	fmt.Printf("Created %s %s at %s\n", kind, id, target)
 }
 
 func scaffoldCell(root string, args []string) error {

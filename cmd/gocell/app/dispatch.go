@@ -13,6 +13,8 @@ import (
 // commands maps sub-command names to their run functions. It is kept
 // unexported so callers go through Dispatch, which enforces the error/usage
 // contract; tests in this package may reference it directly.
+// Black-box tests in the app_test package must go through Dispatch; direct
+// map mutation is not supported.
 var commands = map[string]func(args []string) error{
 	"validate": runValidate,
 	"scaffold": runScaffold,
@@ -24,6 +26,9 @@ var commands = map[string]func(args []string) error{
 // Dispatch runs the gocell sub-command identified by args[0] and returns a
 // process exit code (0 on success, 1 on usage / execution errors). Writes
 // errors to stderr; does not call os.Exit so callers keep control.
+//
+// Stability: internal. Used by cmd/gocell/main.go and in-tree smoke tests;
+// signature may change without notice.
 func Dispatch(args []string) int {
 	if len(args) < 1 {
 		PrintUsage()
@@ -43,6 +48,9 @@ func Dispatch(args []string) int {
 }
 
 // PrintUsage writes the top-level gocell usage summary to stdout.
+//
+// Stability: internal. Used by cmd/gocell/main.go and in-tree smoke tests;
+// signature may change without notice.
 func PrintUsage() {
 	fmt.Println("Usage: gocell <command> [args]")
 	fmt.Println()

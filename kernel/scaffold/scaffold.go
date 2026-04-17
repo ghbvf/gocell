@@ -62,6 +62,15 @@ type JourneyOpts struct {
 }
 
 // Scaffolder generates directory structures and YAML templates.
+//
+// Design note — deviated from runtime/bootstrap Option pattern:
+// Scaffolder intentionally uses a fluent/chained API rather than the variadic-
+// option (WithX ...Option) pattern used by runtime/bootstrap/bootstrap.go. The
+// two patterns are equivalent in power, but Scaffolder has only two state fields
+// (root + dryRun), is always single-use (created, called once, discarded), and
+// is wired in CLI one-liners where chaining reads more naturally than a variadic
+// options slice. The Option pattern would not add safety or extensibility here.
+// ref: runtime/bootstrap/bootstrap.go Option — comparison group.
 type Scaffolder struct {
 	root   string // project root containing go.mod
 	dryRun bool   // if true, skip filesystem writes while still validating opts and detecting conflicts
@@ -72,9 +81,17 @@ func New(root string) *Scaffolder {
 	return &Scaffolder{root: root}
 }
 
-// WithDryRun returns the receiver after flipping its dry-run mode: opts
-// validation, conflict detection, and template rendering still run, but no
-// directories or files are written. Fluent to pair with New.
+// WithDryRun returns the receiver after setting its dry-run flag. When dry is
+// true, opts validation, conflict detection, and template rendering still run,
+// but no directories or files are written to disk. Fluent — designed to chain
+// directly with New:
+//
+//	err := scaffold.New(root).WithDryRun(true).CreateCell(opts)
+//
+// Conflict detection relies on os.Stat for the target path, so an existing file
+// will still cause ErrScaffoldConflict even in dry-run mode.
+//
+// Deviated from runtime/bootstrap Option pattern: see Scaffolder type godoc.
 func (s *Scaffolder) WithDryRun(dry bool) *Scaffolder {
 	s.dryRun = dry
 	return s
