@@ -269,19 +269,19 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrWSMaxConns:      http.StatusServiceUnavailable,
 
 	// --- 500 Internal Server Error ---
-	errcode.ErrInternal:                   http.StatusInternalServerError,
-	errcode.ErrDependencyCycle:            http.StatusInternalServerError,
-	errcode.ErrBusClosed:                  http.StatusInternalServerError,
-	errcode.ErrAdapterPGNoTx:              http.StatusInternalServerError,
-	errcode.ErrTestExecution:              http.StatusInternalServerError,
-	errcode.ErrCellMissingOutbox:          http.StatusInternalServerError,
-	errcode.ErrArchiveUpload:              http.StatusInternalServerError,
-	errcode.ErrArchiveMarshal:             http.StatusInternalServerError,
-	errcode.ErrAuditRepoQuery:             http.StatusInternalServerError,
-	errcode.ErrConfigRepoQuery:            http.StatusInternalServerError,
-	errcode.ErrAuthKeyMissing:             http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStarted:           http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStopped:           http.StatusInternalServerError,
+	errcode.ErrInternal:          http.StatusInternalServerError,
+	errcode.ErrDependencyCycle:   http.StatusInternalServerError,
+	errcode.ErrBusClosed:         http.StatusInternalServerError,
+	errcode.ErrAdapterPGNoTx:     http.StatusInternalServerError,
+	errcode.ErrTestExecution:     http.StatusInternalServerError,
+	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
+	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
+	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
+	errcode.ErrAuditRepoQuery:    http.StatusInternalServerError,
+	errcode.ErrConfigRepoQuery:   http.StatusInternalServerError,
+	errcode.ErrAuthKeyMissing:    http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStarted:  http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStopped:  http.StatusInternalServerError,
 	// Observability init failures (missing Provider, missing CellID) —
 	// these originate from composition-root misconfiguration and never
 	// escape via HTTP in practice, but the exhaustive test requires every
