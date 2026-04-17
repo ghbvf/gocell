@@ -309,15 +309,16 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 
 func TestHandler_Authz_Create(t *testing.T) {
 	cases := []struct {
-		name       string
-		subject    string
-		roles      []string
-		injectAuth bool
-		wantStatus int
+		name        string
+		subject     string
+		roles       []string
+		injectAuth  bool
+		wantStatus  int
+		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, http.StatusUnauthorized},
-		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, http.StatusCreated},
+		{"no_auth", "", nil, false, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, http.StatusCreated, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -331,29 +332,39 @@ func TestHandler_Authz_Create(t *testing.T) {
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantErrCode != "" {
+				var resp struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+			}
 		})
 	}
 }
 
 func TestHandler_Authz_Update(t *testing.T) {
 	cases := []struct {
-		name       string
-		subject    string
-		roles      []string
-		injectAuth bool
-		setup      func(*mem.ConfigRepository)
-		path       string
-		wantStatus int
+		name        string
+		subject     string
+		roles       []string
+		injectAuth  bool
+		setup       func(*mem.ConfigRepository)
+		path        string
+		wantStatus  int
+		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound},
+		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "au-1", Key: "test.update", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
-		}, "/test.update", http.StatusOK},
+		}, "/test.update", http.StatusOK, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -370,29 +381,39 @@ func TestHandler_Authz_Update(t *testing.T) {
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantErrCode != "" {
+				var resp struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+			}
 		})
 	}
 }
 
 func TestHandler_Authz_Delete(t *testing.T) {
 	cases := []struct {
-		name       string
-		subject    string
-		roles      []string
-		injectAuth bool
-		setup      func(*mem.ConfigRepository)
-		path       string
-		wantStatus int
+		name        string
+		subject     string
+		roles       []string
+		injectAuth  bool
+		setup       func(*mem.ConfigRepository)
+		path        string
+		wantStatus  int
+		wantErrCode string
 	}{
-		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized},
-		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound},
+		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
 		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
 			})
-		}, "/test.delete", http.StatusNoContent},
+		}, "/test.delete", http.StatusNoContent, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -407,6 +428,15 @@ func TestHandler_Authz_Delete(t *testing.T) {
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
+			if tc.wantErrCode != "" {
+				var resp struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+			}
 		})
 	}
 }
