@@ -17,17 +17,43 @@ go run ./examples/sso-bff
 
 The server starts on `:8081`.
 
+## Seed User
+
+On startup, a random admin password is generated and printed to the console:
+
+```
+{"level":"INFO","msg":"sso-bff: seed admin ready — use these credentials to log in","username":"admin","password":"<random>","note":"dev-only, resets on restart"}
+```
+
+Copy the `password` value from the log and use it in the walkthrough below.
+The password resets every time the server restarts (in-memory only).
+
 ## API Walkthrough
 
-### 1. Create a user
+### 1. Login as seed admin
+
+```bash
+curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"<password from startup log>"}' | jq
+```
+
+Save the returned `accessToken` as your admin token:
+
+```bash
+export ADMIN_TOKEN="<accessToken from admin login>"
+```
+
+### 2. Create a user (requires admin)
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/users \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"username":"alice","password":"P@ssw0rd123","email":"alice@example.com"}' | jq
 ```
 
-### 2. Login (create session)
+### 3. Login as alice
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
@@ -35,68 +61,78 @@ curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -d '{"username":"alice","password":"P@ssw0rd123"}' | jq
 ```
 
-Save the returned `token` and `sessionId` for subsequent calls.
+Save alice's tokens:
 
-### 3. Refresh token
+```bash
+export ACCESS_TOKEN="<accessToken from alice login>"
+export REFRESH_TOKEN="<refreshToken from alice login>"
+export SESSION_ID="<sessionId from alice login>"
+```
+
+### 4. Refresh token
+
+The refresh endpoint is public (no Authorization header required).
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/refresh \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer {token}" \
-  -d '{"sessionId":"{sessionId}"}' | jq
+  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}" | jq
 ```
 
-### 4. List users
+### 5. Get user profile
 
 ```bash
-curl -s http://localhost:8081/api/v1/access/users | jq
+curl -s http://localhost:8081/api/v1/access/users/{userId} \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
-### 5. Logout (delete session)
+(Replace `{userId}` with the `id` from step 2's response.)
+
+### 6. Logout (delete session)
+
+Use the `sessionId` returned by the login response (saved as `$SESSION_ID` above).
 
 ```bash
-curl -s -X DELETE http://localhost:8081/api/v1/access/sessions/{sessionId} | jq
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  http://localhost:8081/api/v1/access/sessions/$SESSION_ID
 ```
 
-### 6. Query audit entries
+### 7. Query audit entries
 
 ```bash
-curl -s http://localhost:8081/api/v1/audit/entries | jq
+curl -s http://localhost:8081/api/v1/audit/entries \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq '.data[] | {action: .eventType, at: .timestamp}'
 ```
 
-### 7. Create a config entry
+### 8. Create a config entry
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/config/ \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"key":"site.title","value":"My SSO Portal"}' | jq
 ```
 
-### 8. Update a config entry
+### 9. Update a config entry
 
 ```bash
 curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"value":"SSO Portal v2"}' | jq
 ```
 
-### 9. Read a config entry
+### 10. Read a config entry
 
 ```bash
 curl -s http://localhost:8081/api/v1/config/site.title | jq
 ```
 
-### 10. List feature flags
+### 11. List feature flags
 
 ```bash
 curl -s http://localhost:8081/api/v1/flags | jq
-```
-
-### 11. Verify audit trail after login/logout
-
-```bash
-# After performing login + logout, check that audit entries were recorded
-curl -s http://localhost:8081/api/v1/audit/entries | jq '.[] | {action: .eventType, at: .createdAt}'
 ```
 
 ### 12. Health checks

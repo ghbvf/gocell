@@ -15,6 +15,7 @@ func toTokenPairResponse(p *TokenPair) dto.TokenPairResponse {
 		AccessToken:  p.AccessToken,
 		RefreshToken: p.RefreshToken,
 		ExpiresAt:    p.ExpiresAt,
+		SessionID:    p.SessionID,
 	}
 }
 

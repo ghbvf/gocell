@@ -27,6 +27,7 @@ type TokenPair struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresAt    time.Time
+	SessionID    string
 }
 
 // Option configures a session-login Service.
@@ -145,6 +146,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		ExpiresAt:    expiresAt,
+		SessionID:    sessionID,
 	}, nil
 }
 

@@ -10,6 +10,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -28,6 +31,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
+
+func generateDevPassword() (string, error) {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate dev password: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // noopTxRunner executes fn directly without a real transaction (demo mode).
 type noopTxRunner struct{}
@@ -71,9 +82,17 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
+	// Dev-only seed admin: in-memory store resets on every restart.
+	seedAdminPass, err := generateDevPassword()
+	if err != nil {
+		logger.Error("sso-bff: failed to generate seed admin password", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
+		accesscore.WithSeedAdmin("admin", seedAdminPass),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -83,6 +102,7 @@ func main() {
 	)
 
 	// --- audit-core (L3): tamper-evident audit log ---
+	// 32 bytes: matches SHA-256 block size used by the audit HMAC chain.
 	auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")
 	auditCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-audit-cursor-key-32b!!"))
 	if err != nil {
@@ -145,6 +165,11 @@ func main() {
 		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
+	logger.Info("sso-bff: seed admin ready — use these credentials to log in",
+		slog.String("username", "admin"),
+		slog.String("password", seedAdminPass),
+		slog.String("note", "dev-only, resets on restart"),
+	)
 	logger.Info("sso-bff: starting on :8081",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
