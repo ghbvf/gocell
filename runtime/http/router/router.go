@@ -281,28 +281,7 @@ func NewE(opts ...Option) (*Router, error) {
 		o(r)
 	}
 
-	// Derive trust-boundary policy from WithPublicEndpoints: build a single
-	// isPublic function and auto-wire tracing, request_id, and auth middleware.
-	//
-	// ref: go-zero rest/server.go — single-point route group auth config
-	// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-	if len(r.publicEndpoints) > 0 {
-		if len(r.tracingOpts) > 0 {
-			slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
-		}
-		publicSet := make(map[string]bool, len(r.publicEndpoints))
-		for _, p := range r.publicEndpoints {
-			publicSet[path.Clean(p)] = true
-		}
-		isPublic := func(req *http.Request) bool {
-			return publicSet[path.Clean(req.URL.Path)]
-		}
-		r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
-		r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
-		if len(r.authPublicEndpoints) == 0 {
-			r.authPublicEndpoints = r.publicEndpoints
-		}
-	}
+	r.applyPublicEndpoints()
 
 	// Fail-fast: validate and construct the proxy checker once. The validated
 	// checker is passed to RealIPFromChecker so proxies are only parsed once.
@@ -378,6 +357,35 @@ func NewE(opts ...Option) (*Router, error) {
 	r.outerMux.Mount("/", r.mux)
 
 	return r, nil
+}
+
+// applyPublicEndpoints derives trust-boundary policy from WithPublicEndpoints:
+// builds isPublic function and auto-wires tracing, request_id, and auth.
+//
+// ref: go-zero rest/server.go — single-point route group auth config
+// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
+func (r *Router) applyPublicEndpoints() {
+	if len(r.publicEndpoints) == 0 {
+		return
+	}
+	if len(r.tracingOpts) > 0 {
+		slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
+	}
+	publicSet := make(map[string]bool, len(r.publicEndpoints))
+	for _, p := range r.publicEndpoints {
+		publicSet[path.Clean(p)] = true
+	}
+	isPublic := func(req *http.Request) bool {
+		return publicSet[path.Clean(req.URL.Path)]
+	}
+	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
+	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
+	// Standalone callers using WithPublicEndpoints without WithAuthMiddleware
+	// need authPublicEndpoints populated for the auth middleware. When bootstrap
+	// calls both, WithAuthMiddleware already sets this — the guard is a no-op.
+	if len(r.authPublicEndpoints) == 0 {
+		r.authPublicEndpoints = r.publicEndpoints
+	}
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.

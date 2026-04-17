@@ -19,7 +19,9 @@ import (
 )
 
 func TestToAuditEntryResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toAuditEntryResponse(nil) })
+	var got AuditEntryResponse
+	assert.NotPanics(t, func() { got = toAuditEntryResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {

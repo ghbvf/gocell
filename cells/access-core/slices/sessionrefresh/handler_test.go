@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 )
 
@@ -37,7 +38,9 @@ func setup() (*Handler, string) {
 }
 
 func TestToTokenPairResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toTokenPairResponse(nil) })
+	var got dto.TokenPairResponse
+	assert.NotPanics(t, func() { got = toTokenPairResponse(nil) })
+	assert.Empty(t, got.AccessToken)
 }
 
 func TestTokenPairResponse_Fields(t *testing.T) {

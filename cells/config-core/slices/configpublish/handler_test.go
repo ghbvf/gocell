@@ -48,7 +48,9 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 }
 
 func TestToConfigVersionResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toConfigVersionResponse(nil) })
+	var got ConfigVersionResponse
+	assert.NotPanics(t, func() { got = toConfigVersionResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 func TestConfigVersionResponse_Fields(t *testing.T) {

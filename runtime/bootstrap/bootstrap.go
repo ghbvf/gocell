@@ -165,9 +165,10 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 // verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
-// Deprecated: Use WithPublicEndpoints instead. WithPublicEndpoints discovers
-// the auth verifier automatically from cells implementing authProvider,
-// eliminating the need for explicit verifier injection at the composition root.
+// Deprecated: Use bootstrap.WithPublicEndpoints instead, which discovers the
+// auth verifier automatically and delegates trust boundary policy to
+// router.WithPublicEndpoints (auth bypass + tracing new-root + request_id
+// rejection in a single configuration point).
 //
 // publicEndpoints specifies business-route paths that bypass authentication.
 // If nil, no business routes are public (fail-closed). Callers must

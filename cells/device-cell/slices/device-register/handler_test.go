@@ -16,7 +16,9 @@ import (
 )
 
 func TestToDeviceRegisterResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toDeviceRegisterResponse(nil) })
+	var got DeviceRegisterResponse
+	assert.NotPanics(t, func() { got = toDeviceRegisterResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 func TestDeviceRegisterResponse_Fields(t *testing.T) {

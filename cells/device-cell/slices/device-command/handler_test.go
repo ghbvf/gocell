@@ -21,7 +21,9 @@ import (
 )
 
 func TestToCommandResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toCommandResponse(nil) })
+	var got CommandResponse
+	assert.NotPanics(t, func() { got = toCommandResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.

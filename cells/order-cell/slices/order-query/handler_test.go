@@ -19,7 +19,9 @@ import (
 )
 
 func TestToOrderResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toOrderResponse(nil) })
+	var got OrderResponse
+	assert.NotPanics(t, func() { got = toOrderResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 func TestOrderResponse_Fields(t *testing.T) {

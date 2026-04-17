@@ -1100,3 +1100,50 @@ func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
 	assert.NotContains(t, hsts, "preload",
 		"default HSTS must not include preload unless opted in")
 }
+
+// ---------------------------------------------------------------------------
+// WithPublicEndpoints edge cases (F3-TEST-01, F3-TEST-02)
+// ---------------------------------------------------------------------------
+
+func TestWithPublicEndpoints_EmptySlice_IsNoop(t *testing.T) {
+	tracer := tracing.NewTracer("test-empty")
+	r := New(
+		WithTracer(tracer),
+		WithPublicEndpoints([]string{}),
+	)
+
+	var traceID string
+	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		traceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("traceparent", "00-"+upstreamTraceID+"-00f067aa0ba902b7-01")
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, upstreamTraceID, traceID,
+		"empty WithPublicEndpoints must not alter tracing behavior (no-op)")
+}
+
+func TestWithPublicEndpoints_PathNormalization(t *testing.T) {
+	r := New(
+		WithPublicEndpoints([]string{"//api/v1//login"}),
+	)
+
+	var gotID string
+	r.Handle("/api/v1/login", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/login", nil)
+	req.Header.Set("X-Request-Id", "attacker-id")
+	r.ServeHTTP(rec, req)
+
+	assert.NotEqual(t, "attacker-id", gotID,
+		"path.Clean must normalize //api/v1//login to /api/v1/login for matching")
+}

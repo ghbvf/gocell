@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -35,7 +36,9 @@ func setup() *Handler {
 }
 
 func TestToTokenPairResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toTokenPairResponse(nil) })
+	var got dto.TokenPairResponse
+	assert.NotPanics(t, func() { got = toTokenPairResponse(nil) })
+	assert.Empty(t, got.AccessToken)
 }
 
 func TestTokenPairResponse_Fields(t *testing.T) {

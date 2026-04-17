@@ -17,7 +17,9 @@ import (
 )
 
 func TestToDeviceStatusResponse_NilInput(t *testing.T) {
-	assert.NotPanics(t, func() { toDeviceStatusResponse(nil) })
+	var got DeviceStatusResponse
+	assert.NotPanics(t, func() { got = toDeviceStatusResponse(nil) })
+	assert.Zero(t, got.ID)
 }
 
 func TestDeviceStatusResponse_Fields(t *testing.T) {
