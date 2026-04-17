@@ -58,6 +58,13 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...Au
 // handleAuthRequest extracts the bearer token, verifies it (with intent=access
 // when the verifier supports it), records metrics, and either forwards to
 // next with claims attached or writes a 401 response.
+//
+// Enumeration defense: all verification failures — including
+// ErrAuthInvalidTokenIntent — are mapped to the generic ERR_AUTH_UNAUTHORIZED
+// response code so clients cannot distinguish token-type mismatch from
+// signature invalidity or expiry. The specific failure reason is observable
+// via the "reason" label on the auth_token_verify_total metric (ops-only
+// signal) and in structured logs; it is never forwarded to the HTTP response.
 func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier TokenVerifier, cfg authConfig) {
 	token := extractBearerToken(r)
 	if token == "" {

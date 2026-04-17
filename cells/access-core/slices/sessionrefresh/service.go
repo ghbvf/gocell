@@ -136,12 +136,20 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 }
 
 // verifyRefreshToken checks the JWT signature AND requires token_use=refresh
-// when the underlying verifier supports it. Intent-mismatch errors (e.g., an
-// access token submitted to /auth/refresh) are collapsed into the generic
-// ErrAuthRefreshFailed response so clients cannot distinguish "wrong token
-// type" from "bad token" (enumeration defense). Falls back to plain Verify
-// when the verifier is a legacy TokenVerifier used only by some unit tests;
-// production wiring always injects an IntentTokenVerifier.
+// when the underlying verifier supports it.
+//
+// Enumeration defense: ErrAuthRefreshFailed is intentionally broader than
+// ErrAuthInvalidTokenIntent and is used for ALL intent / signature / expiry
+// failures to maintain enumeration defense parity between legitimate
+// refresh-token-not-found and attacker-submitted access-token cases.
+// The specific failure reason is recorded only in the structured log (Warn
+// level) for ops visibility; the HTTP response always surfaces the generic
+// ErrAuthRefreshFailed code so callers cannot distinguish token type from
+// signature validity.
+//
+// Falls back to plain Verify when the verifier is a legacy TokenVerifier used
+// only by some unit tests; production wiring always injects an
+// IntentTokenVerifier.
 func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) error {
 	var verifyErr error
 	if iv, ok := s.verifier.(auth.IntentTokenVerifier); ok {

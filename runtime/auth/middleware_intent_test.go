@@ -7,7 +7,9 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,4 +80,68 @@ func TestAuthMiddleware_RejectsRefreshIntentToken_401(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
+}
+
+// TestAuthMiddleware_RefreshAndInvalidToken_SameResponse asserts that two
+// distinct failure types — intent mismatch and a plain invalid token — produce
+// identical HTTP response bodies (same code, same message).  This test pins the
+// enumeration-defense invariant: if someone later tries to differentiate the
+// response bodies, this test will fail.
+func TestAuthMiddleware_RefreshAndInvalidToken_SameResponse(t *testing.T) {
+	// Case 1: refresh intent mismatch
+	intentErrVerifier := &intentMockVerifier{
+		accessErr: errcode.New(errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
+	}
+	// Case 2: some other invalid token error
+	otherErrVerifier := &intentMockVerifier{
+		accessErr: errcode.New(errcode.ErrAuthUnauthorized, "token expired"),
+	}
+
+	makeHandler := func(v TokenVerifier) http.Handler {
+		return AuthMiddleware(v, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("inner handler must not be called")
+		}))
+	}
+
+	doRequest := func(h http.Handler) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+		req.Header.Set("Authorization", "Bearer some-token")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec1 := doRequest(makeHandler(intentErrVerifier))
+	rec2 := doRequest(makeHandler(otherErrVerifier))
+
+	assert.Equal(t, http.StatusUnauthorized, rec1.Code)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
+	assert.Equal(t, rec1.Body.String(), rec2.Body.String(),
+		"intent-mismatch and other-invalid-token must produce identical response bodies (enumeration defense)")
+}
+
+// TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError asserts that when
+// VerifyIntent returns ErrAuthInvalidTokenIntent, the middleware logs the error
+// containing "ERR_AUTH_INVALID_TOKEN_INTENT". This ensures the intent reason is
+// observable in structured logs (ops signal) while the HTTP response stays
+// generic (enumeration defense). Uses a slog buffer to capture the log output.
+func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	verifier := &intentMockVerifier{
+		accessErr: errcode.New(errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
+	}
+	handler := AuthMiddleware(verifier, nil, WithLogger(logger))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer refresh-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, buf.String(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"ERR_AUTH_INVALID_TOKEN_INTENT must appear in structured log output so ops can distinguish it via metrics reason=invalid_intent")
 }
