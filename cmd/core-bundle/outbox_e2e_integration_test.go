@@ -31,6 +31,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -90,16 +91,18 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	})
 
 	// --- Step 2: Connect to PG and run migrations ---
+	// Migrations run directly against the container before buildConfigCoreOpts
+	// opens its own pool (buildConfigCoreOpts does not run migrations — that
+	// is caller responsibility; see comment on adapterpg.NewPool).
 	pgConnStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
-	pgPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
-	require.NoError(t, err, "create PG pool")
-	t.Cleanup(pgPool.Close)
-
-	migrator, err := adapterpg.NewMigrator(pgPool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "create migration PG pool")
+	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
+	migrationPool.Close() // buildConfigCoreOpts opens its own pool
 
 	// --- Step 3: Connect to RMQ ---
 	amqpURL, err := rmqContainer.AmqpURL(ctx)
@@ -113,8 +116,27 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, err, "create rabbitmq connection")
 	t.Cleanup(func() { _ = rmqConn.Close() })
 
-	// --- Step 4: Build the core-bundle assembly with PG + RMQ ---
+	// --- Step 4: Exercise the REAL production path buildConfigCoreOpts ---
+	// This is the regression guard for A11: if buildConfigCoreOpts ever stops
+	// returning a relay worker in postgres mode, the NotNil assertion below
+	// fires and we fail before even booting the assembly. Prior to this
+	// refactor the test manually built the relay, which silently masked any
+	// regression in the production wiring.
 	rmqPublisher := adaptermq.NewPublisher(rmqConn)
+
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	t.Setenv("GOCELL_PG_DSN", pgConnStr)
+
+	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err :=
+		buildConfigCoreOpts(ctx, rmqPublisher, kernelmetrics.NopProvider{})
+	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
+	require.Equal(t, "postgres", cellAdapterMode, "cell adapter mode must be postgres")
+	require.NotNil(t, relayWorker,
+		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil relay "+
+			"worker in postgres mode; if this fails, the PG outbox→RMQ wire was "+
+			"disconnected in production code")
+	require.NotNil(t, pgPool, "PG pool must be returned in postgres mode")
+	t.Cleanup(pgPool.Close)
 
 	eb := eventbus.New()
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
@@ -132,21 +154,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	outboxWriter := adapterpg.NewOutboxWriter()
-	txMgr := adapterpg.NewTxManager(pgPool)
-
-	// OutboxRelay polls outbox_entries and publishes via rmqPublisher.
-	// This is the A11 fix: the relay was never started in PG mode before.
-	relayCfg := adapterpg.DefaultRelayConfig()
-	relayCfg.PollInterval = 200 * time.Millisecond // fast poll for test
-	relay := adapterpg.NewOutboxRelay(pgPool.DB(), rmqPublisher, relayCfg)
-
-	configCell := configcore.NewConfigCore(
-		configcore.WithPostgresDefaults(pgPool.DB(), outboxWriter),
-		configcore.WithTxManager(txMgr),
+	configOpts := append([]configcore.Option{
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(cursorCodec),
-	)
+	}, cellAdapterOpts...)
+	configCell := configcore.NewConfigCore(configOpts...)
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
@@ -212,8 +224,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			"/api/v1/access/sessions/login",
 			"/api/v1/access/sessions/refresh",
 		}),
-		// A11 fix: wire relay worker so it starts in bootstrap Step 8.
-		bootstrap.WithWorkers(relay),
+		// A11 regression guard: relayWorker came from buildConfigCoreOpts
+		// above — not from a manual adapterpg.NewOutboxRelay call. If the
+		// production wiring ever stops producing a relay worker, the
+		// require.NotNil in Step 4 fires before we get here.
+		bootstrap.WithWorkers(relayWorker),
 	)
 
 	appErrCh := make(chan error, 1)
@@ -266,7 +281,7 @@ func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "login must succeed")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must succeed (returns 201 Created per sessionlogin contract)")
 
 	var result struct {
 		Data struct {
