@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 
@@ -116,10 +115,18 @@ func TestLoadCursorCodec_PreviousKeyShortInRealMode_FailFast(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	// Error must come from NewCursorCodec previous-key length check and be
-	// wrapped so operators see the label + envName.
+	// wrapped so operators see the label + envName in the outer message.
 	assert.Contains(t, err.Error(), "audit")
+	// The wrap chain must remain traversable via errors.As all the way to the
+	// concrete *errcode.Error with ErrCursorInvalid code — otherwise downstream
+	// HTTP mappers and log aggregators that match on code will silently
+	// fall back to generic 500. Harden the contract rather than best-effort it.
+	// ref: Go errors pkg tests — Is/As/Unwrap invariants; Kratos errors_test.
 	var ecErr *errcode.Error
-	_ = errors.As(err, &ecErr) // optional — best effort unwrap to errcode
+	require.ErrorAs(t, err, &ecErr,
+		"loadCursorCodec must keep the errcode.Error reachable via errors.As")
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code,
+		"short previous key must surface as ErrCursorInvalid regardless of wrap depth")
 }
 
 // TestLoadCursorCodec_PreviousKeyUnset_OK confirms that if the previous-key
