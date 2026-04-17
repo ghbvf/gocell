@@ -14,22 +14,21 @@ import (
 // Compile-time check: TxManager implements persistence.TxRunner.
 var _ persistence.TxRunner = (*TxManager)(nil)
 
-// txKey is the context key for an embedded pgx.Tx.
-type txKey struct{}
-
 // savepointDepthKey tracks nested savepoint depth in context.
 type savepointDepthKey struct{}
 
 // CtxWithTx returns a new context carrying the given pgx.Tx.
 // Downstream code (e.g. OutboxWriter) retrieves it via TxFromContext.
+// Uses persistence.TxCtxKey so cell-local adapters can participate
+// in ambient transactions without importing adapters/postgres.
 func CtxWithTx(ctx context.Context, tx pgx.Tx) context.Context {
-	return context.WithValue(ctx, txKey{}, tx)
+	return context.WithValue(ctx, persistence.TxCtxKey, tx)
 }
 
 // TxFromContext extracts a pgx.Tx from the context.
 // The boolean return indicates whether a transaction was present.
 func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
-	tx, ok := ctx.Value(txKey{}).(pgx.Tx)
+	tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx)
 	return tx, ok
 }
 

@@ -230,6 +230,23 @@ func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	assert.Equal(t, TopicConfigChanged, writer.entries[0].EventType)
 }
 
+// TestPublishVersion_CallsTxRunnerRunInTxOnce asserts that Publish wraps both
+// the repo.PublishVersion write and outbox write inside a single RunInTx call
+// (L2 atomicity).
+func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	writer := &recordingWriter{}
+	tx := &noopTxRunner{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(tx))
+
+	mustSeedEntry(repo, "app.name", "value")
+	_, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.calls, "Publish must call RunInTx exactly once")
+	assert.Len(t, writer.entries, 1, "outbox entry must be written inside the tx")
+}
+
 // H2-2 CONFIGPUBLISH-REDACT-01: domain.ConfigVersion must carry the source entry's
 // Sensitive flag so downstream consumers (handler, postgres replay) can redact uniformly.
 func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {

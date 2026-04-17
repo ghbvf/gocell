@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +61,26 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 	assert.Equal(t, 1, entry.Version)
 }
 
-func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
+// TestGetByKey_NotFound_ReturnsErrConfigRepoNotFound verifies that pgx.ErrNoRows
+// is classified as ErrConfigRepoNotFound (REPO-SCAN-CLASSIFY-01).
+func TestGetByKey_NotFound_ReturnsErrConfigRepoNotFound(t *testing.T) {
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+	}
+	repo := NewConfigRepository(db)
+
+	_, err := repo.GetByKey(context.Background(), "missing")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+}
+
+// TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery verifies that scan
+// errors other than pgx.ErrNoRows are classified as ErrConfigRepoQuery
+// (REPO-SCAN-CLASSIFY-01 — previously all were mapped to NotFound).
+func TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	db := &mockDB{
 		queryRowResult: &mockRow{scanErr: assert.AnError},
 	}
@@ -71,7 +91,24 @@ func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+}
+
+// TestConfigRepository_GetByKey_NotFound is a legacy name kept for backward
+// reference. It tests the other-error path (assert.AnError != pgx.ErrNoRows).
+func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
+	// assert.AnError is not pgx.ErrNoRows → classified as ErrConfigRepoQuery
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: assert.AnError},
+	}
+	repo := NewConfigRepository(db)
+
+	_, err := repo.GetByKey(context.Background(), "missing")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
 func TestConfigRepository_Update(t *testing.T) {
@@ -213,7 +250,43 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 	assert.True(t, version.Sensitive)
 }
 
+// TestGetVersion_NotFound_ReturnsErrConfigRepoNotFound verifies that pgx.ErrNoRows
+// is classified as ErrConfigRepoNotFound (REPO-SCAN-CLASSIFY-01).
+func TestGetVersion_NotFound_ReturnsErrConfigRepoNotFound(t *testing.T) {
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+	}
+	repo := NewConfigRepository(db)
+
+	_, err := repo.GetVersion(context.Background(), "missing", 1)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+}
+
+// TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery verifies that scan
+// errors other than pgx.ErrNoRows are classified as ErrConfigRepoQuery
+// (REPO-SCAN-CLASSIFY-01 — previously all were mapped to NotFound).
+func TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: assert.AnError},
+	}
+	repo := NewConfigRepository(db)
+
+	_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+}
+
+// TestConfigRepository_GetVersion_NotFound is a legacy name kept for backward
+// reference. It tests the other-error path (assert.AnError != pgx.ErrNoRows).
 func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
+	// assert.AnError is not pgx.ErrNoRows → classified as ErrConfigRepoQuery
 	db := &mockDB{
 		queryRowResult: &mockRow{scanErr: assert.AnError},
 	}
@@ -224,7 +297,7 @@ func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
 // --- mocks ---
