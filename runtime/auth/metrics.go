@@ -12,6 +12,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// ref: go-kratos/kratos middleware/metrics/metrics.go — nil-guard fast-path pattern.
+// Adopted: counter+histogram with label-based classification.
+// Deviated: auth-specific reason labels (expired/invalid_kid/wrong_alg) vs generic code labels.
+
 // AuthMetrics holds pre-registered metric instruments for auth operations.
 type AuthMetrics struct {
 	tokenVerifyTotal    metrics.CounterVec

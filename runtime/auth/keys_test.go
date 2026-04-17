@@ -245,7 +245,7 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 	assert.Equal(t, pub2, got)
 
 	// Advance clock past expiry using injectable now func.
-	ks.now = func() time.Time { return baseTime.Add(2 * time.Hour) }
+	WithKeySetClock(func() time.Time { return baseTime.Add(2 * time.Hour) })(ks)
 
 	// Key should be pruned now.
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -441,7 +441,7 @@ func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Advance clock past expiry.
-	ks.now = func() time.Time { return baseTime.Add(2 * time.Hour) }
+	WithKeySetClock(func() time.Time { return baseTime.Add(2 * time.Hour) })(ks)
 
 	// Reset buffer so only PruneExpired log is captured.
 	buf.Reset()

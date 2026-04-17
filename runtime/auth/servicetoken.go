@@ -236,6 +236,13 @@ func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(
 				return
 			}
 
+			if !isNewFormat && cfg.nonceStore != nil {
+				cfg.logger.Warn("legacy 2-part service token accepted without replay check",
+					slog.String("path", r.URL.Path),
+					slog.String("method", r.Method),
+				)
+			}
+
 			// Replay check only for new 3-part tokens.
 			if isNewFormat && cfg.nonceStore != nil {
 				if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {

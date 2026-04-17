@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -291,6 +292,38 @@ func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, buf.String(), "token verification failed")
+}
+
+func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {
+	am, err := NewAuthMetrics(metrics.NopProvider{})
+	require.NoError(t, err)
+
+	verifier := &mockVerifier{claims: Claims{Subject: "user-1"}}
+	handler := AuthMiddleware(verifier, nil, WithMetrics(am))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	// Success path.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Failure path.
+	failVerifier := &mockVerifier{err: errors.New("expired")}
+	failHandler := AuthMiddleware(failVerifier, nil, WithMetrics(am))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("should not be called")
+		}),
+	)
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req2.Header.Set("Authorization", "Bearer bad-token")
+	rec2 := httptest.NewRecorder()
+	failHandler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
 }
 
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {

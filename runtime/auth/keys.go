@@ -82,6 +82,15 @@ func WithKeySetLogger(l *slog.Logger) KeySetOption {
 	}
 }
 
+// WithKeySetClock overrides the time source for key expiry checks.
+func WithKeySetClock(fn func() time.Time) KeySetOption {
+	return func(ks *KeySet) {
+		if fn != nil {
+			ks.now = fn
+		}
+	}
+}
+
 // NewKeySet creates a KeySet with a single active signing key pair.
 // The kid is derived deterministically from the public key using RFC 7638.
 func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, opts ...KeySetOption) (*KeySet, error) {

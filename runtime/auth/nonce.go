@@ -18,6 +18,9 @@ var ErrNonceReused = errors.New("auth: nonce already used")
 // forced prune is triggered in InMemoryNonceStore.CheckAndMark.
 const defaultMaxNonceEntries = 100000
 
+// ref: none — no direct framework analog for HMAC nonce store; adopted
+// standard sync.Mutex + map-with-TTL pattern (cf. gorilla/securecookie token store).
+
 // NonceStore tracks nonces for replay prevention. Implementations must be
 // safe for concurrent use. The store must retain nonces for at least
 // ServiceTokenMaxAge (5 minutes) to prevent replay within the token

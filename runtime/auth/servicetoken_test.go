@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -522,4 +523,33 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_StillWorks(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code, "legacy 2-part token must still be accepted")
+}
+
+func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
+	am, err := NewAuthMetrics(metrics.NopProvider{})
+	require.NoError(t, err)
+
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	token := GenerateServiceToken(ring, http.MethodGet, "/api", now)
+
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Success path.
+	req := httptest.NewRequest(http.MethodGet, "/api", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Failure path (missing token).
+	req2 := httptest.NewRequest(http.MethodGet, "/api", nil)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
 }

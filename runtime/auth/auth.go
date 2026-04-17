@@ -1,7 +1,3 @@
-// Package auth defines authentication and authorization interfaces for the
-// GoCell framework. Concrete implementations (e.g., JWT verification) live in
-// cells/access-core or adapters/.
-//
 // ref: go-kratos/kratos middleware/auth/auth.go — auth middleware pattern
 // Adopted: middleware wrapping pattern, Claims extraction from context.
 // Deviated: separate TokenVerifier and Authorizer interfaces (GoCell splits
