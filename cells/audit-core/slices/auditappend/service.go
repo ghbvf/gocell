@@ -157,8 +157,9 @@ func (s *Service) buildPersistFn(auditEntry *domain.AuditEntry, appendedPayload 
 	}
 }
 
-// runPersist executes fn within a transaction if txRunner is configured,
-// otherwise calls fn directly.
+// runPersist executes fn in a transaction if txRunner is configured, otherwise
+// calls fn(ctx) directly. Nil txRunner is intentional for query-only slices;
+// Cell Init() validates txRunner presence for CUD slices before Start().
 func (s *Service) runPersist(ctx context.Context, fn func(context.Context) error) error {
 	if s.txRunner != nil {
 		return s.txRunner.RunInTx(ctx, fn)

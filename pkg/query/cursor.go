@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -182,6 +183,28 @@ func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
 	return errcode.WithDetails(
 		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		details)
+}
+
+// KnownDemoKeys lists the well-known demo cursor keys used by GoCell cells
+// when no production key is injected.
+var KnownDemoKeys = [][]byte{
+	[]byte("gocell-demo-AUDIT--CORE-key-32!!"),
+	[]byte("gocell-demo-CONFIG-CORE-key-32!!"),
+	[]byte("gocell-demo-ORDER-CELL-key-32b!!"),
+	[]byte("gocell-demo-DEVICE-CELL-key-32!!"),
+	[]byte("core-bundle-audit-cursor-key-32!"),
+	[]byte("core-bundle-cfg-cursor-key--32b!"),
+}
+
+// IsDemoKey checks whether the codec's current signing key matches any of
+// the provided known demo keys.
+func (c *CursorCodec) IsDemoKey(known ...[]byte) bool {
+	for _, k := range known {
+		if len(k) == len(c.current) && subtle.ConstantTimeCompare(c.current, k) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateCursorScope checks that the decoded cursor carries the expected sort

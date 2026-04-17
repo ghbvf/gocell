@@ -110,6 +110,52 @@ func TestService_List_InvalidCursor(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
+func TestService_List_ScopeMismatch(t *testing.T) {
+	repo := mem.NewFlagRepository()
+	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
+	svc := NewService(repo, codec, slog.Default())
+
+	differentSort := []query.SortColumn{
+		{Name: "created_at", Direction: query.SortDESC},
+		{Name: "id", Direction: query.SortASC},
+	}
+	cur := query.Cursor{
+		Values:  []any{"some-key", "some-id"},
+		Scope:   query.SortScope(differentSort),
+		Context: query.QueryContext("endpoint", "feature-flag"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "sort scope mismatch", ecErr.Details["reason"])
+}
+
+func TestService_List_ContextMismatch(t *testing.T) {
+	repo := mem.NewFlagRepository()
+	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
+	svc := NewService(repo, codec, slog.Default())
+
+	cur := query.Cursor{
+		Values:  []any{"some-key", "some-id"},
+		Scope:   query.SortScope(flagSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
+}
+
 func TestService_List_LastPage(t *testing.T) {
 	svc, repo := newTestService()
 	seedFlag(t, repo, "flag-a", domain.FlagBoolean, true, 0)

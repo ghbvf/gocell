@@ -127,6 +127,48 @@ func TestService_List_InvalidCursor(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
+func TestService_List_ScopeMismatch(t *testing.T) {
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+	differentSort := []query.SortColumn{
+		{Name: "created_at", Direction: query.SortDESC},
+		{Name: "id", Direction: query.SortASC},
+	}
+	cur := query.Cursor{
+		Values:  []any{"some-key", "some-id"},
+		Scope:   query.SortScope(differentSort),
+		Context: query.QueryContext("endpoint", "config-read"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	svc, _ := newTestService()
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "sort scope mismatch", ecErr.Details["reason"])
+}
+
+func TestService_List_ContextMismatch(t *testing.T) {
+	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
+	cur := query.Cursor{
+		Values:  []any{"some-key", "some-id"},
+		Scope:   query.SortScope(configSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	svc, _ := newTestService()
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
+}
+
 func TestService_List_LastPage(t *testing.T) {
 	svc, repo := newTestService()
 	seedEntry(t, repo, "key-a", "v")

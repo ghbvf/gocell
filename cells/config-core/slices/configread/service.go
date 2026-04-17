@@ -44,34 +44,22 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry
 
 // List returns a paginated page of config entries.
 func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.ConfigEntry], error) {
-	pageReq.Normalize()
-
 	qctx := query.QueryContext("endpoint", "config-read")
-
-	var cursorValues []any
-	if pageReq.Cursor != "" {
-		cur, err := s.codec.Decode(pageReq.Cursor)
-		if err != nil {
-			return query.PageResult[*domain.ConfigEntry]{}, err
-		}
-		if err := query.ValidateCursorScope(cur, configSort, qctx); err != nil {
-			return query.PageResult[*domain.ConfigEntry]{}, err
-		}
-		cursorValues = cur.Values
-	}
-
-	params := query.ListParams{
-		Limit:        pageReq.Limit,
-		CursorValues: cursorValues,
-		Sort:         configSort,
-	}
-
-	entries, err := s.repo.List(ctx, params)
-	if err != nil {
-		return query.PageResult[*domain.ConfigEntry]{}, fmt.Errorf("config-read: list: %w", err)
-	}
-
-	return query.BuildPageResult(entries, pageReq.Limit, s.codec, configSort, qctx, func(e *domain.ConfigEntry) []any {
-		return []any{e.Key, e.ID}
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.ConfigEntry]{
+		Codec:    s.codec,
+		Request:  pageReq,
+		Sort:     configSort,
+		QueryCtx: qctx,
+		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
+			entries, err := s.repo.List(ctx, params)
+			if err != nil {
+				return nil, fmt.Errorf("config-read: list: %w", err)
+			}
+			return entries, nil
+		},
+		Extract: func(e *domain.ConfigEntry) []any {
+			return []any{e.Key, e.ID}
+		},
+		OnCursorErr: query.LogCursorError(s.logger, "configread"),
 	})
 }

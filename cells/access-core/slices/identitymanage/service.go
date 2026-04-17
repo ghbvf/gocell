@@ -243,7 +243,8 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 }
 
 // runInTx executes fn in a transaction if txRunner is configured, otherwise
-// executes directly.
+// calls fn(ctx) directly. Nil txRunner is intentional for query-only slices;
+// Cell Init() validates txRunner presence for CUD slices before Start().
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if s.txRunner != nil {
 		return s.txRunner.RunInTx(ctx, fn)

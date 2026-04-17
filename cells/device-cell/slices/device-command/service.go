@@ -74,40 +74,26 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, payload string) (*domai
 // Sort: created_at ASC, id ASC (FIFO -- oldest pending commands first).
 // This is the poll endpoint used by devices in the L4 latent model.
 func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq query.PageRequest) (query.PageResult[*domain.Command], error) {
-	// Verify device exists.
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
 		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: lookup device: %w", err)
 	}
-
-	pageReq.Normalize()
-
 	qctx := query.QueryContext("endpoint", "device-command", "deviceId", deviceID)
-
-	var cursorValues []any
-	if pageReq.Cursor != "" {
-		cur, err := s.codec.Decode(pageReq.Cursor)
-		if err != nil {
-			return query.PageResult[*domain.Command]{}, err
-		}
-		if err := query.ValidateCursorScope(cur, pendingSort, qctx); err != nil {
-			return query.PageResult[*domain.Command]{}, err
-		}
-		cursorValues = cur.Values
-	}
-
-	params := query.ListParams{
-		Limit:        pageReq.Limit,
-		CursorValues: cursorValues,
-		Sort:         pendingSort,
-	}
-
-	cmds, err := s.cmdRepo.ListPending(ctx, deviceID, params)
-	if err != nil {
-		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: list pending: %w", err)
-	}
-
-	return query.BuildPageResult(cmds, pageReq.Limit, s.codec, pendingSort, qctx, func(c *domain.Command) []any {
-		return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
+	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Command]{
+		Codec:    s.codec,
+		Request:  pageReq,
+		Sort:     pendingSort,
+		QueryCtx: qctx,
+		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Command, error) {
+			cmds, err := s.cmdRepo.ListPending(ctx, deviceID, params)
+			if err != nil {
+				return nil, fmt.Errorf("device-command: list pending: %w", err)
+			}
+			return cmds, nil
+		},
+		Extract: func(c *domain.Command) []any {
+			return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
+		},
+		OnCursorErr: query.LogCursorError(s.logger, "device-command"),
 	})
 }
 
