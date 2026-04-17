@@ -3061,12 +3061,18 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// Change a server.* key — server. cell MUST be notified.
-	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\n"), 0o644))
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\ndb:\n  host: localhost\n"), 0o644))
 
 	select {
 	case evt := <-kfc.reloaded:
 		assert.Contains(t, evt.Updated, "server.port",
 			"event must contain the matched key")
+		// Minimal exposure: Config snapshot only contains keys matching the
+		// cell's registered prefixes, not the full config.
+		_, hasServer := evt.Config["server.port"]
+		_, hasDB := evt.Config["db.host"]
+		assert.True(t, hasServer, "Config must contain matched prefix keys")
+		assert.False(t, hasDB, "Config must NOT contain keys outside registered prefixes (minimal exposure)")
 	case <-time.After(3 * time.Second):
 		t.Fatal("cell was not notified after matching key change")
 	}
@@ -3249,4 +3255,40 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Auth option conflict detection (P1 fail-fast)
+// ---------------------------------------------------------------------------
+
+func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "conflict-test", DurabilityMode: cell.DurabilityDemo})
+	tc := newTestCell("conflict-cell")
+	require.NoError(t, asm.Register(tc))
+
+	verifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+
+	t.Run("WithAuthMiddleware then WithPublicEndpoints", func(t *testing.T) {
+		b := New(
+			WithAssembly(asm),
+			WithAuthMiddleware(verifier, []string{"/login"}),
+			WithPublicEndpoints([]string{"/login"}),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("WithPublicEndpoints then WithAuthMiddleware", func(t *testing.T) {
+		b := New(
+			WithAssembly(asm),
+			WithPublicEndpoints([]string{"/login"}),
+			WithAuthMiddleware(verifier, []string{"/login"}),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
 }

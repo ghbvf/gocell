@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -435,6 +436,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 
+	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
+	// exclusive. Both set authPublicEndpoints but with different semantics
+	// (explicit verifier vs. discovery). Allowing both silently creates
+	// order-dependent behavior.
+	if b.authVerifier != nil && b.authDiscovery {
+		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithPublicEndpoints " +
+			"are mutually exclusive; use WithPublicEndpoints (recommended)")
+	}
+
 	// Track teardown functions for rollback (LIFO order).
 	var teardowns []func(context.Context) error
 
@@ -668,25 +678,32 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				if !ok {
 					continue
 				}
+				var filteredPrefixes []string
 				if kf, ok := c.(cell.ConfigKeyFilterer); ok {
-					prefixes := kf.ConfigKeyPrefixes()
-					if len(prefixes) > 0 {
+					filteredPrefixes = kf.ConfigKeyPrefixes()
+					if len(filteredPrefixes) > 0 {
 						changedKeys := make([]string, 0, len(added)+len(updated)+len(removed))
 						changedKeys = append(changedKeys, added...)
 						changedKeys = append(changedKeys, updated...)
 						changedKeys = append(changedKeys, removed...)
-						if !config.NewKeyFilter(prefixes...).Matches(changedKeys) {
+						if !config.NewKeyFilter(filteredPrefixes...).Matches(changedKeys) {
 							continue
 						}
 					}
 				}
 				// Clone per cell to guarantee isolation: a misbehaving handler
 				// cannot mutate slices/map seen by subsequent handlers.
+				// When the cell declares key prefixes, trim the config snapshot
+				// to only matching keys (minimal exposure principle).
+				cfgSnap := cloneMap(newSnap)
+				if len(filteredPrefixes) > 0 {
+					cfgSnap = filterMapByPrefixes(cfgSnap, filteredPrefixes)
+				}
 				event := cell.ConfigChangeEvent{
 					Added:      cloneStrings(added),
 					Updated:    cloneStrings(updated),
 					Removed:    cloneStrings(removed),
-					Config:     cloneMap(newSnap),
+					Config:     cfgSnap,
 					Generation: gen,
 				}
 				func() {
@@ -999,6 +1016,19 @@ func cloneStrings(src []string) []string {
 // cloneMap returns a deep copy of a map[string]any. Values that are slices
 // or nested maps are recursively cloned so that mutations by one consumer
 // cannot affect another.
+func filterMapByPrefixes(src map[string]any, prefixes []string) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		for _, p := range prefixes {
+			if strings.HasPrefix(k, p) {
+				dst[k] = v
+				break
+			}
+		}
+	}
+	return dst
+}
+
 func cloneMap(src map[string]any) map[string]any {
 	if src == nil {
 		return nil
