@@ -3437,3 +3437,48 @@ func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
 	require.Error(t, err, "nil Allower must cause Run to return an error")
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
+
+// ---------------------------------------------------------------------------
+// Broker health nil option detection (fail-fast parity with WithCircuitBreaker)
+// ---------------------------------------------------------------------------
+
+// typedNilBroker is a concrete *typedNilBroker type whose zero-value pointer
+// is used to simulate the "typed nil" gotcha: a non-nil interface value
+// wrapping a nil pointer. Such a value satisfies `bc != nil` but panics on
+// method dispatch. The fail-fast path must detect it alongside plain nil.
+type typedNilBroker struct{}
+
+func (*typedNilBroker) Health(context.Context) error { return nil }
+
+// TestBootstrap_WithBrokerHealth_Nil_ReturnsError guards that the bootstrap
+// rejects a nil BrokerHealthChecker at Run() rather than nil-deref'ing on the
+// first /readyz probe. Mirrors WithCircuitBreaker's fail-fast contract so
+// the two options behave consistently from an operator's perspective.
+func TestBootstrap_WithBrokerHealth_Nil_ReturnsError(t *testing.T) {
+	t.Run("plain nil interface", func(t *testing.T) {
+		asm := assembly.New(assembly.Config{ID: "bh-nil-plain", DurabilityMode: cell.DurabilityDemo})
+		require.NoError(t, asm.Register(newTestCell("c1")))
+
+		b := New(
+			WithAssembly(asm),
+			WithBrokerHealth(nil),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err, "nil BrokerHealthChecker must cause Run to return an error")
+		assert.Contains(t, err.Error(), "broker health")
+	})
+
+	t.Run("typed nil pointer wrapped in interface", func(t *testing.T) {
+		asm := assembly.New(assembly.Config{ID: "bh-nil-typed", DurabilityMode: cell.DurabilityDemo})
+		require.NoError(t, asm.Register(newTestCell("c1")))
+
+		var bc *typedNilBroker // nil pointer
+		b := New(
+			WithAssembly(asm),
+			WithBrokerHealth(bc),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err, "typed-nil BrokerHealthChecker must cause Run to return an error")
+		assert.Contains(t, err.Error(), "broker health")
+	})
+}

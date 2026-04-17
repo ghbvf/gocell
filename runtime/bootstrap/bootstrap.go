@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -283,12 +284,48 @@ type BrokerHealthChecker interface {
 // WithHealthChecker that picks a canonical name and adapts the interface
 // to func() error, calling Health with a 5-second timeout per K8s readiness
 // probe convention.
+//
+// A nil (or typed-nil) bc is rejected at Run() time with a fatal error so
+// operators are not silently left with a checker that nil-derefs on the
+// first probe. Mirrors WithCircuitBreaker's fail-fast contract.
+//
+// ref: github.com/ghbvf/gocell/runtime/bootstrap.WithCircuitBreaker — sibling
+// fail-fast pattern for nil option arguments.
 func WithBrokerHealth(bc BrokerHealthChecker) Option {
-	return WithHealthChecker("rabbitmq", func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return bc.Health(ctx)
-	})
+	return func(b *Bootstrap) {
+		if isNilBrokerHealthChecker(bc) {
+			b.brokerHealthNil = true
+			return
+		}
+		b.healthCheckers = append(b.healthCheckers, namedChecker{
+			name: "rabbitmq",
+			fn: func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				return bc.Health(ctx)
+			},
+		})
+	}
+}
+
+// isNilBrokerHealthChecker detects both plain-nil interface values and the
+// "typed nil" gotcha (non-nil interface wrapping a nil pointer/slice/etc.).
+// The typed-nil case would satisfy `bc != nil` but panic on method dispatch.
+//
+// ref: github.com/ghbvf/gocell/runtime/http/middleware.IsTypedNilAllower —
+// mirrors the allower helper so the bootstrap-layer fail-fast pattern is
+// symmetric across Option variants.
+func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
+	if bc == nil {
+		return true
+	}
+	v := reflect.ValueOf(bc)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
@@ -415,6 +452,12 @@ type Bootstrap struct {
 	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
 	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
 	circuitBreakerNil bool
+
+	// brokerHealthNil is set by WithBrokerHealth when a nil (or typed-nil)
+	// BrokerHealthChecker is passed. Checked at Run() to fail-fast instead
+	// of registering a closure that would nil-deref on the first /readyz
+	// probe. Mirrors the circuitBreakerNil contract.
+	brokerHealthNil bool
 }
 
 // New creates a Bootstrap with the given options.
@@ -486,6 +529,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// leaving handlers unprotected despite the caller's intent.
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
+	}
+
+	// Fail-fast: nil (or typed-nil) BrokerHealthChecker means the operator
+	// called WithBrokerHealth(nil) which would nil-deref on the first
+	// /readyz probe instead of surfacing the misconfiguration at startup.
+	if b.brokerHealthNil {
+		return fmt.Errorf("bootstrap: broker health checker must not be nil")
 	}
 
 	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
