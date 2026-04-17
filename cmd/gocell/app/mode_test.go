@@ -59,6 +59,24 @@ func TestRunValidate_FailFast_FormatInvariants(t *testing.T) {
 		"fail-fast must not emit warnings banner")
 }
 
+// Output contract for --fail-fast on a clean project: prints exactly
+// "OK: no errors." and returns nil. Locking this in so that future refactors
+// (e.g. "make fail-fast silent for scripting") become an explicit decision
+// rather than an accidental behaviour drift.
+func TestRunValidate_FailFast_NoErrors_PrintsOK(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/empty\n"), 0o644))
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
+	})
+	require.NoError(t, gotErr, "empty project must validate cleanly in fail-fast")
+	assert.Equal(t, "OK: no errors.\n", out,
+		"fail-fast success output is the single-line ack")
+}
+
 // --- scaffold --dry-run ---
 
 func TestRunScaffoldCell_DryRun_NoFileWritten(t *testing.T) {

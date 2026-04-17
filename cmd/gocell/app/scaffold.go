@@ -9,6 +9,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/scaffold"
 )
 
+// Shared flag name + usage for scaffold sub-commands. Constants avoid the
+// "magic string" duplication SonarCloud flags across scaffoldCell/Slice/
+// Contract/Journey; also makes it safe to rename in one place if the CLI
+// convention evolves.
+const (
+	dryRunFlag  = "dry-run"
+	dryRunUsage = "validate inputs and path conflict; do not write files"
+)
+
 // runScaffold implements:
 //
 //	gocell scaffold cell --id=<id> [--type=core] [--level=L2] [--team=<team>] [--dry-run]
@@ -60,7 +69,7 @@ func scaffoldCell(root string, args []string) error {
 	cellType := fs.String("type", "core", "cell type")
 	level := fs.String("level", "L2", "consistency level")
 	team := fs.String("team", "", "owner team (required)")
-	dryRun := fs.Bool("dry-run", false, "validate inputs and path conflict; do not write files")
+	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,7 +100,7 @@ func scaffoldSlice(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold slice", flag.ContinueOnError)
 	id := fs.String("id", "", "slice ID (required)")
 	cellID := fs.String("cell", "", "parent cell ID (required)")
-	dryRun := fs.Bool("dry-run", false, "validate inputs and path conflict; do not write files")
+	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -121,7 +130,7 @@ func scaffoldContract(root string, args []string) error {
 	id := fs.String("id", "", "contract ID (required)")
 	kind := fs.String("kind", "", "contract kind: http|event|command|projection (required)")
 	owner := fs.String("owner", "", "owner cell ID (required)")
-	dryRun := fs.Bool("dry-run", false, "validate inputs and path conflict; do not write files")
+	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -159,7 +168,7 @@ func scaffoldJourney(root string, args []string) error {
 	goal := fs.String("goal", "", "journey goal (required)")
 	team := fs.String("team", "", "owner team (required)")
 	cells := fs.String("cells", "", "comma-separated cell IDs (required)")
-	dryRun := fs.Bool("dry-run", false, "validate inputs and path conflict; do not write files")
+	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
