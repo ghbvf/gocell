@@ -103,18 +103,12 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		return nil, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
-	// Fetch roles for JWT claims.
-	roles, err := s.roleRepo.GetByUserID(ctx, user.ID)
+	roleNames, err := s.fetchRoleNames(ctx, user.ID)
 	if err != nil {
 		s.logger.Warn("session-login: failed to fetch roles",
 			slog.Any("error", err), slog.String("user_id", user.ID))
 	}
-	roleNames := make([]string, 0, len(roles))
-	for _, r := range roles {
-		roleNames = append(roleNames, r.Name)
-	}
 
-	// Issue JWT via RS256 issuer.
 	now := time.Now()
 	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 	sessionID := "sess" + "-" + uuid.NewString()
@@ -129,55 +123,21 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		return nil, fmt.Errorf("session-login: issue refresh token: %w", err)
 	}
 
-	// Persist session.
 	session, err := domain.NewSession(user.ID, accessToken, refreshToken, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: create session: %w", err)
 	}
 	session.ID = sessionID
 
-	// Publish event.
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": session.ID, "user_id": user.ID,
 	})
 
-	// Wrap session create + outbox write in a transaction for L2 atomicity.
-	persistAndPublish := func(txCtx context.Context) error {
-		if err := s.sessionRepo.Create(txCtx, session); err != nil {
-			return fmt.Errorf("session-login: persist session: %w", err)
-		}
-		if s.outboxWriter != nil {
-			entry := outbox.Entry{
-				ID:        "evt" + "-" + uuid.NewString(),
-				EventType: TopicSessionCreated,
-				Payload:   payload,
-			}
-			if writeErr := s.outboxWriter.Write(txCtx, entry); writeErr != nil {
-				return fmt.Errorf("session-login: write outbox entry: %w", writeErr)
-			}
-		}
-		return nil
+	if err := s.persistSession(ctx, session, payload); err != nil {
+		return nil, err
 	}
 
-	// txRunner nil-safe: nil means no transaction support (query-only or demo mode).
-	if s.txRunner != nil {
-		if err := s.txRunner.RunInTx(ctx, persistAndPublish); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := persistAndPublish(ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	// Fallback direct publish when outbox is not in use.
-	if s.outboxWriter == nil {
-		if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
-			s.logger.Warn("session-login: failed to publish event (demo mode)",
-				slog.Any("error", pubErr),
-				slog.String("topic", TopicSessionCreated))
-		}
-	}
+	s.maybePublishDirect(ctx, payload)
 
 	s.logger.Info("user logged in",
 		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
@@ -188,15 +148,71 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
+// fetchRoleNames returns the role names for the given user ID.
+func (s *Service) fetchRoleNames(ctx context.Context, userID string) ([]string, error) {
+	roles, err := s.roleRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(roles))
+	for _, r := range roles {
+		names = append(names, r.Name)
+	}
+	return names, nil
+}
+
+// persistSession writes the session and (when configured) the outbox entry,
+// optionally wrapped in a transaction when txRunner is available.
+func (s *Service) persistSession(ctx context.Context, session *domain.Session, payload []byte) error {
+	do := func(txCtx context.Context) error {
+		if err := s.sessionRepo.Create(txCtx, session); err != nil {
+			return fmt.Errorf("session-login: persist session: %w", err)
+		}
+		return s.writeOutboxEntry(txCtx, payload)
+	}
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, do)
+	}
+	return do(ctx)
+}
+
+// writeOutboxEntry writes a session.created outbox entry when the writer is configured.
+func (s *Service) writeOutboxEntry(ctx context.Context, payload []byte) error {
+	if s.outboxWriter == nil {
+		return nil
+	}
+	entry := outbox.Entry{
+		ID:        "evt" + "-" + uuid.NewString(),
+		EventType: TopicSessionCreated,
+		Payload:   payload,
+	}
+	if err := s.outboxWriter.Write(ctx, entry); err != nil {
+		return fmt.Errorf("session-login: write outbox entry: %w", err)
+	}
+	return nil
+}
+
+// maybePublishDirect publishes directly when outbox is not in use (demo mode).
+func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
+	if s.outboxWriter != nil {
+		return
+	}
+	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
+		s.logger.Warn("session-login: failed to publish event (demo mode)",
+			slog.Any("error", pubErr),
+			slog.String("topic", TopicSessionCreated))
+	}
+}
+
 // issueAccessToken signs a short-lived JWT with intent=access for calling
 // business endpoints. Access tokens carry roles for RBAC decisions.
 func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{"gocell"}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{auth.DefaultJWTAudience}, sessionID)
 }
 
 // issueRefreshToken signs a longer-lived JWT with intent=refresh. Refresh
 // tokens do not carry roles: they are consumed only by /auth/refresh, which
 // looks up the current roles from the session's user on each rotation.
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{"gocell"}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{auth.DefaultJWTAudience}, sessionID)
 }
