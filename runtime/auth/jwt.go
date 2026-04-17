@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -87,14 +88,21 @@ type JWTVerifierOption func(*JWTVerifier)
 // §3.3 ("recipients MUST validate the aud claim"). Production deployments MUST
 // supply at least one expected audience matching what JWTIssuer.Issue writes.
 //
-// When not configured (default), VerifyIntent skips the audience check for
-// backward compatibility. Verify() is never affected — audience enforcement is
-// intentionally scoped to VerifyIntent only.
+// The first argument is required (preventing zero-argument calls). Empty strings
+// are silently filtered. Duplicate values across multiple calls are deduplicated.
+//
+// When not configured (default), VerifyIntent skips the audience check.
+// Verify() is never affected — audience enforcement is intentionally scoped to
+// VerifyIntent only.
 //
 // ref: RFC 8725 §3.3, RFC 7519 §4.1.3 (aud may be string or array)
-func WithExpectedAudiences(audiences ...string) JWTVerifierOption {
+func WithExpectedAudiences(first string, rest ...string) JWTVerifierOption {
 	return func(v *JWTVerifier) {
-		v.expectedAudiences = append(v.expectedAudiences, audiences...)
+		for _, a := range append([]string{first}, rest...) {
+			if a != "" && !slices.Contains(v.expectedAudiences, a) {
+				v.expectedAudiences = append(v.expectedAudiences, a)
+			}
+		}
 	}
 }
 
@@ -119,6 +127,9 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 	for _, o := range opts {
 		o(v)
 	}
+	if len(v.expectedAudiences) == 0 {
+		slog.Warn("JWT verifier constructed without expected audiences; RFC 8725 §3.3 audience validation disabled (configure WithExpectedAudiences for production)")
+	}
 	return v, nil
 }
 
@@ -127,6 +138,8 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 //
 // Verify DOES NOT enforce token intent (access vs. refresh) — callers that
 // need intent checks must use VerifyIntent instead.
+//
+// Note: Verify does NOT check audience. Use VerifyIntent for all production request paths.
 func (v *JWTVerifier) Verify(ctx context.Context, tokenStr string) (Claims, error) {
 	claims, _, err := v.parseAndVerify(ctx, tokenStr)
 	return claims, err
@@ -179,10 +192,9 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	// placed after intent validation so intent-mismatch errors remain distinguishable
 	// in structured logs (ops signal) even when audience would also fail.
 	if len(v.expectedAudiences) > 0 && !audContainsAny(claims.Audience, v.expectedAudiences) {
-		return Claims{}, errcode.Safe(errcode.ErrAuthUnauthorized,
+		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
 			"token audience validation failed",
-			fmt.Sprintf("aud %v does not satisfy expected audience(s) %v",
-				claims.Audience, v.expectedAudiences))
+			fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience))
 	}
 	return claims, nil
 }

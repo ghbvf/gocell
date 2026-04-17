@@ -157,11 +157,11 @@ func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) e
 
 // issueAccessToken signs a short-lived JWT with intent=access carrying roles.
 func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{"gocell"}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{auth.DefaultJWTAudience}, sessionID)
 }
 
 // issueRefreshToken signs a JWT with intent=refresh. Refresh tokens carry no
 // roles: /auth/refresh refetches roles from the session's user on rotation.
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{"gocell"}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{auth.DefaultJWTAudience}, sessionID)
 }

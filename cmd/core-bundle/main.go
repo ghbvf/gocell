@@ -276,10 +276,9 @@ func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Op
 }
 
 // jwtAudience is the expected audience for all tokens issued by this assembly.
-// It must match the audience written by sessionlogin/sessionrefresh services
-// ([]string{"gocell"}). Tokens carrying a different aud are rejected by
-// VerifyIntent per RFC 8725 §3.3.
-const jwtAudience = "gocell"
+// It must match the audience written by sessionlogin/sessionrefresh services.
+// Tokens carrying a different aud are rejected by VerifyIntent per RFC 8725 §3.3.
+const jwtAudience = auth.DefaultJWTAudience
 
 // jwtDeps groups JWT signing and verification components built at startup.
 type jwtDeps struct {

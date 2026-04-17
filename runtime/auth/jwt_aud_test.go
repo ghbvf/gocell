@@ -29,7 +29,7 @@ func makeTokenWithAud(t *testing.T, ks *KeySet, aud []string) string {
 	return tok
 }
 
-// makeRawTokenWithAud builds a token manually so we can omit the aud claim entirely.
+// makeRawTokenWithoutAud builds a token manually so we can omit the aud claim entirely.
 func makeRawTokenWithoutAud(t *testing.T, ks *KeySet) string {
 	t.Helper()
 	claims := jwt.MapClaims{
@@ -62,7 +62,7 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingAudience(t *testing.T) {
 
 // TestJWTVerifier_VerifyIntent_RejectsAudienceMismatch verifies that a token
 // whose aud claim does not contain the expected audience is rejected with
-// ERR_AUTH_UNAUTHORIZED (enumeration defense: same code as other 401 errors).
+// ERR_AUTH_INVALID_TOKEN_INTENT (consistent with intent validation errors).
 func TestJWTVerifier_VerifyIntent_RejectsAudienceMismatch(t *testing.T) {
 	ks := mustTestKeySet(t)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
@@ -71,8 +71,8 @@ func TestJWTVerifier_VerifyIntent_RejectsAudienceMismatch(t *testing.T) {
 	tok := makeTokenWithAud(t, ks, []string{"other-service"})
 	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED",
-		"audience mismatch must return ERR_AUTH_UNAUTHORIZED (enumeration defense)")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"audience mismatch must return ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
 // TestJWTVerifier_VerifyIntent_RejectsMissingAudience verifies that a token
@@ -85,7 +85,7 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingAudience(t *testing.T) {
 	tok := makeRawTokenWithoutAud(t, ks)
 	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED",
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
 		"token without aud claim must be rejected when expected audience is configured")
 }
 
@@ -177,4 +177,60 @@ func TestJWTVerifier_Verify_UnaffectedByExpectedAudiences(t *testing.T) {
 	tok := makeTokenWithAud(t, ks, []string{"some-other-service"})
 	_, err = verifier.Verify(context.Background(), tok)
 	require.NoError(t, err, "Verify() must not enforce audience (only VerifyIntent does)")
+}
+
+// TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud verifies RFC 7519 §4.1.3:
+// the aud claim may be a single JSON string (not an array); parseAudience normalises
+// it to []string so VerifyIntent still matches it against expectedAudiences.
+func TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud(t *testing.T) {
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Build a token manually with aud as a plain JSON string (not an array).
+	claims := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+		"aud":       "gocell", // single string, not []string
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	tokenStr, err := tok.SignedString(ks.SigningKey())
+	require.NoError(t, err)
+
+	result, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err, "single-string aud claim must be accepted when it matches expected audience")
+	assert.Equal(t, "user-1", result.Subject)
+}
+
+// TestJWTVerifier_VerifyIntent_RejectsNonStringTypeAud verifies that aud claims
+// of unexpected types (e.g., integer) are safely rejected without panicking.
+func TestJWTVerifier_VerifyIntent_RejectsNonStringTypeAud(t *testing.T) {
+	ks := mustTestKeySet(t)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Build a token manually with aud as an integer (invalid per RFC 7519).
+	claims := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+		"aud":       123, // invalid type
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	tokenStr, err := tok.SignedString(ks.SigningKey())
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err, "non-string aud type must be rejected")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"non-string aud type must return ERR_AUTH_INVALID_TOKEN_INTENT")
 }

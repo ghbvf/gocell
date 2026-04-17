@@ -36,8 +36,8 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 		require.Error(t, err, "token with aud=wrong-service must be rejected")
-		assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED",
-			"audience mismatch must surface as ERR_AUTH_UNAUTHORIZED (enumeration defense)")
+		assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+			"audience mismatch must surface as ERR_AUTH_INVALID_TOKEN_INTENT")
 	})
 
 	t.Run("rejects_missing_audience", func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 		require.Error(t, err, "token without aud claim must be rejected when expected audience is configured")
-		assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
+		assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 	})
 }
 

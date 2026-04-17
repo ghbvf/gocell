@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// DefaultJWTAudience is the audience value written by JWTIssuer.Issue and
+// expected by JWTVerifier.VerifyIntent in production deployments. Centralised
+// here so issuer (sessionlogin/sessionrefresh) and verifier (buildJWTDeps) stay
+// in sync without drift.
+const DefaultJWTAudience = "gocell"
+
 // TokenIntent distinguishes how a JWT is meant to be used, preventing
 // token-confusion attacks where a refresh token is replayed at a business
 // endpoint, or an access token is submitted to /auth/refresh.
