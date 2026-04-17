@@ -825,6 +825,17 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	}
 	if b.authVerifier != nil {
 		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
+		var authMetrics *auth.AuthMetrics
+		if b.metricsProvider != nil {
+			am, err := auth.NewAuthMetrics(b.metricsProvider)
+			if err != nil {
+				return rollback(fmt.Errorf("bootstrap: register auth metrics: %w", err))
+			}
+			authMetrics = am
+		}
+		if authMetrics != nil {
+			routerOpts = append(routerOpts, router.WithAuthMetrics(authMetrics))
+		}
 	}
 	routerOpts = append(routerOpts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(routerOpts...)

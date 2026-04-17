@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -13,12 +15,12 @@ import (
 
 func TestRequireSelfOrRole(t *testing.T) {
 	tests := []struct {
-		name       string
-		ctx        context.Context
-		targetID   string
-		roles      []string
-		wantErr    bool
-		wantCode   errcode.Code
+		name     string
+		ctx      context.Context
+		targetID string
+		roles    []string
+		wantErr  bool
+		wantCode errcode.Code
 	}{
 		{
 			name:     "self-access allowed",
@@ -160,6 +162,18 @@ func TestRequireAnyRole(t *testing.T) {
 			assert.Equal(t, tc.wantCode, ecErr.Code)
 		})
 	}
+}
+
+func TestRequireSelfOrRole_EmptyTargetID_LogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	ctx := withLogger(context.Background(), logger)
+	ctx = ctxkeys.WithSubject(ctx, "user-1")
+	ctx = WithClaims(ctx, Claims{Subject: "user-1", Roles: []string{"admin"}})
+
+	err := RequireSelfOrRole(ctx, "", "admin")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "empty targetID")
 }
 
 func withSubjectAndClaims(subject string, roles []string) context.Context {

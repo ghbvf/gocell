@@ -6,6 +6,18 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// EnvKeyProviderOption configures EnvKeyProvider behavior.
+type EnvKeyProviderOption func(*EnvKeyProvider)
+
+// WithEnvKeyProviderLogger sets the logger for EnvKeyProvider.
+func WithEnvKeyProviderLogger(l *slog.Logger) EnvKeyProviderOption {
+	return func(p *EnvKeyProvider) {
+		if l != nil {
+			p.logger = l
+		}
+	}
+}
+
 // KeyProvider abstracts the source of cryptographic key material.
 // It is consumed at the composition root (main.go) to build JWTIssuer,
 // JWTVerifier, and service token infrastructure.
@@ -39,26 +51,31 @@ type EnvKeyProvider struct {
 	rsaErr    error
 	hmacRing  *HMACKeyRing
 	hmacErr   error
+	logger    *slog.Logger
 }
 
 // NewEnvKeyProvider loads all available key material from environment variables.
 // It returns a provider even if some key types are not configured — call
 // RSAKeySet() or HMACKeyRing() to check individual domain availability.
-func NewEnvKeyProvider() *EnvKeyProvider {
+func NewEnvKeyProvider(opts ...EnvKeyProviderOption) *EnvKeyProvider {
+	p := &EnvKeyProvider{logger: slog.Default()}
+	for _, o := range opts {
+		o(p)
+	}
+
 	ks, rsaErr := LoadKeySetFromEnv()
 	ring, hmacErr := LoadHMACKeyRingFromEnv()
 	if rsaErr != nil {
-		slog.Info("RSA key set not loaded from environment", slog.String("error", rsaErr.Error()))
+		p.logger.Info("RSA key set not loaded from environment", "error", rsaErr.Error())
 	}
 	if hmacErr != nil {
-		slog.Info("HMAC key ring not loaded from environment", slog.String("error", hmacErr.Error()))
+		p.logger.Info("HMAC key ring not loaded from environment", "error", hmacErr.Error())
 	}
-	return &EnvKeyProvider{
-		rsaKeySet: ks,
-		rsaErr:    rsaErr,
-		hmacRing:  ring,
-		hmacErr:   hmacErr,
-	}
+	p.rsaKeySet = ks
+	p.rsaErr = rsaErr
+	p.hmacRing = ring
+	p.hmacErr = hmacErr
+	return p
 }
 
 // RSAKeySet returns the cached RSA KeySet or the error from loading.

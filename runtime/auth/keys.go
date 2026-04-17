@@ -67,11 +67,33 @@ type KeySet struct {
 	keyIndex         map[string]*rsa.PublicKey // kid → public key
 	keyExpiry        map[string]time.Time      // kid → expiry (signing key absent = never expires)
 	now              func() time.Time          // injectable clock for testing; defaults to time.Now
+	logger           *slog.Logger
+}
+
+// KeySetOption configures KeySet behavior.
+type KeySetOption func(*KeySet)
+
+// WithKeySetLogger sets the logger for a KeySet.
+func WithKeySetLogger(l *slog.Logger) KeySetOption {
+	return func(ks *KeySet) {
+		if l != nil {
+			ks.logger = l
+		}
+	}
+}
+
+// WithKeySetClock overrides the time source for key expiry checks.
+func WithKeySetClock(fn func() time.Time) KeySetOption {
+	return func(ks *KeySet) {
+		if fn != nil {
+			ks.now = fn
+		}
+	}
 }
 
 // NewKeySet creates a KeySet with a single active signing key pair.
 // The kid is derived deterministically from the public key using RFC 7638.
-func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey) (*KeySet, error) {
+func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, opts ...KeySetOption) (*KeySet, error) {
 	if priv == nil || pub == nil {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key pair must not be nil")
 	}
@@ -96,11 +118,15 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey) (*KeySet, error) {
 		keyIndex:     map[string]*rsa.PublicKey{kid: pub},
 		keyExpiry:    make(map[string]time.Time),
 		now:          time.Now,
+		logger:       slog.Default(),
+	}
+	for _, o := range opts {
+		o(ks)
 	}
 
-	slog.Info("key activated",
-		slog.String("kid", kid),
-		slog.String("transition", "activated"),
+	ks.logger.Info("key activated",
+		"kid", kid,
+		"transition", "activated",
 	)
 
 	return ks, nil
@@ -109,8 +135,8 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey) (*KeySet, error) {
 // NewKeySetWithVerificationKeys creates a KeySet with an active signing key
 // and one or more verification-only keys. Keys that are already expired at
 // construction time are pruned immediately.
-func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vkeys []VerificationKey) (*KeySet, error) {
-	ks, err := NewKeySet(priv, pub)
+func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vkeys []VerificationKey, opts ...KeySetOption) (*KeySet, error) {
+	ks, err := NewKeySet(priv, pub, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -127,20 +153,20 @@ func NewKeySetWithVerificationKeys(priv *rsa.PrivateKey, pub *rsa.PublicKey, vke
 			return nil, err
 		}
 		if !now.Before(vk.ExpiresAt) {
-			slog.Info("key pruned",
-				slog.String("kid", vk.KeyID),
-				slog.String("transition", "pruned"),
-				slog.String("reason", "already expired at load time"),
+			ks.logger.Info("key pruned",
+				"kid", vk.KeyID,
+				"transition", "pruned",
+				"reason", "already expired at load time",
 			)
 			continue
 		}
 		ks.verificationKeys = append(ks.verificationKeys, vk)
 		ks.keyIndex[vk.KeyID] = vk.PublicKey
 		ks.keyExpiry[vk.KeyID] = vk.ExpiresAt
-		slog.Info("key demoted to verification-only",
-			slog.String("kid", vk.KeyID),
-			slog.String("transition", "verification-only"),
-			slog.Time("expiresAt", vk.ExpiresAt),
+		ks.logger.Info("key demoted to verification-only",
+			"kid", vk.KeyID,
+			"transition", "verification-only",
+			"expiresAt", vk.ExpiresAt,
 		)
 	}
 
@@ -203,9 +229,9 @@ func (ks *KeySet) PruneExpired() {
 		} else {
 			delete(ks.keyIndex, vk.KeyID)
 			delete(ks.keyExpiry, vk.KeyID)
-			slog.Info("key pruned",
-				slog.String("kid", vk.KeyID),
-				slog.String("transition", "pruned"),
+			ks.logger.Info("key pruned",
+				"kid", vk.KeyID,
+				"transition", "pruned",
 			)
 		}
 	}

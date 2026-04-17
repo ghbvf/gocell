@@ -76,6 +76,11 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 2. 改完 `go build ./...`，涉及逻辑 `go test ./...`
 3. 只改需要改的
 
+## 提交代码前
+
+1. **必须本地跑 lint**: `golangci-lint run ./修改的包/...`，确认 **0 issues** 再 commit+push，本 PR 修改过的文件中的所有 lint 问题都必须清零
+2. `gofmt -w` 修格式问题，不要手动对齐
+
 ## 依赖选择原则
 
 实现外部协议/标准（密码学、签名、OIDC、migration、可观测性导出等）必须优先使用官方或成熟开源库，禁止自建；实现 GoCell 领域逻辑（Cell/Slice 模型、治理规则、outbox 接口等）保留自建。详见 `docs/reviews/202604061630-dependency-replacement-plan.md`。

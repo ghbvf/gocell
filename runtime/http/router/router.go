@@ -182,6 +182,13 @@ func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) O
 	}
 }
 
+// WithAuthMetrics sets the AuthMetrics instance used by AuthMiddleware when wired
+// via WithAuthMiddleware. When provided, JWT verification outcomes are recorded
+// against the shared metrics backend.
+func WithAuthMetrics(m *auth.AuthMetrics) Option {
+	return func(r *Router) { r.authMetrics = m }
+}
+
 // WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
 // the SecurityHeaders middleware. Use this to configure HSTS directives, e.g.:
 //
@@ -230,11 +237,12 @@ type Router struct {
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
-	authPublicEndpoints  []string
-	publicEndpoints      []string
-	securityHeadersOpts  []middleware.SecurityHeadersOption
-	bodyLimit            int64
-	trustedProxies       []string
+	authPublicEndpoints []string
+	authMetrics         *auth.AuthMetrics
+	publicEndpoints     []string
+	securityHeadersOpts []middleware.SecurityHeadersOption
+	bodyLimit           int64
+	trustedProxies      []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -348,7 +356,11 @@ func NewE(opts ...Option) (*Router, error) {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints))
+		var authOpts []auth.AuthOption
+		if r.authMetrics != nil {
+			authOpts = append(authOpts, auth.WithMetrics(r.authMetrics))
+		}
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, authOpts...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 

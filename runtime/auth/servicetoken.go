@@ -2,11 +2,14 @@ package auth
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -16,16 +19,54 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
+// WithServiceTokenLogger sets the logger for ServiceTokenMiddleware.
+func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
+	return func(c *serviceTokenConfig) {
+		if l != nil {
+			c.logger = l
+		}
+	}
+}
+
 // ServiceTokenMaxAge is the maximum age of a service token before it is
 // rejected. Tokens with timestamps at or beyond this window are refused.
 const ServiceTokenMaxAge = 5 * time.Minute
 
-// nowFunc is overridable for testing.
-var nowFunc = time.Now
-
 // MinHMACKeyBytes is the minimum HMAC secret length. NIST recommends 256-bit
 // (32-byte) keys for HMAC-SHA256; this constant enforces that minimum.
 const MinHMACKeyBytes = 32
+
+// serviceTokenConfig holds per-middleware options.
+type serviceTokenConfig struct {
+	now        func() time.Time
+	logger     *slog.Logger
+	nonceStore NonceStore
+	metrics    *AuthMetrics
+}
+
+// ServiceTokenOption configures ServiceTokenMiddleware behavior.
+type ServiceTokenOption func(*serviceTokenConfig)
+
+// WithServiceTokenClock overrides the time source for timestamp validation.
+func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
+	return func(c *serviceTokenConfig) {
+		if fn != nil {
+			c.now = fn
+		}
+	}
+}
+
+// WithNonceStore sets a NonceStore for replay prevention. When set, the
+// middleware rejects tokens whose nonce has already been consumed within
+// the NonceStore's TTL window.
+func WithNonceStore(ns NonceStore) ServiceTokenOption {
+	return func(c *serviceTokenConfig) { c.nonceStore = ns }
+}
+
+// WithServiceTokenMetrics sets the AuthMetrics for ServiceTokenMiddleware.
+func WithServiceTokenMetrics(m *AuthMetrics) ServiceTokenOption {
+	return func(c *serviceTokenConfig) { c.metrics = m }
+}
 
 // HMACKeyRing holds an ordered pair of HMAC secrets for service token operations.
 // Position 0 (current) is used for signing; verification tries all secrets in order.
@@ -105,91 +146,197 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 }
 
 // ServiceTokenMiddleware validates requests using HMAC-SHA256 service tokens.
-// The token is expected in the Authorization header as:
+// The token is expected in the Authorization header as one of:
 //
-//	ServiceToken {unix_timestamp}:{hex_hmac}
+//	ServiceToken {unix_timestamp}:{hex_hmac}                     (legacy)
+//	ServiceToken {unix_timestamp}:{nonce}:{hex_hmac}             (new, with replay protection)
 //
-// The HMAC is computed over "{method} {path} {timestamp}" using secrets from
-// the key ring. Verification tries each secret in order (current, then previous).
-// Tokens older than 5 minutes (exclusive boundary) are rejected.
-func ServiceTokenMiddleware(ring *HMACKeyRing) func(http.Handler) http.Handler {
+// For the new 3-part format the HMAC is computed over
+// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce}". For the legacy
+// 2-part format the HMAC is computed over "{method} {path} {timestamp}" and no
+// nonce check is performed, even when a NonceStore is configured.
+//
+// Verification tries each secret in the key ring in order (current, then
+// previous). Tokens older than 5 minutes (exclusive boundary) are rejected.
+func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+	cfg := serviceTokenConfig{now: time.Now, logger: slog.Default()}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	if ring == nil {
-		// Fail-fast: refuse to create middleware with nil key ring.
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				slog.Error("service token middleware called with nil key ring")
+				cfg.metrics.recordServiceVerify("failure", "internal")
+				cfg.logger.Error("service token middleware called with nil key ring")
 				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			})
 		}
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token := extractServiceToken(r)
-			if token == "" {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
-				return
-			}
-
-			// Parse "{timestamp}:{signature}".
-			parts := strings.SplitN(token, ":", 2)
-			if len(parts) != 2 {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
-				return
-			}
-
-			tsStr, sigHex := parts[0], parts[1]
-			ts, err := strconv.ParseInt(tsStr, 10, 64)
-			if err != nil {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token timestamp")
-				return
-			}
-
-			// Check timestamp is within the allowed window.
-			// Boundary (exactly 5 minutes) is rejected (>=).
-			now := nowFunc()
-			tokenTime := time.Unix(ts, 0)
-			age := now.Sub(tokenTime)
-			if age < 0 {
-				age = -age
-			}
-			if age >= ServiceTokenMaxAge {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token expired")
-				return
-			}
-
-			providedMAC, err := hex.DecodeString(sigHex)
-			if err != nil {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
-				return
-			}
-
-			// Try all secrets in the key ring (current first, then previous).
-			message := fmt.Sprintf("%s %s %s", r.Method, r.URL.Path, tsStr)
-			for _, secret := range ring.Secrets() {
-				mac := hmac.New(sha256.New, secret)
-				_, _ = mac.Write([]byte(message))
-				if hmac.Equal(providedMAC, mac.Sum(nil)) {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-
-			httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
+			handleServiceToken(cfg, ring, next, w, r)
 		})
 	}
 }
 
+// handleServiceToken contains all request-handling logic extracted from
+// ServiceTokenMiddleware to reduce cognitive complexity.
+func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Handler, w http.ResponseWriter, r *http.Request) {
+	token := extractServiceToken(r)
+	if token == "" {
+		cfg.metrics.recordServiceVerify("failure", "missing")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
+		return
+	}
+
+	// Accept both 2-part (legacy) and 3-part (new) formats.
+	parts := strings.SplitN(token, ":", 3)
+	if len(parts) < 2 {
+		cfg.metrics.recordServiceVerify("failure", "invalid_format")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+		return
+	}
+
+	tsStr := parts[0]
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		cfg.metrics.recordServiceVerify("failure", "invalid_format")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token timestamp")
+		return
+	}
+
+	now := cfg.now()
+	tokenTime := time.Unix(ts, 0)
+	age := now.Sub(tokenTime)
+	if age < 0 {
+		age = -age
+	}
+	if age >= ServiceTokenMaxAge {
+		cfg.metrics.recordServiceVerify("failure", "expired")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token expired")
+		return
+	}
+
+	var nonce, sigHex, message string
+	isNewFormat := len(parts) == 3
+	if isNewFormat {
+		nonce, sigHex = parts[1], parts[2]
+		message = buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce)
+	} else {
+		sigHex = parts[1]
+		message = fmt.Sprintf("%s %s %s", r.Method, r.URL.Path, tsStr)
+	}
+
+	providedMAC, err := hex.DecodeString(sigHex)
+	if err != nil {
+		cfg.metrics.recordServiceVerify("failure", "invalid_format")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+		return
+	}
+
+	if !verifyServiceTokenMAC(ring, message, providedMAC) {
+		cfg.metrics.recordServiceVerify("failure", "invalid_mac")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
+		return
+	}
+
+	if blocked := checkNonceReplay(cfg, isNewFormat, nonce, w, r); blocked {
+		return
+	}
+
+	cfg.metrics.recordServiceVerify("success", "ok")
+	next.ServeHTTP(w, r)
+}
+
+// checkNonceReplay handles nonce-based replay detection. Returns true if the
+// request was blocked (response already written).
+func checkNonceReplay(cfg serviceTokenConfig, isNewFormat bool, nonce string, w http.ResponseWriter, r *http.Request) bool {
+	if cfg.nonceStore == nil {
+		return false
+	}
+	if !isNewFormat {
+		cfg.logger.Warn("legacy 2-part service token accepted without replay check",
+			slog.String("path", r.URL.Path),
+			slog.String("method", r.Method),
+		)
+		return false
+	}
+	err := cfg.nonceStore.CheckAndMark(r.Context(), nonce)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNonceReused) {
+		cfg.metrics.recordServiceVerify("failure", "replay")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token replay detected")
+	} else {
+		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
+		cfg.logger.Error("nonce store check failed", slog.Any("error", err))
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+	}
+	return true
+}
+
+// verifyServiceTokenMAC checks whether the provided MAC is valid for message
+// under any of the secrets in the key ring.
+func verifyServiceTokenMAC(ring *HMACKeyRing, message string, providedMAC []byte) bool {
+	for _, secret := range ring.Secrets() {
+		mac := hmac.New(sha256.New, secret)
+		_, _ = mac.Write([]byte(message))
+		if hmac.Equal(providedMAC, mac.Sum(nil)) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildServiceTokenMessage constructs the canonical HMAC message for the new
+// 3-part token format. The query string is canonicalized (keys sorted) and
+// appended to the path when non-empty.
+func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce string) string {
+	cq := canonicalQuery(rawQuery)
+	if cq != "" {
+		return fmt.Sprintf("%s %s?%s %s %s", method, path, cq, tsStr, nonce)
+	}
+	return fmt.Sprintf("%s %s %s %s", method, path, tsStr, nonce)
+}
+
+// canonicalQuery returns a deterministic encoding of rawQuery with keys sorted.
+// Returns empty string when rawQuery is empty. Falls back to rawQuery if
+// url.ParseQuery fails.
+func canonicalQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	params, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return rawQuery
+	}
+	return params.Encode() // url.Values.Encode() sorts keys alphabetically
+}
+
 // GenerateServiceToken creates a service token for the given method, path,
-// and timestamp using the current secret from the key ring.
-// It returns an empty string if ring is nil.
-func GenerateServiceToken(ring *HMACKeyRing, method, path string, ts time.Time) string {
+// optional rawQuery, and timestamp using the current secret from the key ring.
+// The token format is "{timestamp}:{nonce}:{hex_hmac}" where nonce is 16
+// cryptographically random bytes, hex-encoded. It returns an empty string if
+// ring is nil.
+func GenerateServiceToken(ring *HMACKeyRing, method, path, rawQuery string, ts time.Time) string {
 	if ring == nil {
 		return ""
 	}
 	tsStr := strconv.FormatInt(ts.Unix(), 10)
+
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		// crypto/rand failure is not recoverable; return empty to signal error.
+		return ""
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+
+	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce)
 	mac := hmac.New(sha256.New, ring.Current())
-	_, _ = mac.Write([]byte(fmt.Sprintf("%s %s %s", method, path, tsStr)))
-	return tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
+	_, _ = mac.Write([]byte(message))
+	return tsStr + ":" + nonce + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func extractServiceToken(r *http.Request) string {

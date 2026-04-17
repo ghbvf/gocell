@@ -1,10 +1,10 @@
 package auth
 
 import (
-	"log/slog"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -28,7 +28,12 @@ var DefaultPublicEndpoints = []string{}
 // publicEndpoints specifies paths that bypass authentication. If nil,
 // DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
 // matching, consistent with other security middleware in this package.
-func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.Handler) http.Handler {
+func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
+	cfg := defaultAuthConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	publicPaths := publicEndpoints
 	if publicPaths == nil {
 		publicPaths = DefaultPublicEndpoints
@@ -48,23 +53,28 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string) func(http.
 
 			token := extractBearerToken(r)
 			if token == "" {
+				cfg.metrics.recordTokenVerifyCounter("failure", "missing")
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 				return
 			}
 
+			start := time.Now()
 			claims, err := verifier.Verify(r.Context(), token)
 			if err != nil {
-				slog.Error("token verification failed",
-					slog.Any("error", err),
-					slog.String("path", r.URL.Path),
-					slog.String("remote_addr", r.RemoteAddr),
+				cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
+				cfg.logger.Error("token verification failed",
+					"error", err,
+					"path", r.URL.Path,
+					"remote_addr", r.RemoteAddr,
 				)
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 				return
 			}
+			cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
 
 			ctx := WithClaims(r.Context(), claims)
 			ctx = ctxkeys.WithSubject(ctx, claims.Subject)
+			ctx = withLogger(ctx, cfg.logger)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -81,43 +91,62 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			claims, ok := ClaimsFrom(r.Context())
-			if !ok {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
-				return
-			}
-
-			// Check if any of the user's roles match the required roles.
-			for _, role := range claims.Roles {
-				if roleSet[role] {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-
-			// If an Authorizer is provided, try policy-based authorization.
-			if authorizer != nil {
-				sub := claims.Subject
-				for _, role := range roles {
-					allowed, err := authorizer.Authorize(r.Context(), sub, r.URL.Path, role)
-					if err != nil {
-						slog.Error("authorization check failed",
-							slog.Any("error", err),
-							slog.String("subject", sub),
-						)
-						httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
-						return
-					}
-					if allowed {
-						next.ServeHTTP(w, r)
-						return
-					}
-				}
-			}
-
-			httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+			handleRequireRole(authorizer, roles, roleSet, next, w, r)
 		})
 	}
+}
+
+func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string]bool, next http.Handler, w http.ResponseWriter, r *http.Request) {
+	claims, ok := ClaimsFrom(r.Context())
+	if !ok {
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
+		return
+	}
+
+	if hasMatchingRole(claims, roleSet) {
+		next.ServeHTTP(w, r)
+		return
+	}
+
+	if authorizer != nil {
+		allowed, err := checkAuthorizer(authorizer, r, claims.Subject, roles)
+		if err != nil {
+			loggerFrom(r.Context()).Error("authorization check failed",
+				"error", err,
+				"subject", claims.Subject,
+			)
+			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+			return
+		}
+		if allowed {
+			next.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+}
+
+func hasMatchingRole(claims Claims, roleSet map[string]bool) bool {
+	for _, role := range claims.Roles {
+		if roleSet[role] {
+			return true
+		}
+	}
+	return false
+}
+
+func checkAuthorizer(authorizer Authorizer, r *http.Request, subject string, roles []string) (bool, error) {
+	for _, role := range roles {
+		allowed, err := authorizer.Authorize(r.Context(), subject, r.URL.Path, role)
+		if err != nil {
+			return false, err
+		}
+		if allowed {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func extractBearerToken(r *http.Request) string {
@@ -131,4 +160,3 @@ func extractBearerToken(r *http.Request) string {
 	}
 	return strings.TrimSpace(parts[1])
 }
-

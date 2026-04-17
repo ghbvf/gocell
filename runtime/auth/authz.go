@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -24,8 +23,8 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 	}
 
 	if targetID == "" {
-		slog.Warn("authz: RequireSelfOrRole called with empty targetID",
-			slog.String("subject", subject))
+		loggerFrom(ctx).Warn("authz: RequireSelfOrRole called with empty targetID",
+			"subject", subject)
 	}
 
 	if targetID != "" && subject == targetID {
