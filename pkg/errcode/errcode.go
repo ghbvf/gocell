@@ -40,8 +40,13 @@ const (
 	ErrCommandNotFound   Code = "ERR_COMMAND_NOT_FOUND"
 	ErrAdapterPGNoTx     Code = "ERR_ADAPTER_PG_NO_TX"
 	ErrAuthKeyInvalid    Code = "ERR_AUTH_KEY_INVALID"
-	ErrAuthTokenInvalid  Code = "ERR_AUTH_TOKEN_INVALID"
-	ErrAuthTokenExpired  Code = "ERR_AUTH_TOKEN_EXPIRED"
+	// ErrAuthVerifierConfig signals a JWT verifier construction error — e.g.
+	// required configuration (WithExpectedAudiences) was not provided.
+	// Distinct from ErrAuthKeyInvalid (key material) so operators can route
+	// verifier misconfiguration separately from cryptographic key failures.
+	ErrAuthVerifierConfig Code = "ERR_AUTH_VERIFIER_CONFIG"
+	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
+	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
 	// ErrAuthInvalidTokenIntent signals that a JWT's token_use claim (and/or
 	// its JOSE typ header) does not match the expected intent for the current
 	// request scope — e.g., a refresh token presented at a business endpoint,

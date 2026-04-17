@@ -27,13 +27,6 @@ type intentMockVerifier struct {
 	refreshErr    error
 }
 
-// Verify is kept so intentMockVerifier also satisfies TokenVerifier; it is
-// never invoked by AuthMiddleware (which calls VerifyIntent directly) and
-// returns a sentinel error so accidental fallback is caught by tests.
-func (v *intentMockVerifier) Verify(_ context.Context, _ string) (Claims, error) {
-	return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "intentMockVerifier.Verify should not be called")
-}
-
 func (v *intentMockVerifier) VerifyIntent(_ context.Context, _ string, expected TokenIntent) (Claims, error) {
 	switch expected {
 	case TokenIntentAccess:
@@ -147,24 +140,12 @@ func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
 		"ERR_AUTH_INVALID_TOKEN_INTENT must appear in structured log output so ops can distinguish it via metrics reason=invalid_intent")
 }
 
-// TestAuthMiddleware_LegacyTokenVerifierIsCompileTimeRejected is a compile-time
-// invariant check: AuthMiddleware's parameter is IntentTokenVerifier, so a
-// plain TokenVerifier can no longer be plugged in. Any attempt to narrow the
-// parameter back to TokenVerifier will fail to build this test.
-func TestAuthMiddleware_LegacyTokenVerifierIsCompileTimeRejected(t *testing.T) {
+// TestAuthMiddleware_IntentVerifierIsRequiredAtCompileTime is a compile-time
+// invariant check: AuthMiddleware's parameter is IntentTokenVerifier.
+// Any regression that widens it to a plain verifier would allow callers
+// without VerifyIntent to be plugged in — this test pins the constraint.
+func TestAuthMiddleware_IntentVerifierIsRequiredAtCompileTime(t *testing.T) {
 	var v IntentTokenVerifier = &intentMockVerifier{}
-	// The following must compile — v is an IntentTokenVerifier.
 	_ = AuthMiddleware(v, nil)
-
-	// Documented negative case: a value that only implements TokenVerifier
-	// cannot be assigned to IntentTokenVerifier. We express that as a
-	// non-executing check via interface satisfaction so a future regression
-	// (widening the parameter back to TokenVerifier) would let a
-	// plain-TokenVerifier compile and this assertion would become
-	// redundant, surfacing the drift in review.
 	var _ IntentTokenVerifier = (*intentMockVerifier)(nil)
-	var _ TokenVerifier = (*mockVerifier)(nil)
-	// mockVerifier now also satisfies IntentTokenVerifier; we rely on the
-	// parameter type of AuthMiddleware (IntentTokenVerifier) to enforce the
-	// invariant. The comment above documents why narrowing is a regression.
 }

@@ -3,19 +3,22 @@
 // Covers RFC 8725 §3.3: "recipients MUST validate the aud claim to determine
 // that the JWT is indeed intended for the recipient."
 //
-// WithExpectedAudiences configures the verifier; when not set the check is
-// skipped (backward compatible). When set, at least one configured audience
-// must appear in the token's aud claim.
+// WithExpectedAudiences is required — NewJWTVerifier returns an error when no
+// expected audiences are configured (fail-fast per RFC 8725 §3.3). At least
+// one configured audience must appear in the token's aud claim.
 package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // makeTokenWithAud issues a signed token carrying the given audience slice.
@@ -89,30 +92,19 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingAudience(t *testing.T) {
 		"token without aud claim must be rejected when expected audience is configured")
 }
 
-// TestJWTVerifier_VerifyIntent_AudienceCheckSkippedWhenNotConfigured verifies
-// backward compatibility: when WithExpectedAudiences is not called, VerifyIntent
-// skips the audience check and accepts tokens regardless of aud content.
-func TestJWTVerifier_VerifyIntent_AudienceCheckSkippedWhenNotConfigured(t *testing.T) {
+// TestNewJWTVerifier_NoAudiences_ReturnsError verifies that NewJWTVerifier fails
+// at construction time when no expected audiences are configured (RFC 8725 §3.3
+// fail-fast). Any composition root that forgets WithExpectedAudiences will get a
+// hard error instead of silently skipping audience validation.
+func TestNewJWTVerifier_NoAudiences_ReturnsError(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks) // no WithExpectedAudiences
-	require.NoError(t, err)
-
-	// Token with mismatched audience — should still pass when no expectation configured.
-	tok := makeTokenWithAud(t, ks, []string{"some-other-audience"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err, "no expected audience configured → aud check skipped (backward compat)")
-}
-
-// TestJWTVerifier_VerifyIntent_NoAudSkippedWhenNotConfigured mirrors the above
-// but with a token that has no aud claim at all.
-func TestJWTVerifier_VerifyIntent_NoAudSkippedWhenNotConfigured(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks) // no WithExpectedAudiences
-	require.NoError(t, err)
-
-	tok := makeRawTokenWithoutAud(t, ks)
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err, "no expected audience configured → aud check skipped")
+	_, err := NewJWTVerifier(ks)
+	require.Error(t, err, "NewJWTVerifier without WithExpectedAudiences must return an error")
+	assert.Contains(t, err.Error(), "audience")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error")
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code,
+		"construction error must use ErrAuthVerifierConfig, not ErrAuthKeyInvalid")
 }
 
 // TestJWTVerifier_VerifyIntent_AcceptsMultipleAudiencesWhenOneMatches verifies
@@ -165,18 +157,20 @@ func TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck(t *testin
 		"intent check fires before audience check")
 }
 
-// TestJWTVerifier_Verify_UnaffectedByExpectedAudiences verifies that the plain
-// Verify() method is NOT affected by WithExpectedAudiences — audience validation
-// is intentionally scoped to VerifyIntent only.
-func TestJWTVerifier_Verify_UnaffectedByExpectedAudiences(t *testing.T) {
+// TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath confirms that
+// audience enforcement applies through the primary VerifyIntent call path —
+// the only verification API in GoCell (TokenVerifier.Verify was removed in
+// favour of a single intent-aware API to prevent accidental audience bypass).
+func TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath(t *testing.T) {
 	ks := mustTestKeySet(t)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	// Token with mismatched aud — Verify should not check it.
+	// Mismatched audience on access path — rejected.
 	tok := makeTokenWithAud(t, ks, []string{"some-other-service"})
-	_, err = verifier.Verify(context.Background(), tok)
-	require.NoError(t, err, "Verify() must not enforce audience (only VerifyIntent does)")
+	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
+	require.Error(t, err, "VerifyIntent must reject a token with a wrong audience")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
 // TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud verifies RFC 7519 §4.1.3:

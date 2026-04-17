@@ -237,6 +237,7 @@ var codeToStatus = map[errcode.Code]int{
 	// --- 401 Unauthorized ---
 	errcode.ErrAuthUnauthorized:       http.StatusUnauthorized,
 	errcode.ErrAuthKeyInvalid:         http.StatusUnauthorized,
+	errcode.ErrAuthVerifierConfig:     http.StatusInternalServerError,
 	errcode.ErrAuthTokenInvalid:       http.StatusUnauthorized,
 	errcode.ErrAuthTokenExpired:       http.StatusUnauthorized,
 	errcode.ErrAuthLoginFailed:        http.StatusUnauthorized,

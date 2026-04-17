@@ -26,7 +26,7 @@ func init() {
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
-	testVerifier, err = auth.NewJWTVerifier(testKeySet)
+	testVerifier, err = auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -39,7 +39,7 @@ func newTestService() (*Service, *mem.SessionRepository) {
 }
 
 func issueTestToken(sub string) string {
-	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, nil, nil, "")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, nil, []string{auth.DefaultJWTAudience}, "")
 	return tok
 }
 
@@ -207,14 +207,14 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Decode the new access token to verify sid.
-	verifier, err := auth.NewJWTVerifier(testKeySet)
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	accessClaims, err := verifier.Verify(context.Background(), pair.AccessToken)
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-r1", accessClaims.Extra["sid"], "new access token must carry the session ID")
 
-	refreshClaims, err := verifier.Verify(context.Background(), pair.RefreshToken)
+	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
 }
@@ -233,7 +233,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
-	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", nil, nil, "sess-sa")
+	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", nil, []string{auth.DefaultJWTAudience}, "sess-sa")
 	require.NoError(t, err)
 
 	sess, err := domain.NewSession("usr-sa", "at", rt, time.Now().Add(time.Hour))

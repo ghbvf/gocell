@@ -84,18 +84,18 @@ func TestJWTVerifier_VerifiesByKID(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"api"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, "gocell", claims.Issuer)
 	assert.Equal(t, []string{"admin"}, claims.Roles)
-	assert.Equal(t, []string{"api"}, claims.Audience)
+	assert.Equal(t, []string{"gocell"}, claims.Audience)
 }
 
 func TestJWTVerifier_RejectsUnknownKID(t *testing.T) {
@@ -104,13 +104,13 @@ func TestJWTVerifier_RejectsUnknownKID(t *testing.T) {
 
 	issuer, err := NewJWTIssuer(ks1, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks2) // different key set
+	verifier, err := NewJWTVerifier(ks2, WithExpectedAudiences("gocell")) // different key set
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -119,7 +119,7 @@ func TestJWTVerifier_RejectsMissingKID(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 	ks, err := NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// Create a token WITHOUT kid header (legacy-style).
@@ -132,7 +132,7 @@ func TestJWTVerifier_RejectsMissingKID(t *testing.T) {
 	tokenStr, err := token.SignedString(priv)
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -143,18 +143,18 @@ func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin", "user"}, []string{"api"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin", "user"}, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, "gocell", claims.Issuer)
 	assert.Equal(t, []string{"admin", "user"}, claims.Roles)
-	assert.Equal(t, []string{"api"}, claims.Audience)
+	assert.Equal(t, []string{"gocell"}, claims.Audience)
 	assert.False(t, claims.ExpiresAt.IsZero())
 	assert.False(t, claims.IssuedAt.IsZero())
 }
@@ -163,20 +163,20 @@ func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", -time.Hour) // already expired
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestJWTVerifier_RejectsHS256(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	hmacToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -186,14 +186,14 @@ func TestJWTVerifier_RejectsHS256(t *testing.T) {
 	tokenStr, err := hmacToken.SignedString([]byte("some-secret"))
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	noneToken := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
@@ -203,7 +203,7 @@ func TestJWTVerifier_RejectsAlgNone(t *testing.T) {
 	tokenStr, err := noneToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -212,7 +212,7 @@ func TestJWTVerifier_RejectsRS384(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 	ks, err := NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// Sign a valid token with RS384 instead of RS256.
@@ -224,7 +224,7 @@ func TestJWTVerifier_RejectsRS384(t *testing.T) {
 	tokenStr, err := token.SignedString(priv)
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -233,7 +233,7 @@ func TestJWTVerifier_RejectsRS512(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 	ks, err := NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
@@ -244,7 +244,7 @@ func TestJWTVerifier_RejectsRS512(t *testing.T) {
 	tokenStr, err := token.SignedString(priv)
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -255,22 +255,22 @@ func TestJWTVerifier_WrongKey(t *testing.T) {
 
 	issuer, err := NewJWTIssuer(ks1, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks2)
+	verifier, err := NewJWTVerifier(ks2, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), tokenStr)
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
 }
 
 func TestJWTVerifier_MalformedToken(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	_, err = verifier.Verify(context.Background(), "not.a.jwt")
+	_, err = verifier.VerifyIntent(context.Background(), "not.a.jwt", TokenIntentAccess)
 	require.Error(t, err)
 }
 
@@ -278,35 +278,35 @@ func TestJWTIssuer_RoundTrip(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "test-issuer", 30*time.Minute)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "svc-audit", []string{"service"}, []string{"internal"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "svc-audit", []string{"service"}, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "svc-audit", claims.Subject)
 	assert.Equal(t, "test-issuer", claims.Issuer)
 	assert.Equal(t, []string{"service"}, claims.Roles)
-	assert.Equal(t, []string{"internal"}, claims.Audience)
+	assert.Equal(t, []string{"gocell"}, claims.Audience)
 }
 
-func TestJWTIssuer_NoRolesNoAudience(t *testing.T) {
+func TestJWTIssuer_NoRoles(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-2", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-2", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-2", claims.Subject)
 	assert.Empty(t, claims.Roles)
-	assert.Empty(t, claims.Audience)
+	assert.Equal(t, []string{"gocell"}, claims.Audience)
 }
 
 func TestNewJWTVerifier_NilKeySetReturnsError(t *testing.T) {
@@ -338,23 +338,26 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 	ks, err := NewKeySetWithVerificationKeys(priv2, pub2, []VerificationKey{vk})
 	require.NoError(t, err)
 
-	// Issue a token signed with the OLD key (key1), adding kid manually.
+	// Issue a token signed with the OLD key (key1), adding required intent fields.
 	oldClaims := jwt.MapClaims{
-		"sub": "user-old",
-		"iss": "gocell",
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"iat": time.Now().Unix(),
+		"sub":       "user-old",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": string(TokenIntentAccess),
+		"aud":       "gocell",
 	}
 	oldToken := jwt.NewWithClaims(jwt.SigningMethodRS256, oldClaims)
 	oldToken.Header["kid"] = Thumbprint(pub1)
+	oldToken.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
 	oldTokenStr, err := oldToken.SignedString(priv1)
 	require.NoError(t, err)
 
 	// Verifier using the new KeySet should still accept the old token.
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), oldTokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), oldTokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-old", claims.Subject)
 
@@ -362,10 +365,10 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	newTokenStr, err := issuer.Issue(TokenIntentAccess, "user-new", nil, nil, "")
+	newTokenStr, err := issuer.Issue(TokenIntentAccess, "user-new", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err = verifier.Verify(context.Background(), newTokenStr)
+	claims, err = verifier.VerifyIntent(context.Background(), newTokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-new", claims.Subject)
 }
@@ -450,15 +453,15 @@ func TestJWTVerifier_AcceptsVerificationKeyStore(t *testing.T) {
 	require.NoError(t, err)
 	issuer, err := NewJWTIssuer(ks, "gocell-test", time.Hour)
 	require.NoError(t, err)
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
 	// Verify using a stub store with only the public key.
 	stub := &stubVerificationKeyStore{keys: map[string]*rsa.PublicKey{kid: pub}}
-	verifier, err := NewJWTVerifier(stub)
+	verifier, err := NewJWTVerifier(stub, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 }
@@ -558,13 +561,13 @@ func TestJWTIssuer_Issue_IncludesSessionID(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"api"}, "sess-abc123")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "sess-abc123")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, "sess-abc123", claims.Extra["sid"])
@@ -574,13 +577,13 @@ func TestJWTIssuer_Issue_EmptySessionID_OmitsSid(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	_, hasSid := claims.Extra["sid"]
 	assert.False(t, hasSid, "empty sessionID should not produce a sid claim")
@@ -619,7 +622,7 @@ func TestWithIssuerClock_NilIgnored(t *testing.T) {
 
 func TestWithVerifierClock_NilIgnored(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithVerifierClock(nil))
+	verifier, err := NewJWTVerifier(ks, WithVerifierClock(nil), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	// Should not panic on construction.
 	assert.NotNil(t, verifier)

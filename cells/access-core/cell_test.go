@@ -53,7 +53,7 @@ func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
 }
 
 func mustVerifier(ks *auth.KeySet) *auth.JWTVerifier {
-	v, err := auth.NewJWTVerifier(ks)
+	v, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -482,7 +482,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Verify token through session-aware verifier — should succeed.
 	verifier := c.TokenVerifier()
-	claims, err := verifier.Verify(ctx, accessToken)
+	claims, err := verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "token should be valid before revocation")
 
 	sid, ok := claims.Extra["sid"].(string)
@@ -496,7 +496,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Verify same token again — should be rejected.
-	_, err = verifier.Verify(ctx, accessToken)
+	_, err = verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
 	require.Error(t, err, "token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN", "error should be auth invalid token")
 }
@@ -566,7 +566,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Validate refreshed token through session-aware verifier.
 	verifier := c.TokenVerifier()
-	claims, err := verifier.Verify(ctx, refreshedToken)
+	claims, err := verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "refreshed token should be valid")
 
 	sid := claims.Extra["sid"].(string)
@@ -579,7 +579,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Refreshed token should now be rejected.
-	_, err = verifier.Verify(ctx, refreshedToken)
+	_, err = verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
 	require.Error(t, err, "refreshed token should be rejected after session revocation")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }

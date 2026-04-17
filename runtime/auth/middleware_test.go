@@ -16,18 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockVerifier implements IntentTokenVerifier for testing. The tests in this
-// file exercise generic middleware behaviour (missing token, public endpoints,
-// path cleaning, etc.), so VerifyIntent returns the same canned result as
-// Verify regardless of the requested intent. Intent-specific behaviour is
-// tested in middleware_intent_test.go.
+// mockVerifier implements IntentTokenVerifier for testing. Intent-specific
+// behaviour is tested in middleware_intent_test.go.
 type mockVerifier struct {
 	claims Claims
 	err    error
-}
-
-func (v *mockVerifier) Verify(_ context.Context, _ string) (Claims, error) {
-	return v.claims, v.err
 }
 
 func (v *mockVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {

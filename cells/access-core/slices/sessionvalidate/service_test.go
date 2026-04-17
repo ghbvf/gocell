@@ -21,7 +21,7 @@ var (
 
 func init() {
 	var err error
-	testVerifier, err = auth.NewJWTVerifier(testKeySet)
+	testVerifier, err = auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

@@ -47,7 +47,7 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 
-	verifier, err := auth.NewJWTVerifier(testKeySet)
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	newAccess, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)

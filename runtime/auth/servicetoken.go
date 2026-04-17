@@ -19,6 +19,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
+const msgInvalidServiceTokenFormat = "invalid service token format"
+
 // WithServiceTokenLogger sets the logger for ServiceTokenMiddleware.
 func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
 	return func(c *serviceTokenConfig) {
@@ -188,9 +190,20 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 	}
 
 	parts := strings.SplitN(token, ":", 3)
+	if len(parts) == 2 {
+		// 2-part legacy format ({timestamp}:{hex_hmac}) — no nonce, always rejected.
+		// Recorded separately so ops can observe residual legacy token traffic.
+		cfg.metrics.recordServiceVerify("failure", "legacy_format")
+		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
+			slog.String("path", r.URL.Path),
+			slog.String("format", "2-part"),
+		)
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
+		return
+	}
 	if len(parts) != 3 {
 		cfg.metrics.recordServiceVerify("failure", "invalid_format")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
 		return
 	}
 
@@ -220,7 +233,7 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 	providedMAC, err := hex.DecodeString(sigHex)
 	if err != nil {
 		cfg.metrics.recordServiceVerify("failure", "invalid_format")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
 		return
 	}
 
