@@ -23,6 +23,13 @@ func newTestService() (*Service, *mem.FlagRepository) {
 	return NewService(repo, codec, logger, query.RunModeProd), repo
 }
 
+func TestNewService_NilCodec_Panics(t *testing.T) {
+	repo := mem.NewFlagRepository()
+	assert.PanicsWithValue(t, "featureflag: cursor codec is required", func() {
+		_ = NewService(repo, nil, slog.Default(), query.RunModeProd)
+	})
+}
+
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, enabled bool, pct int) {
 	t.Helper()
 	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{

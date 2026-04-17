@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/google/uuid"
 )
 
@@ -37,14 +38,20 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
-// WithDemoFailOpen controls whether publisher-only failures are swallowed.
-// Default is false (fail-closed): publisher errors propagate to the caller so
-// that L2 atomicity is preserved. Set to true only in assemblies that inject
-// outbox.DiscardPublisher{} for demo / local-dev use. Setting it true in
-// durable mode violates the cell's L2 consistency contract.
+// WithRunMode sets the service run mode. RunModeDemo allows publisher-only
+// failures to be logged and swallowed (matching the cell's demo-mode L2 relaxation
+// for deployments that inject outbox.DiscardPublisher{}); RunModeProd — the zero
+// value — keeps the service fail-closed so publisher errors propagate and L2
+// atomicity is preserved.
+//
+// This unifies the publisher fail-open decision with pkg/query.RunMode: the cell
+// translates kernel/cell.DurabilityMode → query.RunMode exactly once in Init()
+// via query.RunModeForDemo and passes the resulting mode to every slice that
+// needs it. Do not introduce slice-local bool flags that re-derive this signal.
+// ref: zeromicro/go-zero ServiceConf.Mode — one mode field, propagated, not re-sniffed.
 // ref: watermill/components/forwarder — publish failures always wrap+return.
-func WithDemoFailOpen(allow bool) Option {
-	return func(s *Service) { s.demoFailOpen = allow }
+func WithRunMode(mode query.RunMode) Option {
+	return func(s *Service) { s.runMode = mode }
 }
 
 // Service implements config publish/rollback business logic.
@@ -54,12 +61,12 @@ type Service struct {
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	logger       *slog.Logger
-	demoFailOpen bool
+	runMode      query.RunMode
 }
 
-// NewService creates a config-publish Service. By default publisher errors
-// propagate (fail-closed); demo assemblies can opt-in to the legacy
-// Warn+swallow behavior via WithDemoFailOpen(true).
+// NewService creates a config-publish Service. By default (RunModeProd zero
+// value) publisher errors propagate to preserve L2 atomicity; demo assemblies
+// opt-in to Warn+swallow behavior via WithRunMode(query.RunModeDemo).
 func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		repo:      repo,
@@ -200,9 +207,9 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 		return nil
 	}
 	// Publisher-only path (no outbox). Fail-closed by default to keep L2
-	// atomicity honest; demo assemblies opt-in via WithDemoFailOpen(true).
+	// atomicity honest; demo assemblies opt-in via WithRunMode(query.RunModeDemo).
 	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
-		if s.demoFailOpen {
+		if s.runMode.IsDemo() {
 			s.logger.Warn("config-publish: publisher failed (demo fail-open)",
 				slog.Any("error", err), slog.String("key", key), slog.String("topic", topic))
 			return nil

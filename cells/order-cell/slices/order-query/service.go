@@ -27,7 +27,13 @@ type Service struct {
 // NewService creates an order-query Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
+//
+// codec must be non-nil — pagination cannot be served without a cursor codec.
+// Passing nil is a caller programming error and fails fast at construction.
 func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+	if codec == nil {
+		panic("order-query: cursor codec is required")
+	}
 	return &Service{
 		repo:    repo,
 		codec:   codec,

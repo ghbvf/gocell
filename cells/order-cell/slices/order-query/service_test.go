@@ -22,6 +22,13 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
+func TestNewService_NilCodec_Panics(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	assert.PanicsWithValue(t, "order-query: cursor codec is required", func() {
+		_ = NewService(repo, nil, slog.Default(), query.RunModeProd)
+	})
+}
+
 func seedRepo(orders ...*domain.Order) *mem.OrderRepository {
 	repo := mem.NewOrderRepository()
 	for _, o := range orders {

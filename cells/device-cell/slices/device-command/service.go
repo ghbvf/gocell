@@ -34,7 +34,14 @@ type Service struct {
 // NewService creates a device-command Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
+//
+// codec must be non-nil — pagination (list pending commands) cannot be served
+// without a cursor codec. Passing nil is a caller programming error and fails
+// fast at construction.
 func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+	if codec == nil {
+		panic("device-command: cursor codec is required")
+	}
 	return &Service{
 		cmdRepo:    cmdRepo,
 		deviceRepo: deviceRepo,

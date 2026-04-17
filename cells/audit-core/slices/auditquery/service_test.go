@@ -30,6 +30,13 @@ func newTestService() (*Service, *mem.AuditRepository) {
 	return NewService(repo, testCodec(), slog.Default(), query.RunModeProd), repo
 }
 
+func TestNewService_NilCodec_Panics(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	assert.PanicsWithValue(t, "auditquery: cursor codec is required", func() {
+		_ = NewService(repo, nil, slog.Default(), query.RunModeProd)
+	})
+}
+
 func seedEntry(repo *mem.AuditRepository, id, eventType, actorID string, ts time.Time) {
 	_ = repo.Append(context.Background(), &domain.AuditEntry{
 		ID:        id,

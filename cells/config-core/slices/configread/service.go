@@ -28,7 +28,15 @@ type Service struct {
 // NewService creates a config-read Service. runMode controls cursor
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
+//
+// codec must be non-nil — pagination cannot be served without a cursor codec.
+// Passing nil is a caller programming error and fails fast at construction so
+// it never surfaces mid-request as a 500. The cell is responsible for wiring
+// the codec (env-loaded or demo-default) in Init() before calling NewService.
 func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+	if codec == nil {
+		panic("configread: cursor codec is required")
+	}
 	return &Service{
 		repo:    repo,
 		codec:   codec,

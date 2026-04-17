@@ -123,18 +123,17 @@
 
 ---
 
-## Phase P: pkg + 工具链偿债（~7h，1 个 PR）
+## Phase P: pkg + 工具链偿债（✅ 完成）
 
-> **2026-04-18 update**: PR#163 已完成 PR-P-CB（CB-IFACE-01 + CB-ENCAP-01）；PR#164 已完成 PR-P-CMD（CMD-MODE-01 + CMD-REFACTOR-01 + F-7 BUILD-OUTDIR-01）；`.env.example` GOCELL_S3_REGION=us-east-1 已存在（line 21）。本 Phase 仅剩 PR-P-QUERY。
+> **2026-04-18 update**: PR#163 已完成 PR-P-CB / PR#164 已完成 PR-P-CMD / PR-P-QUERY 合并 PR-X2 + PR-X3 一次落地 ✅。Phase P 闭合。
 
-### PR-P-QUERY: cursor 稳定性 + 轮换接线（7h）
+### ✅ PR-P-QUERY: cursor 稳定性 + 轮换接线（已合入）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| **PR-X2 pkg/query 稳定性**: `ParsePageRequest` cursor 长度上限 + `PR#165 F1-2` `configpublish.WithDemoFailOpen` 与 `query.RunMode` 语义整合（统一 cell 级 RunMode 注入）+ `PR#165 F3-1` `loadCursorCodec` helper 单测（wrap/errcode 链断言）+ `PR#165 F5-1` `RunModeForDemo` godoc "Do not extend" 警告 + PR160-P1-C codec nil 构造期 fail-fast（Service 层，非 cell 层 fallback） | 3h | `pkg/query/` + `cmd/core-bundle/` + `cells/*/slices/*/service.go` | PR#160 六席位审查 + PR#165 reviewer |
-| **PR-X3 cursor key rotation 接线** (🟡 可延后): `NewCursorCodec(current, previous)` 启动接线 + `GOCELL_CURSOR_PREVIOUS_SIGNING_KEY` 双 env 通道 + 轮换兼容回归。对标 K8s `--service-account-key-file`、gorilla/securecookie `CodecsFromPairs` | 4h | `pkg/query/codec.go` + `cmd/core-bundle/main.go` | PR#160 六席位审查 |
-
-> PR-X2 先做 → PR-X3 再做（依赖 PR-X2 完成 RunMode 语义统一）。
+| 任务 | 状态 | 落地要点 |
+|------|------|---------|
+| PR-X2 pkg/query 稳定性 | ✅ | codec nil Service 层 fail-fast（5 个 slice）/ `ParsePageRequest` cursor 长度上限 / `WithDemoFailOpen`→`WithRunMode(query.RunMode)` 整合 / `loadCursorCodec` wrap 链单测 / `RunModeForDemo` godoc "Do not extend" 警告 |
+| PR-X3 cursor key rotation 接线 | ✅ | `NewCursorCodec(current, previous)` 启动接线 / `GOCELL_{AUDIT,CONFIG}_CURSOR_PREVIOUS_KEY` 双 env / 轮换生效 slog.Info / 7 条测试覆盖 3 步 rotation lifecycle（K8s 对标） |
+| ADR-RUNMODE-TRANSLATION-01 | ✅ | `docs/architecture/202604180100-adr-runmode-translation.md` |
 
 ---
 

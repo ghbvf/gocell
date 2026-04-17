@@ -21,6 +21,16 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	return NewService(repo, codec, logger, query.RunModeProd), repo
 }
 
+// TestNewService_NilCodec_Panics ensures construction fails fast when the cell
+// wires a nil cursor codec. Pagination cannot be served without a codec; failing
+// at construction keeps the nil-deref from surfacing mid-request as a 500.
+func TestNewService_NilCodec_Panics(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	assert.PanicsWithValue(t, "configread: cursor codec is required", func() {
+		_ = NewService(repo, nil, slog.Default(), query.RunModeProd)
+	})
+}
+
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {
 	t.Helper()
 	now := time.Now()

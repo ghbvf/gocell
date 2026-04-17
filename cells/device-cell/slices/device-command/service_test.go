@@ -20,6 +20,14 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
+func TestNewService_NilCodec_Panics(t *testing.T) {
+	devRepo := mem.NewDeviceRepository()
+	cmdRepo := mem.NewCommandRepository()
+	assert.PanicsWithValue(t, "device-command: cursor codec is required", func() {
+		_ = NewService(cmdRepo, devRepo, nil, slog.Default(), query.RunModeProd)
+	})
+}
+
 func newTestService() (*Service, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()

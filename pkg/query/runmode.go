@@ -43,6 +43,18 @@ func (m RunMode) String() string {
 // RunModeForDemo returns RunModeDemo when demo is true, RunModeProd otherwise.
 // Convenience helper for callers that already track their demo-mode decision
 // as a boolean (e.g. translating kernel/cell.DurabilityMode at wire time).
+//
+// Do not extend: this function is the ONLY permitted translation point between
+// kernel/cell.DurabilityMode (or any other "is-demo" signal) and pkg/query.RunMode.
+// Call it exactly once at Cell Init() time and pass the resulting RunMode down
+// to slice services and PagedQueryConfig via constructor parameters. Do NOT call
+// it again inside individual slice methods, handlers, or repositories — that
+// scatters demo semantics across the call graph and defeats the single wire-time
+// decision. Do NOT add a new RunMode value without a corresponding change in the
+// calling layer; the two enums must stay in 1-to-1 correspondence.
+//
+// ref: zeromicro/go-zero core/service/serviceconf.go — ServiceConf.Mode is
+// resolved once at MustSetUp() and propagated by injection, not re-sniffed.
 func RunModeForDemo(demo bool) RunMode {
 	if demo {
 		return RunModeDemo

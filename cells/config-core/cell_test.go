@@ -196,8 +196,8 @@ func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
 	m.handleCount++
 	fn(m)
 }
-func (m *stubMux) Mount(_ string, _ http.Handler)                   { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))                      { m.handleCount++ }
+func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.handleCount++ }
+func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // initCellWithRouter creates an initialized ConfigCore with routes registered
@@ -371,14 +371,14 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 }
 
 // TestConfigCore_Wiring_PublisherFailure_DemoVsDurable exercises the
-// ConfigCore.Init → WithDemoFailOpen wiring end-to-end through HTTP. A
-// publisher-only path with a failing publisher must:
+// ConfigCore.Init → WithRunMode(query.RunModeDemo/Prod) wiring end-to-end
+// through HTTP. A publisher-only path with a failing publisher must:
 //   - DurabilityDemo: swallow the publisher error (200 OK)
 //   - DurabilityDurable: propagate the error (500)
 //
 // This is the contract that PR#165 introduced but was previously only
 // covered at the service layer; the wiring in ConfigCore.Init toggling
-// WithDemoFailOpen was untested.
+// the run mode was untested.
 func TestConfigCore_Wiring_PublisherFailure_DemoVsDurable(t *testing.T) {
 	t.Parallel()
 	productionKey := []byte("wiring-test-cfg-cursor-key-32b!!")
