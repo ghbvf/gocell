@@ -482,7 +482,7 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	// No nonce store — backward-compat mode.
+	// No nonce store — replay protection disabled by config.
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
@@ -501,31 +501,78 @@ func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec2.Code, "replay must be allowed without a NonceStore")
 }
 
-func TestServiceTokenMiddleware_LegacyTwoPartFormat_StillWorks(t *testing.T) {
+// legacyTwoPartToken computes what a pre-PR#159 signer would have emitted:
+// HMAC-SHA256(secret, "METHOD PATH TIMESTAMP") → hex, prefixed with "{ts}:".
+// This is the exact token the old 2-part format would produce.
+func legacyTwoPartToken(secret, method, path string, ts time.Time) string {
+	tsStr := strconv.FormatInt(ts.Unix(), 10)
+	message := fmt.Sprintf("%s %s %s", method, path, tsStr)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(message))
+	return tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected verifies
+// that a semantically valid 2-part token (real HMAC, correct secret, fresh
+// timestamp) is rejected with 401 ERR_AUTH_UNAUTHORIZED.
+//
+// Semantic boundary: if the removed 2-part compat branch (PR#159) were
+// reintroduced, the legacy HMAC would match and the middleware would return 200
+// — this test would then FAIL, proving it truly locks the boundary.
+func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *testing.T) {
+	const (
+		method = http.MethodGet
+		path   = "/legacy/path"
+	)
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Unix(1700000000, 0)
 
-	// Craft a legacy 2-part token manually.
-	tsStr := strconv.FormatInt(now.Unix(), 10)
-	mac := hmac.New(sha256.New, ring.Current())
-	fmt.Fprintf(mac, "%s %s %s", http.MethodGet, "/legacy/path", tsStr)
-	legacyToken := tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
+	// Recompute the exact token a pre-PR#159 signer would have emitted:
+	// HMAC-SHA256(testSecret, "GET /legacy/path 1700000000") → hex.
+	// The 2-part format has no nonce, so this is a fully valid legacy credential.
+	legacyToken := legacyTwoPartToken(testSecret, method, path, now)
 
-	store, err := NewInMemoryNonceStore(5 * time.Minute)
-	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/legacy/path", nil)
+	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Authorization", "ServiceToken "+legacyToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code, "legacy 2-part token must still be accepted")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"2-part legacy token with real HMAC must be rejected")
+	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
+}
+
+// TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected verifies that a
+// 2-part token with a forged (non-HMAC) MAC segment is rejected with 401.
+// This test covers structural rejection, while
+// TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected covers
+// the semantic boundary (valid HMAC, wrong format).
+func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Unix(1700000000, 0)
+
+	// Forged hex MAC — not a real HMAC output.
+	forgedToken := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
+
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: 2-part token must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/legacy/path", nil)
+	req.Header.Set("Authorization", "ServiceToken "+forgedToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "2-part forged token must be rejected")
+	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
