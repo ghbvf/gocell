@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -41,8 +41,8 @@ func readModule(root string) (string, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(rest), nil
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -50,6 +50,18 @@ func readModule(root string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module directive not found in go.mod")
+}
+
+// formatResultsFailFast prints only the first error found and returns. It
+// emits no banner, no warnings, and no summary — giving CI a single, loud
+// signal. A caller that needs rich output should use formatResults instead.
+func formatResultsFailFast(results []governance.ValidationResult) {
+	for i := range results {
+		if results[i].Severity == governance.SeverityError {
+			printResult(results[i])
+			return
+		}
+	}
 }
 
 // formatResults prints validation results grouped by severity.

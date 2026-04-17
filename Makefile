@@ -8,7 +8,8 @@
 # ---------------------------------------------------------------------------
 
 build:
-	go build ./...
+	mkdir -p bin
+	go build -o bin/ ./cmd/... ./examples/...
 
 test:
 	go test ./... -count=1
@@ -24,8 +25,8 @@ cover:
 	go tool cover -func=coverage.out | tail -1
 
 clean:
+	rm -rf bin/
 	rm -f coverage.out
-	rm -f core-bundle gocell iot-device sso-bff todo-order
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle

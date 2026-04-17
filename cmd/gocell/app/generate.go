@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"flag"
@@ -82,40 +82,37 @@ func generateAssembly(args []string) error {
 		return fmt.Errorf("generate boundary: %w", err)
 	}
 
-	// Determine entrypoint path from assembly metadata.
 	// ref: go-zero goctl — generated file paths driven by configuration
 	asm := project.Assemblies[*id]
 	entrypointRel := asm.Build.Entrypoint
 	if entrypointRel == "" {
 		entrypointRel = filepath.Join("cmd", *id, "main.go")
 	}
-	// The entrypoint path in assembly.yaml is relative to the project root.
-
 	entrypointPath := filepath.Join(root, entrypointRel)
-	if !isWithinRoot(root, entrypointPath) {
-		return fmt.Errorf("assembly %q build.entrypoint %q: path escapes project root", *id, entrypointRel)
+	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
+		fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(entrypointPath), 0o755); err != nil {
-		return fmt.Errorf("create entrypoint dir: %w", err)
-	}
-	if err := os.WriteFile(entrypointPath, entrypoint, 0o644); err != nil {
-		return fmt.Errorf("write entrypoint: %w", err)
-	}
-	fmt.Printf("Generated: %s\n", entrypointPath)
 
-	// Boundary goes into assemblies/{id}/generated/ (generated artifacts directory).
-	generatedDir := filepath.Join(root, "assemblies", *id, "generated")
-	if !isWithinRoot(root, generatedDir) {
-		return fmt.Errorf("assembly %q: generated dir escapes project root", *id)
-	}
-	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
-		return fmt.Errorf("create generated dir: %w", err)
-	}
-	boundaryPath := filepath.Join(generatedDir, "boundary.yaml")
-	if err := os.WriteFile(boundaryPath, boundary, 0o644); err != nil {
-		return fmt.Errorf("write boundary: %w", err)
-	}
-	fmt.Printf("Generated: %s\n", boundaryPath)
+	// Boundary goes into assemblies/{id}/generated/.
+	boundaryPath := filepath.Join(root, "assemblies", *id, "generated", "boundary.yaml")
+	return writeGeneratedFile(root, boundaryPath, boundary,
+		fmt.Sprintf("assembly %q generated dir", *id))
+}
 
+// writeGeneratedFile creates parent dirs and writes content to outPath, after
+// verifying the path stays within root. label is used to identify the caller
+// in error messages (e.g. "assembly X build.entrypoint Y").
+func writeGeneratedFile(root, outPath string, content []byte, label string) error {
+	if !isWithinRoot(root, outPath) {
+		return fmt.Errorf("%s: path escapes project root", label)
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("%s: create dir: %w", label, err)
+	}
+	if err := os.WriteFile(outPath, content, 0o644); err != nil {
+		return fmt.Errorf("%s: write file: %w", label, err)
+	}
+	fmt.Printf("Generated: %s\n", outPath)
 	return nil
 }

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"flag"
@@ -14,6 +14,8 @@ import (
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
+	failFast := fs.Bool("fail-fast", false,
+		"print only the first error and exit; skip warnings and summary (CI-friendly)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -45,6 +47,14 @@ func runValidate(args []string) error {
 	// Merge all results.
 	allResults := append(valResults, depResults...)
 
+	if *failFast {
+		if firstErr := firstError(allResults); firstErr != nil {
+			formatResultsFailFast(allResults)
+			return fmt.Errorf("validation failed: %s", firstErr.Code)
+		}
+		return nil
+	}
+
 	// Output results.
 	formatResults(allResults)
 
@@ -63,6 +73,16 @@ func runValidate(args []string) error {
 
 	if errCount > 0 {
 		return fmt.Errorf("validation failed with %d error(s)", errCount)
+	}
+	return nil
+}
+
+// firstError returns the first result whose severity is error, or nil.
+func firstError(results []governance.ValidationResult) *governance.ValidationResult {
+	for i := range results {
+		if results[i].Severity == governance.SeverityError {
+			return &results[i]
+		}
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 func TestPrintUsage(t *testing.T) {
 	// Should not panic.
-	printUsage()
+	PrintUsage()
 }
 
 func TestFindRoot(t *testing.T) {
