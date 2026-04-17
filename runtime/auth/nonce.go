@@ -9,10 +9,19 @@ import (
 
 // ErrNonceReused is returned by NonceStore.CheckAndMark when a nonce has
 // already been consumed within its TTL window.
+//
+// This uses errors.New (not errcode) because it is an internal sentinel
+// for errors.Is matching. The HTTP error code is set at the middleware layer.
 var ErrNonceReused = errors.New("auth: nonce already used")
 
+// defaultMaxNonceEntries is the maximum number of live nonce entries before a
+// forced prune is triggered in InMemoryNonceStore.CheckAndMark.
+const defaultMaxNonceEntries = 100000
+
 // NonceStore tracks nonces for replay prevention. Implementations must be
-// safe for concurrent use.
+// safe for concurrent use. The store must retain nonces for at least
+// ServiceTokenMaxAge (5 minutes) to prevent replay within the token
+// validity window; a shorter TTL creates a replay vulnerability.
 type NonceStore interface {
 	CheckAndMark(ctx context.Context, nonce string) error
 }
@@ -20,10 +29,11 @@ type NonceStore interface {
 // InMemoryNonceStore is a NonceStore backed by a map with lazy expiry pruning.
 // Suitable for single-instance deployments.
 type InMemoryNonceStore struct {
-	mu     sync.Mutex
-	seen   map[string]time.Time // nonce → expiry
-	maxAge time.Duration
-	now    func() time.Time
+	mu         sync.Mutex
+	seen       map[string]time.Time // nonce → expiry
+	maxAge     time.Duration
+	maxEntries int
+	now        func() time.Time
 }
 
 // InMemoryNonceOption configures an InMemoryNonceStore.
@@ -34,12 +44,19 @@ func WithNonceClock(fn func() time.Time) InMemoryNonceOption {
 	return func(s *InMemoryNonceStore) { s.now = fn }
 }
 
+// WithMaxNonceEntries overrides the maximum number of live nonce entries before
+// a forced prune is triggered. The default is defaultMaxNonceEntries.
+func WithMaxNonceEntries(n int) InMemoryNonceOption {
+	return func(s *InMemoryNonceStore) { s.maxEntries = n }
+}
+
 // NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge.
 func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) *InMemoryNonceStore {
 	s := &InMemoryNonceStore{
-		seen:   make(map[string]time.Time),
-		maxAge: maxAge,
-		now:    time.Now,
+		seen:       make(map[string]time.Time),
+		maxAge:     maxAge,
+		maxEntries: defaultMaxNonceEntries,
+		now:        time.Now,
 	}
 	for _, o := range opts {
 		o(s)
@@ -56,8 +73,8 @@ func (s *InMemoryNonceStore) CheckAndMark(_ context.Context, nonce string) error
 
 	now := s.now()
 
-	// Lazy prune when map grows large.
-	if len(s.seen) > 1000 {
+	// Lazy prune when map grows past threshold.
+	if len(s.seen) >= s.maxEntries {
 		for k, exp := range s.seen {
 			if now.After(exp) {
 				delete(s.seen, k)

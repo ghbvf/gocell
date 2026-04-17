@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,24 +47,21 @@ func TestAuthMetrics_NilSafe(t *testing.T) {
 
 func TestClassifyTokenError(t *testing.T) {
 	tests := []struct {
-		name   string
-		errMsg string
-		want   string
+		name string
+		err  error
+		want string
 	}{
-		{"nil error", "", "ok"},
-		{"expired", "token is expired", "expired"},
-		{"not valid yet", "token is not valid yet", "expired"},
-		{"kid", "missing kid header", "invalid_kid"},
-		{"signing method", "unexpected signing method", "wrong_alg"},
-		{"other", "something else", "invalid_signature"},
+		{"nil", nil, "ok"},
+		{"jwt expired", jwt.ErrTokenExpired, "expired"},
+		{"jwt not valid yet", jwt.ErrTokenNotValidYet, "expired"},
+		{"jwt invalid signature", jwt.ErrTokenSignatureInvalid, "invalid_signature"},
+		{"kid error", fmt.Errorf("token verification failed: missing kid header"), "invalid_kid"},
+		{"wrong alg", fmt.Errorf("token verification failed: unexpected signing method: HS256"), "wrong_alg"},
+		{"other", fmt.Errorf("something unexpected"), "invalid_token"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var err error
-			if tt.errMsg != "" {
-				err = fmt.Errorf("%s", tt.errMsg)
-			}
-			assert.Equal(t, tt.want, classifyTokenError(err))
+			assert.Equal(t, tt.want, classifyTokenError(tt.err))
 		})
 	}
 }

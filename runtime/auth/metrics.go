@@ -1,11 +1,15 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // AuthMetrics holds pre-registered metric instruments for auth operations.
@@ -18,7 +22,7 @@ type AuthMetrics struct {
 // NewAuthMetrics registers auth metric instruments with the given provider.
 func NewAuthMetrics(p metrics.Provider) (*AuthMetrics, error) {
 	if p == nil {
-		return nil, fmt.Errorf("auth: metrics provider must not be nil")
+		return nil, errcode.New(errcode.ErrValidationFailed, "auth: metrics provider must not be nil")
 	}
 
 	tvt, err := p.CounterVec(metrics.CounterOpts{
@@ -76,15 +80,22 @@ func classifyTokenError(err error) string {
 	if err == nil {
 		return "ok"
 	}
-	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "expired") || strings.Contains(msg, "not valid yet"):
+	case errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet):
 		return "expired"
-	case strings.Contains(msg, "kid"):
-		return "invalid_kid"
-	case strings.Contains(msg, "signing method"):
-		return "wrong_alg"
-	default:
+	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
 		return "invalid_signature"
+	default:
+		// Covers invalid kid, wrong signing method, malformed tokens.
+		// jwt.ErrTokenMalformed, jwt.ErrTokenUnverifiable, and custom keyFunc errors.
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "kid"):
+			return "invalid_kid"
+		case strings.Contains(msg, "signing method"):
+			return "wrong_alg"
+		default:
+			return "invalid_token"
+		}
 	}
 }

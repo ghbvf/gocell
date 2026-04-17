@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,20 +70,24 @@ func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
 
 func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	store := NewInMemoryNonceStore(1*time.Second, WithNonceClock(func() time.Time { return now }))
+	// Use a low maxEntries cap so the prune triggers after 10 entries.
+	store := NewInMemoryNonceStore(1*time.Second,
+		WithNonceClock(func() time.Time { return now }),
+		WithMaxNonceEntries(10),
+	)
 
-	// Insert 1001 entries; all will expire quickly.
-	for i := 0; i < 1001; i++ {
+	// Insert 10 entries; all will expire quickly.
+	for i := 0; i < 10; i++ {
 		err := store.CheckAndMark(context.Background(), fmt.Sprintf("prune-nonce-%d", i))
 		require.NoError(t, err)
 	}
 	initialLen := len(store.seen)
-	assert.GreaterOrEqual(t, initialLen, 1001)
+	assert.GreaterOrEqual(t, initialLen, 10)
 
 	// Advance clock past TTL so all existing entries are expired.
 	now = now.Add(2 * time.Second)
 
-	// Insert one more entry; this triggers the lazy prune because len > 1000.
+	// Insert one more entry; this triggers the lazy prune because len >= maxEntries.
 	err := store.CheckAndMark(context.Background(), "trigger-prune")
 	require.NoError(t, err)
 
@@ -93,4 +98,30 @@ func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 
 	assert.Less(t, finalLen, initialLen, "lazy prune should have reduced map size")
 	assert.Equal(t, 1, finalLen, "only the new entry should remain after prune")
+}
+
+func TestInMemoryNonceStore_ConcurrentSameNonce_ExactlyOneSucceeds(t *testing.T) {
+	store := NewInMemoryNonceStore(5 * time.Minute)
+	const goroutines = 50
+	var (
+		successes atomic.Int32
+		failures  atomic.Int32
+		wg        sync.WaitGroup
+	)
+	wg.Add(goroutines)
+	for i := range goroutines {
+		_ = i
+		go func() {
+			defer wg.Done()
+			err := store.CheckAndMark(context.Background(), "same-nonce")
+			if err == nil {
+				successes.Add(1)
+			} else {
+				failures.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(1), successes.Load(), "exactly one goroutine should succeed")
+	assert.Equal(t, int32(goroutines-1), failures.Load(), "all others should fail")
 }
