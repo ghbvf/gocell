@@ -477,7 +477,7 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	// No nonce store — backward-compat mode.
+	// No nonce store — replay protection disabled by config.
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
