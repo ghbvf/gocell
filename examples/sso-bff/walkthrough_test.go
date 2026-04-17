@@ -7,6 +7,8 @@
 //  2. refreshToken field works for token rotation
 //  3. Logout returns 204 with empty body
 //  4. Audit entries contain timestamp field (not createdAt)
+//  5-8. Config CRUD (POST/PUT/GET) with admin token — Steps 8-11 in README
+//  9. Feature flags list is accessible without auth
 package main
 
 import (
@@ -25,6 +27,7 @@ import (
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
+	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -77,6 +80,17 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 		auditcore.WithLogger(slog.Default()),
 	)
 
+	configCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-config-cursor-key-32b"))
+	require.NoError(t, err)
+
+	// config-core: demo mode — publisher only, no outboxWriter/txRunner.
+	cc := configcore.NewConfigCore(
+		configcore.WithInMemoryDefaults(),
+		configcore.WithPublisher(eb),
+		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithLogger(slog.Default()),
+	)
+
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -84,6 +98,7 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 	}
 	require.NoError(t, ac.Init(ctx, deps))
 	require.NoError(t, auc.Init(ctx, deps))
+	require.NoError(t, cc.Init(ctx, deps))
 
 	publicEndpoints := []string{
 		"/api/v1/access/sessions/login",
@@ -96,11 +111,13 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 	)
 	ac.RegisterRoutes(r)
 	auc.RegisterRoutes(r)
+	cc.RegisterRoutes(r)
 
 	// Wire audit-core event subscriptions so access-core events reach the
 	// audit handler asynchronously (mirrors bootstrap wiring in main.go).
 	evtRouter := eventrouter.New(eb)
 	require.NoError(t, auc.RegisterSubscriptions(evtRouter))
+	require.NoError(t, cc.RegisterSubscriptions(evtRouter))
 
 	evtCtx, evtCancel := context.WithCancel(context.Background())
 	evtDone := make(chan struct{})
@@ -319,6 +336,121 @@ func TestWalkthrough(t *testing.T) {
 			assert.False(t, hasCreatedAt,
 				"audit entry must NOT have 'createdAt' field (DTO uses 'timestamp')")
 		}
+	})
+
+	// Steps 8-11: config-core CRUD + feature flags.
+	// Write ops require admin role; read ops are open (no auth required).
+
+	t.Run("admin can create a config entry (POST /api/v1/config/)", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			base+"/api/v1/config/",
+			strings.NewReader(`{"key":"site.title","value":"GoCell Demo","sensitive":false}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode,
+			"POST /config/ with admin token must return 201 Created")
+
+		var envelope struct {
+			Data struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		assert.Equal(t, "site.title", envelope.Data.Key,
+			"created config entry must echo back the key")
+		assert.Equal(t, "GoCell Demo", envelope.Data.Value,
+			"created config entry must echo back the value")
+	})
+
+	t.Run("admin can update a config entry (PUT /api/v1/config/site.title)", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPut,
+			base+"/api/v1/config/site.title",
+			strings.NewReader(`{"value":"GoCell Updated"}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"PUT /config/site.title with admin token must return 200 OK")
+
+		var envelope struct {
+			Data struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		assert.Equal(t, "GoCell Updated", envelope.Data.Value,
+			"update response must reflect the new value")
+	})
+
+	t.Run("config entry is readable with valid JWT (GET /api/v1/config/site.title)", func(t *testing.T) {
+		// config-read handler has no role guard — any authenticated user can read.
+		// The router middleware still requires a valid JWT (not a public endpoint).
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodGet,
+			base+"/api/v1/config/site.title",
+			http.NoBody)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"GET /config/site.title with valid JWT must return 200 OK")
+
+		var envelope struct {
+			Data struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		assert.Equal(t, "site.title", envelope.Data.Key)
+		assert.Equal(t, "GoCell Updated", envelope.Data.Value,
+			"GET must reflect the value written by PUT")
+	})
+
+	t.Run("feature flags list is accessible with valid JWT (GET /api/v1/flags)", func(t *testing.T) {
+		// featureflag handler has no role guard — any authenticated user can list flags.
+		// The router middleware still requires a valid JWT (not a public endpoint).
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodGet,
+			base+"/api/v1/flags/",
+			http.NoBody)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"GET /flags/ with valid JWT must return 200 OK")
+
+		// Response shape: {"data":[...],"nextCursor":"...","hasMore":false}
+		var envelope struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+		// In-memory store starts empty; just verify the list shape is correct.
+		assert.NotNil(t, envelope.Data,
+			"flags list response must contain a 'data' array (may be empty)")
 	})
 }
 

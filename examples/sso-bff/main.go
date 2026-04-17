@@ -98,6 +98,7 @@ func main() {
 	)
 
 	// --- audit-core (L3): tamper-evident audit log ---
+	// 32 bytes: matches SHA-256 block size used by the audit HMAC chain.
 	auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")
 	auditCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-audit-cursor-key-32b!!"))
 	if err != nil {
