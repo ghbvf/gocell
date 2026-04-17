@@ -3,9 +3,9 @@
 // Covers RFC 8725 §3.3: "recipients MUST validate the aud claim to determine
 // that the JWT is indeed intended for the recipient."
 //
-// WithExpectedAudiences configures the verifier; when not set the check is
-// skipped (backward compatible). When set, at least one configured audience
-// must appear in the token's aud claim.
+// WithExpectedAudiences is required — NewJWTVerifier returns an error when no
+// expected audiences are configured (fail-fast per RFC 8725 §3.3). At least
+// one configured audience must appear in the token's aud claim.
 package auth
 
 import (
