@@ -260,6 +260,37 @@ func WithHealthChecker(name string, fn func() error) Option {
 	}
 }
 
+// BrokerHealthChecker is the narrow interface GoCell's bootstrap consumes
+// to aggregate message-broker connectivity into the /readyz endpoint.
+// Implementations must return nil when the broker is reachable and able to
+// publish/consume; any non-nil error flips /readyz to 503.
+//
+// ref: github.com/ghbvf/gocell/adapters/rabbitmq.Connection — the canonical
+// implementer (its Health method exposes ConnectionState four-state model:
+// Connecting, Connected, Disconnected, Terminal).
+//
+// ref: docs/references/202604181900-outbox-wire-framework-comparison.md —
+// design analysis concluded three surveyed frameworks (Watermill, fx,
+// Kratos) lack a directly reusable broker-health contract; GoCell's
+// four-state model surpasses watermill-amqp's binary IsConnected() by
+// preserving sub-state for debugging.
+type BrokerHealthChecker interface {
+	Health(ctx context.Context) error
+}
+
+// WithBrokerHealth registers the given broker's Health method as a /readyz
+// aggregator under the name "rabbitmq". It is a thin convenience over
+// WithHealthChecker that picks a canonical name and adapts the interface
+// to func() error, calling Health with a 5-second timeout per K8s readiness
+// probe convention.
+func WithBrokerHealth(bc BrokerHealthChecker) Option {
+	return WithHealthChecker("rabbitmq", func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return bc.Health(ctx)
+	})
+}
+
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
 // in /readyz?verbose output. Helps operators verify which storage/bus backends
 // are active without inspecting application logs.

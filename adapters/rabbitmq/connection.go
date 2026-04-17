@@ -19,14 +19,14 @@ import (
 
 // Error codes for the RabbitMQ adapter.
 const (
-	ErrAdapterAMQPConnect          errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
-	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
-	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
-	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe           errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume             errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
-	ErrAdapterAMQPReconnectExhausted  errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
-	ErrAdapterAMQPReconnecting        errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
+	ErrAdapterAMQPConnect            errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
+	ErrAdapterAMQPConnectPermanent   errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
+	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
+	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume            errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPReconnectExhausted errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
+	ErrAdapterAMQPReconnecting       errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
 )
 
 // Pre-allocated Health() errors to avoid per-call allocation.
@@ -412,6 +412,7 @@ func (c *Connection) reconnectLoop() {
 // reconnectWithBackoff attempts to re-establish the connection with exponential
 // backoff. Returns (true, nil) on success, (false, err) on permanent failure,
 // or (false, nil) if closeCh fired (clean shutdown).
+//
 //nolint:gocognit // pre-existing complexity; tracked in backlog Batch 8
 func (c *Connection) reconnectWithBackoff() (bool, error) {
 	attempt := 0
@@ -581,12 +582,19 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 // connection state so operators can tell "never connected" from "reconnecting"
 // from "terminal".
 //
+// The ctx parameter is accepted for interface compatibility (e.g. bootstrap.BrokerHealthChecker)
+// and to honour caller cancellation; this implementation does not perform I/O
+// so ctx is only checked for early cancellation before the state read.
+//
 // Error codes returned:
 //   - nil: healthy (StateConnected, live connection)
 //   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn closed unexpectedly
 //   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in progress (StateDisconnected)
 //   - ErrAdapterAMQPConnectPermanent / ErrAdapterAMQPReconnectExhausted: terminal, will not recover
-func (c *Connection) Health() error {
+func (c *Connection) Health(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.RLock()
 	state := c.state
 	conn := c.conn

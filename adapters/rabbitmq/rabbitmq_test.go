@@ -291,7 +291,7 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 
 func TestNewConnection_Success(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	assert.NoError(t, conn.Health())
+	assert.NoError(t, conn.Health(context.Background()))
 }
 
 func TestNewConnection_DialFails(t *testing.T) {
@@ -348,7 +348,7 @@ func TestConnection_Health_Closed(t *testing.T) {
 	mockConn.isClosed = true
 	mockConn.mu.Unlock()
 
-	err := conn.Health()
+	err := conn.Health(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
 }
@@ -719,7 +719,7 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 	// After permanent error, WaitConnected should return the permanent error
 	// immediately (not block until ctx timeout).
 	require.Eventually(t, func() bool {
-		return conn.Health() != nil
+		return conn.Health(context.Background()) != nil
 	}, 2*time.Second, time.Millisecond, "terminal state should be set")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -733,7 +733,7 @@ func TestConnection_ReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 		"WaitConnected should return permanent error code, not generic connect error")
 
 	// Health should also reflect terminal state.
-	healthErr := conn.Health()
+	healthErr := conn.Health(context.Background())
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
@@ -814,7 +814,7 @@ func TestConnection_MaxReconnectAttempts_Exceeded(t *testing.T) {
 		"WaitConnected should return reconnect-exhausted error code")
 
 	// Health should also reflect terminal state.
-	healthErr := conn.Health()
+	healthErr := conn.Health(context.Background())
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code)
@@ -877,7 +877,7 @@ func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
 
 	// After reconnection, Health should return nil.
 	require.Eventually(t, func() bool {
-		return conn.Health() == nil
+		return conn.Health(context.Background()) == nil
 	}, 2*time.Second, time.Millisecond, "connection should be healthy after reconnect")
 
 	// WaitConnected should succeed (connected channel re-closed on reconnect).
@@ -3950,7 +3950,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	defer conn.Close()
 
 	// Verify initial health is OK.
-	require.NoError(t, conn.Health(), "initial connection should be healthy")
+	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -3974,7 +3974,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	}, 2*time.Second, time.Millisecond, "reconnect dial should be in progress")
 
 	// Health() should return error during reconnecting state with distinct code.
-	healthErr := conn.Health()
+	healthErr := conn.Health(context.Background())
 	require.Error(t, healthErr, "Health() must return error while reconnecting")
 	var ecErr *errcode.Error
 	require.True(t, errors.As(healthErr, &ecErr), "Health() error should wrap *errcode.Error")
@@ -3986,7 +3986,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 
 	// Health() should recover.
 	require.Eventually(t, func() bool {
-		return conn.Health() == nil
+		return conn.Health(context.Background()) == nil
 	}, 2*time.Second, time.Millisecond, "Health() should return nil after successful reconnect")
 }
 
@@ -4063,7 +4063,7 @@ func TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion(t *testing
 		"permanent error must take priority over MaxReconnectAttempts exhaustion")
 
 	// Health should also report ConnectPermanent.
-	healthErr := conn.Health()
+	healthErr := conn.Health(context.Background())
 	require.Error(t, healthErr)
 	require.True(t, errors.As(healthErr, &ecErr))
 	assert.Equal(t, ErrAdapterAMQPConnectPermanent, ecErr.Code)
@@ -4318,7 +4318,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				permanentErr: tt.permErr,
 			}
 
-			err := c.Health()
+			err := c.Health(context.Background())
 			if tt.wantNil {
 				assert.NoError(t, err)
 				return
