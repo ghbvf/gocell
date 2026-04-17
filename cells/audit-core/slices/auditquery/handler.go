@@ -28,6 +28,9 @@ type AuditEntryResponse struct {
 }
 
 func toAuditEntryResponse(e *domain.AuditEntry) AuditEntryResponse {
+	if e == nil {
+		return AuditEntryResponse{}
+	}
 	return AuditEntryResponse{
 		ID: e.ID, EventID: e.EventID, EventType: e.EventType,
 		ActorID: e.ActorID, Timestamp: e.Timestamp, Payload: e.Payload,

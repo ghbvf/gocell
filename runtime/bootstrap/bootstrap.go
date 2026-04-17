@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"path"
 	"sync"
 	"time"
 
@@ -148,6 +147,17 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 		if cl, ok := cb.(io.Closer); ok {
 			b.closers = append(b.closers, cl)
 		}
+	}
+}
+
+// WithSecurityHeadersOptions configures HSTS and other security header
+// directives. This is a convenience wrapper around
+// WithRouterOptions(router.WithSecurityHeadersOptions(...)).
+//
+// ref: unrolled/secure — configurable HSTS directives via struct fields
+func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithSecurityHeadersOptions(opts...))
 	}
 }
 
@@ -657,6 +667,18 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				if !ok {
 					continue
 				}
+				if kf, ok := c.(cell.ConfigKeyFilterer); ok {
+					prefixes := kf.ConfigKeyPrefixes()
+					if len(prefixes) > 0 {
+						changedKeys := make([]string, 0, len(added)+len(updated)+len(removed))
+						changedKeys = append(changedKeys, added...)
+						changedKeys = append(changedKeys, updated...)
+						changedKeys = append(changedKeys, removed...)
+						if !config.NewKeyFilter(prefixes...).Matches(changedKeys) {
+							continue
+						}
+					}
+				}
 				// Clone per cell to guarantee isolation: a misbehaving handler
 				// cannot mutate slices/map seen by subsequent handlers.
 				event := cell.ConfigChangeEvent{
@@ -778,22 +800,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Copy to avoid mutating b.routerOpts' backing array.
 	routerOpts := make([]router.Option, 0, len(b.routerOpts)+4)
 	routerOpts = append(routerOpts, b.routerOpts...)
-	// Wire trust-boundary policy for tracing and request_id from public endpoints.
-	// Public endpoints (e.g., login, refresh) ignore client-supplied trace context
-	// and X-Request-Id headers, preventing untrusted callers from injecting
-	// arbitrary observability identifiers.
+	// Wire trust-boundary policy via router.WithPublicEndpoints which configures
+	// auth bypass + tracing new-root + request_id rejection in a single option.
 	if len(b.authPublicEndpoints) > 0 {
-		publicSet := make(map[string]bool, len(b.authPublicEndpoints))
-		for _, p := range b.authPublicEndpoints {
-			publicSet[path.Clean(p)] = true
-		}
-		isPublic := func(r *http.Request) bool {
-			return publicSet[path.Clean(r.URL.Path)]
-		}
-		routerOpts = append(routerOpts,
-			router.WithTracingOptions(middleware.WithPublicEndpointFn(isPublic)),
-			router.WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(isPublic)),
-		)
+		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
 	}
 	if b.authVerifier != nil {
 		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))

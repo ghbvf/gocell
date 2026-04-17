@@ -18,6 +18,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+func TestToOrderResponse_NilInput(t *testing.T) {
+	assert.NotPanics(t, func() { toOrderResponse(nil) })
+}
+
 func TestOrderResponse_Fields(t *testing.T) {
 	now := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
 	order := &domain.Order{

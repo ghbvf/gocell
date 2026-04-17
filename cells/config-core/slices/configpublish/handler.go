@@ -30,6 +30,9 @@ type ConfigVersionResponse struct {
 }
 
 func toConfigVersionResponse(v *domain.ConfigVersion) ConfigVersionResponse {
+	if v == nil {
+		return ConfigVersionResponse{}
+	}
 	value := v.Value
 	if v.Sensitive {
 		value = dto.RedactedValue

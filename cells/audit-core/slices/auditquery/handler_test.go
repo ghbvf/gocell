@@ -18,6 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestToAuditEntryResponse_NilInput(t *testing.T) {
+	assert.NotPanics(t, func() { toAuditEntryResponse(nil) })
+}
+
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc := NewService(repo, testCodec(), slog.Default())

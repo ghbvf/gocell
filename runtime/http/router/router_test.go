@@ -904,3 +904,199 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 	assert.Equal(t, "trusted-upstream-id", internalID,
 		"non-public endpoint must accept trusted upstream X-Request-Id")
 }
+
+// ---------------------------------------------------------------------------
+// WithPublicEndpoints combined trust-boundary option
+// ---------------------------------------------------------------------------
+
+func TestWithPublicEndpoints_AuthBypass(t *testing.T) {
+	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
+	r := New(
+		WithPublicEndpoints([]string{"/api/v1/auth/login"}),
+		WithAuthMiddleware(verifier, nil),
+	)
+
+	var reached bool
+	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.True(t, reached, "public endpoint must bypass auth and reach handler")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestWithPublicEndpoints_TracingNewRoot(t *testing.T) {
+	tracer := tracing.NewTracer("test-combined")
+	r := New(
+		WithTracer(tracer),
+		WithPublicEndpoints([]string{"/public"}),
+	)
+
+	var publicTraceID, internalTraceID string
+	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	tp := "00-" + upstreamTraceID + "-00f067aa0ba902b7-01"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("traceparent", tp)
+	r.ServeHTTP(rec, req)
+	assert.NotEqual(t, upstreamTraceID, publicTraceID,
+		"WithPublicEndpoints: public endpoint must create new trace root")
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
+	req.Header.Set("traceparent", tp)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, upstreamTraceID, internalTraceID,
+		"WithPublicEndpoints: non-public endpoint must inherit upstream trace")
+}
+
+func TestWithPublicEndpoints_RequestIDRejectsClient(t *testing.T) {
+	r := New(
+		WithPublicEndpoints([]string{"/public"}),
+	)
+
+	var publicID, internalID string
+	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("X-Request-Id", "attacker-id")
+	r.ServeHTTP(rec, req)
+	assert.NotEqual(t, "attacker-id", publicID,
+		"WithPublicEndpoints: public endpoint must reject client-supplied request ID")
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
+	req.Header.Set("X-Request-Id", "trusted-upstream-id")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, "trusted-upstream-id", internalID,
+		"WithPublicEndpoints: non-public endpoint must accept trusted upstream ID")
+}
+
+func TestWithPublicEndpoints_ProtectedStillRequiresAuth(t *testing.T) {
+	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
+	r := New(
+		WithPublicEndpoints([]string{"/api/v1/auth/login"}),
+		WithAuthMiddleware(verifier, nil),
+	)
+
+	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Protected endpoint without token → 401.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"WithPublicEndpoints: non-public endpoint must still require auth")
+}
+
+func TestWithPublicEndpoints_OverridesFineGrained(t *testing.T) {
+	tracer := tracing.NewTracer("test-combined-fine")
+	r := New(
+		WithTracer(tracer),
+		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
+			return req.URL.Path == "/fine-grained-public"
+		})),
+		WithPublicEndpoints([]string{"/public"}),
+	)
+
+	var publicTraceID, fineTraceID string
+	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
+	tp := "00-" + upstreamTraceID + "-00f067aa0ba902b7-01"
+
+	// WithPublicEndpoints (last write) takes effect for /public.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/public", nil)
+	req.Header.Set("traceparent", tp)
+	r.ServeHTTP(rec, req)
+	assert.NotEqual(t, upstreamTraceID, publicTraceID,
+		"WithPublicEndpoints list path must create new trace root")
+
+	// Fine-grained path is NOT in WithPublicEndpoints → last-write-wins
+	// means WithPublicEndpoints' function is used, /fine-grained-public
+	// inherits upstream trace (not in public list).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/fine-grained-public", nil)
+	req.Header.Set("traceparent", tp)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, upstreamTraceID, fineTraceID,
+		"WithPublicEndpoints overrides fine-grained option (last-write-wins)")
+}
+
+// ---------------------------------------------------------------------------
+// WithSecurityHeadersOptions wiring test (F1-ARCH-03)
+// ---------------------------------------------------------------------------
+
+func TestWithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
+	r := New(
+		WithSecurityHeadersOptions(
+			middleware.WithHSTSIncludeSubDomains(),
+			middleware.WithHSTSPreload(),
+		),
+	)
+	r.Handle("/hsts-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/hsts-test", nil)
+	r.ServeHTTP(rec, req)
+
+	hsts := rec.Header().Get("Strict-Transport-Security")
+	assert.Contains(t, hsts, "includeSubDomains",
+		"custom HSTS option must reach SecurityHeaders middleware")
+	assert.Contains(t, hsts, "preload",
+		"custom HSTS option must reach SecurityHeaders middleware")
+}
+
+func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
+	r := New()
+	r.Handle("/default-hsts", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/default-hsts", nil)
+	r.ServeHTTP(rec, req)
+
+	hsts := rec.Header().Get("Strict-Transport-Security")
+	assert.NotEmpty(t, hsts, "default SecurityHeaders must set HSTS")
+	assert.NotContains(t, hsts, "preload",
+		"default HSTS must not include preload unless opted in")
+}

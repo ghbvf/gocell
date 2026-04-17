@@ -16,6 +16,10 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 )
 
+func TestToDeviceStatusResponse_NilInput(t *testing.T) {
+	assert.NotPanics(t, func() { toDeviceStatusResponse(nil) })
+}
+
 func TestDeviceStatusResponse_Fields(t *testing.T) {
 	now := time.Now()
 	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online", LastSeen: now}

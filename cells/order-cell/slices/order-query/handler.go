@@ -20,6 +20,9 @@ type OrderResponse struct {
 }
 
 func toOrderResponse(o *domain.Order) OrderResponse {
+	if o == nil {
+		return OrderResponse{}
+	}
 	return OrderResponse{
 		ID: o.ID, Item: o.Item, Status: o.Status, CreatedAt: o.CreatedAt,
 	}

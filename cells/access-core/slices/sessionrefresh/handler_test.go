@@ -36,6 +36,10 @@ func setup() (*Handler, string) {
 	return NewHandler(svc), refreshTok
 }
 
+func TestToTokenPairResponse_NilInput(t *testing.T) {
+	assert.NotPanics(t, func() { toTokenPairResponse(nil) })
+}
+
 func TestTokenPairResponse_Fields(t *testing.T) {
 	now := time.Now()
 	pair := &TokenPair{

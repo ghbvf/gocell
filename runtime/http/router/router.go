@@ -11,6 +11,7 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"path"
 
 	"github.com/go-chi/chi/v5"
 
@@ -102,6 +103,24 @@ func WithTracingOptions(opts ...middleware.TracingOption) Option {
 func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 	return func(r *Router) {
 		r.requestIDOpts = append(r.requestIDOpts, opts...)
+	}
+}
+
+// WithPublicEndpoints declares paths that are public-facing. This is the
+// recommended single-point configuration for trust boundary policy:
+//   - Auth: these paths bypass JWT verification
+//   - Tracing: these paths create new trace roots (ignore upstream traceparent)
+//   - RequestID: these paths reject client-supplied X-Request-Id headers
+//
+// For asymmetric policies (e.g., auth bypass without trace root), use the
+// individual WithTracingOptions / WithRequestIDOptions / WithAuthMiddleware
+// options instead.
+//
+// ref: go-zero rest/server.go — single-point route group auth config
+// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
+func WithPublicEndpoints(paths []string) Option {
+	return func(r *Router) {
+		r.publicEndpoints = paths
 	}
 }
 
@@ -207,6 +226,7 @@ type Router struct {
 	circuitBreaker      middleware.CircuitBreakerPolicy
 	authVerifier        auth.TokenVerifier
 	authPublicEndpoints  []string
+	publicEndpoints      []string
 	securityHeadersOpts  []middleware.SecurityHeadersOption
 	bodyLimit            int64
 	trustedProxies       []string
@@ -254,6 +274,26 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 	for _, o := range opts {
 		o(r)
+	}
+
+	// Derive trust-boundary policy from WithPublicEndpoints: build a single
+	// isPublic function and auto-wire tracing, request_id, and auth middleware.
+	//
+	// ref: go-zero rest/server.go — single-point route group auth config
+	// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
+	if len(r.publicEndpoints) > 0 {
+		publicSet := make(map[string]bool, len(r.publicEndpoints))
+		for _, p := range r.publicEndpoints {
+			publicSet[path.Clean(p)] = true
+		}
+		isPublic := func(req *http.Request) bool {
+			return publicSet[path.Clean(req.URL.Path)]
+		}
+		r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
+		r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
+		if len(r.authPublicEndpoints) == 0 {
+			r.authPublicEndpoints = r.publicEndpoints
+		}
 	}
 
 	// Fail-fast: validate and construct the proxy checker once. The validated

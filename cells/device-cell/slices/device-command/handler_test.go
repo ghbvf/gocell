@@ -20,6 +20,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+func TestToCommandResponse_NilInput(t *testing.T) {
+	assert.NotPanics(t, func() { toCommandResponse(nil) })
+}
+
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
 func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
