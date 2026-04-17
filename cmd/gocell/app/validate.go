@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"flag"
@@ -11,9 +11,16 @@ import (
 // runValidate implements: gocell validate [--root <path>]
 // Parses all metadata, runs validate-meta and depcheck.
 // exit 0 = pass, exit 1 = errors found.
+//
+// --fail-fast: true short-circuit. The validator and the dependency checker
+// stop at the first rule that produces a SeverityError — subsequent rules do
+// not run, which is the point of the flag for CI pipelines over large repos.
+// Output is also trimmed to a single error line.
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
+	failFast := fs.Bool("fail-fast", false,
+		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -34,18 +41,30 @@ func runValidate(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	// Run validation rules.
 	validator := governance.NewValidator(project, rootDir)
-	valResults := validator.Validate()
-
-	// Run dependency checks.
 	depChecker := governance.NewDependencyChecker(project)
-	depResults := depChecker.Check()
 
-	// Merge all results.
+	if *failFast {
+		// True bailout: validator first (most errors originate there); if it
+		// already flagged an error, depcheck is skipped entirely.
+		valResults := validator.ValidateFailFast()
+		if firstErr := firstError(valResults); firstErr != nil {
+			formatResultsFailFast(valResults)
+			return fmt.Errorf("validation failed: %s", firstErr.Code)
+		}
+		depResults := depChecker.CheckFailFast()
+		if firstErr := firstError(depResults); firstErr != nil {
+			formatResultsFailFast(depResults)
+			return fmt.Errorf("validation failed: %s", firstErr.Code)
+		}
+		fmt.Println("OK: no errors.")
+		return nil
+	}
+
+	valResults := validator.Validate()
+	depResults := depChecker.Check()
 	allResults := append(valResults, depResults...)
 
-	// Output results.
 	formatResults(allResults)
 
 	// Summary.
@@ -63,6 +82,16 @@ func runValidate(args []string) error {
 
 	if errCount > 0 {
 		return fmt.Errorf("validation failed with %d error(s)", errCount)
+	}
+	return nil
+}
+
+// firstError returns the first result whose severity is error, or nil.
+func firstError(results []governance.ValidationResult) *governance.ValidationResult {
+	for i := range results {
+		if results[i].Severity == governance.SeverityError {
+			return &results[i]
+		}
 	}
 	return nil
 }

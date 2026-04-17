@@ -41,13 +41,6 @@ tmp/
 worktrees/
 .claude/scheduled_tasks.lock
 
-# Build output (root-level binaries from `go build ./cmd/...`)
-/gocell
-/core-bundle
-/iot-device
-/sso-bff
-/todo-order
-
 # Legacy src/ directory (flattened in PR#116, may contain stale build artifacts)
 src/
 

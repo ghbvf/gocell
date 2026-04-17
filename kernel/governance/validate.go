@@ -106,68 +106,52 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 // Validate runs all rules and returns all findings.
 func (v *Validator) Validate() []ValidationResult {
 	var results []ValidationResult
-
-	// Reference integrity rules
-	results = append(results, v.validateREF01()...)
-	results = append(results, v.validateREF02()...)
-	results = append(results, v.validateREF03()...)
-	results = append(results, v.validateREF04()...)
-	results = append(results, v.validateREF05()...)
-	results = append(results, v.validateREF06()...)
-	results = append(results, v.validateREF07()...)
-	results = append(results, v.validateREF08()...)
-	results = append(results, v.validateREF09()...)
-	results = append(results, v.validateREF10()...)
-	results = append(results, v.validateREF11()...)
-	results = append(results, v.validateREF12()...)
-	results = append(results, v.validateREF13()...)
-	results = append(results, v.validateREF14()...)
-	results = append(results, v.validateREF15()...)
-	results = append(results, v.validateREF16()...)
-
-	// Topological rules
-	results = append(results, v.validateTOPO01()...)
-	results = append(results, v.validateTOPO02()...)
-	results = append(results, v.validateTOPO03()...)
-	results = append(results, v.validateTOPO04()...)
-	results = append(results, v.validateTOPO05()...)
-	results = append(results, v.validateTOPO06()...)
-	results = append(results, v.validateTOPO07()...)
-	results = append(results, v.validateTOPO08()...)
-
-	// Verify closure rules
-	results = append(results, v.validateVERIFY01()...)
-	results = append(results, v.validateVERIFY02()...)
-	results = append(results, v.validateVERIFY03()...)
-	results = append(results, v.validateVERIFY04()...)
-	results = append(results, v.validateVERIFY05()...)
-
-	// Format compliance rules
-	results = append(results, v.validateFMT01()...)
-	results = append(results, v.validateFMT02()...)
-	results = append(results, v.validateFMT03()...)
-	results = append(results, v.validateFMT04()...)
-	results = append(results, v.validateFMT05()...)
-	results = append(results, v.validateFMT06()...)
-	results = append(results, v.validateFMT07()...)
-	results = append(results, v.validateFMT08()...)
-	results = append(results, v.validateFMT09()...)
-	results = append(results, v.validateFMT10()...)
-	results = append(results, v.validateFMT11()...)
-	results = append(results, v.validateFMT12()...)
-	results = append(results, v.validateFMT13()...)
-	results = append(results, v.validateFMT14()...)
-	results = append(results, v.validateFMT15()...)
-
-	// Advisory rules
-	results = append(results, v.validateADV01()...)
-	results = append(results, v.validateADV03()...)
-	results = append(results, v.validateADV04()...)
-
-	// Outbox governance rules
-	results = append(results, v.validateOUTGUARD01()...)
-
+	for _, rule := range v.rules() {
+		results = append(results, rule()...)
+	}
 	return results
+}
+
+// ValidateFailFast runs the same rules as Validate but returns as soon as
+// any rule produces a SeverityError result. Warnings do not trigger the
+// bailout. This is the true short-circuit path for CI pipelines — unlike
+// a Validate() caller that filters downstream, no subsequent rule runs.
+//
+// When no errors are found, the return value contains every rule's warnings
+// in the same order as Validate() would.
+func (v *Validator) ValidateFailFast() []ValidationResult {
+	var results []ValidationResult
+	for _, rule := range v.rules() {
+		r := rule()
+		results = append(results, r...)
+		if HasErrors(r) {
+			return results
+		}
+	}
+	return results
+}
+
+// rules returns the list of rule methods in the same order Validate runs
+// them. Used by both Validate (for full evaluation) and ValidateFailFast
+// (for short-circuit). Keeping this list in one place is what makes the
+// two entry points provably equivalent on the happy path.
+func (v *Validator) rules() []func() []ValidationResult {
+	return []func() []ValidationResult{
+		v.validateREF01, v.validateREF02, v.validateREF03, v.validateREF04,
+		v.validateREF05, v.validateREF06, v.validateREF07, v.validateREF08,
+		v.validateREF09, v.validateREF10, v.validateREF11, v.validateREF12,
+		v.validateREF13, v.validateREF14, v.validateREF15, v.validateREF16,
+		v.validateTOPO01, v.validateTOPO02, v.validateTOPO03, v.validateTOPO04,
+		v.validateTOPO05, v.validateTOPO06, v.validateTOPO07, v.validateTOPO08,
+		v.validateVERIFY01, v.validateVERIFY02, v.validateVERIFY03,
+		v.validateVERIFY04, v.validateVERIFY05,
+		v.validateFMT01, v.validateFMT02, v.validateFMT03, v.validateFMT04,
+		v.validateFMT05, v.validateFMT06, v.validateFMT07, v.validateFMT08,
+		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
+		v.validateFMT13, v.validateFMT14, v.validateFMT15,
+		v.validateADV01, v.validateADV03, v.validateADV04,
+		v.validateOUTGUARD01,
+	}
 }
 
 // HasErrors returns true if any result has SeverityError.

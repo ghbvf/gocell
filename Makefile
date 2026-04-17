@@ -1,4 +1,4 @@
-.PHONY: build test validate generate cover clean \
+.PHONY: build check-build test validate generate cover clean \
         up down \
         test-integration \
         healthcheck-verify
@@ -7,7 +7,14 @@
 # Go targets
 # ---------------------------------------------------------------------------
 
+# build produces shippable binaries into bin/. Use `make check-build` when the
+# goal is a full-repo compile check (no artefacts) — mirrors the
+# Kubernetes/kratos/go-zero split between `verify` and `build`.
 build:
+	mkdir -p bin
+	go build -o bin/ ./cmd/... ./examples/...
+
+check-build:
 	go build ./...
 
 test:
@@ -24,8 +31,9 @@ cover:
 	go tool cover -func=coverage.out | tail -1
 
 clean:
+	rm -rf bin/
 	rm -f coverage.out
-	rm -f core-bundle gocell iot-device sso-bff todo-order
+	rm -f gocell core-bundle iot-device sso-bff todo-order
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle

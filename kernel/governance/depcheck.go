@@ -28,15 +28,36 @@ func NewDependencyChecker(project *metadata.ProjectMeta) *DependencyChecker {
 
 // Check runs all dependency checks and returns findings.
 func (dc *DependencyChecker) Check() []ValidationResult {
+	var results []ValidationResult
+	for _, check := range dc.checks() {
+		results = append(results, check()...)
+	}
+	return results
+}
+
+// CheckFailFast runs the same checks as Check but returns as soon as any
+// produces a SeverityError. Warnings do not trigger the bailout.
+func (dc *DependencyChecker) CheckFailFast() []ValidationResult {
+	var results []ValidationResult
+	for _, check := range dc.checks() {
+		r := check()
+		results = append(results, r...)
+		if HasErrors(r) {
+			return results
+		}
+	}
+	return results
+}
+
+// checks returns the list of check methods in execution order. Shared by
+// Check and CheckFailFast so they stay provably in sync.
+func (dc *DependencyChecker) checks() []func() []ValidationResult {
 	if dc.project == nil {
 		return nil
 	}
-
-	var results []ValidationResult
-	results = append(results, dc.checkDEP01()...)
-	results = append(results, dc.checkDEP02()...)
-	results = append(results, dc.checkDEP03()...)
-	return results
+	return []func() []ValidationResult{
+		dc.checkDEP01, dc.checkDEP02, dc.checkDEP03,
+	}
 }
 
 // checkDEP01 verifies that each slice's belongsToCell matches the cellID
