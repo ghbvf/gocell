@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -85,13 +84,12 @@ type JWTVerifierOption func(*JWTVerifier)
 
 // WithExpectedAudiences configures VerifyIntent to enforce that the token's
 // aud claim contains at least one of the given audience strings per RFC 8725
-// §3.3 ("recipients MUST validate the aud claim"). Production deployments MUST
-// supply at least one expected audience matching what JWTIssuer.Issue writes.
+// §3.3 ("recipients MUST validate the aud claim"). This option is REQUIRED:
+// NewJWTVerifier returns an error if no expected audiences are configured.
 //
 // The first argument is required (preventing zero-argument calls). Empty strings
 // are silently filtered. Duplicate values across multiple calls are deduplicated.
 //
-// When not configured (default), VerifyIntent skips the audience check.
 // Verify() is never affected — audience enforcement is intentionally scoped to
 // VerifyIntent only.
 //
@@ -128,7 +126,8 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 		o(v)
 	}
 	if len(v.expectedAudiences) == 0 {
-		slog.Warn("JWT verifier constructed without expected audiences; RFC 8725 §3.3 audience validation disabled (configure WithExpectedAudiences for production)")
+		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+			"JWT verifier requires at least one expected audience (WithExpectedAudiences); RFC 8725 §3.3")
 	}
 	return v, nil
 }

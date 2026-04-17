@@ -20,7 +20,7 @@ func TestService_Login_IssuesDistinctIntents(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 
-	testVerifier, err := auth.NewJWTVerifier(testKeySet)
+	testVerifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	accessClaims, err := testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)

@@ -53,7 +53,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute)
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	eb := eventbus.New()

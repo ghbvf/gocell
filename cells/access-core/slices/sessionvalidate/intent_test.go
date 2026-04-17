@@ -18,7 +18,7 @@ func TestService_Verify_RejectsRefreshIntentToken(t *testing.T) {
 	priv, pub := auth.MustGenerateTestKeyPair()
 	ks, err := auth.NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(ks)
+	verifier, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	svc := NewService(verifier, nil, slog.Default())
@@ -37,7 +37,7 @@ func TestService_Verify_AcceptsAccessIntentToken(t *testing.T) {
 	priv, pub := auth.MustGenerateTestKeyPair()
 	ks, err := auth.NewKeySet(priv, pub)
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(ks)
+	verifier, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	svc := NewService(verifier, nil, slog.Default())

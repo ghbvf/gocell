@@ -114,7 +114,7 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	seedUser(userRepo, "sid-user", "pass123")
 
 	// Need a verifier to decode the tokens.
-	verifier, err := auth.NewJWTVerifier(testKeySet)
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "sid-user", Password: "pass123"})

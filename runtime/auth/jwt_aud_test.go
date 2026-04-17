@@ -89,30 +89,15 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingAudience(t *testing.T) {
 		"token without aud claim must be rejected when expected audience is configured")
 }
 
-// TestJWTVerifier_VerifyIntent_AudienceCheckSkippedWhenNotConfigured verifies
-// backward compatibility: when WithExpectedAudiences is not called, VerifyIntent
-// skips the audience check and accepts tokens regardless of aud content.
-func TestJWTVerifier_VerifyIntent_AudienceCheckSkippedWhenNotConfigured(t *testing.T) {
+// TestNewJWTVerifier_NoAudiences_ReturnsError verifies that NewJWTVerifier fails
+// at construction time when no expected audiences are configured (RFC 8725 §3.3
+// fail-fast). Any composition root that forgets WithExpectedAudiences will get a
+// hard error instead of silently skipping audience validation.
+func TestNewJWTVerifier_NoAudiences_ReturnsError(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks) // no WithExpectedAudiences
-	require.NoError(t, err)
-
-	// Token with mismatched audience — should still pass when no expectation configured.
-	tok := makeTokenWithAud(t, ks, []string{"some-other-audience"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err, "no expected audience configured → aud check skipped (backward compat)")
-}
-
-// TestJWTVerifier_VerifyIntent_NoAudSkippedWhenNotConfigured mirrors the above
-// but with a token that has no aud claim at all.
-func TestJWTVerifier_VerifyIntent_NoAudSkippedWhenNotConfigured(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks) // no WithExpectedAudiences
-	require.NoError(t, err)
-
-	tok := makeRawTokenWithoutAud(t, ks)
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err, "no expected audience configured → aud check skipped")
+	_, err := NewJWTVerifier(ks)
+	require.Error(t, err, "NewJWTVerifier without WithExpectedAudiences must return an error")
+	assert.Contains(t, err.Error(), "audience")
 }
 
 // TestJWTVerifier_VerifyIntent_AcceptsMultipleAudiencesWhenOneMatches verifies

@@ -53,7 +53,7 @@ func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
 }
 
 func mustVerifier(ks *auth.KeySet) *auth.JWTVerifier {
-	v, err := auth.NewJWTVerifier(ks)
+	v, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
