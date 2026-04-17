@@ -59,14 +59,25 @@ func NewConfigRepositoryFromSession(s *Session) *ConfigRepository {
 	return &ConfigRepository{session: s}
 }
 
-// resolveDB returns the DBTX to use for this call. When a Session is
-// configured it resolves the ambient transaction from ctx; otherwise the
-// fixed DBTX is used (unit-test path).
+// resolveDB returns the DBTX to use for read calls. When a Session is
+// configured it resolves the ambient transaction from ctx (falling back to
+// pool for non-transactional reads); otherwise the fixed DBTX is used
+// (unit-test path).
 func (r *ConfigRepository) resolveDB(ctx context.Context) DBTX {
 	if r.session != nil {
 		return r.session.resolve(ctx)
 	}
 	return r.db
+}
+
+// resolveWriteDB returns the DBTX for write calls. When a Session is
+// configured it requires a tx in ctx (L2 atomicity guarantee); otherwise
+// falls back to the fixed DBTX (unit-test path).
+func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
+	if r.session != nil {
+		return r.session.resolveWrite(ctx)
+	}
+	return r.db, nil
 }
 
 // Create inserts a new config entry.
@@ -83,7 +94,11 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		entry.UpdatedAt = now
 	}
 
-	_, err := r.resolveDB(ctx).Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, query,
 		entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
 		entry.CreatedAt, entry.UpdatedAt,
 	)
@@ -141,7 +156,11 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 		entry.UpdatedAt = time.Now()
 	}
 
-	affected, err := r.resolveDB(ctx).Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	affected, err := db.Exec(ctx, query,
 		entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
 	)
 	if err != nil {
@@ -161,7 +180,11 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 	const query = `DELETE FROM config_entries WHERE key = $1`
 
-	affected, err := r.resolveDB(ctx).Exec(ctx, query, key)
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	affected, err := db.Exec(ctx, query, key)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: delete failed for key %s", key), err)
@@ -213,7 +236,11 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		(id, config_id, version, value, sensitive, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`
 
-	_, err := r.resolveDB(ctx).Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, query,
 		version.ID, version.ConfigID, version.Version,
 		version.Value, version.Sensitive, version.PublishedAt,
 	)

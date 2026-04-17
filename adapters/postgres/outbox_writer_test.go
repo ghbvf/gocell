@@ -57,10 +57,10 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 	call := tx.execCalls[0]
 	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
 	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[0]) // id
-	assert.Equal(t, "agg-2", call.args[1])                                 // aggregate_id
-	assert.Equal(t, "order", call.args[2])                                  // aggregate_type
-	assert.Equal(t, "order.shipped", call.args[3])                          // event_type
-	assert.Equal(t, "", call.args[4])                                       // topic (empty string)
+	assert.Equal(t, "agg-2", call.args[1])                                // aggregate_id
+	assert.Equal(t, "order", call.args[2])                                // aggregate_type
+	assert.Equal(t, "order.shipped", call.args[3])                        // event_type
+	assert.Equal(t, "", call.args[4])                                     // topic (empty string)
 
 	// Verify metadata was serialized as JSON.
 	metaJSON, ok := call.args[6].([]byte)

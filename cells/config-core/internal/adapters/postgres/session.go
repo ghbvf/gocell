@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,12 +31,24 @@ func NewSession(pool *pgxpool.Pool) *Session {
 }
 
 // resolve returns the ambient pgx.Tx (wrapped as DBTX) if one is present in
-// ctx, otherwise returns the pool (wrapped as DBTX).
+// ctx, otherwise returns the pool (wrapped as DBTX). Use for read-only paths.
 func (s *Session) resolve(ctx context.Context) DBTX {
 	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
 		return &dbtxAdapter{tx: tx}
 	}
 	return &poolAdapter{pool: s.pool}
+}
+
+// resolveWrite returns the ambient pgx.Tx, or an error if none is present.
+// L2 write paths (Create, Update, Delete, PublishVersion) must go through
+// this to guarantee the domain write participates in the same tx as the
+// outbox write (ref: adapters/postgres.OutboxWriter enforcement).
+func (s *Session) resolveWrite(ctx context.Context) (DBTX, error) {
+	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
+		return &dbtxAdapter{tx: tx}, nil
+	}
+	return nil, errcode.New(errcode.ErrAdapterPGNoTx,
+		"config repo: write requires a transaction in context")
 }
 
 // dbtxAdapter wraps pgx.Tx to implement the cell-local DBTX interface.

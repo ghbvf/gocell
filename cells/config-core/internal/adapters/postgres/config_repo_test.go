@@ -300,6 +300,65 @@ func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
+// --- F-S-1: resolveWrite enforcement tests ---
+
+// TestCreate_WithoutTx_ReturnsNoTxError verifies that Create via a session-based
+// repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
+func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
+	session := NewSession(nil) // nil pool — resolveWrite never reaches pool path
+	repo := NewConfigRepositoryFromSession(session)
+
+	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAdapterPGNoTx, ec.Code)
+}
+
+// TestUpdate_WithoutTx_ReturnsNoTxError verifies that Update via a session-based
+// repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
+func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
+	session := NewSession(nil)
+	repo := NewConfigRepositoryFromSession(session)
+
+	err := repo.Update(context.Background(), &domain.ConfigEntry{Key: "k"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAdapterPGNoTx, ec.Code)
+}
+
+// TestDelete_WithoutTx_ReturnsNoTxError verifies that Delete via a session-based
+// repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
+func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
+	session := NewSession(nil)
+	repo := NewConfigRepositoryFromSession(session)
+
+	err := repo.Delete(context.Background(), "k")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAdapterPGNoTx, ec.Code)
+}
+
+// TestPublishVersion_WithoutTx_ReturnsNoTxError verifies that PublishVersion via
+// a session-based repo fails with ErrAdapterPGNoTx when no tx is present in
+// context (F-S-1).
+func TestPublishVersion_WithoutTx_ReturnsNoTxError(t *testing.T) {
+	session := NewSession(nil)
+	repo := NewConfigRepositoryFromSession(session)
+
+	err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{ConfigID: "cfg-1"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAdapterPGNoTx, ec.Code)
+}
+
 // --- mocks ---
 
 type dbCallRecord struct {
