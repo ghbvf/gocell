@@ -220,5 +220,98 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
+// TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader verifies that a token
+// carrying typ="JWT" (RFC 7519 legacy plain JWT) is rejected even when the
+// token_use claim is valid. intentForJWTTyp("JWT") returns ("", false),
+// triggering the "typ header missing or unknown" fail-closed path. This closes
+// the chimera vector where a pre-intent legacy issuer signs typ=JWT tokens that
+// carry a plausible token_use claim.
+func TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	// RFC 7519 legacy: typ="JWT" (upper-case) + token_use=access
+	claims := jwt.MapClaims{
+		"sub":       "user-legacy",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = "JWT" // RFC 7519 plain JWT, not at+jwt
+	tokenStr, err := tok.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"typ=JWT (RFC 7519 legacy) must be rejected — intentForJWTTyp returns false")
+}
+
+// TestJWTVerifier_VerifyIntent_RejectsMissingTypHeader verifies that a token
+// without any typ header at all is rejected even when token_use claim is valid.
+func TestJWTVerifier_VerifyIntent_RejectsMissingTypHeader(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	claims := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	// Deliberately omit typ header — golang-jwt/jwt sets typ="JWT" by default
+	// in the header map, so delete it explicitly.
+	delete(tok.Header, "typ")
+	tokenStr, err := tok.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"missing typ header must be rejected")
+}
+
+// TestJWTVerifier_VerifyIntent_RejectsNonStringTypHeader verifies that a token
+// where typ is a non-string value (e.g. integer 42) does not panic and is
+// rejected. stringFromHeader uses a type-assertion that returns "" on failure,
+// which leads intentForJWTTyp to return ("", false).
+func TestJWTVerifier_VerifyIntent_RejectsNonStringTypHeader(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks)
+	require.NoError(t, err)
+
+	claims := jwt.MapClaims{
+		"sub":       "attacker",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = 42 // non-string — stringFromHeader returns ""
+	tokenStr, err := tok.SignedString(priv)
+	require.NoError(t, err)
+
+	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
+		"non-string typ header must be rejected and must not panic")
+}
+
 // Compile-time check: *JWTVerifier satisfies IntentTokenVerifier.
 var _ IntentTokenVerifier = (*JWTVerifier)(nil)

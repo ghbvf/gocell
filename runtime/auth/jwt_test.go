@@ -532,6 +532,16 @@ func TestMapClaimsToClaims_EdgeCases(t *testing.T) {
 				assert.False(t, hasNbf, "nbf is a standard claim and should not appear in Extra")
 			},
 		},
+		{
+			name:   "token_use not leaked into Extra",
+			claims: jwt.MapClaims{"sub": "u1", "token_use": "access", "custom": "x"},
+			check: func(t *testing.T, c Claims) {
+				assert.Equal(t, TokenIntentAccess, c.TokenUse)
+				assert.Equal(t, "x", c.Extra["custom"])
+				_, ok := c.Extra["token_use"]
+				assert.False(t, ok, "token_use must not leak into Extra")
+			},
+		},
 	}
 
 	for _, tt := range tests {
