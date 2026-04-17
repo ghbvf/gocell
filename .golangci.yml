@@ -8,7 +8,7 @@ linters:
 
   settings:
     gocognit:
-      min-complexity: 16 # project rule: ≤ 15, flag at 16+
+      min-complexity: 15 # project rule: ≤ 15, flag at 15+
 
   exclusions:
     rules:

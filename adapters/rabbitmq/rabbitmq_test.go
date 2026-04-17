@@ -39,8 +39,8 @@ type mockChannel struct {
 	consumeDeliveries chan amqp.Delivery
 	consumeErr        error
 
-	qosCalled    bool
-	qosPrefetch  int
+	qosCalled     bool
+	qosPrefetch   int
 	confirmCalled bool
 	confirmErr    error
 
@@ -53,14 +53,23 @@ type mockChannel struct {
 	queueBindErr       error
 
 	notifyPublishCh chan amqp.Confirmation
+	// autoConfirmation, when non-nil, is pushed into the publisher's confirm
+	// channel the moment NotifyPublish runs — eliminates the polling / sleep
+	// goroutines that previously faked broker confirmations and raced against
+	// publisher.NotifyPublish registration. Buffered send (publisher allocates
+	// chan with cap 1), never blocks.
+	autoConfirmation *amqp.Confirmation
+	// autoCloseConfirm closes the publisher's confirm channel on NotifyPublish
+	// registration — simulates a broker disconnect between publish and confirm.
+	autoCloseConfirm bool
 
-	ackCalled  bool
-	ackTag     uint64
-	ackErr     error
-	nackCalled bool
-	nackTag    uint64
+	ackCalled   bool
+	ackTag      uint64
+	ackErr      error
+	nackCalled  bool
+	nackTag     uint64
 	nackRequeue bool
-	nackErr    error
+	nackErr     error
 
 	closeCalled bool
 	closeErr    error
@@ -110,8 +119,19 @@ func (m *mockChannel) Confirm(noWait bool) error {
 
 func (m *mockChannel) NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Confirmation {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.notifyPublishCh = confirm
+	autoConf := m.autoConfirmation
+	autoClose := m.autoCloseConfirm
+	m.mu.Unlock()
+	if autoConf != nil {
+		select {
+		case confirm <- *autoConf:
+		default:
+		}
+	}
+	if autoClose {
+		close(confirm)
+	}
 	return confirm
 }
 
@@ -184,7 +204,7 @@ type mockConnection struct {
 
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
-	closeErr         error
+	closeErr      error
 }
 
 func newMockConnection() *mockConnection {
@@ -745,10 +765,10 @@ func TestConnection_MaxReconnectAttempts_Exceeded(t *testing.T) {
 	}
 
 	conn, err := NewConnection(Config{
-		URL:                 "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		URL:                  "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:      2,
+		ReconnectBaseDelay:   1 * time.Millisecond,
+		ReconnectMaxBackoff:  5 * time.Millisecond,
 		MaxReconnectAttempts: 2,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
@@ -825,10 +845,10 @@ func TestConnection_MaxReconnectAttempts_Zero_Unlimited(t *testing.T) {
 	}
 
 	conn, err := NewConnection(Config{
-		URL:                 "amqp://test:test@localhost:5672/",
-		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		URL:                  "amqp://test:test@localhost:5672/",
+		ChannelPoolSize:      2,
+		ReconnectBaseDelay:   1 * time.Millisecond,
+		ReconnectMaxBackoff:  5 * time.Millisecond,
 		MaxReconnectAttempts: 0, // unlimited
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
@@ -1022,8 +1042,8 @@ func TestConnection_ReconnectWithBackoff_PermanentError(t *testing.T) {
 		dial: func(url string) (AMQPConnection, error) {
 			return nil, permanentErr
 		},
-		closeCh:   make(chan struct{}),
-		connected: make(chan struct{}),
+		closeCh:    make(chan struct{}),
+		connected:  make(chan struct{}),
 		terminalCh: make(chan struct{}),
 	}
 
@@ -1055,8 +1075,8 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 			}
 			return newMockConnection(), nil
 		},
-		closeCh:   make(chan struct{}),
-		connected: make(chan struct{}),
+		closeCh:    make(chan struct{}),
+		connected:  make(chan struct{}),
 		terminalCh: make(chan struct{}),
 	}
 
@@ -1080,8 +1100,8 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		dial: func(url string) (AMQPConnection, error) {
 			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 		},
-		closeCh:   closeCh,
-		connected: make(chan struct{}),
+		closeCh:    closeCh,
+		connected:  make(chan struct{}),
 		terminalCh: make(chan struct{}),
 	}
 
@@ -1118,22 +1138,13 @@ func TestPublisher_InterfaceCompliance(t *testing.T) {
 func TestPublisher_Publish_Success(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
-	// Pre-create a mock channel that will send confirmation.
 	ch := newMockChannel()
+	ch.autoConfirmation = &amqp.Confirmation{Ack: true, DeliveryTag: 1}
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
 	pub := NewPublisher(conn)
-
-	// Send confirmation asynchronously.
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		ch.mu.Lock()
-		notifyCh := ch.notifyPublishCh
-		ch.mu.Unlock()
-		notifyCh <- amqp.Confirmation{Ack: true, DeliveryTag: 1}
-	}()
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"hello":"world"}`))
 	assert.NoError(t, err)
@@ -1152,19 +1163,12 @@ func TestPublisher_Publish_Nacked(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	ch := newMockChannel()
+	ch.autoConfirmation = &amqp.Confirmation{Ack: false, DeliveryTag: 1}
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
 	pub := NewPublisher(conn)
-
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		ch.mu.Lock()
-		notifyCh := ch.notifyPublishCh
-		ch.mu.Unlock()
-		notifyCh <- amqp.Confirmation{Ack: false, DeliveryTag: 1}
-	}()
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	assert.Error(t, err)
@@ -1245,9 +1249,9 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 	// ErrAdapterAMQPConnectPermanent (not generic publish error).
 	conn := &Connection{
 		config: Config{
-			URL:            "amqp://test:test@localhost:5672/",
+			URL:             "amqp://test:test@localhost:5672/",
 			ChannelPoolSize: 2,
-			ConfirmTimeout: 5 * time.Second,
+			ConfirmTimeout:  5 * time.Second,
 		},
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
@@ -1407,20 +1411,23 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Send delivery then close.
-	go func() {
-		ch.consumeDeliveries <- amqp.Delivery{
-			DeliveryTag: 1,
-			Body:        entryBytes,
-		}
-		// Wait for processing then cancel.
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	// Deliver before Subscribe starts consuming (buffered cap 10).
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: entryBytes}
 
-	err = sub.Subscribe(ctx, "test.topic", handler, "")
-	assert.NoError(t, err)
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+
+	// Deterministic wait: poll until Ack is recorded instead of time.Sleep.
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.ackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Ack was not called in time")
+
+	cancel()
+	assert.NoError(t, <-subDone)
 
 	select {
 	case received := <-handled:
@@ -1433,7 +1440,6 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	ch.mu.Lock()
 	assert.True(t, ch.qosCalled)
 	assert.Equal(t, 5, ch.qosPrefetch)
-	assert.True(t, ch.ackCalled)
 	assert.Equal(t, uint64(1), ch.ackTag)
 	ch.mu.Unlock()
 
@@ -1460,21 +1466,23 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	go func() {
-		ch.consumeDeliveries <- amqp.Delivery{
-			DeliveryTag: 1,
-			Body:        []byte("not valid json{{{"),
-		}
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: []byte("not valid json{{{")}
 
-	err := sub.Subscribe(ctx, "test.topic", handler, "")
-	assert.NoError(t, err)
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+
+	cancel()
+	assert.NoError(t, <-subDone)
 
 	ch.mu.Lock()
-	assert.True(t, ch.nackCalled)
 	assert.False(t, ch.nackRequeue) // Unmarshal failure should not requeue.
 	ch.mu.Unlock()
 
@@ -1504,21 +1512,23 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	go func() {
-		ch.consumeDeliveries <- amqp.Delivery{
-			DeliveryTag: 1,
-			Body:        entryBytes,
-		}
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: entryBytes}
 
-	err = sub.Subscribe(ctx, "test.topic", handler, "")
-	assert.NoError(t, err)
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+
+	cancel()
+	assert.NoError(t, <-subDone)
 
 	ch.mu.Lock()
-	assert.True(t, ch.nackCalled)
 	assert.True(t, ch.nackRequeue) // Requeue disposition should requeue.
 	ch.mu.Unlock()
 
@@ -1852,33 +1862,34 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		ShutdownTimeout: 1 * time.Second,
 	})
 
-	// Run Subscribe in a goroutine so the main goroutine can safely orchestrate the close sequence.
-	// Note: c.conn is nil in this manually-constructed Connection, so AcquireChannel always returns
-	// "connection not available". The subscriber enters the reconnect hot-loop immediately, never
-	// reaching QoS/Consume. The close(ch.consumeDeliveries) below is a no-op (ch is never consumed);
-	// it is kept for documentary clarity of the original test intent.
+	// Run Subscribe in a goroutine so the main goroutine can orchestrate the
+	// close sequence. c.conn is nil in this manually-constructed Connection,
+	// so AcquireChannel always returns "connection not available" and the
+	// subscriber enters the reconnect hot-loop immediately (never reaches
+	// QoS/Consume). The exact interleaving between replace-connected and
+	// sub.Close() does not matter: closeCh cancels the derived subCtx, which
+	// unblocks WaitConnected regardless of whether the subscriber is mid
+	// AcquireChannel or blocked in WaitConnected — hence no "wait for X to
+	// reach Y" sleeps are needed.
 	subscribeDone := make(chan error, 1)
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
 			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
 	}()
 
-	// Let the subscriber spin briefly in the reconnect hot-loop.
+	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
+	// microseconds, so 20ms is many iterations regardless of scheduling.
 	time.Sleep(20 * time.Millisecond)
-	close(ch.consumeDeliveries) // no-op: ch is never acquired; kept for test intent clarity.
 
-	// Simulate disconnection: re-create the connected channel so WaitConnected blocks.
-	time.Sleep(10 * time.Millisecond)
+	// Simulate disconnection: replace c.connected with an unclosed channel
+	// so that the next WaitConnected call would block.
 	c.mu.Lock()
 	c.connected = make(chan struct{})
 	c.mu.Unlock()
 
-	// Wait for the subscriber to call WaitConnected and block on the new (unclosed) connected channel.
-	// Only then does sub.Close() reliably unblock it via closeCh → subCtx cancellation.
-	time.Sleep(30 * time.Millisecond)
-
-	// Close subscriber while WaitConnected is blocking.
-	// The derived context in Subscribe is cancelled by closeCh, unblocking WaitConnected.
+	// Close subscriber. closeCh cancels the derived subCtx → WaitConnected
+	// (or any other blocking call in the loop) returns ctx.Err() → Subscribe
+	// exits cleanly.
 	_ = sub.Close()
 
 	select {
@@ -2098,6 +2109,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		// Simulate ctx cancel happening before/during handler.
@@ -2105,23 +2117,27 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error during shutdown")}
 	}
 
-	go func() {
-		ch.consumeDeliveries <- amqp.Delivery{
-			DeliveryTag: 42,
-			Body:        entryBytes,
-		}
-		// Give time for processing then close deliveries to exit.
-		time.Sleep(100 * time.Millisecond)
-		close(ch.consumeDeliveries)
-	}()
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 42, Body: entryBytes}
 
-	_ = sub.Subscribe(ctx, "test.topic", handler, "")
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
 
-	// Wait briefly for async processing.
-	time.Sleep(50 * time.Millisecond)
+	// Deterministic wait for NACK instead of fixed sleep — handler cancels
+	// ctx synchronously, so Subscribe will exit shortly after processDelivery
+	// applies the disposition.
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+
+	select {
+	case <-subDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe did not exit after ctx cancel in handler")
+	}
 
 	ch.mu.Lock()
-	assert.True(t, ch.nackCalled, "should NACK the delivery")
 	assert.True(t, ch.nackRequeue, "should NACK with requeue when disposition is Requeue")
 	assert.Equal(t, uint64(42), ch.nackTag)
 	ch.mu.Unlock()
@@ -2142,10 +2158,9 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	})
 	require.NoError(t, cbErr)
 
+	// AsMiddleware's return type is outbox.TopicHandlerMiddleware — compile
+	// enforces the test name's contract.
 	mw := cb.AsMiddleware()
-
-	// mw should be a valid TopicHandlerMiddleware.
-	var _ outbox.TopicHandlerMiddleware = mw
 
 	handlerCalled := false
 	wrapped := mw("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -2434,21 +2449,14 @@ func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	ch := newMockChannel()
+	// Simulate broker disconnect between publish and confirm: close the
+	// confirm channel immediately on NotifyPublish registration.
+	ch.autoCloseConfirm = true
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
 	pub := NewPublisher(conn)
-
-	// Close the notifyPublishCh without sending any value to simulate
-	// the confirm channel being closed (e.g., broker disconnected after publish).
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		ch.mu.Lock()
-		notifyCh := ch.notifyPublishCh
-		ch.mu.Unlock()
-		close(notifyCh)
-	}()
 
 	err := pub.Publish(context.Background(), "test.topic", []byte(`{"data":"value"}`))
 	assert.Error(t, err)
@@ -2461,13 +2469,13 @@ func TestPublisher_Publish_ConfirmChannelClosed(t *testing.T) {
 // =============================================================================
 
 type mockReceipt struct {
-	mu           sync.Mutex
-	commitCalled bool
-	commitErr    error
+	mu            sync.Mutex
+	commitCalled  bool
+	commitErr     error
 	releaseCalled bool
-	releaseErr   error
-	commitCtx    context.Context
-	releaseCtx   context.Context
+	releaseErr    error
+	commitCtx     context.Context
+	releaseCtx    context.Context
 }
 
 func (r *mockReceipt) Commit(ctx context.Context) error {
@@ -2688,14 +2696,14 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 	// fail-closed: claimWithRetry handles ALL attempts (no naked first Claim).
 	// ClaimRetryCount=3 → 3 total Claim calls, last succeeds.
 	claimer := &sequenceClaimer{responses: []claimResponse{
-		{err: errors.New("redis down")},                                     // attempt 0
-		{err: errors.New("redis down")},                                     // attempt 1
-		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 2 — success
+		{err: errors.New("redis down")},                      // attempt 0
+		{err: errors.New("redis down")},                      // attempt 1
+		{state: idempotency.ClaimAcquired, receipt: receipt}, // attempt 2 — success
 	}}
 
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimRetryCount:    3,
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
@@ -2722,8 +2730,8 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
 	// With jitter, we assert >= base delay only (not exact).
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimRetryCount:    3,
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 20 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
@@ -2751,8 +2759,8 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimRetryCount:    3,
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
 	})
 	require.NoError(t, cbErr)
@@ -2780,8 +2788,8 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimRetryCount:    1,
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     1,
 		ClaimRetryBaseDelay: 5 * time.Second,
 	})
 	require.NoError(t, cbErr)
@@ -2806,15 +2814,15 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	// S1-01: ClaimRetryCount/ClaimRetryBaseDelay independent from RetryCount/RetryBaseDelay.
 	receipt := &mockReceipt{}
 	claimer := &sequenceClaimer{responses: []claimResponse{
-		{err: errors.New("redis down")},                                     // attempt 0
-		{state: idempotency.ClaimAcquired, receipt: receipt},                // attempt 1 — success
+		{err: errors.New("redis down")},                      // attempt 0
+		{state: idempotency.ClaimAcquired, receipt: receipt}, // attempt 1 — success
 	}}
 
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		RetryCount:         5,                   // handler retries — should not affect claim
-		RetryBaseDelay:     1 * time.Second,     // handler backoff — should not affect claim
-		ClaimRetryCount:    2,                   // claim retries
+		ConsumerGroup:       "test-group",
+		RetryCount:          5,                     // handler retries — should not affect claim
+		RetryBaseDelay:      1 * time.Second,       // handler backoff — should not affect claim
+		ClaimRetryCount:     2,                     // claim retries
 		ClaimRetryBaseDelay: 10 * time.Millisecond, // claim backoff
 	})
 	require.NoError(t, cbErr)
@@ -2844,10 +2852,10 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:      "test-group",
-		ClaimRetryCount:    3,
+		ConsumerGroup:       "test-group",
+		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 100 * time.Millisecond,
-		MaxRetryDelay:      50 * time.Millisecond, // cap below base — forces all delays to 50ms
+		MaxRetryDelay:       50 * time.Millisecond, // cap below base — forces all delays to 50ms
 	})
 	require.NoError(t, cbErr)
 
@@ -4487,35 +4495,7 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 // never sharing a pool. Default publisher strategy: open, use, close per publish.
 func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 	ch := newMockChannel()
-
-	// Use context.WithTimeout to prevent goroutine leak if the test
-	// exits before the confirmation is sent (same fix as CloseError test).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
-
-	go func() {
-		// Wait until confirmCalled is set (Confirm was called), then the
-		// next NotifyPublish will install a new channel. Poll briefly.
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			ch.mu.Lock()
-			npc := ch.notifyPublishCh
-			confirmed := ch.confirmCalled
-			ch.mu.Unlock()
-			if confirmed && npc != nil {
-				select {
-				case npc <- amqp.Confirmation{Ack: true}:
-					return
-				default:
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	ch.autoConfirmation = &amqp.Confirmation{Ack: true}
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
@@ -4550,34 +4530,7 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 	ch := newMockChannel()
 	ch.closeErr = errors.New("channel already closed")
-
-	// Use context.WithTimeout to prevent goroutine leak if the test
-	// exits before the confirmation is sent (e.g., on early failure).
-	// Pattern ref: NATS channel+timeout, Sarama goleak.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	t.Cleanup(cancel)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			ch.mu.Lock()
-			npc := ch.notifyPublishCh
-			confirmed := ch.confirmCalled
-			ch.mu.Unlock()
-			if confirmed && npc != nil {
-				select {
-				case npc <- amqp.Confirmation{Ack: true}:
-					return
-				default:
-				}
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	ch.autoConfirmation = &amqp.Confirmation{Ack: true}
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
