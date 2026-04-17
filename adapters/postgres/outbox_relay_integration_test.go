@@ -181,17 +181,20 @@ func TestIntegration_OutboxRelay_HappyPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestIntegration_OutboxRelay_BrokerDisconnectRetry
+// TestIntegration_OutboxRelay_TransientPublishFailureRetry
 // ---------------------------------------------------------------------------
 
-// TestIntegration_OutboxRelay_BrokerDisconnectRetry verifies that when the
-// publisher fails transiently, the relay retries and eventually publishes.
-// Publish failures are simulated by countingPublisher (fails for first N calls,
-// then succeeds). This covers the retry-and-recover logic path.
-// Note: true broker TCP-disconnect testing (container Stop/Start) is out of
-// scope here; the RabbitMQ reconnect path is exercised in
-// adapters/rabbitmq/integration_test.go.
-func TestIntegration_OutboxRelay_BrokerDisconnectRetry(t *testing.T) {
+// TestIntegration_OutboxRelay_TransientPublishFailureRetry verifies that when
+// the publisher returns a transient error (simulating a transient RabbitMQ
+// publish failure such as channel error or transient broker issue), the
+// relay's retry state machine backs off, retries, and eventually publishes
+// successfully when the publisher recovers.
+//
+// Scope: this test exercises the relay's retry state machine against
+// publisher error returns. It does NOT cover RabbitMQ TCP-level
+// disconnect/reconnect — that is the RabbitMQ adapter's responsibility,
+// tested in adapters/rabbitmq/integration_test.go.
+func TestIntegration_OutboxRelay_TransientPublishFailureRetry(t *testing.T) {
 	pool, _, _, cleanup := setupPGAndRMQ(t)
 	defer cleanup()
 
@@ -199,7 +202,9 @@ func TestIntegration_OutboxRelay_BrokerDisconnectRetry(t *testing.T) {
 
 	const topic = "relay.retry.v1"
 
-	// Use a counting publisher: fails for the first 2 Publish calls then succeeds.
+	// Use a counting publisher: returns transient errors for the first 2 Publish
+	// calls then succeeds. This simulates a transient broker-side publish failure
+	// (e.g., channel error) without requiring a real RabbitMQ TCP disconnect.
 	var callCount atomic.Int32
 	pub := &countingPublisher{
 		failUntil: 2,
@@ -220,11 +225,11 @@ func TestIntegration_OutboxRelay_BrokerDisconnectRetry(t *testing.T) {
 
 	go func() { _ = relay.Start(relayCtx) }()
 
-	// After retries, should reach published.
+	// After the relay backs off and retries, the entry should reach published.
 	waitForStatus(t, pool, entryID, "published", 20*time.Second)
 	relayCancel()
 	assert.GreaterOrEqual(t, callCount.Load(), int32(3),
-		"should have had at least 3 publish attempts (2 failures + 1 success)")
+		"should have had at least 3 publish attempts (2 transient failures + 1 success)")
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +424,8 @@ func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 // Test helper publishers
 // ---------------------------------------------------------------------------
 
-// countingPublisher fails for the first N calls, then succeeds.
+// countingPublisher returns a transient error for the first N calls, then succeeds.
+// It simulates a publisher that recovers after a series of transient publish failures.
 type countingPublisher struct {
 	failUntil int32
 	calls     *atomic.Int32
@@ -428,16 +434,16 @@ type countingPublisher struct {
 func (p *countingPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
 	n := p.calls.Add(1)
 	if n <= p.failUntil {
-		return errcode.New(ErrAdapterPGPublish, "simulated broker failure")
+		return errcode.New(ErrAdapterPGPublish, "simulated transient publish failure")
 	}
 	return nil
 }
 
-// failingPublisher always returns an error.
+// failingPublisher always returns an error, simulating a permanently failing publisher.
 type failingPublisher struct{}
 
 func (p *failingPublisher) Publish(_ context.Context, _ string, _ []byte) error {
-	return errcode.New(ErrAdapterPGPublish, "simulated permanent broker failure")
+	return errcode.New(ErrAdapterPGPublish, "simulated permanent publish failure")
 }
 
 // countingSuccessPublisher wraps a real publisher and counts successful publishes.
