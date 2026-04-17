@@ -21,13 +21,13 @@ var _ auth.TokenVerifier = (*Service)(nil)
 
 // Service validates JWT access tokens and checks session revocation status.
 type Service struct {
-	verifier    auth.TokenVerifier
+	verifier    auth.IntentTokenVerifier
 	sessionRepo ports.SessionRepository
 	logger      *slog.Logger
 }
 
 // NewService creates a session-validate Service.
-func NewService(verifier auth.TokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
+func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
 	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger}
 }
 
@@ -51,33 +51,15 @@ func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, err
 	return s.enforceSessionState(ctx, claims)
 }
 
-// verifyJWTWithIntent runs the underlying verifier (preferring
-// IntentTokenVerifier so token_use=access is enforced at the claim/header
-// level) and maps intent mismatches or signature errors to the uniform
-// ErrAuthInvalidToken response.
+// verifyJWTWithIntent runs the underlying verifier enforcing token_use=access
+// at both the claim and JOSE header level, mapping all failures to the uniform
+// ErrAuthInvalidToken response to prevent token-type enumeration.
 func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (auth.Claims, error) {
-	if iv, ok := s.verifier.(auth.IntentTokenVerifier); ok {
-		claims, err := iv.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
-		if err != nil {
-			s.logger.Warn("session-validate: JWT verification failed",
-				slog.Any("error", err))
-			return auth.Claims{}, errcode.Wrap(errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
-		}
-		return claims, nil
-	}
-	// Fallback for TokenVerifier implementations that don't expose
-	// VerifyIntent — production wiring uses JWTVerifier (IntentTokenVerifier).
-	claims, err := s.verifier.Verify(ctx, tokenStr)
+	claims, err := s.verifier.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
 	if err != nil {
 		s.logger.Warn("session-validate: JWT verification failed",
 			slog.Any("error", err))
 		return auth.Claims{}, errcode.Wrap(errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
-	}
-	if claims.TokenUse != auth.TokenIntentAccess {
-		s.logger.Warn("session-validate: non-access token rejected (fallback)",
-			slog.String("subject", claims.Subject),
-			slog.String("token_use", string(claims.TokenUse)))
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	return claims, nil
 }

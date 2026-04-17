@@ -28,7 +28,7 @@ type Service struct {
 	sessionRepo ports.SessionRepository
 	roleRepo    ports.RoleRepository
 	issuer      *auth.JWTIssuer
-	verifier    auth.TokenVerifier
+	verifier    auth.IntentTokenVerifier
 	logger      *slog.Logger
 }
 
@@ -37,7 +37,7 @@ func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
 	issuer *auth.JWTIssuer,
-	verifier auth.TokenVerifier,
+	verifier auth.IntentTokenVerifier,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
@@ -135,8 +135,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	}, nil
 }
 
-// verifyRefreshToken checks the JWT signature AND requires token_use=refresh
-// when the underlying verifier supports it.
+// verifyRefreshToken checks the JWT signature AND requires token_use=refresh.
 //
 // Enumeration defense: ErrAuthRefreshFailed is intentionally broader than
 // ErrAuthInvalidTokenIntent and is used for ALL intent / signature / expiry
@@ -146,17 +145,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 // level) for ops visibility; the HTTP response always surfaces the generic
 // ErrAuthRefreshFailed code so callers cannot distinguish token type from
 // signature validity.
-//
-// Falls back to plain Verify when the verifier is a legacy TokenVerifier used
-// only by some unit tests; production wiring always injects an
-// IntentTokenVerifier.
 func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) error {
-	var verifyErr error
-	if iv, ok := s.verifier.(auth.IntentTokenVerifier); ok {
-		_, verifyErr = iv.VerifyIntent(ctx, refreshToken, auth.TokenIntentRefresh)
-	} else {
-		_, verifyErr = s.verifier.Verify(ctx, refreshToken)
-	}
+	_, verifyErr := s.verifier.VerifyIntent(ctx, refreshToken, auth.TokenIntentRefresh)
 	if verifyErr != nil {
 		s.logger.Warn("session-refresh: refresh token verification failed",
 			slog.Any("error", verifyErr))
