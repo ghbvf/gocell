@@ -241,30 +241,40 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 		return
 	}
 
-	if !isNewFormat && cfg.nonceStore != nil {
-		cfg.logger.Warn("legacy 2-part service token accepted without replay check",
-			slog.String("path", r.URL.Path),
-			slog.String("method", r.Method),
-		)
-	}
-
-	// Replay check only for new 3-part tokens.
-	if isNewFormat && cfg.nonceStore != nil {
-		if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
-			if errors.Is(err, ErrNonceReused) {
-				cfg.metrics.recordServiceVerify("failure", "replay")
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token replay detected")
-			} else {
-				cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
-				cfg.logger.Error("nonce store check failed", slog.Any("error", err))
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
-			}
-			return
-		}
+	if blocked := checkNonceReplay(cfg, isNewFormat, nonce, w, r); blocked {
+		return
 	}
 
 	cfg.metrics.recordServiceVerify("success", "ok")
 	next.ServeHTTP(w, r)
+}
+
+// checkNonceReplay handles nonce-based replay detection. Returns true if the
+// request was blocked (response already written).
+func checkNonceReplay(cfg serviceTokenConfig, isNewFormat bool, nonce string, w http.ResponseWriter, r *http.Request) bool {
+	if cfg.nonceStore == nil {
+		return false
+	}
+	if !isNewFormat {
+		cfg.logger.Warn("legacy 2-part service token accepted without replay check",
+			slog.String("path", r.URL.Path),
+			slog.String("method", r.Method),
+		)
+		return false
+	}
+	err := cfg.nonceStore.CheckAndMark(r.Context(), nonce)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNonceReused) {
+		cfg.metrics.recordServiceVerify("failure", "replay")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token replay detected")
+	} else {
+		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
+		cfg.logger.Error("nonce store check failed", slog.Any("error", err))
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+	}
+	return true
 }
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message
@@ -325,7 +335,7 @@ func GenerateServiceToken(ring *HMACKeyRing, method, path, rawQuery string, ts t
 
 	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce)
 	mac := hmac.New(sha256.New, ring.Current())
-	fmt.Fprintf(mac, "%s", message)
+	_, _ = mac.Write([]byte(message))
 	return tsStr + ":" + nonce + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 

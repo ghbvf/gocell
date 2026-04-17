@@ -8,6 +8,9 @@ import (
 )
 
 func toTokenPairResponse(p *TokenPair) dto.TokenPairResponse {
+	if p == nil {
+		return dto.TokenPairResponse{}
+	}
 	return dto.TokenPairResponse{
 		AccessToken:  p.AccessToken,
 		RefreshToken: p.RefreshToken,

@@ -47,6 +47,12 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return fn(context.Background())
 }
 
+func TestToConfigVersionResponse_NilInput(t *testing.T) {
+	var got ConfigVersionResponse
+	assert.NotPanics(t, func() { got = toConfigVersionResponse(nil) })
+	assert.Zero(t, got.ID)
+}
+
 func TestConfigVersionResponse_Fields(t *testing.T) {
 	now := time.Now()
 	version := &domain.ConfigVersion{

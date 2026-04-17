@@ -17,6 +17,9 @@ type DeviceStatusResponse struct {
 }
 
 func toDeviceStatusResponse(d *domain.Device) DeviceStatusResponse {
+	if d == nil {
+		return DeviceStatusResponse{}
+	}
 	return DeviceStatusResponse{
 		ID:       d.ID,
 		Name:     d.Name,

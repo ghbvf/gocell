@@ -15,6 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestToDeviceRegisterResponse_NilInput(t *testing.T) {
+	var got DeviceRegisterResponse
+	assert.NotPanics(t, func() { got = toDeviceRegisterResponse(nil) })
+	assert.Zero(t, got.ID)
+}
+
 func TestDeviceRegisterResponse_Fields(t *testing.T) {
 	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online"}
 	resp := toDeviceRegisterResponse(device)

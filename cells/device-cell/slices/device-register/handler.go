@@ -15,6 +15,9 @@ type DeviceRegisterResponse struct {
 }
 
 func toDeviceRegisterResponse(d *domain.Device) DeviceRegisterResponse {
+	if d == nil {
+		return DeviceRegisterResponse{}
+	}
 	return DeviceRegisterResponse{
 		ID:     d.ID,
 		Name:   d.Name,

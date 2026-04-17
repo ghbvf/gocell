@@ -23,6 +23,9 @@ type CommandResponse struct {
 }
 
 func toCommandResponse(c *domain.Command) CommandResponse {
+	if c == nil {
+		return CommandResponse{}
+	}
 	return CommandResponse{
 		ID: c.ID, DeviceID: c.DeviceID, Payload: c.Payload,
 		Status: c.Status, CreatedAt: c.CreatedAt, AckedAt: c.AckedAt,

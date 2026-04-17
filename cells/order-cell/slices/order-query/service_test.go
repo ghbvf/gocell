@@ -190,3 +190,27 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	assert.Equal(t, "sort scope mismatch", ecErr.Details["reason"])
 }
+
+func TestService_List_ContextMismatch(t *testing.T) {
+	codec := testCodec()
+	cur := query.Cursor{
+		Values:  []any{time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano), "ord-1"},
+		Scope:   query.SortScope(orderSort),
+		Context: query.QueryContext("endpoint", "wrong-endpoint"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	repo := seedRepo(&domain.Order{
+		ID: "ord-1", Item: "a", Status: "pending",
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	svc := NewService(repo, codec, slog.Default())
+
+	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
+}

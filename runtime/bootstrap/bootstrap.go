@@ -17,7 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,13 +151,25 @@ func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
 	}
 }
 
+// WithSecurityHeadersOptions configures HSTS and other security header
+// directives. This is a convenience wrapper around
+// WithRouterOptions(router.WithSecurityHeadersOptions(...)).
+//
+// ref: unrolled/secure — configurable HSTS directives via struct fields
+func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
+	return func(b *Bootstrap) {
+		b.routerOpts = append(b.routerOpts, router.WithSecurityHeadersOptions(opts...))
+	}
+}
+
 // WithAuthMiddleware enables authentication for HTTP business routes. The
 // verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
-// Deprecated: Use WithPublicEndpoints instead. WithPublicEndpoints discovers
-// the auth verifier automatically from cells implementing authProvider,
-// eliminating the need for explicit verifier injection at the composition root.
+// Deprecated: Use bootstrap.WithPublicEndpoints instead, which discovers the
+// auth verifier automatically and delegates trust boundary policy to
+// router.WithPublicEndpoints (auth bypass + tracing new-root + request_id
+// rejection in a single configuration point).
 //
 // publicEndpoints specifies business-route paths that bypass authentication.
 // If nil, no business routes are public (fail-closed). Callers must
@@ -424,6 +436,15 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 
+	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
+	// exclusive. Both set authPublicEndpoints but with different semantics
+	// (explicit verifier vs. discovery). Allowing both silently creates
+	// order-dependent behavior.
+	if b.authVerifier != nil && b.authDiscovery {
+		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithPublicEndpoints " +
+			"are mutually exclusive; use WithPublicEndpoints (recommended)")
+	}
+
 	// Track teardown functions for rollback (LIFO order).
 	var teardowns []func(context.Context) error
 
@@ -657,13 +678,32 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 				if !ok {
 					continue
 				}
+				var filteredPrefixes []string
+				if kf, ok := c.(cell.ConfigKeyFilterer); ok {
+					filteredPrefixes = kf.ConfigKeyPrefixes()
+					if len(filteredPrefixes) > 0 {
+						changedKeys := make([]string, 0, len(added)+len(updated)+len(removed))
+						changedKeys = append(changedKeys, added...)
+						changedKeys = append(changedKeys, updated...)
+						changedKeys = append(changedKeys, removed...)
+						if !config.NewKeyFilter(filteredPrefixes...).Matches(changedKeys) {
+							continue
+						}
+					}
+				}
 				// Clone per cell to guarantee isolation: a misbehaving handler
 				// cannot mutate slices/map seen by subsequent handlers.
+				// When the cell declares key prefixes, trim the config snapshot
+				// to only matching keys (minimal exposure principle).
+				cfgSnap := cloneMap(newSnap)
+				if len(filteredPrefixes) > 0 {
+					cfgSnap = filterMapByPrefixes(cfgSnap, filteredPrefixes)
+				}
 				event := cell.ConfigChangeEvent{
 					Added:      cloneStrings(added),
 					Updated:    cloneStrings(updated),
 					Removed:    cloneStrings(removed),
-					Config:     cloneMap(newSnap),
+					Config:     cfgSnap,
 					Generation: gen,
 				}
 				func() {
@@ -778,22 +818,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Copy to avoid mutating b.routerOpts' backing array.
 	routerOpts := make([]router.Option, 0, len(b.routerOpts)+4)
 	routerOpts = append(routerOpts, b.routerOpts...)
-	// Wire trust-boundary policy for tracing and request_id from public endpoints.
-	// Public endpoints (e.g., login, refresh) ignore client-supplied trace context
-	// and X-Request-Id headers, preventing untrusted callers from injecting
-	// arbitrary observability identifiers.
+	// Wire trust-boundary policy via router.WithPublicEndpoints which configures
+	// auth bypass + tracing new-root + request_id rejection in a single option.
 	if len(b.authPublicEndpoints) > 0 {
-		publicSet := make(map[string]bool, len(b.authPublicEndpoints))
-		for _, p := range b.authPublicEndpoints {
-			publicSet[path.Clean(p)] = true
-		}
-		isPublic := func(r *http.Request) bool {
-			return publicSet[path.Clean(r.URL.Path)]
-		}
-		routerOpts = append(routerOpts,
-			router.WithTracingOptions(middleware.WithPublicEndpointFn(isPublic)),
-			router.WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(isPublic)),
-		)
+		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
 	}
 	if b.authVerifier != nil {
 		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
@@ -999,6 +1027,19 @@ func cloneStrings(src []string) []string {
 // cloneMap returns a deep copy of a map[string]any. Values that are slices
 // or nested maps are recursively cloned so that mutations by one consumer
 // cannot affect another.
+func filterMapByPrefixes(src map[string]any, prefixes []string) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		for _, p := range prefixes {
+			if strings.HasPrefix(k, p) {
+				dst[k] = v
+				break
+			}
+		}
+	}
+	return dst
+}
+
 func cloneMap(src map[string]any) map[string]any {
 	if src == nil {
 		return nil

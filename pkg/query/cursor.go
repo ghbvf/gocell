@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -182,6 +183,39 @@ func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
 	return errcode.WithDetails(
 		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		details)
+}
+
+// knownDemoKeys holds the well-known demo cursor keys used by GoCell cells
+// when no production key is injected.
+var knownDemoKeys = [][]byte{
+	[]byte("gocell-demo-AUDIT--CORE-key-32!!"),
+	[]byte("gocell-demo-CONFIG-CORE-key-32!!"),
+	[]byte("gocell-demo-ORDER-CELL-key-32b!!"),
+	[]byte("gocell-demo-DEVICE-CELL-key-32!!"),
+	[]byte("core-bundle-audit-cursor-key-32!"),
+	[]byte("core-bundle-cfg-cursor-key--32b!"),
+}
+
+// KnownDemoKeys returns a copy of the well-known demo cursor keys.
+func KnownDemoKeys() [][]byte {
+	out := make([][]byte, len(knownDemoKeys))
+	copy(out, knownDemoKeys)
+	return out
+}
+
+// IsDemoKey checks whether the codec's current signing key matches any of
+// the provided known demo keys. Only the current key is checked — during
+// key rotation from a demo key to a production key, IsDemoKey returns false
+// once the current key is production, even if previous is still demo.
+// This is intentional: once signing uses a production key, strict cursor
+// validation should apply.
+func (c *CursorCodec) IsDemoKey(known ...[]byte) bool {
+	for _, k := range known {
+		if len(k) == len(c.current) && subtle.ConstantTimeCompare(c.current, k) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateCursorScope checks that the decoded cursor carries the expected sort

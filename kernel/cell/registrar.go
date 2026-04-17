@@ -194,3 +194,15 @@ type HealthContributor interface {
 type ConfigReloader interface {
 	OnConfigReload(event ConfigChangeEvent) error
 }
+
+// ConfigKeyFilterer is optionally implemented by ConfigReloader cells that
+// want notifications only for specific config key prefixes. If the changed
+// keys don't match any prefix, the cell is skipped.
+//
+// An empty return (nil or []string{}) means receive ALL notifications (default).
+//
+// ref: kratos config/config.go — Watch(key, Observer) single-key registration
+// ref: go-micro config/default.go — Watch(path...) key-scoped observation
+type ConfigKeyFilterer interface {
+	ConfigKeyPrefixes() []string
+}

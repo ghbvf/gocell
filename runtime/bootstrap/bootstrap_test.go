@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
@@ -2906,4 +2907,388 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
+}
+
+func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-sechdr", DurabilityMode: cell.DurabilityDemo})
+	tc := newTestCell("hsts-cell")
+	require.NoError(t, asm.Register(tc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithSecurityHeadersOptions(
+			middleware.WithHSTSIncludeSubDomains(),
+			middleware.WithHSTSPreload(),
+		),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, reqErr := testHTTPClient.Get("http://" + addr + "/healthz")
+	require.NoError(t, reqErr)
+	_ = resp.Body.Close()
+
+	hsts := resp.Header.Get("Strict-Transport-Security")
+	assert.Contains(t, hsts, "includeSubDomains",
+		"WithSecurityHeadersOptions must propagate HSTS subdomain directive")
+	assert.Contains(t, hsts, "preload",
+		"WithSecurityHeadersOptions must propagate HSTS preload directive")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ConfigKeyFilterer integration tests (CFG-KEYFILTER-WIRE-01)
+// ---------------------------------------------------------------------------
+
+// keyFilterReloaderCell implements ConfigReloader + ConfigKeyFilterer for testing.
+type keyFilterReloaderCell struct {
+	*cell.BaseCell
+	prefixes []string
+	reloaded chan cell.ConfigChangeEvent
+}
+
+func newKeyFilterReloaderCell(id string, prefixes []string) *keyFilterReloaderCell {
+	return &keyFilterReloaderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+		prefixes: prefixes,
+		reloaded: make(chan cell.ConfigChangeEvent, 4),
+	}
+}
+
+func (c *keyFilterReloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
+	c.reloaded <- event
+	return nil
+}
+
+func (c *keyFilterReloaderCell) ConfigKeyPrefixes() []string {
+	return c.prefixes
+}
+
+// TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched verifies that a cell with
+// ConfigKeyPrefixes()=["server."] is NOT notified when only "db.host" changes.
+func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: localhost\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-skip", DurabilityMode: cell.DurabilityDemo})
+	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
+	require.NoError(t, asm.Register(kfc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Change only a db.* key — server. cell must NOT be notified.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
+
+	// Wait long enough for any spurious notification to arrive.
+	select {
+	case evt := <-kfc.reloaded:
+		t.Fatalf("cell must NOT be notified when keys don't match prefix: got event %+v", evt)
+	case <-time.After(500 * time.Millisecond):
+		// expected: no notification
+	}
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched verifies that a cell with
+// ConfigKeyPrefixes()=["server."] IS notified when "server.port" changes.
+func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 8080\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-match", DurabilityMode: cell.DurabilityDemo})
+	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
+	require.NoError(t, asm.Register(kfc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Change a server.* key — server. cell MUST be notified.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\ndb:\n  host: localhost\n"), 0o644))
+
+	select {
+	case evt := <-kfc.reloaded:
+		assert.Contains(t, evt.Updated, "server.port",
+			"event must contain the matched key")
+		// Minimal exposure: Config snapshot only contains keys matching the
+		// cell's registered prefixes, not the full config.
+		_, hasServer := evt.Config["server.port"]
+		_, hasDB := evt.Config["db.host"]
+		assert.True(t, hasServer, "Config must contain matched prefix keys")
+		assert.False(t, hasDB, "Config must NOT contain keys outside registered prefixes (minimal exposure)")
+	case <-time.After(3 * time.Second):
+		t.Fatal("cell was not notified after matching key change")
+	}
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies backward
+// compatibility: a cell implementing only ConfigReloader (no ConfigKeyFilterer)
+// receives all config change notifications regardless of which keys changed.
+func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: localhost\n"), 0o644))
+
+	ln := newLocalListener(t)
+
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-nofilter", DurabilityMode: cell.DurabilityDemo})
+	rc := newReloaderCell("plain-reloader")
+	require.NoError(t, asm.Register(rc))
+
+	b := New(
+		WithAssembly(asm),
+		WithConfig(cfgFile, ""),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Change any key — plain reloader must receive notification.
+	require.NoError(t, os.WriteFile(cfgFile, []byte("db:\n  host: db-primary\n"), 0o644))
+
+	require.Eventually(t, func() bool {
+		return rc.eventCount() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "plain ConfigReloader must receive all notifications")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Trust boundary: traceparent header injection (F2-SEC-03)
+// ---------------------------------------------------------------------------
+
+// traceCapturingCell registers routes that capture the trace_id from context.
+type traceCapturingCell struct {
+	*cell.BaseCell
+	verifier     auth.TokenVerifier
+	gotPublic    chan string
+	gotProtected chan string
+}
+
+func newTraceCapturingCell(id string, verifier auth.TokenVerifier) *traceCapturingCell {
+	return &traceCapturingCell{
+		BaseCell:     cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		verifier:     verifier,
+		gotPublic:    make(chan string, 4),
+		gotProtected: make(chan string, 4),
+	}
+}
+
+func (c *traceCapturingCell) TokenVerifier() auth.TokenVerifier {
+	return c.verifier
+}
+
+func (c *traceCapturingCell) RegisterRoutes(mux cell.RouteMux) {
+	mux.Handle("GET /api/v1/public/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, _ := ctxkeys.TraceIDFrom(r.Context())
+		c.gotPublic <- tid
+		w.WriteHeader(http.StatusOK)
+	}))
+	mux.Handle("GET /api/v1/protected/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, _ := ctxkeys.TraceIDFrom(r.Context())
+		c.gotProtected <- tid
+		w.WriteHeader(http.StatusOK)
+	}))
+}
+
+// TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the
+// trust boundary for traceparent headers:
+//   - Public endpoints must NOT propagate a client-supplied traceparent (new root trace).
+//   - Protected endpoints with a valid auth token MUST propagate the upstream traceparent.
+func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T) {
+	ln := newLocalListener(t)
+	tracer := tracing.NewTracer("trust-test")
+
+	verifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+	tc := newTraceCapturingCell("trace-boundary-cell", verifier)
+
+	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(tc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithTracer(tracer),
+		WithShutdownTimeout(2*time.Second),
+		WithPublicEndpoints([]string{"/api/v1/public/ping"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	upstreamTraceID := "aabbccddeeff00112233445566778899"
+	traceparentHeader := "00-" + upstreamTraceID + "-b7ad6b7169203331-01"
+
+	t.Run("public endpoint creates new root trace", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/public/ping", addr), nil)
+		require.NoError(t, err)
+		req.Header.Set("traceparent", traceparentHeader)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var gotTraceID string
+		select {
+		case gotTraceID = <-tc.gotPublic:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler did not capture trace_id")
+		}
+		assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context")
+		assert.NotEqual(t, upstreamTraceID, gotTraceID,
+			"public endpoint must create a new root trace, not propagate client-supplied traceparent")
+	})
+
+	t.Run("protected endpoint continues upstream trace", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/protected/ping", addr), nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer test-token")
+		req.Header.Set("traceparent", traceparentHeader)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var gotTraceID string
+		select {
+		case gotTraceID = <-tc.gotProtected:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler did not capture trace_id")
+		}
+		assert.Equal(t, upstreamTraceID, gotTraceID,
+			"protected endpoint must propagate upstream trace_id from traceparent header")
+	})
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auth option conflict detection (P1 fail-fast)
+// ---------------------------------------------------------------------------
+
+func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "conflict-test", DurabilityMode: cell.DurabilityDemo})
+	tc := newTestCell("conflict-cell")
+	require.NoError(t, asm.Register(tc))
+
+	verifier := &bootstrapTestVerifier{
+		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
+	}
+
+	t.Run("WithAuthMiddleware then WithPublicEndpoints", func(t *testing.T) {
+		b := New(
+			WithAssembly(asm),
+			WithAuthMiddleware(verifier, []string{"/login"}),
+			WithPublicEndpoints([]string{"/login"}),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("WithPublicEndpoints then WithAuthMiddleware", func(t *testing.T) {
+		b := New(
+			WithAssembly(asm),
+			WithPublicEndpoints([]string{"/login"}),
+			WithAuthMiddleware(verifier, []string{"/login"}),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
 }
