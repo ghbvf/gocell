@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	cellpg "github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/config-core/slices/configpublish"
@@ -20,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Compile-time interface checks.
@@ -73,6 +75,27 @@ func WithInMemoryDefaults() Option {
 	return func(c *ConfigCore) {
 		c.configRepo = mem.NewConfigRepository()
 		c.flagRepo = mem.NewFlagRepository()
+	}
+}
+
+// WithPostgresDefaults wires the config-core cell with PostgreSQL-backed
+// repositories and a transactional outbox. Use this option when
+// GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
+// migrations (004_create_config_entries_and_versions.sql) before starting.
+//
+// pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
+// writes to the outbox_entries table within the same transaction.
+//
+// L2 consistency: repo writes + outbox writes are wrapped in a single
+// RunInTx call per service operation.
+//
+// ref: go-zero wire — adapter selected at assembly init time, not run time.
+func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option {
+	return func(c *ConfigCore) {
+		session := cellpg.NewSession(pool)
+		c.configRepo = cellpg.NewConfigRepositoryFromSession(session)
+		c.flagRepo = mem.NewFlagRepository() // flags remain in-memory in PR-C1
+		c.outboxWriter = outboxWriter
 	}
 }
 

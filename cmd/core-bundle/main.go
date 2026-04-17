@@ -17,12 +17,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -217,11 +219,43 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	configCell := configcore.NewConfigCore(
-		configcore.WithInMemoryDefaults(),
+	// GOCELL_CELL_ADAPTER_MODE selects the storage backend for config-core.
+	// "postgres" = real PG (requires GOCELL_PG_DSN); "memory" or unset = in-memory.
+	// ref: Kratos wire injection pattern — adapter selected at assembly time.
+	cellAdapterMode := os.Getenv("GOCELL_CELL_ADAPTER_MODE")
+	if cellAdapterMode == "" {
+		cellAdapterMode = "memory"
+	}
+
+	configOpts := []configcore.Option{
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
-	)
+	}
+
+	switch cellAdapterMode {
+	case "postgres":
+		pgPool, pgErr := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
+		if pgErr != nil {
+			return fmt.Errorf("config-core PG pool: %w", pgErr)
+		}
+		outboxWriter := adapterpg.NewOutboxWriter()
+		txMgr := adapterpg.NewTxManager(pgPool)
+		configOpts = append(configOpts,
+			configcore.WithPostgresDefaults(pgPool.DB(), outboxWriter),
+			configcore.WithTxManager(txMgr),
+		)
+		slog.Info("config-core: using PostgreSQL storage",
+			slog.String("cell_adapter_mode", cellAdapterMode))
+	case "memory":
+		configOpts = append(configOpts, configcore.WithInMemoryDefaults())
+		slog.Info("config-core: using in-memory storage",
+			slog.String("cell_adapter_mode", cellAdapterMode))
+	default:
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", cellAdapterMode))
+	}
+
+	configCell := configcore.NewConfigCore(configOpts...)
 
 	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),

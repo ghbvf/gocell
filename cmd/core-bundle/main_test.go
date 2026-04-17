@@ -282,6 +282,47 @@ func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 	return privPEM, pubPEM
 }
 
+// TestBootstrap_DemoModeUsesInMemory verifies that when GOCELL_CELL_ADAPTER_MODE
+// is unset (or empty), run() selects the in-memory storage path for config-core
+// and does not attempt to connect to PostgreSQL (no GOCELL_PG_DSN required).
+// Guards against regression where the default could be accidentally flipped to
+// "postgres" and break dev/test setups.
+func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
+	// Ensure both GOCELL_CELL_ADAPTER_MODE and GOCELL_PG_DSN are unset.
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
+	t.Setenv("GOCELL_PG_DSN", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately — we only need Init(), not server start
+
+	err := run(ctx)
+	// Only context.Canceled and listen/sandbox errors are acceptable.
+	// A postgres connection failure would be: "config-core PG pool: ..."
+	if err != nil {
+		acceptable := errors.Is(err, context.Canceled) ||
+			errors.Is(err, syscall.EPERM) ||
+			isBindError(err)
+		if !acceptable {
+			t.Fatalf("unexpected error when GOCELL_CELL_ADAPTER_MODE is empty (should use in-memory): %v", err)
+		}
+	}
+}
+
+// TestBootstrap_UnknownCellAdapterMode_FailsFast verifies that an unrecognised
+// GOCELL_CELL_ADAPTER_MODE value causes run() to fail with an informative error
+// before attempting any DB connections.
+func TestBootstrap_UnknownCellAdapterMode_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "cassandra")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cassandra",
+		"error must mention the unknown value")
+}
+
 // TestRun_RealMode_DemoKey_FailsFast locks the rejectDemoKey wiring: for
 // each env channel (HMAC key + two cursor keys), injecting a well-known
 // demo value must abort run() before the HTTP server starts. Guards
