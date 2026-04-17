@@ -1,9 +1,14 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -496,15 +501,64 @@ func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec2.Code, "replay must be allowed without a NonceStore")
 }
 
-func TestServiceTokenMiddleware_LegacyTwoPartFormat_Rejected(t *testing.T) {
-	// 2-part tokens (format: {ts}:{hmac}) must be rejected with 401.
-	// Per CLAUDE.md "not considering backward compatibility", the legacy
-	// format introduced before PR#159 added nonce is no longer accepted.
+// legacyTwoPartToken computes what a pre-PR#159 signer would have emitted:
+// HMAC-SHA256(secret, "METHOD PATH TIMESTAMP") → hex, prefixed with "{ts}:".
+// This is the exact token the old 2-part format would produce.
+func legacyTwoPartToken(secret, method, path string, ts time.Time) string {
+	tsStr := strconv.FormatInt(ts.Unix(), 10)
+	message := fmt.Sprintf("%s %s %s", method, path, tsStr)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(message))
+	return tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected verifies
+// that a semantically valid 2-part token (real HMAC, correct secret, fresh
+// timestamp) is rejected with 401 ERR_AUTH_UNAUTHORIZED.
+//
+// Semantic boundary: if the removed 2-part compat branch (PR#159) were
+// reintroduced, the legacy HMAC would match and the middleware would return 200
+// — this test would then FAIL, proving it truly locks the boundary.
+func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *testing.T) {
+	const (
+		method = http.MethodGet
+		path   = "/legacy/path"
+	)
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Unix(1700000000, 0)
 
-	// Craft a 2-part token with a valid-looking hex MAC segment.
-	legacyToken := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
+	// Recompute the exact token a pre-PR#159 signer would have emitted:
+	// HMAC-SHA256(testSecret, "GET /legacy/path 1700000000") → hex.
+	// The 2-part format has no nonce, so this is a fully valid legacy credential.
+	legacyToken := legacyTwoPartToken(testSecret, method, path, now)
+
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
+	}))
+
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "ServiceToken "+legacyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"2-part legacy token with real HMAC must be rejected")
+	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
+}
+
+// TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected verifies that a
+// 2-part token with a forged (non-HMAC) MAC segment is rejected with 401.
+// This test covers structural rejection, while
+// TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected covers
+// the semantic boundary (valid HMAC, wrong format).
+func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Unix(1700000000, 0)
+
+	// Forged hex MAC — not a real HMAC output.
+	forgedToken := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -513,11 +567,12 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_Rejected(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/legacy/path", nil)
-	req.Header.Set("Authorization", "ServiceToken "+legacyToken)
+	req.Header.Set("Authorization", "ServiceToken "+forgedToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusUnauthorized, rec.Code, "2-part legacy token must be rejected")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "2-part forged token must be rejected")
+	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
