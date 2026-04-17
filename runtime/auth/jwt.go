@@ -10,9 +10,13 @@ import (
 )
 
 // DefaultAccessTokenTTL is the default time-to-live for access tokens issued
-// by JWTIssuer. Shared across session-login, session-refresh, and bootstrap.
-// Callers can override by passing a custom duration to NewJWTIssuer.
+// by JWTIssuer. Can be overridden by cmd/* via NewJWTIssuer or WithRefreshTTL.
 const DefaultAccessTokenTTL = 15 * time.Minute
+
+// DefaultRefreshTokenTTL is the default time-to-live for refresh tokens issued
+// by JWTIssuer. 7 days follows common OAuth 2.0 server defaults (e.g., Auth0,
+// Okta, Keycloak). Can be overridden by cmd/* via WithRefreshTTL.
+const DefaultRefreshTokenTTL = 7 * 24 * time.Hour
 
 // JOSE typ header values written per TokenIntent. RFC 9068 §2.1 mandates
 // "at+jwt" for access tokens; "refresh+jwt" is a GoCell convention (RFC 8725
@@ -198,10 +202,11 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
 // Each issued token carries a kid header derived from the signing key.
 type JWTIssuer struct {
-	keys   SigningKeyProvider
-	issuer string
-	ttl    time.Duration
-	now    func() time.Time
+	keys       SigningKeyProvider
+	issuer     string
+	ttl        time.Duration
+	refreshTTL time.Duration
+	now        func() time.Time
 }
 
 // JWTIssuerOption configures a JWTIssuer.
@@ -217,16 +222,27 @@ func WithIssuerClock(fn func() time.Time) JWTIssuerOption {
 	}
 }
 
+// WithRefreshTTL overrides the default refresh token TTL (DefaultRefreshTokenTTL).
+// A zero or negative duration is ignored.
+func WithRefreshTTL(d time.Duration) JWTIssuerOption {
+	return func(i *JWTIssuer) {
+		if d > 0 {
+			i.refreshTTL = d
+		}
+	}
+}
+
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
 func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opts ...JWTIssuerOption) (*JWTIssuer, error) {
 	if keys == nil {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	i := &JWTIssuer{
-		keys:   keys,
-		issuer: issuer,
-		ttl:    ttl,
-		now:    time.Now,
+		keys:       keys,
+		issuer:     issuer,
+		ttl:        ttl,
+		refreshTTL: DefaultRefreshTokenTTL,
+		now:        time.Now,
 	}
 	for _, o := range opts {
 		o(i)
@@ -253,11 +269,15 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, roles []string, au
 		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
 	now := i.now()
+	expiry := i.ttl
+	if intent == TokenIntentRefresh {
+		expiry = i.refreshTTL
+	}
 	claims := jwt.MapClaims{
 		"sub":         subject,
 		"iss":         i.issuer,
 		"iat":         now.Unix(),
-		"exp":         now.Add(i.ttl).Unix(),
+		"exp":         now.Add(expiry).Unix(),
 		tokenUseClaim: string(intent),
 	}
 	if len(audience) > 0 {

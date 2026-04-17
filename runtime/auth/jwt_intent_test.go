@@ -220,6 +220,33 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
+// TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL verifies that Issue()
+// uses DefaultRefreshTokenTTL for refresh tokens and the access ttl for access
+// tokens. Uses a fixed clock to compare exp precisely.
+func TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL(t *testing.T) {
+	ks := mustTestKeySet(t)
+	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	issuer, err := NewJWTIssuer(ks, "gocell", DefaultAccessTokenTTL, WithIssuerClock(func() time.Time { return fixedNow }))
+	require.NoError(t, err)
+
+	accessStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	require.NoError(t, err)
+	accessPayload := decodeJWTPayload(t, accessStr)
+	accessExp := int64(accessPayload["exp"].(float64))
+	assert.Equal(t, fixedNow.Add(DefaultAccessTokenTTL).Unix(), accessExp,
+		"access token exp must be now+DefaultAccessTokenTTL (15min)")
+
+	refreshStr, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, nil, "")
+	require.NoError(t, err)
+	refreshPayload := decodeJWTPayload(t, refreshStr)
+	refreshExp := int64(refreshPayload["exp"].(float64))
+	assert.Equal(t, fixedNow.Add(DefaultRefreshTokenTTL).Unix(), refreshExp,
+		"refresh token exp must be now+DefaultRefreshTokenTTL (7 days)")
+
+	assert.Greater(t, refreshExp, accessExp,
+		"refresh token must live longer than access token")
+}
+
 // TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader verifies that a token
 // carrying typ="JWT" (RFC 7519 legacy plain JWT) is rejected even when the
 // token_use claim is valid. intentForJWTTyp("JWT") returns ("", false),
