@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +40,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-test", []string{dto.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
