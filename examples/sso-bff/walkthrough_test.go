@@ -26,24 +26,14 @@ import (
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// walkthroughTxRunner executes fn directly without a real transaction (demo mode).
-type walkthroughTxRunner struct{}
-
-func (walkthroughTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = walkthroughTxRunner{}
 
 // buildWalkthroughServer constructs an in-memory test server that mirrors
 // sso-bff main.go but uses httptest.NewServer for port-free testing.
@@ -63,15 +53,14 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(auth.DefaultJWTAudience))
 	require.NoError(t, err)
 
-	var nw outbox.Writer = outbox.NoopWriter{}
-
+	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
+	// eventbus publisher. This ensures access-core events reach audit-core's
+	// subscriber without transactional outbox machinery.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithOutboxWriter(nw),
-		accesscore.WithTxManager(walkthroughTxRunner{}),
 		accesscore.WithLogger(slog.Default()),
 		accesscore.WithSeedAdmin("admin", seedPass),
 	)
@@ -84,8 +73,6 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(auditHMACKey),
-		auditcore.WithOutboxWriter(nw),
-		auditcore.WithTxManager(walkthroughTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(slog.Default()),
 	)
@@ -104,13 +91,35 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 	}
 
 	r := router.New(
-		router.WithAuthMiddleware(ac.TokenVerifier(), publicEndpoints),
+		router.WithPublicEndpoints(publicEndpoints),
+		router.WithAuthMiddleware(ac.TokenVerifier(), nil),
 	)
 	ac.RegisterRoutes(r)
 	auc.RegisterRoutes(r)
 
+	// Wire audit-core event subscriptions so access-core events reach the
+	// audit handler asynchronously (mirrors bootstrap wiring in main.go).
+	evtRouter := eventrouter.New(eb)
+	require.NoError(t, auc.RegisterSubscriptions(evtRouter))
+
+	evtCtx, evtCancel := context.WithCancel(context.Background())
+	evtDone := make(chan struct{})
+	go func() {
+		defer close(evtDone)
+		_ = evtRouter.Run(evtCtx)
+	}()
+	// Wait briefly for subscriptions to start consuming.
+	select {
+	case <-evtRouter.Running():
+	case <-time.After(500 * time.Millisecond):
+	}
+
 	srv := httptest.NewServer(r)
-	cleanup := func() { srv.Close() }
+	cleanup := func() {
+		srv.Close()
+		evtCancel()
+		<-evtDone
+	}
 	return srv, cleanup
 }
 
@@ -266,28 +275,38 @@ func TestWalkthrough(t *testing.T) {
 	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {
 		// Use the admin token — alice's session was logged out, but adminToken
 		// session is still active. Admin can query audit entries for any actor.
-		req, err := http.NewRequestWithContext(context.Background(),
-			http.MethodGet,
-			base+"/api/v1/audit/entries",
-			http.NoBody)
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+adminToken)
+		auditURL := base + "/api/v1/audit/entries"
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-		// Decode as a page result: {"data":[...],"hasMore":bool}
-		var page struct {
+		// In demo mode, audit events are delivered async via the in-memory
+		// eventbus; poll until at least one entry is visible.
+		type auditPage struct {
 			Data []json.RawMessage `json:"data"`
 		}
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
+		var page auditPage
+		require.Eventually(t, func() bool {
+			req, err := http.NewRequestWithContext(context.Background(),
+				http.MethodGet, auditURL, http.NoBody)
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bearer "+adminToken)
 
-		// In demo mode, audit events are delivered async via the in-memory eventbus;
-		// entries may not yet be visible immediately after login. Validate field
-		// names only when entries are present.
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil || resp.StatusCode != http.StatusOK {
+				if resp != nil {
+					resp.Body.Close()
+				}
+				return false
+			}
+			defer resp.Body.Close()
+
+			page = auditPage{}
+			if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+				return false
+			}
+			return len(page.Data) > 0
+		}, 2*time.Second, 50*time.Millisecond, "expected at least one audit entry")
+
 		for _, raw := range page.Data {
 			var entry map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(raw, &entry))

@@ -92,7 +92,7 @@ curl -s http://localhost:8081/api/v1/access/users/{userId} \
 The session ID is embedded in the `accessToken` JWT claims under the `sid` field.
 
 ```bash
-SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sid)
+SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .sid)
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://localhost:8081/api/v1/access/sessions/$SESSION_ID
@@ -110,6 +110,7 @@ curl -s http://localhost:8081/api/v1/audit/entries \
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/config/ \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"key":"site.title","value":"My SSO Portal"}' | jq
 ```
 
@@ -118,6 +119,7 @@ curl -s -X POST http://localhost:8081/api/v1/config/ \
 ```bash
 curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{"value":"SSO Portal v2"}' | jq
 ```
 
