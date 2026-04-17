@@ -216,10 +216,10 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// Down() rolls back one migration at a time. With 5 migrations applied,
-		// call Down() 5 times to fully revert. The outbox_entries table disappears
+		// Down() rolls back one migration at a time. With 6 migrations applied,
+		// call Down() 6 times to fully revert. The outbox_entries table disappears
 		// after rolling back 001 (the last iteration).
-		for i := 5; i > 1; i-- {
+		for i := 6; i > 1; i-- {
 			err := migrator.Down(ctx)
 			require.NoError(t, err, "Down() should roll back migration %d without error", i)
 
@@ -457,6 +457,54 @@ func TestMigration004_StructuralAssertions(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, exists, "idx_outbox_pending_v2 must exist (RL-MIG-01 evidence, migration 005)")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// T7: TestMigration006_ConfigVersionsConfigIDIndex
+// ---------------------------------------------------------------------------
+
+// TestMigration006_ConfigVersionsConfigIDIndex verifies that migration 006
+// creates idx_config_versions_config_id and that an eq-lookup on config_id
+// uses an Index Scan (not a Seq Scan).
+func TestMigration006_ConfigVersionsConfigIDIndex(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_006")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations including 006")
+
+	// Verify idx_config_versions_config_id exists.
+	var idxExists bool
+	err = pool.DB().QueryRow(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_config_versions_config_id')").
+		Scan(&idxExists)
+	require.NoError(t, err)
+	assert.True(t, idxExists, "idx_config_versions_config_id must exist after migration 006")
+
+	// Disable seq scan to force index usage in EXPLAIN, then verify plan.
+	// This confirms the planner can use the new index for eq-lookup on config_id.
+	_, err = pool.DB().Exec(ctx, "SET enable_seqscan = off")
+	require.NoError(t, err)
+
+	rows, err := pool.DB().Query(ctx,
+		"EXPLAIN (FORMAT JSON) SELECT * FROM config_versions WHERE config_id = 'test-id'")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var planJSON string
+	require.True(t, rows.Next(), "EXPLAIN should return at least one row")
+	require.NoError(t, rows.Scan(&planJSON))
+	require.NoError(t, rows.Err())
+
+	assert.Contains(t, planJSON, "idx_config_versions_config_id",
+		"query plan should reference idx_config_versions_config_id when seq scan disabled")
+
+	// Re-enable seq scan to not affect other tests (belt-and-suspenders;
+	// the connection returns to pool and settings reset on next acquire).
+	_, _ = pool.DB().Exec(ctx, "SET enable_seqscan = on")
 }
 
 // Target: adapters/postgres coverage >= 80%
