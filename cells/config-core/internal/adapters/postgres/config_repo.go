@@ -5,6 +5,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/jackc/pgx/v5"
 )
 
 // DBTX abstracts the database operations needed by ConfigRepository.
@@ -40,12 +42,39 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 // ConfigRepository implements ports.ConfigRepository using PostgreSQL.
 type ConfigRepository struct {
-	db DBTX
+	db      DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
+	session *Session // production path: resolves ambient tx via persistence.TxCtxKey
 }
 
-// NewConfigRepository creates a ConfigRepository backed by the given DBTX.
-func NewConfigRepository(db DBTX) *ConfigRepository {
-	return &ConfigRepository{db: db}
+// NewConfigRepository creates a ConfigRepository that resolves the ambient
+// pgx.Tx from the context on each call, enabling transactional participation
+// via persistence.TxCtxKey. Session is the sole production entry point;
+// use the unexported newConfigRepositoryFromDBTX in tests.
+//
+// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
+func NewConfigRepository(s *Session) *ConfigRepository {
+	return &ConfigRepository{session: s}
+}
+
+// resolveDB returns the DBTX to use for read calls. When a Session is
+// configured it resolves the ambient transaction from ctx (falling back to
+// pool for non-transactional reads); otherwise the fixed DBTX is used
+// (unit-test path).
+func (r *ConfigRepository) resolveDB(ctx context.Context) DBTX {
+	if r.session != nil {
+		return r.session.resolve(ctx)
+	}
+	return r.db
+}
+
+// resolveWriteDB returns the DBTX for write calls. When a Session is
+// configured it requires a tx in ctx (L2 atomicity guarantee); otherwise
+// falls back to the fixed DBTX (unit-test path).
+func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
+	if r.session != nil {
+		return r.session.resolveWrite(ctx)
+	}
+	return r.db, nil
 }
 
 // Create inserts a new config entry.
@@ -62,7 +91,11 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		entry.UpdatedAt = now
 	}
 
-	_, err := r.db.Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, query,
 		entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
 		entry.CreatedAt, entry.UpdatedAt,
 	)
@@ -79,18 +112,30 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 	const query = `SELECT id, key, value, sensitive, version, created_at, updated_at
 		FROM config_entries WHERE key = $1`
 
-	row := r.db.QueryRow(ctx, query, key)
+	row := r.resolveDB(ctx).QueryRow(ctx, query, key)
 
 	var e domain.ConfigEntry
 	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
-		// PR#155 followup F3: Message is the externally visible string for 4xx
-		// (writeErrcodeError pass-through). Keep it identifier-free; the key
-		// goes into InternalMessage which is logged but never written to the
-		// HTTP response. ref: pkg/errcode.Safe.
+		// REPO-SCAN-CLASSIFY-01: distinguish pgx.ErrNoRows (404) from other
+		// scan errors (internal/query error). Previously all scan errors were
+		// mapped to ErrConfigRepoNotFound which hid real DB failures.
+		// ref: go-zero sqlx — sql.ErrNoRows as sentinel for not-found.
+		if errors.Is(err, pgx.ErrNoRows) {
+			// PR#155 followup F3: Message is the externally visible string for 4xx
+			// (writeErrcodeError pass-through). Keep it identifier-free; the key
+			// goes into InternalMessage which is logged but never written to the
+			// HTTP response. ref: pkg/errcode.Safe.
+			return nil, &errcode.Error{
+				Code:            errcode.ErrConfigRepoNotFound,
+				Message:         "config not found",
+				InternalMessage: fmt.Sprintf("config repo: GetByKey miss key=%s", key),
+				Cause:           err,
+			}
+		}
 		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoNotFound,
-			Message:         "config not found",
-			InternalMessage: fmt.Sprintf("config repo: GetByKey miss key=%s", key),
+			Code:            errcode.ErrConfigRepoQuery,
+			Message:         "config repo query failed",
+			InternalMessage: fmt.Sprintf("config repo: GetByKey scan error key=%s", key),
 			Cause:           err,
 		}
 	}
@@ -108,7 +153,11 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 		entry.UpdatedAt = time.Now()
 	}
 
-	affected, err := r.db.Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	affected, err := db.Exec(ctx, query,
 		entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
 	)
 	if err != nil {
@@ -128,7 +177,11 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 	const query = `DELETE FROM config_entries WHERE key = $1`
 
-	affected, err := r.db.Exec(ctx, query, key)
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	affected, err := db.Exec(ctx, query, key)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: delete failed for key %s", key), err)
@@ -153,7 +206,7 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	}
 
 	sql, args := b.Build()
-	rows, err := r.db.Query(ctx, sql, args...)
+	rows, err := r.resolveDB(ctx).Query(ctx, sql, args...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: list failed", err)
 	}
@@ -180,7 +233,11 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		(id, config_id, version, value, sensitive, published_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`
 
-	_, err := r.db.Exec(ctx, query,
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(ctx, query,
 		version.ID, version.ConfigID, version.Version,
 		version.Value, version.Sensitive, version.PublishedAt,
 	)
@@ -198,17 +255,29 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 	const query = `SELECT id, config_id, version, value, sensitive, published_at
 		FROM config_versions WHERE config_id = $1 AND version = $2`
 
-	row := r.db.QueryRow(ctx, query, configID, version)
+	row := r.resolveDB(ctx).QueryRow(ctx, query, configID, version)
 
 	var v domain.ConfigVersion
 	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt); err != nil {
-		// PR#155 followup F3: external Message must not leak the internal config_id
-		// or the requested version (would help an attacker enumerate). Identifiers
-		// stay in InternalMessage + Cause for logs/diagnostics only.
+		// REPO-SCAN-CLASSIFY-01: distinguish pgx.ErrNoRows (404) from other
+		// scan errors (internal/query error). Previously all scan errors were
+		// mapped to ErrConfigRepoNotFound which hid real DB failures.
+		// ref: go-zero sqlx — sql.ErrNoRows as sentinel for not-found.
+		if errors.Is(err, pgx.ErrNoRows) {
+			// PR#155 followup F3: external Message must not leak the internal config_id
+			// or the requested version (would help an attacker enumerate). Identifiers
+			// stay in InternalMessage + Cause for logs/diagnostics only.
+			return nil, &errcode.Error{
+				Code:            errcode.ErrConfigRepoNotFound,
+				Message:         "config version not found",
+				InternalMessage: fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version),
+				Cause:           err,
+			}
+		}
 		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoNotFound,
-			Message:         "config version not found",
-			InternalMessage: fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version),
+			Code:            errcode.ErrConfigRepoQuery,
+			Message:         "config repo query failed",
+			InternalMessage: fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version),
 			Cause:           err,
 		}
 	}

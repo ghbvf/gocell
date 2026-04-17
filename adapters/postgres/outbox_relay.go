@@ -133,12 +133,12 @@ type RelayConfig struct {
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
-		PollInterval:    1 * time.Second,
-		BatchSize:       100,
-		RetentionPeriod: 72 * time.Hour,
-		MaxAttempts:     5,
-		BaseRetryDelay:  5 * time.Second,
-		ClaimTTL:        60 * time.Second,
+		PollInterval:        1 * time.Second,
+		BatchSize:           100,
+		RetentionPeriod:     72 * time.Hour,
+		MaxAttempts:         5,
+		BaseRetryDelay:      5 * time.Second,
+		ClaimTTL:            60 * time.Second,
 		MaxRetryDelay:       5 * time.Minute,
 		ReclaimInterval:     30 * time.Second,
 		DeadRetentionPeriod: 30 * 24 * time.Hour, // 30 days
@@ -508,7 +508,7 @@ func (r *OutboxRelay) claim(ctx context.Context) ([]relayEntry, error) {
 		}
 	}()
 
-	// ORDER BY matches idx_outbox_pending (next_retry_at NULLS FIRST, created_at)
+	// ORDER BY matches idx_outbox_pending_v2 (next_retry_at NULLS FIRST, created_at)
 	// so PostgreSQL can use the partial index for sorting without an extra Sort step.
 	const claimQuery = `UPDATE outbox_entries
 		SET status = $1, claimed_at = now()
@@ -606,6 +606,7 @@ const (
 // writeBack updates entry statuses based on publish outcomes in a short transaction.
 // All UPDATEs include WHERE status='claiming' as an optimistic lock — this prevents
 // a race where reclaimStale recovers the entry between Phase 2 and Phase 3.
+//
 //nolint:gocognit // pre-existing complexity; tracked in backlog Batch 8
 func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (pollStats, error) {
 	tx, err := r.db.Begin(ctx)

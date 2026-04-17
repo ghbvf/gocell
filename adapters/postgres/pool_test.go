@@ -158,7 +158,7 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")
 	}
 	_, err := NewPool(t.Context(), Config{
-		DSN:     "postgres://nobody:nopass@127.0.0.1:1/nonexistent",
+		DSN:      "postgres://nobody:nopass@127.0.0.1:1/nonexistent",
 		MaxConns: 1,
 	})
 	require.Error(t, err)

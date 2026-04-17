@@ -17,12 +17,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -140,6 +142,84 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	return codec, nil
 }
 
+// buildAssembly constructs the core-bundle Assembly and registers the three
+// cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
+func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *accesscore.AccessCore, auditCell *auditcore.AuditCore) (*assembly.CoreAssembly, error) {
+	asm := assembly.New(assembly.Config{
+		ID:              "core-bundle",
+		DurabilityMode:  cell.DurabilityDurable,
+		HookObserver:    ps.hookObserver,
+		MetricsProvider: ps.metricProvider,
+		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
+	})
+	if err := asm.Register(configCell); err != nil {
+		return nil, fmt.Errorf("register config-core: %w", err)
+	}
+	if err := asm.Register(accessCell); err != nil {
+		return nil, fmt.Errorf("register access-core: %w", err)
+	}
+	if err := asm.Register(auditCell); err != nil {
+		return nil, fmt.Errorf("register audit-core: %w", err)
+	}
+	return asm, nil
+}
+
+// pgHealthCheckerOpts returns a single bootstrap.WithHealthChecker option
+// bound to pool.Health when pool is non-nil. Returns nil when pool is nil so
+// the caller can unconditionally append without a guard block.
+//
+// ref: Kubernetes readyz — external dependencies contribute named checks.
+// ref: Uber fx lifecycle — resources must be explicitly hooked; the framework
+// does not auto-manage lifetime.
+func pgHealthCheckerOpts(ctx context.Context, pool *adapterpg.Pool) []bootstrap.Option {
+	if pool == nil {
+		return nil
+	}
+	return []bootstrap.Option{
+		bootstrap.WithHealthChecker("postgres", func() error {
+			return pool.Health(ctx)
+		}),
+	}
+}
+
+// buildAdapterInfo builds the adapter-info map that's exposed via
+// bootstrap.WithAdapterInfo. It reflects the RESOLVED runtime topology
+// (not static strings) so /readyz?verbose and adapter_info metrics match
+// what actually serves traffic.
+//
+// ref: go-micro service metadata — mode changes must be visible to observers.
+func buildAdapterInfo(effectiveMode, cellAdapterMode string) map[string]string {
+	storageMode := "in-memory"
+	if cellAdapterMode == "postgres" {
+		storageMode = "postgres"
+	}
+	return map[string]string{
+		"mode":      effectiveMode,
+		"storage":   storageMode,
+		"event_bus": "in-memory", // event bus adapters pending
+	}
+}
+
+// validateModeCoupling enforces that the DATA plane (cellAdapterMode) and
+// CONTROL plane (adapterMode) agree on production posture. If the cell has
+// committed to a real backend (postgres), operators MUST also set
+// GOCELL_ADAPTER_MODE=real so key loading, /metrics, and /readyz?verbose
+// run with production guards. Otherwise real persistence runs with dev-grade
+// HMAC/cursor keys and unauthenticated control-plane endpoints — the exact
+// split ops/security review flagged on PR #169.
+//
+// ref: go-zero serviceconf — single config drives all gates; misalignment is fatal.
+// ref: go-micro mode/profile — runtime mode is observed by all subsystems.
+func validateModeCoupling(cellAdapterMode, adapterMode string) error {
+	if cellAdapterMode == "postgres" && adapterMode != "real" {
+		return errcode.New(errcode.ErrValidationFailed,
+			"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
+				"(real persistence demands production key loading, token-guarded "+
+				"/metrics, and token-guarded /readyz?verbose)")
+	}
+	return nil
+}
+
 // validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
 // Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
 func validateAdapterMode(mode string) error {
@@ -149,6 +229,155 @@ func validateAdapterMode(mode string) error {
 	default:
 		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (unset = dev) or \"real\"", mode)
 	}
+}
+
+// buildConfigCoreOpts selects storage-adapter options for config-core based on
+// GOCELL_CELL_ADAPTER_MODE. Returns the selected mode, the cell options, and
+// the underlying *adapterpg.Pool (non-nil iff mode=="postgres") so the caller
+// can plumb lifecycle (Close) and readiness (Health) hooks.
+//
+// "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
+// "memory" or unset = in-memory repos (dev/test only).
+//
+// Pilot scope: single global switch applies to all cells. Before adding a 2nd
+// cell's PG wiring, split to per-cell `GOCELL_<CELL>_ADAPTER_MODE`
+// (backlog: GOCELL-PER-CELL-ADAPTER-01).
+//
+// ref: Kratos wire — adapter selected at assembly init time, not run time.
+// ref: Uber fx lifecycle — external resources must hook OnStart/OnStop;
+//
+//	the framework does not auto-manage pool lifetime. We return pool to run()
+//	so that Close() and Health() both get wired into bootstrap explicitly.
+func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Option, pool *adapterpg.Pool, err error) {
+	mode = os.Getenv("GOCELL_CELL_ADAPTER_MODE")
+	if mode == "" {
+		mode = "memory"
+	}
+	switch mode {
+	case "postgres":
+		pool, err = adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
+		if err != nil {
+			return mode, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
+		}
+		outboxWriter := adapterpg.NewOutboxWriter()
+		txMgr := adapterpg.NewTxManager(pool)
+		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
+		return mode, []configcore.Option{
+			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
+			configcore.WithTxManager(txMgr),
+		}, pool, nil
+	case "memory":
+		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", mode))
+		return mode, []configcore.Option{configcore.WithInMemoryDefaults()}, nil, nil
+	default:
+		return mode, nil, nil, errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", mode))
+	}
+}
+
+// jwtDeps groups JWT signing and verification components built at startup.
+type jwtDeps struct {
+	issuer   *auth.JWTIssuer
+	verifier *auth.JWTVerifier
+}
+
+// buildJWTDeps loads the key set and constructs issuer + verifier.
+// Extracted from run() to keep cognitive complexity within bounds.
+func buildJWTDeps(adapterMode string) (jwtDeps, error) {
+	keySet, err := loadKeySet(adapterMode)
+	if err != nil {
+		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
+	}
+	issuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
+	if err != nil {
+		return jwtDeps{}, fmt.Errorf("create JWT issuer: %w", err)
+	}
+	verifier, err := auth.NewJWTVerifier(keySet)
+	if err != nil {
+		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
+	}
+	return jwtDeps{issuer: issuer, verifier: verifier}, nil
+}
+
+// buildAdminOpts appends the appropriate admin-seed option to base, reading
+// GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS from the environment.
+// The password env var is unset immediately after reading to minimise its
+// exposure in /proc/{pid}/environ (defense-in-depth).
+func buildAdminOpts(base []accesscore.Option) []accesscore.Option {
+	adminUser := os.Getenv("GOCELL_ADMIN_USER")
+	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
+	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
+	switch {
+	case adminUser != "" && adminPass != "":
+		return append(base, accesscore.WithSeedAdmin(adminUser, adminPass))
+	case adminUser != "" || adminPass != "":
+		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
+		return append(base, accesscore.WithSeedAdminRole())
+	default:
+		return append(base, accesscore.WithSeedAdminRole())
+	}
+}
+
+// promStack groups the Prometheus hook observer and metric provider.
+type promStack struct {
+	registry       *prom.Registry
+	hookObserver   *adapterprom.HookObserver
+	metricProvider *adapterprom.MetricProvider
+}
+
+// buildPromStack creates an isolated Prometheus registry, a hook observer,
+// and a metric provider on top of it.
+func buildPromStack() (promStack, error) {
+	registry := prom.NewRegistry()
+	hookObserver, err := adapterprom.NewHookObserver(adapterprom.HookObserverConfig{
+		Registry: registry,
+	})
+	if err != nil {
+		return promStack{}, fmt.Errorf("register cell hook observer: %w", err)
+	}
+	metricProvider, err := adapterprom.NewMetricProvider(adapterprom.MetricProviderConfig{
+		Registry:  registry,
+		Namespace: "gocell",
+	})
+	if err != nil {
+		return promStack{}, fmt.Errorf("build metrics provider: %w", err)
+	}
+	return promStack{
+		registry:       registry,
+		hookObserver:   hookObserver,
+		metricProvider: metricProvider,
+	}, nil
+}
+
+// buildMetricsHandler constructs the /metrics HTTP handler.
+// In "real" adapter mode, metricsToken must be non-empty (fail-fast).
+// When metricsToken is set the handler is wrapped with a token guard;
+// otherwise a warning is emitted and the handler is unauthenticated.
+//
+// ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
+func buildMetricsHandler(adapterMode, metricsToken string, registry *prom.Registry) (http.Handler, error) {
+	if adapterMode == "real" && metricsToken == "" {
+		return nil, fmt.Errorf("GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header")
+	}
+	h := http.Handler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	if metricsToken != "" {
+		return withMetricsTokenGuard(metricsToken, h), nil
+	}
+	slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
+	return h, nil
+}
+
+// buildVerboseOpts returns bootstrap options for /readyz?verbose.
+// In "real" adapter mode, verboseToken must be non-empty (fail-fast).
+func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, error) {
+	if adapterMode == "real" && verboseToken == "" {
+		return nil, fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
+	}
+	if verboseToken != "" {
+		return []bootstrap.Option{bootstrap.WithVerboseToken(verboseToken)}, nil
+	}
+	slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
+	return nil, nil
 }
 
 func main() {
@@ -164,7 +393,6 @@ func main() {
 // run contains all assembly and bootstrap logic, extracted from main() for testability.
 func run(ctx context.Context) error {
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
-
 	if err := validateAdapterMode(adapterMode); err != nil {
 		return fmt.Errorf("adapter mode: %w", err)
 	}
@@ -177,25 +405,13 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	keySet, err := loadKeySet(adapterMode)
+	jwt, err := buildJWTDeps(adapterMode)
 	if err != nil {
-		return fmt.Errorf("load JWT key set: %w", err)
-	}
-
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
-	if err != nil {
-		return fmt.Errorf("create JWT issuer: %w", err)
-	}
-	jwtVerifier, err := auth.NewJWTVerifier(keySet)
-	if err != nil {
-		return fmt.Errorf("create JWT verifier: %w", err)
+		return err
 	}
 
 	eb := eventbus.New()
 
-	// NOTE: Storage adapters (postgres/redis/rabbitmq) are not yet wired even in
-	// "real" mode — only JWT keys + HMAC + cursor keys come from env. Storage is
-	// always in-memory for now. adapterInfo reflects storage state, not mode.
 	effectiveMode := "in-memory"
 	if adapterMode == "real" {
 		effectiveMode = "real-keys-in-memory-storage"
@@ -217,36 +433,34 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	configCell := configcore.NewConfigCore(
-		configcore.WithInMemoryDefaults(),
+	cellAdapterMode, cellAdapterOpts, pgPool, err := buildConfigCoreOpts(ctx)
+	if err != nil {
+		return fmt.Errorf("config-core cell adapter: %w", err)
+	}
+	// Pool lifecycle: when running with a real PG pool, we own Close() and
+	// owe readiness signals. defer Close here (before mode check) so an early
+	// validation failure still releases the pool.
+	if pgPool != nil {
+		defer pgPool.Close()
+	}
+	if err := validateModeCoupling(cellAdapterMode, adapterMode); err != nil {
+		return err
+	}
+
+	configOpts := append([]configcore.Option{
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(configCursorCodec),
-	)
+	}, cellAdapterOpts...)
+	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts := []accesscore.Option{
+	accessOpts := buildAdminOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
-		accesscore.WithJWTIssuer(jwtIssuer),
-		accesscore.WithJWTVerifier(jwtVerifier),
-	}
-
-	// Seed admin role + optional admin user from env vars.
-	// Unsetenv to remove plaintext from /proc/{pid}/environ as soon as possible
-	// (defense-in-depth; Go's string immutability prevents full cleanup).
-	adminUser := os.Getenv("GOCELL_ADMIN_USER")
-	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
-	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
-	switch {
-	case adminUser != "" && adminPass != "":
-		accessOpts = append(accessOpts, accesscore.WithSeedAdmin(adminUser, adminPass))
-	case adminUser != "" || adminPass != "":
-		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
-		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
-	default:
-		accessOpts = append(accessOpts, accesscore.WithSeedAdminRole())
-	}
-
+		accesscore.WithJWTIssuer(jwt.issuer),
+		accesscore.WithJWTVerifier(jwt.verifier),
+	})
 	accessCell := accesscore.NewAccessCore(accessOpts...)
+
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
@@ -254,78 +468,36 @@ func run(ctx context.Context) error {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	// Register cell lifecycle hook metrics on a dedicated Prometheus registry.
-	// The registry is isolated from the default global registry so test runs
-	// and multiple assemblies can coexist without collisions.
-	promRegistry := prom.NewRegistry()
-	hookObserver, err := adapterprom.NewHookObserver(adapterprom.HookObserverConfig{
-		Registry: promRegistry,
-	})
+	ps, err := buildPromStack()
 	if err != nil {
-		return fmt.Errorf("register cell hook observer: %w", err)
+		return err
 	}
 
-	// Expose the Prometheus registry to kernel modules via the
-	// provider-neutral metrics.Provider surface. The assembly dispatcher
-	// uses it for drop counters; bootstrap exposes it for caller-registered
-	// metrics (e.g. pool collectors wired from real adapter topologies).
-	metricProvider, err := adapterprom.NewMetricProvider(adapterprom.MetricProviderConfig{
-		Registry:  promRegistry,
-		Namespace: "gocell",
-	})
+	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)
 	if err != nil {
-		return fmt.Errorf("build metrics provider: %w", err)
+		return err
 	}
 
-	asm := assembly.New(assembly.Config{
-		ID:              "core-bundle",
-		DurabilityMode:  cell.DurabilityDurable,
-		HookObserver:    hookObserver,
-		MetricsProvider: metricProvider,
-		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
-	})
-	if err := asm.Register(configCell); err != nil {
-		return fmt.Errorf("register config-core: %w", err)
-	}
-	if err := asm.Register(accessCell); err != nil {
-		return fmt.Errorf("register access-core: %w", err)
-	}
-	if err := asm.Register(auditCell); err != nil {
-		return fmt.Errorf("register audit-core: %w", err)
-	}
-
-	adapterInfo := map[string]string{
-		"mode":      effectiveMode,
-		"storage":   "in-memory", // storage adapters pending
-		"event_bus": "in-memory", // event bus adapters pending
-	}
+	adapterInfo := buildAdapterInfo(effectiveMode, cellAdapterMode)
 	slog.Info("core-bundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]))
 
 	// /readyz?verbose token — required in real mode, optional in dev.
-	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
-	if adapterMode == "real" && verboseToken == "" {
-		return fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
+	// Check this before /metrics so operator error messages name the first
+	// missing secret (consistent with the original sequential validation order).
+	verboseOpts, err := buildVerboseOpts(adapterMode, os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"))
+	if err != nil {
+		return err
 	}
 
-	// /metrics token — required in real mode to avoid anonymous exposure of
-	// cell lifecycle signals (cell_id / hook / outcome labels reveal internal
-	// topology). In dev mode, unrestricted to keep local debugging friction low.
-	// ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
-	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
-	if adapterMode == "real" && metricsToken == "" {
-		return fmt.Errorf("GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header")
-	}
-	metricsHandler := http.Handler(promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
-	if metricsToken != "" {
-		metricsHandler = withMetricsTokenGuard(metricsToken, metricsHandler)
-	} else {
-		slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
+	metricsHandler, err := buildMetricsHandler(adapterMode, os.Getenv("GOCELL_METRICS_TOKEN"), ps.registry)
+	if err != nil {
+		return err
 	}
 
-	bootstrapOpts := []bootstrap.Option{
+	bootstrapOpts := append([]bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -334,22 +506,11 @@ func run(ctx context.Context) error {
 			"/api/v1/access/sessions/refresh",
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
-		// Expose cell lifecycle hook metrics on /metrics.
-		// promhttp serves the isolated registry configured above; the
-		// handler is wrapped with token guard when GOCELL_METRICS_TOKEN is set.
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
-		// Share the same Provider with bootstrap so any future metric
-		// registrar (HTTP collector, relay collector, pool collector)
-		// lands on one Prometheus registry.
-		bootstrap.WithMetricsProvider(metricProvider),
-	}
-	if verboseToken != "" {
-		bootstrapOpts = append(bootstrapOpts, bootstrap.WithVerboseToken(verboseToken))
-	} else {
-		slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
-	}
+		bootstrap.WithMetricsProvider(ps.metricProvider),
+	}, verboseOpts...)
+	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(ctx, pgPool)...)
 
 	app := bootstrap.New(bootstrapOpts...)
-
 	return app.Run(ctx)
 }

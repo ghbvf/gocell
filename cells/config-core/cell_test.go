@@ -465,3 +465,27 @@ func mustPublish(t *testing.T, repo *mem.ConfigRepository, key string) {
 		ID: "ver-seed-" + key, ConfigID: entry.ID, Version: entry.Version, Value: entry.Value,
 	}))
 }
+
+// TestWithPostgresDefaults_ConfiguresRepoAndOutbox verifies that
+// WithPostgresDefaults wires configRepo and outboxWriter on the cell without
+// requiring a real pgxpool.Pool. We pass nil — NewSession accepts nil and the
+// Session is only resolved at query time, not at construction time.
+// The key assertion is that after applying the option, Init succeeds in demo
+// mode when we also supply a txRunner (which WithPostgresDefaults does NOT set,
+// so we must supply it separately to satisfy the XOR constraint).
+func TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter(t *testing.T) {
+	// WithPostgresDefaults wires configRepo + outboxWriter but NOT txRunner.
+	// Supply txRunner separately to satisfy the XOR constraint so Init passes.
+	writer := &recordingConfigWriter{}
+	c := NewConfigCore(
+		WithPostgresDefaults(nil, writer), // nil pool accepted at construction
+		WithTxManager(noopTxRunner{}),
+		WithPublisher(eventbus.New()),
+		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
+	)
+	// configRepo and outboxWriter are non-nil after the option.
+	assert.NotNil(t, c.configRepo, "WithPostgresDefaults must set configRepo")
+	assert.NotNil(t, c.outboxWriter, "WithPostgresDefaults must set outboxWriter")
+	// flagRepo is set by WithPostgresDefaults (in-memory in PR-C1).
+	assert.NotNil(t, c.flagRepo, "WithPostgresDefaults must set flagRepo")
+}

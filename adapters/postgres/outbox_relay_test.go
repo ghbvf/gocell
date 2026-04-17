@@ -892,11 +892,11 @@ func (p *mockPublisher) Publish(_ context.Context, topic string, payload []byte)
 // ---------------------------------------------------------------------------
 
 type mockRelayCollector struct {
-	mu             sync.Mutex
-	pollCycles     []outbox.PollCycleResult
-	batchSizes     []int
-	reclaimCounts  []int64
-	cleanupCalls   []mockCleanupCall
+	mu            sync.Mutex
+	pollCycles    []outbox.PollCycleResult
+	batchSizes    []int
+	reclaimCounts []int64
+	cleanupCalls  []mockCleanupCall
 }
 
 type mockCleanupCall struct {

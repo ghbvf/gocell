@@ -256,3 +256,56 @@ func TestService_Create_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	require.Len(t, writer.entries, 1)
 	assert.Equal(t, TopicConfigChanged, writer.entries[0].EventType)
 }
+
+// TestCreate_CallsTxRunnerRunInTxOnce asserts that Create wraps both the repo
+// write and outbox write inside a single RunInTx call (L2 atomicity).
+func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	writer := &recordingWriter{}
+	tx := &noopTxRunner{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(tx))
+
+	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.calls, "Create must call RunInTx exactly once")
+	assert.Len(t, writer.entries, 1, "outbox entry must be written inside the tx")
+}
+
+// TestUpdate_CallsTxRunnerRunInTxOnce asserts that Update wraps the repo+outbox
+// writes in a single RunInTx (the pre-fetch GetByKey is outside the tx).
+func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	writer := &recordingWriter{}
+	tx := &noopTxRunner{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(tx))
+
+	// Seed via direct repo insert (bypasses service tx counter).
+	_, _ = NewService(repo, stubPublisher{}, slog.Default()).Create(
+		context.Background(), CreateInput{Key: "k", Value: "v1"})
+
+	tx.calls = 0 // reset counter after seed
+	_, err := svc.Update(context.Background(), UpdateInput{Key: "k", Value: "v2"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.calls, "Update must call RunInTx exactly once")
+}
+
+// TestDelete_CallsTxRunnerRunInTxOnce asserts that Delete wraps the repo+outbox
+// writes in a single RunInTx (the pre-fetch GetByKey is outside the tx).
+func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	writer := &recordingWriter{}
+	tx := &noopTxRunner{}
+	svc := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(tx))
+
+	// Seed via direct repo insert (bypasses service tx counter).
+	_, _ = NewService(repo, stubPublisher{}, slog.Default()).Create(
+		context.Background(), CreateInput{Key: "k", Value: "v1"})
+
+	tx.calls = 0 // reset counter after seed
+	err := svc.Delete(context.Background(), "k")
+	require.NoError(t, err)
+	assert.Equal(t, 1, tx.calls, "Delete must call RunInTx exactly once")
+}

@@ -14,9 +14,9 @@ import (
 
 // Default pool configuration values.
 const (
-	defaultMaxConns     = 10
-	defaultIdleTimeout  = 5 * time.Minute
-	defaultMaxLifetime  = 1 * time.Hour
+	defaultMaxConns      = 10
+	defaultIdleTimeout   = 5 * time.Minute
+	defaultMaxLifetime   = 1 * time.Hour
 	defaultHealthTimeout = 5 * time.Second
 )
 
