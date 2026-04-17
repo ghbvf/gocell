@@ -121,14 +121,14 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Access token must contain sid.
-	accessClaims, err := verifier.Verify(context.Background(), pair.AccessToken)
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	sid, ok := accessClaims.Extra["sid"].(string)
 	assert.True(t, ok, "access token must contain sid claim")
 	assert.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
 
 	// Refresh token must contain same sid.
-	refreshClaims, err := verifier.Verify(context.Background(), pair.RefreshToken)
+	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
 	refreshSid, ok := refreshClaims.Extra["sid"].(string)
 	assert.True(t, ok, "refresh token must contain sid claim")

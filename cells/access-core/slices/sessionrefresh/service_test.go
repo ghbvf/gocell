@@ -210,11 +210,11 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	accessClaims, err := verifier.Verify(context.Background(), pair.AccessToken)
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-r1", accessClaims.Extra["sid"], "new access token must carry the session ID")
 
-	refreshClaims, err := verifier.Verify(context.Background(), pair.RefreshToken)
+	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
 	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
 }
