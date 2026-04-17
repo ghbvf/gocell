@@ -14,6 +14,44 @@ import (
 // Callers can override by passing a custom duration to NewJWTIssuer.
 const DefaultAccessTokenTTL = 15 * time.Minute
 
+// JOSE typ header values written per TokenIntent. RFC 9068 §2.1 mandates
+// "at+jwt" for access tokens; "refresh+jwt" is a GoCell convention (RFC 8725
+// §3.11 permits issuer-chosen values as long as they are validated on read).
+const (
+	jwtTypAccess  = "at+jwt"
+	jwtTypRefresh = "refresh+jwt"
+	// tokenUseClaim is the JWT payload key carrying the TokenIntent value.
+	// Named after AWS Cognito's convention, which is the most widely-adopted
+	// community precedent.
+	tokenUseClaim = "token_use"
+)
+
+// jwtTypForIntent returns the JOSE typ header value corresponding to intent.
+// Returns empty string for unknown intents; callers must validate intent first.
+func jwtTypForIntent(intent TokenIntent) string {
+	switch intent {
+	case TokenIntentAccess:
+		return jwtTypAccess
+	case TokenIntentRefresh:
+		return jwtTypRefresh
+	default:
+		return ""
+	}
+}
+
+// intentForJWTTyp is the reverse of jwtTypForIntent. Returns ("", false) for
+// unrecognized typ values (which must be treated as fail-closed).
+func intentForJWTTyp(typ string) (TokenIntent, bool) {
+	switch typ {
+	case jwtTypAccess:
+		return TokenIntentAccess, true
+	case jwtTypRefresh:
+		return TokenIntentRefresh, true
+	default:
+		return "", false
+	}
+}
+
 // JWTVerifier verifies JWT tokens signed with RS256.
 //
 // ref: go-kratos/kratos middleware/auth/jwt/jwt.go -- JWT middleware pattern
@@ -56,7 +94,64 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 
 // Verify validates the token string and returns Claims on success.
 // It rejects tokens that are not signed with RS256 or do not carry a valid kid.
-func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error) {
+//
+// Verify DOES NOT enforce token intent (access vs. refresh) — callers that
+// need intent checks must use VerifyIntent instead.
+func (v *JWTVerifier) Verify(ctx context.Context, tokenStr string) (Claims, error) {
+	claims, _, err := v.parseAndVerify(ctx, tokenStr)
+	return claims, err
+}
+
+// VerifyIntent validates the token like Verify, and additionally requires the
+// declared intent (JWT token_use claim + JOSE typ header) to equal expected.
+// Returns ErrAuthInvalidTokenIntent when:
+//   - expected is not a valid TokenIntent
+//   - the token lacks a token_use claim or typ header
+//   - the token's claim/header disagree with each other
+//   - the token's intent does not match expected
+//
+// This is the primary API for HTTP middleware (expected=access) and the
+// /auth/refresh endpoint (expected=refresh).
+func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expected TokenIntent) (Claims, error) {
+	if !expected.IsValid() {
+		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			fmt.Sprintf("unknown expected intent %q", string(expected)))
+	}
+	claims, header, err := v.parseAndVerify(ctx, tokenStr)
+	if err != nil {
+		return Claims{}, err
+	}
+	if !claims.TokenUse.IsValid() {
+		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			"token_use claim missing or unknown")
+	}
+	headerIntent, ok := intentForJWTTyp(stringFromHeader(header, "typ"))
+	if !ok {
+		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			"typ header missing or unknown")
+	}
+	if headerIntent != claims.TokenUse {
+		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			"typ header and token_use claim disagree")
+	}
+	if claims.TokenUse != expected {
+		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			fmt.Sprintf("token_use=%q does not match expected %q",
+				string(claims.TokenUse), string(expected)))
+	}
+	return claims, nil
+}
+
+// stringFromHeader returns a string-typed JOSE header value or empty string.
+func stringFromHeader(header map[string]any, key string) string {
+	s, _ := header[key].(string)
+	return s
+}
+
+// parseAndVerify decodes the token, validates its signature, and returns both
+// the Claims and the raw JOSE header. It is the shared path of Verify and
+// VerifyIntent.
+func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims, map[string]any, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (any, error) {
 		// Inner errors use bare fmt.Errorf because jwt.Parse wraps them
 		// and line 57 wraps the result with errcode. Using errcode here
@@ -86,18 +181,18 @@ func (v *JWTVerifier) Verify(_ context.Context, tokenStr string) (Claims, error)
 		return pub, nil
 	}, v.parserOpts...)
 	if err != nil {
-		return Claims{}, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
+		return Claims{}, nil, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
-		return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "invalid token")
+		return Claims{}, nil, errcode.New(errcode.ErrAuthUnauthorized, "invalid token")
 	}
 
 	mapClaims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "invalid token claims")
+		return Claims{}, nil, errcode.New(errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
-	return mapClaimsToClaims(mapClaims), nil
+	return mapClaimsToClaims(mapClaims), token.Header, nil
 }
 
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
@@ -140,19 +235,30 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 }
 
 // Issue creates a signed JWT token for the given subject and roles.
-// The token header includes the kid of the active signing key.
-// When sessionID is non-empty, a "sid" claim is included to bind the token
-// to a specific session for revocation support.
-func (i *JWTIssuer) Issue(subject string, roles []string, audience []string, sessionID string) (string, error) {
+//
+// intent declares how the token is meant to be used (access vs. refresh).
+// The resulting JWT carries both a JOSE "typ" header (at+jwt / refresh+jwt)
+// and a "token_use" payload claim so verifiers can reject token-confusion
+// attempts on two independent channels (RFC 9068 §2.1, RFC 8725 §3.11).
+//
+// The token header includes the kid of the active signing key. When
+// sessionID is non-empty, a "sid" claim binds the token to a specific
+// session for revocation support.
+func (i *JWTIssuer) Issue(intent TokenIntent, subject string, roles []string, audience []string, sessionID string) (string, error) {
+	if !intent.IsValid() {
+		return "", errcode.New(errcode.ErrAuthInvalidTokenIntent,
+			fmt.Sprintf("unknown token intent %q", string(intent)))
+	}
 	if i.keys.SigningKey() == nil {
 		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
 	now := i.now()
 	claims := jwt.MapClaims{
-		"sub": subject,
-		"iss": i.issuer,
-		"iat": now.Unix(),
-		"exp": now.Add(i.ttl).Unix(),
+		"sub":         subject,
+		"iss":         i.issuer,
+		"iat":         now.Unix(),
+		"exp":         now.Add(i.ttl).Unix(),
+		tokenUseClaim: string(intent),
 	}
 	if len(audience) > 0 {
 		claims["aud"] = audience
@@ -166,6 +272,7 @@ func (i *JWTIssuer) Issue(subject string, roles []string, audience []string, ses
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = i.keys.SigningKeyID()
+	token.Header["typ"] = jwtTypForIntent(intent)
 	return token.SignedString(i.keys.SigningKey())
 }
 
@@ -185,6 +292,9 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	c.Roles = parseStringSlice(mc["roles"])
 	c.ExpiresAt = parseUnixTime(mc["exp"])
 	c.IssuedAt = parseUnixTime(mc["iat"])
+	if tu, ok := mc[tokenUseClaim].(string); ok {
+		c.TokenUse = TokenIntent(tu)
+	}
 	c.Extra = collectExtraClaims(mc)
 
 	return c
@@ -230,6 +340,7 @@ func parseUnixTime(v any) time.Time {
 var standardClaims = map[string]bool{
 	"sub": true, "iss": true, "aud": true,
 	"exp": true, "iat": true, "nbf": true, "roles": true,
+	tokenUseClaim: true,
 }
 
 func collectExtraClaims(mc jwt.MapClaims) map[string]any {

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"path"
 	"strings"
@@ -45,39 +46,55 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...Au
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip authentication for public endpoints.
 			if publicSet[path.Clean(r.URL.Path)] {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			token := extractBearerToken(r)
-			if token == "" {
-				cfg.metrics.recordTokenVerifyCounter("failure", "missing")
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
-				return
-			}
-
-			start := time.Now()
-			claims, err := verifier.Verify(r.Context(), token)
-			if err != nil {
-				cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
-				cfg.logger.Error("token verification failed",
-					"error", err,
-					"path", r.URL.Path,
-					"remote_addr", r.RemoteAddr,
-				)
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
-				return
-			}
-			cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
-
-			ctx := WithClaims(r.Context(), claims)
-			ctx = ctxkeys.WithSubject(ctx, claims.Subject)
-			ctx = withLogger(ctx, cfg.logger)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			handleAuthRequest(w, r, next, verifier, cfg)
 		})
 	}
+}
+
+// handleAuthRequest extracts the bearer token, verifies it (with intent=access
+// when the verifier supports it), records metrics, and either forwards to
+// next with claims attached or writes a 401 response.
+func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier TokenVerifier, cfg authConfig) {
+	token := extractBearerToken(r)
+	if token == "" {
+		cfg.metrics.recordTokenVerifyCounter("failure", "missing")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
+		return
+	}
+
+	start := time.Now()
+	claims, err := verifyAccessToken(r.Context(), verifier, token)
+	if err != nil {
+		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
+		cfg.logger.Error("token verification failed",
+			"error", err,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr,
+		)
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
+		return
+	}
+	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
+
+	ctx := WithClaims(r.Context(), claims)
+	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
+	ctx = withLogger(ctx, cfg.logger)
+	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// verifyAccessToken dispatches verification through IntentTokenVerifier when
+// available (enforcing token_use=access) and falls back to plain Verify for
+// legacy test doubles. Intent-mismatch errors are collapsed to the generic
+// 401 response by the caller to prevent token-type enumeration.
+func verifyAccessToken(ctx context.Context, verifier TokenVerifier, token string) (Claims, error) {
+	if iv, ok := verifier.(IntentTokenVerifier); ok {
+		return iv.VerifyIntent(ctx, token, TokenIntentAccess)
+	}
+	return verifier.Verify(ctx, token)
 }
 
 // RequireRole checks that the authenticated subject has at least one of the
