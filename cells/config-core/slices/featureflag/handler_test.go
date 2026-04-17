@@ -19,6 +19,18 @@ import (
 
 var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
 
+func TestToFeatureFlagResponse_NilInput(t *testing.T) {
+	var got FeatureFlagResponse
+	assert.NotPanics(t, func() { got = toFeatureFlagResponse(nil) })
+	assert.Zero(t, got.ID)
+}
+
+func TestToEvaluateResultResponse_NilInput(t *testing.T) {
+	var got EvaluateResultResponse
+	assert.NotPanics(t, func() { got = toEvaluateResultResponse(nil) })
+	assert.Zero(t, got.Key)
+}
+
 func TestFeatureFlagResponse_Fields(t *testing.T) {
 	flag := &domain.FeatureFlag{
 		ID: "ff-1", Key: "dark-mode", Type: domain.FlagBoolean,

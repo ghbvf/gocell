@@ -33,6 +33,9 @@ type UserResponse struct {
 
 // toUserResponse converts a domain.User to a UserResponse DTO.
 func toUserResponse(u *domain.User) UserResponse {
+	if u == nil {
+		return UserResponse{}
+	}
 	return UserResponse{
 		ID:        u.ID,
 		Username:  u.Username,

@@ -20,6 +20,9 @@ type FeatureFlagResponse struct {
 }
 
 func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
+	if f == nil {
+		return FeatureFlagResponse{}
+	}
 	return FeatureFlagResponse{
 		ID: f.ID, Key: f.Key, Type: string(f.Type),
 		Enabled: f.Enabled, RolloutPercentage: f.RolloutPercentage,
@@ -34,6 +37,9 @@ type EvaluateResultResponse struct {
 }
 
 func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
+	if r == nil {
+		return EvaluateResultResponse{}
+	}
 	return EvaluateResultResponse{Key: r.Key, Enabled: r.Enabled}
 }
 

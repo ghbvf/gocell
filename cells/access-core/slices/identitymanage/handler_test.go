@@ -33,6 +33,12 @@ func adminCtx() func(*http.Request) *http.Request {
 	}
 }
 
+func TestToUserResponse_NilInput(t *testing.T) {
+	var got UserResponse
+	assert.NotPanics(t, func() { got = toUserResponse(nil) })
+	assert.Zero(t, got.ID)
+}
+
 func TestUserResponse_ExcludesSensitiveFields(t *testing.T) {
 	now := time.Now()
 	user := &domain.User{

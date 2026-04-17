@@ -17,6 +17,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
+func TestToOrderCreateResponse_NilInput(t *testing.T) {
+	var got OrderCreateResponse
+	assert.NotPanics(t, func() { got = toOrderCreateResponse(nil) })
+	assert.Zero(t, got.ID)
+}
+
 func TestOrderCreateResponse_Fields(t *testing.T) {
 	order := &domain.Order{ID: "ord-1", Item: "laptop", Status: "pending"}
 	resp := toOrderCreateResponse(order)

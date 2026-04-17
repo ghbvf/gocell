@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -32,6 +33,12 @@ func setup() *Handler {
 
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), eventbus.New(), testIssuer, slog.Default())
 	return NewHandler(svc)
+}
+
+func TestToTokenPairResponse_NilInput(t *testing.T) {
+	var got dto.TokenPairResponse
+	assert.NotPanics(t, func() { got = toTokenPairResponse(nil) })
+	assert.Empty(t, got.AccessToken)
 }
 
 func TestTokenPairResponse_Fields(t *testing.T) {
