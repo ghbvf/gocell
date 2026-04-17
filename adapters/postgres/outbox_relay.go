@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"regexp"
@@ -599,7 +600,7 @@ const (
 	writeBackMarkDead = `UPDATE outbox_entries SET status = $1, attempts = $2, last_error = $3, dead_at = now()
 		WHERE id = $4 AND status = $5`
 	writeBackMarkRetry = `UPDATE outbox_entries SET status = $1, attempts = $2,
-		next_retry_at = now() + $3::interval, last_error = $4
+		next_retry_at = now() + $3, last_error = $4
 		WHERE id = $5 AND status = $6`
 )
 
@@ -659,9 +660,13 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 			} else {
 				// Retry: back to pending with exponential backoff + jitter,
 				// preventing thundering herd in multi-relay-instance deployments.
+				// Convert delay to a PG interval string (e.g. "5000000 microseconds")
+				// because pgx serialises time.Duration as int64 nanoseconds which PG
+				// cannot cast to interval directly (SQLSTATE 42846).
 				delay := r.retryDelay(newAttempts)
+				delayInterval := fmt.Sprintf("%d microseconds", delay.Microseconds())
 				if _, execErr := tx.Exec(ctx, writeBackMarkRetry,
-					statusPending, newAttempts, delay, errMsg, res.entry.ID, statusClaiming); execErr != nil {
+					statusPending, newAttempts, delayInterval, errMsg, res.entry.ID, statusClaiming); execErr != nil {
 					return stats, errcode.Wrap(ErrAdapterPGQuery, "outbox relay: writeBack mark retry", execErr)
 				}
 				stats.retried++
@@ -685,20 +690,27 @@ func (r *OutboxRelay) writeBack(ctx context.Context, results []publishResult) (p
 func (r *OutboxRelay) reclaimStale(ctx context.Context) error {
 	// LEAST caps the SQL-side backoff at MaxRetryDelay, matching the Go-side
 	// retryDelay() behavior used in writeBack.
+	//
+	// pgx serialises time.Duration as int64 nanoseconds which PostgreSQL cannot
+	// cast to interval (SQLSTATE 42846). To work around this we:
+	//   $1 (ClaimTTL)       — passed as "N microseconds" text; PG parses via ::interval
+	//   $5 (BaseRetryDelay) — passed as int64 microseconds; multiplied by
+	//   $7 (MaxRetryDelay)    interval '1 microsecond' inside the expression
+	claimTTLInterval := fmt.Sprintf("%d microseconds", r.config.ClaimTTL.Microseconds())
 	const q = `UPDATE outbox_entries
 		SET status = CASE WHEN attempts + 1 >= $2 THEN $3 ELSE $4 END,
 			attempts = attempts + 1,
 			claimed_at = NULL,
 			dead_at = CASE WHEN attempts + 1 >= $2 THEN now() ELSE NULL END,
 			next_retry_at = CASE WHEN attempts + 1 >= $2 THEN NULL
-				ELSE now() + LEAST($5 * power(2, attempts + 1), $7)::interval END
+				ELSE now() + LEAST($5 * power(2, attempts + 1), $7) * interval '1 microsecond' END
 		WHERE status = $6 AND claimed_at < now() - $1::interval`
 
 	ct, err := r.db.Exec(ctx, q,
-		r.config.ClaimTTL, r.config.MaxAttempts,
+		claimTTLInterval, r.config.MaxAttempts,
 		statusDead, statusPending,
-		r.config.BaseRetryDelay, statusClaiming,
-		r.config.MaxRetryDelay)
+		r.config.BaseRetryDelay.Microseconds(), statusClaiming,
+		r.config.MaxRetryDelay.Microseconds())
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "outbox relay: reclaimStale failed", err)
 	}
