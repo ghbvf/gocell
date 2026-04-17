@@ -595,18 +595,18 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 
 // --- Circuit breaker wiring ---
 
-// routerTestBreaker is a minimal CircuitBreakerPolicy for router integration tests.
+// routerTestBreaker is a minimal Allower for router integration tests.
 type routerTestBreaker struct {
 	allowErr error
 	called   bool
 }
 
-func (b *routerTestBreaker) Allow() (func(bool), error) {
+func (b *routerTestBreaker) Allow() (bool, func(error)) {
 	b.called = true
 	if b.allowErr != nil {
-		return nil, b.allowErr
+		return false, nil
 	}
-	return func(bool) {}, nil
+	return true, func(error) {}
 }
 
 func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {

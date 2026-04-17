@@ -5,12 +5,43 @@ import (
 	"time"
 
 	"github.com/sony/gobreaker/v2"
-
-	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
-// Compile-time check: Adapter implements CircuitBreakerPolicy.
-var _ middleware.CircuitBreakerPolicy = (*Adapter)(nil)
+// State represents the state of the circuit breaker.
+type State int
+
+const (
+	// StateClosed means the circuit breaker is closed: requests flow through.
+	StateClosed State = iota
+	// StateHalfOpen means the circuit breaker is probing with a limited number of requests.
+	StateHalfOpen
+	// StateOpen means the circuit breaker is open: requests are rejected.
+	StateOpen
+)
+
+// String returns a human-readable name for the state.
+func (s State) String() string {
+	switch s {
+	case StateClosed:
+		return "closed"
+	case StateHalfOpen:
+		return "half-open"
+	case StateOpen:
+		return "open"
+	default:
+		return "unknown"
+	}
+}
+
+// Counts holds the counts of requests and their outcomes. It mirrors
+// gobreaker.Counts but is a local type so callers do not import gobreaker.
+type Counts struct {
+	Requests             uint32
+	TotalSuccesses       uint32
+	TotalFailures        uint32
+	ConsecutiveSuccesses uint32
+	ConsecutiveFailures  uint32
+}
 
 // errServerFailure is the sentinel error passed to gobreaker's done callback
 // when the HTTP handler reports a server-side failure (5xx status).
@@ -36,17 +67,14 @@ type Config struct {
 	// ReadyToTrip is called with counts whenever a request fails in the closed
 	// state. If it returns true, the circuit opens. Default: consecutive
 	// failures > 5.
-	ReadyToTrip func(counts gobreaker.Counts) bool
+	ReadyToTrip func(counts Counts) bool
 
 	// OnStateChange is called whenever the circuit state changes.
-	OnStateChange func(name string, from, to gobreaker.State)
+	OnStateChange func(name string, from, to State)
 }
 
-// Compile-time check: Adapter implements CircuitBreakerRetryAfter.
-var _ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
-
 // Adapter wraps sony/gobreaker's TwoStepCircuitBreaker to implement
-// middleware.CircuitBreakerPolicy and middleware.CircuitBreakerRetryAfter.
+// middleware.Allower and middleware.CircuitBreakerRetryAfter.
 type Adapter struct {
 	cb      *gobreaker.TwoStepCircuitBreaker[struct{}]
 	timeout time.Duration
@@ -55,13 +83,30 @@ type Adapter struct {
 // New creates a gobreaker-backed circuit breaker adapter.
 func New(cfg Config) *Adapter {
 	st := gobreaker.Settings{
-		Name:          cfg.Name,
-		MaxRequests:   cfg.MaxRequests,
-		Interval:      cfg.Interval,
-		Timeout:       cfg.Timeout,
-		ReadyToTrip:   cfg.ReadyToTrip,
-		OnStateChange: cfg.OnStateChange,
+		Name:        cfg.Name,
+		MaxRequests: cfg.MaxRequests,
+		Interval:    cfg.Interval,
+		Timeout:     cfg.Timeout,
 	}
+	if cfg.ReadyToTrip != nil {
+		fn := cfg.ReadyToTrip
+		st.ReadyToTrip = func(c gobreaker.Counts) bool {
+			return fn(Counts{
+				Requests:             c.Requests,
+				TotalSuccesses:       c.TotalSuccesses,
+				TotalFailures:        c.TotalFailures,
+				ConsecutiveSuccesses: c.ConsecutiveSuccesses,
+				ConsecutiveFailures:  c.ConsecutiveFailures,
+			})
+		}
+	}
+	if cfg.OnStateChange != nil {
+		fn := cfg.OnStateChange
+		st.OnStateChange = func(name string, from, to gobreaker.State) {
+			fn(name, gobreakerState(from), gobreakerState(to))
+		}
+	}
+
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second // gobreaker default
@@ -72,21 +117,36 @@ func New(cfg Config) *Adapter {
 	}
 }
 
-// Allow checks if the request should proceed. Returns a done callback that
-// must be called with true (success) or false (failure). If the circuit is
-// open, returns (nil, error).
-func (a *Adapter) Allow() (func(success bool), error) {
-	done, err := a.cb.Allow()
-	if err != nil {
-		return nil, err
+// gobreakerState converts a gobreaker.State to the local State type.
+func gobreakerState(s gobreaker.State) State {
+	switch s {
+	case gobreaker.StateClosed:
+		return StateClosed
+	case gobreaker.StateHalfOpen:
+		return StateHalfOpen
+	case gobreaker.StateOpen:
+		return StateOpen
+	default:
+		return StateClosed
 	}
-	return func(success bool) {
-		if success {
-			done(nil)
+}
+
+// Allow checks if the request should proceed. Returns allowed=true and a done
+// callback when the circuit is closed or half-open. The done callback MUST be
+// called exactly once with nil (success) or a non-nil error (failure). Returns
+// allowed=false and a nil done when the circuit is open.
+func (a *Adapter) Allow() (allowed bool, done func(err error)) {
+	gobDone, err := a.cb.Allow()
+	if err != nil {
+		return false, nil
+	}
+	return true, func(err error) {
+		if err == nil {
+			gobDone(nil)
 		} else {
-			done(errServerFailure)
+			gobDone(errServerFailure)
 		}
-	}, nil
+	}
 }
 
 // RetryAfter returns the open-state timeout — the duration until the circuit
@@ -96,7 +156,8 @@ func (a *Adapter) RetryAfter() time.Duration {
 	return a.timeout
 }
 
-// State returns the current state of the circuit breaker.
-func (a *Adapter) State() gobreaker.State {
-	return a.cb.State()
+// State returns the current state of the circuit breaker using the local State
+// type (no gobreaker import required by callers).
+func (a *Adapter) State() State {
+	return gobreakerState(a.cb.State())
 }

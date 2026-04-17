@@ -142,7 +142,7 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // Bootstrap registers it for teardown on shutdown and startup rollback.
 //
 // ref: go-zero — resilience middleware configuration at app level
-func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
+func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
 		if cl, ok := cb.(io.Closer); ok {

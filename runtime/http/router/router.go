@@ -149,12 +149,12 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // before Metrics, protecting downstream handlers from cascade failures.
 // When the circuit opens, requests are rejected with 503 Service Unavailable.
 //
-// The CircuitBreakerPolicy interface is defined in runtime/http/middleware.
+// The Allower interface is defined in runtime/http/middleware.
 // Use adapters/circuitbreaker.New() for a sony/gobreaker implementation.
 //
 // ref: go-zero — circuit breaker as default middleware when configured
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
-func WithCircuitBreaker(cb middleware.CircuitBreakerPolicy) Option {
+func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(r *Router) {
 		r.circuitBreaker = cb
 	}
@@ -235,7 +235,7 @@ type Router struct {
 	tracingOpts         []middleware.TracingOption
 	requestIDOpts       []middleware.RequestIDOption
 	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.CircuitBreakerPolicy
+	circuitBreaker      middleware.Allower
 	authVerifier        auth.TokenVerifier
 	authPublicEndpoints []string
 	authMetrics         *auth.AuthMetrics

@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,17 +11,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockBreaker implements CircuitBreakerPolicy for testing.
+// mockBreaker implements Allower for testing.
 type mockBreaker struct {
-	allowErr    error
-	doneSuccess *bool // captures the value passed to done()
+	open        bool
+	doneErr     *error // captures the error passed to done()
+	doneInvoked bool
 }
 
-func (m *mockBreaker) Allow() (func(bool), error) {
-	if m.allowErr != nil {
-		return nil, m.allowErr
+func (m *mockBreaker) Allow() (bool, func(error)) {
+	if m.open {
+		return false, nil
 	}
-	return func(success bool) { m.doneSuccess = &success }, nil
+	return true, func(err error) {
+		m.doneInvoked = true
+		m.doneErr = &err
+	}
 }
 
 func TestCircuitBreaker_Closed_PassesThrough(t *testing.T) {
@@ -41,12 +44,13 @@ func TestCircuitBreaker_Closed_PassesThrough(t *testing.T) {
 	handler.ServeHTTP(wrapped, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	require.NotNil(t, cb.doneSuccess, "done callback must be invoked")
-	assert.True(t, *cb.doneSuccess, "200 must report success")
+	require.True(t, cb.doneInvoked, "done callback must be invoked")
+	require.NotNil(t, cb.doneErr)
+	assert.NoError(t, *cb.doneErr, "200 must report nil error (success)")
 }
 
 func TestCircuitBreaker_Open_Returns503(t *testing.T) {
-	cb := &mockBreaker{allowErr: errors.New("circuit breaker is open")}
+	cb := &mockBreaker{open: true}
 	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when circuit is open")
 	}))
@@ -64,7 +68,7 @@ func TestCircuitBreaker_Open_Returns503(t *testing.T) {
 	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
 	assert.Equal(t, "service unavailable", errObj["message"],
 		"503 message must say 'service unavailable', not 'internal server error'")
-	assert.Nil(t, cb.doneSuccess, "done callback must not be invoked when circuit is open")
+	assert.False(t, cb.doneInvoked, "done callback must not be invoked when circuit is open")
 }
 
 func TestCircuitBreaker_Standalone_NoRecorderState(t *testing.T) {
@@ -79,8 +83,8 @@ func TestCircuitBreaker_Standalone_NoRecorderState(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	require.NotNil(t, cb.doneSuccess, "done callback must be invoked even without pre-existing RecorderState")
-	assert.True(t, *cb.doneSuccess, "200 must report success")
+	require.True(t, cb.doneInvoked, "done callback must be invoked even without pre-existing RecorderState")
+	assert.NoError(t, *cb.doneErr, "200 must report nil error (success)")
 }
 
 func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
@@ -99,8 +103,9 @@ func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 		handler.ServeHTTP(wrapped, req)
 	}, "panic must propagate")
 
-	require.NotNil(t, cb.doneSuccess, "done callback must be invoked even when handler panics")
-	assert.False(t, *cb.doneSuccess,
+	require.True(t, cb.doneInvoked, "done callback must be invoked even when handler panics")
+	require.NotNil(t, cb.doneErr)
+	assert.Error(t, *cb.doneErr,
 		"panic must always be recorded as failure, regardless of status code")
 }
 
@@ -119,8 +124,8 @@ func TestCircuitBreaker_HandlerError5xx_ReportsFalse(t *testing.T) {
 	handler.ServeHTTP(wrapped, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.NotNil(t, cb.doneSuccess, "done callback must be invoked")
-	assert.False(t, *cb.doneSuccess, "5xx must report failure")
+	require.True(t, cb.doneInvoked, "done callback must be invoked")
+	assert.Error(t, *cb.doneErr, "5xx must report non-nil error (failure)")
 }
 
 func TestCircuitBreaker_HandlerError4xx_ReportsTrue(t *testing.T) {
@@ -138,11 +143,11 @@ func TestCircuitBreaker_HandlerError4xx_ReportsTrue(t *testing.T) {
 	handler.ServeHTTP(wrapped, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	require.NotNil(t, cb.doneSuccess, "done callback must be invoked")
-	assert.True(t, *cb.doneSuccess, "4xx is a client error, not a server failure")
+	require.True(t, cb.doneInvoked, "done callback must be invoked")
+	assert.NoError(t, *cb.doneErr, "4xx is a client error, not a server failure")
 }
 
-// mockBreakerWithRetryAfter implements both CircuitBreakerPolicy and
+// mockBreakerWithRetryAfter implements both Allower and
 // CircuitBreakerRetryAfter for testing the Retry-After header.
 type mockBreakerWithRetryAfter struct {
 	mockBreaker
@@ -155,7 +160,7 @@ func (m *mockBreakerWithRetryAfter) RetryAfter() time.Duration {
 
 func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
 	cb := &mockBreakerWithRetryAfter{
-		mockBreaker: mockBreaker{allowErr: errors.New("circuit open")},
+		mockBreaker: mockBreaker{open: true},
 		retryAfter:  30 * time.Second,
 	}
 	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -172,7 +177,7 @@ func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
 }
 
 func TestCircuitBreaker_Open_NoRetryAfterWithoutInterface(t *testing.T) {
-	cb := &mockBreaker{allowErr: errors.New("circuit open")}
+	cb := &mockBreaker{open: true}
 	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -189,5 +194,43 @@ func TestCircuitBreaker_Open_NoRetryAfterWithoutInterface(t *testing.T) {
 func TestCircuitBreaker_NilBreaker_Panics(t *testing.T) {
 	assert.Panics(t, func() {
 		CircuitBreaker(nil)
-	}, "nil CircuitBreakerPolicy must panic at construction time")
+	}, "nil Allower must panic at construction time")
+}
+
+// TestAllower_ISP verifies that a caller can depend only on Allower without
+// needing to implement CircuitBreakerRetryAfter, demonstrating the ISP split.
+func TestAllower_ISP(t *testing.T) {
+	// allowerOnly implements only Allower — no RetryAfter.
+	type allowerOnly struct{ mockBreaker }
+
+	var _ Allower = (*allowerOnly)(nil) // compile-time check
+
+	cb := &allowerOnly{mockBreaker: mockBreaker{open: true}}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("should not reach handler")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Empty(t, rec.Header().Get("Retry-After"),
+		"Allower-only implementation must not set Retry-After")
+}
+
+func TestCircuitBreaker_204_ReportsSuccess(t *testing.T) {
+	// 204 No Content is a success status; done must receive nil error.
+	cb := &mockBreaker{}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/resource/1", nil)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	require.True(t, cb.doneInvoked)
+	assert.NoError(t, *cb.doneErr, "204 must report nil error (success)")
 }
