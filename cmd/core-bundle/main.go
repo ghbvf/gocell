@@ -24,12 +24,14 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/worker"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -232,12 +234,19 @@ func validateAdapterMode(mode string) error {
 }
 
 // buildConfigCoreOpts selects storage-adapter options for config-core based on
-// GOCELL_CELL_ADAPTER_MODE. Returns the selected mode, the cell options, and
-// the underlying *adapterpg.Pool (non-nil iff mode=="postgres") so the caller
-// can plumb lifecycle (Close) and readiness (Health) hooks.
+// GOCELL_CELL_ADAPTER_MODE. Returns the selected mode, the cell options, the
+// underlying *adapterpg.Pool (non-nil iff mode=="postgres"), and a relay
+// worker (non-nil iff mode=="postgres") so the caller can plumb lifecycle
+// (Close, Health, relay start/stop) into bootstrap.
 //
 // "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
 // "memory" or unset = in-memory repos (dev/test only).
+//
+// The relay worker (adapterpg.OutboxRelay) satisfies runtime/worker.Worker via
+// structural typing (Start/Stop methods). It must be registered via
+// bootstrap.WithWorkers so the bootstrap lifecycle starts it in Step 8 and
+// stops it LIFO on shutdown — see docs/references/202604181900-outbox-wire-
+// framework-comparison.md for the Kratos/fx rationale.
 //
 // Pilot scope: single global switch applies to all cells. Before adding a 2nd
 // cell's PG wiring, split to per-cell `GOCELL_<CELL>_ADAPTER_MODE`
@@ -248,7 +257,7 @@ func validateAdapterMode(mode string) error {
 //
 //	the framework does not auto-manage pool lifetime. We return pool to run()
 //	so that Close() and Health() both get wired into bootstrap explicitly.
-func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Option, pool *adapterpg.Pool, err error) {
+func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher) (mode string, opts []configcore.Option, pool *adapterpg.Pool, relay worker.Worker, err error) {
 	mode = os.Getenv("GOCELL_CELL_ADAPTER_MODE")
 	if mode == "" {
 		mode = "memory"
@@ -257,20 +266,21 @@ func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Op
 	case "postgres":
 		pool, err = adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
 		if err != nil {
-			return mode, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
+			return mode, nil, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
 		}
 		outboxWriter := adapterpg.NewOutboxWriter()
 		txMgr := adapterpg.NewTxManager(pool)
+		relayWorker := adapterpg.NewOutboxRelay(pool.DB(), pub, adapterpg.DefaultRelayConfig())
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
 		return mode, []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
-		}, pool, nil
+		}, pool, relayWorker, nil
 	case "memory":
 		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", mode))
-		return mode, []configcore.Option{configcore.WithInMemoryDefaults()}, nil, nil
+		return mode, []configcore.Option{configcore.WithInMemoryDefaults()}, nil, nil, nil
 	default:
-		return mode, nil, nil, errcode.New(errcode.ErrValidationFailed,
+		return mode, nil, nil, nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", mode))
 	}
 }
@@ -441,7 +451,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	cellAdapterMode, cellAdapterOpts, pgPool, err := buildConfigCoreOpts(ctx)
+	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err := buildConfigCoreOpts(ctx, eb)
 	if err != nil {
 		return fmt.Errorf("config-core cell adapter: %w", err)
 	}
@@ -518,6 +528,16 @@ func run(ctx context.Context) error {
 		bootstrap.WithMetricsProvider(ps.metricProvider),
 	}, verboseOpts...)
 	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(ctx, pgPool)...)
+	// Wire outbox relay worker: PG mode only. relayWorker is nil in memory mode;
+	// bootstrap.WithWorkers with a nil worker is safe (it appends, but WorkerGroup
+	// skips nil — however we guard here to be explicit and avoid log noise).
+	//
+	// ref: Uber fx OnStart non-blocking + goroutine + OnStop blocking pattern.
+	// GoCell WorkerGroup already implements this contract; OutboxRelay already
+	// satisfies worker.Worker — only the wiring was missing (A11 fix).
+	if relayWorker != nil {
+		bootstrapOpts = append(bootstrapOpts, bootstrap.WithWorkers(relayWorker))
+	}
 
 	app := bootstrap.New(bootstrapOpts...)
 	return app.Run(ctx)
