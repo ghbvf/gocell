@@ -140,6 +140,7 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 	if err != nil {
 		return nil, rollback(fmt.Errorf("outbox: register outbox_cleaned_total: %w", err))
 	}
+	registered = append(registered, cleaned)
 
 	return &providerRelayCollector{
 		cellID:       cellID,

@@ -33,8 +33,12 @@ import (
 // registration unit. GoCell's Collector is a thinner typed handle that keeps
 // kernel code free of Prometheus imports.
 type Collector interface {
-	// Registered marks implementations that were returned by
-	// CounterVec/HistogramVec and may be passed to Provider.Unregister.
+	// Registered is a compile-time type-membership marker, not a runtime
+	// state probe. It always returns true for vecs returned by a Provider;
+	// after Unregister, implementations may still return true because the
+	// collector value itself remains valid — the change is only in the
+	// Provider's registry state, not the vec's identity.
+	//
 	// All concrete vec types (prom, otel, nop, test spy) implement this
 	// method; external code must not implement Collector directly.
 	Registered() bool
