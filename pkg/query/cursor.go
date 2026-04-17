@@ -185,9 +185,9 @@ func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
 		details)
 }
 
-// KnownDemoKeys lists the well-known demo cursor keys used by GoCell cells
+// knownDemoKeys holds the well-known demo cursor keys used by GoCell cells
 // when no production key is injected.
-var KnownDemoKeys = [][]byte{
+var knownDemoKeys = [][]byte{
 	[]byte("gocell-demo-AUDIT--CORE-key-32!!"),
 	[]byte("gocell-demo-CONFIG-CORE-key-32!!"),
 	[]byte("gocell-demo-ORDER-CELL-key-32b!!"),
@@ -196,8 +196,19 @@ var KnownDemoKeys = [][]byte{
 	[]byte("core-bundle-cfg-cursor-key--32b!"),
 }
 
+// KnownDemoKeys returns a copy of the well-known demo cursor keys.
+func KnownDemoKeys() [][]byte {
+	out := make([][]byte, len(knownDemoKeys))
+	copy(out, knownDemoKeys)
+	return out
+}
+
 // IsDemoKey checks whether the codec's current signing key matches any of
-// the provided known demo keys.
+// the provided known demo keys. Only the current key is checked — during
+// key rotation from a demo key to a production key, IsDemoKey returns false
+// once the current key is production, even if previous is still demo.
+// This is intentional: once signing uses a production key, strict cursor
+// validation should apply.
 func (c *CursorCodec) IsDemoKey(known ...[]byte) bool {
 	for _, k := range known {
 		if len(k) == len(c.current) && subtle.ConstantTimeCompare(c.current, k) == 1 {

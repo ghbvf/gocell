@@ -12,7 +12,7 @@ import (
 func TestIsDemoKey_KnownDemoKey(t *testing.T) {
 	codec, err := NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))
 	require.NoError(t, err)
-	assert.True(t, codec.IsDemoKey(KnownDemoKeys...))
+	assert.True(t, codec.IsDemoKey(KnownDemoKeys()...))
 }
 
 func TestIsDemoKey_ProductionKey(t *testing.T) {
@@ -20,7 +20,7 @@ func TestIsDemoKey_ProductionKey(t *testing.T) {
 	_, _ = rand.Read(key)
 	codec, err := NewCursorCodec(key)
 	require.NoError(t, err)
-	assert.False(t, codec.IsDemoKey(KnownDemoKeys...))
+	assert.False(t, codec.IsDemoKey(KnownDemoKeys()...))
 }
 
 func TestIsDemoKey_EmptyKnownList(t *testing.T) {
@@ -36,7 +36,7 @@ func TestIsDemoKey_CurrentIsDemo_WithRotation(t *testing.T) {
 
 	codec, err := NewCursorCodec(demoKey, prodKey)
 	require.NoError(t, err)
-	assert.True(t, codec.IsDemoKey(KnownDemoKeys...))
+	assert.True(t, codec.IsDemoKey(KnownDemoKeys()...))
 }
 
 func TestIsDemoKey_PreviousIsDemo_CurrentIsProd(t *testing.T) {
@@ -46,5 +46,5 @@ func TestIsDemoKey_PreviousIsDemo_CurrentIsProd(t *testing.T) {
 
 	codec, err := NewCursorCodec(prodKey, demoKey)
 	require.NoError(t, err)
-	assert.False(t, codec.IsDemoKey(KnownDemoKeys...))
+	assert.False(t, codec.IsDemoKey(KnownDemoKeys()...))
 }

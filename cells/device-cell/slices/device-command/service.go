@@ -94,6 +94,7 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 			return []any{c.CreatedAt.Format(time.RFC3339Nano), c.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "device-command"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }
 

@@ -61,5 +61,6 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{e.Key, e.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "configread"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }

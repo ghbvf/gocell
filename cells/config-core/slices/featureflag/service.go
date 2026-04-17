@@ -69,6 +69,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{f.Key, f.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "featureflag"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }
 

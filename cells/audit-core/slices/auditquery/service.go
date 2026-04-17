@@ -55,5 +55,6 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 			return []any{e.Timestamp.Format(time.RFC3339Nano), e.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "auditquery"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }

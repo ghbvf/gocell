@@ -320,3 +320,45 @@ func TestExecutePagedQuery_DemoMode_False_StaleCursor_ReturnsError(t *testing.T)
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
+
+func TestExecutePagedQuery_DemoMode_ScopeMismatch_ReturnsFirstPage(t *testing.T) {
+	codec := newTestCodec(t)
+	items := []testItem{
+		{Name: "apple", ID: "1"},
+		{Name: "banana", ID: "2"},
+	}
+	// Construct a valid HMAC token with wrong scope
+	differentSort := []SortColumn{{Name: "other", Direction: SortDESC}}
+	cur := Cursor{
+		Values:  []any{"v1"},
+		Scope:   SortScope(differentSort),
+		Context: QueryContext("endpoint", "test"),
+	}
+	token, err := codec.Encode(cur)
+	require.NoError(t, err)
+
+	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
+		Codec: codec, Request: PageRequest{Limit: 10, Cursor: token}, Sort: pagedTestSort,
+		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
+		DemoMode: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2)
+	assert.False(t, result.HasMore)
+}
+
+func TestExecutePagedQuery_DemoMode_FetchError_Propagated(t *testing.T) {
+	codec := newTestCodec(t)
+
+	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
+		Codec: codec, Request: PageRequest{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
+		QueryCtx: QueryContext("endpoint", "test"),
+		Fetch: func(context.Context, ListParams) ([]testItem, error) {
+			return nil, fmt.Errorf("db connection refused")
+		},
+		Extract:  testExtract,
+		DemoMode: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "db connection refused")
+}

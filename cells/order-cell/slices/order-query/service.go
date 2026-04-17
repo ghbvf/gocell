@@ -52,5 +52,6 @@ func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.Pa
 			return []any{o.CreatedAt.Format(time.RFC3339Nano), o.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "order-query"),
+		DemoMode:    s.codec.IsDemoKey(query.KnownDemoKeys()...),
 	})
 }
