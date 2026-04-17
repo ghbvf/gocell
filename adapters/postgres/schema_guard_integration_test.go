@@ -59,13 +59,56 @@ func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
 	after, err := DetectInvalidIndexes(ctx, pool)
 	require.NoError(t, err)
 	assert.NotEmpty(t, after, "should detect the injected invalid index")
-	assert.Contains(t, after, "idx_outbox_pending_v2",
-		"invalid index list should contain the injected index")
+	var found bool
+	for _, idx := range after {
+		if idx.Index == "idx_outbox_pending_v2" {
+			found = true
+			assert.NotEmpty(t, idx.Table, "invalid index should include table name")
+			break
+		}
+	}
+	assert.True(t, found, "invalid index list should contain the injected index")
 
 	// Restore the index to valid state so container cleanup is clean.
 	_, _ = pool.DB().Exec(ctx,
 		`UPDATE pg_index SET indisvalid = true
 		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
+}
+
+// TestVerifyExpectedVersion_DBAhead_Integration verifies that when the DB
+// schema is ahead of the binary (DB version > FS max), VerifyExpectedVersion
+// returns an error containing "schema version mismatch". This simulates a
+// binary rollback without a corresponding migration rollback.
+func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	const tbl = "schema_migrations_ahead"
+
+	// Apply all migrations.
+	migrator, err := NewMigrator(pool, MigrationsFS(), tbl)
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "initial Up() must succeed")
+
+	// Determine the expected (FS max) version.
+	expected, err := ExpectedVersion(MigrationsFS())
+	require.NoError(t, err)
+	require.Greater(t, expected, int64(0), "test requires at least 1 migration")
+
+	// Simulate a "binary rollback" scenario: DB has an extra version applied that
+	// the current binary doesn't know about (expected + 1).
+	_, execErr := pool.DB().Exec(ctx,
+		"INSERT INTO "+tbl+" (version_id, is_applied, tstamp) VALUES ($1, true, NOW())",
+		expected+1)
+	require.NoError(t, execErr, "inserting extra version record must succeed")
+
+	// VerifyExpectedVersion must now return a schema mismatch error (DB ahead).
+	err = VerifyExpectedVersion(ctx, pool, MigrationsFS(), tbl)
+	require.Error(t, err, "should return error when DB version is ahead of binary")
+	assert.Contains(t, err.Error(), "schema version mismatch",
+		"error message should mention schema version mismatch")
 }
 
 // TestVerifyExpectedVersion_DBLagged_Integration verifies that when the DB

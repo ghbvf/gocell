@@ -59,6 +59,7 @@
 | A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
 | ~~A3~~ | ✅ **RL-INT-01**: Relay PG 集成测试（5 个 testcontainers PG+RMQ 测试） | — | `adapters/postgres/outbox_relay_integration_test.go` | PR-PG-HARDEN |
 | ~~A4~~ | ✅ **RL-MIG-01**: `CREATE INDEX CONCURRENTLY` online-safe 索引 + INVALID index detection + migrations/README.md | — | `adapters/postgres/migrations/` | PR-PG-HARDEN |
+| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 006_add_config_versions_config_id_index.sql + TestMigration006 | — | adapters/postgres/migrations/006_*.sql | PR-PG-HARDEN |
 | A5 | **RL-SUB-01** (🟡 可延后): 入站 ID 校验（空/过长 message ID） | 1h | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **#31 RabbitMQ backoff + FailOpen enum 清理** (🟡 可延后) | 2h | `adapters/rabbitmq/` | Wave 2 残留 |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
