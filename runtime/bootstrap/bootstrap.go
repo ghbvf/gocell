@@ -38,9 +38,11 @@ import (
 )
 
 // authProvider is discovered post-Init from cells that provide a
-// session-aware TokenVerifier (e.g. access-core's TokenVerifier()).
+// session-aware IntentTokenVerifier (e.g. access-core's TokenVerifier()).
+// Intent-awareness is required so AuthMiddleware can enforce
+// token_use=access at the type level.
 type authProvider interface {
-	TokenVerifier() auth.TokenVerifier
+	TokenVerifier() auth.IntentTokenVerifier
 }
 
 // Option configures a Bootstrap instance.
@@ -190,7 +192,7 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 //
 // ref: go-kratos/kratos — auth middleware at service level
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
+func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []string) Option {
 	return func(b *Bootstrap) {
 		b.authVerifier = verifier
 		b.authPublicEndpoints = publicEndpoints
@@ -357,7 +359,7 @@ type Bootstrap struct {
 	publisher                   outbox.Publisher
 	subscriber                  outbox.Subscriber
 	routerOpts                  []router.Option
-	authVerifier                auth.TokenVerifier
+	authVerifier                auth.IntentTokenVerifier
 	authPublicEndpoints         []string
 	authDiscovery               bool // true when WithPublicEndpoints was called
 	shutdownTimeout             time.Duration

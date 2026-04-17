@@ -180,9 +180,9 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.TokenVerifier, publicEndpoints []string) Option {
+func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []string) Option {
 	if verifier == nil {
-		panic("router: WithAuthMiddleware requires a non-nil TokenVerifier")
+		panic("router: WithAuthMiddleware requires a non-nil IntentTokenVerifier")
 	}
 	return func(r *Router) {
 		r.authVerifier = verifier
@@ -245,7 +245,7 @@ type Router struct {
 	rateLimiter         middleware.RateLimiter
 	circuitBreaker      middleware.Allower
 	circuitBreakerNil   bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier        auth.TokenVerifier
+	authVerifier        auth.IntentTokenVerifier
 	authPublicEndpoints []string
 	authMetrics         *auth.AuthMetrics
 	publicEndpoints     []string

@@ -10,6 +10,29 @@ import (
 	"time"
 )
 
+// TokenIntent distinguishes how a JWT is meant to be used, preventing
+// token-confusion attacks where a refresh token is replayed at a business
+// endpoint, or an access token is submitted to /auth/refresh.
+//
+// ref: RFC 9068 §2.1 (typ: at+jwt), RFC 8725 §3.11 (token confusion defense)
+// ref: AWS Cognito token_use claim ("access"/"id"), Keycloak TokenUtil.java
+type TokenIntent string
+
+const (
+	// TokenIntentAccess marks a short-lived credential for calling business
+	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
+	TokenIntentAccess TokenIntent = "access"
+	// TokenIntentRefresh marks a long-lived credential consumed only by
+	// /auth/refresh to rotate the session. Verifier rejects any refresh token
+	// presented at a business endpoint.
+	TokenIntentRefresh TokenIntent = "refresh"
+)
+
+// IsValid reports whether the intent is one of the known enum values.
+func (t TokenIntent) IsValid() bool {
+	return t == TokenIntentAccess || t == TokenIntentRefresh
+}
+
 // Claims represents the decoded token claims.
 type Claims struct {
 	// Subject is the principal identifier (user ID, service name, etc.).
@@ -24,6 +47,10 @@ type Claims struct {
 	IssuedAt time.Time
 	// Roles is the set of roles associated with the subject.
 	Roles []string
+	// TokenUse records the intent declared by the JWT's token_use claim (see
+	// TokenIntent). Empty when absent — callers that enforce intent must
+	// treat empty as fail-closed.
+	TokenUse TokenIntent
 	// Extra holds additional claims not covered by the standard fields.
 	Extra map[string]any
 }
@@ -33,6 +60,20 @@ type Claims struct {
 type TokenVerifier interface {
 	// Verify validates the token string and returns claims on success.
 	Verify(ctx context.Context, token string) (Claims, error)
+}
+
+// IntentTokenVerifier extends TokenVerifier with intent-aware validation.
+// Callers that know the required token intent (e.g., HTTP middleware expecting
+// access tokens, /auth/refresh expecting refresh tokens) should use
+// VerifyIntent so the verifier can reject token-confusion attempts with a
+// distinct ErrAuthInvalidTokenIntent code.
+type IntentTokenVerifier interface {
+	TokenVerifier
+	// VerifyIntent validates the token and additionally requires that its
+	// declared intent (token_use claim + typ header) matches expected.
+	// Returns ErrAuthInvalidTokenIntent when the intent does not match, is
+	// missing, or header/claim diverge.
+	VerifyIntent(ctx context.Context, token string, expected TokenIntent) (Claims, error)
 }
 
 // Authorizer checks whether a subject is allowed to perform an action on a resource.

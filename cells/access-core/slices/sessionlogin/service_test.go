@@ -18,8 +18,8 @@ import (
 )
 
 var (
-	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
-	testIssuer                 *auth.JWTIssuer
+	testKeySet, _, _ = auth.MustNewTestKeySet()
+	testIssuer       *auth.JWTIssuer
 )
 
 func init() {

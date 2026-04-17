@@ -235,14 +235,15 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrInvalidTimeFormat:         http.StatusBadRequest,
 
 	// --- 401 Unauthorized ---
-	errcode.ErrAuthUnauthorized:      http.StatusUnauthorized,
-	errcode.ErrAuthKeyInvalid:        http.StatusUnauthorized,
-	errcode.ErrAuthTokenInvalid:      http.StatusUnauthorized,
-	errcode.ErrAuthTokenExpired:      http.StatusUnauthorized,
-	errcode.ErrAuthLoginFailed:       http.StatusUnauthorized,
-	errcode.ErrAuthRefreshFailed:     http.StatusUnauthorized,
-	errcode.ErrAuthRefreshTokenReuse: http.StatusUnauthorized,
-	errcode.ErrAuthInvalidToken:      http.StatusUnauthorized,
+	errcode.ErrAuthUnauthorized:       http.StatusUnauthorized,
+	errcode.ErrAuthKeyInvalid:         http.StatusUnauthorized,
+	errcode.ErrAuthTokenInvalid:       http.StatusUnauthorized,
+	errcode.ErrAuthTokenExpired:       http.StatusUnauthorized,
+	errcode.ErrAuthLoginFailed:        http.StatusUnauthorized,
+	errcode.ErrAuthRefreshFailed:      http.StatusUnauthorized,
+	errcode.ErrAuthRefreshTokenReuse:  http.StatusUnauthorized,
+	errcode.ErrAuthInvalidToken:       http.StatusUnauthorized,
+	errcode.ErrAuthInvalidTokenIntent: http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
 	errcode.ErrAuthForbidden:    http.StatusForbidden,

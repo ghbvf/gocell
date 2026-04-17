@@ -744,13 +744,17 @@ func TestMetrics_Records429And503(t *testing.T) {
 
 // --- Auth middleware wiring ---
 
-// routerTestVerifier is a minimal TokenVerifier for router integration tests.
+// routerTestVerifier is a minimal IntentTokenVerifier for router integration tests.
 type routerTestVerifier struct {
 	claims auth.Claims
 	err    error
 }
 
 func (v *routerTestVerifier) Verify(_ context.Context, _ string) (auth.Claims, error) {
+	return v.claims, v.err
+}
+
+func (v *routerTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
 	return v.claims, v.err
 }
 

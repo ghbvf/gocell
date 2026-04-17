@@ -10,38 +10,49 @@ type Code string
 
 // Sentinel error codes used throughout the GoCell framework.
 const (
-	ErrMetadataInvalid  Code = "ERR_METADATA_INVALID"
-	ErrMetadataNotFound Code = "ERR_METADATA_NOT_FOUND"
-	ErrCellNotFound     Code = "ERR_CELL_NOT_FOUND"
-	ErrSliceNotFound    Code = "ERR_SLICE_NOT_FOUND"
-	ErrContractNotFound Code = "ERR_CONTRACT_NOT_FOUND"
-	ErrAssemblyNotFound Code = "ERR_ASSEMBLY_NOT_FOUND"
-	ErrLifecycleInvalid Code = "ERR_LIFECYCLE_INVALID"
-	ErrDependencyCycle  Code = "ERR_DEPENDENCY_CYCLE"
-	ErrValidationFailed Code = "ERR_VALIDATION_FAILED"
-	ErrReferenceBroken  Code = "ERR_REFERENCE_BROKEN"
-	ErrInternal         Code = "ERR_INTERNAL"
-	ErrAuthUnauthorized Code = "ERR_AUTH_UNAUTHORIZED"
-	ErrAuthForbidden    Code = "ERR_AUTH_FORBIDDEN"
-	ErrRateLimited      Code = "ERR_RATE_LIMITED"
-	ErrCSRFOriginDenied Code = "ERR_CSRF_ORIGIN_DENIED"
-	ErrBodyTooLarge     Code = "ERR_BODY_TOO_LARGE"
-	ErrJourneyNotFound  Code = "ERR_JOURNEY_NOT_FOUND"
-	ErrTestExecution    Code = "ERR_TEST_EXECUTION"
-	ErrCheckRefInvalid  Code = "ERR_CHECKREF_INVALID"
-	ErrZeroTestMatch    Code = "ERR_ZERO_TEST_MATCH"
-	ErrBusClosed          Code = "ERR_BUS_CLOSED"
-	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
-	ErrCellMissingCodec   Code = "ERR_CELL_MISSING_CODEC"
-	ErrSessionNotFound    Code = "ERR_SESSION_NOT_FOUND"
-	ErrSessionConflict    Code = "ERR_SESSION_CONFLICT"
-	ErrOrderNotFound      Code = "ERR_ORDER_NOT_FOUND"
-	ErrDeviceNotFound     Code = "ERR_DEVICE_NOT_FOUND"
-	ErrCommandNotFound    Code = "ERR_COMMAND_NOT_FOUND"
-	ErrAdapterPGNoTx      Code = "ERR_ADAPTER_PG_NO_TX"
-	ErrAuthKeyInvalid     Code = "ERR_AUTH_KEY_INVALID"
-	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
-	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
+	ErrMetadataInvalid   Code = "ERR_METADATA_INVALID"
+	ErrMetadataNotFound  Code = "ERR_METADATA_NOT_FOUND"
+	ErrCellNotFound      Code = "ERR_CELL_NOT_FOUND"
+	ErrSliceNotFound     Code = "ERR_SLICE_NOT_FOUND"
+	ErrContractNotFound  Code = "ERR_CONTRACT_NOT_FOUND"
+	ErrAssemblyNotFound  Code = "ERR_ASSEMBLY_NOT_FOUND"
+	ErrLifecycleInvalid  Code = "ERR_LIFECYCLE_INVALID"
+	ErrDependencyCycle   Code = "ERR_DEPENDENCY_CYCLE"
+	ErrValidationFailed  Code = "ERR_VALIDATION_FAILED"
+	ErrReferenceBroken   Code = "ERR_REFERENCE_BROKEN"
+	ErrInternal          Code = "ERR_INTERNAL"
+	ErrAuthUnauthorized  Code = "ERR_AUTH_UNAUTHORIZED"
+	ErrAuthForbidden     Code = "ERR_AUTH_FORBIDDEN"
+	ErrRateLimited       Code = "ERR_RATE_LIMITED"
+	ErrCSRFOriginDenied  Code = "ERR_CSRF_ORIGIN_DENIED"
+	ErrBodyTooLarge      Code = "ERR_BODY_TOO_LARGE"
+	ErrJourneyNotFound   Code = "ERR_JOURNEY_NOT_FOUND"
+	ErrTestExecution     Code = "ERR_TEST_EXECUTION"
+	ErrCheckRefInvalid   Code = "ERR_CHECKREF_INVALID"
+	ErrZeroTestMatch     Code = "ERR_ZERO_TEST_MATCH"
+	ErrBusClosed         Code = "ERR_BUS_CLOSED"
+	ErrCellMissingOutbox Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrCellMissingCodec  Code = "ERR_CELL_MISSING_CODEC"
+	ErrSessionNotFound   Code = "ERR_SESSION_NOT_FOUND"
+	ErrSessionConflict   Code = "ERR_SESSION_CONFLICT"
+	ErrOrderNotFound     Code = "ERR_ORDER_NOT_FOUND"
+	ErrDeviceNotFound    Code = "ERR_DEVICE_NOT_FOUND"
+	ErrCommandNotFound   Code = "ERR_COMMAND_NOT_FOUND"
+	ErrAdapterPGNoTx     Code = "ERR_ADAPTER_PG_NO_TX"
+	ErrAuthKeyInvalid    Code = "ERR_AUTH_KEY_INVALID"
+	ErrAuthTokenInvalid  Code = "ERR_AUTH_TOKEN_INVALID"
+	ErrAuthTokenExpired  Code = "ERR_AUTH_TOKEN_EXPIRED"
+	// ErrAuthInvalidTokenIntent signals that a JWT's token_use claim (and/or
+	// its JOSE typ header) does not match the expected intent for the current
+	// request scope — e.g., a refresh token presented at a business endpoint,
+	// or an access token presented at /auth/refresh. Middleware and slice
+	// layers map this to a generic ERR_AUTH_UNAUTHORIZED / ERR_AUTH_REFRESH_FAILED
+	// response to prevent token-type enumeration; the specific code is only
+	// visible in logs.
+	//
+	// ref: RFC 8725 §2.8 / §3.11 (JWT token confusion threat model)
+	// ref: AWS Cognito token_use claim, Keycloak typ header constants
+	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_TOKEN_INTENT"
 
 	// Access-core cell error codes.
 	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
@@ -82,9 +93,9 @@ const (
 	ErrNotImplemented    Code = "ERR_NOT_IMPLEMENTED"
 
 	// Pagination / validation error codes.
-	ErrCursorInvalid      Code = "ERR_CURSOR_INVALID"
-	ErrPageSizeExceeded   Code = "ERR_PAGE_SIZE_EXCEEDED"
-	ErrInvalidTimeFormat  Code = "ERR_INVALID_TIME_FORMAT"
+	ErrCursorInvalid     Code = "ERR_CURSOR_INVALID"
+	ErrPageSizeExceeded  Code = "ERR_PAGE_SIZE_EXCEEDED"
+	ErrInvalidTimeFormat Code = "ERR_INVALID_TIME_FORMAT"
 
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"

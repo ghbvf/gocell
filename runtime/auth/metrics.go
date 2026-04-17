@@ -94,6 +94,10 @@ func classifyTokenError(err error) string {
 	if err == nil {
 		return "ok"
 	}
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrAuthInvalidTokenIntent {
+		return "invalid_intent"
+	}
 	switch {
 	case errors.Is(err, jwt.ErrTokenExpired) || errors.Is(err, jwt.ErrTokenNotValidYet):
 		return "expired"

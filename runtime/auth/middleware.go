@@ -22,13 +22,19 @@ import (
 var DefaultPublicEndpoints = []string{}
 
 // AuthMiddleware extracts a Bearer token from the Authorization header,
-// verifies it using the provided TokenVerifier, and stores the resulting
-// Claims in the request context. On failure, it returns a 401 JSON response.
+// verifies it using the provided IntentTokenVerifier (always enforcing
+// token_use=access for business endpoints), and stores the resulting Claims
+// in the request context. On failure, it returns a 401 JSON response.
+//
+// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
+// access-vs-refresh distinction is a hard safety invariant — any verifier
+// plugged into business routes must be able to enforce it at the type level,
+// so we refuse to compile call sites that pass an intent-unaware verifier.
 //
 // publicEndpoints specifies paths that bypass authentication. If nil,
 // DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
 // matching, consistent with other security middleware in this package.
-func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
+func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
 	cfg := defaultAuthConfig()
 	for _, o := range opts {
 		o(&cfg)
@@ -45,39 +51,51 @@ func AuthMiddleware(verifier TokenVerifier, publicEndpoints []string, opts ...Au
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip authentication for public endpoints.
 			if publicSet[path.Clean(r.URL.Path)] {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			token := extractBearerToken(r)
-			if token == "" {
-				cfg.metrics.recordTokenVerifyCounter("failure", "missing")
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
-				return
-			}
-
-			start := time.Now()
-			claims, err := verifier.Verify(r.Context(), token)
-			if err != nil {
-				cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
-				cfg.logger.Error("token verification failed",
-					"error", err,
-					"path", r.URL.Path,
-					"remote_addr", r.RemoteAddr,
-				)
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
-				return
-			}
-			cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
-
-			ctx := WithClaims(r.Context(), claims)
-			ctx = ctxkeys.WithSubject(ctx, claims.Subject)
-			ctx = withLogger(ctx, cfg.logger)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			handleAuthRequest(w, r, next, verifier, cfg)
 		})
 	}
+}
+
+// handleAuthRequest extracts the bearer token, verifies it (with intent=access
+// when the verifier supports it), records metrics, and either forwards to
+// next with claims attached or writes a 401 response.
+//
+// Enumeration defense: all verification failures — including
+// ErrAuthInvalidTokenIntent — are mapped to the generic ERR_AUTH_UNAUTHORIZED
+// response code so clients cannot distinguish token-type mismatch from
+// signature invalidity or expiry. The specific failure reason is observable
+// via the "reason" label on the auth_token_verify_total metric (ops-only
+// signal) and in structured logs; it is never forwarded to the HTTP response.
+func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier IntentTokenVerifier, cfg authConfig) {
+	token := extractBearerToken(r)
+	if token == "" {
+		cfg.metrics.recordTokenVerifyCounter("failure", "missing")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
+		return
+	}
+
+	start := time.Now()
+	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
+	if err != nil {
+		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
+		cfg.logger.Error("token verification failed",
+			"error", err,
+			"path", r.URL.Path,
+			"remote_addr", r.RemoteAddr,
+		)
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
+		return
+	}
+	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
+
+	ctx := WithClaims(r.Context(), claims)
+	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
+	ctx = withLogger(ctx, cfg.logger)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // RequireRole checks that the authenticated subject has at least one of the
