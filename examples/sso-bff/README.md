@@ -17,6 +17,18 @@ go run ./examples/sso-bff
 
 The server starts on `:8081`.
 
+## Seed User
+
+The demo starts with a pre-seeded admin user:
+
+| Field    | Value          |
+|----------|----------------|
+| Username | `admin`        |
+| Password | `P@ssw0rd123`  |
+| Role     | `admin`        |
+
+You can create additional users via the API (see step 1 below), or use the seed user directly from step 2.
+
 ## API Walkthrough
 
 ### 1. Create a user
@@ -35,27 +47,44 @@ curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -d '{"username":"alice","password":"P@ssw0rd123"}' | jq
 ```
 
-Save the returned `token` and `sessionId` for subsequent calls.
+Save the returned `accessToken` and `refreshToken` for subsequent calls.
 
 ### 3. Refresh token
 
 ```bash
+export ACCESS_TOKEN="<accessToken from login>"
+export REFRESH_TOKEN="<refreshToken from login>"
+
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/refresh \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer {token}" \
-  -d '{"sessionId":"{sessionId}"}' | jq
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}" | jq
 ```
 
 ### 4. List users
 
 ```bash
-curl -s http://localhost:8081/api/v1/access/users | jq
+curl -s http://localhost:8081/api/v1/access/users \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
+```
+
+### 4b. Get user profile
+
+```bash
+curl -s http://localhost:8081/api/v1/access/users/{userId} \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
 ### 5. Logout (delete session)
 
+The session ID is embedded in the `accessToken` JWT claims under the `sid` field.
+You can extract it with: `SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | jq -r .sid)`
+
 ```bash
-curl -s -X DELETE http://localhost:8081/api/v1/access/sessions/{sessionId} | jq
+# 204 No Content — no response body
+curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  http://localhost:8081/api/v1/access/sessions/$SESSION_ID
 ```
 
 ### 6. Query audit entries
@@ -96,7 +125,8 @@ curl -s http://localhost:8081/api/v1/flags | jq
 
 ```bash
 # After performing login + logout, check that audit entries were recorded
-curl -s http://localhost:8081/api/v1/audit/entries | jq '.[] | {action: .eventType, at: .createdAt}'
+curl -s http://localhost:8081/api/v1/audit/entries \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq '.data[] | {action: .eventType, at: .timestamp}'
 ```
 
 ### 12. Health checks

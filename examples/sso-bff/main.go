@@ -74,6 +74,7 @@ func main() {
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
+		accesscore.WithSeedAdmin("admin", "P@ssw0rd123"),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -145,6 +146,10 @@ func main() {
 		bootstrap.WithPublicEndpoints(publicEndpoints),
 	)
 
+	logger.Info("sso-bff: seed user ready",
+		slog.String("username", "admin"),
+		slog.String("password", "P@ssw0rd123 (dev only)"),
+	)
 	logger.Info("sso-bff: starting on :8081",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
