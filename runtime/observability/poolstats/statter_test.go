@@ -23,7 +23,7 @@ type staticStatter struct {
 	snap poolstats.Snapshot
 }
 
-func (s staticStatter) PoolName() string           { return s.name }
+func (s staticStatter) PoolName() string             { return s.name }
 func (s staticStatter) Snapshot() poolstats.Snapshot { return s.snap }
 
 var _ poolstats.Statter = staticStatter{}
