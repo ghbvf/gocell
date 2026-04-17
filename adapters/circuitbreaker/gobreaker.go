@@ -1,7 +1,6 @@
 package circuitbreaker
 
 import (
-	"errors"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
@@ -43,10 +42,6 @@ type Counts struct {
 	ConsecutiveFailures  uint32
 }
 
-// errServerFailure is the sentinel error passed to gobreaker's done callback
-// when the HTTP handler reports a server-side failure (5xx status).
-var errServerFailure = errors.New("server failure")
-
 // Config holds settings for the gobreaker adapter.
 type Config struct {
 	// Name identifies the circuit breaker instance (required, used in logs/metrics).
@@ -71,6 +66,18 @@ type Config struct {
 
 	// OnStateChange is called whenever the circuit state changes.
 	OnStateChange func(name string, from, to State)
+
+	// IsSuccessful classifies the error returned by the done callback as
+	// success (return true) or failure (return false). When nil, the default
+	// behaviour is err == nil → success, err != nil → failure, which matches
+	// gobreaker's built-in default.
+	//
+	// Provide this field when the caller uses domain-specific sentinel errors
+	// to distinguish expected non-fatal errors (e.g. ErrNotFound) from true
+	// server failures that should count against the circuit.
+	//
+	// ref: sony/gobreaker — Settings.IsSuccessful
+	IsSuccessful func(err error) bool
 }
 
 // Adapter wraps sony/gobreaker's TwoStepCircuitBreaker to implement
@@ -104,6 +111,12 @@ func New(cfg Config) *Adapter {
 		fn := cfg.OnStateChange
 		st.OnStateChange = func(name string, from, to gobreaker.State) {
 			fn(name, gobreakerState(from), gobreakerState(to))
+		}
+	}
+	if cfg.IsSuccessful != nil {
+		fn := cfg.IsSuccessful
+		st.IsSuccessful = func(err error) bool {
+			return fn(err)
 		}
 	}
 
@@ -141,11 +154,7 @@ func (a *Adapter) Allow() (allowed bool, done func(err error)) {
 		return false, nil
 	}
 	return true, func(err error) {
-		if err == nil {
-			gobDone(nil)
-		} else {
-			gobDone(errServerFailure)
-		}
+		gobDone(err)
 	}
 }
 
