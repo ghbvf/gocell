@@ -17,20 +17,18 @@
 
 ---
 
-## Phase 0: 正确性守护（~8h，立即做）
+## Phase 0: ✅ 全部完成（PR#143+PR#151）
 
 > 不论是否赶发布，这些是 bug 不是 feature。
 
-| PR | 任务 | 层 | 工时 | 涉及文件 | 来源 |
-|----|------|----|------|----------|------|
-| **PR-SAFE** | H1-1 PROD-KEY-FAILFAST (P0): `loadKeySet` 空值走 dev 分支，生产密钥可预测 | cmd/core-bundle | 2h | `cmd/core-bundle/main.go` | PR#137-138 集成审查 P0 |
-| | H1-3 DURABLE-NIL-GUARD (P1): `CheckNotNoop` 对 nil `continue` 跳过，durable+nil 旁路 | kernel/cell | 1.5h | `kernel/cell/durability.go` + 5 个 `cell.go` | PR#137-138 集成审查 P1 |
-| | READYZ-VERBOSE-TOKEN-01: `/readyz?verbose` 匿名暴露内部拓扑 | runtime/http | 2h | `runtime/http/health/health.go` + `runtime/bootstrap/bootstrap.go` | PR#134 review |
-| **PR-AUTHZ** | H1-2 IDENTITY-AUTHZ-01: identitymanage 7 端点仅鉴权无授权 | cells/access-core | 1.5h | `cells/access-core/slices/identitymanage/handler.go` | PR#137-138 集成审查 P1 |
-| | H1-4 ROLE-ASSIGN-API: `POST /internal/v1/roles/assign` + `DELETE /internal/v1/roles/revoke` | cells/access-core | 2h | `cells/access-core/slices/rbacassign/` | backend_issues.md #3 |
-| | H1-5 SEED-ADMIN: 启动时 seed admin（环境变量驱动） | cmd/core-bundle | 1h | `cmd/core-bundle/main.go` + `cells/access-core/internal/mem/` | backend_issues.md #3 |
-
-> PR-SAFE 与 PR-AUTHZ 可并行。H1-2/H1-4/H1-5 必须同 PR（避免加了授权但无法分配角色的死锁）。
+| PR | 任务 | 层 | 工时 | 涉及文件 | 合并 PR |
+|----|------|----|------|----------|---------|
+| **PR-SAFE** | ✅ H1-1 PROD-KEY-FAILFAST (P0) | cmd/core-bundle | 2h | `cmd/core-bundle/main.go` | PR#151（rebased from #149） |
+| | ✅ H1-3 DURABLE-NIL-GUARD (P1): 5 个 L2 cell Init() 显式 nil XOR guard + `CheckNotNoop`（caller 职责已履行） | cells/\* | 1.5h | `cells/access-core/cell.go` + `audit-core/cell.go` + `config-core/cell.go` + `order-cell/cell.go` + `device-cell/cell.go` | PR#135/#136/#137 |
+| | ✅ H1-6 READYZ-VERBOSE-TOKEN-01 | runtime/http | 2h | `runtime/http/health/health.go` + `runtime/bootstrap/bootstrap.go` + `cmd/core-bundle/main.go` | PR#151 |
+| **PR-AUTHZ** | ✅ H1-2 IDENTITY-AUTHZ-01 | cells/access-core | 1.5h | `cells/access-core/slices/identitymanage/handler.go` | PR#143 |
+| | ✅ H1-4 ROLE-ASSIGN-API | cells/access-core | 2h | `cells/access-core/slices/rbacassign/` | PR#143 |
+| | ✅ H1-5 SEED-ADMIN | cmd/core-bundle | 1h | `cmd/core-bundle/main.go` + `cells/access-core/internal/mem/` | PR#143 |
 
 ---
 
@@ -38,33 +36,35 @@
 
 > kernel 是底座灵魂。先修内核，上层才有意义。
 
-### PR-K-OUTBOX: outbox 治理 + 可观测（5h）
+### PR-K-OUTBOX: ✅ 全部完成（PR#147+PR#148）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| OUTBOX-GUARD-01: NoopWriter/DiscardPublisher lint 约束（go vet 或 golangci-lint 自定义规则） | 2h | `kernel/outbox/` | 6B review |
-| DISCARD-OBS-01: DiscardPublisher Logger 注入 + counter（可观测静默丢弃量） | 1h | `kernel/outbox/outbox.go` | 6B review |
-| OUTBOX-RECEIPT-01: `outbox.Receipt` alias 全仓迁移 `idempotency.Receipt` | 1h | `kernel/outbox/` + `kernel/idempotency/` | 6B review |
-| META-SIZE-01: Metadata key 数量和大小上限，防 OOM | 1h | `kernel/outbox/outbox.go` | 6A review |
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ OUTBOX-GUARD-01 | 2h | `kernel/outbox/` | 6B review | PR#147 |
+| ✅ DISCARD-OBS-01 | 1h | `kernel/outbox/outbox.go` | 6B review | PR#148 |
+| ✅ OUTBOX-RECEIPT-01 | 1h | `kernel/outbox/` + `kernel/idempotency/` | 6B review | PR#148 |
+| ✅ META-SIZE-01 | 1h | `kernel/outbox/outbox.go` | 6A review | PR#147 |
 
-### PR-K-META: metadata parser + registry 健壮性（4h）
+### PR-K-META: ✅ 全部完成（PR#142+PR#152）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| META-67-01: strict unknown-field reject | 1h | `kernel/metadata/parser.go` | PR#67 review |
-| META-67-02: 位置信息错误报告 | 1h | `kernel/metadata/parser.go` | PR#67 review |
-| META-67-03: cross-file 引用校验 | 0.5h | `kernel/metadata/parser.go` | PR#67 review |
-| REGISTRY-CONSUMERS-UNKNOWN-KIND-01: `Consumers()` allowlist + error return | 1.5h | `kernel/registry/contract.go` | PR#135 review |
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ META-67-01: strict unknown-field reject | 1h | `kernel/metadata/parser.go` | PR#67 review | PR#142 |
+| ✅ META-67-02: 位置信息错误报告（Position{Line,Column} + locator.go + printResult file:line:col） | 1h | `kernel/metadata/parser.go` + `kernel/metadata/location.go` + `kernel/governance/` + `cmd/gocell/` | PR#67 review | PR#152 |
+| ✅ META-67-03: cross-file 引用校验（REF-01..REF-16） | 0.5h | `kernel/governance/rules_ref.go` | PR#67 review | PR#142 |
+| ✅ REGISTRY-CONSUMERS-UNKNOWN-KIND-01: `Consumers()` + `Provider()` typed error | 1.5h | `kernel/registry/contract.go` | PR#135 review | PR#142 |
 
-### PR-K-CELL: cell 元数据 + hook + 治理工具（8h）
+> PR#152 衍生 follow-up（Batch 8 下沉）: METADATA-PROJECTLOC-IFACE-01（yaml.v3 AST 泄漏）+ OUTPUT-JSON-SARIF-01（诊断机器输出）+ METADATA-PERF-BENCH-01（500 文件基准）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| #27b SLICE-ALLOWEDFILES-01: `BaseSlice.AllowedFiles()` 默认逻辑修复（kebab-case vs no-dash） | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review |
-| #17 WM17-F2-2: Hook ctx 超时 | 1.5h | `kernel/cell/` | WM-17 |
-| #17 WM17-F4-3: Prometheus metrics via HookObserver 接口 | 1.5h | `kernel/cell/` | WM-17 |
-| #21 F-5: Journey catalog 不校验引用 | 1h | `kernel/journey/catalog.go` | 6B |
-| CONTRACT-LIST-LINT-01: `gocell check contract-health` list 响应格式检查 | 2h | `kernel/governance/` | PR#138 review |
+### PR-K-CELL: 部分完成（#27b PR#142 + #17 Hook 增强 PR#154）
+
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ #27b SLICE-ALLOWEDFILES-01 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review | PR#142 |
+| ✅ #17 WM17-F2-2: Hook ctx 超时（per-hook `ctx.WithTimeout`, default 30s, soft-cancel 对标 fx） | 1.5h | `kernel/cell/observer.go` + `kernel/assembly/assembly.go` + `runtime/bootstrap/` | WM-17 | PR#154 |
+| ✅ #17 WM17-F4-3: LifecycleHookObserver + Prometheus 实现（counter+histogram，isolated registry）| 1.5h | `kernel/cell/observer.go` + `adapters/prometheus/hook_observer.go` + `cmd/core-bundle/main.go` | WM-17 | PR#154 |
+| #21 F-5: Journey catalog 不校验引用 — **stale**: REF-06+REF-07 已覆盖 journey cell/contract 引用校验，此项关闭 | — | — | 6B | — |
+| ✅ CONTRACT-LIST-LINT-01: `gocell check contract-health` list 响应格式检查 | 2h | `kernel/governance/` | PR#138 review | PR#142 |
 
 ---
 
@@ -89,17 +89,22 @@
 | WM-2-F2: HMAC replay 防护 | 2h | `runtime/auth/` | WM-2 |
 | WM-2-F3: auth metrics (token verify latency/failure count) | 2h | `runtime/auth/` | WM-2 |
 
-### PR-R-OBS: 可观测性补全（4.5h）
+### PR-R-OBS: ✅ 全部完成（PR#154+PR#156+PR#157，剩余 OB-02 下沉 Batch 8）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| OBS-TABLE-01: observability bridge table-driven 改写 | 1.5h | `runtime/http/middleware/` | 6A review |
-| OBS-METRIC-01: bridge counter/histogram 补全 | 1.5h | `runtime/http/middleware/` | 6A review |
-| OBS-DX-01: cloneMetadata 导出 + wrapper 清理 + godoc | 1h | `kernel/outbox/` | 6A review |
-| OBS-DOC-01: IsReservedMetadataKey usage example | 0.5h | `kernel/outbox/` | 6A review |
-| OB-02: safe_observe broken logger 注入测试 | 1h | `runtime/http/middleware/safe_observe_test.go` | 历史 backlog 0-J |
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ OBS-TABLE-01: observability bridge table-driven 改写 | 1.5h | `runtime/http/middleware/` | 6A review | PR#156 |
+| ✅ OBS-METRIC-01: provider-neutral `kernel/observability/metrics.Provider` + prom/otel adapter + HTTP/Relay collector 迁移 + `bootstrap.WithMetricsProvider` | 1.5h | `kernel/observability/metrics/` + `runtime/observability/metrics/` + `runtime/bootstrap/` | 6A review | PR#157 |
+| ✅ OBS-DX-01: CloneMetadata 导出 + godoc | 1h | `kernel/outbox/observability_metadata.go` | 6A review | PR#154 |
+| ✅ OBS-DOC-01: ExampleIsReservedMetadataKey testable example | 0.5h | `kernel/outbox/observability_metadata.go` | 6A review | PR#154 |
+| ✅ CONFORMANCE-SLEEP-01: conformance.go `time.Sleep(200ms)` → deterministic negative assertion | — | `kernel/outbox/outboxtest/conformance.go` | PR#145 review | PR#156 |
+| ✅ HOOK-OBSERVER-ASYNC-01: 异步 hook dispatcher（有界队列 + per-sink timeout + drop counter + goleak + failed-start cleanup） | — | `kernel/assembly/hook_dispatcher.go` | WM-17 follow-up | PR#157 |
+| ✅ OBS-LEAK-02: `newTestAssembly(t, cfg)` helper + 51 sites 迁移，移除 goleak allowlist | — | `kernel/assembly/test_helpers_test.go` | PR#157 review | PR#157 |
+| ✅ OBS-POOLSTATS-WAITCOUNT-01: `db.client.connection.timeouts` ObservableCounter | — | `runtime/observability/poolstats/statter.go` | PR#157 review | PR#157 |
+| ✅ OBS-HOOK-DISPATCHER-CFG-01: `dispatcherConfig{}` 替代位置参数 | — | `kernel/assembly/hook_dispatcher.go` | PR#157 review | PR#157 |
+| OB-02: safe_observe broken logger 注入测试（下沉 Batch 8） | 1h | `runtime/http/middleware/safe_observe_test.go` | 历史 backlog 0-J | — |
 
-> 注: OBS-DX-01/OBS-DOC-01 虽属 kernel/outbox，但与 OBS-TABLE/METRIC 同属可观测主题，合并一个 PR 减少 review 负担。
+> PR#157 衍生 follow-up（Batch 8 下沉）: OBS-RELAY-REGISTER-ATOMIC-01（Provider.Unregister 契约） + OBS-HTTP-COLLECTOR-AUTOWIRE-01（bootstrap auto-wire 默认 HTTP collector） + OBS-LGTM-INTEGRATION-01（夜间 OTLP 兼容性测试）
 
 ### PR-R-CFG: 配置治理 + 测试补全（2h）
 
@@ -145,14 +150,14 @@
 
 > 前置: Phase 1 PR-K-OUTBOX（outbox 治理改造完成后再做集成测试）。
 
-### PR-A-INTEG: 集成测试补全（9.5h）
+### PR-A-INTEG: 集成测试补全（剩余 ~4h，TPUB + OTEL-COV ✅ 已完成）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| #6 TPUB-01: TestPubSub conformance 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B |
-| P4-TD-05: outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
-| RL-INT-01: Relay PG 集成测试 | 2h | `adapters/postgres/outbox_relay_test.go` | PR#46 review |
-| OTEL-COV-01: OTel testcontainers 集成测试 | 1.5h | `adapters/otel/` | 6A review |
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ #6 TPUB-01: TestPubSub conformance 替换 sleep + 接入 RabbitMQ adapter | 4h | `kernel/outbox/outboxtest/` + `adapters/rabbitmq/` | 6B | PR#141 |
+| P4-TD-05: outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review | — |
+| RL-INT-01: Relay PG 集成测试 | 2h | `adapters/postgres/outbox_relay_test.go` | PR#46 review | — |
+| ✅ OTEL-COV-01: OTel testcontainers 集成测试（ManualReader + tracetest.InMemoryExporter） | 1.5h | `adapters/otel/` | 6A review | PR#157 |
 
 ### PR-A-HARDEN: 生产安全加固（6.5h）
 
@@ -170,6 +175,8 @@
 |------|------|----------|------|
 | CI-DIGEST-01: testcontainers 镜像 tag+digest 双固定 | 1h | `adapters/*/integration_test.go` | PR#139 review |
 | CI-LINT-PIN-01: golangci-lint patch 级固定 + dependabot 升级 | 1h | `.github/workflows/ci.yml` | PR#139 review |
+
+> 关联（已完成）: **PR#153 CI wall-time 优化** — integration 与 build-test 并行 + SonarCloud 拆为独立 job + rabbitmq testcontainer 在 `adapters/rabbitmq` 包内共享（`TestMain` + `sync.Once`，需隔离连接的测试仍走 `startRabbitMQWithContainer`）。实测 wall time 从 ~280s 降到 ~170s（-40%），不含覆盖率稀释（kernel coverage gate 保留独立 run）。
 
 ---
 
@@ -190,13 +197,15 @@
 | AL-01: outbox_relay.go 轮询调度逻辑拆到 `runtime/outbox/relay.go` | 2h | `adapters/postgres/outbox_relay.go` → `runtime/outbox/relay.go` | 依赖替换分析 |
 | AL-02: distlock.go 续期/TTL 策略拆到 `runtime/` | 2h | `adapters/redis/distlock.go` → `runtime/` | 依赖替换分析 |
 
-### PR-CONTRACT: 契约缺口补全（3h）
+### PR-CONTRACT: ✅ 全部完成（PR#143+PR#155）
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| H2-1 CONFIG-ROLLBACK-CONTRACT | 1.5h | `contracts/http/config/rollback/v1/` | PR#137-138 集成审查 |
-| H2-2 CONFIGPUBLISH-REDACT-01 | 0.5h | `cells/config-core/slices/configpublish/handler.go` | PR#138 review |
-| H2-3 IDENTITY-PATCH-CONTRACT + H2-4~H2-7 config/identity 列表契约 | 1h | `contracts/http/` 多目录 | 代码验证发现 |
+| 任务 | 工时 | 涉及文件 | 来源 | 合并 PR |
+|------|------|----------|------|---------|
+| ✅ H2-1 CONFIG-ROLLBACK-CONTRACT | 1.5h | `contracts/http/config/rollback/v1/` | PR#137-138 集成审查 | PR#155 |
+| ✅ H2-2 CONFIGPUBLISH-REDACT-01 | 0.5h | `cells/config-core/slices/configpublish/handler.go` + `service.go` + `contracts/http/config/publish/v1/response.schema.json` | PR#138 review | PR#155 |
+| ✅ H2-3 IDENTITY-PATCH-CONTRACT | 1h | `contracts/http/auth/identity/patch/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` | 代码验证发现 | PR#143 |
+
+> PR#155 搭车完成 review followup: AUTHZ-WRITE-CONFIG-01（publish/rollback admin gate）+ ERROR-MSG-SCRUB-01（repo 4xx Message 去 id/version 内部细节，`errcode.Safe` 二段式）+ ROLLBACK-NEGPATH-TEST-01 + SCHEMA-SENSITIVE-DESC-01
 
 ---
 
@@ -246,40 +255,49 @@
 ## 执行总览
 
 ```
-Phase 0  正确性守护     ~8h    ← 立即做，不可跳过
-  PR-SAFE (5.5h) ─┐
-  PR-AUTHZ (4.5h) ┘ 并行
+Phase 0  正确性守护     ✅ 全部完成
+  PR-SAFE (5.5h)    ✅ H1-1 + H1-6 PR#151；H1-3 ✅（5 个 L2 cell Init() nil XOR guard + CheckNotNoop，PR#135/#136/#137）
+  PR-AUTHZ (4.5h)   ✅ H1-2 + H1-4 + H1-5 PR#143
     ↓
-Phase 1  kernel 加固    ~17h   ┐
-  PR-K-OUTBOX (5h)             │
-  PR-K-META (4h)               │
-  PR-K-CELL (8h)               │
-                               ├ 三层并行推进（层内各 PR 也可并行）
-Phase 2  runtime 优化   ~17.5h │
+Phase 1  kernel 加固    ~4h 剩余（原 17h）
+  PR-K-OUTBOX (5h)    ✅ 全部完成 PR#147+PR#148
+  PR-K-META (4h)      ✅ 全部完成 PR#142+PR#152
+  PR-K-CELL (8h)      ✅ #27b + #17 Hook 增强 + CONTRACT-LIST-LINT PR#142+PR#154；剩余 #21 F-5 已关闭（stale）→ 本 phase 无剩余
+                               ┐
+Phase 2  runtime 优化   ~14h 剩余（原 17.5h）
   PR-R-ROUTER (4h)             │
   PR-R-AUTH (7h)               │
-  PR-R-OBS (4.5h)             │
-  PR-R-CFG (2h)                │
+  PR-R-OBS   ✅ 全部完成 PR#154+PR#156+PR#157（OB-02 下沉 Batch 8）
+  PR-R-CFG (2h)                ├ 三层并行推进
                                │
-Phase 3  pkg + 工具链   ~10h   ┘
-  PR-P-CURSOR (5.5h)
-  PR-P-CB (2h)
-  PR-CMD (4h)
+Phase 3  pkg + 工具链   ~9h 剩余（原 10h）
+  PR-P-CURSOR (4.5h)    ← CURSOR-P2-02 ✅ PR#156 扣除
+  PR-P-CB (2h)                 │
+  PR-CMD (4h)                  ┘
     ↓
-Phase 4  adapter 加固   ~16h   ← 依赖 Phase 1 outbox 改造
-  PR-A-INTEG (9.5h)
+Phase 4  adapter 加固   ~10h 剩余（原 16h）  ← 依赖 Phase 1 outbox（已完成）
+  PR-A-INTEG (4h 剩余)  ← TPUB ✅ PR#141 + OTEL-COV-01 ✅ PR#157 扣除
   PR-A-HARDEN (6.5h)
-  PR-A-CI (2h)
+  PR-A-CI (2h)          ← PR#153 已完成 CI wall-time 优化
     ↓
-Phase 5  架构收敛       ~10h   ← 可选但推荐
+Phase 5  架构收敛       ~7h 剩余（原 10h）  ← 可选但推荐
   PR-SERIAL (3h)
   PR-ADAPTER-SPLIT (4h)
-  PR-CONTRACT (3h)
+  PR-CONTRACT  ✅ 全部完成 PR#143+PR#155
     ↓
 Phase 6  功能 + 发布    ~15h+  ← 底座稳固后
 
-总计 Phase 0-4: ~68.5h（约 9 工作日）
-含 Phase 5:    ~78.5h（约 10 工作日）
+当前剩余 Phase 0-4: ~33h（约 4 工作日，原 68.5h）
+含 Phase 5:        ~40h（约 5 工作日）
+
+已合入底座 PR:
+  PR#147+148 outbox 治理 / PR#142 kernel 元数据治理 / PR#152 validator 诊断定位
+  PR#154 kernel hook 生命周期超时 + Observer + outbox metadata DX
+  PR#151 access-core 安全加固 + READYZ / PR#143 RBAC closure
+  PR#153 CI 并行 + SonarCloud 拆分 + RMQ testcontainer 共享
+  PR#155 config-core rollback 契约 + publish redaction + config 写旅程 admin gate + repo 错误脱敏
+  PR#156 OBS-B test determinism（CONFORMANCE-SLEEP-01 + OBS-TABLE-01 + CURSOR-P2-02）
+  PR#157 OBS-A provider-neutral metrics + async hook dispatcher + pool statter
 ```
 
 ---

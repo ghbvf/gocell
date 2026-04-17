@@ -39,6 +39,7 @@ tmp/
 
 # Claude Code
 worktrees/
+.claude/scheduled_tasks.lock
 
 # Build output (root-level binaries from `go build ./cmd/...`)
 /gocell
