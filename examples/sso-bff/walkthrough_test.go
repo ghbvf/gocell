@@ -14,7 +14,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -142,14 +141,15 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 
 // TestWalkthrough exercises the complete sso-bff API walkthrough.
 func TestWalkthrough(t *testing.T) {
-	testPass := generateDevPassword()
+	testPass, err := generateDevPassword()
+	require.NoError(t, err, "generateDevPassword must succeed in tests")
 	srv, cleanup := buildWalkthroughServer(t, testPass)
 	defer cleanup()
 
 	base := srv.URL
 
 	var adminToken string
-	var accessToken, refreshToken string
+	var accessToken, refreshToken, sessionID string
 
 	t.Run("seed user can login and returns accessToken+refreshToken", func(t *testing.T) {
 		body := fmt.Sprintf(`{"username":"admin","password":%q}`, testPass)
@@ -204,7 +204,7 @@ func TestWalkthrough(t *testing.T) {
 		assert.NotEmpty(t, envelope.Data.ID, "created user must have an id")
 	})
 
-	t.Run("alice can login and returns accessToken+refreshToken", func(t *testing.T) {
+	t.Run("alice can login and returns accessToken+refreshToken+sessionId", func(t *testing.T) {
 		body := `{"username":"alice","password":"P@ssw0rd123"}`
 		resp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
 			"application/json", strings.NewReader(body))
@@ -218,19 +218,23 @@ func TestWalkthrough(t *testing.T) {
 			Data struct {
 				AccessToken  string `json:"accessToken"`
 				RefreshToken string `json:"refreshToken"`
+				SessionID    string `json:"sessionId"`
 			} `json:"data"`
 		}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 		assert.NotEmpty(t, envelope.Data.AccessToken, "response must include accessToken")
 		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include refreshToken")
+		assert.NotEmpty(t, envelope.Data.SessionID, "response must include sessionId")
 
 		accessToken = envelope.Data.AccessToken
 		refreshToken = envelope.Data.RefreshToken
+		sessionID = envelope.Data.SessionID
 	})
 
 	// Guard: remaining subtests need valid alice tokens.
 	require.NotEmpty(t, accessToken, "accessToken must be set by alice login subtest")
 	require.NotEmpty(t, refreshToken, "refreshToken must be set by alice login subtest")
+	require.NotEmpty(t, sessionID, "sessionID must be set by alice login subtest")
 
 	t.Run("refresh using refreshToken field works without Authorization header", func(t *testing.T) {
 		payload := fmt.Sprintf(`{"refreshToken":%q}`, refreshToken)
@@ -263,9 +267,6 @@ func TestWalkthrough(t *testing.T) {
 		accessToken = envelope.Data.AccessToken
 		refreshToken = envelope.Data.RefreshToken
 	})
-
-	// Extract sessionId from JWT claims for logout.
-	sessionID := jwtExtractSID(t, accessToken)
 
 	t.Run("logout returns 204 with empty body", func(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(),
@@ -456,21 +457,3 @@ func fetchAuditEntries(url, token string) ([]json.RawMessage, bool) {
 	return page.Data, len(page.Data) > 0
 }
 
-// jwtExtractSID parses the JWT payload (without signature verification) to
-// extract the session ID from the "sid" extra claim. Used to build the logout URL.
-func jwtExtractSID(t *testing.T, token string) string {
-	t.Helper()
-	parts := strings.Split(token, ".")
-	require.Len(t, parts, 3, "JWT must have 3 dot-separated parts")
-
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	require.NoError(t, err, "JWT payload must be valid base64url")
-
-	var claims map[string]any
-	require.NoError(t, json.Unmarshal(decoded, &claims), "JWT payload must be valid JSON")
-
-	sid, ok := claims["sid"].(string)
-	require.True(t, ok, "JWT must contain 'sid' string claim for session ID")
-	require.NotEmpty(t, sid)
-	return sid
-}

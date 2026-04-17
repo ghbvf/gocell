@@ -66,6 +66,7 @@ Save alice's tokens:
 ```bash
 export ACCESS_TOKEN="<accessToken from alice login>"
 export REFRESH_TOKEN="<refreshToken from alice login>"
+export SESSION_ID="<sessionId from alice login>"
 ```
 
 ### 4. Refresh token
@@ -89,10 +90,9 @@ curl -s http://localhost:8081/api/v1/access/users/{userId} \
 
 ### 6. Logout (delete session)
 
-The session ID is embedded in the `accessToken` JWT claims under the `sid` field.
+Use the `sessionId` returned by the login response (saved as `$SESSION_ID` above).
 
 ```bash
-SESSION_ID=$(echo $ACCESS_TOKEN | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .sid)
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   http://localhost:8081/api/v1/access/sessions/$SESSION_ID

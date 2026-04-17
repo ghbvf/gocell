@@ -11,4 +11,5 @@ type TokenPairResponse struct {
 	AccessToken  string    `json:"accessToken"`
 	RefreshToken string    `json:"refreshToken"`
 	ExpiresAt    time.Time `json:"expiresAt"`
+	SessionID    string    `json:"sessionId,omitempty"`
 }
