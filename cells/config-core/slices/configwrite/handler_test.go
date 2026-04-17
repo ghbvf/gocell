@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testAdminSubject = "admin-test"
+
 // --- stubs ---
 
 type stubOutboxWriter struct{ entries []outbox.Entry }
@@ -40,7 +42,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 // non-auth logic (e.g. validation, business errors) and need to pass the
 // auth guard.
 func withAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-test", []string{dto.RoleAdmin}))
+	return req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
 }
 
 // --- handler tests ---
@@ -305,17 +307,6 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 
 // --- authz tests ---
 
-func setupHandlerMux() http.Handler {
-	repo := mem.NewConfigRepository()
-	svc := NewService(repo, eventbus.New(), slog.Default())
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /", h.HandleCreate)
-	mux.HandleFunc("PUT /{key}", h.HandleUpdate)
-	mux.HandleFunc("DELETE /{key}", h.HandleDelete)
-	return mux
-}
-
 func TestHandler_Authz_Create(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -326,11 +317,11 @@ func TestHandler_Authz_Create(t *testing.T) {
 	}{
 		{"no_auth", "", nil, false, http.StatusUnauthorized},
 		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden},
-		{"admin", "admin-1", []string{dto.RoleAdmin}, true, http.StatusCreated},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, http.StatusCreated},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := setupHandlerMux()
+			mux, _ := setupHandler()
 			body := `{"key":"test.key","value":"v"}`
 			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -350,17 +341,28 @@ func TestHandler_Authz_Update(t *testing.T) {
 		subject    string
 		roles      []string
 		injectAuth bool
+		setup      func(*mem.ConfigRepository)
+		path       string
 		wantStatus int
 	}{
-		{"no_auth", "", nil, false, http.StatusUnauthorized},
-		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden},
-		{"admin", "admin-1", []string{dto.RoleAdmin}, true, http.StatusNotFound},
+		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound},
+		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+			now := time.Now()
+			_ = r.Create(context.Background(), &domain.ConfigEntry{
+				ID: "au-1", Key: "test.update", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
+			})
+		}, "/test.update", http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := setupHandlerMux()
+			mux, repo := setupHandler()
+			if tc.setup != nil {
+				tc.setup(repo)
+			}
 			body := `{"value":"new"}`
-			req := httptest.NewRequest(http.MethodPut, "/nonexistent", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPut, tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
@@ -378,16 +380,27 @@ func TestHandler_Authz_Delete(t *testing.T) {
 		subject    string
 		roles      []string
 		injectAuth bool
+		setup      func(*mem.ConfigRepository)
+		path       string
 		wantStatus int
 	}{
-		{"no_auth", "", nil, false, http.StatusUnauthorized},
-		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden},
-		{"admin", "admin-1", []string{dto.RoleAdmin}, true, http.StatusNotFound},
+		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized},
+		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden},
+		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound},
+		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+			now := time.Now()
+			_ = r.Create(context.Background(), &domain.ConfigEntry{
+				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
+			})
+		}, "/test.delete", http.StatusNoContent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mux := setupHandlerMux()
-			req := httptest.NewRequest(http.MethodDelete, "/nonexistent", nil)
+			mux, repo := setupHandler()
+			if tc.setup != nil {
+				tc.setup(repo)
+			}
+			req := httptest.NewRequest(http.MethodDelete, tc.path, nil)
 			if tc.injectAuth {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}

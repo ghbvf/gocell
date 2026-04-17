@@ -40,7 +40,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"key":"app.name","value":"myapp"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-test", []string{dto.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
