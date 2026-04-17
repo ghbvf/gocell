@@ -31,7 +31,10 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandReposit
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc := NewService(cmdRepo, devRepo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(cmdRepo, devRepo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 
 	_ = devRepo.Create(context.Background(), &domain.Device{
 		ID: "dev-1", Name: "sensor-a", Status: "online",

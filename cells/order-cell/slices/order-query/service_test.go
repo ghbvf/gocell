@@ -22,6 +22,25 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
+func TestNewService_NilCodec_ReturnsError(t *testing.T) {
+	repo := mem.NewOrderRepository()
+	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
+}
+
+// mustNewService is a test helper that panics on NewService error (test-only).
+func mustNewService(repo domain.OrderRepository, codec *query.CursorCodec) *Service {
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc
+}
+
 func seedRepo(orders ...*domain.Order) *mem.OrderRepository {
 	repo := mem.NewOrderRepository()
 	for _, o := range orders {
@@ -55,7 +74,7 @@ func TestService_GetByID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := seedRepo(tt.seed...)
-			svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+			svc := mustNewService(repo, testCodec())
 
 			order, err := svc.GetByID(context.Background(), tt.id)
 			if tt.wantErr {
@@ -85,7 +104,7 @@ func TestService_List_FirstPage(t *testing.T) {
 		})
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, testCodec())
 
 	result, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
 	require.NoError(t, err)
@@ -108,7 +127,7 @@ func TestService_List_WithCursor(t *testing.T) {
 		})
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, testCodec())
 
 	// Get first page
 	page1, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
@@ -125,7 +144,7 @@ func TestService_List_WithCursor(t *testing.T) {
 
 func TestService_List_InvalidCursor(t *testing.T) {
 	repo := seedRepo()
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, testCodec())
 
 	_, err := svc.List(context.Background(), query.PageRequest{Cursor: "garbage-token"})
 	require.Error(t, err)
@@ -141,7 +160,7 @@ func TestService_List_LastPage(t *testing.T) {
 		{ID: "ord-01", Item: "b", Status: "pending", CreatedAt: base.Add(time.Hour)},
 	}
 	repo := seedRepo(seed...)
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, testCodec())
 
 	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
 	require.NoError(t, err)
@@ -152,7 +171,7 @@ func TestService_List_LastPage(t *testing.T) {
 
 func TestService_List_Empty(t *testing.T) {
 	repo := seedRepo()
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, testCodec())
 
 	result, err := svc.List(context.Background(), query.PageRequest{})
 	require.NoError(t, err)
@@ -181,7 +200,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 		ID: "ord-1", Item: "a", Status: "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, codec)
 
 	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
 	require.Error(t, err)
@@ -205,7 +224,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 		ID: "ord-1", Item: "a", Status: "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc := mustNewService(repo, codec)
 
 	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
 	require.Error(t, err)

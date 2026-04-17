@@ -20,7 +20,10 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *mem.Comm
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc := NewService(cmdRepo, devRepo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(cmdRepo, devRepo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/devices/{id}/commands", http.HandlerFunc(h.HandleEnqueue))

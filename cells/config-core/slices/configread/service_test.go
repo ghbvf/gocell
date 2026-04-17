@@ -18,7 +18,25 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	logger := slog.Default()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	return NewService(repo, codec, logger, query.RunModeProd), repo
+	svc, err := NewService(repo, codec, logger, query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, repo
+}
+
+// TestNewService_NilCodec_ReturnsError ensures construction fails fast when the
+// cell wires a nil cursor codec. Pagination cannot be served without a codec;
+// failing at construction with a structured errcode keeps the nil-deref from
+// surfacing mid-request as a 500.
+func TestNewService_NilCodec_ReturnsError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
 func seedEntry(t *testing.T, repo *mem.ConfigRepository, key, value string) {

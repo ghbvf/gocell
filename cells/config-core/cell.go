@@ -4,6 +4,7 @@ package configcore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -23,8 +24,8 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell          = (*ConfigCore)(nil)
-	_ cell.HTTPRegistrar = (*ConfigCore)(nil)
+	_ cell.Cell           = (*ConfigCore)(nil)
+	_ cell.HTTPRegistrar  = (*ConfigCore)(nil)
 	_ cell.EventRegistrar = (*ConfigCore)(nil)
 )
 
@@ -87,11 +88,11 @@ type ConfigCore struct {
 	logger       *slog.Logger
 
 	// Slice services and handlers.
-	writeHandler     *configwrite.Handler
-	readHandler      *configread.Handler
-	publishHandler   *configpublish.Handler
-	flagHandler      *featureflag.Handler
-	subscribeSvc     *configsubscribe.Service
+	writeHandler   *configwrite.Handler
+	readHandler    *configread.Handler
+	publishHandler *configpublish.Handler
+	flagHandler    *featureflag.Handler
+	subscribeSvc   *configsubscribe.Service
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
@@ -179,7 +180,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
 
 	// config-read slice
-	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
+	readSvc, err := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
+	if err != nil {
+		return fmt.Errorf("config-read: %w", err)
+	}
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
@@ -191,10 +195,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.txRunner != nil {
 		publishOpts = append(publishOpts, configpublish.WithTxManager(c.txRunner))
 	}
-	// Only demo assemblies may swallow publisher errors; durable stays fail-closed.
-	if deps.DurabilityMode == cell.DurabilityDemo {
-		publishOpts = append(publishOpts, configpublish.WithDemoFailOpen(true))
-	}
+	// Publisher fail-open is keyed off the same cell-level RunMode that config-read /
+	// feature-flag consume; durable stays fail-closed by construction (zero-value RunModeProd).
+	// Do not re-derive this from DurabilityMode here — call RunModeForDemo once (above).
+	publishOpts = append(publishOpts, configpublish.WithRunMode(runMode))
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, publishOpts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
@@ -204,7 +208,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
 
 	// feature-flag slice
-	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
+	flagSvc, err := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
+	if err != nil {
+		return fmt.Errorf("feature-flag: %w", err)
+	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
 

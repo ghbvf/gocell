@@ -400,6 +400,116 @@ func TestCursorCodec_NewRequiresPreviousKeyMinLength(t *testing.T) {
 	assert.Contains(t, err.Error(), "previous cursor HMAC key")
 }
 
+// TestCursorCodec_New_PreviousEqualsCurrent_Rejected asserts that NewCursorCodec
+// rejects a previous key that is identical to the current key. Using the same
+// value for both degrades rotation to a no-op and is a likely operator mistake.
+func TestCursorCodec_New_PreviousEqualsCurrent_Rejected(t *testing.T) {
+	key := bytes.Repeat([]byte("k"), 32)
+	_, err := NewCursorCodec(key, key)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Contains(t, err.Error(), "previous cursor key must differ from current")
+}
+
+// TestCursorCodec_PreviousKeyNilVsEmpty confirms that nil and []byte{} previous
+// keys both disable rotation without error (API regression guard). Matches
+// gorilla/securecookie CodecsFromPairs treatment of empty key slots.
+func TestCursorCodec_PreviousKeyNilVsEmpty(t *testing.T) {
+	current := bytes.Repeat([]byte("c"), 32)
+
+	codecNil, err := NewCursorCodec(current)
+	require.NoError(t, err)
+	require.NotNil(t, codecNil)
+
+	codecEmpty, err := NewCursorCodec(current, []byte{})
+	require.NoError(t, err)
+	require.NotNil(t, codecEmpty)
+
+	tok, err := codecNil.Encode(Cursor{Values: []any{"x"}})
+	require.NoError(t, err)
+	decoded, err := codecEmpty.Decode(tok)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"x"}, decoded.Values)
+}
+
+// TestCursorCodec_AllKeysFail_NoSideChannel asserts that when both current and
+// previous keys fail signature verification, the returned error does NOT leak
+// information about which key was "closer" or mention keys at all in the
+// client-facing details. Required defense against key-identification side
+// channels.
+// ref: gorilla/securecookie MultiError aggregates but exposes no per-key index.
+func TestCursorCodec_AllKeysFail_NoSideChannel(t *testing.T) {
+	keyA := bytes.Repeat([]byte("a"), 32)
+	keyB := bytes.Repeat([]byte("b"), 32)
+	keyC := bytes.Repeat([]byte("c"), 32)
+
+	codecSign, err := NewCursorCodec(keyA)
+	require.NoError(t, err)
+	codecVerify, err := NewCursorCodec(keyB, keyC)
+	require.NoError(t, err)
+
+	token, err := codecSign.Encode(Cursor{Values: []any{"v"}})
+	require.NoError(t, err)
+
+	_, err = codecVerify.Decode(token)
+	requireCursorInvalid(t, err, "signature verification failed")
+
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	for k, v := range ecErr.Details {
+		assert.NotContains(t, k, "key", "details key must not reveal key role")
+		assert.NotContains(t, k, "current", "details must not expose rotation position")
+		assert.NotContains(t, k, "previous", "details must not expose rotation position")
+		if s, ok := v.(string); ok {
+			assert.NotContains(t, s, "current", "detail value must not expose rotation position")
+			assert.NotContains(t, s, "previous", "detail value must not expose rotation position")
+		}
+	}
+	// InternalMessage is the server-side diagnostic; it also must not leak rotation position.
+	assert.NotContains(t, ecErr.InternalMessage, "current",
+		"InternalMessage must not expose rotation position")
+	assert.NotContains(t, ecErr.InternalMessage, "previous",
+		"InternalMessage must not expose rotation position")
+}
+
+// TestCursorCodec_KeyRotation_Lifecycle3Step is a regression guard on the
+// 3-step rotation lifecycle: tokens signed by the old key continue to verify
+// after the operator promotes a new current key and keeps old as previous.
+// ref: kube-apiserver --service-account-key-file 3-step rotation.
+func TestCursorCodec_KeyRotation_Lifecycle3Step(t *testing.T) {
+	keyOld := bytes.Repeat([]byte("o"), 32)
+	keyNew := bytes.Repeat([]byte("n"), 32)
+
+	codecOld, err := NewCursorCodec(keyOld)
+	require.NoError(t, err)
+	tokenOld, err := codecOld.Encode(Cursor{Values: []any{"legacy"}})
+	require.NoError(t, err)
+
+	codecRotated, err := NewCursorCodec(keyNew, keyOld)
+	require.NoError(t, err)
+
+	decoded, err := codecRotated.Decode(tokenOld)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"legacy"}, decoded.Values)
+
+	tokenNew, err := codecRotated.Encode(Cursor{Values: []any{"fresh"}})
+	require.NoError(t, err)
+
+	// Step 3 simulation: keyOld removed, keyNew-only codec verifies tokens
+	// written during the rotation window, but legacy tokens fail — this is
+	// the invariant the 3-step process protects (operator waits TTL).
+	codecNewOnly, err := NewCursorCodec(keyNew)
+	require.NoError(t, err)
+	decoded, err = codecNewOnly.Decode(tokenNew)
+	require.NoError(t, err)
+	assert.Equal(t, []any{"fresh"}, decoded.Values)
+
+	_, err = codecNewOnly.Decode(tokenOld)
+	requireCursorInvalid(t, err, "signature verification failed")
+}
+
 func TestCursorCodec_RoundTrip_WithScope(t *testing.T) {
 	codec, err := NewCursorCodec(testKey())
 	require.NoError(t, err)

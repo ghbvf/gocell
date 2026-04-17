@@ -15,6 +15,10 @@ import (
 //
 // Returns ErrPageSizeExceeded if limit > MaxPageSize.
 // Returns ErrValidationFailed if limit is not a valid integer.
+// Returns ErrCursorInvalid if the cursor exceeds query.MaxCursorTokenBytes —
+// rejecting oversize cursors at the parse boundary bounds the work any handler
+// can be forced to do before the codec's own length guard fires.
+// ref: kubernetes apiserver 4 KiB continue-token guidance.
 // Zero or negative limits are normalized to DefaultPageSize.
 func ParsePageRequest(r *http.Request) (query.PageRequest, error) {
 	var pr query.PageRequest
@@ -38,7 +42,16 @@ func ParsePageRequest(r *http.Request) (query.PageRequest, error) {
 		pr.Limit = n
 	}
 
-	pr.Cursor = r.URL.Query().Get("cursor")
+	cursor := r.URL.Query().Get("cursor")
+	if len(cursor) > query.MaxCursorTokenBytes {
+		slog.Warn("pagination: cursor token exceeds maximum length",
+			slog.Int("length", len(cursor)),
+			slog.Int("max", query.MaxCursorTokenBytes),
+		)
+		return pr, errcode.New(errcode.ErrCursorInvalid,
+			"cursor token exceeds maximum length")
+	}
+	pr.Cursor = cursor
 	pr.Normalize()
 	return pr, nil
 }

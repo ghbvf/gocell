@@ -4,6 +4,7 @@ package auditcore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -201,8 +202,11 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// audit-query
-	querySvc := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger,
+	querySvc, err := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+	if err != nil {
+		return fmt.Errorf("audit-query: %w", err)
+	}
 	c.queryHandler = auditquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
 

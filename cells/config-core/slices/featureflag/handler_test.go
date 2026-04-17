@@ -78,7 +78,10 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.HandleList)

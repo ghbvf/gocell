@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -80,4 +82,34 @@ func TestParsePageRequest_LimitAndCursor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 20, pr.Limit)
 	assert.Equal(t, "TOKEN", pr.Cursor)
+}
+
+// TestParsePageRequest_CursorTooLong rejects cursors longer than
+// query.MaxCursorTokenBytes at the HTTP parse boundary, before any
+// base64/HMAC work — defense against DoS amplification via oversize cursors.
+// ref: kubernetes apiserver 4 KiB continue-token guidance; enforcing at the
+// parse boundary (not only at codec.Decode) avoids wasting work in handlers
+// that forward the cursor through layers before decoding.
+func TestParsePageRequest_CursorTooLong(t *testing.T) {
+	oversize := strings.Repeat("A", query.MaxCursorTokenBytes+1)
+	u := "/api/v1/items?cursor=" + url.QueryEscape(oversize)
+	r := httptest.NewRequest(http.MethodGet, u, nil)
+
+	_, err := ParsePageRequest(r)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+}
+
+// TestParsePageRequest_CursorAtMaxLength accepts a cursor at exactly the
+// limit (only tokens strictly longer than the cap are rejected at parse time).
+func TestParsePageRequest_CursorAtMaxLength(t *testing.T) {
+	atLimit := strings.Repeat("A", query.MaxCursorTokenBytes)
+	u := "/api/v1/items?cursor=" + url.QueryEscape(atLimit)
+	r := httptest.NewRequest(http.MethodGet, u, nil)
+
+	pr, err := ParsePageRequest(r)
+	require.NoError(t, err)
+	assert.Len(t, pr.Cursor, query.MaxCursorTokenBytes)
 }

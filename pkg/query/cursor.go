@@ -39,7 +39,9 @@ type CursorCodec struct {
 
 // NewCursorCodec creates a CursorCodec. current is used for signing;
 // verification tries current first, then previous (if set).
-// Both keys must be at least 32 bytes.
+// Both keys must be at least 32 bytes. current and previous must differ —
+// using the same value for both would silently degrade key rotation to a
+// no-op and is therefore rejected at construction time.
 func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 	if len(current) < minCursorKeyBytes {
 		return nil, errcode.New(errcode.ErrCursorInvalid,
@@ -51,6 +53,10 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 		if len(prev) < minCursorKeyBytes {
 			return nil, errcode.New(errcode.ErrCursorInvalid,
 				fmt.Sprintf("previous cursor HMAC key is %d bytes, minimum is %d", len(prev), minCursorKeyBytes))
+		}
+		if bytes.Equal(current, prev) {
+			return nil, errcode.New(errcode.ErrCursorInvalid,
+				"previous cursor key must differ from current")
 		}
 	}
 	return &CursorCodec{current: current, previous: prev}, nil
@@ -167,7 +173,7 @@ func QueryContext(pairs ...string) string {
 // cursorInvalidMsg is the stable, client-facing message for all cursor
 // validation failures. Specific diagnostics go into errcode.Error.Details
 // so they appear in the response "details" field without polluting "message".
-const cursorInvalidMsg = "invalid cursor; restart from first page"
+const cursorInvalidMsg = "invalid cursor; restart from first page (client should discard stored cursor)"
 
 // cursorInvalid returns a standardized cursor error with a stable client-facing
 // message and diagnostic reason in the details field. The reason is also set as

@@ -27,7 +27,21 @@ func testCodec() *query.CursorCodec {
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testCodec(), slog.Default(), query.RunModeProd), repo
+	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, repo
+}
+
+func TestNewService_NilCodec_ReturnsError(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
 func seedEntry(repo *mem.AuditRepository, id, eventType, actorID string, ts time.Time) {
@@ -201,7 +215,11 @@ func newTestServiceWithLogBuf() (*Service, *mem.AuditRepository, *bytes.Buffer) 
 	repo := mem.NewAuditRepository()
 	buf := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return NewService(repo, testCodec(), logger, query.RunModeProd), repo, buf
+	svc, err := NewService(repo, testCodec(), logger, query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, repo, buf
 }
 
 // parseLogLines parses each non-empty newline-delimited JSON record in buf.
