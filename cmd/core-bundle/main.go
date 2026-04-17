@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
@@ -24,6 +25,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -170,16 +172,24 @@ func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *
 // bound to pool.Health when pool is non-nil. Returns nil when pool is nil so
 // the caller can unconditionally append without a guard block.
 //
+// Each probe call uses a fresh context.Background()-derived timeout so that
+// a SIGTERM cancelling the outer ctx does not cause probes to fail immediately.
+// K8s cannot distinguish "PG is down" from "process is shutting down" if the
+// outer ctx is passed directly — the probe must remain callable until the
+// process terminates.
+//
 // ref: Kubernetes readyz — external dependencies contribute named checks.
 // ref: Uber fx lifecycle — resources must be explicitly hooked; the framework
 // does not auto-manage lifetime.
-func pgHealthCheckerOpts(ctx context.Context, pool *adapterpg.Pool) []bootstrap.Option {
+func pgHealthCheckerOpts(pool *adapterpg.Pool) []bootstrap.Option {
 	if pool == nil {
 		return nil
 	}
 	return []bootstrap.Option{
 		bootstrap.WithHealthChecker("postgres", func() error {
-			return pool.Health(ctx)
+			probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			return pool.Health(probeCtx)
 		}),
 	}
 }
@@ -189,16 +199,24 @@ func pgHealthCheckerOpts(ctx context.Context, pool *adapterpg.Pool) []bootstrap.
 // (not static strings) so /readyz?verbose and adapter_info metrics match
 // what actually serves traffic.
 //
+// The event_bus field reflects the actual in-process event bus (always
+// in-memory at present — the relay forwards PG outbox entries INTO the
+// in-memory bus, it does not replace it). outbox_storage distinguishes the
+// outbox persistence backend so operators can tell whether the relay is active.
+//
 // ref: go-micro service metadata — mode changes must be visible to observers.
 func buildAdapterInfo(effectiveMode, cellAdapterMode string) map[string]string {
 	storageMode := "in-memory"
+	outboxStorage := "in-memory"
 	if cellAdapterMode == "postgres" {
 		storageMode = "postgres"
+		outboxStorage = "postgres"
 	}
 	return map[string]string{
-		"mode":      effectiveMode,
-		"storage":   storageMode,
-		"event_bus": "in-memory", // event bus adapters pending
+		"mode":           effectiveMode,
+		"storage":        storageMode,
+		"event_bus":      "in-memory", // in-process eventbus; relay forwards PG outbox entries into it
+		"outbox_storage": outboxStorage,
 	}
 }
 
@@ -239,6 +257,10 @@ func validateAdapterMode(mode string) error {
 // worker (non-nil iff mode=="postgres") so the caller can plumb lifecycle
 // (Close, Health, relay start/stop) into bootstrap.
 //
+// metricsProvider is used to wire K2 relay metrics into the relay worker when
+// running in postgres mode. Pass metrics.NopProvider{} in tests that do not
+// exercise the relay path (or have no metrics backend configured).
+//
 // "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
 // "memory" or unset = in-memory repos (dev/test only).
 //
@@ -257,7 +279,7 @@ func validateAdapterMode(mode string) error {
 //
 //	the framework does not auto-manage pool lifetime. We return pool to run()
 //	so that Close() and Health() both get wired into bootstrap explicitly.
-func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher) (mode string, opts []configcore.Option, pool *adapterpg.Pool, relay worker.Worker, err error) {
+func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvider metrics.Provider) (mode string, opts []configcore.Option, pool *adapterpg.Pool, relay worker.Worker, err error) {
 	mode = os.Getenv("GOCELL_CELL_ADAPTER_MODE")
 	if mode == "" {
 		mode = "memory"
@@ -270,7 +292,16 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher) (mode string
 		}
 		outboxWriter := adapterpg.NewOutboxWriter()
 		txMgr := adapterpg.NewTxManager(pool)
-		relayWorker := adapterpg.NewOutboxRelay(pool.DB(), pub, adapterpg.DefaultRelayConfig())
+		// Wire K2 relay metrics into production relay (OBS-RELAY-REGISTER-ATOMIC-01).
+		// Falls back to NoopRelayCollector only when provider registration fails,
+		// which surfaces as an error rather than silently losing metrics.
+		relayCfg := adapterpg.DefaultRelayConfig()
+		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
+		if rmErr != nil {
+			return mode, nil, nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
+		}
+		relayCfg.Metrics = relayMetrics
+		relayWorker := adapterpg.NewOutboxRelay(pool.DB(), pub, relayCfg)
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
 		return mode, []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
@@ -451,7 +482,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err := buildConfigCoreOpts(ctx, eb)
+	// Build Prometheus stack before config-core opts so the metrics provider
+	// can be passed into buildConfigCoreOpts for K2 relay metrics wiring.
+	ps, err := buildPromStack()
+	if err != nil {
+		return err
+	}
+
+	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err := buildConfigCoreOpts(ctx, eb, ps.metricProvider)
 	if err != nil {
 		return fmt.Errorf("config-core cell adapter: %w", err)
 	}
@@ -486,11 +524,6 @@ func run(ctx context.Context) error {
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
 
-	ps, err := buildPromStack()
-	if err != nil {
-		return err
-	}
-
 	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)
 	if err != nil {
 		return err
@@ -500,7 +533,8 @@ func run(ctx context.Context) error {
 	slog.Info("core-bundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
-		slog.String("event_bus", adapterInfo["event_bus"]))
+		slog.String("event_bus", adapterInfo["event_bus"]),
+		slog.String("outbox_storage", adapterInfo["outbox_storage"]))
 
 	// /readyz?verbose token — required in real mode, optional in dev.
 	// Check this before /metrics so operator error messages name the first
@@ -527,7 +561,7 @@ func run(ctx context.Context) error {
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
 		bootstrap.WithMetricsProvider(ps.metricProvider),
 	}, verboseOpts...)
-	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(ctx, pgPool)...)
+	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(pgPool)...)
 	// Wire outbox relay worker: PG mode only. relayWorker is nil in memory mode;
 	// bootstrap.WithWorkers with a nil worker is safe (it appends, but WorkerGroup
 	// skips nil — however we guard here to be explicit and avoid log noise).

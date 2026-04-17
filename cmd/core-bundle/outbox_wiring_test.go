@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	t.Setenv("GOCELL_PG_DSN", "") // ensure no PG connection is attempted
 
 	ctx := context.Background()
-	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{})
+	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "memory", mode, "unset GOCELL_CELL_ADAPTER_MODE must resolve to memory")
@@ -44,7 +45,7 @@ func TestBuildConfigCoreOpts_ExplicitMemoryMode_NoRelay(t *testing.T) {
 	t.Setenv("GOCELL_PG_DSN", "")
 
 	ctx := context.Background()
-	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{})
+	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "memory", mode)
@@ -58,7 +59,7 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "cassandra")
 
 	ctx := context.Background()
-	_, _, _, relay, err := buildConfigCoreOpts(ctx, discardPublisher{})
+	_, _, _, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
@@ -82,7 +83,7 @@ func TestBuildConfigCoreOpts_PGMode_RelayNonNil(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
 	ctx := context.Background()
-	mode, opts, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{})
+	mode, opts, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
 	assert.Equal(t, "postgres", mode)
