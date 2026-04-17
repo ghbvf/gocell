@@ -159,6 +159,10 @@ func validateAdapterMode(mode string) error {
 // "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
 // "memory" or unset = in-memory repos (dev/test only).
 //
+// Pilot scope: single global switch applies to all cells. Before adding a 2nd
+// cell's PG wiring, split to per-cell `GOCELL_<CELL>_ADAPTER_MODE`
+// (backlog: GOCELL-PER-CELL-ADAPTER-01).
+//
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 func buildConfigCoreOpts(ctx context.Context) ([]configcore.Option, error) {
 	mode := os.Getenv("GOCELL_CELL_ADAPTER_MODE")

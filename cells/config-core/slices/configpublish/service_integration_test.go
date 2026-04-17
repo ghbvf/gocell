@@ -29,6 +29,7 @@ type publishServiceBundle struct {
 // plus a cleanup function.
 func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -51,7 +52,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepositoryFromSession(session)
+	repo := cellpg.NewConfigRepository(session)
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 

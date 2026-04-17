@@ -26,6 +26,7 @@ import (
 // ConfigRepository backed by a Session plus cleanup func.
 func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -48,7 +49,7 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepositoryFromSession(session)
+	repo := NewConfigRepository(session)
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {

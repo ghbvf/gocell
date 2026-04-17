@@ -82,6 +82,7 @@ func WithInMemoryDefaults() Option {
 // repositories and a transactional outbox. Use this option when
 // GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
 // migrations (004_create_config_entries_and_versions.sql) before starting.
+// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
 //
 // pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
 // writes to the outbox_entries table within the same transaction.
@@ -93,7 +94,7 @@ func WithInMemoryDefaults() Option {
 func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option {
 	return func(c *ConfigCore) {
 		session := cellpg.NewSession(pool)
-		c.configRepo = cellpg.NewConfigRepositoryFromSession(session)
+		c.configRepo = cellpg.NewConfigRepository(session)
 		c.flagRepo = mem.NewFlagRepository() // flags remain in-memory in PR-C1
 		c.outboxWriter = outboxWriter
 	}

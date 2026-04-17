@@ -23,6 +23,9 @@ DROP INDEX IF EXISTS idx_outbox_pending;
 -- +goose Down
 
 DROP INDEX CONCURRENTLY IF EXISTS idx_outbox_pending_v2;
+-- WARNING: this down path recreates the index WITHOUT CONCURRENTLY,
+-- which takes ACCESS EXCLUSIVE lock and blocks writes. Only run during
+-- maintenance windows. Production rollbacks should prefer forward-fix.
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
     ON outbox_entries (next_retry_at NULLS FIRST, created_at)
     WHERE status = 'pending';

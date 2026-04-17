@@ -42,20 +42,17 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 // ConfigRepository implements ports.ConfigRepository using PostgreSQL.
 type ConfigRepository struct {
-	db      DBTX     // set when constructed directly with a fixed DBTX (test path)
-	session *Session // set when constructed from a Session (production path)
+	db      DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
+	session *Session // production path: resolves ambient tx via persistence.TxCtxKey
 }
 
-// NewConfigRepository creates a ConfigRepository backed by the given DBTX.
-// Prefer NewConfigRepositoryFromSession for production use.
-func NewConfigRepository(db DBTX) *ConfigRepository {
-	return &ConfigRepository{db: db}
-}
-
-// NewConfigRepositoryFromSession creates a ConfigRepository that resolves the
-// ambient pgx.Tx from the context on each call, enabling transactional
-// participation via persistence.TxCtxKey.
-func NewConfigRepositoryFromSession(s *Session) *ConfigRepository {
+// NewConfigRepository creates a ConfigRepository that resolves the ambient
+// pgx.Tx from the context on each call, enabling transactional participation
+// via persistence.TxCtxKey. Session is the sole production entry point;
+// use the unexported newConfigRepositoryFromDBTX in tests.
+//
+// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
+func NewConfigRepository(s *Session) *ConfigRepository {
 	return &ConfigRepository{session: s}
 }
 

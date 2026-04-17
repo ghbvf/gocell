@@ -15,6 +15,10 @@ import (
 var _ persistence.TxRunner = (*TxManager)(nil)
 
 // savepointDepthKey tracks nested savepoint depth in context.
+// savepointDepthKey is LOCAL to tx_manager (pg-specific nesting depth,
+// no cross-package consumer). Contrast with persistence.TxCtxKey which
+// is kernel-owned so that cells/*/internal/adapters/postgres can read
+// the ambient tx without importing adapters/postgres.
 type savepointDepthKey struct{}
 
 // CtxWithTx returns a new context carrying the given pgx.Tx.

@@ -23,6 +23,7 @@ import (
 // (or use t.Cleanup) to terminate the container.
 func setupPostgres(t *testing.T) (*Pool, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -399,6 +400,63 @@ func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
 
 	// Idempotent: second Up() must be a no-op.
 	require.NoError(t, migrator.Up(ctx), "second Up() must be idempotent (no error)")
+}
+
+// TestMigration004_StructuralAssertions verifies the column layout of
+// config_entries and config_versions after migration 004 is applied
+// (F-D-3 / RL-MIG-01 evidence). Also asserts idx_outbox_pending_v2 existence
+// (introduced by migration 005).
+func TestMigration004_StructuralAssertions(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_struct")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
+
+	// --- config_entries columns ---
+	wantConfigEntryColumns := []string{"id", "key", "value", "sensitive", "version", "created_at", "updated_at"}
+	for _, col := range wantConfigEntryColumns {
+		col := col
+		t.Run("config_entries_has_col_"+col, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = 'config_entries' AND column_name = $1
+				)`, col).Scan(&exists)
+			require.NoError(t, err)
+			assert.Truef(t, exists, "config_entries must have column %q", col)
+		})
+	}
+
+	// --- config_versions columns ---
+	wantConfigVersionColumns := []string{"id", "config_id", "version", "value", "sensitive", "published_at"}
+	for _, col := range wantConfigVersionColumns {
+		col := col
+		t.Run("config_versions_has_col_"+col, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = 'config_versions' AND column_name = $1
+				)`, col).Scan(&exists)
+			require.NoError(t, err)
+			assert.Truef(t, exists, "config_versions must have column %q", col)
+		})
+	}
+
+	// --- RL-MIG-01: idx_outbox_pending_v2 (migration 005) ---
+	t.Run("idx_outbox_pending_v2_exists", func(t *testing.T) {
+		var exists bool
+		err := pool.DB().QueryRow(ctx,
+			"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_outbox_pending_v2')").
+			Scan(&exists)
+		require.NoError(t, err)
+		assert.True(t, exists, "idx_outbox_pending_v2 must exist (RL-MIG-01 evidence, migration 005)")
+	})
 }
 
 // Target: adapters/postgres coverage >= 80%

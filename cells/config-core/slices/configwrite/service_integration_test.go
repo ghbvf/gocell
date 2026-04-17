@@ -21,6 +21,7 @@ import (
 // and returns a Service wired with PG repo + outbox writer + tx manager.
 func setupWriteService(t *testing.T) (*Service, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
 
 	ctx := context.Background()
 
@@ -43,7 +44,7 @@ func setupWriteService(t *testing.T) (*Service, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepositoryFromSession(session)
+	repo := cellpg.NewConfigRepository(session)
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -104,7 +105,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepositoryFromSession(session)
+	repo := cellpg.NewConfigRepository(session)
 
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}

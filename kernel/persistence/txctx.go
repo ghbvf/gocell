@@ -1,3 +1,12 @@
+// Package persistence defines shared transaction abstractions for the
+// GoCell framework. TxCtxKey is owned by the kernel so that adapters
+// (e.g. adapters/postgres) can WRITE a concrete tx into ctx and cells'
+// own adapter implementations can READ it, without either side importing
+// the other (per CLAUDE.md cells→adapters layering rule).
+//
+// Contract: only ONE adapter may claim this key per assembly. If a
+// second DB adapter is introduced, define its own key — do NOT reuse
+// TxCtxKey for a different value type.
 package persistence
 
 // txKey is the context key under which a database-specific transaction
