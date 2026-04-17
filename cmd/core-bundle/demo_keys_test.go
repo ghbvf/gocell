@@ -39,3 +39,28 @@ func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 	err := rejectDemoKey("real", "GOCELL_AUDIT_CURSOR_KEY", nil)
 	require.NoError(t, err)
 }
+
+// TestDevDefaults_AreAllInWellKnownDemoKeys guards against the pattern where
+// a new dev-only default is added to loadSecret/loadCursorCodec call sites
+// without being appended to wellKnownDemoKeys. Without this test, a stale
+// dev default could silently pass rejectDemoKey in real mode.
+func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
+	// The dev defaults currently wired in run(). Keep this list in sync with
+	// main.go's loadSecret/loadCursorCodec call sites when they change.
+	devDefaults := []string{
+		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_HMAC_KEY", ...)
+		"core-bundle-audit-cursor-key-32!", // loadCursorCodec("GOCELL_AUDIT_CURSOR_KEY", ...)
+		"core-bundle-cfg-cursor-key--32b!", // loadCursorCodec("GOCELL_CONFIG_CURSOR_KEY", ...)
+	}
+	for _, dd := range devDefaults {
+		dd := dd
+		t.Run(dd, func(t *testing.T) {
+			for _, demo := range wellKnownDemoKeys {
+				if dd == demo {
+					return
+				}
+			}
+			t.Errorf("dev default %q is not in wellKnownDemoKeys — real mode will silently accept it; add to demo_keys.go", dd)
+		})
+	}
+}
