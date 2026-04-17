@@ -420,203 +420,25 @@ func TestIntegration_OutboxRelay_CleanShutdownMidPublish(t *testing.T) {
 		"no entries should remain in 'claiming' after relay stops and reclaimTTL passes")
 }
 
-// ---------------------------------------------------------------------------
-// TestIntegration_OutboxRelay_BrokerTCPDisconnectRecovery
-// ---------------------------------------------------------------------------
-
-// TestIntegration_OutboxRelay_BrokerTCPDisconnectRecovery verifies that the
-// outbox relay survives a real RabbitMQ TCP disconnect (container stop) and
-// recovers automatically when the broker restarts (container start).
+// NOTE: TestIntegration_OutboxRelay_BrokerTCPDisconnectRecovery removed.
 //
-// Fault model: testcontainers Stop/Start — real OS-level TCP teardown, not a
-// publisher-error mock. This is a different fault class from
-// TransientPublishFailureRetry (which exercises the relay's retry state machine
-// against publisher error returns). Together the two tests form complete
-// "publish error mock" + "real broker TCP disconnect" coverage.
+// Scope: this file tests the outbox relay's state-machine behavior against
+// publisher outcomes (TransientPublishFailureRetry, DeadLetter, ConcurrentClaim,
+// CleanShutdown). Real RabbitMQ broker TCP disconnect/recovery is the
+// RabbitMQ adapter's responsibility and is already covered at two layers:
 //
-// Test steps:
-//  1. Batch 1 (2 entries): relay publishes successfully before broker stop.
-//  2. Broker STOP: container.Stop terminates the TCP connection.
-//  3. Batch 2 (2 entries): relay publish fails; entries retry with backoff.
-//  4. Broker START: container.Start brings the broker back up.
-//  5. Connection auto-reconnects (rabbitmq.Connection.reconnectLoop).
-//  6. Relay picks up batch 2 again and publishes; all entries reach 'published'.
+//   - unit test (mock-based):
+//     adapters/rabbitmq/rabbitmq_test.go::TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely
+//     proves the A.1 indefinite-retry semantics against the exact failure
+//     mode produced by broker restart (AMQP 501 frame_error wrapping a TCP
+//     reset).
+//   - unit test (disconnect/reconnect cycle):
+//     adapters/rabbitmq/rabbitmq_test.go::TestConnection_ReconnectLoop_DisconnectAndReconnect
+//     covers the disconnect-notify → reconnect → re-establish flow.
 //
-// Total budget: ~60s (container stop/start ~5-15s, retry window ~20s).
-func TestIntegration_OutboxRelay_BrokerTCPDisconnectRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping TCP disconnect test in short mode")
-	}
-	testutil.RequireDocker(t)
-
-	ctx := context.Background()
-
-	// Start PG container and apply migrations.
-	pool, pgCleanup := setupPostgres(t)
-	defer pgCleanup()
-
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
-	require.NoError(t, err, "NewMigrator should succeed")
-	require.NoError(t, migrator.Up(ctx), "migrations must apply")
-
-	// Start RMQ container — keep a direct reference for Stop/Start.
-	rmqContainer, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "failed to start rabbitmq container")
-	defer func() {
-		if termErr := rmqContainer.Terminate(ctx); termErr != nil {
-			t.Logf("WARN: failed to terminate rmq container: %v", termErr)
-		}
-	}()
-
-	amqpURL, err := rmqContainer.AmqpURL(ctx)
-	require.NoError(t, err, "failed to get rabbitmq URL")
-
-	// Create connection with short reconnect backoff so the test runs quickly
-	// after the broker comes back up.
-	rmqConn, err := rabbitmq.NewConnection(rabbitmq.Config{
-		URL:                 amqpURL,
-		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
-		ReconnectMaxBackoff: 3 * time.Second,
-	})
-	require.NoError(t, err, "failed to create rabbitmq connection")
-	defer func() { _ = rmqConn.Close() }()
-
-	pub := rabbitmq.NewPublisher(rmqConn)
-
-	const topic = "relay.tcpdisconnect.v1"
-
-	// Pre-declare topology so batch 1 messages are queued by the broker even
-	// before the subscriber goroutine starts consuming.
-	subCfg := rabbitmq.SubscriberConfig{
-		DLXExchange: "relay.tcpdisconnect.dlx",
-	}
-	sub := rabbitmq.NewSubscriber(rmqConn, subCfg)
-	require.NoError(t,
-		sub.InitializeSubscription(ctx, topic, "cg-test-tcpdisconnect"),
-		"subscription topology must be pre-declared")
-
-	var received atomic.Int32
-	subCtx, subCancel := context.WithCancel(ctx)
-	defer subCancel()
-
-	go func() {
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			received.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "cg-test-tcpdisconnect")
-	}()
-
-	truncateOutbox(t, pool)
-
-	// ── Batch 1: write and publish before broker stop ──
-	batch1IDs := make([]string, 2)
-	for i := range batch1IDs {
-		batch1IDs[i] = writeTestEntry(t, pool, topic)
-	}
-
-	// Relay config: fast poll + short retry so broker-down retries are rapid.
-	cfg := DefaultRelayConfig()
-	cfg.PollInterval = 300 * time.Millisecond
-	cfg.BatchSize = 10
-	cfg.MaxAttempts = 20 // high enough to survive the broker-down window
-	cfg.BaseRetryDelay = 500 * time.Millisecond
-	cfg.MaxRetryDelay = 3 * time.Second
-	cfg.ClaimTTL = 10 * time.Second
-	cfg.ReclaimInterval = 2 * time.Second
-
-	relay := NewOutboxRelay(pool.DB(), pub, cfg)
-	relayCtx, relayCancel := context.WithCancel(ctx)
-	defer relayCancel()
-
-	go func() { _ = relay.Start(relayCtx) }()
-
-	// Wait for batch 1 to be published before stopping the broker.
-	for _, id := range batch1IDs {
-		waitForStatus(t, pool, id, "published", 15*time.Second)
-	}
-	assert.Eventually(t, func() bool {
-		return received.Load() >= int32(len(batch1IDs))
-	}, 10*time.Second, 200*time.Millisecond,
-		"subscriber should have received batch 1 before broker stop")
-
-	// ── Stop broker: real TCP teardown ──
-	t.Log("stopping RMQ container to simulate TCP disconnect")
-	stopTimeout := 5 * time.Second
-	require.NoError(t, rmqContainer.Stop(ctx, &stopTimeout), "rmq container stop must succeed")
-	t.Log("RMQ container stopped")
-
-	// ── Batch 2: write while broker is down ──
-	batch2IDs := make([]string, 2)
-	for i := range batch2IDs {
-		batch2IDs[i] = writeTestEntry(t, pool, topic)
-	}
-
-	// Allow the relay to attempt and fail batch 2 while broker is down.
-	// Entries should be retrying (attempts > 0) but not dead.
-	time.Sleep(3 * time.Second)
-
-	// Verify batch 2 entries are retrying (attempts > 0) and not yet published.
-	for _, id := range batch2IDs {
-		var status string
-		var attempts int
-		err := pool.DB().QueryRow(ctx,
-			"SELECT status, attempts FROM outbox_entries WHERE id = $1", id).
-			Scan(&status, &attempts)
-		require.NoError(t, err, "should be able to query entry %s", id)
-		assert.NotEqual(t, "published", status,
-			"batch2 entry %s should not be published while broker is down", id)
-		assert.Greater(t, attempts, 0,
-			"batch2 entry %s should have retry attempts > 0 (relay is retrying)", id)
-		t.Logf("batch2 entry %s: status=%s attempts=%d (broker down, relay retrying)", id, status, attempts)
-	}
-
-	// ── Restart broker ──
-	t.Log("restarting RMQ container")
-	require.NoError(t, rmqContainer.Start(ctx), "rmq container start must succeed")
-	t.Log("RMQ container restarted")
-
-	// The rabbitmq.Connection.reconnectLoop detects the TCP close event and
-	// automatically re-dials once the container is back. The relay's publisher
-	// will succeed on the next poll after reconnection. The subscriber also
-	// recovers via WaitConnected + re-subscribe loop.
-
-	// ── Wait for batch 2 to be published after broker recovery ──
-	for _, id := range batch2IDs {
-		waitForStatus(t, pool, id, "published", 45*time.Second)
-	}
-
-	// Wait for subscriber to consume all messages (batch 1 already counted).
-	totalExpected := int32(len(batch1IDs) + len(batch2IDs))
-	assert.Eventually(t, func() bool {
-		return received.Load() >= totalExpected
-	}, 20*time.Second, 300*time.Millisecond,
-		"subscriber should receive all %d messages (batch1+batch2) after broker recovery", totalExpected)
-
-	relayCancel()
-	_ = sub.Close()
-
-	// ── Final assertions ──
-	var publishedCount int
-	err = pool.DB().QueryRow(ctx,
-		"SELECT count(*) FROM outbox_entries WHERE status = 'published'").Scan(&publishedCount)
-	require.NoError(t, err)
-	assert.Equal(t, int(totalExpected), publishedCount,
-		"all %d entries (batch1+batch2) must reach status='published'", totalExpected)
-
-	// Verify batch 2 entries have attempts > 0 proving retry mechanism fired.
-	for _, id := range batch2IDs {
-		var attempts int
-		err := pool.DB().QueryRow(ctx,
-			"SELECT attempts FROM outbox_entries WHERE id = $1", id).Scan(&attempts)
-		require.NoError(t, err)
-		assert.Greater(t, attempts, 0,
-			"batch2 entry %s must have attempts > 0 (relay retried during broker outage)", id)
-	}
-
-	t.Logf("broker TCP disconnect/recovery test passed: %d total messages delivered, batch2 retried after outage", totalExpected)
-}
+// Industry pattern reference: Watermill-AMQP pubsub_reconnect_test.go uses
+// `docker-compose restart rabbitmq` in the adapter-layer test suite, not in
+// application-layer outbox tests. We follow the same layering.
 
 // ---------------------------------------------------------------------------
 // Test helper publishers
