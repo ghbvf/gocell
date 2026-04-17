@@ -259,6 +259,20 @@ func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Op
 		if err != nil {
 			return mode, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
 		}
+		// A12: fail-fast on schema version mismatch (startup time, before any traffic).
+		// ref: pressly/goose v3.27 GetDBVersion — reads max version from schema_migrations.
+		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
+			pool.Close()
+			return mode, nil, nil, fmt.Errorf("config-core PG schema guard: %w", schemaErr)
+		}
+		// A4: warn on INVALID indexes (non-fatal; operator must clean up manually).
+		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
+			slog.Warn("config-core: could not detect invalid indexes",
+				slog.Any("error", detectErr))
+		} else if len(invalid) > 0 {
+			slog.Warn("config-core: invalid indexes detected; manual cleanup required",
+				slog.Any("indexes", invalid))
+		}
 		outboxWriter := adapterpg.NewOutboxWriter()
 		txMgr := adapterpg.NewTxManager(pool)
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
