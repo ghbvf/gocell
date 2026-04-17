@@ -290,41 +290,18 @@ func TestWalkthrough(t *testing.T) {
 	})
 
 	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {
-		// Use the admin token — alice's session was logged out, but adminToken
-		// session is still active. Admin can query audit entries for any actor.
-		auditURL := base + "/api/v1/audit/entries"
-
 		// In demo mode, audit events are delivered async via the in-memory
 		// eventbus; poll until at least one entry is visible.
-		type auditPage struct {
-			Data []json.RawMessage `json:"data"`
-		}
-		var page auditPage
+		var entries []json.RawMessage
 		require.Eventually(t, func() bool {
-			req, err := http.NewRequestWithContext(context.Background(),
-				http.MethodGet, auditURL, http.NoBody)
-			if err != nil {
-				return false
+			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries", adminToken)
+			if ok {
+				entries = data
 			}
-			req.Header.Set("Authorization", "Bearer "+adminToken)
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil || resp.StatusCode != http.StatusOK {
-				if resp != nil {
-					resp.Body.Close()
-				}
-				return false
-			}
-			defer resp.Body.Close()
-
-			page = auditPage{}
-			if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-				return false
-			}
-			return len(page.Data) > 0
+			return ok
 		}, 2*time.Second, 50*time.Millisecond, "expected at least one audit entry")
 
-		for _, raw := range page.Data {
+		for _, raw := range entries {
 			var entry map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(raw, &entry))
 
@@ -452,6 +429,31 @@ func TestWalkthrough(t *testing.T) {
 		assert.NotNil(t, envelope.Data,
 			"flags list response must contain a 'data' array (may be empty)")
 	})
+}
+
+// fetchAuditEntries queries GET /audit/entries with the given bearer token and
+// returns the data array. Returns (nil, false) on any error or empty result.
+func fetchAuditEntries(url, token string) ([]json.RawMessage, bool) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil, false
+	}
+	defer resp.Body.Close()
+	var page struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, false
+	}
+	return page.Data, len(page.Data) > 0
 }
 
 // jwtExtractSID parses the JWT payload (without signature verification) to
