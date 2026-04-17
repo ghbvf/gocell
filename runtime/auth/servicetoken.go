@@ -146,15 +146,12 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 }
 
 // ServiceTokenMiddleware validates requests using HMAC-SHA256 service tokens.
-// The token is expected in the Authorization header as one of:
+// The token is expected in the Authorization header as:
 //
-//	ServiceToken {unix_timestamp}:{hex_hmac}                     (legacy)
-//	ServiceToken {unix_timestamp}:{nonce}:{hex_hmac}             (new, with replay protection)
+//	ServiceToken {unix_timestamp}:{nonce}:{hex_hmac}
 //
-// For the new 3-part format the HMAC is computed over
-// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce}". For the legacy
-// 2-part format the HMAC is computed over "{method} {path} {timestamp}" and no
-// nonce check is performed, even when a NonceStore is configured.
+// The HMAC is computed over
+// "{method} {path}[?{canonicalQuery}] {timestamp} {nonce}".
 //
 // Verification tries each secret in the key ring in order (current, then
 // previous). Tokens older than 5 minutes (exclusive boundary) are rejected.
@@ -190,9 +187,8 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 		return
 	}
 
-	// Accept both 2-part (legacy) and 3-part (new) formats.
 	parts := strings.SplitN(token, ":", 3)
-	if len(parts) < 2 {
+	if len(parts) != 3 {
 		cfg.metrics.recordServiceVerify("failure", "invalid_format")
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token format")
 		return
@@ -218,15 +214,8 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 		return
 	}
 
-	var nonce, sigHex, message string
-	isNewFormat := len(parts) == 3
-	if isNewFormat {
-		nonce, sigHex = parts[1], parts[2]
-		message = buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce)
-	} else {
-		sigHex = parts[1]
-		message = fmt.Sprintf("%s %s %s", r.Method, r.URL.Path, tsStr)
-	}
+	nonce, sigHex := parts[1], parts[2]
+	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce)
 
 	providedMAC, err := hex.DecodeString(sigHex)
 	if err != nil {
@@ -241,7 +230,7 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 		return
 	}
 
-	if blocked := checkNonceReplay(cfg, isNewFormat, nonce, w, r); blocked {
+	if blocked := checkNonceReplay(cfg, nonce, w, r); blocked {
 		return
 	}
 
@@ -251,15 +240,8 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 
 // checkNonceReplay handles nonce-based replay detection. Returns true if the
 // request was blocked (response already written).
-func checkNonceReplay(cfg serviceTokenConfig, isNewFormat bool, nonce string, w http.ResponseWriter, r *http.Request) bool {
+func checkNonceReplay(cfg serviceTokenConfig, nonce string, w http.ResponseWriter, r *http.Request) bool {
 	if cfg.nonceStore == nil {
-		return false
-	}
-	if !isNewFormat {
-		cfg.logger.Warn("legacy 2-part service token accepted without replay check",
-			slog.String("path", r.URL.Path),
-			slog.String("method", r.Method),
-		)
 		return false
 	}
 	err := cfg.nonceStore.CheckAndMark(r.Context(), nonce)

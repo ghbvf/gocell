@@ -1,14 +1,9 @@
 package auth
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -501,23 +496,20 @@ func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec2.Code, "replay must be allowed without a NonceStore")
 }
 
-func TestServiceTokenMiddleware_LegacyTwoPartFormat_StillWorks(t *testing.T) {
+func TestServiceTokenMiddleware_LegacyTwoPartFormat_Rejected(t *testing.T) {
+	// 2-part tokens (format: {ts}:{hmac}) must be rejected with 401.
+	// Per CLAUDE.md "not considering backward compatibility", the legacy
+	// format introduced before PR#159 added nonce is no longer accepted.
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Unix(1700000000, 0)
 
-	// Craft a legacy 2-part token manually.
-	tsStr := strconv.FormatInt(now.Unix(), 10)
-	mac := hmac.New(sha256.New, ring.Current())
-	fmt.Fprintf(mac, "%s %s %s", http.MethodGet, "/legacy/path", tsStr)
-	legacyToken := tsStr + ":" + hex.EncodeToString(mac.Sum(nil))
+	// Craft a 2-part token with a valid-looking hex MAC segment.
+	legacyToken := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
 
-	store, err := NewInMemoryNonceStore(5 * time.Minute)
-	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
+		t.Fatal("should not be called: 2-part token must be rejected")
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/legacy/path", nil)
@@ -525,7 +517,7 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_StillWorks(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusOK, rec.Code, "legacy 2-part token must still be accepted")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "2-part legacy token must be rejected")
 }
 
 func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
