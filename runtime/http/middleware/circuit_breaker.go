@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"errors"
+	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -47,6 +49,30 @@ type Allower interface {
 	Allow() (allowed bool, done func(err error))
 }
 
+// IsTypedNilAllower reports whether cb is a typed-nil pointer wrapped in an
+// Allower interface. A typed-nil passes a plain cb == nil check because the
+// interface value is non-nil (it carries type information), but calling any
+// method on the underlying pointer will panic.
+//
+// Usage: call this after the cb == nil interface check, so the fast path still
+// short-circuits on a bare nil interface:
+//
+//	if cb == nil || middleware.IsTypedNilAllower(cb) {
+//	    // reject
+//	}
+//
+// ref: golang.org/src/reflect Value.IsNil — kind-gated to avoid panic on
+// non-nilable kinds (string, int, struct, …).
+func IsTypedNilAllower(cb Allower) bool {
+	v := reflect.ValueOf(cb)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map,
+		reflect.Slice, reflect.Chan, reflect.Func:
+		return v.IsNil()
+	}
+	return false
+}
+
 // CircuitBreaker returns HTTP middleware that protects upstream handlers using
 // the given Allower. When the circuit is open, requests are rejected with 503
 // Service Unavailable. When closed or half-open, requests proceed to the next
@@ -80,6 +106,16 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 	if !allowed {
 		writeCircuitOpenError(w, r, cb)
 		return
+	}
+
+	// Guard against Allower implementations that violate the contract by
+	// returning allowed=true with a nil done callback. Without this guard a
+	// deferred done(...) call would panic with a nil function pointer, causing
+	// an unrecoverable 500. Fail open with a no-op so the request is served,
+	// and log an Error so the operator can detect the broken implementation.
+	if done == nil {
+		slog.ErrorContext(r.Context(), "circuitbreaker: Allow returned nil done, contract violation; failing open")
+		done = func(error) {}
 	}
 
 	state, w, r := ensureRecorder(w, r)

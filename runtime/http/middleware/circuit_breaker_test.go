@@ -197,6 +197,38 @@ func TestCircuitBreaker_NilBreaker_Panics(t *testing.T) {
 	}, "nil Allower must panic at construction time")
 }
 
+// TestIsTypedNilAllower verifies that IsTypedNilAllower detects typed-nil
+// pointers wrapped in an Allower interface value.
+func TestIsTypedNilAllower(t *testing.T) {
+	cases := []struct {
+		name string
+		cb   Allower
+		want bool
+	}{
+		{
+			name: "nil interface value",
+			cb:   nil,
+			want: false, // bare nil interface: cb == nil already catches this
+		},
+		{
+			name: "typed-nil pointer",
+			cb:   (*mockBreaker)(nil),
+			want: true,
+		},
+		{
+			name: "valid non-nil pointer",
+			cb:   &mockBreaker{},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsTypedNilAllower(tc.cb)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestAllower_ISP verifies that a caller can depend only on Allower without
 // needing to implement CircuitBreakerRetryAfter, demonstrating the ISP split.
 func TestAllower_ISP(t *testing.T) {
@@ -324,4 +356,33 @@ func TestCircuitBreaker_StateMachineTransition_AllowDoneAllow(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec2.Code,
 		"second request must be rejected after breaker opens from failure")
+}
+
+// nilDoneBreaker returns allowed=true but a nil done callback, violating the
+// Allower contract. Used to test the nil-done guard in circuitBreakerServe.
+type nilDoneBreaker struct{}
+
+func (n *nilDoneBreaker) Allow() (bool, func(error)) {
+	return true, nil
+}
+
+// TestCircuitBreaker_AllowerReturnsNilDone_NoPanic verifies that when an
+// Allower implementation violates the contract by returning allowed=true with a
+// nil done callback, the middleware fails open (serves the request, returns
+// 200) without panicking.
+func TestCircuitBreaker_AllowerReturnsNilDone_NoPanic(t *testing.T) {
+	cb := &nilDoneBreaker{}
+	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	// Must not panic even though done is nil.
+	assert.NotPanics(t, func() {
+		handler.ServeHTTP(rec, req)
+	}, "nil done must not cause a panic")
+
+	assert.Equal(t, http.StatusOK, rec.Code, "request must be served (fail-open)")
 }

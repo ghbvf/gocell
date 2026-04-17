@@ -643,6 +643,24 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
 }
 
+func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
+	// A bare nil interface value must cause NewE to return an error so that
+	// Bootstrap.Run fails fast instead of silently skipping CB protection.
+	_, err := NewE(WithCircuitBreaker(nil))
+	require.Error(t, err, "nil interface Allower must return error from NewE")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
+	// A typed-nil (*routerTestBreaker)(nil) must also be rejected: the interface
+	// value is non-nil but the underlying pointer is nil, so calling Allow()
+	// on it would panic at runtime.
+	var cb *routerTestBreaker // typed nil
+	_, err := NewE(WithCircuitBreaker(cb))
+	require.Error(t, err, "typed-nil Allower must return error from NewE")
+	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
 // --- Infra endpoints bypass RL/CB ---
 
 func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {

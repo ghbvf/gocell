@@ -141,9 +141,17 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 // router.WithCircuitBreaker. If the breaker implements io.Closer,
 // Bootstrap registers it for teardown on shutdown and startup rollback.
 //
+// A nil cb is rejected at Run() time with a fatal error so operators are not
+// silently left without circuit-breaker protection.
+//
 // ref: go-zero — resilience middleware configuration at app level
+// ref: kubernetes/kubernetes apiserver — option fail-fast at startup
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
+		if cb == nil || middleware.IsTypedNilAllower(cb) {
+			b.circuitBreakerNil = true
+			return
+		}
 		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
 		if cl, ok := cb.(io.Closer); ok {
 			b.closers = append(b.closers, cl)
@@ -370,6 +378,10 @@ type Bootstrap struct {
 	// config.NewWatcher. Override per-instance in tests to inject failures
 	// without mutating package-level state (safe for parallel tests).
 	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
+
+	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
+	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
+	circuitBreakerNil bool
 }
 
 // New creates a Bootstrap with the given options.
@@ -434,6 +446,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if hc.fn == nil {
 			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
 		}
+	}
+
+	// Fail-fast: nil circuit breaker means the operator called
+	// WithCircuitBreaker(nil) which would silently skip CB installation,
+	// leaving handlers unprotected despite the caller's intent.
+	if b.circuitBreakerNil {
+		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
 
 	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually

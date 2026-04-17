@@ -1,6 +1,7 @@
 package circuitbreaker
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
@@ -88,7 +89,12 @@ type Adapter struct {
 }
 
 // New creates a gobreaker-backed circuit breaker adapter.
-func New(cfg Config) *Adapter {
+// Returns an error if cfg.Name is empty, as Name is required for logs and
+// metrics identification. Production configurations must never silently degrade.
+func New(cfg Config) (*Adapter, error) {
+	if cfg.Name == "" {
+		return nil, fmt.Errorf("circuitbreaker: Name required")
+	}
 	st := gobreaker.Settings{
 		Name:        cfg.Name,
 		MaxRequests: cfg.MaxRequests,
@@ -127,7 +133,7 @@ func New(cfg Config) *Adapter {
 	return &Adapter{
 		cb:      gobreaker.NewTwoStepCircuitBreaker[struct{}](st),
 		timeout: timeout,
-	}
+	}, nil
 }
 
 // gobreakerState converts a gobreaker.State to the local State type.
