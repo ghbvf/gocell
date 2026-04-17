@@ -28,32 +28,29 @@
 
 ---
 
-## Phase 0.5: P0 正确性回归（2026-04-18 外部审查，插队执行，~10h）
+## Phase 0.5: ✅ P0 正确性回归（2026-04-18 外部审查，已闭合，~8h）
 
 > 跨层 P0 项，不受 bottom-up 约束；修复面包含 runtime + slice，一个 PR 一起落地才能形成完整语义。
 
-### PR-P0-AUTH-INTENT: token intent 强约束（P0 阻塞，6.5h）
+### ✅ PR-P0-AUTH-INTENT: token intent 强约束（PR#166 已合入）
 
-| 改动层 | 任务 | 涉及文件 |
-|--------|------|----------|
-| runtime | `TokenIntent` enum（access/refresh）→ `Issue()` 新入参 → 映射 JWT `aud` claim；verifier 按请求 scope 拒绝 intent 不匹配的 token | `runtime/auth/jwt.go` + `runtime/auth/middleware.go` |
-| slice | 3 个 slice service 传 intent；`/auth/refresh` 只接受 `intent=refresh`，其余只接受 `intent=access` | `cells/access-core/slices/{sessionlogin,sessionrefresh,sessionvalidate}/service.go` |
-| test | 2 条集成用例：refresh token → 业务接口 401；access token → /auth/refresh 401；**搭车 AUTH-INT-REACHABILITY-01**：补合法 token 到达性断言 + public handler 精确状态断言 | `cells/access-core/slices/*/auth_integration_test.go` |
+| 改动层 | 落地要点 |
+|--------|---------|
+| runtime | `TokenIntent` enum（access/refresh）→ `Issue()` 新入参 → `token_use` claim + JOSE `typ` header；新增 `IntentTokenVerifier.VerifyIntent`；`AuthMiddleware` 签名收紧为 `IntentTokenVerifier`（编译期强制）|
+| slice | 3 个 slice service 传 intent；`/auth/refresh` 只接 refresh、其它只接 access |
+| test | 3 个 intent_test.go（sessionlogin/sessionrefresh/sessionvalidate）+ `cells/access-core/auth_integration_test.go` |
+| 遗留 | **P1-11 PR-R-AUTH-AUD-VALIDATION**：`VerifyIntent` 未按 RFC 8725 §3.3 验证 `aud` claim → 已登入 Phase R 待做（4h）|
 
-### PR-P0-AUTHZ-CONFIGWRITE: config 管理面授权收口（P0 阻塞，1.5h）
+### ✅ PR-P0-AUTHZ-CONFIGWRITE: config 管理面授权收口（PR#168 已合入）
 
-| 改动层 | 任务 | 涉及文件 |
-|--------|------|----------|
-| slice | configwrite 的 create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`，`roleAdmin` const 提到 `internal/dto/authz.go` 共享；补 401/403/200 测试 | `cells/config-core/slices/configwrite/handler.go` + `cells/config-core/internal/dto/authz.go`（新建）|
+| 改动层 | 落地要点 |
+|--------|---------|
+| slice | configwrite create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`；`roleAdmin` const 提取到 `cells/config-core/internal/dto/authz.go`；补 401/403/200 测试 |
+| 遗留 | S11 CONFIG-CORE-INIT-COGNIT-01（nolint 临时抑制，3h）/ S12 AUTH-GUARD-INLINE-UNIFY-01（全库统一待做，2h）/ S13 CONFIGWRITE-4XX-OBSERVABILITY-01（1h）→ 已登入 Phase S |
 
-### PR-P0-READYZ-BROKER: broker 健康纳入 readyz（P2 但跨层，可延迟到 Phase A 合并，2h）
+### PR-P0-READYZ-BROKER: broker 健康纳入 readyz（已顺延至 Phase A，2h）
 
-| 改动层 | 任务 | 涉及文件 |
-|--------|------|----------|
-| adapter | `Connection.Health() error` 暴露 | `adapters/rabbitmq/connection.go` |
-| runtime | bootstrap 把关键 subscriber/connection 自动注册为 health checker；`WithBrokerHealth(opts...)` 控制开关 | `runtime/bootstrap/bootstrap.go` + `runtime/http/health/health.go` |
-
-> 顺序建议: PR-P0-AUTH-INTENT → PR-P0-AUTHZ-CONFIGWRITE 可立刻做；PR-P0-READYZ-BROKER 可顺延至 Phase A 内与 POOLSTATS 改动合并（同改 connection.go）。
+> 合并进 Phase A PR-A-HARDEN，与 POOLSTATS 同改 `connection.go`，一次落地。
 
 ---
 
@@ -114,6 +111,12 @@
 | **INTERNAL-LISTENER-01** (P2, Cx4): `/internal/v1/` 当前与公网共用 listener + Bearer JWT；独立 listener 或 service-token/mTLS 策略 | 4-8h | `runtime/bootstrap/bootstrap.go` + cell 路由注册拆分 | PR#143 review F1 |
 
 > 规模风险：Cx4 + 工时 8h 上界。如实施发现 blast radius 大，降级到 Phase X。
+
+### PR-R-AUTH-AUD-VALIDATION: aud claim 强验证（P1，4h）
+
+| 任务 | 工时 | 涉及文件 | 来源 |
+|------|------|----------|------|
+| **PR-R-AUTH-AUD-VALIDATION** (P1, Cx2): `VerifyIntent` 未按 RFC 8725 §3.3 验证 `aud` claim；verifier 强制 `aud == expected`，`cmd/core-bundle/main.go` 传入 audience + audience mismatch 集成测试 | 4h | `runtime/auth/jwt.go` + `cmd/core-bundle/main.go` | PR#166 R1-F2-5（backlog P1-11）|
 
 ### PR-R-AUTH-STRICT (🟡 可延后): legacy token strict 模式（搭车，1h，产品确认后）
 
@@ -205,6 +208,21 @@
 |------|------|----------|------|
 | **H1-7 RBAC-OUTBOX-MIGRATION** (P2): `rbacassign.Service` "角色变更 → 会话失效"双写 → transactional outbox 原子写入 + consumer 异步失效 session；前置 outbox consumer 基础设施 | 6h | `cells/access-core/slices/rbacassign/service.go` + `cells/access-core/slices/sessionlogout/consumer.go`（新） + contract event schemas | PR#149 review round 2 |
 
+### PR-S-TECH-DEBT: PR#168/169 review 积压（🟡 全部可延后，~20h）
+
+> 2026-04-18 PR#168 + PR#169 review 新增，统一归入 Phase S 末尾，优先级低于主线。
+
+| 任务 | 工时 | 涉及文件 | 来源（backlog #）|
+|------|------|----------|------|
+| **MODE-SEMANTIC-SPLIT-01** (S10): 读路径 `query.RunMode` 与写路径 `configpublish.WithRunMode` 共用同一枚举耦合；触发条件：任一方向需新增非二元模式值 | 3h | `pkg/query/runmode.go` + `cells/config-core/slices/configpublish/service.go` | S10 / PR#167 |
+| **CONFIG-CORE-INIT-COGNIT-01** (S11): `cell.go::Init()` 认知复杂度 19（nolint 临时抑制）；拆三段式降至 ≈9 | 3h | `cells/config-core/cell.go` | S11 / PR#168 |
+| **AUTH-GUARD-INLINE-UNIFY-01** (S12): 全库 11 处 inline guard 统一，跨 3 cell | 2h | `cells/*/slices/*/handler.go` × 11 | S12 / PR#168 |
+| **CONFIGWRITE-4XX-OBSERVABILITY-01** (S13): `writeErrcodeError` 4xx 分支加 code+path+request_id 采样日志 | 1h | `pkg/httputil/response.go` | S13 / PR#168 |
+| **CONFIG-VALUE-ENCRYPTION-01** (S14, Cx3): sensitive=true 明文存储；需 KMS 选型 + key rotation ADR，独立 PR | — | PG adapter + migrations | S14 / PR#169 |
+| **ERROR-CTX-CANCELLED-CLASSIFY** (S15, P3): `ctx.Canceled` 归类为 `ErrContextCanceled` | 1h | `cells/config-core/internal/adapters/postgres/config_repo.go` | S15 / PR#169 |
+| **RUNTIME-TOPOLOGY-SINGLE-SOURCE-01** (S16, Cx3): 已解析运行拓扑抽象为单一事实源，驱动 repo wiring / adapterInfo / /readyz / /metrics；彻底消除 ENV 分裂 | 6h | `cmd/core-bundle/main.go` + 新 runtime 抽象 | S16 / PR#169 |
+| **POOL-FRAMEWORK-LIFECYCLE-01** (S17, Cx3): 外部资源提升为 bootstrap 托管，统一 LIFO shutdown + 自动 health checker 注册 | 4h | `runtime/bootstrap/` + `kernel/assembly/` | S17 / PR#169 |
+
 ---
 
 ## Phase F: 功能扩展 + 发布（~14h + 发布活动）
@@ -224,7 +242,7 @@
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
 | **#5 AUTH-DX-01**: README + seed 用户 + sso-bff walkthrough；修复 refresh curl `sessionId`→`refreshToken`、logout 204 空 body jq 坑、audit `.createdAt` vs `.Timestamp` | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
-| **ADR-RUNMODE-TRANSLATION-01** (P2, Cx1): 记录 `kernel/cell.DurabilityMode → pkg/query.RunMode` 的分层翻译模式 — pkg 不 import kernel，cell 构造期负责翻译；对标 zeromicro/go-zero `ServiceConf.Mode` 默认严格原则 | 1h | `docs/architecture/` 新 ADR | PR#165 reviewer F1-1 |
+| ~~**ADR-RUNMODE-TRANSLATION-01**~~ ✅ 已随 PR-P-QUERY 合入 `docs/architecture/202604180100-adr-runmode-translation.md` | — | — | PR#165 reviewer F1-1 |
 | **P2-T-02 audit e2e 测试**: Journey 级验收 | 2h | `journeys/` + integration test | 历史 Batch 8 |
 
 ### Wave 4 发布
@@ -240,15 +258,27 @@
 
 ## Phase X: 大型独立项 + 深层重构（发布后排期）
 
-### PR-X-PG-REPO: PostgreSQL 域 Repository（3-5d）
+### PR-X-PG-REPO: PostgreSQL 域 Repository（进行中，剩余 ~2-4d）
 
 > 规模大，独立 PR 串。必须一次性覆盖联动项，否则元数据/代码漂移。
 
+#### ✅ 已落地（PR#169 feat/pr-c1-config-pg-repo）
+
+| 任务 | 状态 | 涉及文件 |
+|------|------|----------|
+| `004_create_config_entries_and_versions.sql`（CONFIG-VERSIONS-MIGRATION-01）| ✅ | `adapters/postgres/migrations/` |
+| `005_recreate_outbox_pending_concurrent.sql` | ✅ | `adapters/postgres/migrations/` |
+| config-core PG repo（`config_repo.go` + `session.go`）+ 集成测试 | ✅ | `cells/config-core/internal/adapters/postgres/` |
+| `GOCELL_CELL_ADAPTER_MODE` config-core 接线（cmd/core-bundle）| ✅ | `cmd/core-bundle/main.go` |
+
+#### 待做（剩余 ~2-4d）
+
 | 任务 | 工时 | 涉及文件 |
 |------|------|----------|
-| 4 个 migration DDL（users/sessions/roles/devices+commands）+ `CONFIG-VERSIONS-MIGRATION-01` (`004_create_config_entries_and_versions.sql`) | 1d | `adapters/postgres/migrations/` |
-| 5 个域 Repository PostgreSQL 实现 | 2d | `cells/*/internal/adapters/postgres/` |
-| 落地联动（必须同 PR 或紧邻 PR）：**RBAC-ASSIGN-LEVEL-UPGRADE-01** L0→L1；**SEED-ROLE-IFACE-01** 去 type assertion；**ACCESS-LEVEL-AUDIT-01** slice.yaml 校正；**AUTH-CACHE-01 激活** Redis session cache | 1-2d | 联动点 |
+| migration DDL：users / sessions / roles / devices+commands（access-core + audit-core + device-cell）| 0.5d | `adapters/postgres/migrations/006+.sql` |
+| access-core PG repo（User / Session / Role）| 1d | `cells/access-core/internal/adapters/postgres/`（新建）|
+| audit-core / device-cell / order-cell PG repo | 0.5-1d | `cells/*/internal/adapters/postgres/` |
+| 落地联动（同 PR 或紧邻 PR）：**RBAC-ASSIGN-LEVEL-UPGRADE-01** L0→L1；**SEED-ROLE-IFACE-01** 去 type assertion；**ACCESS-LEVEL-AUDIT-01** slice.yaml 校正；**AUTH-CACHE-01 激活** Redis session cache | 1-2d | 联动点 |
 
 ### PR-X-ADAPTER-SPLIT: adapter 分层重整（4h）
 
@@ -279,6 +309,12 @@
 | **AUTH-CACHE-01 Redis session cache**（若未在 PG-REPO 激活） | 4h | PG-REPO |
 | **SOL-B-01 Claimer lease 续租**（#28） | 4h | L4 API ✅ |
 
+### PR-X-AUTH-REFRESH-OPAQUE: refresh token 不透明化（🟠 PG-REPO 上线后触发）
+
+| 任务 | 工时 | 涉及文件 | 来源 |
+|------|------|----------|------|
+| **AUTH-REFRESH-OPAQUE-01** (Cx3): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7（backlog X10）|
+
 ### 触发条件项（不排期）
 
 | 任务 | 触发条件 |
@@ -288,6 +324,8 @@
 | DEVICE-ENQUEUE-RBAC | 多租户 operator |
 | CB-RESILIENCE-PACKAGE-01 | 非 HTTP 的 CB 消费方 |
 | AUTH-SIGNER-01 `crypto.Signer` | golang-jwt v6 发布 |
+| ~~**GOCELL-PER-CELL-ADAPTER-01** (T6)~~ **不做** — 决策全量 PG 接入，全局开关 `GOCELL_CELL_ADAPTER_MODE` 直接复用即可 | 已裁决，撤销 |
+| **CONFIG-VERSIONS-CONFIG-ID-INDEX** (T7): `config_versions` 缺 `config_id` 单列索引 | >100w 行或 EXPLAIN 出现 seq scan |
 
 ---
 
@@ -307,45 +345,49 @@
 ```
 Phase 0     ✅ 历史 PR 闭合
 
-Phase 0.5   P0 正确性回归      ~10h（2-3 工作日内优先完成）
-  PR-P0-AUTH-INTENT (6.5h)
-  PR-P0-AUTHZ-CONFIGWRITE (1.5h)
-  PR-P0-READYZ-BROKER (2h)  ← 可合并进 Phase A PR-A-HARDEN
+Phase 0.5   ✅ P0 正确性回归（已闭合，2026-04-18）
+  PR-P0-AUTH-INTENT   ✅ PR#166（token_use claim + IntentTokenVerifier）
+  PR-P0-AUTHZ-CONFIGWRITE  ✅ PR#168（configwrite admin gate + dto/authz.go）
+  PR-P0-READYZ-BROKER → 顺延至 Phase A PR-A-HARDEN
 
-↓ 自底向上偿债（Phase K/R/P/A 可在 Phase 0.5 完成后并行推进）
+↓ 自底向上偿债（Phase K/R/P/A 可并行推进）
 
 Phase K     kernel 层            ~13h
   PR-K-VALIDATOR (9h) + PR-K-METAPERF (4h) + PR-K-OBS-CONTRACT (2h)
 
-Phase R     runtime 层           ~11-15h
+Phase R     runtime 层           ~15-19h  ← +4h PR-R-AUTH-AUD-VALIDATION
+  PR-R-AUTH-AUD-VALIDATION (4h, P1: aud claim RFC 8725 §3.3)
   PR-R-BOOT-COGNIT (4h) + PR-R-OBS-AUTOWIRE (3h) + PR-R-ROUTER-METHOD (4h)
   PR-R-INTERNAL-LISTENER (4-8h, 规模风险) + PR-R-AUTH-STRICT (1h, 触发)
 
-Phase P     pkg + 工具链          ~7h  ← PR-P-CB ✅ PR#163 / PR-P-CMD ✅ PR#164 扣除
-  PR-P-QUERY (7h)
+Phase P     ✅ pkg + 工具链（已闭合）
+  PR-P-CB ✅ PR#163 / PR-P-CMD ✅ PR#164 / PR-P-QUERY ✅（含 ADR-RUNMODE-TRANSLATION）
 
 Phase A     adapter 层            ~14.5h
   PR-A-INTEG (4h) + PR-A-HARDEN (8.5h, 含 READYZ-BROKER 搭车) + PR-A-CI-OTEL (4h)
 
 ↓ 上层收口
 
-Phase S     slice/cell 收口       ~21h
+Phase S     slice/cell 收口       ~41h  ← +20h PR#168/169 tech-debt（🟡 全部可延后）
   PR-S-CONFIG-HARDEN (5h) + PR-S-DTO-EVENT (6h) + PR-S-RBAC (4h)
   PR-S-RBAC-OUTBOX (6h, 可选)
+  PR-S-TECH-DEBT (20h, 🟡 可延后): S10-S17 from PR#168+169 review
 
 ↓ 发布
 
-Phase F     功能 + 发布           ~15h + 发布活动
+Phase F     功能 + 发布           ~14h + 发布活动  ← ADR ✅ 已合
   PR-F-FEAT (8h, Device List + Flag Write + Topology)
-  PR-F-DOC (7h, README + ADR-RUNMODE-TRANSLATION + audit e2e)
+  PR-F-DOC (6h, README + audit e2e)  ← ADR-RUNMODE-TRANSLATION ✅ 扣除
   Wave 4 Review + v1.0 tag
 
 Phase X     大型独立 + 长期重构    按需排期
-  PG-REPO (3-5d) / ADAPTER-SPLIT (4h) / LINT-MODERN (6h)
+  PG-REPO (进行中: config-core ✅ PR#169；剩余 access/audit/device ~2-4d) / ADAPTER-SPLIT (4h) / LINT-MODERN (6h)
+  AUTH-REFRESH-OPAQUE (1-2d, 🟠 PG-REPO 后触发)
   WM-35/36/7 / P3-TD-11 / AUTH-CACHE-01 / SOL-B-01
 
-当前核心路径剩余（不含 Phase X，2026-04-18 扣除 PR#163+#164 后）:
-  Phase 0.5 + K + R + P + A + S + F ≈ 91-95h（约 11-12 工作日）
+当前核心路径剩余（不含 Phase X，2026-04-18 扣除 Phase 0.5 + PR-P ✅）:
+  K + R + A + S(主线) + F ≈ 74-80h（约 9-10 工作日）
+  + Phase S tech-debt(🟡) 20h 可机会性纳入
 ```
 
 ---
@@ -378,12 +420,12 @@ Phase X     大型独立 + 长期重构    按需排期
 
 ## 并行度建议
 
-- **Phase 0.5 三条 PR** 独立文件，可同时发起；PR-P0-READYZ-BROKER 如选择合并到 Phase A，则本 Phase 只发两个 PR
+- **Phase 0.5** ✅ 已闭合；PR-P0-READYZ-BROKER 顺延至 Phase A
 - **Phase K 三条 PR** 改不同文件（validator / parser bench / outbox metric），可并行
-- **Phase R 三条主 PR** 改不同文件，可并行；INTERNAL-LISTENER 单独排
-- **Phase P 只剩 PR-P-QUERY 一条**（PR-P-CB ✅ PR#163，PR-P-CMD ✅ PR#164）
+- **Phase R 四条主 PR** 改不同文件，可并行；PR-R-AUTH-AUD-VALIDATION 优先（P1）；INTERNAL-LISTENER 单独排
+- **Phase P** ✅ 已闭合（PR#163 + PR#164 + PR-P-QUERY）
 - **Phase A 三条 PR** 独立，可并行
-- **Phase S 三条 PR** 改不同 slice 域，可并行
+- **Phase S 主线三条 PR** 改不同 slice 域，可并行；PR-S-TECH-DEBT（🟡）可机会性纳入或 v1.0 后做
 - **Phase F PR-F-FEAT + PR-F-DOC** 可并行
 
 底座偿债（K/R/P/A）四层之间建议**不严格阻塞**，但建议 Phase K PR-K-OBS-CONTRACT 先于 Phase A 完成（OBS-RELAY 契约定义后 adapter 才改实现）。其余跨层项无强依赖。
