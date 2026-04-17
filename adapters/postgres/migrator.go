@@ -58,6 +58,7 @@ type MigrationStatus struct {
 type Migrator struct {
 	provider  *goose.Provider
 	db        *sql.DB
+	pool      *Pool
 	tableName string
 }
 
@@ -92,12 +93,35 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 	return &Migrator{
 		provider:  provider,
 		db:        db,
+		pool:      p,
 		tableName: tableName,
 	}, nil
 }
 
 // Up applies all unapplied migrations in order.
+// It performs a pre-check for INVALID indexes before advancing the schema
+// version: if any index is found with indisvalid=false, Up returns an error
+// and does not execute any migrations. Manual cleanup is required before
+// re-running.
+//
+// ref: pressly/goose migration workflow boundary — fail before advancing
+// version, not after; same principle as Atlas lint gate.
+// ref: golang-migrate Source.Read — validate preconditions before applying.
 func (m *Migrator) Up(ctx context.Context) error {
+	if m.pool != nil {
+		invalid, err := DetectInvalidIndexes(ctx, m.pool)
+		if err != nil {
+			return errcode.Wrap(ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
+		}
+		if len(invalid) > 0 {
+			names := make([]string, len(invalid))
+			for i, idx := range invalid {
+				names[i] = idx.Index
+			}
+			return errcode.New(ErrAdapterPGMigrate,
+				fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v; manual cleanup required before proceeding", len(invalid), names))
+		}
+	}
 	if _, err := m.provider.Up(ctx); err != nil {
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}

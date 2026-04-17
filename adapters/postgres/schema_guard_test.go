@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"testing"
 	"testing/fstest"
 
@@ -9,6 +11,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errDirFile implements fs.File and fs.ReadDirFile, returning error from ReadDir.
+type errDirFile struct{ err error }
+
+func (d errDirFile) Stat() (fs.FileInfo, error)           { return nil, d.err }
+func (d errDirFile) Read(_ []byte) (int, error)           { return 0, d.err }
+func (d errDirFile) Close() error                         { return nil }
+func (d errDirFile) ReadDir(_ int) ([]fs.DirEntry, error) { return nil, d.err }
+
+// readDirErrFS is an fs.FS whose root "." opens as an errDirFile.
+type readDirErrFS struct{ err error }
+
+func (r readDirErrFS) Open(name string) (fs.File, error) {
+	if name == "." {
+		return errDirFile(r), nil
+	}
+	return nil, r.err
+}
 
 // ---------------------------------------------------------------------------
 // TestExpectedVersion — unit tests for the FS-scan helper
@@ -68,6 +88,14 @@ func TestExpectedVersion_SyntheticFS(t *testing.T) {
 				"002_something.sql": []byte("-- up"),
 			},
 			wantMax: 2,
+		},
+		{
+			name: "subdirectory entries are skipped",
+			files: map[string][]byte{
+				"subdir/nested.sql": []byte("-- up"),
+				"005_real.sql":      []byte("-- up"),
+			},
+			wantMax: 5,
 		},
 	}
 
@@ -135,4 +163,56 @@ func TestInvalidIndex_Fields(t *testing.T) {
 	var zero InvalidIndex
 	assert.Empty(t, zero.Index)
 	assert.Empty(t, zero.Table)
+}
+
+// ---------------------------------------------------------------------------
+// TestExpectedVersion — error path: ReadDir fails
+// ---------------------------------------------------------------------------
+
+// TestExpectedVersion_ReadDirError verifies that ExpectedVersion propagates
+// a ReadDir failure from the underlying fs.FS.
+func TestExpectedVersion_ReadDirError(t *testing.T) {
+	sentinel := errors.New("disk I/O error")
+	fsys := readDirErrFS{err: sentinel}
+
+	_, err := ExpectedVersion(fsys)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema_guard: read migration dir",
+		"error must include context prefix")
+	assert.ErrorIs(t, err, sentinel, "original error must be wrapped")
+}
+
+// TestExpectedVersion_OverflowVersionIgnored verifies that a migration file
+// with a numeric prefix too large for int64 is silently skipped (ParseInt
+// overflow → parseErr != nil → continue).
+func TestExpectedVersion_OverflowVersionIgnored(t *testing.T) {
+	// 99999999999999999999 overflows int64.
+	fsys := fstest.MapFS{
+		"99999999999999999999_too_big.sql": &fstest.MapFile{Data: []byte("-- up")},
+		"003_normal.sql":                   &fstest.MapFile{Data: []byte("-- up")},
+	}
+	v, err := ExpectedVersion(fsys)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), v,
+		"overflow version must be skipped; normal max must be returned")
+}
+
+// ---------------------------------------------------------------------------
+// TestVerifyExpectedVersion — error path: ExpectedVersion returns error
+// ---------------------------------------------------------------------------
+
+// TestVerifyExpectedVersion_ExpectedVersionError verifies that
+// VerifyExpectedVersion propagates a failure from ExpectedVersion
+// before ever touching the DB pool.
+func TestVerifyExpectedVersion_ExpectedVersionError(t *testing.T) {
+	sentinel := errors.New("disk I/O error")
+	fsys := readDirErrFS{err: sentinel}
+
+	// Valid table name → passes validateIdentifier, then fails at ExpectedVersion.
+	// pool=nil is intentional: we must NOT reach stdlib.OpenDBFromPool.
+	err := VerifyExpectedVersion(context.Background(), nil, fsys)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema_guard: compute expected version",
+		"error must include context prefix")
+	assert.ErrorIs(t, err, sentinel, "original error must be wrapped")
 }

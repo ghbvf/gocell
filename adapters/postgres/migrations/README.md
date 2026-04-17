@@ -42,19 +42,38 @@ SET LOCAL lock_timeout = '5s';
 
 这将访问排他锁（ACCESS EXCLUSIVE）的等待时间限制在 5 秒内，避免长时间阻塞生产写入。
 
-## 规则 5：INVALID 索引告警与处理
+## 规则 5：INVALID 索引 pre-check 与启动期防线
 
 `CREATE INDEX CONCURRENTLY` 失败时，PostgreSQL 可能留下 `indisvalid = false` 的 INVALID 索引。
 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 遇到 INVALID 残留会**静默跳过**，不重建。
 
-- 启动期 `DetectInvalidIndexes` 会检测并以 `slog.Warn` 告警，**不自动清理**，需人工确认后执行：
-  ```sql
-  DROP INDEX CONCURRENTLY <index_name>;
-  -- 然后重新跑 migration 或手动 CREATE INDEX CONCURRENTLY
-  ```
-- **禁止**在 migration 文件中使用 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 而不配套 INVALID 索引 pre-check。
+GoCell 通过两道防线确保 INVALID 索引不会被静默跳过：
+
+**第一道防线（migration 执行边界）**：`Migrator.Up` 在执行任何 migration 前调用
+`DetectInvalidIndexes` pre-check：
+
+- 发现 INVALID 索引 → 立即返回 error，**不推进版本**，要求人工清理后重试。
+- 这遵循 pressly/goose migration workflow、Atlas lint gate 和 golang-migrate 的设计原则：
+  在版本推进边界处验证前置条件，而不是在应用中途或启动期自愈。
+
+**第二道防线（启动期 detect-and-warn）**：`cmd/core-bundle/main.go` 的 postgres 分支
+在 pool 创建后调用 `DetectInvalidIndexes`，以 `slog.Warn` 告警，**不中断启动**。
+该防线覆盖 migration 被旁路工具绕过、并发 DDL 在 migration 之外留下残留等场景。
+
+人工清理步骤：
+
+```sql
+DROP INDEX CONCURRENTLY <index_name>;
+-- 然后重新跑 migration 或手动 CREATE INDEX CONCURRENTLY
+```
+
+**禁止**在 migration 文件中使用 `CREATE INDEX CONCURRENTLY IF NOT EXISTS` 而不通过
+`Migrator.Up` 执行（否则绕过 pre-check 防线）。
 
 ## 参考
 
 - [pressly/goose 官方文档](https://github.com/pressly/goose#transactions)：`-- +goose no transaction` 用法
+- [pressly/goose Provider.Up](https://pkg.go.dev/github.com/pressly/goose/v3#Provider.Up)：migration workflow 边界
+- [Atlas lint](https://atlasgo.io/versioned/lint)：在版本推进前做 lint/pre-check 的设计原则
+- [golang-migrate Source](https://github.com/golang-migrate/migrate)：Source.Read 先验证再执行
 - [PostgreSQL CREATE INDEX CONCURRENTLY](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY)：限制与 INVALID 索引处理
