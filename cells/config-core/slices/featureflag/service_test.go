@@ -20,14 +20,21 @@ func newTestService() (*Service, *mem.FlagRepository) {
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
 	codec, _ := query.NewCursorCodec(key)
-	return NewService(repo, codec, logger, query.RunModeProd), repo
+	svc, err := NewService(repo, codec, logger, query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
+	return svc, repo
 }
 
-func TestNewService_NilCodec_Panics(t *testing.T) {
+func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	assert.PanicsWithValue(t, "featureflag: cursor codec is required", func() {
-		_ = NewService(repo, nil, slog.Default(), query.RunModeProd)
-	})
+	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, enabled bool, pct int) {
@@ -120,7 +127,8 @@ func TestService_List_InvalidCursor(t *testing.T) {
 func TestService_List_ScopeMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
 
 	differentSort := []query.SortColumn{
 		{Name: "created_at", Direction: query.SortDESC},
@@ -145,7 +153,8 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 func TestService_List_ContextMismatch(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
 
 	cur := query.Cursor{
 		Values:  []any{"some-key", "some-id"},

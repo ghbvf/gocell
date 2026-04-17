@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -29,17 +30,19 @@ type Service struct {
 // assembly declares DurabilityDemo.
 //
 // codec must be non-nil — pagination cannot be served without a cursor codec.
-// Passing nil is a caller programming error and fails fast at construction.
-func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+// Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
+// so the cell Init() can propagate a structured error instead of a runtime panic.
+func NewService(repo domain.OrderRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		panic("order-query: cursor codec is required")
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"order-query: cursor codec is required")
 	}
 	return &Service{
 		repo:    repo,
 		codec:   codec,
 		logger:  logger,
 		runMode: runMode,
-	}
+	}, nil
 }
 
 // GetByID returns a single order by ID.

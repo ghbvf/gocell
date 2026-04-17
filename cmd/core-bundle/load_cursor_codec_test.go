@@ -160,3 +160,55 @@ func TestLoadCursorCodec_PreviousKeyDemoInRealMode_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
 		"error must name the previous-key env var")
 }
+
+// TestLoadCursorCodec_CurrentEqualsPrevious_Rejected asserts that when the
+// current and previous cursor keys are set to the same value, loadCursorCodec
+// propagates the errcode.ErrCursorInvalid from NewCursorCodec.
+// ref: S2-C1 — NewCursorCodec rejects identical current/previous keys.
+func TestLoadCursorCodec_CurrentEqualsPrevious_Rejected(t *testing.T) {
+	sameKey := bytes.Repeat([]byte("K"), 32)
+	t.Setenv("GOCELL_TEST_CURSOR_KEY", string(sameKey))
+	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", string(sameKey))
+
+	codec, err := loadCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
+		"GOCELL_TEST_CURSOR_PREVIOUS_KEY", "unused", "audit")
+	require.Error(t, err)
+	assert.Nil(t, codec)
+	assert.Contains(t, err.Error(), "previous cursor key must differ from current",
+		"error must explain why the keys were rejected")
+}
+
+// TestLoadCursorCodec_OnlyPreviousSet_CurrentMissingRealMode_FailFast asserts
+// that in real mode, if the current key env is unset but the previous key env
+// is set, loadSecret fails fast on the missing current key before even loading
+// the previous key — enforcing the correct error priority.
+func TestLoadCursorCodec_OnlyPreviousSet_CurrentMissingRealMode_FailFast(t *testing.T) {
+	t.Setenv("GOCELL_TEST_CURSOR_KEY", "")
+	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", string(bytes.Repeat([]byte("P"), 32)))
+
+	codec, err := loadCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
+		"GOCELL_TEST_CURSOR_PREVIOUS_KEY", "unused", "audit")
+	require.Error(t, err)
+	assert.Nil(t, codec)
+	// The current key error fires first; previous key is never reached.
+	assert.Contains(t, err.Error(), "GOCELL_TEST_CURSOR_KEY",
+		"error must report the missing current-key env var, not the previous")
+}
+
+// TestLoadCursorCodec_BothKeysShort_ReportsFirst asserts that when both current
+// and previous keys are shorter than 32 bytes, the error reports the current
+// key length first (loadSecret delegates to NewCursorCodec which validates
+// current before previous).
+func TestLoadCursorCodec_BothKeysShort_ReportsFirst(t *testing.T) {
+	t.Setenv("GOCELL_TEST_CURSOR_KEY", "short-current-11")
+	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", "short-previous-1")
+
+	codec, err := loadCursorCodec("", "GOCELL_TEST_CURSOR_KEY",
+		"GOCELL_TEST_CURSOR_PREVIOUS_KEY", "unused-dev-default", "audit")
+	require.Error(t, err)
+	assert.Nil(t, codec)
+	// NewCursorCodec validates current length first; the error must mention
+	// "cursor HMAC key" (current) not "previous cursor HMAC key".
+	assert.Contains(t, err.Error(), "cursor HMAC key",
+		"first error must be about the current key length")
+}

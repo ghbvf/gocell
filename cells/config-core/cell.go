@@ -4,6 +4,7 @@ package configcore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -179,7 +180,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
 
 	// config-read slice
-	readSvc := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
+	readSvc, err := configread.NewService(c.configRepo, c.cursorCodec, c.logger, runMode)
+	if err != nil {
+		return fmt.Errorf("config-read: %w", err)
+	}
 	c.readHandler = configread.NewHandler(readSvc)
 	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
 
@@ -204,7 +208,10 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
 
 	// feature-flag slice
-	flagSvc := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
+	flagSvc, err := featureflag.NewService(c.flagRepo, c.cursorCodec, c.logger, runMode)
+	if err != nil {
+		return fmt.Errorf("feature-flag: %w", err)
+	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
 	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
 

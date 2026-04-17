@@ -20,7 +20,10 @@ import (
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
-	svc := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 	mux := http.NewServeMux()
 	h := NewHandler(svc)
 	mux.HandleFunc("GET /{key}", h.HandleGet)

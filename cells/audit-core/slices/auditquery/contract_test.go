@@ -20,7 +20,10 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 	for _, e := range entries {
 		_ = repo.Append(context.Background(), e)
 	}
-	svc := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	if err != nil {
+		panic(err)
+	}
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/audit/entries", http.HandlerFunc(h.HandleQuery))

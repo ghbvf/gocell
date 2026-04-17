@@ -5,6 +5,7 @@ package ordercell
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -138,8 +139,11 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// order-query slice
-	querySvc := orderquery.NewService(c.repo, c.cursorCodec, c.logger,
+	querySvc, err := orderquery.NewService(c.repo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+	if err != nil {
+		return fmt.Errorf("order-query: %w", err)
+	}
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("order-query", "order-cell", cell.L0))
 

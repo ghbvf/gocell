@@ -400,6 +400,19 @@ func TestCursorCodec_NewRequiresPreviousKeyMinLength(t *testing.T) {
 	assert.Contains(t, err.Error(), "previous cursor HMAC key")
 }
 
+// TestCursorCodec_New_PreviousEqualsCurrent_Rejected asserts that NewCursorCodec
+// rejects a previous key that is identical to the current key. Using the same
+// value for both degrades rotation to a no-op and is a likely operator mistake.
+func TestCursorCodec_New_PreviousEqualsCurrent_Rejected(t *testing.T) {
+	key := bytes.Repeat([]byte("k"), 32)
+	_, err := NewCursorCodec(key, key)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
+	assert.Contains(t, err.Error(), "previous cursor key must differ from current")
+}
+
 // TestCursorCodec_PreviousKeyNilVsEmpty confirms that nil and []byte{} previous
 // keys both disable rotation without error (API regression guard). Matches
 // gorilla/securecookie CodecsFromPairs treatment of empty key slots.
@@ -454,13 +467,18 @@ func TestCursorCodec_AllKeysFail_NoSideChannel(t *testing.T) {
 			assert.NotContains(t, s, "previous", "detail value must not expose rotation position")
 		}
 	}
+	// InternalMessage is the server-side diagnostic; it also must not leak rotation position.
+	assert.NotContains(t, ecErr.InternalMessage, "current",
+		"InternalMessage must not expose rotation position")
+	assert.NotContains(t, ecErr.InternalMessage, "previous",
+		"InternalMessage must not expose rotation position")
 }
 
-// TestCursorCodec_KeyRotation_OldTokenNewCurrent is a regression guard on the
+// TestCursorCodec_KeyRotation_Lifecycle3Step is a regression guard on the
 // 3-step rotation lifecycle: tokens signed by the old key continue to verify
 // after the operator promotes a new current key and keeps old as previous.
 // ref: kube-apiserver --service-account-key-file 3-step rotation.
-func TestCursorCodec_KeyRotation_OldTokenNewCurrent(t *testing.T) {
+func TestCursorCodec_KeyRotation_Lifecycle3Step(t *testing.T) {
 	keyOld := bytes.Repeat([]byte("o"), 32)
 	keyNew := bytes.Repeat([]byte("n"), 32)
 

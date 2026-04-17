@@ -71,6 +71,38 @@ pkg/       允许依赖: 标准库         禁止依赖: kernel/ cells/ runtime/
   - `cells/order-cell/cell.go::Init`
   - `cells/device-cell/cell.go::Init`
 
+## 扩展路径
+
+当需要更复杂的模式演进时，可按如下接口 sketch 扩展，无需修改现有翻译函数：
+
+### N-key rotation（多前一密钥）
+
+当前 `CursorCodec` 支持 `current + previous` 两槽。若将来需同时兼容多个旧密钥
+（例如分批轮换，分批老客户端超时更长），可将 `previous []byte` 改为 `previous [][]byte`，
+`Decode` 遍历顺序不变（current → previous[0] → previous[1] → …）。接口变更仅在
+`pkg/query/cursor.go`，对 Cell/slice 不透明，翻译点（`cell.go::Init`）无需修改。
+
+### 外部 KMS 集成
+
+在 `cell.go::Init` 注入阶段，将 `WithCursorCodec` 的参数来源由 `loadCursorCodec`（env）
+改为 KMS SDK 调用：
+
+```go
+// 示例演进接口（不影响 NewCursorCodec 签名）
+key, err := kmsClient.GetCurrentDataKey(ctx, "cursor/audit")
+prevKey, _ := kmsClient.GetPreviousDataKey(ctx, "cursor/audit")
+codec, err := query.NewCursorCodec(key, prevKey)
+```
+
+KMS 适配器实现在 `adapters/kms/`（待添加），`cell.go` 仅通过接口感知，不直接依赖 SDK。
+
+### HSM 硬件密钥
+
+HSM 场景下 HMAC 签名在硬件内完成，`CursorCodec.signWith` 需替换为 HSM 调用。
+演进方式：抽出 `type Signer interface { Sign(data []byte) ([]byte, error) }` 接口，
+`CursorCodec` 依赖 `Signer` 而非裸 `[]byte` key，HSM 实现在 `adapters/hsm/`。
+当前架构下此扩展不涉及 `RunMode` 或翻译函数，可独立演进。
+
 ## 相关不修
 
 - Kratos app 层无 Mode 字段，依赖注入模式；GoCell 维持 opinionated 翻译函数不改用注入，因为 Cell 声明式模型（`cell.yaml`）与 `DurabilityMode` 强绑定，注入只会把复杂度外扩。

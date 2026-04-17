@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -30,19 +31,19 @@ type Service struct {
 // assembly declares DurabilityDemo.
 //
 // codec must be non-nil — pagination cannot be served without a cursor codec.
-// Passing nil is a caller programming error and fails fast at construction so
-// it never surfaces mid-request as a 500. The cell is responsible for wiring
-// the codec (env-loaded or demo-default) in Init() before calling NewService.
-func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+// Passing nil is a caller programming error; NewService returns errcode.ErrCellMissingCodec
+// so the cell Init() can propagate a structured error instead of a runtime panic.
+func NewService(repo ports.ConfigRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		panic("configread: cursor codec is required")
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"configread: cursor codec is required")
 	}
 	return &Service{
 		repo:    repo,
 		codec:   codec,
 		logger:  logger,
 		runMode: runMode,
-	}
+	}, nil
 }
 
 // GetByKey retrieves a config entry by key.

@@ -36,11 +36,13 @@ type Service struct {
 // assembly declares DurabilityDemo.
 //
 // codec must be non-nil — pagination (list pending commands) cannot be served
-// without a cursor codec. Passing nil is a caller programming error and fails
-// fast at construction.
-func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+// without a cursor codec. Passing nil is a caller programming error;
+// NewService returns errcode.ErrCellMissingCodec so the cell Init() can
+// propagate a structured error instead of a runtime panic.
+func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		panic("device-command: cursor codec is required")
+		return nil, errcode.New(errcode.ErrCellMissingCodec,
+			"device-command: cursor codec is required")
 	}
 	return &Service{
 		cmdRepo:    cmdRepo,
@@ -48,7 +50,7 @@ func NewService(cmdRepo domain.CommandRepository, deviceRepo domain.DeviceReposi
 		codec:      codec,
 		logger:     logger,
 		runMode:    runMode,
-	}
+	}, nil
 }
 
 // Enqueue creates a new pending command for the given device.
