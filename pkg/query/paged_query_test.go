@@ -321,13 +321,8 @@ func TestExecutePagedQuery_DemoMode_False_StaleCursor_ReturnsError(t *testing.T)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
-func TestExecutePagedQuery_DemoMode_ScopeMismatch_ReturnsFirstPage(t *testing.T) {
+func TestExecutePagedQuery_DemoMode_ScopeMismatch_StillRejects(t *testing.T) {
 	codec := newTestCodec(t)
-	items := []testItem{
-		{Name: "apple", ID: "1"},
-		{Name: "banana", ID: "2"},
-	}
-	// Construct a valid HMAC token with wrong scope
 	differentSort := []SortColumn{{Name: "other", Direction: SortDESC}}
 	cur := Cursor{
 		Values:  []any{"v1"},
@@ -337,14 +332,15 @@ func TestExecutePagedQuery_DemoMode_ScopeMismatch_ReturnsFirstPage(t *testing.T)
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
 
-	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
+	_, err = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
 		Codec: codec, Request: PageRequest{Limit: 10, Cursor: token}, Sort: pagedTestSort,
-		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
+		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		DemoMode: true,
 	})
-	require.NoError(t, err)
-	assert.Len(t, result.Items, 2)
-	assert.False(t, result.HasMore)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }
 
 func TestExecutePagedQuery_DemoMode_FetchError_Propagated(t *testing.T) {

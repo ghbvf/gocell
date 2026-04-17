@@ -31,9 +31,10 @@ type PagedQueryConfig[T any] struct {
 	Extract func(T) []any
 	// OnCursorErr is called when cursor decode or scope validation fails; nil is safe.
 	OnCursorErr CursorErrorFunc
-	// DemoMode when true causes cursor errors to fall back to the first page
-	// instead of returning an error. Set to codec.IsDemoKey(KnownDemoKeys()...)
-	// for automatic demo detection.
+	// DemoMode when true causes cursor decode failures to fall back to the
+	// first page instead of returning an error. Scope/context mismatches
+	// always return an error regardless of DemoMode (they indicate a client
+	// bug, not a stale key). Set to codec.IsDemoKey(KnownDemoKeys()...).
 	DemoMode bool
 }
 
@@ -71,6 +72,10 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 // resolveCursor decodes and validates the cursor token. Returns the keyset
 // values for the next page, or (nil, true, nil) when DemoMode absorbs a
 // stale cursor and the caller should fall back to the first page.
+//
+// DemoMode only absorbs decode failures (stale key after server restart).
+// Scope/context mismatches always return an error because they indicate a
+// client bug (cross-endpoint cursor reuse), not a transient key issue.
 func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, bool, error) {
 	if cfg.Request.Cursor == "" {
 		return nil, false, nil
@@ -87,9 +92,6 @@ func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, 
 
 	if err := ValidateCursorScope(cur, cfg.Sort, cfg.QueryCtx); err != nil {
 		reportCursorErr(ctx, cfg.OnCursorErr, CursorPhaseScope, err)
-		if cfg.DemoMode {
-			return nil, true, nil
-		}
 		return nil, false, err
 	}
 
