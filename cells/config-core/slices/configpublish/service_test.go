@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +59,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger, WithRunMode(query.RunModeDemo)), repo
+	return NewService(repo, eb, logger), repo
 }
 
 func newDurableTestService() (*Service, *mem.ConfigRepository, *recordingWriter) {
@@ -175,16 +174,6 @@ func TestService_Publish_PublisherError_ProdMode_PropagatesError(t *testing.T) {
 	_, err := svc.Publish(context.Background(), "k")
 	require.Error(t, err, "prod-mode publisher failure must propagate")
 	assert.Contains(t, err.Error(), "broker unavailable")
-}
-
-func TestService_Publish_PublisherError_DemoMode_SwallowsError(t *testing.T) {
-	repo := mem.NewConfigRepository()
-	pub := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default(), WithRunMode(query.RunModeDemo))
-
-	mustSeedEntry(repo, "k", "v1")
-	_, err := svc.Publish(context.Background(), "k")
-	require.NoError(t, err, "demo fail-open must swallow publisher failure")
 }
 
 // --- #27d OUTBOX-WRITE-ERR-01: outbox.Write error must propagate ---
