@@ -86,17 +86,17 @@ func TestJWTIssuer_IssueWithIntent_InvalidIntent_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
-func TestJWTVerifier_Verify_PopulatesTokenUseOnClaims(t *testing.T) {
+func TestJWTVerifier_VerifyIntent_PopulatesTokenUseOnClaims(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
 	require.NoError(t, err)
 
-	claims, err := verifier.Verify(context.Background(), tokenStr)
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, TokenIntentAccess, claims.TokenUse)
 }

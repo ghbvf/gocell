@@ -132,19 +132,7 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 	return v, nil
 }
 
-// Verify validates the token string and returns Claims on success.
-// It rejects tokens that are not signed with RS256 or do not carry a valid kid.
-//
-// Verify DOES NOT enforce token intent (access vs. refresh) — callers that
-// need intent checks must use VerifyIntent instead.
-//
-// Note: Verify does NOT check audience. Use VerifyIntent for all production request paths.
-func (v *JWTVerifier) Verify(ctx context.Context, tokenStr string) (Claims, error) {
-	claims, _, err := v.parseAndVerify(ctx, tokenStr)
-	return claims, err
-}
-
-// VerifyIntent validates the token like Verify, and additionally requires the
+// VerifyIntent validates the token and additionally requires the
 // declared intent (JWT token_use claim + JOSE typ header) to equal expected.
 // Returns ErrAuthInvalidTokenIntent when:
 //   - expected is not a valid TokenIntent

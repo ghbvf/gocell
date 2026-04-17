@@ -157,18 +157,20 @@ func TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck(t *testin
 		"intent check fires before audience check")
 }
 
-// TestJWTVerifier_Verify_UnaffectedByExpectedAudiences verifies that the plain
-// Verify() method is NOT affected by WithExpectedAudiences — audience validation
-// is intentionally scoped to VerifyIntent only.
-func TestJWTVerifier_Verify_UnaffectedByExpectedAudiences(t *testing.T) {
+// TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath confirms that
+// audience enforcement applies through the primary VerifyIntent call path —
+// the only verification API in GoCell (TokenVerifier.Verify was removed in
+// favour of a single intent-aware API to prevent accidental audience bypass).
+func TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath(t *testing.T) {
 	ks := mustTestKeySet(t)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	// Token with mismatched aud — Verify should not check it.
+	// Mismatched audience on access path — rejected.
 	tok := makeTokenWithAud(t, ks, []string{"some-other-service"})
-	_, err = verifier.Verify(context.Background(), tok)
-	require.NoError(t, err, "Verify() must not enforce audience (only VerifyIntent does)")
+	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
+	require.Error(t, err, "VerifyIntent must reject a token with a wrong audience")
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
 // TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud verifies RFC 7519 §4.1.3:

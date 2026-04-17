@@ -14,6 +14,15 @@ import (
 // expected by JWTVerifier.VerifyIntent in production deployments. Centralised
 // here so issuer (sessionlogin/sessionrefresh) and verifier (buildJWTDeps) stay
 // in sync without drift.
+//
+// Design note: this is a single fixed string, which means audience validation is
+// a self-referential check in GoCell's single-tenant deployment — the issuer
+// always writes "gocell" and the verifier always expects "gocell". The primary
+// security boundary is the RS256 private key; audience prevents cross-service
+// token confusion in multi-service deployments (e.g., a token issued for
+// service-A cannot be accepted by service-B if each configures a distinct
+// expected audience). Multi-tenant or multi-service operators should override
+// this value per deployment rather than relying on the default.
 const DefaultJWTAudience = "gocell"
 
 // TokenIntent distinguishes how a JWT is meant to be used, preventing
@@ -61,22 +70,18 @@ type Claims struct {
 	Extra map[string]any
 }
 
-// TokenVerifier verifies an authentication token and returns the decoded claims.
-// Implementations live in cells/access-core (e.g., JWT, opaque token).
-type TokenVerifier interface {
-	// Verify validates the token string and returns claims on success.
-	Verify(ctx context.Context, token string) (Claims, error)
-}
-
-// IntentTokenVerifier extends TokenVerifier with intent-aware validation.
-// Callers that know the required token intent (e.g., HTTP middleware expecting
-// access tokens, /auth/refresh expecting refresh tokens) should use
-// VerifyIntent so the verifier can reject token-confusion attempts with a
-// distinct ErrAuthInvalidTokenIntent code.
+// IntentTokenVerifier verifies an authentication token, requiring both
+// cryptographic validity and a declared intent (token_use claim + typ header)
+// that matches the expected usage scope (access vs. refresh). Audience is
+// enforced when the verifier is configured with WithExpectedAudiences.
+//
+// This is the only verification interface in GoCell. The narrower TokenVerifier
+// interface (Verify without intent) was removed: every production verification
+// path must declare the expected intent to prevent token-confusion attacks
+// (RFC 8725 §3.11).
 type IntentTokenVerifier interface {
-	TokenVerifier
-	// VerifyIntent validates the token and additionally requires that its
-	// declared intent (token_use claim + typ header) matches expected.
+	// VerifyIntent validates the token and requires that its declared intent
+	// (token_use claim + typ header) matches expected.
 	// Returns ErrAuthInvalidTokenIntent when the intent does not match, is
 	// missing, or header/claim diverge.
 	VerifyIntent(ctx context.Context, token string, expected TokenIntent) (Claims, error)
