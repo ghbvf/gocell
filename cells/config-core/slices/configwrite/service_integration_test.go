@@ -10,16 +10,26 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
+// writeBundle exposes the pool so tests can assert raw outbox_entries state
+// — the L2 co-commit invariant can only be verified by querying outbox_entries
+// directly, not via the domain repo.
+type writeBundle struct {
+	svc  *Service
+	pool *pgxpool.Pool
+}
+
 // setupWriteService spins up a PostgreSQL container, applies migrations,
 // and returns a Service wired with PG repo + outbox writer + tx manager.
-func setupWriteService(t *testing.T) (*Service, func()) {
+func setupWriteService(t *testing.T) (writeBundle, func()) {
 	t.Helper()
 	testutil.RequireDocker(t)
 
@@ -60,22 +70,44 @@ func setupWriteService(t *testing.T) (*Service, func()) {
 		}
 	}
 
-	return svc, cleanup
+	return writeBundle{svc: svc, pool: pool.DB()}, cleanup
+}
+
+// countOutboxRowsByEventType returns the number of outbox_entries rows for
+// the given event_type. Used to assert the L2 domain + outbox co-commit.
+func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType string) int {
+	t.Helper()
+	var count int
+	err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM outbox_entries WHERE event_type = $1`,
+		eventType,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count
 }
 
 // TestCreate_AtomicWithOutbox verifies that config_entries and outbox_entries
 // rows are both committed in the same transaction (L2 atomicity).
 func TestCreate_AtomicWithOutbox(t *testing.T) {
-	svc, cleanup := setupWriteService(t)
+	bundle, cleanup := setupWriteService(t)
 	defer cleanup()
 
-	entry, err := svc.Create(context.Background(), CreateInput{
+	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	require.Equal(t, 0, before, "baseline outbox count must be 0")
+
+	entry, err := bundle.svc.Create(context.Background(), CreateInput{
 		Key:   "integration.atomic.write",
 		Value: "hello",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "integration.atomic.write", entry.Key)
 	assert.Equal(t, 1, entry.Version)
+
+	// Outbox-side: Create's L2 co-commit must have added exactly one
+	// event.config.changed.v1 row, atomically with the config_entries row.
+	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	assert.Equal(t, 1, after-before,
+		"Create must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
 }
 
 // TestCreate_RollbackOnOutboxFailure verifies that when the outbox write

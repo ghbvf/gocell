@@ -142,6 +142,84 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	return codec, nil
 }
 
+// buildAssembly constructs the core-bundle Assembly and registers the three
+// cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
+func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *accesscore.AccessCore, auditCell *auditcore.AuditCore) (*assembly.CoreAssembly, error) {
+	asm := assembly.New(assembly.Config{
+		ID:              "core-bundle",
+		DurabilityMode:  cell.DurabilityDurable,
+		HookObserver:    ps.hookObserver,
+		MetricsProvider: ps.metricProvider,
+		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
+	})
+	if err := asm.Register(configCell); err != nil {
+		return nil, fmt.Errorf("register config-core: %w", err)
+	}
+	if err := asm.Register(accessCell); err != nil {
+		return nil, fmt.Errorf("register access-core: %w", err)
+	}
+	if err := asm.Register(auditCell); err != nil {
+		return nil, fmt.Errorf("register audit-core: %w", err)
+	}
+	return asm, nil
+}
+
+// pgHealthCheckerOpts returns a single bootstrap.WithHealthChecker option
+// bound to pool.Health when pool is non-nil. Returns nil when pool is nil so
+// the caller can unconditionally append without a guard block.
+//
+// ref: Kubernetes readyz — external dependencies contribute named checks.
+// ref: Uber fx lifecycle — resources must be explicitly hooked; the framework
+// does not auto-manage lifetime.
+func pgHealthCheckerOpts(ctx context.Context, pool *adapterpg.Pool) []bootstrap.Option {
+	if pool == nil {
+		return nil
+	}
+	return []bootstrap.Option{
+		bootstrap.WithHealthChecker("postgres", func() error {
+			return pool.Health(ctx)
+		}),
+	}
+}
+
+// buildAdapterInfo builds the adapter-info map that's exposed via
+// bootstrap.WithAdapterInfo. It reflects the RESOLVED runtime topology
+// (not static strings) so /readyz?verbose and adapter_info metrics match
+// what actually serves traffic.
+//
+// ref: go-micro service metadata — mode changes must be visible to observers.
+func buildAdapterInfo(effectiveMode, cellAdapterMode string) map[string]string {
+	storageMode := "in-memory"
+	if cellAdapterMode == "postgres" {
+		storageMode = "postgres"
+	}
+	return map[string]string{
+		"mode":      effectiveMode,
+		"storage":   storageMode,
+		"event_bus": "in-memory", // event bus adapters pending
+	}
+}
+
+// validateModeCoupling enforces that the DATA plane (cellAdapterMode) and
+// CONTROL plane (adapterMode) agree on production posture. If the cell has
+// committed to a real backend (postgres), operators MUST also set
+// GOCELL_ADAPTER_MODE=real so key loading, /metrics, and /readyz?verbose
+// run with production guards. Otherwise real persistence runs with dev-grade
+// HMAC/cursor keys and unauthenticated control-plane endpoints — the exact
+// split ops/security review flagged on PR #169.
+//
+// ref: go-zero serviceconf — single config drives all gates; misalignment is fatal.
+// ref: go-micro mode/profile — runtime mode is observed by all subsystems.
+func validateModeCoupling(cellAdapterMode, adapterMode string) error {
+	if cellAdapterMode == "postgres" && adapterMode != "real" {
+		return errcode.New(errcode.ErrValidationFailed,
+			"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
+				"(real persistence demands production key loading, token-guarded "+
+				"/metrics, and token-guarded /readyz?verbose)")
+	}
+	return nil
+}
+
 // validateAdapterMode rejects unrecognised GOCELL_ADAPTER_MODE values.
 // Follows the project allowlist convention (cf. cell.ParseLevel, cmd/gocell/verify).
 func validateAdapterMode(mode string) error {
@@ -154,7 +232,9 @@ func validateAdapterMode(mode string) error {
 }
 
 // buildConfigCoreOpts selects storage-adapter options for config-core based on
-// GOCELL_CELL_ADAPTER_MODE. Returns an error for unknown values.
+// GOCELL_CELL_ADAPTER_MODE. Returns the selected mode, the cell options, and
+// the underlying *adapterpg.Pool (non-nil iff mode=="postgres") so the caller
+// can plumb lifecycle (Close) and readiness (Health) hooks.
 //
 // "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
 // "memory" or unset = in-memory repos (dev/test only).
@@ -164,29 +244,33 @@ func validateAdapterMode(mode string) error {
 // (backlog: GOCELL-PER-CELL-ADAPTER-01).
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
-func buildConfigCoreOpts(ctx context.Context) ([]configcore.Option, error) {
-	mode := os.Getenv("GOCELL_CELL_ADAPTER_MODE")
+// ref: Uber fx lifecycle — external resources must hook OnStart/OnStop;
+//
+//	the framework does not auto-manage pool lifetime. We return pool to run()
+//	so that Close() and Health() both get wired into bootstrap explicitly.
+func buildConfigCoreOpts(ctx context.Context) (mode string, opts []configcore.Option, pool *adapterpg.Pool, err error) {
+	mode = os.Getenv("GOCELL_CELL_ADAPTER_MODE")
 	if mode == "" {
 		mode = "memory"
 	}
 	switch mode {
 	case "postgres":
-		pgPool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
+		pool, err = adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
 		if err != nil {
-			return nil, fmt.Errorf("config-core PG pool: %w", err)
+			return mode, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
 		}
 		outboxWriter := adapterpg.NewOutboxWriter()
-		txMgr := adapterpg.NewTxManager(pgPool)
+		txMgr := adapterpg.NewTxManager(pool)
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
-		return []configcore.Option{
-			configcore.WithPostgresDefaults(pgPool.DB(), outboxWriter),
+		return mode, []configcore.Option{
+			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
-		}, nil
+		}, pool, nil
 	case "memory":
 		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", mode))
-		return []configcore.Option{configcore.WithInMemoryDefaults()}, nil
+		return mode, []configcore.Option{configcore.WithInMemoryDefaults()}, nil, nil
 	default:
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return mode, nil, nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", mode))
 	}
 }
@@ -349,9 +433,18 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	cellAdapterOpts, err := buildConfigCoreOpts(ctx)
+	cellAdapterMode, cellAdapterOpts, pgPool, err := buildConfigCoreOpts(ctx)
 	if err != nil {
 		return fmt.Errorf("config-core cell adapter: %w", err)
+	}
+	// Pool lifecycle: when running with a real PG pool, we own Close() and
+	// owe readiness signals. defer Close here (before mode check) so an early
+	// validation failure still releases the pool.
+	if pgPool != nil {
+		defer pgPool.Close()
+	}
+	if err := validateModeCoupling(cellAdapterMode, adapterMode); err != nil {
+		return err
 	}
 
 	configOpts := append([]configcore.Option{
@@ -380,28 +473,12 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	asm := assembly.New(assembly.Config{
-		ID:              "core-bundle",
-		DurabilityMode:  cell.DurabilityDurable,
-		HookObserver:    ps.hookObserver,
-		MetricsProvider: ps.metricProvider,
-		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
-	})
-	if err := asm.Register(configCell); err != nil {
-		return fmt.Errorf("register config-core: %w", err)
-	}
-	if err := asm.Register(accessCell); err != nil {
-		return fmt.Errorf("register access-core: %w", err)
-	}
-	if err := asm.Register(auditCell); err != nil {
-		return fmt.Errorf("register audit-core: %w", err)
+	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)
+	if err != nil {
+		return err
 	}
 
-	adapterInfo := map[string]string{
-		"mode":      effectiveMode,
-		"storage":   "in-memory", // storage adapters pending
-		"event_bus": "in-memory", // event bus adapters pending
-	}
+	adapterInfo := buildAdapterInfo(effectiveMode, cellAdapterMode)
 	slog.Info("core-bundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
@@ -432,6 +509,7 @@ func run(ctx context.Context) error {
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
 		bootstrap.WithMetricsProvider(ps.metricProvider),
 	}, verboseOpts...)
+	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(ctx, pgPool)...)
 
 	app := bootstrap.New(bootstrapOpts...)
 	return app.Run(ctx)
