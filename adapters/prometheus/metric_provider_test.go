@@ -123,6 +123,128 @@ func TestMetricProvider_NilRegistryRejected(t *testing.T) {
 	}
 }
 
+// TestMetricProvider_Unregister_RemovesAndAllowsReregister verifies the K2
+// atomic-registration rollback contract: Unregister removes a previously
+// registered Collector from both the Provider's internal map and the
+// underlying Prometheus registry, allowing the same name to be registered
+// again without "duplicate collector" error.
+//
+// Without this behaviour, the NewProviderRelayCollector rollback loop would
+// leak orphan Prometheus collectors on partial failure and refuse retry.
+func TestMetricProvider_Unregister_RemovesAndAllowsReregister(t *testing.T) {
+	p, reg := newTestProvider(t)
+
+	cv, err := p.CounterVec(metrics.CounterOpts{
+		Name:       "unreg_demo_total",
+		Help:       "demo",
+		LabelNames: []string{"label"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
+	}
+
+	// Registering the same name again must fail — baseline for the rollback
+	// contract (without Unregister, rollback would be useless).
+	if _, err := p.CounterVec(metrics.CounterOpts{
+		Name:       "unreg_demo_total",
+		Help:       "demo",
+		LabelNames: []string{"label"},
+	}); err == nil {
+		t.Fatal("duplicate CounterVec without Unregister should fail")
+	}
+
+	// Unregister the first vec. Same name must now be re-registrable.
+	if err := p.Unregister(cv); err != nil {
+		t.Fatalf("Unregister: %v", err)
+	}
+	cv2, err := p.CounterVec(metrics.CounterOpts{
+		Name:       "unreg_demo_total",
+		Help:       "demo",
+		LabelNames: []string{"label"},
+	})
+	if err != nil {
+		t.Fatalf("re-register after Unregister: %v", err)
+	}
+
+	// Touch the new vec so Prometheus Gather emits a sample, then confirm
+	// exactly one family — the registry is in sync with no stale entries.
+	cv2.With(metrics.Labels{"label": "v"}).Inc()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var seen int
+	for _, f := range families {
+		if strings.HasSuffix(f.GetName(), "unreg_demo_total") {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("expected exactly 1 unreg_demo_total metric family after re-register, got %d", seen)
+	}
+}
+
+// TestMetricProvider_Unregister_IdempotentOnUnknown verifies Unregister
+// returns nil when called with a Collector never registered with this
+// Provider — required by the Provider.Unregister contract (idempotent,
+// nil-safe for double-unregister and orphan collectors).
+func TestMetricProvider_Unregister_IdempotentOnUnknown(t *testing.T) {
+	p, _ := newTestProvider(t)
+
+	cv, err := p.CounterVec(metrics.CounterOpts{
+		Name: "known_total", Help: "h", LabelNames: []string{"x"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
+	}
+	if err := p.Unregister(cv); err != nil {
+		t.Fatalf("first Unregister: %v", err)
+	}
+	// Second call must also return nil (idempotent).
+	if err := p.Unregister(cv); err != nil {
+		t.Fatalf("double Unregister must be idempotent, got %v", err)
+	}
+}
+
+// TestMetricProvider_Registered_AlwaysTrue locks in the documented marker
+// semantics of Collector.Registered: the method is a compile-time type-
+// membership marker and always returns true for vecs issued by the Provider,
+// even after Unregister. It is not a runtime state probe.
+func TestMetricProvider_Registered_AlwaysTrue(t *testing.T) {
+	p, _ := newTestProvider(t)
+
+	cv, err := p.CounterVec(metrics.CounterOpts{
+		Name: "marker_counter_total", Help: "h", LabelNames: []string{"x"},
+	})
+	if err != nil {
+		t.Fatalf("CounterVec: %v", err)
+	}
+	hv, err := p.HistogramVec(metrics.HistogramOpts{
+		Name: "marker_hist_seconds", Help: "h", LabelNames: []string{"x"},
+	})
+	if err != nil {
+		t.Fatalf("HistogramVec: %v", err)
+	}
+
+	if !cv.Registered() {
+		t.Error("counter vec Registered() must be true before Unregister")
+	}
+	if !hv.Registered() {
+		t.Error("histogram vec Registered() must be true before Unregister")
+	}
+
+	// Per the marker contract, Registered remains true post-Unregister; the
+	// registry state changes but the vec value identity does not.
+	_ = p.Unregister(cv)
+	_ = p.Unregister(hv)
+	if !cv.Registered() {
+		t.Error("counter vec Registered() must still be true after Unregister (marker semantics)")
+	}
+	if !hv.Registered() {
+		t.Error("histogram vec Registered() must still be true after Unregister (marker semantics)")
+	}
+}
+
 // collect fetches a single labeled Counter/Histogram from the registry for
 // testutil.ToFloat64. prom.Collector must be obtained indirectly; easiest is
 // to reflect via testutil.GatherAndCount for histogram bucket sums, but for

@@ -68,6 +68,10 @@ func (s *spyCounterVec) count(reason string) int {
 	return s.v[reason]
 }
 
+// Registered satisfies metrics.Collector so spyCounterVec can be
+// passed to Provider.Unregister in rollback scenarios.
+func (s *spyCounterVec) Registered() bool { return true }
+
 // spyProvider satisfies metrics.Provider and returns a captured CounterVec
 // so tests can assert on drop counts.
 type spyProvider struct {
@@ -82,6 +86,10 @@ func (p *spyProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVe
 	// Unused by the dispatcher but required for the Provider contract.
 	return metrics.NopProvider{}.HistogramVec(metrics.HistogramOpts{})
 }
+
+// Unregister is a no-op for the spy; tests that care about rollback use
+// the failingProvider in relay_collector_test.go instead.
+func (p *spyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // blockingObserver blocks on OnHookEvent until the test calls release().
 // Used to exercise slow-sink scenarios deterministically. release() is

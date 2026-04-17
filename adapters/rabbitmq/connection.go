@@ -571,12 +571,19 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 // connection state so operators can tell "never connected" from "reconnecting"
 // from "terminal".
 //
+// The ctx parameter is accepted for interface compatibility (e.g. bootstrap.BrokerHealthChecker)
+// and to honour caller cancellation; this implementation does not perform I/O
+// so ctx is only checked for early cancellation before the state read.
+//
 // Error codes returned:
 //   - nil: healthy (StateConnected, live connection)
 //   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn closed unexpectedly
 //   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in progress (StateDisconnected)
 //   - ErrAdapterAMQPConnectPermanent / ErrAdapterAMQPReconnectExhausted: terminal, will not recover
-func (c *Connection) Health() error {
+func (c *Connection) Health(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.RLock()
 	state := c.state
 	conn := c.conn

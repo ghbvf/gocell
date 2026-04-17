@@ -148,7 +148,9 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Integration tests (testcontainers)
-        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... -count=1 -timeout 10m
+        # cmd/core-bundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
+        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/core-bundle/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

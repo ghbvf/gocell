@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,12 +62,13 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	mode, opts, gotPool, err := buildConfigCoreOpts(ctx)
+	mode, opts, gotPool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
 	assert.Equal(t, "postgres", mode, "mode must be 'postgres'")
 	assert.NotNil(t, opts, "opts must be non-nil")
 	require.NotNil(t, gotPool, "pool must be non-nil on success")
+	require.NotNil(t, relay, "relay worker must be non-nil on success (A11 wire guard)")
 
 	// Cleanup returned pool.
 	gotPool.Close()
@@ -101,7 +103,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	mode, opts, gotPool, err := buildConfigCoreOpts(ctx)
+	mode, opts, gotPool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",
@@ -110,4 +112,5 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	assert.Nil(t, opts, "opts must be nil on schema mismatch")
 	// pool must be nil — main.go closes and zeroes pool before returning error.
 	assert.Nil(t, gotPool, "pool must be nil (was closed on schema mismatch)")
+	assert.Nil(t, relay, "relay must be nil on schema mismatch (error path)")
 }

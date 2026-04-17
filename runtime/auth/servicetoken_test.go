@@ -643,6 +643,7 @@ type spyRecord struct {
 	reason string
 }
 
+func (v *spyCounterVec) Registered() bool { return true }
 func (v *spyCounterVec) With(l metrics.Labels) metrics.Counter {
 	metrics.MustValidateLabels(v.labels, l)
 	return &spyCounter{vec: v, result: l["result"], reason: l["reason"]}
@@ -681,6 +682,8 @@ func (p *spyProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, 
 func (p *spyProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	return metrics.NopProvider{}.HistogramVec(opts)
 }
+
+func (p *spyProvider) Unregister(_ metrics.Collector) error { return nil }
 
 func (p *spyProvider) assertServiceVerify(t *testing.T, result, reason string) {
 	t.Helper()

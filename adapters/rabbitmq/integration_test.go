@@ -154,7 +154,7 @@ func TestIntegration_ConnectionHealth(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	err := conn.Health()
+	err := conn.Health(context.Background())
 	assert.NoError(t, err, "Health should succeed on a live RabbitMQ")
 	assert.Equal(t, StateConnected, conn.ConnectionStatus())
 }
@@ -390,7 +390,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Verify initial healthy state.
-	require.NoError(t, conn.Health(), "initial Health should be nil")
+	require.NoError(t, conn.Health(context.Background()), "initial Health should be nil")
 	assert.Equal(t, StateConnected, conn.ConnectionStatus())
 
 	// 2. Force-close all connections via rabbitmqctl.
@@ -402,7 +402,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 
 	// 3. Health() should return error during reconnect.
 	require.Eventually(t, func() bool {
-		return conn.Health() != nil
+		return conn.Health(context.Background()) != nil
 	}, 5*time.Second, 50*time.Millisecond,
 		"Health() should report error after broker-forced disconnect")
 
@@ -413,7 +413,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 
 	// 4. Health() should recover after reconnect succeeds.
 	require.Eventually(t, func() bool {
-		return conn.Health() == nil
+		return conn.Health(context.Background()) == nil
 	}, 10*time.Second, 100*time.Millisecond,
 		"Health() should recover after successful reconnect")
 

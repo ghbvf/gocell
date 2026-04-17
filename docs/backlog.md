@@ -68,6 +68,7 @@
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
 | A11 | **OUTBOX-RELAY-WIRE-PG-01** (P1, Cx3): `GOCELL_CELL_ADAPTER_MODE=postgres` 时 core-bundle 未启动 outbox relay worker；config 变更事件写入 `outbox_entries` 后停滞，消费者永远收不到，持续积压。修法：relay 作为 bootstrap OnStart/OnStop worker 显式接入，补 PG 模式 write→relay→RMQ→subscriber 端到端回归测试。搭车 PR-C2（PR-C2 e2e 依赖此修复才能通过）| 2h（接线）+ PR-C2 测试 | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | 2026-04-18 静态审查 |
 | ~~A12~~ | ✅ **READYZ-PG-SCHEMA-01**: 启动期 fail-fast — VerifyExpectedVersion 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | `adapters/postgres/schema_guard.go` + `cmd/core-bundle/main.go` | PR-PG-HARDEN |
+| A13 | **BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01** (🟠 条件延后): `cmd/core-bundle` 当前 publisher 是 in-memory eventbus（outbox relay 将 PG entries 转发至此）；`bootstrap.WithBrokerHealth` 未接线，/readyz 缺 RMQ 健康检查。触发条件：core-bundle 接入真实 RabbitMQ connection（替换 in-memory eventbus 为 rabbitmq.Publisher），此时同步通过 `bootstrap.WithBrokerHealth` 将 RMQ readiness 纳入 /readyz。当前 in-memory eventbus 无需 broker health probe。 | 2h | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | PR#174 review F8 |
 
 ### slice / cell 收口
 

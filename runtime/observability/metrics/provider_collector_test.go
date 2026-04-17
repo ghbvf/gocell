@@ -81,12 +81,15 @@ func (s *spyProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetr
 	return spyHistogramVec{parent: s, name: opts.Name, labels: opts.LabelNames}, nil
 }
 
+func (s *spyProvider) Unregister(_ kernelmetrics.Collector) error { return nil }
+
 type spyCounterVec struct {
 	parent *spyProvider
 	name   string
 	labels []string
 }
 
+func (v spyCounterVec) Registered() bool { return true }
 func (v spyCounterVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
 	kernelmetrics.MustValidateLabels(v.labels, l)
 	return spyCounter{parent: v.parent, name: v.name, labels: l}
@@ -98,6 +101,7 @@ type spyHistogramVec struct {
 	labels []string
 }
 
+func (v spyHistogramVec) Registered() bool { return true }
 func (v spyHistogramVec) With(l kernelmetrics.Labels) kernelmetrics.Histogram {
 	kernelmetrics.MustValidateLabels(v.labels, l)
 	return spyHistogram{parent: v.parent, name: v.name, labels: l}

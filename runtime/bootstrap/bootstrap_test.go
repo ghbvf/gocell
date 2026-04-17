@@ -3326,6 +3326,101 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// A1: BrokerHealthChecker — WithBrokerHealth auto-registration
+// ---------------------------------------------------------------------------
+
+// fakeBroker is a minimal BrokerHealthChecker for unit tests; it returns the
+// configured error (nil = healthy, non-nil = unhealthy).
+type fakeBroker struct {
+	err error
+}
+
+func (f *fakeBroker) Health(ctx context.Context) error { return f.err }
+
+// TestWithBrokerHealth_RegistersChecker verifies A1
+// (READYZ-BROKER-HEALTH-01): bootstrap.WithBrokerHealth auto-registers a
+// broker's Health method as a /readyz checker under the name "rabbitmq",
+// so K8s readiness probes reflect broker connectivity.
+func TestWithBrokerHealth_RegistersChecker(t *testing.T) {
+	brokerErr := fmt.Errorf("simulated broker disconnect")
+
+	tests := []struct {
+		name           string
+		brokerErr      error
+		wantStatusCode int
+		wantDepsKey    string // key expected in verbose dependencies map
+		wantDepsValue  string // value expected (healthy / unhealthy message)
+	}{
+		{
+			name:           "broker healthy -> /readyz 200 with rabbitmq=healthy",
+			brokerErr:      nil,
+			wantStatusCode: http.StatusOK,
+			wantDepsKey:    "rabbitmq",
+			wantDepsValue:  "healthy",
+		},
+		{
+			name:           "broker unhealthy -> /readyz 503",
+			brokerErr:      brokerErr,
+			wantStatusCode: http.StatusServiceUnavailable,
+			wantDepsKey:    "rabbitmq",
+			wantDepsValue:  "unhealthy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+
+			asm := assembly.New(assembly.Config{ID: "test-broker-health-" + tt.name, DurabilityMode: cell.DurabilityDemo})
+			require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+			broker := &fakeBroker{err: tt.brokerErr}
+			b := New(
+				WithAssembly(asm),
+				WithListener(ln),
+				WithShutdownTimeout(2*time.Second),
+				WithBrokerHealth(broker),
+			)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- b.Run(ctx) }()
+
+			addr := ln.Addr().String()
+			require.Eventually(t, func() bool {
+				resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+				if err != nil {
+					return false
+				}
+				resp.Body.Close()
+				return true
+			}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+			resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			assert.Equal(t, tt.wantStatusCode, resp.StatusCode)
+
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+			deps, ok := body["dependencies"].(map[string]any)
+			require.True(t, ok, "response must contain dependencies map")
+			assert.Equal(t, tt.wantDepsValue, deps[tt.wantDepsKey])
+
+			cancel()
+			select {
+			case runErr := <-done:
+				assert.NoError(t, runErr)
+			case <-time.After(5 * time.Second):
+				t.Fatal("bootstrap did not shut down in time")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Circuit breaker nil option detection (P1-A fail-fast)
 // ---------------------------------------------------------------------------
 
@@ -3341,4 +3436,49 @@ func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
 	err := b.Run(context.Background())
 	require.Error(t, err, "nil Allower must cause Run to return an error")
 	assert.Contains(t, err.Error(), "circuit breaker")
+}
+
+// ---------------------------------------------------------------------------
+// Broker health nil option detection (fail-fast parity with WithCircuitBreaker)
+// ---------------------------------------------------------------------------
+
+// typedNilBroker is a concrete *typedNilBroker type whose zero-value pointer
+// is used to simulate the "typed nil" gotcha: a non-nil interface value
+// wrapping a nil pointer. Such a value satisfies `bc != nil` but panics on
+// method dispatch. The fail-fast path must detect it alongside plain nil.
+type typedNilBroker struct{}
+
+func (*typedNilBroker) Health(context.Context) error { return nil }
+
+// TestBootstrap_WithBrokerHealth_Nil_ReturnsError guards that the bootstrap
+// rejects a nil BrokerHealthChecker at Run() rather than nil-deref'ing on the
+// first /readyz probe. Mirrors WithCircuitBreaker's fail-fast contract so
+// the two options behave consistently from an operator's perspective.
+func TestBootstrap_WithBrokerHealth_Nil_ReturnsError(t *testing.T) {
+	t.Run("plain nil interface", func(t *testing.T) {
+		asm := assembly.New(assembly.Config{ID: "bh-nil-plain", DurabilityMode: cell.DurabilityDemo})
+		require.NoError(t, asm.Register(newTestCell("c1")))
+
+		b := New(
+			WithAssembly(asm),
+			WithBrokerHealth(nil),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err, "nil BrokerHealthChecker must cause Run to return an error")
+		assert.Contains(t, err.Error(), "broker health")
+	})
+
+	t.Run("typed nil pointer wrapped in interface", func(t *testing.T) {
+		asm := assembly.New(assembly.Config{ID: "bh-nil-typed", DurabilityMode: cell.DurabilityDemo})
+		require.NoError(t, asm.Register(newTestCell("c1")))
+
+		var bc *typedNilBroker // nil pointer
+		b := New(
+			WithAssembly(asm),
+			WithBrokerHealth(bc),
+		)
+		err := b.Run(context.Background())
+		require.Error(t, err, "typed-nil BrokerHealthChecker must cause Run to return an error")
+		assert.Contains(t, err.Error(), "broker health")
+	})
 }

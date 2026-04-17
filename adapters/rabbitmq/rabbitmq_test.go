@@ -291,7 +291,7 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 
 func TestNewConnection_Success(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	assert.NoError(t, conn.Health())
+	assert.NoError(t, conn.Health(context.Background()))
 }
 
 func TestNewConnection_DialFails(t *testing.T) {
@@ -348,7 +348,7 @@ func TestConnection_Health_Closed(t *testing.T) {
 	mockConn.isClosed = true
 	mockConn.mu.Unlock()
 
-	err := conn.Health()
+	err := conn.Health(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_CONNECT")
 }
@@ -734,7 +734,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 
 	// After reconnection, Health should return nil.
 	require.Eventually(t, func() bool {
-		return conn.Health() == nil
+		return conn.Health(context.Background()) == nil
 	}, 2*time.Second, time.Millisecond, "connection should be healthy after reconnect")
 
 	// WaitConnected should succeed (connected channel re-closed on reconnect).
@@ -3772,7 +3772,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	defer conn.Close()
 
 	// Verify initial health is OK.
-	require.NoError(t, conn.Health(), "initial connection should be healthy")
+	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -3796,7 +3796,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	}, 2*time.Second, time.Millisecond, "reconnect dial should be in progress")
 
 	// Health() should return error during reconnecting state with distinct code.
-	healthErr := conn.Health()
+	healthErr := conn.Health(context.Background())
 	require.Error(t, healthErr, "Health() must return error while reconnecting")
 	var ecErr *errcode.Error
 	require.True(t, errors.As(healthErr, &ecErr), "Health() error should wrap *errcode.Error")
@@ -3808,7 +3808,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 
 	// Health() should recover.
 	require.Eventually(t, func() bool {
-		return conn.Health() == nil
+		return conn.Health(context.Background()) == nil
 	}, 2*time.Second, time.Millisecond, "Health() should return nil after successful reconnect")
 }
 
@@ -4066,7 +4066,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				permanentErr: tt.permErr,
 			}
 
-			err := c.Health()
+			err := c.Health(context.Background())
 			if tt.wantNil {
 				assert.NoError(t, err)
 				return
