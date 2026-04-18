@@ -394,24 +394,54 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil
 }
 
-// buildAdminOpts appends WithInitialAdminBootstrap to base options and returns
-// a sink that collects the cleanup worker produced by the bootstrap sequence.
-// The collected worker must be passed to bootstrap.WithWorkers by the caller.
+// adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
+// onto the given base access-core options and returns the extended options together
+// with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
+// WorkerGroup.
 //
-// GOCELL_ADMIN_USER / GOCELL_ADMIN_PASS are no longer read — the new bootstrap
-// scheme (plan H) generates a random credential on first run and writes it to a
-// file. See docs/architecture/202604181900-adr-auth-setup-first-run.md.
+// Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
+// bootstrap.Run), before the WorkerGroup starts (Step 8). Using a lazyBootstrapWorker
+// wrapper means bootstrap.WithWorkers can be called at construction time while the
+// actual worker reference is resolved at Start() time — after the assembly has Init'd.
 //
-// Note: full Phase 4 wiring (GOCELL_STATE_DIR, TTL override, e2e test migration)
-// is deferred to a follow-up commit. This stub keeps core-bundle compilable.
-func buildAdminOpts(base []accesscore.Option) (opts []accesscore.Option, cleanerSink func(worker.Worker), collectedWorkers *[]worker.Worker) {
-	workers := make([]worker.Worker, 0)
-	sink := func(w worker.Worker) { workers = append(workers, w) }
-	opts = append(base,
+// When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
+// When admin already exists: sink is not called, adminWorker stays nil, lazyWorker
+// Start/Stop are no-ops.
+//
+// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
+func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
+	var adminWorker worker.Worker
+	sink := func(w worker.Worker) { adminWorker = w }
+	accessOpts = append(base,
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithBootstrapWorkerSink(sink),
 	)
-	return opts, sink, &workers
+	lazyWorkerOpt = bootstrap.WithWorkers(&lazyBootstrapWorker{get: func() worker.Worker { return adminWorker }})
+	return accessOpts, lazyWorkerOpt
+}
+
+// lazyBootstrapWorker defers worker resolution to Start/Stop time so that a
+// worker.Worker produced during asm.Init (inside bootstrap.Run Step 3-4) can be
+// registered with bootstrap.WithWorkers before bootstrap.New is called.
+//
+// If get() returns nil (admin already existed, sink was never called), Start and
+// Stop are safe no-ops.
+type lazyBootstrapWorker struct {
+	get func() worker.Worker
+}
+
+func (l *lazyBootstrapWorker) Start(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Start(ctx)
+	}
+	return nil
+}
+
+func (l *lazyBootstrapWorker) Stop(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Stop(ctx)
+	}
+	return nil
 }
 
 // promStack groups the Prometheus hook observer and metric provider.
@@ -474,6 +504,19 @@ func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, err
 	}
 	slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
 	return nil, nil
+}
+
+// logInitialAdminCredPath emits a startup info log so operators know where to
+// find the initial admin credential on first run. Resolved in the same order as
+// initialadmin.resolveCredentialPath: GOCELL_STATE_DIR → /run/gocell.
+func logInitialAdminCredPath() {
+	stateDir := os.Getenv("GOCELL_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/run/gocell"
+	}
+	credPath := stateDir + "/initial_admin_password"
+	slog.Info("core-bundle: starting; if first run, initial admin credentials are written to "+credPath,
+		slog.String("cred_path", credPath))
 }
 
 func main() {
@@ -548,13 +591,12 @@ func run(ctx context.Context) error {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts, _, bootstrapWorkers := buildAdminOpts([]accesscore.Option{
+	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwt.issuer),
 		accesscore.WithJWTVerifier(jwt.verifier),
 	})
-	_ = bootstrapWorkers // Phase 4 wires sink-collected workers via lifecycle hook
 	accessCell := accesscore.NewAccessCore(accessOpts...)
 
 	auditCell := auditcore.NewAuditCore(
@@ -604,6 +646,8 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("construct ConsumerBase: %w", err)
 	}
 
+	logInitialAdminCredPath()
+
 	app := bootstrap.New(assembleBootstrapOpts(bootstrapDeps{
 		assembly:        asm,
 		eventBus:        eb,
@@ -614,6 +658,7 @@ func run(ctx context.Context) error {
 		verboseOpts:     verboseOpts,
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
+		adminWorkerOpt:  adminWorkerOpt,
 	})...)
 	return app.Run(ctx)
 }
@@ -630,6 +675,7 @@ type bootstrapDeps struct {
 	verboseOpts     []bootstrap.Option
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
+	adminWorkerOpt  bootstrap.Option
 }
 
 // assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
@@ -656,6 +702,13 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 	opts = append(opts, pgHealthCheckerOpts(d.pgPool)...)
 	if d.relayWorker != nil {
 		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
+	}
+	// Wire the initial-admin bootstrap cleanup worker via a lazy wrapper.
+	// The sink fires during asm.StartWithConfig (Step 3-4 inside bootstrap.Run),
+	// so the lazyBootstrapWorker resolves the worker at Start() time (Step 8),
+	// after the assembly has Init'd. No-op when admin already existed.
+	if d.adminWorkerOpt != nil {
+		opts = append(opts, d.adminWorkerOpt)
 	}
 	return opts
 }

@@ -39,6 +39,29 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
+// ssoBFFLazyWorker defers worker resolution to Start/Stop time so that a
+// worker.Worker produced during asm.Init can be registered with
+// bootstrap.WithWorkers before bootstrap.New is called.
+// get() returns nil when admin already existed (bootstrap skipped), making
+// Start and Stop safe no-ops.
+type ssoBFFLazyWorker struct {
+	get func() worker.Worker
+}
+
+func (l *ssoBFFLazyWorker) Start(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Start(ctx)
+	}
+	return nil
+}
+
+func (l *ssoBFFLazyWorker) Stop(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Stop(ctx)
+	}
+	return nil
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -72,11 +95,11 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
-	// Collect any bootstrap cleanup workers produced during Init.
-	// Full Phase 4 wiring (lifecycle integration, GOCELL_STATE_DIR, test migration)
-	// is deferred to a follow-up commit per AUTH-SETUP-01 plan Phase 4.
-	var bootstrapWorkers []worker.Worker
-	bootstrapSink := func(w worker.Worker) { bootstrapWorkers = append(bootstrapWorkers, w) }
+	// Lazy bootstrap worker: resolves the cleanup worker at WorkerGroup.Start() time
+	// (bootstrap Step 8), after asm.StartWithConfig has fired the sink (Step 3-4).
+	// No-op when admin already existed and sink was never called.
+	var adminBootstrapWorker worker.Worker
+	bootstrapSink := func(w worker.Worker) { adminBootstrapWorker = w }
 
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
@@ -148,20 +171,27 @@ func main() {
 		"POST /api/v1/access/sessions/refresh",
 	}
 
+	// lazyAdminWorker defers resolution to Start() time (after asm.StartWithConfig
+	// fires the sink). No-op when admin already existed.
+	lazyAdminWorker := &ssoBFFLazyWorker{get: func() worker.Worker { return adminBootstrapWorker }}
+
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithWorkers(lazyAdminWorker),
 	)
 
-	// Bootstrap credentials are written to the credential file (see slog.Warn
-	// emitted by initialadmin.Bootstrapper.Run). Phase 4 will integrate the
-	// credential file path into the sso-bff walkthrough test.
-	_ = bootstrapWorkers // workers wired to bootstrap lifecycle in Phase 4
-	logger.Info("sso-bff: starting on :8081",
+	stateDir := os.Getenv("GOCELL_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/run/gocell"
+	}
+	credPath := stateDir + "/initial_admin_password"
+	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to "+credPath,
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
+		slog.String("cred_path", credPath),
 	)
 	if err := app.Run(ctx); err != nil {
 		logger.Error("sso-bff: application exited with error", slog.Any("error", err))

@@ -126,6 +126,10 @@ func TestValidateAdapterMode_DevLiteralRejected(t *testing.T) {
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-cancelled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
+	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
+	// can write the credential file (default /run/gocell is not writable in CI).
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — run() should exit cleanly
 
@@ -291,6 +295,9 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// Ensure both GOCELL_CELL_ADAPTER_MODE and GOCELL_PG_DSN are unset.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
 	t.Setenv("GOCELL_PG_DSN", "")
+	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
+	// can write the credential file (default /run/gocell is not writable in CI).
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — we only need Init(), not server start
