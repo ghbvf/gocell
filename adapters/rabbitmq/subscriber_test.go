@@ -55,9 +55,11 @@ func TestProcessDelivery_EmptyEntryID_RejectsToDLX(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use a legacy outbox.Entry JSON body with empty ID. The unmarshalDelivery
-	// legacy fallback parses this successfully (JSON is well-formed), and the
-	// entry.ID guard in processDelivery then Nacks it without requeue.
+	// Use a non-v1 body (legacy outbox.Entry JSON format, missing schemaVersion).
+	// After P1-14 (A2), unmarshalDelivery rejects any body that is not a v1
+	// envelope — ErrUnknownEnvelopeVersion is returned and processDelivery
+	// NACKs without requeue. The empty-ID case is now subsumed by the schema
+	// version check, but the behavior (NACK, no handler call) is unchanged.
 	// Note: outbox.Entry has no json tags so PascalCase field names are used.
 	body := []byte(`{"ID":"","EventType":"test.event","Payload":"e30="}`)
 

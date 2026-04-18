@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -10,9 +11,36 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// makeTestEnvelope wraps payload bytes in a valid v1 wire envelope for topic.
+// All test Publish calls must use this helper to satisfy the fail-closed
+// envelope schema check introduced in P1-14 (A1/A2).
+func makeTestEnvelope(t testing.TB, topic string, payload []byte, id string) []byte {
+	t.Helper()
+	entry := outboxrt.ClaimedEntry{
+		Entry: outbox.Entry{
+			ID:        id,
+			EventType: topic,
+			Topic:     topic,
+			Payload:   payload,
+		},
+	}
+	b, err := outboxrt.MarshalEnvelope(entry)
+	if err != nil {
+		t.Fatalf("makeTestEnvelope: %v", err)
+	}
+	return b
+}
+
+// makeSimpleEnvelope wraps payload in a v1 envelope with a fixed test ID.
+func makeSimpleEnvelope(t testing.TB, topic string) []byte {
+	t.Helper()
+	return makeTestEnvelope(t, topic, json.RawMessage(`{"test":true}`), "test-id-"+topic)
+}
 
 // TestPublish_EnvelopePayload_UnwrappedBeforeDelivery guards the F1 fix:
 // when a relay publishes an outboxMessage envelope (JSON object with id,
@@ -45,7 +73,9 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 
 	// Envelope wrapping a business payload (action/key/value), mirroring the
 	// shape produced by adapters/postgres/outbox_relay.go publishAll.
+	// schemaVersion:"v1" is required since P1-14 A1 (fail-closed envelope schema).
 	envelope := []byte(`{
+		"schemaVersion": "v1",
 		"id": "ent-123",
 		"aggregateId": "agg-1",
 		"aggregateType": "config",
@@ -79,49 +109,46 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	assert.Equal(t, map[string]string{"request_id": "req-42"}, got.Metadata)
 }
 
-// TestPublish_NonEnvelopePayload_ForwardedUnchanged documents the fallback:
-// direct publish paths (cells calling bus.Publish with a business payload)
-// keep their pre-F1 semantics — the bus stamps an evt-{uuid} ID and forwards
-// the payload byte-for-byte.
-func TestPublish_NonEnvelopePayload_ForwardedUnchanged(t *testing.T) {
+// TestPublish_InvalidEnvelope_Dropped verifies fail-closed semantics (P1-14 A2):
+// when Publish receives a payload that is not a valid v1 envelope, the message
+// is routed to dead letter and NO subscriber handler is invoked.
+//
+// ref: Watermill poison-queue middleware — undecodable → DLX, main route cleared
+func TestPublish_InvalidEnvelope_Dropped(t *testing.T) {
 	bus := New(WithBufferSize(16))
 	defer func() { _ = bus.Close() }()
 
-	var got outbox.Entry
-	var mu sync.Mutex
+	var handlerCalled atomic.Bool
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.direct.topic"},
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.invalid.topic"},
 			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-				mu.Lock()
-				got = e
-				mu.Unlock()
+				handlerCalled.Store(true)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
 
-	// Business payload without id/eventType — must NOT be treated as envelope.
-	direct := []byte(`{"action":"updated","key":"k2","value":"v2"}`)
-	require.NoError(t, bus.Publish(context.Background(), "test.direct.topic", direct))
+	// Non-v1 payload: missing schemaVersion — must be dead-lettered, not delivered.
+	nonEnvelope := []byte(`{"action":"updated","key":"k2","value":"v2"}`)
+	require.NoError(t, bus.Publish(context.Background(), "test.invalid.topic", nonEnvelope))
 
-	assert.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return got.ID != ""
-	}, time.Second, 10*time.Millisecond)
+	// Dead letter should record the dropped message.
+	require.Eventually(t, func() bool {
+		return bus.DeadLetterLen() > 0
+	}, time.Second, 5*time.Millisecond, "invalid envelope must be routed to dead letter")
+
+	assert.False(t, handlerCalled.Load(), "subscriber handler must not be called for invalid envelope")
+
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, "test.invalid.topic", dl[0].Topic)
 
 	cancel()
 	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, direct, got.Payload, "non-envelope payload must be forwarded unchanged")
-	assert.Contains(t, got.ID, "evt-", "bus stamps evt-{uuid} id for direct publish")
-	assert.Equal(t, "test.direct.topic", got.EventType, "event type defaults to topic for direct publish")
 }
 
 func TestPublishSubscribe(t *testing.T) {
@@ -145,10 +172,12 @@ func TestPublishSubscribe(t *testing.T) {
 	// Give subscriber time to register.
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "test.topic", []byte(`{"key":"value"}`))
+	msg1 := makeTestEnvelope(t, "test.topic", []byte(`{"key":"value"}`), "msg-1")
+	err := bus.Publish(context.Background(), "test.topic", msg1)
 	require.NoError(t, err)
 
-	err = bus.Publish(context.Background(), "test.topic", []byte(`{"key":"value2"}`))
+	msg2 := makeTestEnvelope(t, "test.topic", []byte(`{"key":"value2"}`), "msg-2")
+	err = bus.Publish(context.Background(), "test.topic", msg2)
 	require.NoError(t, err)
 
 	// Wait for processing.
@@ -172,7 +201,7 @@ func TestPublish_NoSubscribers(t *testing.T) {
 	bus := New()
 	defer func() { _ = bus.Close() }()
 
-	err := bus.Publish(context.Background(), "no.subs", []byte("data"))
+	err := bus.Publish(context.Background(), "no.subs", makeSimpleEnvelope(t, "no.subs"))
 	assert.NoError(t, err)
 }
 
@@ -194,7 +223,7 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "retry.topic", []byte("fail"))
+	err := bus.Publish(context.Background(), "retry.topic", makeSimpleEnvelope(t, "retry.topic"))
 	require.NoError(t, err)
 
 	// Wait for all retries to complete (3 attempts with delays: 100+200+400 = 700ms).
@@ -237,7 +266,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "reject.topic", []byte("perm-fail"))
+	err := bus.Publish(context.Background(), "reject.topic", makeSimpleEnvelope(t, "reject.topic"))
 	require.NoError(t, err)
 
 	// Should go directly to dead letter on first attempt (no retries).
@@ -277,7 +306,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "perm.requeue", []byte("bad-payload"))
+	err := bus.Publish(context.Background(), "perm.requeue", makeSimpleEnvelope(t, "perm.requeue"))
 	require.NoError(t, err)
 
 	// Should go directly to dead letter on first attempt (no retries).
@@ -353,7 +382,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 				// below only needs proof that at least one publisher is actively
 				// calling Publish before we race Close against them.
 				publishStarted.CompareAndSwap(0, 1)
-				_ = bus.Publish(context.Background(), "race.topic", []byte("payload"))
+				_ = bus.Publish(context.Background(), "race.topic", makeSimpleEnvelope(t, "race.topic"))
 			}
 		}(i)
 	}
@@ -411,7 +440,7 @@ func TestMultipleSubscribers(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "multi.topic", []byte("hello"))
+	err := bus.Publish(context.Background(), "multi.topic", makeSimpleEnvelope(t, "multi.topic"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
@@ -442,7 +471,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "partial.fail", []byte("data"))
+	err := bus.Publish(context.Background(), "partial.fail", makeSimpleEnvelope(t, "partial.fail"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
@@ -547,7 +576,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "receipt.ack", []byte("data"))
+	err := bus.Publish(context.Background(), "receipt.ack", makeSimpleEnvelope(t, "receipt.ack"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
@@ -580,7 +609,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "receipt.reject", []byte("data"))
+	err := bus.Publish(context.Background(), "receipt.reject", makeSimpleEnvelope(t, "receipt.reject"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
@@ -618,7 +647,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "receipt.requeue", []byte("data"))
+	err := bus.Publish(context.Background(), "receipt.requeue", makeSimpleEnvelope(t, "receipt.requeue"))
 	require.NoError(t, err)
 
 	// Wait for all retries to exhaust.
@@ -669,7 +698,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "receipt.exhaust", []byte("exhaust-data"))
+	err := bus.Publish(context.Background(), "receipt.exhaust", makeSimpleEnvelope(t, "receipt.exhaust"))
 	require.NoError(t, err)
 
 	// Wait for retries to exhaust and message to land in dead letter.
@@ -725,7 +754,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	start := time.Now()
-	err := bus.Publish(context.Background(), "zero.disp", []byte("data"))
+	err := bus.Publish(context.Background(), "zero.disp", makeSimpleEnvelope(t, "zero.disp"))
 	require.NoError(t, err)
 
 	// Should exhaust retries and land in dead letter.
@@ -783,7 +812,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	start := time.Now()
-	err := bus.Publish(context.Background(), "unknown.disp", []byte("data"))
+	err := bus.Publish(context.Background(), "unknown.disp", makeSimpleEnvelope(t, "unknown.disp"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
@@ -830,7 +859,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 
-	err := bus.Publish(context.Background(), "cancel.disp", []byte("data"))
+	err := bus.Publish(context.Background(), "cancel.disp", makeSimpleEnvelope(t, "cancel.disp"))
 	require.NoError(t, err)
 
 	// Subscribe should return promptly after cancel.
@@ -886,8 +915,9 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 
 	// Publish 10 messages.
 	n := 10
-	for range n {
-		require.NoError(t, bus.Publish(ctx, "session.created", []byte(`{"event":"test"}`)))
+	for i := range n {
+		env := makeTestEnvelope(t, "session.created", []byte(`{"event":"test"}`), fmt.Sprintf("cg-same-msg-%d", i))
+		require.NoError(t, bus.Publish(ctx, "session.created", env))
 	}
 
 	// Wait for all messages to be handled.
@@ -941,8 +971,9 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	n := 5
-	for range n {
-		require.NoError(t, bus.Publish(ctx, "session.created", []byte(`{"event":"test"}`)))
+	for i := range n {
+		env := makeTestEnvelope(t, "session.created", []byte(`{"event":"test"}`), fmt.Sprintf("cg-diff-msg-%d", i))
+		require.NoError(t, bus.Publish(ctx, "session.created", env))
 	}
 
 	require.Eventually(t, func() bool {
@@ -992,8 +1023,9 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	n := 5
-	for range n {
-		require.NoError(t, bus.Publish(ctx, "events.v1", []byte(`{"event":"test"}`)))
+	for i := range n {
+		env := makeTestEnvelope(t, "events.v1", []byte(`{"event":"test"}`), fmt.Sprintf("cg-empty-msg-%d", i))
+		require.NoError(t, bus.Publish(ctx, "events.v1", env))
 	}
 
 	require.Eventually(t, func() bool {
@@ -1039,15 +1071,21 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let subscriptions register
 
 	// Concurrent publishers hammering the same topic+group.
+	// Use shared counter for unique envelope IDs across goroutines.
 	const numPublishers = 8
 	const msgsPerPublisher = 50
-	var pubWg sync.WaitGroup
+	var (
+		pubWg  sync.WaitGroup
+		msgSeq atomic.Int64
+	)
 	pubWg.Add(numPublishers)
 	for range numPublishers {
 		go func() {
 			defer pubWg.Done()
 			for range msgsPerPublisher {
-				_ = bus.Publish(ctx, "race.topic", []byte(`{"race":"test"}`))
+				id := fmt.Sprintf("race-msg-%d", msgSeq.Add(1))
+				env := makeTestEnvelope(t, "race.topic", []byte(`{"race":"test"}`), id)
+				_ = bus.Publish(ctx, "race.topic", env)
 			}
 		}()
 	}

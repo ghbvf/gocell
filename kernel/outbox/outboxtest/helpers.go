@@ -79,13 +79,16 @@ func testPayload(seq int) []byte {
 }
 
 // PublishN publishes n messages to the given topic and returns the entries published.
+// Messages are wrapped in v1 wire envelopes so relay-aware implementations
+// (e.g. InMemoryEventBus after P1-14) can receive them. Subscribers receive
+// the unwrapped business payload.
 func PublishN(t *testing.T, ctx context.Context, pub outbox.Publisher, topic string, n int) []outbox.Entry {
 	t.Helper()
 	entries := make([]outbox.Entry, 0, n)
 	for i := range n {
 		payload := testPayload(i)
 		entry := NewEntry(topic, payload)
-		if err := pub.Publish(ctx, topic, payload); err != nil {
+		if err := pub.Publish(ctx, topic, wrapV1Envelope(t, topic, payload)); err != nil {
 			t.Fatalf("publish message %d: %v", i, err)
 		}
 		entries = append(entries, entry)
@@ -326,15 +329,54 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	waitForSubscription(h.T, ctx, h.Sub, h.Topic, "")
 }
 
-// publishAndWait publishes payload and blocks until signalDone or timeout.
+// publishAndWait wraps payload in a v1 wire envelope and publishes it, then
+// blocks until signalDone or timeout. Wrapping is required because relay-aware
+// implementations (e.g. InMemoryEventBus after P1-14) reject non-v1 payloads
+// at the consumer entry point — they dead-letter the message instead of
+// delivering it to subscribers.
 func (h *pubSubHarness) publishAndWait(payload []byte) {
 	h.T.Helper()
-	assertNoError(h.T, h.Pub.Publish(context.Background(), h.Topic, payload))
+	assertNoError(h.T, h.Pub.Publish(context.Background(), h.Topic, wrapV1Envelope(h.T, h.Topic, payload)))
 	select {
 	case <-h.done:
 	case <-time.After(defaultTimeout):
 		h.T.Fatal("timed out")
 	}
+}
+
+// wrapV1Envelope constructs a minimal v1 wire envelope JSON for the given topic
+// and business payload. Used by conformance helpers so implementations that
+// enforce schemaVersion:"v1" (e.g. InMemoryEventBus after P1-14) can receive
+// test messages. The subscriber will receive the unwrapped business payload.
+//
+// Constructed manually to avoid importing runtime/outbox from the kernel layer.
+func wrapV1Envelope(t testing.TB, topic string, payload []byte) []byte {
+	t.Helper()
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	id := "conf-" + hex.EncodeToString(b)
+
+	type wireMsg struct {
+		SchemaVersion string          `json:"schemaVersion"`
+		ID            string          `json:"id"`
+		EventType     string          `json:"eventType"`
+		Topic         string          `json:"topic"`
+		Payload       json.RawMessage `json:"payload"`
+		CreatedAt     string          `json:"createdAt"`
+	}
+	msg := wireMsg{
+		SchemaVersion: "v1",
+		ID:            id,
+		EventType:     topic,
+		Topic:         topic,
+		Payload:       json.RawMessage(payload),
+		CreatedAt:     "2024-01-01T00:00:00Z",
+	}
+	out, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("wrapV1Envelope: %v", err)
+	}
+	return out
 }
 
 // signalDone closes the done channel (safe for concurrent calls via sync.Once).

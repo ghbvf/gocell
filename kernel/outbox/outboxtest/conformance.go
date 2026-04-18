@@ -201,7 +201,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 	c := startCollecting(t, ctx, sub, topic, n)
 
 	for i := range n {
-		assertNoError(t, pub.Publish(ctx, topic, testPayload(i)))
+		assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, testPayload(i))))
 	}
 
 	collected := c.waitAndGet(defaultTimeout)
@@ -253,8 +253,8 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	waitForSubscription(t, ctx, sub, topicA, "")
 
 	// Publish to both topics.
-	assertNoError(t, pub.Publish(ctx, topicB, []byte(`{"topic":"B"}`)))
-	assertNoError(t, pub.Publish(ctx, topicA, []byte(`{"topic":"A"}`)))
+	assertNoError(t, pub.Publish(ctx, topicB, wrapV1Envelope(t, topicB, []byte(`{"topic":"B"}`))))
+	assertNoError(t, pub.Publish(ctx, topicA, wrapV1Envelope(t, topicA, []byte(`{"topic":"A"}`))))
 
 	select {
 	case <-doneA:
@@ -334,7 +334,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	// (BroadcastSubscribe=false → testCompetingConsumers).
 	time.Sleep(subscribeInitDelay)
 
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"fan-out"}`)))
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"fan-out"}`))))
 
 	// Wait for both subscribers to receive.
 	assertEventually(t, func() bool {
@@ -388,7 +388,7 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	waitForSubscription(t, ctx, sub, topic, "")
 
 	// Publish one message.
-	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"competing"}`)))
+	assertNoError(t, pub.Publish(ctx, topic, wrapV1Envelope(t, topic, []byte(`{"test":"competing"}`))))
 
 	// Wait for exactly one delivery (bounded — if nothing arrives within
 	// defaultTimeout the test fails fast rather than hanging until the global
@@ -776,7 +776,7 @@ func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
 
 	// Publishing after close should not panic.
 	assertNotPanics(t, func() {
-		_ = pub.Publish(context.Background(), "any-topic", []byte(`{}`))
+		_ = pub.Publish(context.Background(), "any-topic", wrapV1Envelope(t, "any-topic", []byte(`{}`)))
 	})
 }
 
@@ -803,7 +803,7 @@ func testConcurrentPublish(t *testing.T, features Features, constructor PubSubCo
 		wg.Add(1)
 		go func(seq int) {
 			defer wg.Done()
-			if err := pub.Publish(ctx, topic, testPayload(seq)); err != nil {
+			if err := pub.Publish(ctx, topic, wrapV1Envelope(t, topic, testPayload(seq))); err != nil {
 				pubMu.Lock()
 				pubErrs = append(pubErrs, err)
 				pubMu.Unlock()
