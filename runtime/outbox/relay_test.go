@@ -739,13 +739,14 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 		return ok && fn() != nil
 	}, 2*time.Second, 5*time.Millisecond, "reclaim budget must trip")
 
+	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
+	checkers := relay.HealthCheckers()
+	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered")
+	pollChecker := checkers["outbox-relay-poll"]
+
 	// Poll checker must never become unhealthy while only reclaim fails.
 	assert.Never(t, func() bool {
-		checkers := relay.HealthCheckers()
-		if fn, ok := checkers["outbox-relay-poll"]; ok {
-			return fn() != nil
-		}
-		return false
+		return pollChecker() != nil
 	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only reclaim fails")
 }
 
@@ -765,13 +766,14 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 		return ok && fn() != nil
 	}, 2*time.Second, 5*time.Millisecond, "cleanup budget must trip")
 
+	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
+	checkers2 := relay.HealthCheckers()
+	require.Contains(t, checkers2, "outbox-relay-poll", "poll checker must be registered")
+	pollChecker2 := checkers2["outbox-relay-poll"]
+
 	// Poll checker must never become unhealthy while only cleanup fails.
 	assert.Never(t, func() bool {
-		checkers := relay.HealthCheckers()
-		if fn, ok := checkers["outbox-relay-poll"]; ok {
-			return fn() != nil
-		}
-		return false
+		return pollChecker2() != nil
 	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only cleanup fails")
 }
 
