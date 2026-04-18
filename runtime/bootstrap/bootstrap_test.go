@@ -2745,6 +2745,16 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	assert.Equal(t, int32(0), verifier.callCount.Load(),
 		"verifier must not be called for public endpoint")
 
+	// Method-specific bypass regression: GET must return 401 (only POST is public).
+	getReq, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("http://%s/api/v1/access/sessions/login", addr), nil)
+	require.NoError(t, err)
+	getResp, err := testHTTPClient.Do(getReq)
+	require.NoError(t, err)
+	defer getResp.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, getResp.StatusCode,
+		"GET must not bypass auth when only POST is declared public (method-specific bypass)")
+
 	cancel()
 	select {
 	case runErr := <-done:
@@ -3481,4 +3491,68 @@ func TestBootstrap_WithBrokerHealth_Nil_ReturnsError(t *testing.T) {
 		require.Error(t, err, "typed-nil BrokerHealthChecker must cause Run to return an error")
 		assert.Contains(t, err.Error(), "broker health")
 	})
+}
+
+// TestBootstrap_MalformedPublicEndpoint_PanicsAtOption tests I-1: preflight
+// validation panics at Option-construction time for malformed entries.
+func TestBootstrap_MalformedPublicEndpoint_PanicsAtOption(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "expected panic on malformed entry")
+		require.Contains(t, fmt.Sprint(r), "bootstrap.WithPublicEndpoints")
+	}()
+	// Legacy path-only format (missing method) should panic at Option construction.
+	_ = WithPublicEndpoints([]string{"/api/v1/auth/login"})
+	t.Fatal("expected panic not reached")
+}
+
+// TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
+// declaration automatically covers HEAD requests (RFC 7231 §4.3.2).
+func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	asm := assembly.New(assembly.Config{ID: "test-head-alias", DurabilityMode: cell.DurabilityDemo})
+	verifier := &bootstrapTestVerifier{
+		err: fmt.Errorf("should not be called for GET/HEAD public route"),
+	}
+	hc := newAuthProviderCell("access-core", verifier)
+	require.NoError(t, asm.Register(hc))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		// Only GET is declared public; HEAD alias must be covered automatically.
+		WithPublicEndpoints([]string{"GET /api/v1/public/ping"}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// HEAD request to the GET-declared public endpoint must bypass auth.
+	headReq, err := http.NewRequest(http.MethodHead,
+		fmt.Sprintf("http://%s/api/v1/public/ping", addr), nil)
+	require.NoError(t, err)
+	headResp, err := testHTTPClient.Do(headReq)
+	require.NoError(t, err)
+	defer headResp.Body.Close()
+
+	// HEAD to a public GET endpoint should not return 401 (verifier not called).
+	assert.NotEqual(t, http.StatusUnauthorized, headResp.StatusCode,
+		"HEAD must bypass auth when GET is declared public (RFC 7231 §4.3.2 alias)")
+	assert.Equal(t, int32(0), verifier.callCount.Load(),
+		"verifier must not be called for HEAD request to GET-public endpoint")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
 }

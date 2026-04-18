@@ -12,11 +12,26 @@ package middleware
 // request-id reject) already accept — no downstream API change needed.
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path"
 	"strings"
 )
+
+// validMethods is the set of recognized HTTP methods for public endpoint entries.
+// Entries with a method not in this set are rejected at compile time (fail-fast).
+var validMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodPost:    true,
+	http.MethodPut:     true,
+	http.MethodPatch:   true,
+	http.MethodDelete:  true,
+	http.MethodOptions: true,
+	http.MethodConnect: true,
+	http.MethodTrace:   true,
+}
 
 // matchKey builds the lookup key used in the compiled set.
 // Uses \x00 as separator because neither HTTP method nor URL path may contain
@@ -27,14 +42,21 @@ func matchKey(method, cleanPath string) string {
 
 // CompilePublicEndpoints parses a slice of "METHOD /path" entries and returns
 // a per-request predicate that returns true when the request's (method, path)
-// pair is in the public set. Returns a non-nil error on the first malformed or
-// duplicate entry — the caller should treat any error as a startup failure.
+// pair is in the public set.
+//
+// Intended for router internals (applyPublicEndpoints) and bootstrap-layer
+// preflight validation (WithPublicEndpoints). Cell code should not call this
+// directly — use bootstrap.WithPublicEndpoints as the composition-root API.
+//
+// Returns a non-nil error aggregating all malformed or duplicate entries via
+// errors.Join — the caller should treat any error as a startup failure.
 //
 // Rules:
 //   - Entry format: "METHOD /path" (single space minimum; extra spaces trimmed).
 //   - Method is normalised to uppercase.
 //   - Path is normalised with path.Clean; must start with '/'.
 //   - Entries with no method prefix are rejected (fail-fast; no silent fallback).
+//   - Method must be one of: GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE.
 //   - GET entries automatically also match HEAD (RFC 7231 §4.3.2).
 //   - Duplicate (method, path) pairs return an error (protect config cleanliness).
 //   - Empty entry slice is valid; the returned predicate always returns false.
@@ -43,17 +65,19 @@ func matchKey(method, cleanPath string) string {
 // ref: otelhttp WithPublicEndpointFn per-request predicate
 func CompilePublicEndpoints(entries []string) (func(*http.Request) bool, error) {
 	set := make(map[string]bool, len(entries)*2)
+	var errs []error
 
-	for _, raw := range entries {
+	for i, raw := range entries {
 		method, cleanPath, err := parseEntry(raw)
 		if err != nil {
-			return nil, err
+			errs = append(errs, fmt.Errorf("entry[%d]: %w", i, err))
+			continue
 		}
 
 		key := matchKey(method, cleanPath)
 		if set[key] {
-			return nil, fmt.Errorf("public endpoint entry %q: duplicate (method=%s path=%s)",
-				raw, method, cleanPath)
+			errs = append(errs, fmt.Errorf("entry[%d]: duplicate (method=%s path=%s)", i, method, cleanPath))
+			continue
 		}
 		set[key] = true
 
@@ -64,11 +88,15 @@ func CompilePublicEndpoints(entries []string) (func(*http.Request) bool, error) 
 		if method == http.MethodGet {
 			headKey := matchKey(http.MethodHead, cleanPath)
 			if set[headKey] {
-				return nil, fmt.Errorf("public endpoint entry %q: duplicate — GET auto-alias HEAD conflicts with an existing HEAD %s entry",
-					raw, cleanPath)
+				errs = append(errs, fmt.Errorf("entry[%d]: duplicate — GET auto-alias HEAD conflicts with existing HEAD %s entry", i, cleanPath))
+				continue
 			}
 			set[headKey] = true
 		}
+	}
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 
 	return func(r *http.Request) bool {
@@ -91,6 +119,10 @@ func parseEntry(raw string) (method, cleanPath string, err error) {
 	if method == "" {
 		return "", "", fmt.Errorf(
 			"public endpoint entry %q: method must not be empty", raw)
+	}
+	if !validMethods[method] {
+		return "", "", fmt.Errorf(
+			"public endpoint entry %q: method %q not recognized (must be one of GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)", raw, method)
 	}
 	if rawPath == "" || rawPath[0] != '/' {
 		return "", "", fmt.Errorf(

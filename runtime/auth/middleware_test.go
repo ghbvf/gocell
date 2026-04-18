@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -375,6 +376,20 @@ func TestAuthMiddleware_WithPublicEndpointMatcher_OverridesSliceParam(t *testing
 	handler.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"matcher must take precedence over []string publicEndpoints parameter")
+}
+
+// TestAuthMiddleware_LegacyStringWithSpace_Panics tests I-2: defense-in-depth
+// detection of callers that accidentally pass "METHOD /path" format to the
+// legacy []string path.
+func TestAuthMiddleware_LegacyStringWithSpace_Panics(t *testing.T) {
+	verifier := &mockVerifier{}
+	defer func() {
+		r := recover()
+		require.NotNil(t, r)
+		require.Contains(t, fmt.Sprint(r), "METHOD /path")
+	}()
+	_ = AuthMiddleware(verifier, []string{"POST /foo"})
+	t.Fatal("expected panic")
 }
 
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {

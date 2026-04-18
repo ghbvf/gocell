@@ -10,7 +10,6 @@ package router
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -168,6 +167,11 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 }
 
 // WithAuthMiddleware enables authentication in the default middleware chain.
+//
+// Deprecated: Use WithPublicEndpoints for the composition-root API. Direct
+// WithAuthMiddleware usage remains for tests and advanced scenarios; new
+// production code should prefer WithPublicEndpoints.
+//
 // When provided, the auth middleware is placed after CircuitBreaker and before
 // BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
@@ -233,18 +237,23 @@ func WithTrustedProxies(proxies []string) Option {
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux            *chi.Mux
-	mux                 *chi.Mux
-	healthHandler       *health.Handler
-	metricsCollector    metrics.Collector
-	metricsHandler      http.Handler
-	tracer              tracing.Tracer
-	tracingOpts         []middleware.TracingOption
-	requestIDOpts       []middleware.RequestIDOption
-	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.Allower
-	circuitBreakerNil   bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier        auth.IntentTokenVerifier
+	outerMux          *chi.Mux
+	mux               *chi.Mux
+	healthHandler     *health.Handler
+	metricsCollector  metrics.Collector
+	metricsHandler    http.Handler
+	tracer            tracing.Tracer
+	tracingOpts       []middleware.TracingOption
+	requestIDOpts     []middleware.RequestIDOption
+	rateLimiter       middleware.RateLimiter
+	circuitBreaker    middleware.Allower
+	circuitBreakerNil bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
+	authVerifier      auth.IntentTokenVerifier
+	// authPublicEndpoints is the legacy path-only list accepted only by direct
+	// callers of WithAuthMiddleware. WithPublicEndpoints no longer backfills this
+	// field — the method-aware matcher (authPublicMatcher) is the sole source of
+	// truth, preventing silent reactivation of path-only bypass if the matcher
+	// is removed by future refactors.
 	authPublicEndpoints []string
 	authPublicMatcher   func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
 	authMetrics         *auth.AuthMetrics
@@ -420,14 +429,17 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 // auto-wires tracing, request_id, and auth. Returns an error if any entry is
 // malformed (fail-fast; the caller NewE propagates it to Bootstrap.Run).
 //
+// Semantic note: auth / tracing / request-id share the same isPublic predicate
+// because their trust-boundary criteria are currently identical ("is this a
+// public-facing edge?"). If these three semantics diverge in the future (e.g.
+// a public endpoint that still requires auth), split into independent
+// predicates. See backlog T8 PUBLIC-ENDPOINT-STRUCT-MIGRATE-01.
+//
 // ref: go-zero rest/server.go — single-point route group auth config
 // ref: otelhttp config.go — WithPublicEndpointFn per-request detection
 func (r *Router) applyPublicEndpoints() error {
 	if len(r.publicEndpoints) == 0 {
 		return nil
-	}
-	if len(r.tracingOpts) > 0 {
-		slog.Warn("router: WithPublicEndpoints appends a publicEndpointFn; if TracingOptions already contains WithPublicEndpointFn, last-write-wins")
 	}
 
 	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)
@@ -438,14 +450,12 @@ func (r *Router) applyPublicEndpoints() error {
 	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
 	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
 
-	// Standalone callers using WithPublicEndpoints without WithAuthMiddleware
-	// need the matcher populated for the auth middleware. When bootstrap calls
-	// both, WithAuthMiddleware already sets authPublicEndpoints — the guard is
-	// a no-op for the legacy []string path. The matcher path supersedes it.
+	// Populate the method-aware matcher for the auth middleware.
+	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher is
+	// the sole source of truth. Passing nil to auth.AuthMiddleware is safe because
+	// F-B's panic guard ensures no space-containing legacy entries reach that path,
+	// and the matcher supersedes the []string parameter when both are present.
 	r.authPublicMatcher = isPublic
-	if len(r.authPublicEndpoints) == 0 {
-		r.authPublicEndpoints = r.publicEndpoints
-	}
 	return nil
 }
 

@@ -206,10 +206,11 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 // resolution to Run() time.
 //
 // Each entry must be in "METHOD /path" format (e.g. "POST /api/v1/auth/login").
-// Entries without a method prefix cause Run() to return an error immediately
-// (fail-fast — the service will not start). Entries with method GET also
-// automatically cover HEAD requests, following stdlib ServeMux and chi v5
-// semantics (RFC 7231 §4.3.2).
+// Entries without a method prefix panic immediately at Option-construction time
+// (fail-fast — surfaces in unit tests and dev workflows before Run()).
+// Run() still re-validates via router.NewE for defense-in-depth. Entries with
+// method GET also automatically cover HEAD requests, following stdlib ServeMux
+// and chi v5 semantics (RFC 7231 §4.3.2).
 //
 // The same entries configure all three trust boundaries simultaneously:
 //   - Auth bypass: the matching (method + path) pair skips JWT verification.
@@ -230,10 +231,13 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 //
 // ref: Go 1.22 net/http ServeMux pattern grammar "[METHOD] PATH"
 func WithPublicEndpoints(endpoints []string) Option {
+	// Preflight validation: fail-fast at Option-construction time so
+	// malformed entries surface in unit tests and dev workflows before Run().
+	// Run() still re-validates via router.NewE for defense-in-depth.
+	if _, err := middleware.CompilePublicEndpoints(endpoints); err != nil {
+		panic(fmt.Sprintf("bootstrap.WithPublicEndpoints: %v", err))
+	}
 	return func(b *Bootstrap) {
-		if b.authVerifier != nil {
-			slog.Warn("bootstrap: WithPublicEndpoints called after WithAuthMiddleware; publicEndpoints will be overwritten")
-		}
 		b.authPublicEndpoints = endpoints
 		b.authDiscovery = true
 	}
@@ -547,7 +551,7 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 //  10. Shutdown: stop workers -> drain HTTP -> stop assembly -> close subscriber/publisher
 //
 // If any step fails, already-started components are rolled back in reverse.
-func (b *Bootstrap) Run(ctx context.Context) error {
+func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // complexity tracked as backlog R1 BOOTSTRAP-RUN-COGNIT-01
 	// Guard against double-Run. A second call would create duplicate
 	// teardowns and race on shared resources.
 	// ref: uber-go/fx App.Run — returns immediately if already started
@@ -970,7 +974,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
 	}
 	if b.authVerifier != nil {
-		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
+		// Internal bootstrap use: router.WithAuthMiddleware is the advanced path
+		// for explicit-verifier callers (WithAuthMiddleware bootstrap option).
+		// The Deprecated notice targets new production callers; bootstrap itself
+		// is a legitimate "advanced scenario" consumer.
+		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints)) //nolint:staticcheck
 		var authMetrics *auth.AuthMetrics
 		if b.metricsProvider != nil {
 			am, err := auth.NewAuthMetrics(b.metricsProvider)

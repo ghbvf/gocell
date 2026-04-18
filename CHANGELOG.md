@@ -4,6 +4,28 @@ All notable changes to GoCell are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - Public endpoint method-aware trust boundary
+
+> PR: #182
+> Scope: P1-3 PUBLIC-ENDPOINT-METHOD-MATCH-01
+
+### Breaking
+
+- **runtime/bootstrap**: `WithPublicEndpoints` entries must now be in `"METHOD /path"` format (e.g. `"POST /api/v1/auth/login"`). Legacy path-only entries (e.g. `"/api/v1/auth/login"`) panic at Option-construction time. Migration: add the appropriate HTTP method prefix to each entry.
+- **runtime/http/middleware**: `publicEndpoints []string` parameter to `auth.AuthMiddleware` panics when entries contain spaces (defense-in-depth against accidental METHOD-prefixed entries on the legacy path). Use `router.WithPublicEndpoints` for method-aware composition.
+
+### Added
+
+- **runtime/http/middleware**: `CompilePublicEndpoints` parser compiles `"METHOD /path"` entries into a `func(*http.Request) bool` predicate shared by auth bypass, tracing new-root, and request-id reject trust-boundaries.
+- GET entries automatically cover HEAD requests (RFC 7231 §4.3.2, aligned with stdlib ServeMux and chi v5).
+- Duplicate (method, path) pairs fail-fast at Option time (config-cleanliness protection).
+
+### Design
+
+- ref: Go 1.22 `net/http.ServeMux` pattern grammar `"[METHOD] PATH"` — adopted format.
+- ref: otelhttp `WithPublicEndpointFn` — adopted per-request predicate shape for downstream consumers.
+- ref: RFC 7231 §4.3.2 — GET→HEAD aliasing rationale.
+
 ## [Unreleased] - DurabilityMode 守护加固
 
 > PR: #284

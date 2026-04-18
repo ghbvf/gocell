@@ -9,6 +9,7 @@ package middleware_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -151,6 +152,41 @@ func TestCompilePublicEndpoints_ErrorCases(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// TestCompilePublicEndpoints_InvalidMethod tests I-7: method whitelist validation.
+func TestCompilePublicEndpoints_InvalidMethod(t *testing.T) {
+	fn, err := middleware.CompilePublicEndpoints([]string{"GETT /foo"})
+	require.Error(t, err)
+	assert.Nil(t, fn)
+	assert.Contains(t, err.Error(), "not recognized")
+	assert.Contains(t, err.Error(), "GETT")
+}
+
+// TestCompilePublicEndpoints_MultipleErrors tests I-11: collect-all errors with entry[i] indexing.
+func TestCompilePublicEndpoints_MultipleErrors(t *testing.T) {
+	// entry[0]: "/foo" — no method prefix (error)
+	// entry[1]: "POST" — no path (error)
+	// entry[2]: "GET /bar" — valid
+	// entry[3]: "GET /bar" — duplicate (error)
+	entries := []string{"/foo", "POST", "GET /bar", "GET /bar"}
+	fn, err := middleware.CompilePublicEndpoints(entries)
+	require.Error(t, err)
+	assert.Nil(t, fn)
+	errStr := err.Error()
+	assert.True(t, strings.Contains(errStr, "entry[0]"), "should report entry[0]: %s", errStr)
+	assert.True(t, strings.Contains(errStr, "entry[1]"), "should report entry[1]: %s", errStr)
+	assert.True(t, strings.Contains(errStr, "entry[3]"), "should report entry[3]: %s", errStr)
+}
+
+// TestCompilePublicEndpoints_ValidOptions tests I-7: OPTIONS is a valid method.
+func TestCompilePublicEndpoints_ValidOptions(t *testing.T) {
+	fn, err := middleware.CompilePublicEndpoints([]string{"OPTIONS /preflight"})
+	require.NoError(t, err)
+	require.NotNil(t, fn)
+
+	req := httptest.NewRequest(http.MethodOptions, "/preflight", nil)
+	assert.True(t, fn(req))
 }
 
 func TestCompilePublicEndpoints_EmptySlice(t *testing.T) {

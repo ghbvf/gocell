@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"path"
 	"strings"
@@ -69,6 +70,20 @@ func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts
 		if publicPaths == nil {
 			publicPaths = DefaultPublicEndpoints
 		}
+
+		// Defense-in-depth: detect callers that accidentally pass "METHOD /path" format
+		// to the legacy []string path (which does path.Clean on the whole string and
+		// never matches). Panic to fail-fast — caller should use
+		// router.WithPublicEndpoints instead (which compiles into publicMatcher).
+		for _, p := range publicPaths {
+			if strings.ContainsRune(p, ' ') {
+				panic(fmt.Sprintf(
+					"auth.AuthMiddleware: legacy publicEndpoints entry %q looks like METHOD /path format; "+
+						"pass it through router.WithPublicEndpoints (which sets WithPublicEndpointMatcher) instead",
+					p))
+			}
+		}
+
 		publicSet := make(map[string]bool, len(publicPaths))
 		for _, p := range publicPaths {
 			publicSet[path.Clean(p)] = true
