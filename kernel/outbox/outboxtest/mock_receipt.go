@@ -12,12 +12,13 @@ import (
 var _ outbox.Receipt = (*MockReceipt)(nil)
 
 // MockReceipt records Commit/Release calls for assertion in tests.
-// Thread-safe via atomic.Bool.
+// Thread-safe via atomic counters.
 type MockReceipt struct {
-	committed  atomic.Bool
-	released   atomic.Bool
-	commitErr  error
-	releaseErr error
+	committed   atomic.Bool
+	released    atomic.Bool
+	commitCalls atomic.Int32
+	commitErr   error
+	releaseErr  error
 }
 
 // NewMockReceipt creates a MockReceipt that succeeds on Commit/Release.
@@ -33,7 +34,14 @@ func NewMockReceiptWithErrors(commitErr, releaseErr error) *MockReceipt {
 // Commit marks the receipt as committed.
 func (r *MockReceipt) Commit(_ context.Context) error {
 	r.committed.Store(true)
+	r.commitCalls.Add(1)
 	return r.commitErr
+}
+
+// CommitCount returns the number of times Commit was called. Used by
+// regression tests that need to verify retries on Commit failure.
+func (r *MockReceipt) CommitCount() int32 {
+	return r.commitCalls.Load()
 }
 
 // Release marks the receipt as released.

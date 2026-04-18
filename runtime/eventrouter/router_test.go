@@ -857,6 +857,106 @@ func TestRouter_SetupErrorAborts(t *testing.T) {
 	}
 }
 
+// mixedReadySubscriber covers the concurrent failure mode tested by
+// TestRouter_ReadyError_PartialNotReady_NoLeak: per-topic dispatch where
+// some topics close Ready immediately, one topic returns a Subscribe error,
+// and another topic delays Ready beyond the test window. Used to validate
+// that runAwaitReady's setupErr branch (1) returns the error promptly,
+// (2) does NOT close Running(), and (3) does not leak goroutines.
+type mixedReadySubscriber struct {
+	subscribeErrTopic string
+	subscribeErr      error
+	slowReadyTopic    string
+	slowReadyDelay    time.Duration
+	subscribeCalls    atomic.Int32
+}
+
+func (s *mixedReadySubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+
+func (s *mixedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	if sub.Topic == s.subscribeErrTopic {
+		// Subscribe will fail before Ready can fire; leave channel open.
+		return ch
+	}
+	if sub.Topic == s.slowReadyTopic {
+		go func() {
+			time.Sleep(s.slowReadyDelay)
+			close(ch)
+		}()
+		return ch
+	}
+	close(ch)
+	return ch
+}
+
+func (s *mixedReadySubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
+	s.subscribeCalls.Add(1)
+	if sub.Topic == s.subscribeErrTopic {
+		return s.subscribeErr
+	}
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (s *mixedReadySubscriber) Close() error { return nil }
+
+// TestRouter_ReadyError_PartialNotReady_NoLeak verifies the runAwaitReady
+// failure path (six-seat review F1): when one Subscribe goroutine sends
+// to setupErr while other handlers are still waiting on Ready, Run must:
+//  1. Return the Subscribe error promptly (within ~100ms, not block on
+//     the slow Ready).
+//  2. NOT close Running() — Health remains "not running".
+//  3. Cancel the runCtx so all goroutines (including the slow-Ready waiter
+//     and the still-running Subscribe goroutines) exit cleanly via wg.Wait.
+//  4. Not leak the setupErr drain goroutine — proven by no extra background
+//     goroutine surviving the test (no drain since the F1 fix removed it).
+func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
+	subErr := errors.New("subscribe failed mid-ready")
+	sub := &mixedReadySubscriber{
+		subscribeErrTopic: "topic.subscribe-error",
+		subscribeErr:      subErr,
+		slowReadyTopic:    "topic.slow-ready",
+		slowReadyDelay:    5 * time.Second, // would block test if Run waited
+	}
+
+	r := New(sub, WithReadyTimeout(0)) // disable timeout to isolate setupErr path
+
+	r.AddHandler("topic.fast", noopHandler, "test")
+	r.AddHandler(sub.subscribeErrTopic, noopHandler, "test")
+	r.AddHandler(sub.slowReadyTopic, noopHandler, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	runDone := make(chan error, 1)
+	start := time.Now()
+	go func() { runDone <- r.Run(ctx) }()
+
+	select {
+	case err := <-runDone:
+		require.Error(t, err)
+		assert.ErrorIs(t, err, subErr, "Run should propagate the Subscribe error")
+		elapsed := time.Since(start)
+		assert.Less(t, elapsed, 1*time.Second,
+			"Run should return promptly on Subscribe error, not wait for slow Ready (5s)")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s after Subscribe error — possible block on slow Ready")
+	}
+
+	// Running() must NOT be closed.
+	select {
+	case <-r.Running():
+		t.Fatal("Running() must not close when a Subscribe goroutine errors during ready wait")
+	default:
+	}
+	assert.Error(t, r.Health(), "Health must report not-running after setup error")
+
+	// All three Subscribe goroutines were dispatched (Phase 2 launches all
+	// before Phase 3 select); error path cancels them via runCtx.
+	assert.Equal(t, int32(3), sub.subscribeCalls.Load(),
+		"all 3 Subscribe goroutines should have been launched in Phase 2")
+}
+
 // TestRouter_PartialReady_BlocksUntilAll verifies that with 3 handlers where
 // topic-C Ready closes after 200ms, Router.Running() only closes after all
 // three Ready channels are closed (i.e., at or after 200ms).
