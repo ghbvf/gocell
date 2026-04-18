@@ -2129,6 +2129,68 @@ func TestREF12(t *testing.T) {
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
+
+	t.Run("responses schemaRef missing", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+		require.NoError(t, os.MkdirAll(contractDir, 0o755))
+		// Directory exists but nonexistent-401.schema.json is not written.
+
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+			Method:        "POST",
+			Path:          "/api/v1/auth/login",
+			SuccessStatus: 200,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				401: {Description: "unauthorized", SchemaRef: "nonexistent-401.schema.json"},
+			},
+		}
+		val := NewValidator(pm, tmpDir)
+		got := findByCode(val.validateREF12(), "REF-12")
+		require.Len(t, got, 1)
+		assert.Equal(t, "endpoints.http.responses[401].schemaRef", got[0].Field)
+		assert.Equal(t, IssueRefNotFound, got[0].IssueType)
+		assert.Equal(t, SeverityError, got[0].Severity)
+	})
+
+	t.Run("responses schemaRef empty is skipped", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+		require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+			Method:        "POST",
+			Path:          "/api/v1/auth/login",
+			SuccessStatus: 200,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				401: {Description: "unauthorized", SchemaRef: ""},
+			},
+		}
+		val := NewValidator(pm, tmpDir)
+		got := findByCode(val.validateREF12(), "REF-12")
+		assert.Empty(t, got)
+	})
+
+	t.Run("responses schemaRef file exists", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		contractDir := filepath.Join(tmpDir, "contracts", "http", "auth", "login", "v1")
+		require.NoError(t, os.MkdirAll(contractDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(contractDir, "error-401.schema.json"), []byte("{}"), 0o644))
+
+		pm := validProject()
+		pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+			Method:        "POST",
+			Path:          "/api/v1/auth/login",
+			SuccessStatus: 200,
+			Responses: map[int]metadata.HTTPResponseMeta{
+				401: {Description: "unauthorized", SchemaRef: "error-401.schema.json"},
+			},
+		}
+		val := NewValidator(pm, tmpDir)
+		got := findByCode(val.validateREF12(), "REF-12")
+		assert.Empty(t, got)
+	})
 }
 
 // --- REF-13: contract provider actor exists ---

@@ -214,6 +214,53 @@ func TestValidateContractHealth(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "responses entry missing schemaRef fails",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					SchemaRefs: metadata.SchemaRefsMeta{
+						Response: "response.schema.json",
+					},
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method: "POST",
+							Responses: map[int]metadata.HTTPResponseMeta{
+								401: {Description: "unauthorized", SchemaRef: ""},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+			wantMsg: "schemaRef",
+		},
+		{
+			name: "responses entry with schemaRef passes",
+			contracts: []*metadata.ContractMeta{
+				{
+					ID:        "http.test.v1",
+					Kind:      "http",
+					OwnerCell: "test-cell",
+					Lifecycle: "active",
+					SchemaRefs: metadata.SchemaRefsMeta{
+						Response: "response.schema.json",
+					},
+					Endpoints: metadata.EndpointsMeta{
+						HTTP: &metadata.HTTPTransportMeta{
+							Method: "POST",
+							Responses: map[int]metadata.HTTPResponseMeta{
+								401: {Description: "unauthorized", SchemaRef: "error.schema.json"},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
