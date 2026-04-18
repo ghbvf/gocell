@@ -230,3 +230,32 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 	}
 	return int(ct.RowsAffected()), nil
 }
+
+// OldestEligibleAt returns the oldest published_at (status="published") or
+// dead_at (status="dead") in the table. Used by the relay's data-driven
+// cleanup loop to schedule the next wake-up at oldest+retention instead of a
+// fixed timer.
+func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status string) (time.Time, bool, error) {
+	var col string
+	switch status {
+	case statusPublished:
+		col = "published_at"
+	case statusDead:
+		col = "dead_at"
+	default:
+		return time.Time{}, false, errcode.New(ErrAdapterPGQuery,
+			fmt.Sprintf("OldestEligibleAt: invalid status %q (want published or dead)", status))
+	}
+
+	// Inline status as a literal (validated by the switch above) so we don't
+	// need a placeholder for it; the column name cannot be parameterised.
+	query := fmt.Sprintf("SELECT MIN(%s) FROM outbox_entries WHERE status = $1", col)
+	var oldest *time.Time
+	if err := s.db.QueryRow(ctx, query, status).Scan(&oldest); err != nil {
+		return time.Time{}, false, errcode.Wrap(ErrAdapterPGQuery, "outbox store: OldestEligibleAt failed", err)
+	}
+	if oldest == nil {
+		return time.Time{}, false, nil
+	}
+	return *oldest, true, nil
+}

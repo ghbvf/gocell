@@ -59,14 +59,16 @@ type queryCall struct {
 }
 
 type mockDBTX struct {
-	mu         sync.Mutex
-	queryRows  *mockRows
-	queryCalls []queryCall
-	execCalls  []execCall
-	execErr    error
-	execResult pgconn.CommandTag
-	commitErr  error
-	beginErr   error
+	mu           sync.Mutex
+	queryRows    *mockRows
+	queryRowFn   func(sql string, args ...any) pgx.Row
+	queryCalls   []queryCall
+	queryRowSQLs []queryCall
+	execCalls    []execCall
+	execErr      error
+	execResult   pgconn.CommandTag
+	commitErr    error
+	beginErr     error
 }
 
 func (m *mockDBTX) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -90,6 +92,17 @@ func (m *mockDBTX) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 		return &mockRows{}, nil
 	}
 	return m.queryRows, nil
+}
+
+func (m *mockDBTX) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	m.mu.Lock()
+	m.queryRowSQLs = append(m.queryRowSQLs, queryCall{sql: sql, args: args})
+	fn := m.queryRowFn
+	m.mu.Unlock()
+	if fn != nil {
+		return fn(sql, args...)
+	}
+	return &mockNullTimeRow{}
 }
 
 func (m *mockDBTX) Begin(_ context.Context) (pgx.Tx, error) {
@@ -131,6 +144,21 @@ func (t *mockRelayTx) Conn() *pgx.Conn                                        { 
 // ---------------------------------------------------------------------------
 // mockRows — in-memory pgx.Rows for unit tests
 // ---------------------------------------------------------------------------
+
+// mockNullTimeRow is the default pgx.Row returned by mockDBTX.QueryRow when no
+// queryRowFn is set. It scans NULL into a *time.Time destination, which models
+// "no rows found" for OldestEligibleAt unit tests that don't care about the
+// QueryRow path.
+type mockNullTimeRow struct{}
+
+func (mockNullTimeRow) Scan(dest ...any) error {
+	for _, d := range dest {
+		if pp, ok := d.(**time.Time); ok {
+			*pp = nil
+		}
+	}
+	return nil
+}
 
 type mockRowData struct {
 	values []any
@@ -189,6 +217,10 @@ func (r *mockRowsWithIterErr) Err() error { return r.iterErr }
 
 type mockDBTXIterErr struct {
 	iterErr error
+}
+
+func (m *mockDBTXIterErr) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return &mockNullTimeRow{}
 }
 
 func (m *mockDBTXIterErr) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {

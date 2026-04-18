@@ -388,25 +388,12 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	assert.Empty(t, snap, "published entry must be deleted by cleanup")
 }
 
-// TestRelay_CleanupLoop_ActuallyRunsPeriodically verifies that the relay's
-// cleanupLoop goroutine actually fires and deletes old entries. Uses a very
-// short PollInterval so the cleanup interval (max(PollInterval*10, 10s) in
-// production) is shortened via the formula; we override the interval by using
-// a RetentionPeriod of 0 with a very short PollInterval.
-//
-// Since cleanupLoop interval = max(PollInterval*10, 10s), the minimum in
-// production is 10s — far too long for a unit test. This test instead verifies
-// the relay.cleanup() path by pre-seeding entries that are already past their
-// retention period so that the relay's cleanup call deletes them on the next
-// tick (driven through relay_internal_test.go's cleanup() helper).
-//
-// Approach: use relay.Start then rely on the relay_internal cleanup() being
-// reachable via the loop. Because cleanupLoop fires at ≥10s, we test the
-// cleanup method directly via the white-box relay_internal_test.go
-// TestRelay_Cleanup_DeletesPublishedAndDead. This test serves as a smoke check
-// that cleanup methods are wired and callable through the relay.
-func TestRelay_CleanupLoop_ActuallyRunsPeriodically(t *testing.T) {
-	// Seed a published entry that is already past retention.
+// TestRelay_CleanupLoop_RunsImmediatelyAtStart verifies that the data-driven
+// cleanupLoop runs cleanup() on the very first iteration (before the first
+// sleep), so a relay starting against a backlog of expired rows drains them
+// without waiting for any timer. This is the key DX win of the data-driven
+// design over the old "wake on a fixed PollInterval×10 ticker" model.
+func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 	entry := makeEntry("e-loop-cleanup", "order.created")
 	store.Seed(entry)
@@ -418,33 +405,23 @@ func TestRelay_CleanupLoop_ActuallyRunsPeriodically(t *testing.T) {
 	_, err = store.MarkPublished(ctx, claimed[0].ID)
 	require.NoError(t, err)
 
-	// cfg with very short PollInterval but retention of 0 so entries qualify
-	// for cleanup immediately. cleanupLoop still fires at max(5ms*10,10s)=10s,
-	// but we verify the relay reaches the running state and poll/cleanup paths
-	// are exercised without waiting for the 10s interval.
+	// retention=1ns so the just-published entry is immediately past cutoff
+	// (RelayConfig.WithDefaults treats 0 as "missing" and substitutes the
+	// 72h default; use a tiny positive value to keep the override).
+	// The relay must delete the entry on the very first cleanupLoop pass.
 	cfg := fastCfg()
-	cfg.RetentionPeriod = 0
-	cfg.DeadRetentionPeriod = 0
+	cfg.RetentionPeriod = 1 * time.Nanosecond
+	cfg.DeadRetentionPeriod = 1 * time.Nanosecond
 	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
 
 	_, stop := startRelay(t, relay)
+	defer stop()
 
-	// Give the relay a few poll cycles to verify it is running.
-	waitUntil(t, 200*time.Millisecond, func() bool {
-		// The published entry was never pending-again so poll cycles won't
-		// re-claim it; just check the relay started and at least one poll happened.
-		return true
+	waitUntil(t, 500*time.Millisecond, func() bool {
+		return len(store.Snapshot()) == 0
 	})
-	stop()
 
-	// Cleanup fires at max(PollInterval*10, 10s) = 10s minimum, so within this
-	// test duration the loop will not have fired. The test passes as long as the
-	// relay started and stopped cleanly with no panic — the real cleanup path is
-	// covered by TestRelay_Cleanup_DeletesPublishedAndDead (white-box).
-	snap := store.Snapshot()
-	// Entry remains published (cleanup loop hasn't fired within the test window).
-	require.Len(t, snap, 1)
-	assert.Equal(t, "published", snap[0].Status)
+	assert.Empty(t, store.Snapshot(), "cleanupLoop must drain the published entry on its first pass")
 }
 
 func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {

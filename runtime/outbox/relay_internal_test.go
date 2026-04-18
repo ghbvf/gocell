@@ -5,6 +5,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -200,6 +201,42 @@ func (s *minimalStore) CleanupDead(_ context.Context, cutoff time.Time, batchSiz
 		}
 	}
 	return deleted, nil
+}
+
+func (s *minimalStore) OldestEligibleAt(_ context.Context, status string) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var (
+		want string
+		tsOf func(*minimalRow) *time.Time
+	)
+	switch status {
+	case "published":
+		want = "published"
+		tsOf = func(r *minimalRow) *time.Time { return r.publishedAt }
+	case "dead":
+		want = "dead"
+		tsOf = func(r *minimalRow) *time.Time { return r.deadAt }
+	default:
+		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %q", status)
+	}
+
+	var oldest time.Time
+	found := false
+	for _, r := range s.rows {
+		if r.status != want {
+			continue
+		}
+		ts := tsOf(r)
+		if ts == nil {
+			continue
+		}
+		if !found || ts.Before(oldest) {
+			oldest = *ts
+			found = true
+		}
+	}
+	return oldest, found, nil
 }
 
 // Compile-time check.

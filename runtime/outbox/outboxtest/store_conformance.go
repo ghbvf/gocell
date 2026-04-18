@@ -69,13 +69,20 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("MarkPublished_AlreadyReclaimed_UpdatedFalse", func(t *testing.T) { conformMarkPublishedReclaimed(t, factory) })
 	t.Run("MarkRetry_TransitionsClaimingToPending", func(t *testing.T) { conformMarkRetry(t, factory) })
 	t.Run("MarkRetry_SetsAttemptsAndNextRetryAt", func(t *testing.T) { conformMarkRetryFields(t) })
+	t.Run("MarkRetry_NonExistentEntry_ReturnsFalseNoError", func(t *testing.T) { conformMarkRetryNotExist(t, factory) })
 	t.Run("MarkDead_TransitionsClaimingToDead", func(t *testing.T) { conformMarkDead(t, factory) })
+	t.Run("MarkDead_NonExistentEntry_ReturnsFalseNoError", func(t *testing.T) { conformMarkDeadNotExist(t, factory) })
 	t.Run("ReclaimStale_RecoversExpiredClaims", func(t *testing.T) { conformReclaimStaleRecovers(t, factory) })
 	t.Run("ReclaimStale_IgnoresFreshClaims", func(t *testing.T) { conformReclaimStaleFresh(t, factory) })
 	t.Run("ReclaimStale_EscalatesToDeadOnMaxAttempts", func(t *testing.T) { conformReclaimStaleEscalates(t, factory) })
 	t.Run("CleanupPublished_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupPublished(t, factory) })
 	t.Run("CleanupPublished_BatchLimit", func(t *testing.T) { conformCleanupPublishedBatch(t, factory) })
 	t.Run("CleanupDead_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupDead(t, factory) })
+	t.Run("OldestEligibleAt_PublishedEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "published") })
+	t.Run("OldestEligibleAt_DeadEmpty_ReturnsFalse", func(t *testing.T) { conformOldestEligibleAtEmpty(t, factory, "dead") })
+	t.Run("OldestEligibleAt_Published_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtPublished(t, factory) })
+	t.Run("OldestEligibleAt_Dead_ReturnsMin", func(t *testing.T) { conformOldestEligibleAtDead(t, factory) })
+	t.Run("OldestEligibleAt_InvalidStatus_ReturnsError", func(t *testing.T) { conformOldestEligibleAtInvalid(t, factory) })
 }
 
 func conformClaimPendingEmpty(t *testing.T, factory StoreFactory) {
@@ -276,6 +283,23 @@ func conformMarkRetryFields(t *testing.T) {
 	}
 }
 
+// conformMarkRetryNotExist verifies that calling MarkRetry on an ID that does
+// not exist returns updated=false and no error. This is the "tombstoned by
+// reclaim" / "racing reclaim" path that publishers must tolerate.
+func conformMarkRetryNotExist(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := context.Background()
+	store := factory(t, nil)
+
+	updated, err := store.MarkRetry(ctx, "does-not-exist", 1, time.Now().Add(time.Second), "transient")
+	if err != nil {
+		t.Fatalf("MarkRetry on missing entry should not error, got: %v", err)
+	}
+	if updated {
+		t.Error("expected updated=false for non-existent entry")
+	}
+}
+
 func conformMarkDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
@@ -294,6 +318,22 @@ func conformMarkDead(t *testing.T, factory StoreFactory) {
 	got, _ := store.ClaimPending(ctx, 10)
 	if len(got) != 0 {
 		t.Errorf("expected 0 claimable after dead, got %d", len(got))
+	}
+}
+
+// conformMarkDeadNotExist verifies that calling MarkDead on an ID that does
+// not exist returns updated=false and no error. Same race semantics as MarkRetry.
+func conformMarkDeadNotExist(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := context.Background()
+	store := factory(t, nil)
+
+	updated, err := store.MarkDead(ctx, "does-not-exist", 5, "permanent")
+	if err != nil {
+		t.Fatalf("MarkDead on missing entry should not error, got: %v", err)
+	}
+	if updated {
+		t.Error("expected updated=false for non-existent entry")
 	}
 }
 
@@ -489,6 +529,103 @@ func conformCleanupDead(t *testing.T, factory StoreFactory) {
 	if fs, ok := store.(*FakeStore); ok {
 		if snap := fs.Snapshot(); len(snap) != 0 {
 			t.Errorf("FakeStore: expected 0 rows after cleanup, got %d", len(snap))
+		}
+	}
+}
+
+// conformOldestEligibleAtEmpty verifies that an empty table (or one with no
+// rows in the requested status) returns ok=false and a nil error — the
+// "idle table" branch the relay's nextCleanupWait relies on to back off to
+// the safety ceiling instead of tight-looping.
+func conformOldestEligibleAtEmpty(t *testing.T, factory StoreFactory, status string) {
+	t.Helper()
+	ctx := context.Background()
+	store := factory(t, nil)
+
+	at, ok, err := store.OldestEligibleAt(ctx, status)
+	if err != nil {
+		t.Fatalf("OldestEligibleAt(%q) on empty: %v", status, err)
+	}
+	if ok {
+		t.Errorf("OldestEligibleAt(%q) on empty: ok=true, at=%v; want ok=false", status, at)
+	}
+}
+
+// conformOldestEligibleAtPublished verifies that with multiple published rows,
+// the smallest published_at is returned and lies in the recent past.
+func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now()
+	seed := []outbox.ClaimedEntry{
+		newEntryAt("e1", testEventType, 0, now.Add(-3*time.Second)),
+		newEntryAt("e2", testEventType, 0, now.Add(-2*time.Second)),
+		newEntryAt("e3", testEventType, 0, now.Add(-1*time.Second)),
+	}
+	store := factory(t, seed)
+
+	for _, ce := range seed {
+		if _, err := store.ClaimPending(ctx, 10); err != nil {
+			t.Fatalf("ClaimPending: %v", err)
+		}
+		if _, err := store.MarkPublished(ctx, ce.ID); err != nil {
+			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
+		}
+	}
+
+	beforeFirst := now.Add(-time.Minute)
+	at, ok, err := store.OldestEligibleAt(ctx, "published")
+	if err != nil {
+		t.Fatalf("OldestEligibleAt: %v", err)
+	}
+	if !ok {
+		t.Fatal("OldestEligibleAt: expected ok=true, got false")
+	}
+	if at.Before(beforeFirst) {
+		t.Errorf("OldestEligibleAt: returned %v before any published_at could exist (%v)", at, beforeFirst)
+	}
+	if at.After(time.Now()) {
+		t.Errorf("OldestEligibleAt: returned %v in the future", at)
+	}
+}
+
+// conformOldestEligibleAtDead verifies the same min semantics for dead rows.
+func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := context.Background()
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
+
+	if _, err := store.ClaimPending(ctx, 10); err != nil {
+		t.Fatalf("ClaimPending: %v", err)
+	}
+	if _, err := store.MarkDead(ctx, "e1", 5, "perm"); err != nil {
+		t.Fatalf("MarkDead: %v", err)
+	}
+
+	at, ok, err := store.OldestEligibleAt(ctx, "dead")
+	if err != nil {
+		t.Fatalf("OldestEligibleAt: %v", err)
+	}
+	if !ok {
+		t.Fatal("OldestEligibleAt: expected ok=true after MarkDead, got false")
+	}
+	if at.IsZero() {
+		t.Error("OldestEligibleAt: returned zero time after MarkDead")
+	}
+}
+
+// conformOldestEligibleAtInvalid verifies that statuses other than "published"
+// or "dead" return an error (the contract narrows the surface to exactly the
+// two cleanup-eligible statuses).
+func conformOldestEligibleAtInvalid(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := context.Background()
+	store := factory(t, nil)
+
+	for _, bad := range []string{"pending", "claiming", "", "unknown"} {
+		_, _, err := store.OldestEligibleAt(ctx, bad)
+		if err == nil {
+			t.Errorf("OldestEligibleAt(%q): expected error, got nil", bad)
 		}
 	}
 }

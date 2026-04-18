@@ -278,26 +278,74 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 	}
 }
 
-// cleanupLoop periodically deletes old published entries.
+// cleanupLoop runs cleanup data-driven: after each pass it asks the store for
+// the oldest published / dead row and sleeps exactly until that row crosses its
+// retention window, instead of polling on a fixed timer. Bounded by [floor,
+// ceiling] for safety: floor prevents tight-loop on clock skew; ceiling acts as
+// a periodic re-check in case OldestEligibleAt itself returns stale info or no
+// rows exist for a long time.
 func (r *Relay) cleanupLoop(ctx context.Context) {
-	// Run cleanup at 10x the poll interval (minimum 10s).
-	interval := max(r.cfg.PollInterval*10, 10*time.Second)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	for {
+		if err := r.cleanup(ctx); err != nil {
+			slog.Error("outbox relay: cleanup failed", slog.Any("error", err))
+		}
+
+		wait := r.nextCleanupWait(ctx)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if err := r.cleanup(ctx); err != nil {
-				slog.Error("outbox relay: cleanup failed",
-					slog.Any("error", err),
-				)
-			}
+		case <-time.After(wait):
 		}
 	}
+}
+
+// cleanupWaitFloor and cleanupWaitCeiling bound the cleanup wake-up sleep.
+// Floor avoids tight-loop on clock skew. Ceiling forces a periodic re-check
+// even when the table is empty (OldestEligibleAt returns ok=false).
+const (
+	cleanupWaitFloor   = 5 * time.Second
+	cleanupWaitCeiling = 1 * time.Hour
+)
+
+// nextCleanupWait computes how long the cleanup loop should sleep before the
+// next pass: min(time-until-next-published-eligible, time-until-next-dead-eligible),
+// clamped to [floor, ceiling]. Returns ceiling when the store reports no
+// candidates for either status (idle table) or any error (defensive: keep
+// the loop alive but back off).
+func (r *Relay) nextCleanupWait(ctx context.Context) time.Duration {
+	now := time.Now()
+	wait := cleanupWaitCeiling
+
+	if pubAt, ok := r.oldestOrZero(ctx, "published"); ok {
+		if d := pubAt.Add(r.cfg.RetentionPeriod).Sub(now); d < wait {
+			wait = d
+		}
+	}
+	if deadAt, ok := r.oldestOrZero(ctx, "dead"); ok {
+		if d := deadAt.Add(r.cfg.DeadRetentionPeriod).Sub(now); d < wait {
+			wait = d
+		}
+	}
+
+	if wait < cleanupWaitFloor {
+		wait = cleanupWaitFloor
+	}
+	return wait
+}
+
+// oldestOrZero wraps Store.OldestEligibleAt with logging and an idle-fallback:
+// any error degrades to ok=false so nextCleanupWait falls back to the ceiling
+// instead of tight-looping.
+func (r *Relay) oldestOrZero(ctx context.Context, status string) (time.Time, bool) {
+	at, ok, err := r.store.OldestEligibleAt(ctx, status)
+	if err != nil {
+		slog.Warn("outbox relay: OldestEligibleAt failed, backing off to ceiling",
+			slog.String("status", status),
+			slog.Any("error", err),
+		)
+		return time.Time{}, false
+	}
+	return at, ok
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +585,11 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // Formula: cappedDelay(base * 2^attempts) + jitter([0, delay/4])
 // ref: adapters/rabbitmq/consumer_base.go claimWithRetry backoff
 func (r *Relay) retryDelay(attempts int) time.Duration {
-	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (1 << attempts))
+	// Clamp shift exponent to avoid int64 overflow when attempts is unexpectedly
+	// large (defensive: real callers stop at MaxAttempts ≤ 10). 1<<30 * 5s already
+	// far exceeds MaxRetryDelay so the cap kicks in identically.
+	shift := min(attempts, 30)
+	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (1 << shift))
 	if delay > 0 {
 		jitter := time.Duration(rand.Int64N(int64(delay/4) + 1))
 		delay += jitter

@@ -8,6 +8,7 @@ package outboxtest
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -275,7 +276,8 @@ func (s *FakeStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxA
 			r.deadAt = &now
 			r.claimedAt = nil
 		} else {
-			delay := cappedDelay(baseDelay*(1<<newAttempts), maxDelay)
+			shift := min(newAttempts, 30)
+			delay := cappedDelay(baseDelay*(1<<shift), maxDelay)
 			nextRetry := now.Add(delay)
 			r.status = statusPending
 			r.attempts = newAttempts
@@ -288,37 +290,112 @@ func (s *FakeStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxA
 }
 
 // CleanupPublished deletes up to batchSize published rows older than cutoff.
+// Rows are deleted oldest-first (by published_at) to mirror PG's
+// DELETE ... ORDER BY published_at LIMIT N semantics and keep test results
+// deterministic when batchSize < eligible row count.
 func (s *FakeStore) CleanupPublished(_ context.Context, cutoff time.Time, batchSize int) (deleted int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for id, r := range s.rows {
+	for _, id := range s.eligibleIDsByTimeAsc(statusPublished, cutoff, func(r *fakeRow) *time.Time { return r.publishedAt }) {
 		if deleted >= batchSize {
 			break
 		}
-		if r.status == statusPublished && r.publishedAt != nil && r.publishedAt.Before(cutoff) {
-			delete(s.rows, id)
-			deleted++
-		}
+		delete(s.rows, id)
+		deleted++
 	}
 	return deleted, nil
 }
 
 // CleanupDead deletes up to batchSize dead rows older than cutoff.
+// Rows are deleted oldest-first (by dead_at) for the same determinism reason
+// as CleanupPublished.
 func (s *FakeStore) CleanupDead(_ context.Context, cutoff time.Time, batchSize int) (deleted int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for id, r := range s.rows {
+	for _, id := range s.eligibleIDsByTimeAsc(statusDead, cutoff, func(r *fakeRow) *time.Time { return r.deadAt }) {
 		if deleted >= batchSize {
 			break
 		}
-		if r.status == statusDead && r.deadAt != nil && r.deadAt.Before(cutoff) {
-			delete(s.rows, id)
-			deleted++
-		}
+		delete(s.rows, id)
+		deleted++
 	}
 	return deleted, nil
+}
+
+// OldestEligibleAt returns the smallest published_at (status="published") or
+// dead_at (status="dead") across all rows. Returns ok=false when no rows of
+// the given status exist or all such rows have a nil timestamp.
+func (s *FakeStore) OldestEligibleAt(_ context.Context, status string) (time.Time, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var (
+		want rowStatus
+		tsOf func(*fakeRow) *time.Time
+	)
+	switch status {
+	case string(statusPublished):
+		want = statusPublished
+		tsOf = func(r *fakeRow) *time.Time { return r.publishedAt }
+	case string(statusDead):
+		want = statusDead
+		tsOf = func(r *fakeRow) *time.Time { return r.deadAt }
+	default:
+		return time.Time{}, false, fmt.Errorf("OldestEligibleAt: invalid status %q (want published or dead)", status)
+	}
+
+	var (
+		oldest time.Time
+		found  bool
+	)
+	for _, r := range s.rows {
+		if r.status != want {
+			continue
+		}
+		ts := tsOf(r)
+		if ts == nil {
+			continue
+		}
+		if !found || ts.Before(oldest) {
+			oldest = *ts
+			found = true
+		}
+	}
+	return oldest, found, nil
+}
+
+// eligibleIDsByTimeAsc returns IDs of rows in the given status whose timestamp
+// (extracted by tsOf) is non-nil and strictly before cutoff, sorted ascending.
+// Caller must hold s.mu.
+func (s *FakeStore) eligibleIDsByTimeAsc(status rowStatus, cutoff time.Time, tsOf func(*fakeRow) *time.Time) []string {
+	type entry struct {
+		id string
+		ts time.Time
+	}
+	candidates := make([]entry, 0, len(s.rows))
+	for id, r := range s.rows {
+		if r.status != status {
+			continue
+		}
+		ts := tsOf(r)
+		if ts == nil || !ts.Before(cutoff) {
+			continue
+		}
+		candidates = append(candidates, entry{id: id, ts: *ts})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ts.Equal(candidates[j].ts) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].ts.Before(candidates[j].ts)
+	})
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.id
+	}
+	return ids
 }
 
 // cappedDelay caps d at maxDelay, mirroring the Go-side backoff in the PG adapter.

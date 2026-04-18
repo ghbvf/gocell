@@ -54,4 +54,13 @@ type Store interface {
 
 	// CleanupDead deletes a batch of dead rows older than cutoff.
 	CleanupDead(ctx context.Context, cutoff time.Time, batchSize int) (deleted int, err error)
+
+	// OldestEligibleAt returns the oldest published_at (when status="published")
+	// or dead_at (when status="dead") in the table. The relay uses this to schedule
+	// data-driven cleanup wake-ups: sleep until oldest+retention instead of polling
+	// on a fixed interval. Returns ok=false when no rows of the given status exist.
+	//
+	// status MUST be either "published" or "dead". Implementations should reject
+	// other values to keep the contract narrow.
+	OldestEligibleAt(ctx context.Context, status string) (at time.Time, ok bool, err error)
 }
