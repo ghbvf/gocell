@@ -72,8 +72,9 @@ type configChangedBusinessPayload struct {
 // bootstrap.WithWorkers lifecycle.
 //
 // Chain under test: HTTP publish → config-core WriteService (L2) → outbox_entries
-//                   → OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
-//                   → subscriber handler receives business payload.
+//
+//	→ OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
+//	→ subscriber handler receives business payload.
 func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	testutil.RequireDocker(t)
 

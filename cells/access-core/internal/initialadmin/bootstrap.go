@@ -318,7 +318,27 @@ func (b *Bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte)
 	user.MarkPasswordResetRequired()
 
 	if err := b.deps.UserRepo.Create(ctx, user); err != nil {
-		return b.handleUserCreateError(ctx, err)
+		existing, resolveErr := b.resolveDuplicateUser(ctx, err)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if existing == nil {
+			// Silent skip: another replica finished the bootstrap concurrently.
+			return nil, nil
+		}
+		// Orphan-user recovery: UserRepo.Create returned duplicate but no admin
+		// role exists yet — a previous run crashed between Create and
+		// AssignToUser. Rewrite the existing row's password hash with the
+		// freshly generated one (the old hash is orphaned — we no longer know
+		// the plaintext) and re-assert PasswordResetRequired, so the credfile
+		// written below matches what's in the repo. Then fall through to
+		// AssignToUser on the existing ID.
+		existing.PasswordHash = string(hash)
+		existing.MarkPasswordResetRequired()
+		if err := b.deps.UserRepo.Update(ctx, existing); err != nil {
+			return nil, fmt.Errorf("initialadmin: reset orphan user credentials: %w", err)
+		}
+		user = existing
 	}
 
 	if _, err := b.deps.RoleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
@@ -327,14 +347,31 @@ func (b *Bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte)
 	return user, nil
 }
 
-// handleUserCreateError handles a Create error on the user repository.
-// Returns (nil, nil) for a PG concurrent-bootstrap race, or the original error.
-func (b *Bootstrapper) handleUserCreateError(ctx context.Context, createErr error) (*domain.User, error) {
+// resolveDuplicateUser interprets a UserRepo.Create duplicate error into one of
+// three outcomes:
+//
+//   - not a duplicate → return (nil, wrapped-error): caller surfaces the error
+//   - duplicate + recount > 0 (another pod already completed bootstrap) →
+//     return (nil, nil): caller silently skips
+//   - duplicate + recount == 0 (orphan user from a previous crashed run) →
+//     return (existingUser, nil): caller resumes with that user ID so
+//     AssignToUser finishes the half-done bootstrap
+//
+// The orphan-recovery branch is the idempotent alternative to saga-style
+// step-level compensation (which none of GitLab / Keycloak / Vault / Consul
+// implement in their bootstrap flows). In the current in-memory repo the
+// orphan state cannot persist across restarts, so this path only activates
+// once we switch to PG (X1 PG-DOMAIN-REPO); having the logic in place now
+// keeps the bootstrap contract consistent across the memory/PG transition.
+//
+// ref: GitLab db/fixtures/production/001_admin.rb (single-tx, no compensation),
+// Keycloak ApplianceBootstrap.createMasterRealmAdminUser (catch duplicate,
+// return false), Vault operator init (detect partial-init, resume).
+func (b *Bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error) (*domain.User, error) {
 	var ecErr *errcode.Error
 	if !errors.As(createErr, &ecErr) || ecErr.Code != errcode.ErrAuthUserDuplicate {
 		return nil, fmt.Errorf("initialadmin: create user: %w", createErr)
 	}
-	// Duplicate user — confirm admin exists (race with another replica).
 	recount, err := b.deps.RoleRepo.CountByRole(ctx, domain.RoleAdmin)
 	if err != nil {
 		return nil, fmt.Errorf("initialadmin: recount after duplicate user: %w", err)
@@ -345,7 +382,18 @@ func (b *Bootstrapper) handleUserCreateError(ctx context.Context, createErr erro
 		)
 		return nil, nil
 	}
-	return nil, fmt.Errorf("initialadmin: create user: %w", createErr)
+	// Orphan recovery: a prior run crashed after UserRepo.Create but before
+	// AssignToUser committed. Pull the existing row and let the caller retry
+	// AssignToUser on its ID.
+	existing, err := b.deps.UserRepo.GetByUsername(ctx, b.cfg.Username)
+	if err != nil {
+		return nil, fmt.Errorf("initialadmin: lookup orphan user for recovery: %w", err)
+	}
+	b.deps.Logger.Info("initial admin bootstrap: resuming orphan-user recovery",
+		slog.String("event", "initial_admin_bootstrap_orphan_recover"),
+		slog.String("user_id", existing.ID),
+	)
+	return existing, nil
 }
 
 // writeFileAndMakeCleaner writes the credential file and constructs the cleanup worker.

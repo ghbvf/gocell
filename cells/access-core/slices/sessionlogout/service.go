@@ -67,32 +67,33 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 	return fn(ctx)
 }
 
-// Logout revokes a session by its ID.
-func (s *Service) Logout(ctx context.Context, sessionID string) error {
+// Logout revokes the caller's own session identified by sessionID.
+//
+// Ownership is enforced inside the repository query (RevokeByIDAndOwner)
+// rather than a handler-side compare, eliminating the TOCTOU window that a
+// load-then-check pattern leaves and preventing cross-user session enumeration
+// (IDOR). A session that does not exist OR does not belong to the caller
+// yields the same ErrSessionNotFound — the two cases are intentionally
+// conflated per the Ory Kratos and Keycloak account/SessionResource pattern.
+//
+// Admin-side force logout belongs to a separate endpoint (not yet implemented);
+// it must NOT reuse this method with a bypass flag.
+func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
 	if sessionID == "" {
 		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "session ID is required")
 	}
-
-	session, err := s.sessionRepo.GetByID(ctx, sessionID)
-	if err != nil {
-		return errcode.New(errcode.ErrSessionNotFound, "session not found")
+	if callerUserID == "" {
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "caller user ID is required")
 	}
 
-	if session.IsRevoked() {
-		return nil // already revoked, idempotent
-	}
-
-	session.Revoke()
-
-	// Publish event.
 	payload, _ := json.Marshal(map[string]any{
-		"session_id": sessionID, "user_id": session.UserID,
+		"session_id": sessionID, "user_id": callerUserID,
 	})
 
-	// Wrap session update + outbox write in a transaction for L2 atomicity.
-	persistAndPublish := func(txCtx context.Context) error {
-		if err := s.sessionRepo.Update(txCtx, session); err != nil {
-			return fmt.Errorf("session-logout: persist revoke: %w", err)
+	// Wrap the owner-scoped revoke + outbox write in a transaction for L2 atomicity.
+	revokeAndPublish := func(txCtx context.Context) error {
+		if err := s.sessionRepo.RevokeByIDAndOwner(txCtx, sessionID, callerUserID); err != nil {
+			return err
 		}
 		if s.outboxWriter != nil {
 			entry := outbox.Entry{
@@ -107,7 +108,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
-	if err := s.persistRevoke(ctx, persistAndPublish); err != nil {
+	if err := s.persistRevoke(ctx, revokeAndPublish); err != nil {
 		return err
 	}
 
@@ -121,7 +122,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	}
 
 	s.logger.Info("session revoked",
-		slog.String("session_id", sessionID), slog.String("user_id", session.UserID))
+		slog.String("session_id", sessionID), slog.String("user_id", callerUserID))
 	return nil
 }
 

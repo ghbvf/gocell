@@ -69,8 +69,16 @@ echo "$TOKEN_RESP" | jq .
 
 BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
 
-# 3. Extract user ID from the JWT sub claim
-USER_ID=$(echo "$BOOTSTRAP_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.sub')
+# 3. Extract user ID from the JWT sub claim.
+# JWT uses base64url (RFC 4648 §5) WITHOUT padding, but `base64 -d` on
+# Linux/macOS expects padded input — restore padding before decoding,
+# otherwise base64 -d errors silently and USER_ID ends up empty.
+USER_ID=$(echo "$BOOTSTRAP_TOKEN" \
+  | cut -d. -f2 \
+  | tr '_-' '/+' \
+  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
+  | base64 -d \
+  | jq -r '.sub')
 
 # 4. Change password (returns new token with passwordResetRequired=false)
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
@@ -86,6 +94,12 @@ export ADMIN_TOKEN=$(echo "$NEW_TOKEN_RESP" | jq -r '.data.accessToken')
 After this the `ADMIN_TOKEN` works for all business endpoints.
 
 ## API Walkthrough
+
+Every endpoint below except `POST /api/v1/access/sessions/login` and
+`POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
+header (the public-endpoint list is declared in `examples/sso-bff/main.go`).
+`walkthrough_test.go` exercises the same sequence and is the authoritative
+behaviour record if a curl here disagrees.
 
 ### 1. Login as admin (after completing First Login & Password Reset above)
 
@@ -183,13 +197,15 @@ curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
 ### 10. Read a config entry
 
 ```bash
-curl -s http://localhost:8081/api/v1/config/site.title | jq
+curl -s http://localhost:8081/api/v1/config/site.title \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
 ### 11. List feature flags
 
 ```bash
-curl -s http://localhost:8081/api/v1/flags | jq
+curl -s http://localhost:8081/api/v1/flags \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
 ### 12. Health checks

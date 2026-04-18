@@ -351,6 +351,9 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-nonexistent", nil)
+	// Simulate the auth middleware having populated the caller subject in ctx;
+	// the handler now enforces ownership so it must see a caller identity.
+	req = req.WithContext(auth.TestContext("usr-router", nil))
 	r.ServeHTTP(rec, req)
 
 	// 404 means handler was reached and session not found (correct routing).

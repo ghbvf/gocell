@@ -188,6 +188,9 @@ func (errorSessionRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (
 func (errorSessionRepo) Update(_ context.Context, _ *domain.Session) error { return nil }
 func (errorSessionRepo) Delete(_ context.Context, _ string) error          { return nil }
 func (errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error  { return nil }
+func (errorSessionRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error {
+	return nil
+}
 
 func TestService_Verify_DBError_FailsClosed(t *testing.T) {
 	// Infrastructure errors (not just "not found") must also fail-closed.

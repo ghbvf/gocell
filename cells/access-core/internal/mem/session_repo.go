@@ -120,6 +120,18 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 	return nil
 }
 
+func (r *SessionRepository) RevokeByIDAndOwner(_ context.Context, id, ownerUserID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	s, ok := r.byID[id]
+	if !ok || s.UserID != ownerUserID {
+		return errcode.New(errcode.ErrSessionNotFound, "session not found: "+id)
+	}
+	s.Revoke()
+	return nil
+}
+
 func (r *SessionRepository) RevokeByUserID(_ context.Context, userID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -309,6 +309,77 @@ func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
 	require.Error(t, uerr, "admin user row must be rolled back after credfile failure")
 }
 
+// TestBootstrap_OrphanUserRecoveryResumesAssign verifies the idempotent
+// recovery path (Direction B, per GitLab/Keycloak/Vault patterns): if a
+// previous run crashed after UserRepo.Create succeeded but before
+// RoleRepo.AssignToUser committed, the next startup must:
+//
+//  1. detect UserRepo.Create returning ErrAuthUserDuplicate and recount==0
+//  2. look up the orphan user by username
+//  3. rewrite its password hash + re-mark PasswordResetRequired
+//  4. resume AssignToUser on that existing ID
+//  5. finish bootstrap successfully (credfile written, admin role assigned)
+//
+// Without this logic, the old handleUserCreateError returned an error in the
+// recount==0 branch, which on PG would wedge every subsequent startup on
+// "user exists but nobody knows the password". The in-memory repo masks this
+// because restart wipes state, but exercising the path here keeps the
+// contract honest for Phase X.
+func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
+	deps, _ := makeDeps(t)
+	cfg := makeCfg(t)
+	userRepo := deps.UserRepo.(*mem.UserRepository)
+	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
+
+	// Simulate the "previous run crashed between Create and AssignToUser"
+	// state: admin username row exists, but no admin role assignment.
+	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun")
+	require.NoError(t, err)
+	orphan.ID = "usr-bootstrap-crashed-run"
+	orphan.MarkPasswordResetRequired()
+	require.NoError(t, userRepo.Create(context.Background(), orphan))
+	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	require.Equal(t, 0, count, "precondition: no admin role assignment yet")
+
+	bs, err := NewBootstrapper(deps, cfg)
+	require.NoError(t, err)
+
+	cleaner, runErr := bs.Run(context.Background())
+	require.NoError(t, runErr, "bootstrap must recover from the orphan-user state, not wedge")
+	assert.NotNil(t, cleaner, "cleaner must be returned after successful recovery")
+
+	// The recovered user must keep the ORIGINAL id (we resumed the existing
+	// row; we did not create a new user with a fresh UUID).
+	recovered, err := userRepo.GetByUsername(context.Background(), "admin")
+	require.NoError(t, err)
+	assert.Equal(t, "usr-bootstrap-crashed-run", recovered.ID,
+		"orphan user id must be preserved — recovery resumes, does not replace")
+
+	// Password hash must have been rewritten (new random password in credfile
+	// must match the hash in the repo); the orphan hash must no longer be
+	// present.
+	assert.NotEqual(t, "$2a$12$orphanedhashFromPrevRun", recovered.PasswordHash,
+		"orphan hash must be replaced so the credfile password matches the repo")
+
+	// PasswordResetRequired must still be set — first login flow stays enforced.
+	assert.True(t, recovered.PasswordResetRequired,
+		"orphan recovery must re-assert PasswordResetRequired")
+
+	// Admin role must now be assigned to the recovered user.
+	roles, err := roleRepo.GetByUserID(context.Background(), recovered.ID)
+	require.NoError(t, err)
+	require.Len(t, roles, 1)
+	assert.Equal(t, domain.RoleAdmin, roles[0].ID)
+
+	// Credential file must exist with username=admin and the fresh password.
+	knownPW := knownPassword(t)
+	contents, err := os.ReadFile(cfg.CredentialPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(contents), "username=admin")
+	assert.Contains(t, string(contents), "password="+knownPW)
+}
+
 func TestBootstrap_NoPlaintextInAnyLog(t *testing.T) {
 	logger, handler := newBootstrapCapturingLogger()
 	deps := BootstrapDeps{

@@ -37,7 +37,7 @@ func TestService_WithOutboxWriter(t *testing.T) {
 
 	seedSession(repo, "sess-1", "usr-1")
 
-	require.NoError(t, svc.Logout(context.Background(), "sess-1"))
+	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 
 	require.Len(t, ow.entries, 1)
 	assert.Equal(t, TopicSessionRevoked, ow.entries[0].EventType)
@@ -50,7 +50,7 @@ func TestService_WithTxManager(t *testing.T) {
 
 	seedSession(repo, "sess-1", "usr-1")
 
-	require.NoError(t, svc.Logout(context.Background(), "sess-1"))
+	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 	assert.Equal(t, 1, tx.calls)
 }
 
@@ -63,7 +63,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 
 	seedSession(repo, "sess-1", "usr-1")
 
-	require.NoError(t, svc.Logout(context.Background(), "sess-1"))
+	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 	assert.Equal(t, 1, tx.calls)
 	require.Len(t, ow.entries, 1)
 }

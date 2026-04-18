@@ -715,6 +715,10 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 			"POST /api/v1/access/users/{id}/password",
 			"DELETE /api/v1/access/sessions/{id}",
 		}),
+		// Client-navigation hint for the 403 response body; runtime/auth no
+		// longer carries any business path literal, so the composition root
+		// names the endpoint that finishes the reset flow.
+		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
 		bootstrap.WithAdapterInfo(d.adapterInfo),
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
 		bootstrap.WithMetricsProvider(d.metricsProvider),

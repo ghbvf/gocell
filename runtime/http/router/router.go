@@ -217,6 +217,19 @@ func WithPasswordResetExemptEndpoints(endpoints []string) Option {
 	return func(r *Router) { r.passwordResetExemptEndpoints = endpoints }
 }
 
+// WithPasswordResetChangeEndpointHint sets the string emitted in the
+// details.change_password_endpoint field of the 403
+// ERR_AUTH_PASSWORD_RESET_REQUIRED response body. Purely a client-navigation
+// hint — empty value (default) omits the details map entirely.
+//
+// Declaring the hint here (rather than hard-coding it in runtime/auth) keeps
+// runtime/ free of business-level path literals — the composition root that
+// knows which endpoint finishes the reset flow is the only place that names
+// it.
+func WithPasswordResetChangeEndpointHint(hint string) Option {
+	return func(r *Router) { r.passwordResetChangeEndpointHint = hint }
+}
+
 // WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
 // the SecurityHeaders middleware. Use this to configure HSTS directives, e.g.:
 //
@@ -271,15 +284,16 @@ type Router struct {
 	// field — the method-aware matcher (authPublicMatcher) is the sole source of
 	// truth, preventing silent reactivation of path-only bypass if the matcher
 	// is removed by future refactors.
-	authPublicEndpoints          []string
-	authPublicMatcher            func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
-	authMetrics                  *auth.AuthMetrics
-	publicEndpoints              []string
-	passwordResetExemptEndpoints []string                          // raw "METHOD /path" entries; compiled in NewE
-	passwordResetExemptMatcher   func(method, urlPath string) bool // compiled matcher fed to AuthMiddleware
-	securityHeadersOpts          []middleware.SecurityHeadersOption
-	bodyLimit                    int64
-	trustedProxies               []string
+	authPublicEndpoints             []string
+	authPublicMatcher               func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
+	authMetrics                     *auth.AuthMetrics
+	publicEndpoints                 []string
+	passwordResetExemptEndpoints    []string                          // raw "METHOD /path" entries; compiled in NewE
+	passwordResetExemptMatcher      func(method, urlPath string) bool // compiled matcher fed to AuthMiddleware
+	passwordResetChangeEndpointHint string                            // optional details.change_password_endpoint value for 403 body
+	securityHeadersOpts             []middleware.SecurityHeadersOption
+	bodyLimit                       int64
+	trustedProxies                  []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -446,6 +460,9 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 	}
 	if r.passwordResetExemptMatcher != nil {
 		opts = append(opts, auth.WithPasswordResetExemptMatcher(r.passwordResetExemptMatcher))
+	}
+	if r.passwordResetChangeEndpointHint != "" {
+		opts = append(opts, auth.WithPasswordResetChangeEndpointHint(r.passwordResetChangeEndpointHint))
 	}
 	return opts
 }

@@ -464,12 +464,17 @@ func TestAuthMiddleware_PasswordResetRequired_DefaultMatcherIsFailClosed(t *test
 // --- Phase 3.5: PasswordResetRequired middleware enforcement tests ---
 
 // TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute verifies that a
-// token with PasswordResetRequired=true is blocked on non-exempt business routes.
+// token with PasswordResetRequired=true is blocked on non-exempt business
+// routes. The composition root wires WithPasswordResetChangeEndpointHint so
+// the 403 body carries the navigational hint; runtime/auth itself knows no
+// business paths.
 func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) {
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not reach business handler when password reset is required")
 	}))
 
@@ -574,7 +579,9 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("GET on change-password path must NOT be exempt")
 	}))
 
@@ -585,6 +592,34 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assertPasswordResetErrorWithHint(t, rec)
+}
+
+// TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
+// the runtime/auth default: without WithPasswordResetChangeEndpointHint, the
+// 403 response body has NO details.change_password_endpoint — runtime/auth
+// carries no business path knowledge, and the composition root opts in to
+// any hint explicitly.
+func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("should not reach handler")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
+	_, hasDetails := errObj["details"]
+	assert.False(t, hasDetails,
+		"without WithPasswordResetChangeEndpointHint, the response must carry no details map")
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

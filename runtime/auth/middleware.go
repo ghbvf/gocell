@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -147,7 +146,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// their password and obtains a new token without the claim. If no matcher
 	// is wired, the gate rejects every request — fail-closed default.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
-		writePasswordResetRequired(r.Context(), w)
+		writePasswordResetRequired(w, cfg.passwordResetChangeEndpointHint)
 		return
 	}
 
@@ -158,15 +157,21 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 }
 
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response with a details.change_password_endpoint hint to help clients
-// navigate to the correct endpoint (P2-10 fix).
-func writePasswordResetRequired(ctx context.Context, w http.ResponseWriter) {
+// response. When changeEndpointHint is non-empty, it is emitted as
+// details.change_password_endpoint so clients can navigate to the correct
+// endpoint; when empty, the details map is omitted — runtime/auth itself
+// carries no knowledge of any specific business path. The hint originates
+// from WithPasswordResetChangeEndpointHint, which the composition root sets
+// alongside WithPasswordResetExemptEndpoints.
+func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint string) {
 	errBody := map[string]any{
 		"code":    string(errcode.ErrAuthPasswordResetRequired),
 		"message": "password reset required before accessing this endpoint",
-		"details": map[string]any{
-			"change_password_endpoint": "POST /api/v1/access/users/{id}/password",
-		},
+	}
+	if changeEndpointHint != "" {
+		errBody["details"] = map[string]any{
+			"change_password_endpoint": changeEndpointHint,
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)

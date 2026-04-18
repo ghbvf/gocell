@@ -184,6 +184,7 @@ func main() {
 			"POST /api/v1/access/users/{id}/password",
 			"DELETE /api/v1/access/sessions/{id}",
 		}),
+		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
 		bootstrap.WithWorkers(lazyAdminWorker),
 	)
 

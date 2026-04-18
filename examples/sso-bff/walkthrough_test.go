@@ -171,7 +171,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 
 	// The bootstrap sink captures the cleaner worker. In tests the cleaner
 	// lifecycle does not need to run — the temp dir is cleaned up by t.Cleanup.
-	var _ worker.Worker // ensure the import is used
+	var _ worker.Worker                       // ensure the import is used
 	bootstrapSink := func(_ worker.Worker) {} // intentional no-op in test
 
 	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
