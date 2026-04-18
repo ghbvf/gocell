@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -218,10 +219,10 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	})
 	claimer := redis.NewIdempotencyClaimer(redisClient)
 
-	relayCfg := postgres.DefaultRelayConfig()
+	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = 200 * time.Millisecond // fast polling for test
 	relayCfg.BatchSize = 10
-	relay := postgres.NewOutboxRelay(pool.DB(), pub, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write in a single transaction.
@@ -478,10 +479,10 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 		ShutdownTimeout: 5 * time.Second,
 	})
 
-	relayCfg := postgres.DefaultRelayConfig()
+	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = 200 * time.Millisecond
 	relayCfg.BatchSize = 10
-	relay := postgres.NewOutboxRelay(pool.DB(), pub, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write.
@@ -648,10 +649,10 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	// Mock publisher that captures published messages.
 	mock := &capturingPublisher{messages: make(chan publishedMessage, 10)}
 
-	relayCfg := postgres.DefaultRelayConfig()
+	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = 100 * time.Millisecond
 	relayCfg.BatchSize = 10
-	relay := postgres.NewOutboxRelay(pool.DB(), mock, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), mock, relayCfg)
 
 	// Write outbox entry within a transaction.
 	entryID := uuid.New().String()
