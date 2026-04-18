@@ -8,8 +8,8 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_JWT_ISSUER` | JWT `iss` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). Replaces the deleted `auth.DefaultJWTAudience` constant. |
-| `GOCELL_JWT_AUDIENCE` | JWT `aud` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). Must match the value expected by all session-login/refresh token consumers. |
+| `GOCELL_JWT_ISSUER` | JWT `iss` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). There is no default value; missing this variable causes fail-fast at startup. |
+| `GOCELL_JWT_AUDIENCE` | JWT `aud` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). Must match the value expected by all session-login/refresh token consumers. There is no default value; missing this variable causes fail-fast at startup. |
 
 ## RSA Key Set (for JWT signing and verification)
 
@@ -24,7 +24,7 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Empty in dev mode disables the guard (Warn logged). |
+| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded). To generate: `openssl rand -base64 32`. Empty in dev mode disables the guard (Warn logged). |
 | `GOCELL_SERVICE_SECRET_PREVIOUS` | Previous HMAC secret for zero-downtime rotation | — | No | Optional; tried after current secret fails verification. |
 
 ## Storage and Session Keys

@@ -131,6 +131,10 @@ const (
 
 // LoadHMACKeyRingFromEnv loads an HMACKeyRing from environment variables.
 // GOCELL_SERVICE_SECRET is required; GOCELL_SERVICE_SECRET_PREVIOUS is optional.
+//
+// Both variables are read as raw UTF-8 strings and used directly as HMAC key
+// bytes (no base64 decoding is performed). The value must be at least 32 bytes
+// long. To generate a suitable value: openssl rand -base64 32
 func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 	current := os.Getenv(EnvServiceSecret)
 	if current == "" {

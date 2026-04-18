@@ -206,8 +206,14 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 	return claims, nil
 }
 
-// checkIssuer validates the token issuer when expectedIssuer is non-empty.
-// Returns nil when no expected issuer is configured (no-op).
+// checkIssuer validates that the token's iss claim matches the expected issuer.
+// Returns ErrAuthInvalidTokenIntent with detail on mismatch.
+//
+// NOTE: The error detail distinguishes issuer mismatch from audience mismatch
+// for ops-level logging and metrics, but both codes are collapsed to
+// ERR_AUTH_UNAUTHORIZED at the HTTP response layer (see middleware.go).
+// This is intentional enumeration defense — do NOT change the error code to
+// leak more info to clients.
 //
 // ref: coreos/go-oidc v3 IDTokenVerifier.Verify — strict equality issuer check
 func (v *JWTVerifier) checkIssuer(claims Claims) error {
