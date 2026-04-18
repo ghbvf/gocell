@@ -491,11 +491,17 @@ func (s *Subscriber) processDelivery(
 	// Defense-in-depth — valid WireMessage envelopes always have a non-empty ID, but
 	// the legacy fallback path and future format changes could produce invalid IDs.
 	if reason := validateEntryID(entry.ID); reason != "" {
-		slog.Error("rabbitmq: invalid entry.ID, nacking without requeue",
+		attrs := []slog.Attr{
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
 			slog.String("reason", reason),
-			slog.Int("len", len(entry.ID)))
+		}
+		if reason == "too_long" {
+			// Cap the logged length to 2× maxEntryIDLength (510) to indicate
+			// overflow magnitude without exposing the full byte count.
+			attrs = append(attrs, slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
+		}
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry.ID, nacking without requeue", attrs...)
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -522,7 +528,7 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionAck:
 		brokerErr = ch.Ack(delivery.DeliveryTag, false)
 		if brokerErr != nil {
-			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: ack failed",
+			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: ack failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
@@ -530,7 +536,7 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionReject:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
 		if brokerErr != nil {
-			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: nack(reject) failed",
+			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
@@ -538,13 +544,13 @@ func (s *Subscriber) processDelivery(
 	case outbox.DispositionRequeue:
 		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
 		if brokerErr != nil {
-			logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: nack(requeue) failed",
+			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(requeue) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, entry.ID),
 				slog.String("error", brokerErr.Error()))
 		}
 	default:
-		logAttrsWithContext(deliveryCtx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
+		slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()))
@@ -553,7 +559,7 @@ func (s *Subscriber) processDelivery(
 
 	// Log handler-level error if present (separate from broker error).
 	if res.Err != nil {
-		logAttrsWithContext(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
+		slog.LogAttrs(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()),
@@ -580,7 +586,7 @@ func (s *Subscriber) settleReceipt(
 
 	if brokerErr != nil {
 		if relErr := res.Receipt.Release(rctx); relErr != nil {
-			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt release failed after broker error",
+			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed after broker error",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", relErr.Error()))
@@ -591,7 +597,7 @@ func (s *Subscriber) settleReceipt(
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if err := res.Receipt.Commit(rctx); err != nil {
-			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt commit failed",
+			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt commit failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
@@ -599,16 +605,12 @@ func (s *Subscriber) settleReceipt(
 	default:
 		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
 		if err := res.Receipt.Release(rctx); err != nil {
-			logAttrsWithContext(rctx, slog.LevelError, "rabbitmq: receipt release failed",
+			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.String("error", err.Error()))
 		}
 	}
-}
-
-func logAttrsWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
-	slog.LogAttrs(ctx, level, msg, attrs...)
 }
 
 // Close terminates all active subscriptions and waits for in-flight messages.

@@ -256,7 +256,7 @@ func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
 	}
 	res, err := r.rdb.Eval(ctx, extendScript, []string{r.leaseKey}, r.token, ttlMs).Result()
 	if err != nil {
-		return fmt.Errorf("redis claimer: extend lease: %w", err)
+		return errcode.Wrap(ErrAdapterRedisSet, "redis claimer: extend lease", err)
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {

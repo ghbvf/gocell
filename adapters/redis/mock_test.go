@@ -277,9 +277,13 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 		token := toString(args[0])
 		leaseSec, _ := toInt64(args[1])
 
-		if _, ok := m.store[doneKey]; ok {
-			cmd.SetVal(int64(0)) // ClaimDone
-			return cmd
+		if entry, ok := m.store[doneKey]; ok {
+			// Treat expired done key as absent (same as Get with expiry check).
+			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
+				cmd.SetVal(int64(0)) // ClaimDone
+				return cmd
+			}
+			delete(m.store, doneKey) // expired
 		}
 		if entry, ok := m.store[leaseKey]; ok {
 			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {

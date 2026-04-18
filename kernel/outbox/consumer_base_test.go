@@ -721,6 +721,32 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 	// goleak.VerifyNone(t) at defer will catch any leaked goroutines.
 }
 
+// TestWrap_LeaseRenewal_DisabledWhenIntervalNegative verifies that setting
+// LeaseRenewalInterval to a negative value disables the renewal goroutine:
+// Receipt.Extend is never called, no goroutines are leaked, and the handler
+// runs to completion normally.
+func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             idempotency.DefaultLeaseTTL,
+		LeaseRenewalInterval: -1, // negative disables renewal
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-neg-interval"})
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Equal(t, int32(0), receipt.extendCalls.Load(), "Extend must not be called when interval is negative")
+}
+
 // TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero verifies that when
 // both LeaseRenewalInterval and LeaseTTL are zero (after defaults applied),
 // the handler is still called and returns normally.

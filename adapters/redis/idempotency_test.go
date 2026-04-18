@@ -509,3 +509,26 @@ func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *t
 	assert.False(t, hasLease, "lease key should be deleted after successful release")
 	assert.False(t, hasDone, "done key should NOT exist after release")
 }
+
+// TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired verifies that the mock
+// treats an expired done key as absent and returns ClaimAcquired (not ClaimDone).
+// This mirrors the real Redis behavior where TTL-expired keys are invisible.
+func TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired(t *testing.T) {
+	mock := newClaimerMock()
+	ctx := context.Background()
+
+	// Pre-set a done key that is already expired.
+	mock.mu.Lock()
+	mock.store["done:idem:expired-done:1"] = mockEntry{
+		value:  "1",
+		expiry: time.Now().Add(-1 * time.Second), // already expired
+	}
+	mock.mu.Unlock()
+
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	state, receipt, err := claimer.Claim(ctx, "idem:expired-done:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	// Expired done key must not block re-acquisition.
+	assert.Equal(t, idempotency.ClaimAcquired, state)
+	assert.NotNil(t, receipt)
+}
