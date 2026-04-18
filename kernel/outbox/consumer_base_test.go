@@ -1,0 +1,554 @@
+package outbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/bits"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/idempotency"
+)
+
+// ConsumerBase lives in kernel/outbox so tests covering its behaviour must
+// also live here (kernel layer requires >= 90% coverage). These tests
+// previously lived in adapters/rabbitmq and were left behind when
+// ConsumerBase was hoisted out of the adapter in PR #176.
+
+// --- Test fakes ----------------------------------------------------------
+
+type fakeReceipt struct {
+	mu            sync.Mutex
+	commitCalled  bool
+	releaseCalled bool
+}
+
+func (r *fakeReceipt) Commit(_ context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commitCalled = true
+	return nil
+}
+
+func (r *fakeReceipt) Release(_ context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.releaseCalled = true
+	return nil
+}
+
+var _ Receipt = (*fakeReceipt)(nil)
+
+type fakeClaimer struct {
+	mu      sync.Mutex
+	state   idempotency.ClaimState
+	receipt Receipt
+	err     error
+	calls   []string
+}
+
+func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls = append(c.calls, key)
+	return c.state, c.receipt, c.err
+}
+
+var _ idempotency.Claimer = (*fakeClaimer)(nil)
+
+type claimOutcome struct {
+	state   idempotency.ClaimState
+	receipt Receipt
+	err     error
+}
+
+// sequenceClaimer returns the next queued outcome on each Claim call; once
+// exhausted it keeps returning the last outcome.
+type sequenceClaimer struct {
+	mu        sync.Mutex
+	outcomes  []claimOutcome
+	callCount int
+}
+
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx := c.callCount
+	c.callCount++
+	if idx < len(c.outcomes) {
+		o := c.outcomes[idx]
+		return o.state, o.receipt, o.err
+	}
+	o := c.outcomes[len(c.outcomes)-1]
+	return o.state, o.receipt, o.err
+}
+
+var _ idempotency.Claimer = (*sequenceClaimer)(nil)
+
+// --- ClaimPolicy / config --------------------------------------------------
+
+func TestClaimPolicy_Valid(t *testing.T) {
+	assert.True(t, ClaimPolicyFailClosed.Valid())
+	assert.True(t, ClaimPolicyFailOpen.Valid())
+	assert.False(t, claimPolicySentinel.Valid())
+	assert.False(t, ClaimPolicy(99).Valid())
+}
+
+func TestConsumerBaseConfig_SetDefaults_ZeroValues(t *testing.T) {
+	cfg := ConsumerBaseConfig{}
+	cfg.SetDefaults()
+	assert.Equal(t, 3, cfg.RetryCount)
+	assert.Equal(t, time.Second, cfg.RetryBaseDelay)
+	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
+	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
+	assert.Equal(t, 3, cfg.ClaimRetryCount)
+	assert.Equal(t, time.Second, cfg.ClaimRetryBaseDelay)
+	assert.Equal(t, 30*time.Second, cfg.MaxRetryDelay)
+}
+
+func TestConsumerBaseConfig_SetDefaults_NegativeValuesReplaced(t *testing.T) {
+	cfg := ConsumerBaseConfig{
+		RetryCount:          -1,
+		RetryBaseDelay:      -time.Second,
+		IdempotencyTTL:      -time.Hour,
+		LeaseTTL:            -time.Minute,
+		ClaimRetryCount:     -5,
+		ClaimRetryBaseDelay: -time.Second,
+		MaxRetryDelay:       -time.Second,
+	}
+	cfg.SetDefaults()
+	assert.Equal(t, 3, cfg.RetryCount)
+	assert.Equal(t, time.Second, cfg.RetryBaseDelay)
+	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
+	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
+	assert.Equal(t, 3, cfg.ClaimRetryCount)
+	assert.Equal(t, time.Second, cfg.ClaimRetryBaseDelay)
+	assert.Equal(t, 30*time.Second, cfg.MaxRetryDelay)
+}
+
+func TestConsumerBaseConfig_SetDefaults_PositiveValuesPreserved(t *testing.T) {
+	cfg := ConsumerBaseConfig{
+		RetryCount:          7,
+		RetryBaseDelay:      500 * time.Millisecond,
+		IdempotencyTTL:      48 * time.Hour,
+		LeaseTTL:            10 * time.Minute,
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: 250 * time.Millisecond,
+		MaxRetryDelay:       5 * time.Second,
+	}
+	cfg.SetDefaults()
+	assert.Equal(t, 7, cfg.RetryCount)
+	assert.Equal(t, 500*time.Millisecond, cfg.RetryBaseDelay)
+	assert.Equal(t, 48*time.Hour, cfg.IdempotencyTTL)
+	assert.Equal(t, 10*time.Minute, cfg.LeaseTTL)
+	assert.Equal(t, 2, cfg.ClaimRetryCount)
+	assert.Equal(t, 250*time.Millisecond, cfg.ClaimRetryBaseDelay)
+	assert.Equal(t, 5*time.Second, cfg.MaxRetryDelay)
+}
+
+// --- exponentialDelay ------------------------------------------------------
+
+func TestExponentialDelay_Table(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     time.Duration
+		maxDelay time.Duration
+		attempt  int
+		want     time.Duration
+	}{
+		{name: "attempt 0 returns base", base: time.Second, maxDelay: 30 * time.Second, attempt: 0, want: time.Second},
+		{name: "attempt 1 doubles", base: time.Second, maxDelay: 30 * time.Second, attempt: 1, want: 2 * time.Second},
+		{name: "attempt 3 is 8x", base: time.Second, maxDelay: 30 * time.Second, attempt: 3, want: 8 * time.Second},
+		{name: "attempt capped at maxDelay", base: time.Second, maxDelay: 30 * time.Second, attempt: 10, want: 30 * time.Second},
+		{name: "large attempt overflow guard", base: time.Second, maxDelay: 30 * time.Second, attempt: 100, want: 30 * time.Second},
+		{name: "zero base returns 0", base: 0, maxDelay: 30 * time.Second, attempt: 5, want: 0},
+		{name: "negative base returns 0", base: -time.Second, maxDelay: 30 * time.Second, attempt: 3, want: 0},
+		{name: "base larger than max returns max", base: 100 * time.Second, maxDelay: 30 * time.Second, attempt: 0, want: 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := exponentialDelay(tt.base, tt.maxDelay, tt.attempt)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExponentialDelay_ExactMaxSafeShift(t *testing.T) {
+	base := time.Second
+	maxSafeShift := 63 - bits.Len64(uint64(base))
+	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift))
+	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift+1))
+}
+
+// --- NewConsumerBase -------------------------------------------------------
+
+func TestNewConsumerBase_InvalidClaimPolicy(t *testing.T) {
+	_, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
+		ConsumerGroup: "g",
+		ClaimPolicy:   ClaimPolicy(99),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid ClaimPolicy")
+}
+
+func TestNewConsumerBase_DefaultClaimPolicyFailClosed(t *testing.T) {
+	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{ConsumerGroup: "g"})
+	require.NoError(t, err)
+	assert.Equal(t, ClaimPolicyFailClosed, cb.config.ClaimPolicy)
+}
+
+func TestNewConsumerBase_ExplicitFailOpenPreserved(t *testing.T) {
+	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
+		ConsumerGroup: "g",
+		ClaimPolicy:   ClaimPolicyFailOpen,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ClaimPolicyFailOpen, cb.config.ClaimPolicy)
+}
+
+// --- Wrap: happy paths -----------------------------------------------------
+
+func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-1"})
+
+	assert.True(t, called)
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt)
+
+	receipt.mu.Lock()
+	defer receipt.mu.Unlock()
+	assert.False(t, receipt.commitCalled, "ConsumerBase must not Commit — that's the delivery loop's job")
+	assert.False(t, receipt.releaseCalled)
+}
+
+func TestConsumerBase_Wrap_ClaimDone_SkipsHandler(t *testing.T) {
+	claimer := &fakeClaimer{state: idempotency.ClaimDone}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-dup"})
+	assert.False(t, called, "ClaimDone must skip the handler")
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt)
+}
+
+func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
+	claimer := &fakeClaimer{state: idempotency.ClaimBusy}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryBaseDelay: 5 * time.Millisecond, // short backoff for test
+	})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-busy"})
+	assert.False(t, called)
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+}
+
+// --- Wrap: retry loop ------------------------------------------------------
+
+func TestConsumerBase_Wrap_TransientError_RetriesUntilAck(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryCount:     3,
+		RetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	attempts := 0
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		attempts++
+		if attempts == 1 {
+			return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
+		}
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-retry"})
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt)
+}
+
+func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryCount:     2,
+		RetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	attempts := 0
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		attempts++
+		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("always fail")}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-exhaust"})
+	assert.Equal(t, 2, attempts)
+	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt)
+}
+
+func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryCount:     5,
+		RetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	attempts := 0
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		attempts++
+		return HandleResult{Disposition: DispositionReject, Err: errors.New("bad payload")}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-explicit-reject"})
+	assert.Equal(t, 1, attempts, "DispositionReject must skip retries")
+	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Same(t, receipt, res.Receipt)
+}
+
+func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryCount:     5,
+		RetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	attempts := 0
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		attempts++
+		return HandleResult{
+			Disposition: DispositionRequeue,
+			Err:         fmt.Errorf("ctx: %w", NewPermanentError(errors.New("unmarshal"))),
+		}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-perm"})
+	assert.Equal(t, 1, attempts, "wrapped PermanentError must be detected on first attempt")
+	assert.Equal(t, DispositionReject, res.Disposition)
+}
+
+func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:  "cg",
+		RetryCount:     5,
+		RetryBaseDelay: 5 * time.Second, // long enough that ctx cancel wins
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := handler(ctx, Entry{ID: "evt-ctx"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Less(t, elapsed, time.Second, "ctx cancel must short-circuit retry backoff")
+}
+
+// --- Wrap: claim failure paths --------------------------------------------
+
+func TestConsumerBase_Wrap_ClaimError_FailClosed_LocalRetryThenSuccess(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &sequenceClaimer{outcomes: []claimOutcome{
+		{err: errors.New("redis down")},
+		{err: errors.New("redis down")},
+		{state: idempotency.ClaimAcquired, receipt: receipt},
+	}}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "cg",
+		ClaimRetryCount:     3,
+		ClaimRetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-claim-retry"})
+	assert.True(t, called)
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Same(t, receipt, res.Receipt)
+
+	claimer.mu.Lock()
+	defer claimer.mu.Unlock()
+	assert.Equal(t, 3, claimer.callCount)
+}
+
+func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T) {
+	claimer := &fakeClaimer{err: errors.New("redis down")}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "cg",
+		ClaimRetryCount:     2,
+		ClaimRetryBaseDelay: time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-claim-fail"})
+	assert.False(t, called, "handler must not run when claim is exhausted")
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Error(t, res.Err)
+}
+
+func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
+	claimer := &fakeClaimer{err: errors.New("redis down")}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "cg",
+		ClaimRetryCount:     5,
+		ClaimRetryBaseDelay: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := handler(ctx, Entry{ID: "evt-claim-ctx"})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Less(t, elapsed, time.Second, "ctx cancel must short-circuit claim backoff")
+}
+
+func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing.T) {
+	claimer := &fakeClaimer{err: errors.New("redis down")}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup: "cg",
+		ClaimPolicy:   ClaimPolicyFailOpen,
+	})
+	require.NoError(t, err)
+
+	called := false
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-fail-open"})
+	assert.True(t, called, "fail-open must invoke handler despite claim failure")
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Nil(t, res.Receipt, "no receipt when claim failed under fail-open")
+}
+
+func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
+	claimer := &fakeClaimer{err: errors.New("redis down")}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:       "cg",
+		ClaimRetryCount:     3,
+		ClaimRetryBaseDelay: 200 * time.Millisecond,
+		MaxRetryDelay:       20 * time.Millisecond, // clamp well below base
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	start := time.Now()
+	_ = handler(context.Background(), Entry{ID: "evt-cap"})
+	elapsed := time.Since(start)
+
+	// Without cap: 200ms + 400ms = 600ms. With cap 20ms: total well under 200ms.
+	assert.Less(t, elapsed, 300*time.Millisecond, "MaxRetryDelay must cap claim backoff")
+}
+
+// --- AsMiddleware ---------------------------------------------------------
+
+func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimDone, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	require.NoError(t, err)
+
+	mw := cb.AsMiddleware()
+	require.NotNil(t, mw)
+
+	called := false
+	wrapped := mw("topic", func(_ context.Context, _ Entry) HandleResult {
+		called = true
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := wrapped(context.Background(), Entry{ID: "evt-mw"})
+	assert.False(t, called, "ClaimDone should short-circuit the wrapped handler")
+	assert.Equal(t, DispositionAck, res.Disposition)
+}
