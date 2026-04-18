@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExponentialDelay(t *testing.T) {
@@ -34,5 +35,28 @@ func TestExponentialDelay(t *testing.T) {
 			got := exponentialDelay(tt.base, tt.maxDelay, tt.attempt)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+// TestExponentialDelay_DoublesEachAttempt verifies that backoffMultiplierShift=1
+// produces exactly 2x growth per attempt: base * 2^attempt.
+func TestExponentialDelay_DoublesEachAttempt(t *testing.T) {
+	const base = 100 * time.Millisecond
+	const maxDelay = 10 * time.Second
+
+	require.Equal(t, 1, backoffMultiplierShift, "backoffMultiplierShift must be 1 for 2x growth")
+
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{0, 100 * time.Millisecond},
+		{1, 200 * time.Millisecond},
+		{2, 400 * time.Millisecond},
+		{3, 800 * time.Millisecond},
+	}
+	for _, c := range cases {
+		got := exponentialDelay(base, maxDelay, c.attempt)
+		assert.Equal(t, c.want, got, "attempt=%d", c.attempt)
 	}
 }

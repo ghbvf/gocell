@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+const (
+	// backoffMultiplierShift controls exponential growth: delay = base << (attempt * backoffMultiplierShift)
+	// (i.e. multiplier = 2^backoffMultiplierShift = 2x per attempt).
+	backoffMultiplierShift = 1
+)
+
 // safeDelay is an alias for exponentialDelay retained so existing rabbitmq
 // tests can reference the helper without churn.
 func safeDelay(base, maxDelay time.Duration, attempt int) time.Duration {
@@ -22,7 +28,7 @@ func exponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 	if attempt > maxSafeShift {
 		return maxDelay
 	}
-	delay := base * (1 << uint(attempt))
+	delay := base * (1 << (uint(attempt) * backoffMultiplierShift))
 	if delay <= 0 || delay > maxDelay {
 		return maxDelay
 	}
