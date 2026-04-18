@@ -296,6 +296,7 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 		payload = []byte(`{}`)
 	}
 	wire := outboxrt.WireMessage{
+		SchemaVersion: outboxrt.EnvelopeSchemaV1, // required since P1-14 A1 (fail-closed envelope schema)
 		ID:            entry.ID,
 		AggregateID:   entry.AggregateID,
 		AggregateType: entry.AggregateType,
@@ -1404,10 +1405,12 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	assert.NoError(t, sub.Close())
 }
 
-// TestUnmarshalDelivery covers the three discriminator paths in unmarshalDelivery:
-//  1. WireMessage envelope (primary relay path) — EventType is decoded from JSON.
-//  2. Legacy outbox.Entry JSON (pre-envelope format, used by integration tests).
-//  3. Broken JSON (neither path yields a valid entry) — returns an error.
+// TestUnmarshalDelivery covers the discriminator paths in unmarshalDelivery
+// after P1-14 A2 (fail-closed envelope schema, legacy fallback removed):
+//  1. v1 WireMessage envelope (primary relay path) — succeeds.
+//  2. Legacy outbox.Entry JSON (no schemaVersion) — rejected with ErrUnknownEnvelopeVersion.
+//  3. Broken JSON — returns a wrapped parse error (not ErrUnknownEnvelopeVersion).
+//  4. Empty body — returns error.
 func TestUnmarshalDelivery(t *testing.T) {
 	t.Run("wire_message_envelope", func(t *testing.T) {
 		entry := outbox.Entry{
@@ -1415,7 +1418,7 @@ func TestUnmarshalDelivery(t *testing.T) {
 			EventType: "test.created",
 			Payload:   []byte(`{"x":1}`),
 		}
-		body := makeDeliveryBody(t, entry)
+		body := makeDeliveryBody(t, entry) // includes schemaVersion:"v1" since P1-14 A1
 
 		got, err := unmarshalDelivery(body)
 		require.NoError(t, err)
@@ -1425,8 +1428,8 @@ func TestUnmarshalDelivery(t *testing.T) {
 	})
 
 	t.Run("legacy_entry_json", func(t *testing.T) {
-		// Publish raw outbox.Entry JSON (PascalCase, no WireMessage envelope).
-		// This is the format used by the three failing integration tests.
+		// Legacy outbox.Entry JSON (PascalCase, missing schemaVersion) is now
+		// rejected with ErrUnknownEnvelopeVersion (fail-closed, no fallback).
 		entry := outbox.Entry{
 			ID:        "evt-legacy-001",
 			EventType: "test.legacy",
@@ -1435,17 +1438,16 @@ func TestUnmarshalDelivery(t *testing.T) {
 		body, err := json.Marshal(entry)
 		require.NoError(t, err)
 
-		got, legacyErr := unmarshalDelivery(body)
-		require.NoError(t, legacyErr)
-		assert.Equal(t, "evt-legacy-001", got.ID)
-		assert.Equal(t, "test.legacy", got.EventType)
-		assert.JSONEq(t, `{"legacy":true}`, string(got.Payload))
+		_, legacyErr := unmarshalDelivery(body)
+		require.Error(t, legacyErr, "legacy entry JSON must be rejected (no schemaVersion)")
+		assert.ErrorIs(t, legacyErr, outboxrt.ErrUnknownEnvelopeVersion)
 	})
 
 	t.Run("broken_json_returns_error", func(t *testing.T) {
 		_, err := unmarshalDelivery([]byte("not valid json{{{"))
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unmarshal delivery")
+		// Must NOT be ErrUnknownEnvelopeVersion — it's a parse error.
+		assert.NotErrorIs(t, err, outboxrt.ErrUnknownEnvelopeVersion)
 	})
 
 	t.Run("empty_body_returns_error", func(t *testing.T) {

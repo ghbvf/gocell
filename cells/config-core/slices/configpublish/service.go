@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -186,7 +187,10 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 		}
 		return nil
 	}
-	if err := s.publisher.Publish(ctx, topic, payload); err != nil {
+	// Wrap in v1 wire envelope so the eventbus fail-closed schema check (P1-14)
+	// accepts the message.
+	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
+	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
 		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
 	}
 	return nil

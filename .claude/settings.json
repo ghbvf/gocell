@@ -1,0 +1,5 @@
+{
+  "skillOverrides": {
+    "sonar-scan": "user-invocable-only"
+  }
+}

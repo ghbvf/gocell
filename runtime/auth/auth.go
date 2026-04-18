@@ -10,21 +10,6 @@ import (
 	"time"
 )
 
-// DefaultJWTAudience is the audience value written by JWTIssuer.Issue and
-// expected by JWTVerifier.VerifyIntent in production deployments. Centralised
-// here so issuer (sessionlogin/sessionrefresh) and verifier (buildJWTDeps) stay
-// in sync without drift.
-//
-// Design note: this is a single fixed string, which means audience validation is
-// a self-referential check in GoCell's single-tenant deployment — the issuer
-// always writes "gocell" and the verifier always expects "gocell". The primary
-// security boundary is the RS256 private key; audience prevents cross-service
-// token confusion in multi-service deployments (e.g., a token issued for
-// service-A cannot be accepted by service-B if each configures a distinct
-// expected audience). Multi-tenant or multi-service operators should override
-// this value per deployment rather than relying on the default.
-const DefaultJWTAudience = "gocell"
-
 // TokenIntent distinguishes how a JWT is meant to be used, preventing
 // token-confusion attacks where a refresh token is replayed at a business
 // endpoint, or an access token is submitted to /auth/refresh.

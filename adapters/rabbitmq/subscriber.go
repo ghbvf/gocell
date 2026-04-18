@@ -2,7 +2,6 @@ package rabbitmq
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -745,39 +744,16 @@ func (s *Subscriber) Close() error {
 
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
 //
-// Primary path: the body is a WireMessage envelope produced by MarshalEnvelope
-// (relay path). Detected by calling UnmarshalEnvelope with topic="" — a real
-// WireMessage always has EventType set, so the returned entry has EventType != "".
+// Requires a valid v1 WireMessage envelope (schemaVersion:"v1", non-empty id and
+// eventType). Any other payload — legacy Entry JSON, raw bytes, unknown schema
+// versions — is rejected with an error so processDelivery NACKs without requeue
+// (permanent error, routes to DLX).
 //
-// Fallback path: the body is a legacy outbox.Entry JSON (PascalCase field names,
-// no envelope). This format is used by adapter-level integration tests that
-// publish raw Entry JSON directly to test pub/sub primitives, predating the
-// WireMessage contract. When UnmarshalEnvelope falls back (EventType == ""),
-// we attempt json.Unmarshal into outbox.Entry. ID validation (non-empty,
-// max length) is deferred to the entry.ID guard in processDelivery.
+// Fail-closed semantics: legacy fallback has been removed. All relay producers
+// MUST emit v1 envelopes via MarshalEnvelope.
 //
-// Broken JSON: if neither path can parse the body, we return an error so that
-// processDelivery NACKs without requeue (permanent error).
-//
-// Discriminator: UnmarshalEnvelope called with topic="" sets EventType="" on the
-// fallback path (since EventType = topic = ""), while a real WireMessage always
-// has EventType set by the relay producer. This replaces the previous "evt-"
-// ID-prefix heuristic, which collided with outboxtest.NewEntry IDs.
-//
+// ref: Watermill message/router.go handleMessage (unknown type → Nack, no retry)
 // ref: runtime/outbox/envelope.go UnmarshalEnvelope
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
-	entry, _ := outboxrt.UnmarshalEnvelope("", body)
-	if entry.EventType != "" {
-		// WireMessage envelope decoded successfully.
-		return entry, nil
-	}
-	// Fall back to legacy outbox.Entry JSON (predates WireMessage contract,
-	// still used by adapter-level integration tests that bypass the relay).
-	var legacy outbox.Entry
-	if json.Unmarshal(body, &legacy) == nil {
-		return legacy, nil
-	}
-	// Neither a valid WireMessage envelope nor a parseable legacy Entry JSON.
-	// Treat as a permanent unmarshal error so the delivery is NACKed without requeue.
-	return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope or legacy Entry JSON")
+	return outboxrt.UnmarshalEnvelope("", body)
 }

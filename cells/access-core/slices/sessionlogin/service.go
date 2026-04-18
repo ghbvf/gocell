@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -54,10 +55,13 @@ type Service struct {
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	issuer       *auth.JWTIssuer
+	audience     []string
 	logger       *slog.Logger
 }
 
 // NewService creates a session-login Service.
+// The audience for issued tokens is read from issuer.DefaultAudience() at
+// construction time so there is no hard-coded audience constant in this slice.
 func NewService(
 	userRepo ports.UserRepository,
 	sessionRepo ports.SessionRepository,
@@ -73,6 +77,7 @@ func NewService(
 		roleRepo:    roleRepo,
 		publisher:   pub,
 		issuer:      issuer,
+		audience:    issuer.DefaultAudience(),
 		logger:      logger,
 	}
 	for _, o := range opts {
@@ -198,11 +203,14 @@ func (s *Service) writeOutboxEntry(ctx context.Context, payload []byte) error {
 }
 
 // maybePublishDirect publishes directly when outbox is not in use (demo mode).
+// Wraps the business payload in a v1 wire envelope so the eventbus fail-closed
+// schema check (P1-14) accepts the message and subscribers receive it.
 func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 	if s.outboxWriter != nil {
 		return
 	}
-	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
+	envelope := outboxrt.MarshalDirectEnvelope(TopicSessionCreated, TopicSessionCreated, outbox.NewEntryID(), payload)
+	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, envelope); pubErr != nil {
 		s.logger.Warn("session-login: failed to publish event (demo mode)",
 			slog.Any("error", pubErr),
 			slog.String("topic", TopicSessionCreated))
@@ -212,10 +220,12 @@ func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 // issueAccessToken signs a short-lived JWT with intent=access for calling
 // business endpoints. Access tokens carry roles for RBAC decisions and the
 // passwordResetRequired flag so middleware can enforce server-side reset.
+// The audience is sourced from s.audience (populated from issuer.DefaultAudience()
+// at construction) — no hard-coded audience constant.
 func (s *Service) issueAccessToken(subject string, roles []string, sessionID string, passwordResetRequired bool) (string, error) {
 	return s.issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
 		Roles:                 roles,
-		Audience:              []string{auth.DefaultJWTAudience},
+		Audience:              s.audience,
 		SessionID:             sessionID,
 		PasswordResetRequired: passwordResetRequired,
 	})
@@ -286,9 +296,11 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 // issueRefreshToken signs a longer-lived JWT with intent=refresh. Refresh
 // tokens do not carry roles: they are consumed only by /auth/refresh, which
 // looks up the current roles from the session's user on each rotation.
+// The audience is sourced from s.audience (populated from issuer.DefaultAudience()
+// at construction) — no hard-coded audience constant.
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
 	return s.issuer.Issue(auth.TokenIntentRefresh, subject, auth.IssueOptions{
-		Audience:  []string{auth.DefaultJWTAudience},
+		Audience:  s.audience,
 		SessionID: sessionID,
 	})
 }

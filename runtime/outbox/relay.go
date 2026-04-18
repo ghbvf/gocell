@@ -99,6 +99,12 @@ type Relay struct {
 	readyCh chan struct{} // closed once Start() transitions to relayRunning
 
 	wg sync.WaitGroup
+
+	// Failure budgets for each background loop. nil means disabled (threshold=0).
+	// ref: K8s workqueue ItemExponentialFailureRateLimiter — absolute count + Forget.
+	pollBudget    *FailureBudget
+	reclaimBudget *FailureBudget
+	cleanupBudget *FailureBudget
 }
 
 // NewRelay creates a Relay that polls from store and publishes via pub.
@@ -122,12 +128,24 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 			slog.Duration("poll_interval", cfg.PollInterval))
 	}
 
-	return &Relay{
+	r := &Relay{
 		store:   store,
 		pub:     pub,
 		cfg:     cfg,
 		metrics: metrics,
+		readyCh: make(chan struct{}),
 	}
+	// Instantiate failure budgets. threshold=0 → nil (disabled).
+	if cfg.PollFailureBudget > 0 {
+		r.pollBudget = NewFailureBudget("outbox-relay-poll", cfg.PollFailureBudget)
+	}
+	if cfg.ReclaimFailureBudget > 0 {
+		r.reclaimBudget = NewFailureBudget("outbox-relay-reclaim", cfg.ReclaimFailureBudget)
+	}
+	if cfg.CleanupFailureBudget > 0 {
+		r.cleanupBudget = NewFailureBudget("outbox-relay-cleanup", cfg.CleanupFailureBudget)
+	}
+	return r
 }
 
 // ---------------------------------------------------------------------------
@@ -143,17 +161,27 @@ func (r *Relay) Start(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	ready := make(chan struct{})
 
 	r.mu.Lock()
 	r.cancel = cancel
 	r.done = done
-	r.readyCh = ready
 	r.wg.Add(3)
 	r.mu.Unlock()
 
+	// Reset budgets so stale trip state from a previous run does not bleed into
+	// the new run.  Must happen after CAS (exclusive) and before goroutines start.
+	if r.pollBudget != nil {
+		r.pollBudget.Reset()
+	}
+	if r.reclaimBudget != nil {
+		r.reclaimBudget.Reset()
+	}
+	if r.cleanupBudget != nil {
+		r.cleanupBudget.Reset()
+	}
+
 	r.state.Store(int32(relayRunning))
-	close(ready)
+	close(r.readyCh)
 
 	defer func() {
 		r.wg.Wait()
@@ -161,6 +189,7 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.cancel = nil
 		r.done = nil
+		r.readyCh = make(chan struct{}) // fresh open channel; next Start() will close it
 		r.state.Store(int32(relayStopped))
 		close(done)
 		r.mu.Unlock()
@@ -196,12 +225,15 @@ func (r *Relay) Start(ctx context.Context) error {
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
 func (r *Relay) Stop(ctx context.Context) error {
-	// If never started, no-op (consistent with worker.Worker contract).
+	// If never started (or already stopped), no-op (consistent with worker.Worker
+	// contract).  We detect this by checking cancel under mu: cancel is only set
+	// during an active Start() call and cleared by the Start() defer on shutdown.
 	r.mu.Lock()
+	notStarted := r.cancel == nil && relayState(r.state.Load()) == relayStopped
 	ready := r.readyCh
 	r.mu.Unlock()
 
-	if ready == nil {
+	if notStarted {
 		return nil
 	}
 
@@ -250,10 +282,14 @@ func (r *Relay) pollLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := r.pollOnce(ctx); err != nil {
-				slog.Error("outbox relay: poll failed",
+			err := r.pollOnce(ctx)
+			if err != nil {
+				slog.Warn("outbox relay: poll failed",
 					slog.Any("error", err),
 				)
+			}
+			if r.pollBudget != nil {
+				r.pollBudget.Record(err)
 			}
 		}
 	}
@@ -269,10 +305,14 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := r.reclaimStale(ctx); err != nil {
-				slog.Error("outbox relay: reclaim failed",
+			err := r.reclaimStale(ctx)
+			if err != nil {
+				slog.Warn("outbox relay: reclaim failed",
 					slog.Any("error", err),
 				)
+			}
+			if r.reclaimBudget != nil {
+				r.reclaimBudget.Record(err)
 			}
 		}
 	}
@@ -286,8 +326,12 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 // rows exist for a long time.
 func (r *Relay) cleanupLoop(ctx context.Context) {
 	for {
-		if err := r.cleanup(ctx); err != nil {
-			slog.Error("outbox relay: cleanup failed", slog.Any("error", err))
+		err := r.cleanup(ctx)
+		if err != nil {
+			slog.Warn("outbox relay: cleanup failed", slog.Any("error", err))
+		}
+		if r.cleanupBudget != nil {
+			r.cleanupBudget.Record(err)
 		}
 
 		wait := r.nextCleanupWait(ctx)
@@ -299,12 +343,12 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 	}
 }
 
-// cleanupWaitFloor and cleanupWaitCeiling bound the cleanup wake-up sleep.
+// defaultCleanupWaitFloor and cleanupWaitCeiling bound the cleanup wake-up sleep.
 // Floor avoids tight-loop on clock skew. Ceiling forces a periodic re-check
 // even when the table is empty (OldestEligibleAt returns ok=false).
 const (
-	cleanupWaitFloor   = 5 * time.Second
-	cleanupWaitCeiling = 1 * time.Hour
+	defaultCleanupWaitFloor = 5 * time.Second
+	cleanupWaitCeiling      = 1 * time.Hour
 )
 
 // nextCleanupWait computes how long the cleanup loop should sleep before the
@@ -327,10 +371,20 @@ func (r *Relay) nextCleanupWait(ctx context.Context) time.Duration {
 		}
 	}
 
-	if wait < cleanupWaitFloor {
-		wait = cleanupWaitFloor
+	floor := r.cleanupWaitFloor()
+	if wait < floor {
+		wait = floor
 	}
 	return wait
+}
+
+// cleanupWaitFloor returns the effective cleanup floor duration:
+// cfg.CleanupWaitFloor if positive, otherwise defaultCleanupWaitFloor.
+func (r *Relay) cleanupWaitFloor() time.Duration {
+	if r.cfg.CleanupWaitFloor > 0 {
+		return r.cfg.CleanupWaitFloor
+	}
+	return defaultCleanupWaitFloor
 }
 
 // oldestOrZero wraps Store.OldestEligibleAt with logging and an idle-fallback:
@@ -579,6 +633,55 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 		return r.cfg.MaxRetryDelay
 	}
 	return d
+}
+
+// ---------------------------------------------------------------------------
+// Health and readiness
+// ---------------------------------------------------------------------------
+
+// HealthCheckers returns a map of named health checker functions, one per
+// enabled failure budget. The returned functions implement the
+// health.Checker contract: nil return = healthy; non-nil = unhealthy.
+//
+// Only budgets with a positive threshold are included; threshold=0 (disabled)
+// budgets are excluded from the map so callers can safely iterate all entries
+// and register them unconditionally.
+//
+// ref: controller-runtime/pkg/healthz AddReadyzCheck — named-checker aggregation.
+func (r *Relay) HealthCheckers() map[string]func() error {
+	m := make(map[string]func() error)
+	if r.pollBudget != nil {
+		m["outbox-relay-poll"] = r.pollBudget.Checker()
+	}
+	if r.reclaimBudget != nil {
+		m["outbox-relay-reclaim"] = r.reclaimBudget.Checker()
+	}
+	if r.cleanupBudget != nil {
+		m["outbox-relay-cleanup"] = r.cleanupBudget.Checker()
+	}
+	return m
+}
+
+// Ready returns the channel that is closed when Start() has transitioned the
+// relay to the running state. Callers can use this to synchronise without
+// polling:
+//
+//	select {
+//	case <-relay.Ready():
+//	    // relay is running
+//	case <-time.After(deadline):
+//	    // timeout
+//	}
+//
+// Ready() never returns nil. Before Start() completes (or after Stop()), the
+// returned channel is open and will not close until the next Start() runs to
+// completion. Callers that want to detect the "not yet started" state should
+// still guard the select with a timeout.
+func (r *Relay) Ready() <-chan struct{} {
+	r.mu.Lock()
+	ch := r.readyCh
+	r.mu.Unlock()
+	return ch
 }
 
 // retryDelay computes exponential backoff with jitter and cap.

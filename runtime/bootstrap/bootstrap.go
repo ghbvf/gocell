@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -361,6 +363,37 @@ func WithBrokerHealth(bc BrokerHealthChecker) Option {
 	}
 }
 
+// WithRelayHealth registers the relay's named health checkers (one per enabled
+// FailureBudget) into the /readyz endpoint. Checkers are named:
+//
+//   - "outbox-relay-poll"
+//   - "outbox-relay-reclaim"
+//   - "outbox-relay-cleanup"
+//
+// Only budgets with a positive threshold are registered; threshold=0 (disabled)
+// budgets are silently skipped. A nil relay is rejected at Run() time with a
+// fatal error, mirroring the WithBrokerHealth fail-fast contract.
+//
+// ref: controller-runtime AddReadyzCheck — named-checker aggregation pattern.
+// ref: runtime/bootstrap.WithBrokerHealth — sibling fail-fast pattern.
+func WithRelayHealth(r *runtimeoutbox.Relay) Option {
+	return func(b *Bootstrap) {
+		if r == nil {
+			b.relayHealthNil = true
+			return
+		}
+		checkers := r.HealthCheckers()
+		names := make([]string, 0, len(checkers))
+		for k := range checkers {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: checkers[name]})
+		}
+	}
+}
+
 // isNilBrokerHealthChecker detects both plain-nil interface values and the
 // "typed nil" gotcha (non-nil interface wrapping a nil pointer/slice/etc.).
 // The typed-nil case would satisfy `bc != nil` but panic on method dispatch.
@@ -379,6 +412,28 @@ func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
 	default:
 		return false
 	}
+}
+
+// validateInternalGuard validates the internal endpoint guard configuration.
+// Returns an error when prefix or guard violate their constraints so Run()
+// can fail-fast before any side effects.
+func (b *Bootstrap) validateInternalGuard() error {
+	if b.internalGuardPrefix == "" && b.internalGuard == nil {
+		return nil // option not used
+	}
+	if b.internalGuardPrefix == "" {
+		return fmt.Errorf("bootstrap: internal guard prefix must not be empty")
+	}
+	if !strings.HasPrefix(b.internalGuardPrefix, "/") {
+		return fmt.Errorf("bootstrap: internal guard prefix %q must start with '/'", b.internalGuardPrefix)
+	}
+	if !strings.HasSuffix(b.internalGuardPrefix, "/") {
+		return fmt.Errorf("bootstrap: internal guard prefix %q must end with '/'", b.internalGuardPrefix)
+	}
+	if b.internalGuard == nil {
+		return fmt.Errorf("bootstrap: internal guard must not be nil when prefix %q is set", b.internalGuardPrefix)
+	}
+	return nil
 }
 
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
@@ -480,6 +535,31 @@ func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	}
 }
 
+// WithInternalEndpointGuard registers a guard middleware that protects every
+// HTTP route whose path starts with prefix. The canonical value for prefix is
+// "/internal/v1/" (must start and end with '/').
+//
+// guard is a standard http.Handler middleware factory (func(http.Handler) http.Handler).
+// Run() validates both constraints and returns an error immediately (fail-fast)
+// when either is violated:
+//   - prefix empty / not starting with '/' / not ending with '/'
+//   - guard nil
+//
+// The guard is wired into the router's business mux via
+// router.WithInternalPathPrefixGuard; infrastructure endpoints (/healthz,
+// /readyz, /metrics) are on outerMux and are never reached by the guard.
+//
+// Actual token-validation logic lives in the guard function — this option is
+// a pure wiring point (injection, not policy).
+//
+// ref: go-kratos/kratos middleware/selector — default-deny + Option injection.
+func WithInternalEndpointGuard(prefix string, guard func(http.Handler) http.Handler) Option {
+	return func(b *Bootstrap) {
+		b.internalGuardPrefix = prefix
+		b.internalGuard = guard
+	}
+}
+
 // WithHookObserver registers a cell lifecycle hook observer for the
 // default assembly built when no WithAssembly option is supplied.
 //
@@ -550,6 +630,16 @@ type Bootstrap struct {
 	// of registering a closure that would nil-deref on the first /readyz
 	// probe. Mirrors the circuitBreakerNil contract.
 	brokerHealthNil bool
+
+	// internalGuardPrefix and internalGuard hold the configuration set by
+	// WithInternalEndpointGuard. Both are forwarded to the router at Run()
+	// time via router.WithInternalPathPrefixGuard after prefix validation.
+	internalGuardPrefix string
+	internalGuard       func(http.Handler) http.Handler
+
+	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
+	// Checked at Run() to fail-fast rather than silently skipping relay health.
+	relayHealthNil bool
 }
 
 // New creates a Bootstrap with the given options.
@@ -628,6 +718,19 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// /readyz probe instead of surfacing the misconfiguration at startup.
 	if b.brokerHealthNil {
 		return fmt.Errorf("bootstrap: broker health checker must not be nil")
+	}
+
+	// Fail-fast: validate internal endpoint guard before any side effects.
+	// Mirrors the circuitBreakerNil pattern: surface misconfiguration at Run()
+	// rather than silently operating without the intended protection.
+	if err := b.validateInternalGuard(); err != nil {
+		return err
+	}
+
+	// Fail-fast: nil relay passed to WithRelayHealth — surfaces misconfiguration
+	// at startup instead of silently skipping relay health registration.
+	if b.relayHealthNil {
+		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
 	}
 
 	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
@@ -972,7 +1075,14 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// (e.g. session-store), aligning with the authProvider discovery pattern.
 	for _, id := range asm.CellIDs() {
 		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
-			for name, fn := range hcc.HealthCheckers() {
+			cellCheckers := hcc.HealthCheckers()
+			cellNames := make([]string, 0, len(cellCheckers))
+			for k := range cellCheckers {
+				cellNames = append(cellNames, k)
+			}
+			sort.Strings(cellNames)
+			for _, name := range cellNames {
+				fn := cellCheckers[name]
 				if fn == nil {
 					return rollback(fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name))
 				}
@@ -1036,6 +1146,12 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 		if authMetrics != nil {
 			routerOpts = append(routerOpts, router.WithAuthMetrics(authMetrics))
 		}
+	}
+	// Wire the internal path-prefix guard when configured.
+	// Validation already passed (Step 0), so b.internalGuard is non-nil iff
+	// b.internalGuardPrefix is also a valid prefix — safe to forward unconditionally.
+	if b.internalGuard != nil {
+		routerOpts = append(routerOpts, router.WithInternalPathPrefixGuard(b.internalGuardPrefix, b.internalGuard))
 	}
 	routerOpts = append(routerOpts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(routerOpts...)

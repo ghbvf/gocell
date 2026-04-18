@@ -4,7 +4,6 @@ package rabbitmq
 
 import (
 	"context"
-	"encoding/json"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -194,7 +194,9 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Wait until Subscribe has declared, bound, and started consuming from the queue.
 	waitForSubscriberReady(t, conn, queueName, subErrCh, 5*time.Second)
 
-	// Prepare an outbox.Entry as the message payload.
+	// Prepare an outbox.Entry as the message payload, wrapped in a v1 wire
+	// envelope so the subscriber's unmarshalDelivery (fail-closed since P1-14)
+	// accepts it.
 	entry := outbox.Entry{
 		ID:            "evt-001",
 		AggregateID:   "agg-001",
@@ -205,8 +207,8 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		Metadata:      map[string]string{"source": "integration-test"},
 	}
 
-	payload, err := json.Marshal(entry)
-	require.NoError(t, err, "marshal entry")
+	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+	require.NoError(t, err, "marshal envelope")
 
 	// Publish the message after the subscriber is ready.
 	err = pub.Publish(ctx, topic, payload)
@@ -244,7 +246,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	payload, err := json.Marshal(entry)
+	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -333,7 +335,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		Payload:   []byte(`{"retry":"e2e"}`),
 		CreatedAt: time.Now().UTC(),
 	}
-	payload, err := json.Marshal(entry)
+	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
 	require.NoError(t, err)
 
 	err = pub.Publish(ctx, topic, payload)
@@ -354,7 +356,12 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case msg := <-dlxMsgs:
-			return json.Unmarshal(msg.Body, &dlEntry) == nil
+			decoded, decodeErr := outboxrt.UnmarshalEnvelope("", msg.Body)
+			if decodeErr != nil {
+				return false
+			}
+			dlEntry = decoded
+			return true
 		default:
 			return false
 		}
@@ -503,7 +510,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		Payload:   []byte(`{"dlx":"end-to-end"}`),
 		CreatedAt: time.Now().UTC(),
 	}
-	payload, err := json.Marshal(entry)
+	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
 	require.NoError(t, err)
 
 	err = pub.Publish(ctx, topic, payload)
@@ -530,7 +537,12 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case msg := <-dlxMsgs:
-			return json.Unmarshal(msg.Body, &dlEntry) == nil
+			decoded, decodeErr := outboxrt.UnmarshalEnvelope("", msg.Body)
+			if decodeErr != nil {
+				return false
+			}
+			dlEntry = decoded
+			return true
 		default:
 			return false
 		}

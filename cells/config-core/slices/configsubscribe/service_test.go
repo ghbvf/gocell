@@ -73,8 +73,63 @@ func TestService_HandleEvent_InvalidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
 	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
 
-	// Should return error so ConsumerBase routes to dead letter after retries.
+	// Should return PermanentError so WrapLegacyHandler routes to DLX, not retry.
 	err := svc.HandleEvent(context.Background(), entry)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 0, svc.Cache().Len())
+
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "invalid payload must be PermanentError")
+}
+
+// TestWrapLegacyHandler_InvalidPayload_Reject verifies the full disposition
+// chain: invalid payload → PermanentError → WrapLegacyHandler → DispositionReject.
+func TestWrapLegacyHandler_InvalidPayload_Reject(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"invalid payload via WrapLegacyHandler must produce DispositionReject")
+	assert.Error(t, result.Err)
+}
+
+// TestHandleEvent_UnknownAction_PermanentError verifies that an unknown action
+// returns a PermanentError (fail-closed, P1-14 A3). The cache must not be modified.
+func TestHandleEvent_UnknownAction_PermanentError(t *testing.T) {
+	svc := NewService(slog.Default())
+	// Pre-populate cache so we can verify it stays unchanged.
+	_ = svc.HandleEvent(context.Background(), makeEntry("created", "existing.key", "existing-value"))
+
+	entry := makeEntry("bogus", "some.key", "")
+	err := svc.HandleEvent(context.Background(), entry)
+
+	require.Error(t, err, "unknown action must return error")
+
+	// Must be a PermanentError so WrapLegacyHandler routes to DLX, not retry.
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "unknown action must be PermanentError")
+	assert.Contains(t, err.Error(), "bogus", "error message should include the unknown action name")
+
+	// Cache must not be modified.
+	assert.Equal(t, 1, svc.Cache().Len(), "cache must be unchanged after unknown action")
+	v, ok := svc.Cache().Get("existing.key")
+	assert.True(t, ok)
+	assert.Equal(t, "existing-value", v)
+}
+
+// TestHandleEvent_UnknownAction_WrapLegacyHandler_Reject verifies the full
+// disposition chain: unknown action → PermanentError → WrapLegacyHandler → DispositionReject.
+func TestHandleEvent_UnknownAction_WrapLegacyHandler_Reject(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	entry := makeEntry("bogus", "some.key", "")
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"unknown action via WrapLegacyHandler must produce DispositionReject")
+	assert.Error(t, result.Err)
 }

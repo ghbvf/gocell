@@ -5,6 +5,22 @@
 // DurabilityDurable is set to reject noop placeholders (NoopWriter,
 // NoopTxRunner, DiscardPublisher) even in dev mode. Set GOCELL_ADAPTER_MODE=real
 // to require all secrets from env vars (fail-fast on missing).
+//
+// # Required env vars (all adapter modes)
+//
+//   - GOCELL_JWT_ISSUER: JWT iss claim written into tokens and verified on
+//     inbound requests via VerifyIntent. Must be set before startup.
+//
+//   - GOCELL_JWT_AUDIENCE: JWT aud claim written into tokens and verified on
+//     inbound requests via VerifyIntent. Must be set before startup.
+//
+// # Required env vars (real adapter mode only)
+//
+//   - GOCELL_SERVICE_SECRET: HMAC-SHA256 secret (≥32 bytes) protecting
+//     /internal/v1/* paths via ServiceTokenMiddleware. Missing in real mode
+//     aborts startup; missing in dev mode disables the guard with a Warn log.
+//
+// See also: docs/ops/env-vars.md for the full env var reference.
 package main
 
 import (
@@ -53,7 +69,10 @@ func loadSecret(envKey, devDefault, adapterMode string) ([]byte, error) {
 	if adapterMode == "real" {
 		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envKey)
 	}
-	slog.Warn("using dev-only default; set env var for production", slog.String("var", envKey))
+	slog.Warn("using dev-only default; set env var for production",
+		slog.String("var", envKey),
+		slog.String("mode", "dev-fallback"),
+		slog.String("action_required", "set env var before real mode"))
 	return []byte(devDefault), nil
 }
 
@@ -363,10 +382,28 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 	}
 }
 
-// jwtAudience is the expected audience for all tokens issued by this assembly.
-// It must match the audience written by sessionlogin/sessionrefresh services.
-// Tokens carrying a different aud are rejected by VerifyIntent per RFC 8725 §3.3.
-const jwtAudience = auth.DefaultJWTAudience
+// loadRequiredEnv loads a required env var. Returns an error if the value is
+// empty; there is no fallback default. Used for env vars that are mandatory
+// in all adapter modes (e.g. GOCELL_JWT_ISSUER, GOCELL_JWT_AUDIENCE).
+func loadRequiredEnv(envKey, description string) (string, error) {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return "", fmt.Errorf("%s must be set (%s)", envKey, description)
+	}
+	return v, nil
+}
+
+// loadJWTIssuer loads the JWT issuer string from GOCELL_JWT_ISSUER.
+// The env var is required in all adapter modes — there is no fallback default.
+func loadJWTIssuer(adapterMode string) (string, error) {
+	return loadRequiredEnv("GOCELL_JWT_ISSUER", fmt.Sprintf("adapter mode %q", adapterMode))
+}
+
+// loadJWTAudience loads the JWT audience string from GOCELL_JWT_AUDIENCE.
+// The env var is required in all adapter modes — there is no fallback default.
+func loadJWTAudience(adapterMode string) (string, error) {
+	return loadRequiredEnv("GOCELL_JWT_AUDIENCE", fmt.Sprintf("adapter mode %q", adapterMode))
+}
 
 // jwtDeps groups JWT signing and verification components built at startup.
 type jwtDeps struct {
@@ -375,23 +412,45 @@ type jwtDeps struct {
 }
 
 // buildJWTDeps loads the key set and constructs issuer + verifier.
-// Extracted from run() to keep cognitive complexity within bounds.
+// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes;
+// missing values cause fail-fast before any assembly init.
+//
+// ref: kube-apiserver --service-account-issuer — required at startup.
 func buildJWTDeps(adapterMode string) (jwtDeps, error) {
+	iss, err := loadJWTIssuer(adapterMode)
+	if err != nil {
+		return jwtDeps{}, err
+	}
+	aud, err := loadJWTAudience(adapterMode)
+	if err != nil {
+		return jwtDeps{}, err
+	}
+
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
 	}
-	issuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
+	issuer, err := auth.NewJWTIssuer(keySet, iss, auth.DefaultAccessTokenTTL,
+		auth.WithDefaultAudience(aud))
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT issuer: %w", err)
 	}
 	// WithExpectedAudiences enforces RFC 8725 §3.3 audience validation in
-	// VerifyIntent: tokens whose aud claim does not contain jwtAudience are
-	// rejected with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(jwtAudience))
+	// VerifyIntent: tokens whose aud claim does not contain aud are rejected
+	// with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
+	// WithExpectedIssuer enforces iss claim equality per RFC 7519 §4.1.1.
+	verifier, err := auth.NewJWTVerifier(keySet,
+		auth.WithExpectedAudiences(aud),
+		auth.WithExpectedIssuer(iss))
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
 	}
+
+	slog.Info("core-bundle: JWT deps built",
+		slog.String("issuer", iss),
+		slog.String("audience", aud),
+		slog.String("adapter_mode", adapterMode))
+
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil
 }
 
@@ -512,6 +571,39 @@ func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, err
 	}
 	slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
 	return nil, nil
+}
+
+// internalGuardFromEnv builds a ServiceTokenMiddleware guard for /internal/v1/*
+// from GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
+//
+//   - In "real" adapter mode, the env var is required; missing value returns an error.
+//   - In dev mode (any non-"real" mode), an empty secret returns (nil, nil), meaning
+//     "no guard installed" — the caller then skips WithInternalEndpointGuard.
+//
+// The returned guard is nil only in dev mode with an empty secret. In all other
+// cases a functioning guard (or an error) is returned.
+//
+// ref: Kubernetes kube-apiserver service-account verification — guard only when
+// key material is present; no guard is better than a broken guard.
+func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, error) {
+	secret := os.Getenv(auth.EnvServiceSecret)
+	if secret == "" {
+		if adapterMode == "real" {
+			return nil, fmt.Errorf("GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
+		}
+		slog.Warn("controlplane guard disabled: GOCELL_SERVICE_SECRET is empty (dev mode only)")
+		return nil, nil
+	}
+	prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
+	var prevBytes []byte
+	if prevSecret != "" {
+		prevBytes = []byte(prevSecret)
+	}
+	ring, err := auth.NewHMACKeyRing([]byte(secret), prevBytes)
+	if err != nil {
+		return nil, fmt.Errorf("build service HMAC key ring: %w", err)
+	}
+	return auth.ServiceTokenMiddleware(ring), nil
 }
 
 // logInitialAdminCredPath emits a startup info log so operators know where to
@@ -644,6 +736,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Build the /internal/v1/* service-token guard. In real mode, the guard is
+	// required (missing secret aborts startup). In dev mode, empty secret skips
+	// the guard entirely (nil guard means WithInternalEndpointGuard is not added).
+	internalGuard, err := internalGuardFromEnv(adapterMode)
+	if err != nil {
+		return err
+	}
+
 	// Wire ConsumerBase so every subscriber handler inherits two-phase Claimer
 	// idempotency, backoff retry, and DLX routing. An in-memory Claimer is used
 	// here so the in-process EventBus path has the same semantics as a future
@@ -672,6 +772,7 @@ func run(ctx context.Context) error {
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
 		adminWorkerOpt:  adminWorkerOpt,
+		internalGuard:   internalGuard,
 	})...)
 	return app.Run(ctx)
 }
@@ -689,6 +790,9 @@ type bootstrapDeps struct {
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
 	adminWorkerOpt  bootstrap.Option
+	// internalGuard is the service-token middleware protecting /internal/v1/*.
+	// nil means no guard is installed (dev mode with empty GOCELL_SERVICE_SECRET).
+	internalGuard func(http.Handler) http.Handler
 }
 
 // assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
@@ -733,6 +837,12 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 	// after the assembly has Init'd. No-op when admin already existed.
 	if d.adminWorkerOpt != nil {
 		opts = append(opts, d.adminWorkerOpt)
+	}
+	// Wire the service-token guard for /internal/v1/* when a guard was built.
+	// guard is nil in dev mode when GOCELL_SERVICE_SECRET is empty; real mode
+	// fail-fasts in internalGuardFromEnv before reaching here.
+	if d.internalGuard != nil {
+		opts = append(opts, bootstrap.WithInternalEndpointGuard("/internal/v1/", d.internalGuard))
 	}
 	return opts
 }

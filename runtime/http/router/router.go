@@ -11,6 +11,7 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -257,6 +258,49 @@ func WithTrustedProxies(proxies []string) Option {
 	}
 }
 
+// WithInternalPathPrefixGuard registers a guard middleware that is applied to
+// every request whose URL path has the given prefix. The canonical use-case is
+// protecting all /internal/v1/* endpoints with a service-token or HMAC check.
+//
+// prefix must be non-empty, start with '/', and end with '/' (e.g.
+// "/internal/v1/"). guard must be non-nil. NewE returns an error immediately
+// (fail-fast) when either constraint is violated.
+//
+// The guard is injected into the business mux (r.mux) as a selective
+// middleware: requests that match the prefix are wrapped; all others pass
+// through unchanged. Infrastructure endpoints (/healthz, /readyz, /metrics)
+// are registered on outerMux and are never reached by this guard.
+//
+// Actual token-validation logic lives in the guard function supplied by the
+// caller — this option is purely a wiring point (injection, not policy).
+//
+// Chain order for business requests:
+//
+//	RateLimit → CircuitBreaker → Auth (JWT/delegated) → BodyLimit → InternalGuard → handler
+//
+// Installing this option automatically marks the prefix as "JWT-delegated" in
+// AuthMiddleware: requests whose path starts with prefix bypass JWT verification
+// entirely and proceed directly to InternalGuard, which becomes the sole
+// authentication layer for that prefix. This makes machine-to-machine callers
+// (service tokens, HMAC) work without a user JWT.
+//
+// ref: go-kratos/kratos middleware/selector — default-deny + Option injection
+// for per-route middleware application.
+func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Handler) Option {
+	return func(r *Router) {
+		r.internalGuardPrefix = prefix
+		r.internalGuard = guard
+		// Auto-delegate JWT for the guard prefix: the guard is the sole auth layer
+		// for requests under this prefix. AuthMiddleware will call next directly
+		// without verifying any Bearer token, passing the request to InternalGuard.
+		// This is set unconditionally here; validateInternalGuard() enforces that
+		// prefix is valid before NewE returns.
+		r.authDelegatedMatcher = func(req *http.Request) bool {
+			return strings.HasPrefix(req.URL.Path, prefix)
+		}
+	}
+}
+
 // Router wraps chi.Mux and implements kernel/cell.RouteMux.
 //
 // Internally it uses two chi.Mux instances:
@@ -294,6 +338,19 @@ type Router struct {
 	securityHeadersOpts             []middleware.SecurityHeadersOption
 	bodyLimit                       int64
 	trustedProxies                  []string
+
+	// internalGuardPrefix and internalGuard implement the /internal/v1/* path-prefix
+	// guard: any request whose URL path starts with internalGuardPrefix is wrapped
+	// by internalGuard before reaching the business handler.
+	// Both fields must be set together (validated in NewE).
+	internalGuardPrefix string
+	internalGuard       func(http.Handler) http.Handler
+
+	// authDelegatedMatcher is a per-request predicate that marks paths where JWT
+	// authentication is delegated to a downstream middleware (e.g. the internal
+	// guard). When set, AuthMiddleware forwards these requests to next without any
+	// JWT check. Auto-populated by WithInternalPathPrefixGuard.
+	authDelegatedMatcher func(*http.Request) bool
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -352,6 +409,11 @@ func NewE(opts ...Option) (*Router, error) {
 	// WithCircuitBreaker(nil) which would silently skip CB installation.
 	if r.circuitBreakerNil {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
+	}
+
+	// Fail-fast: validate internal guard configuration when the option was used.
+	if err := r.validateInternalGuard(); err != nil {
+		return nil, err
 	}
 
 	realIPMW, err := r.buildRealIPMiddleware()
@@ -425,11 +487,17 @@ func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	}
 }
 
-// buildBusinessMux wires rate limiter, circuit breaker, auth, and body-limit
-// middleware onto r.mux. Cells register their routes on this mux.
+// buildBusinessMux wires rate limiter, circuit breaker, auth, body-limit, and
+// optional internal-path-prefix guard middleware onto r.mux. Cells register
+// their routes on this mux.
 //
-// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
+// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [InternalGuard] → handler.
 // Recovery + SecurityHeaders are already applied by outerMux.
+//
+// The internal guard is applied as a selective inline middleware: only requests
+// whose path starts with internalGuardPrefix are forwarded through the guard
+// function; all others are handled directly. This keeps the guard out of the
+// global Use() chain to avoid wrapping infrastructure or public endpoints.
 func (r *Router) buildBusinessMux() {
 	if r.rateLimiter != nil {
 		r.mux.Use(middleware.RateLimit(r.rateLimiter))
@@ -441,6 +509,20 @@ func (r *Router) buildBusinessMux() {
 		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+	if r.internalGuard != nil {
+		prefix := r.internalGuardPrefix
+		guard := r.internalGuard
+		r.mux.Use(func(next http.Handler) http.Handler {
+			guarded := guard(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if strings.HasPrefix(req.URL.Path, prefix) {
+					guarded.ServeHTTP(w, req)
+					return
+				}
+				next.ServeHTTP(w, req)
+			})
+		})
+	}
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
@@ -458,6 +540,9 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 	if r.authPublicMatcher != nil {
 		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
 	}
+	if r.authDelegatedMatcher != nil {
+		opts = append(opts, auth.WithDelegatedMatcher(r.authDelegatedMatcher))
+	}
 	if r.passwordResetExemptMatcher != nil {
 		opts = append(opts, auth.WithPasswordResetExemptMatcher(r.passwordResetExemptMatcher))
 	}
@@ -465,6 +550,28 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 		opts = append(opts, auth.WithPasswordResetChangeEndpointHint(r.passwordResetChangeEndpointHint))
 	}
 	return opts
+}
+
+// validateInternalGuard checks that the internal path-prefix guard is either
+// absent (both fields zero) or fully specified (valid prefix + non-nil guard).
+// Returns an error on any misconfiguration so NewE can fail-fast at startup.
+func (r *Router) validateInternalGuard() error {
+	if r.internalGuardPrefix == "" && r.internalGuard == nil {
+		return nil // option not used — nothing to validate
+	}
+	if r.internalGuardPrefix == "" {
+		return fmt.Errorf("router: internal guard prefix must not be empty")
+	}
+	if !strings.HasPrefix(r.internalGuardPrefix, "/") {
+		return fmt.Errorf("router: internal guard prefix %q must start with '/'", r.internalGuardPrefix)
+	}
+	if !strings.HasSuffix(r.internalGuardPrefix, "/") {
+		return fmt.Errorf("router: internal guard prefix %q must end with '/'", r.internalGuardPrefix)
+	}
+	if r.internalGuard == nil {
+		return fmt.Errorf("router: internal guard must not be nil when prefix %q is set", r.internalGuardPrefix)
+	}
+	return nil
 }
 
 // applyPasswordResetExempts compiles the "METHOD /path" entries supplied via

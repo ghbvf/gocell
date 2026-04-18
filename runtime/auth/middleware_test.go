@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -645,6 +646,136 @@ func TestAuthMiddleware_NoResetClaim_PassesThrough(t *testing.T) {
 			assert.Equal(t, http.StatusOK, rec.Code)
 		})
 	}
+}
+
+// --- Delegated endpoint tests ---
+
+// TestAuthMiddleware_DelegatedEndpoint_SkipsJWT verifies that a request hitting
+// a delegated path is forwarded to next without any JWT check. Even without an
+// Authorization header, the middleware must NOT return 401.
+func TestAuthMiddleware_DelegatedEndpoint_SkipsJWT(t *testing.T) {
+	verifier := &mockVerifier{err: errors.New("must not be called")}
+
+	matcher := func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/internal/v1/")
+	}
+
+	reached := false
+	handler := AuthMiddleware(verifier, nil, WithDelegatedMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached = true
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	// No Authorization header — delegated path must still reach the handler.
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.True(t, reached, "delegated path must reach next handler without JWT verification")
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"delegated path without Authorization must not 401 — JWT is not the auth layer here")
+}
+
+// TestAuthMiddleware_DelegatedEndpoint_PassesToNext verifies that the downstream
+// handler receives the original request untouched — the JWT middleware must not
+// consume the Authorization header or modify the request.
+func TestAuthMiddleware_DelegatedEndpoint_PassesToNext(t *testing.T) {
+	verifier := &mockVerifier{err: errors.New("must not be called")}
+
+	matcher := func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/internal/v1/")
+	}
+
+	var receivedAuth string
+	handler := AuthMiddleware(verifier, nil, WithDelegatedMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", nil)
+	req.Header.Set("Authorization", "ServiceToken hmac-token-value")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "ServiceToken hmac-token-value", receivedAuth,
+		"downstream handler must receive the original Authorization header unmodified")
+}
+
+// TestAuthMiddleware_Public_Still_SkipsJWT regression: public behavior must not
+// change when a delegated matcher is also wired.
+func TestAuthMiddleware_Public_Still_SkipsJWT(t *testing.T) {
+	verifier := &mockVerifier{err: errors.New("must not be called")}
+
+	publicMatcher := func(r *http.Request) bool {
+		return r.URL.Path == "/api/v1/access/sessions/login"
+	}
+	delegatedMatcher := func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/internal/v1/")
+	}
+
+	reached := false
+	handler := AuthMiddleware(verifier, nil,
+		WithPublicEndpointMatcher(publicMatcher),
+		WithDelegatedMatcher(delegatedMatcher),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.True(t, reached, "public endpoint must still reach handler (regression check)")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestAuthMiddleware_NonDelegated_EnforceJWT verifies that a path not covered by
+// delegatedMatcher still requires a valid JWT token.
+func TestAuthMiddleware_NonDelegated_EnforceJWT(t *testing.T) {
+	verifier := &mockVerifier{} // no error, but also no token supplied
+
+	matcher := func(r *http.Request) bool {
+		return strings.HasPrefix(r.URL.Path, "/internal/v1/")
+	}
+
+	handler := AuthMiddleware(verifier, nil, WithDelegatedMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			t.Fatal("must not reach handler: JWT enforcement must block non-delegated path")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
+	// No Authorization header → JWT middleware must 401.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"non-delegated path without JWT must be rejected with 401")
+}
+
+// TestAuthMiddleware_NilDelegatedMatcher_NoEffect verifies that omitting
+// WithDelegatedMatcher leaves standard JWT enforcement intact.
+func TestAuthMiddleware_NilDelegatedMatcher_NoEffect(t *testing.T) {
+	verifier := &mockVerifier{}
+
+	handler := AuthMiddleware(verifier, nil)(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			t.Fatal("must not reach handler")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"without WithDelegatedMatcher, even /internal/v1/* paths must require JWT")
 }
 
 // --- matchPathTemplate unit tests ---

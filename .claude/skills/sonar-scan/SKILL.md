@@ -1,6 +1,7 @@
 ---
 name: sonar-scan
 description: 从 SonarCloud 获取静态扫描结果（质量门、issue、hotspot），输出到 .claude/tools/findings/static-scan/。
+
 ---
 
 # SonarCloud 静态扫描导出

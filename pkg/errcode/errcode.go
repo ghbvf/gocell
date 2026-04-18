@@ -114,6 +114,12 @@ const (
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
 
+	// Outbox relay health error codes.
+	// ErrRelayBudgetExhausted signals that an outbox relay operation (poll /
+	// reclaim / cleanup) has exceeded its consecutive-failure threshold, tripping
+	// the failure budget and marking /readyz unhealthy.
+	ErrRelayBudgetExhausted Code = "ERR_RELAY_BUDGET_EXHAUSTED"
+
 	// Observability configuration error.
 	// Raised by kernel / runtime observability constructors when a
 	// required dependency (Provider, cellID) is missing or malformed.
@@ -129,6 +135,12 @@ const (
 	ErrWSHubStopping    Code = "ERR_WS_HUB_STOPPING"
 	ErrWSHubNotRunning  Code = "ERR_WS_HUB_NOT_RUNNING"
 	ErrWSMaxConns       Code = "ERR_WS_MAX_CONNS"
+
+	// Outbox envelope error codes.
+	// ErrEnvelopeSchema signals that an inbound wire message does not conform
+	// to the expected envelope schema — unknown schemaVersion, missing required
+	// fields, or corrupt JSON. Consumers must Reject (not retry) on this error.
+	ErrEnvelopeSchema Code = "ERR_ENVELOPE_SCHEMA"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

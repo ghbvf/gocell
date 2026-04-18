@@ -535,3 +535,28 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 	assert.True(t, updated.PasswordResetRequired, "omitted field must not change existing flag")
 	assert.Equal(t, "new@omit.com", updated.Email)
 }
+
+// failingPublisher returns an error on every Publish call, used to drive the
+// publisher-error warn-log branch in Service.publish (demo mode).
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+// TestService_Create_PublishError_DoesNotFailCreate verifies that demo-mode
+// publisher failure in Service.publish is logged but does not propagate as an
+// error — covering the else-branch warn log introduced when the direct publish
+// path was wrapped in a v1 envelope (P1-14 follow-up).
+func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	fp := failingPublisher{err: errors.New("broker unavailable")}
+	svc, err := NewService(userRepo, sessionRepo, fp, slog.Default(),
+		WithTokenIssuer(&stubTokenIssuer{}))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "pub-err-user", Email: "pub@err.com", Password: "hash",
+	})
+	require.NoError(t, err, "publish failure in demo mode must not fail Create")
+	assert.NotEmpty(t, user.ID)
+}

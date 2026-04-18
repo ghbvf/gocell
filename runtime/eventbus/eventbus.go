@@ -104,6 +104,11 @@ func New(opts ...Option) *InMemoryEventBus {
 
 // Publish sends payload to subscribers of the given topic.
 //
+// Contract (P1-14 follow-up): payload MUST be a v1 wire envelope (produced by
+// outbox.MarshalEnvelope for relay-driven paths, or outbox.MarshalDirectEnvelope
+// for direct-publish paths such as demo-mode L2 cells and L4 cells without
+// outbox writer). Raw business payloads are rejected fail-closed.
+//
 // ConsumerGroup dispatch:
 //   - For each named consumer group: pick ONE subscriber via round-robin
 //   - For the empty-group ("") bucket: send to ALL subscribers (broadcast)
@@ -111,17 +116,19 @@ func New(opts ...Option) *InMemoryEventBus {
 // Non-blocking: if a subscriber's buffer is full, the message is dropped
 // (logged as warning).
 //
-// Envelope handling: when Publish is invoked by an outbox relay, payload is
-// a JSON-encoded wire envelope (outbox.WireEnvelope) wrapping the business
-// payload. The bus unwraps it so subscribers always see the business payload
+// The bus unwraps the envelope so subscribers always see the business payload
 // in Entry.Payload, matching the semantics of the RabbitMQ subscriber path.
-// Non-envelope payloads (direct publish from cells) are forwarded unchanged.
 //
-// Regression guard: before this unwrap, the PG mode (relay → in-memory bus)
-// silently delivered the envelope as-is; subscribers parsed the envelope
-// fields as business fields (empty Action, etc.) and ACKed unknown-action
-// events, causing complete event loss. Kept symmetric with
-// adapters/rabbitmq.unmarshalDelivery.
+// Regression guard: before this contract, demo-mode and L4 direct publishes
+// sent raw business bytes; with envelope enforcement added in P1-14 A1/A2 such
+// bytes were silently dead-lettered + nil returned, causing complete event
+// loss (symptom: sso-bff walkthrough audit-entries assertion fails because
+// audit-core never received session.created / user.created events). Returning
+// an explicit error makes producer-side contract violations loud instead of
+// silent; the dead-letter slice is retained as a diagnostic trail.
+//
+// ref: Watermill poison-queue middleware — undecodable messages → DLX,
+// main route cleared; K8s workqueue fail-closed semantics.
 func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []byte) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -130,18 +137,13 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
 
-	entry := unmarshalInboundEntry(topic, payload)
-
-	// Defense-in-depth: reject malformed entries at the consumer entry, before
-	// any subscriber sees them. Mirrors adapters/rabbitmq.processDelivery —
-	// production senders satisfy these invariants, but a tampered payload or
-	// adapter regression must not propagate to handlers.
-	if err := entry.Validate(); err != nil {
-		slog.Warn("eventbus: dropping invalid entry at consumer entry",
+	entry, unmarshalErr := unmarshalInboundEntry(topic, payload)
+	if unmarshalErr != nil {
+		slog.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
 			slog.String("topic", topic),
-			slog.String("entry_id", entry.ID),
-			slog.String("error", err.Error()))
-		return errcode.Wrap(errcode.ErrValidationFailed, "eventbus: invalid inbound entry", err)
+			slog.String("error", unmarshalErr.Error()))
+		b.appendDeadLetter(topic, outbox.Entry{Topic: topic}, unmarshalErr)
+		return unmarshalErr
 	}
 
 	for group, gs := range b.groupSubs[topic] {
@@ -551,10 +553,14 @@ func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string
 // Wire envelope unwrap
 // ---------------------------------------------------------------------------
 
-// unmarshalInboundEntry constructs an outbox.Entry for delivery to subscribers.
-// Delegates to outboxrt.UnmarshalEnvelope which handles both relay wire envelopes
-// and the raw-payload fallback (direct-publish semantics).
-func unmarshalInboundEntry(topic string, payload []byte) outbox.Entry {
-	entry, _ := outboxrt.UnmarshalEnvelope(topic, payload)
-	return entry
+// unmarshalInboundEntry decodes a v1 wire envelope from payload into an outbox.Entry.
+// Returns (entry, nil) on success, or (zero, error) when the payload is not a
+// valid v1 envelope (missing/wrong schemaVersion, broken JSON, missing required fields).
+//
+// Callers must treat a non-nil error as a permanent failure and route to dead
+// letter without delivering to subscribers.
+//
+// ref: Watermill message/router.go handleMessage — handler error → Nack, no skip
+func unmarshalInboundEntry(topic string, payload []byte) (outbox.Entry, error) {
+	return outboxrt.UnmarshalEnvelope(topic, payload)
 }

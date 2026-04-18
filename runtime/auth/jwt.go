@@ -73,10 +73,12 @@ func intentForJWTTyp(typ string) (TokenIntent, bool) {
 // Extended: kid-based key lookup from VerificationKeyStore (RFC 7638 thumbprint).
 //
 // ref: golang-jwt/jwt v5 parser_option.go -- WithTimeFunc for clock injection.
+// ref: coreos/go-oidc v3 oidc.go IDTokenVerifier -- issuer validation pattern.
 type JWTVerifier struct {
 	keys              VerificationKeyStore
 	parserOpts        []jwt.ParserOption
 	expectedAudiences []string
+	expectedIssuer    string
 }
 
 // JWTVerifierOption configures a JWTVerifier.
@@ -102,6 +104,18 @@ func WithExpectedAudiences(first string, rest ...string) JWTVerifierOption {
 			}
 		}
 	}
+}
+
+// WithExpectedIssuer configures VerifyIntent to enforce that the token's iss
+// claim exactly matches the given issuer string. The check is applied after
+// audience validation so audience errors remain distinguishable in structured
+// logs. An empty iss argument is silently ignored (no-op), preserving the
+// previous behaviour of accepting any issuer.
+//
+// ref: coreos/go-oidc v3 IDTokenVerifier — issuer validation with equality check
+// ref: golang-jwt/jwt v5 WithIssuer ParserOption — functional option pattern
+func WithExpectedIssuer(iss string) JWTVerifierOption {
+	return func(v *JWTVerifier) { v.expectedIssuer = iss }
 }
 
 // WithVerifierClock overrides the time source used for token expiry validation.
@@ -183,7 +197,35 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 			"token audience validation failed",
 			fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience))
 	}
+	// Issuer validation: when expectedIssuer is configured, the token's iss claim
+	// must match exactly. Placed after audience check so each failure type remains
+	// independently distinguishable in structured logs.
+	if err := v.checkIssuer(claims); err != nil {
+		return Claims{}, err
+	}
 	return claims, nil
+}
+
+// checkIssuer validates that the token's iss claim matches the expected issuer.
+// Returns ErrAuthInvalidTokenIntent with detail on mismatch.
+//
+// NOTE: The error detail distinguishes issuer mismatch from audience mismatch
+// for ops-level logging and metrics, but both codes are collapsed to
+// ERR_AUTH_UNAUTHORIZED at the HTTP response layer (see middleware.go).
+// This is intentional enumeration defense — do NOT change the error code to
+// leak more info to clients.
+//
+// ref: coreos/go-oidc v3 IDTokenVerifier.Verify — strict equality issuer check
+func (v *JWTVerifier) checkIssuer(claims Claims) error {
+	if v.expectedIssuer == "" {
+		return nil
+	}
+	if claims.Issuer != v.expectedIssuer {
+		return errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token issuer validation failed",
+			fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer))
+	}
+	return nil
 }
 
 // audContainsAny reports whether any element of expected appears in aud.
@@ -254,11 +296,12 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
 // Each issued token carries a kid header derived from the signing key.
 type JWTIssuer struct {
-	keys       SigningKeyProvider
-	issuer     string
-	ttl        time.Duration
-	refreshTTL time.Duration
-	now        func() time.Time
+	keys            SigningKeyProvider
+	issuer          string
+	ttl             time.Duration
+	refreshTTL      time.Duration
+	now             func() time.Time
+	defaultAudience []string
 }
 
 // JWTIssuerOption configures a JWTIssuer.
@@ -282,6 +325,30 @@ func WithRefreshTTL(d time.Duration) JWTIssuerOption {
 			i.refreshTTL = d
 		}
 	}
+}
+
+// WithDefaultAudience sets the audience written into tokens when IssueOptions.Audience
+// is nil. The first argument is required; additional audiences may be provided as
+// variadic arguments. When IssueOptions.Audience is non-nil it takes precedence over
+// the default (override semantics).
+//
+// Upper layers (sessionlogin/sessionrefresh) may read the configured default via
+// DefaultAudience() to share a single source of truth for the expected audience.
+func WithDefaultAudience(first string, rest ...string) JWTIssuerOption {
+	auds := append([]string{first}, rest...)
+	return func(i *JWTIssuer) { i.defaultAudience = auds }
+}
+
+// DefaultAudience returns a copy of the default audience slice configured via
+// WithDefaultAudience. Returns nil when no default audience is configured.
+// The returned slice is an independent copy — mutating it does not affect the issuer.
+func (i *JWTIssuer) DefaultAudience() []string {
+	if i == nil || len(i.defaultAudience) == 0 {
+		return nil
+	}
+	out := make([]string, len(i.defaultAudience))
+	copy(out, i.defaultAudience)
+	return out
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
@@ -352,8 +419,12 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 		"exp":         now.Add(expiry).Unix(),
 		tokenUseClaim: string(intent),
 	}
-	if len(opts.Audience) > 0 {
-		claims["aud"] = opts.Audience
+	aud := opts.Audience
+	if aud == nil {
+		aud = i.defaultAudience // may be nil; upper layer decides whether to reject no-aud tokens
+	}
+	if len(aud) > 0 {
+		claims["aud"] = aud
 	}
 	if len(opts.Roles) > 0 {
 		claims["roles"] = opts.Roles

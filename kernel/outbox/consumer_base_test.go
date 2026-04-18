@@ -70,6 +70,27 @@ func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (
 
 var _ idempotency.Claimer = (*fakeClaimer)(nil)
 
+// signalingClaimer wraps an inner Claimer and sends on the started channel
+// the first time Claim is invoked. Used to replace time.Sleep startup synchronisation
+// in tests that need to cancel ctx after the claimer has been called.
+type signalingClaimer struct {
+	inner   idempotency.Claimer
+	started chan<- struct{}
+	once    sync.Once
+}
+
+func (s *signalingClaimer) Claim(ctx context.Context, key string, leaseTTL, renewInterval time.Duration) (idempotency.ClaimState, Receipt, error) {
+	s.once.Do(func() {
+		select {
+		case s.started <- struct{}{}:
+		default:
+		}
+	})
+	return s.inner.Claim(ctx, key, leaseTTL, renewInterval)
+}
+
+var _ idempotency.Claimer = (*signalingClaimer)(nil)
+
 type claimOutcome struct {
 	state   idempotency.ClaimState
 	receipt Receipt
@@ -434,13 +455,20 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// Signal channel: handler sends when it has been called, meaning ConsumerBase
+	// is about to enter the retry backoff sleep — safe to cancel ctx at that point.
+	started := make(chan struct{}, 1)
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		<-started
 		cancel()
 	}()
 
@@ -506,7 +534,13 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 }
 
 func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
-	claimer := &fakeClaimer{err: errors.New("redis down")}
+	// Signal channel: claimer sends when first called, meaning ConsumerBase is about
+	// to enter the claim retry backoff sleep — safe to cancel ctx at that point.
+	claimStarted := make(chan struct{}, 1)
+	claimer := &signalingClaimer{
+		inner:   &fakeClaimer{err: errors.New("redis down")},
+		started: claimStarted,
+	}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     5,
@@ -520,7 +554,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		<-claimStarted
 		cancel()
 	}()
 

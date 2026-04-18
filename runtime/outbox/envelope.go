@@ -2,12 +2,24 @@ package outbox
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/google/uuid"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// EnvelopeSchemaV1 is the canonical schema version for outbox wire envelopes.
+// All envelopes produced by MarshalEnvelope carry this version; UnmarshalEnvelope
+// rejects any message that does not match.
+const EnvelopeSchemaV1 = "v1"
+
+// ErrUnknownEnvelopeVersion is returned by UnmarshalEnvelope when the inbound
+// wire message carries an unrecognised (or absent) schemaVersion field.
+// Consumers must treat this as a permanent error and route to DLX, not retry.
+//
+// ref: Watermill message/router.go handleMessage — unknown message type → Nack, no retry
+var ErrUnknownEnvelopeVersion = errcode.New(errcode.ErrEnvelopeSchema,
+	"outbox: unknown envelope schema version")
 
 // WireMessage is the canonical wire envelope used by outbox relay publishers
 // across all transports (in-memory eventbus, RabbitMQ, future Kafka). Transports
@@ -21,6 +33,7 @@ import (
 //
 // ref: Watermill message.Message — payload + metadata envelope
 type WireMessage struct {
+	SchemaVersion string            `json:"schemaVersion"`
 	ID            string            `json:"id"`
 	AggregateID   string            `json:"aggregateId,omitempty"`
 	AggregateType string            `json:"aggregateType,omitempty"`
@@ -33,8 +46,10 @@ type WireMessage struct {
 }
 
 // MarshalEnvelope serializes a ClaimedEntry into the wire envelope JSON.
+// The output always carries SchemaVersion = EnvelopeSchemaV1.
 func MarshalEnvelope(entry ClaimedEntry) ([]byte, error) {
 	msg := WireMessage{
+		SchemaVersion: EnvelopeSchemaV1,
 		ID:            entry.ID,
 		AggregateID:   entry.AggregateID,
 		AggregateType: entry.AggregateType,
@@ -47,66 +62,93 @@ func MarshalEnvelope(entry ClaimedEntry) ([]byte, error) {
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return nil, fmt.Errorf("outbox: marshal envelope: %w", err)
+		return nil, errcode.Wrap(errcode.ErrEnvelopeSchema, "outbox: marshal envelope", err)
 	}
 	return b, nil
 }
 
-// UnmarshalEnvelope tries to decode raw as a WireMessage envelope. If raw
-// looks like an envelope (has "id" + "eventType" + "payload" fields and
-// Payload starts with '{' or '['), it extracts payload + metadata into
-// a kernel/outbox.Entry. Otherwise it wraps raw as a fresh Entry with
-// topic as eventType (fallback compatibility with non-outbox publishes).
+// MarshalDirectEnvelope builds a v1 wire envelope for direct-publish paths
+// (demo mode L2 cells, L4 cells without outbox writer) that do not go through
+// the relay. The returned bytes are suitable for passing to outbox.Publisher.Publish.
 //
-// This function replaces duplicated logic in runtime/eventbus/eventbus.go
-// (unmarshalInboundEntry) and adapters/rabbitmq/subscriber.go (unmarshalDelivery).
+// eventType is the canonical event name (e.g. "event.session.created.v1") —
+// typically the same as topic for direct paths. id must be globally unique
+// (callers should use outbox.NewEntryID() to construct it). payload is the
+// business JSON bytes that handlers will receive in Entry.Payload after the
+// bus unwraps.
 //
-// Discriminator: require non-empty ID + EventType AND an embedded JSON payload
-// (starts with '{' or '['), matching the check in both transport adapters.
-// Business payloads that happen to parse as an envelope structure are guarded
-// by the isEmbeddedJSON check (very unlikely to be mis-detected).
-//
-// Fallback: raw is wrapped in a freshly stamped Entry with ID = "evt-" + UUID,
-// EventType = topic, and CreatedAt = time.Now(). This preserves pre-envelope
-// direct-publish semantics (InMemoryEventBus path).
-func UnmarshalEnvelope(topic string, raw []byte) (kout.Entry, error) {
-	var msg WireMessage
-	if err := json.Unmarshal(raw, &msg); err == nil &&
-		msg.ID != "" && msg.EventType != "" && isEmbeddedJSON(msg.Payload) {
-		return kout.Entry{
-			ID:            msg.ID,
-			AggregateID:   msg.AggregateID,
-			AggregateType: msg.AggregateType,
-			EventType:     msg.EventType,
-			Topic:         msg.Topic,
-			Payload:       []byte(msg.Payload),
-			Metadata:      msg.Metadata,
-			CreatedAt:     msg.CreatedAt,
-		}, nil
+// Panics on empty id or eventType — these are programmer errors (internal
+// producers pass compile-time constants / NewEntryID()), not runtime
+// conditions. Follows the stdlib Must-style convention (regexp.MustCompile,
+// netip.MustParseAddr) so callers are not forced to handle unreachable
+// branches. json.Marshal of a WireMessage with valid string/byte fields
+// does not fail, so the internal marshal error is also treated as unreachable.
+func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
+	if id == "" {
+		panic("outbox.MarshalDirectEnvelope: empty id")
 	}
-	// Fallback: wrap as a fresh entry (direct-publish / non-envelope semantics).
-	// Mirror of runtime/eventbus/eventbus.go unmarshalInboundEntry fallback branch.
-	return kout.Entry{
-		ID:        "evt-" + uuid.NewString(),
-		EventType: topic,
-		Payload:   raw,
-		CreatedAt: time.Now(),
-	}, nil
+	if eventType == "" {
+		panic("outbox.MarshalDirectEnvelope: empty eventType")
+	}
+	msg := WireMessage{
+		SchemaVersion: EnvelopeSchemaV1,
+		ID:            id,
+		EventType:     eventType,
+		Topic:         topic,
+		Payload:       json.RawMessage(payload),
+		CreatedAt:     time.Now().UTC(),
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		// Unreachable: WireMessage fields are strings and []byte; json.Marshal
+		// only fails on cyclic references or unsupported types, neither of which
+		// applies here. Panic so any regression surfaces at the call site.
+		panic("outbox.MarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
+	}
+	return b
 }
 
-// isEmbeddedJSON returns true if the raw JSON value is an object or array
-// (relay envelope payload), not a base64 string or primitive.
-// Mirrors the identical helpers in runtime/eventbus and adapters/rabbitmq.
-func isEmbeddedJSON(raw json.RawMessage) bool {
-	for _, b := range raw {
-		switch b {
-		case ' ', '\t', '\n', '\r':
-			continue
-		case '{', '[':
-			return true
-		default:
-			return false
-		}
+// UnmarshalEnvelope decodes a v1 wire envelope from raw bytes into a kernel/outbox.Entry.
+//
+// Fail-closed semantics (ref: Watermill router.go, K8s workqueue fail-closed):
+//   - JSON parse failure → ErrEnvelopeSchema-coded error wrapping the json error
+//     (distinct from ErrUnknownEnvelopeVersion by sentinel identity; callers that
+//     need to distinguish parse vs schema-version use errors.Is against the
+//     sentinel, while code-based observability groups both under
+//     ErrEnvelopeSchema)
+//   - schemaVersion != "v1" (or absent) → ErrUnknownEnvelopeVersion
+//   - empty ID or EventType → ErrEnvelopeSchema error
+//
+// Legacy fallback has been removed. All producers MUST emit v1 envelopes.
+// Consumers that receive non-v1 messages must Reject (route to DLX), not retry.
+func UnmarshalEnvelope(topic string, raw []byte) (kout.Entry, error) {
+	var msg WireMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return kout.Entry{}, errcode.Wrap(errcode.ErrEnvelopeSchema,
+			"outbox: unmarshal envelope", err)
 	}
-	return false
+
+	if msg.SchemaVersion != EnvelopeSchemaV1 {
+		return kout.Entry{}, ErrUnknownEnvelopeVersion
+	}
+
+	if msg.ID == "" {
+		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox: envelope missing required field: id")
+	}
+	if msg.EventType == "" {
+		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox: envelope missing required field: eventType")
+	}
+
+	return kout.Entry{
+		ID:            msg.ID,
+		AggregateID:   msg.AggregateID,
+		AggregateType: msg.AggregateType,
+		EventType:     msg.EventType,
+		Topic:         msg.Topic,
+		Payload:       []byte(msg.Payload),
+		Metadata:      msg.Metadata,
+		CreatedAt:     msg.CreatedAt,
+	}, nil
 }
