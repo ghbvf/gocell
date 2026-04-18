@@ -24,7 +24,8 @@ var (
 
 func init() {
 	var err error
-	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", auth.DefaultAccessTokenTTL)
+	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", auth.DefaultAccessTokenTTL,
+		auth.WithDefaultAudience("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -32,6 +33,35 @@ func init() {
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
+}
+
+// TestNewService_InheritsAudienceFromIssuer_Refresh verifies that the sessionrefresh
+// Service reads the default audience from issuer.DefaultAudience() and uses it when
+// minting new tokens during rotation, without relying on a hard-coded constant.
+func TestNewService_InheritsAudienceFromIssuer_Refresh(t *testing.T) {
+	svc, sessionRepo := newTestService("usr-aud-refresh")
+
+	rt := issueTestToken("usr-aud-refresh")
+	sess, err := domain.NewSession("usr-aud-refresh", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-aud-refresh"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.Contains(t, accessClaims.Audience, "gocell",
+		"rotated access token aud must come from issuer.DefaultAudience()")
+
+	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
+	require.NoError(t, err)
+	assert.Contains(t, refreshClaims.Audience, "gocell",
+		"rotated refresh token aud must come from issuer.DefaultAudience()")
 }
 
 // newTestService creates a refresh service with a minimal in-memory userRepo
@@ -64,7 +94,7 @@ func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRe
 
 func issueTestToken(sub string) string {
 	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, auth.IssueOptions{
-		Audience: []string{auth.DefaultJWTAudience},
+		Audience: []string{"gocell"},
 	})
 	return tok
 }
@@ -264,7 +294,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 
 	// Issue a token with sid claim to tie to a session.
 	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", auth.IssueOptions{
-		Audience:  []string{auth.DefaultJWTAudience},
+		Audience:  []string{"gocell"},
 		SessionID: "sess-sa",
 	})
 	require.NoError(t, err)
