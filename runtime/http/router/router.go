@@ -276,21 +276,13 @@ func WithTrustedProxies(proxies []string) Option {
 //
 // Chain order for business requests:
 //
-//	RateLimit → CircuitBreaker → Auth (JWT) → BodyLimit → InternalGuard → handler
+//	RateLimit → CircuitBreaker → Auth (JWT/delegated) → BodyLimit → InternalGuard → handler
 //
-// The Auth middleware runs before InternalGuard. Call sites should therefore
-// choose one of the following strategies:
-//
-//	(a) Add the /internal/v1/* paths to the Auth middleware's public-endpoints
-//	    whitelist (bootstrap.WithPublicEndpoints). The guard then becomes the
-//	    sole protection layer for internal endpoints.
-//
-//	(b) Accept double protection: both JWT validation AND the service-token
-//	    guard are required. Callers must present a valid JWT AND a valid
-//	    service token to reach the handler.
-//
-// The current bootstrap default wiring is (b). Option (a) is appropriate when
-// machine-to-machine callers cannot easily obtain a user JWT.
+// Installing this option automatically marks the prefix as "JWT-delegated" in
+// AuthMiddleware: requests whose path starts with prefix bypass JWT verification
+// entirely and proceed directly to InternalGuard, which becomes the sole
+// authentication layer for that prefix. This makes machine-to-machine callers
+// (service tokens, HMAC) work without a user JWT.
 //
 // ref: go-kratos/kratos middleware/selector — default-deny + Option injection
 // for per-route middleware application.
@@ -298,6 +290,14 @@ func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Ha
 	return func(r *Router) {
 		r.internalGuardPrefix = prefix
 		r.internalGuard = guard
+		// Auto-delegate JWT for the guard prefix: the guard is the sole auth layer
+		// for requests under this prefix. AuthMiddleware will call next directly
+		// without verifying any Bearer token, passing the request to InternalGuard.
+		// This is set unconditionally here; validateInternalGuard() enforces that
+		// prefix is valid before NewE returns.
+		r.authDelegatedMatcher = func(req *http.Request) bool {
+			return strings.HasPrefix(req.URL.Path, prefix)
+		}
 	}
 }
 
@@ -345,6 +345,12 @@ type Router struct {
 	// Both fields must be set together (validated in NewE).
 	internalGuardPrefix string
 	internalGuard       func(http.Handler) http.Handler
+
+	// authDelegatedMatcher is a per-request predicate that marks paths where JWT
+	// authentication is delegated to a downstream middleware (e.g. the internal
+	// guard). When set, AuthMiddleware forwards these requests to next without any
+	// JWT check. Auto-populated by WithInternalPathPrefixGuard.
+	authDelegatedMatcher func(*http.Request) bool
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -533,6 +539,9 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 	// call WithPublicEndpoints continue to use the []string path (no regression).
 	if r.authPublicMatcher != nil {
 		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
+	}
+	if r.authDelegatedMatcher != nil {
+		opts = append(opts, auth.WithDelegatedMatcher(r.authDelegatedMatcher))
 	}
 	if r.passwordResetExemptMatcher != nil {
 		opts = append(opts, auth.WithPasswordResetExemptMatcher(r.passwordResetExemptMatcher))

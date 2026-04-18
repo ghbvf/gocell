@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,6 +175,118 @@ func TestWithInternalEndpointGuard_Wiring(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, int64(1), guardCount.Load(), "guard must NOT be invoked for /healthz")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// guardSentinelVerifier is an IntentTokenVerifier that always fails. Used in
+// TestWithInternalEndpointGuard_BypassesJWT to detect if AuthMiddleware ran for
+// a delegated path (it must not).
+type guardSentinelVerifier struct{ called atomic.Int64 }
+
+func (v *guardSentinelVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
+	v.called.Add(1)
+	return auth.Claims{}, errors.New("sentinel: JWT verifier must not be called for delegated paths")
+}
+
+// TestWithInternalEndpointGuard_BypassesJWT is the end-to-end bootstrap test
+// that validates the core fix for PR#185 P1:
+//
+//   - /internal/v1/* requests without an Authorization header must NOT be 401'd
+//     by AuthMiddleware (JWT guard bypass via delegated-endpoints exemption).
+//   - /api/v1/* requests without an Authorization header still receive 401 from
+//     AuthMiddleware (non-delegated paths are not affected).
+func TestWithInternalEndpointGuard_BypassesJWT(t *testing.T) {
+	ln := newLocalListener(t)
+
+	// JWT verifier that always fails — if it runs for /internal/v1/*, the test fails.
+	jwtVerifier := &guardSentinelVerifier{}
+
+	// Guard that writes a distinctive status code so we can tell the guard ran
+	// (not JWT middleware).
+	var guardCount atomic.Int64
+	guard := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			guardCount.Add(1)
+			// Guard rejects as "missing service token" — 401 from guard, not JWT.
+			http.Error(w, "missing service token", http.StatusUnauthorized)
+		})
+	}
+
+	asm := assembly.New(assembly.Config{ID: "bypass-jwt-test", DurabilityMode: cell.DurabilityDemo})
+
+	internalCell := newRouteRegisterCell("internal-cell", "/internal/v1/roles",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK) // only reached if guard allows
+		}))
+	apiCell := newRouteRegisterCell("api-cell", "/api/v1/users",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+
+	require.NoError(t, asm.Register(internalCell))
+	require.NoError(t, asm.Register(apiCell))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithAuthMiddleware(jwtVerifier, nil),
+		WithInternalEndpointGuard("/internal/v1/", guard),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, e := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if e != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// /internal/v1/* without Authorization → guard runs, NOT JWT middleware.
+	t.Run("internal_bypasses_jwt_reaches_guard", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/internal/v1/roles", addr), nil)
+		require.NoError(t, err)
+		// No Authorization header.
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		assert.Equal(t, int64(0), jwtVerifier.called.Load(),
+			"JWT verifier must not be called for delegated /internal/v1/* path")
+		assert.Equal(t, int64(1), guardCount.Load(),
+			"guard must be invoked for /internal/v1/* request")
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"guard returned 401 (missing service token) — not JWT 401")
+	})
+
+	// /api/v1/* without Authorization → JWT middleware must reject (not affected).
+	t.Run("api_still_requires_jwt", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/users", addr), nil)
+		require.NoError(t, err)
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"/api/v1/* without JWT must still receive 401 from AuthMiddleware")
+		assert.Equal(t, int64(1), guardCount.Load(),
+			"guard must NOT be invoked for /api/v1/* (count unchanged at 1)")
+	})
 
 	cancel()
 	select {
