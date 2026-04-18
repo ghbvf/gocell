@@ -69,7 +69,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 			})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "test.envelope.topic"})
 
 	// Envelope wrapping a business payload (action/key/value), mirroring the
 	// shape produced by adapters/postgres/outbox_relay.go publishAll.
@@ -130,7 +130,7 @@ func TestPublish_InvalidEnvelope_Dropped(t *testing.T) {
 			})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "test.invalid.topic"})
 
 	// Non-v1 payload: missing schemaVersion — must be dead-lettered, not delivered.
 	nonEnvelope := []byte(`{"action":"updated","key":"k2","value":"v2"}`)
@@ -169,8 +169,8 @@ func TestPublishSubscribe(t *testing.T) {
 		})
 	}()
 
-	// Give subscriber time to register.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for subscriber to register.
+	<-bus.Ready(outbox.Subscription{Topic: "test.topic"})
 
 	msg1 := makeTestEnvelope(t, "test.topic", []byte(`{"key":"value"}`), "msg-1")
 	err := bus.Publish(context.Background(), "test.topic", msg1)
@@ -221,7 +221,7 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "retry.topic"})
 
 	err := bus.Publish(context.Background(), "retry.topic", makeSimpleEnvelope(t, "retry.topic"))
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "reject.topic"})
 
 	err := bus.Publish(context.Background(), "reject.topic", makeSimpleEnvelope(t, "reject.topic"))
 	require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "perm.requeue"})
 
 	err := bus.Publish(context.Background(), "perm.requeue", makeSimpleEnvelope(t, "perm.requeue"))
 	require.NoError(t, err)
@@ -438,7 +438,13 @@ func TestMultipleSubscribers(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	// Wait for both broadcast subscribers to be registered before publishing.
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		gs := bus.groupSubs["multi.topic"][""]
+		return gs != nil && len(gs.subs) == 2
+	}, time.Second, 5*time.Millisecond)
 
 	err := bus.Publish(context.Background(), "multi.topic", makeSimpleEnvelope(t, "multi.topic"))
 	require.NoError(t, err)
@@ -469,7 +475,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "partial.fail"})
 
 	err := bus.Publish(context.Background(), "partial.fail", makeSimpleEnvelope(t, "partial.fail"))
 	require.NoError(t, err)
@@ -479,8 +485,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond)
 
 	// Should NOT be in dead letter (succeeded on 3rd attempt).
-	time.Sleep(100 * time.Millisecond)
-	assert.Equal(t, 0, bus.DeadLetterLen())
+	assert.Equal(t, 0, bus.DeadLetterLen(), "message must not land in dead letter after successful retry")
 
 	cancel()
 	<-done
@@ -511,7 +516,7 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	}()
 
 	// Wait for subscriber to register.
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "cleanup.topic"})
 
 	bus.mu.RLock()
 	gs := bus.groupSubs["cleanup.topic"][""]
@@ -574,7 +579,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "receipt.ack"})
 
 	err := bus.Publish(context.Background(), "receipt.ack", makeSimpleEnvelope(t, "receipt.ack"))
 	require.NoError(t, err)
@@ -607,7 +612,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "receipt.reject"})
 
 	err := bus.Publish(context.Background(), "receipt.reject", makeSimpleEnvelope(t, "receipt.reject"))
 	require.NoError(t, err)
@@ -645,7 +650,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "receipt.requeue"})
 
 	err := bus.Publish(context.Background(), "receipt.requeue", makeSimpleEnvelope(t, "receipt.requeue"))
 	require.NoError(t, err)
@@ -696,7 +701,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "receipt.exhaust"})
 
 	err := bus.Publish(context.Background(), "receipt.exhaust", makeSimpleEnvelope(t, "receipt.exhaust"))
 	require.NoError(t, err)
@@ -751,7 +756,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "zero.disp"})
 
 	start := time.Now()
 	err := bus.Publish(context.Background(), "zero.disp", makeSimpleEnvelope(t, "zero.disp"))
@@ -809,7 +814,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "unknown.disp"})
 
 	start := time.Now()
 	err := bus.Publish(context.Background(), "unknown.disp", makeSimpleEnvelope(t, "unknown.disp"))
@@ -857,7 +862,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "cancel.disp"})
 
 	err := bus.Publish(context.Background(), "cancel.disp", makeSimpleEnvelope(t, "cancel.disp"))
 	require.NoError(t, err)
