@@ -4,10 +4,13 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/tests/testutil"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -221,6 +224,12 @@ func TestIntegration_DistLock_Release_AfterNaturalExpiry_SkipsDEL(t *testing.T) 
 	_, err = client.cmdable().Del(context.Background(), key).Result()
 	require.NoError(t, err)
 
-	// Release should detect expired and skip DEL entirely.
-	require.NoError(t, lock.Release(ctx), "Release must be nil when lock already expired")
+	// Release should detect expired and skip DEL entirely, returning ErrLockLost
+	// per the unified contract (past-expiry is "no longer owned" symmetrically
+	// with the Lua result==0 path). See runtime/distlock/errors.go ErrLockLost.
+	err = lock.Release(ctx)
+	require.Error(t, err, "Release must return ErrLockLost when lock already expired via TTL")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must wrap errcode.Error")
+	require.Equal(t, distlock.ErrLockLost, ec.Code, "error code must be ErrLockLost")
 }
