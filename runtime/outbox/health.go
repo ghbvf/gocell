@@ -135,6 +135,19 @@ func (b *FailureBudget) Checker() func() error {
 	}
 }
 
+// Reset clears the consecutive failure counter and tripped state.
+// Called on Relay.Start to avoid stale state from a previous run.
+// Does NOT log; silent state reset.
+func (b *FailureBudget) Reset() {
+	if b.threshold <= 0 {
+		return
+	}
+	b.consec.Store(0)
+	b.tripped.Store(false)
+	b.loggedTrip.Store(false)
+	b.loggedRecover.Store(false)
+}
+
 // Tripped returns true when the consecutive failure count has reached the
 // threshold and has not yet been reset by a successful Record(nil) call.
 func (b *FailureBudget) Tripped() bool {

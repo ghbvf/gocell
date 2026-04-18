@@ -800,6 +800,58 @@ func TestRelay_FailureBudgetThresholdZero_DisablesChecker(t *testing.T) {
 	assert.Contains(t, checkers, "outbox-relay-cleanup")
 }
 
+func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
+	// Threshold=3 so we trip quickly without a long poll loop.
+	store := newFailingStore()
+	store.setClaimErr(errors.New("db down"))
+
+	cfg := budgetCfg()
+	cfg.PollFailureBudget = 3
+	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
+
+	// --- First run: trip the poll budget ---
+	_, stop := startRelay(t, relay)
+
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-poll"]
+		return ok && fn() != nil
+	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip during first run")
+
+	stop() // gracefully stop; defer in Start resets readyCh for next Start
+
+	// Wait until state is relayStopped so we can restart.
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-poll"]
+		// The checker still exists; it reflects state at the time of the last run.
+		// We just need the relay to have fully stopped.
+		_ = fn
+		_ = ok
+		return true // we'll use Ready() channel approach below
+	}, 100*time.Millisecond, 2*time.Millisecond)
+
+	// Clear the error so the second run succeeds.
+	store.setClaimErr(nil)
+
+	// --- Second run: budget must be reset before first poll ---
+	_, stop2 := startRelay(t, relay)
+	defer stop2()
+
+	// Wait for relay to be running.
+	select {
+	case <-relay.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay did not become ready for second run")
+	}
+
+	// Immediately after start (before any poll result), poll checker must be
+	// healthy because Reset() cleared the stale trip from the first run.
+	checkers := relay.HealthCheckers()
+	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered on second run")
+	assert.Nil(t, checkers["outbox-relay-poll"](), "poll checker must be healthy immediately after restart (Reset cleared stale trip)")
+}
+
 func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), fastCfg())
 

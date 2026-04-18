@@ -176,6 +176,18 @@ func (r *Relay) Start(ctx context.Context) error {
 	r.wg.Add(3)
 	r.mu.Unlock()
 
+	// Reset budgets so stale trip state from a previous run does not bleed into
+	// the new run.  Must happen after CAS (exclusive) and before goroutines start.
+	if r.pollBudget != nil {
+		r.pollBudget.Reset()
+	}
+	if r.reclaimBudget != nil {
+		r.reclaimBudget.Reset()
+	}
+	if r.cleanupBudget != nil {
+		r.cleanupBudget.Reset()
+	}
+
 	r.state.Store(int32(relayRunning))
 	close(r.readyCh)
 

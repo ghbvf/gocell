@@ -185,3 +185,38 @@ func TestFailureBudget_TripAndRecover_LogsOnce(t *testing.T) {
 	assert.Equal(t, 1, h.countByLevel(slog.LevelInfo),
 		"repeated successes after recover must not re-log Info")
 }
+
+// ---------------------------------------------------------------------------
+// TestFailureBudget_Reset_ClearsState
+// ---------------------------------------------------------------------------
+
+func TestFailureBudget_Reset_ClearsState(t *testing.T) {
+	const threshold = 3
+	fb := outbox.NewFailureBudget("reset-test", threshold)
+
+	// Trip the budget.
+	for range threshold {
+		fb.Record(errors.New("err"))
+	}
+	require.True(t, fb.Tripped(), "budget must be tripped before Reset")
+	require.Equal(t, int64(threshold), fb.ConsecutiveFailures())
+
+	// Reset must clear all state.
+	fb.Reset()
+	assert.False(t, fb.Tripped(), "Reset must clear tripped state")
+	assert.Equal(t, int64(0), fb.ConsecutiveFailures(), "Reset must clear consecutive failure count")
+	assert.Nil(t, fb.Checker()(), "Checker must return nil (healthy) after Reset")
+
+	// Verify reset budget can trip again after threshold new failures.
+	for range threshold {
+		fb.Record(errors.New("err"))
+	}
+	assert.True(t, fb.Tripped(), "budget must be able to trip again after Reset")
+}
+
+func TestFailureBudget_Reset_DisabledBudget_Noop(t *testing.T) {
+	fb := outbox.NewFailureBudget("disabled", 0) // threshold=0 → disabled
+	// Should not panic.
+	fb.Reset()
+	assert.False(t, fb.Tripped())
+}
