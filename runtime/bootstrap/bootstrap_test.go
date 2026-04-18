@@ -27,6 +27,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3553,6 +3555,153 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 		"HEAD must bypass auth when GET is declared public (RFC 7231 §4.3.2 alias)")
 	assert.Equal(t, int32(0), verifier.callCount.Load(),
 		"verifier must not be called for HEAD request to GET-public endpoint")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B3 WithRelayHealth tests
+// ---------------------------------------------------------------------------
+
+func newTestRelay() *runtimeoutbox.Relay {
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    3,
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	return runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
+}
+
+func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
+	ln := newLocalListener(t)
+
+	asm := assembly.New(assembly.Config{ID: "test-relay-health", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	relay := newTestRelay()
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithRelayHealth(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// GET /readyz?verbose — all three relay checkers must appear.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+
+	assert.Contains(t, deps, "outbox-relay-poll", "poll checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox-relay-reclaim", "reclaim checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox-relay-cleanup", "cleanup checker must be in /readyz?verbose")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+func TestWithRelayHealth_NilRelay_FailsFast(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-relay-nil", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(newLocalListener(t)),
+		WithShutdownTimeout(2*time.Second),
+		WithRelayHealth(nil),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "relay")
+}
+
+func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "test-relay-disabled", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	// Build a relay with poll budget disabled (=0), others enabled.
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    0, // disabled
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithRelayHealth(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, _ := body["dependencies"].(map[string]any)
+
+	assert.NotContains(t, deps, "outbox-relay-poll",
+		"disabled poll budget must not register a checker")
+	assert.Contains(t, deps, "outbox-relay-reclaim")
+	assert.Contains(t, deps, "outbox-relay-cleanup")
 
 	cancel()
 	select {

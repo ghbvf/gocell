@@ -33,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
@@ -361,6 +362,31 @@ func WithBrokerHealth(bc BrokerHealthChecker) Option {
 	}
 }
 
+// WithRelayHealth registers the relay's named health checkers (one per enabled
+// FailureBudget) into the /readyz endpoint. Checkers are named:
+//
+//   - "outbox-relay-poll"
+//   - "outbox-relay-reclaim"
+//   - "outbox-relay-cleanup"
+//
+// Only budgets with a positive threshold are registered; threshold=0 (disabled)
+// budgets are silently skipped. A nil relay is rejected at Run() time with a
+// fatal error, mirroring the WithBrokerHealth fail-fast contract.
+//
+// ref: controller-runtime AddReadyzCheck — named-checker aggregation pattern.
+// ref: runtime/bootstrap.WithBrokerHealth — sibling fail-fast pattern.
+func WithRelayHealth(r *runtimeoutbox.Relay) Option {
+	return func(b *Bootstrap) {
+		if r == nil {
+			b.relayHealthNil = true
+			return
+		}
+		for name, fn := range r.HealthCheckers() {
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+		}
+	}
+}
+
 // isNilBrokerHealthChecker detects both plain-nil interface values and the
 // "typed nil" gotcha (non-nil interface wrapping a nil pointer/slice/etc.).
 // The typed-nil case would satisfy `bc != nil` but panic on method dispatch.
@@ -603,6 +629,10 @@ type Bootstrap struct {
 	// time via router.WithInternalPathPrefixGuard after prefix validation.
 	internalGuardPrefix string
 	internalGuard       func(http.Handler) http.Handler
+
+	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
+	// Checked at Run() to fail-fast rather than silently skipping relay health.
+	relayHealthNil bool
 }
 
 // New creates a Bootstrap with the given options.
@@ -688,6 +718,12 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// rather than silently operating without the intended protection.
 	if err := b.validateInternalGuard(); err != nil {
 		return err
+	}
+
+	// Fail-fast: nil relay passed to WithRelayHealth — surfaces misconfiguration
+	// at startup instead of silently skipping relay health registration.
+	if b.relayHealthNil {
+		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
 	}
 
 	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
