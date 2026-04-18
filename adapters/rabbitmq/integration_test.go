@@ -555,6 +555,6 @@ func (n *noopClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (id
 
 type noopReceipt struct{}
 
-func (n *noopReceipt) Commit(_ context.Context) error                    { return nil }
-func (n *noopReceipt) Release(_ context.Context) error                   { return nil }
-func (n *noopReceipt) Extend(_ context.Context, _ time.Duration) error   { return nil }
+func (n *noopReceipt) Commit(_ context.Context) error                  { return nil }
+func (n *noopReceipt) Release(_ context.Context) error                 { return nil }
+func (n *noopReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }

@@ -131,6 +131,19 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	}
 
 	entry := unmarshalInboundEntry(topic, payload)
+
+	// Defense-in-depth: reject malformed entries at the consumer entry, before
+	// any subscriber sees them. Mirrors adapters/rabbitmq.processDelivery —
+	// production senders satisfy these invariants, but a tampered payload or
+	// adapter regression must not propagate to handlers.
+	if err := entry.Validate(); err != nil {
+		slog.Warn("eventbus: dropping invalid entry at consumer entry",
+			slog.String("topic", topic),
+			slog.String("entry_id", entry.ID),
+			slog.String("error", err.Error()))
+		return errcode.Wrap(errcode.ErrValidationFailed, "eventbus: invalid inbound entry", err)
+	}
+
 	for group, gs := range b.groupSubs[topic] {
 		if len(gs.subs) == 0 {
 			continue
@@ -399,7 +412,16 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if res.Receipt != nil {
-			commitReceipt(ctx, res.Receipt, topic, entry.ID)
+			if commitErr := commitReceipt(ctx, res.Receipt, topic, entry.ID); commitErr != nil {
+				// Mirror rabbitmq.dispatchAck: Commit failure (lease lost,
+				// token mismatch, backend error) MUST NOT be silently
+				// promoted to success. Treat as transient → retry path.
+				slog.Warn("eventbus: receipt commit failed, downgrading Ack to Requeue",
+					slog.String("topic", topic),
+					slog.String("entry_id", entry.ID),
+					slog.String("error", commitErr.Error()))
+				return false, commitErr
+			}
 		}
 		return true, nil
 	case outbox.DispositionReject:
@@ -495,8 +517,12 @@ func (b *InMemoryEventBus) appendDeadLetter(topic string, entry outbox.Entry, er
 }
 
 // commitReceipt calls Receipt.Commit with a detached 5s-timeout context,
-// consistent with the RabbitMQ subscriber path.
-func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
+// consistent with the RabbitMQ subscriber path. Returns the Commit error so
+// the caller can downgrade Ack to Requeue on lease-loss / token-mismatch /
+// backend failure (matches rabbitmq.dispatchAck Commit→Ack ordering — Commit
+// failure must NOT be silently swallowed, otherwise stale holders could
+// "succeed" after losing the lease).
+func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) error {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := r.Commit(rctx); err != nil {
@@ -504,7 +530,9 @@ func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string)
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
 			slog.String("error", err.Error()))
+		return err
 	}
+	return nil
 }
 
 // releaseReceipt calls Receipt.Release with a detached 5s-timeout context.

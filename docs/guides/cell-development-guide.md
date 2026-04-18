@@ -104,20 +104,35 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 ### 5. 注册事件订阅（可选）
 
-实现 `cell.EventRegistrar` 接口：
+实现 `cell.EventRegistrar` 接口，**通过 EventRouter 声明订阅意图**——
+禁止手动启动 goroutine 或直接调 `Subscriber.Subscribe`，goroutine 生命周期、
+错误收敛、Setup/Ready 阶段一律由 Router 统一接管。
 
 ```go
 var _ cell.EventRegistrar = (*MyCell)(nil)
 
-func (c *MyCell) RegisterSubscriptions(sub outbox.Subscriber) {
-    go func() {
-        ctx := context.Background()
-        if err := sub.Subscribe(ctx, "my.topic", c.svc.HandleEvent); err != nil {
-            c.logger.Error("subscription ended", slog.Any("error", err))
-        }
-    }()
+// RegisterSubscriptions 在启动阶段被框架调用一次。每次 AddHandler 注册
+// 一个 (topic, handler, consumerGroup) 三元组：
+//   - topic         : broker 路由键
+//   - handler       : outbox.EntryHandler 业务处理函数
+//   - consumerGroup : 通常等于 cell.ID()，作为幂等键命名空间；同 group 竞争消费，
+//                     不同 group 各自一份（fanout）
+//
+// 框架会包装 ConsumerBase（两阶段 Claim/Commit/Release + 退避重试 + DLX 路由），
+// 业务 handler 只需返回 outbox.HandleResult{Disposition: Ack/Requeue/Reject}。
+func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
+    handler := outbox.WrapLegacyHandler(c.svc.HandleEvent) // 旧签名 → EntryHandler
+    r.AddHandler("my.topic.v1", handler, c.ID())
+    return nil
 }
 ```
+
+EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
+1. **Setup**：串行调 `Subscriber.Setup(sub)` 声明 broker topology；任一失败立即终止
+2. **Subscribe**：每个 handler 起一个 goroutine 调 `Subscribe(ctx, sub, handler)`
+3. **Ready**：等所有 `Subscriber.Ready(sub)` channel close（默认 30s 超时；
+   `bootstrap.WithEventRouterReadyTimeout` 可调），任何未就绪的订阅会出现在错误信息中
+4. **Block**：阻塞至 ctx cancel 或运行时错误
 
 ### 6. 注册到 Assembly
 

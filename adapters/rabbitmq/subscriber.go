@@ -490,16 +490,11 @@ func (s *Subscriber) nackPermanent(ch AMQPChannel, tag uint64, topic string) {
 	}
 }
 
-// validateEntryID returns the reason string if entry.ID is invalid ("empty" or
-// "too_long"), or empty string if the ID is acceptable.
-func validateEntryID(id string) string {
-	if id == "" {
-		return "empty"
-	}
-	if len(id) > maxEntryIDLength {
-		return "too_long"
-	}
-	return ""
+// validateEntryIDLength returns true if entry.ID exceeds the AMQP shortstr
+// limit. Kept separate so that the too-long branch can log the truncated
+// length for diagnostics; outbox.Entry.Validate covers the empty-ID case.
+func validateEntryIDLength(id string) bool {
+	return len(id) > maxEntryIDLength
 }
 
 func (s *Subscriber) processDelivery(
@@ -522,21 +517,27 @@ func (s *Subscriber) processDelivery(
 		return
 	}
 
-	// Guard: reject entries with invalid ID before touching metadata or invoking handler.
-	// Defense-in-depth — valid WireMessage envelopes always have a non-empty ID, but
-	// the legacy fallback path and future format changes could produce invalid IDs.
-	if reason := validateEntryID(entry.ID); reason != "" {
-		attrs := []slog.Attr{
+	// AMQP shortstr cap: too-long IDs cannot survive a broker round-trip, so
+	// reject before touching metadata. Logged with capped length to indicate
+	// overflow magnitude without exposing the full byte count.
+	if validateEntryIDLength(entry.ID) {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: entry.ID exceeds AMQP shortstr limit, nacking without requeue",
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
-			slog.String("reason", reason),
-		}
-		if reason == "too_long" {
-			// Cap the logged length to 2× maxEntryIDLength (510) to indicate
-			// overflow magnitude without exposing the full byte count.
-			attrs = append(attrs, slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
-		}
-		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry.ID, nacking without requeue", attrs...)
+			slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
+		s.nackPermanent(ch, delivery.DeliveryTag, topic)
+		return
+	}
+
+	// Unified Entry validation at consumer entry: covers empty ID, missing
+	// Topic+EventType, empty Payload, and metadata size limits in one place.
+	// Defense-in-depth — production senders satisfy these invariants, but a
+	// malformed broker delivery (e.g. tampered payload) must not reach handlers.
+	if err := entry.Validate(); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry, nacking without requeue",
+			slog.String(logKeyTopic, topic),
+			slog.Uint64("delivery_tag", delivery.DeliveryTag),
+			slog.String("error", err.Error()))
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -714,7 +715,12 @@ func (s *Subscriber) Close() error {
 		slog.Warn("rabbitmq: subscriber shutdown timed out, channels not force-closed",
 			slog.Duration("timeout", s.config.ShutdownTimeout),
 			slog.Int("remaining_channels", remaining))
-		return nil
+		// Surface the timeout to the caller so bootstrap teardown does not
+		// report success when in-flight handlers are still holding channels.
+		// Channels are deferred to process exit (see Two-phase shutdown above).
+		return errcode.New(ErrAdapterAMQPCloseTimeout,
+			fmt.Sprintf("rabbitmq: subscriber Close timed out after %s with %d channel(s) still in use",
+				s.config.ShutdownTimeout, remaining))
 	}
 
 	// All goroutines have exited — safe to close the AMQP channels.

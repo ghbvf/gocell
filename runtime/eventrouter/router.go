@@ -27,8 +27,20 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// Option configures a Router. The Option type is retained for future extensibility.
+// DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
+// signals Ready (broker reconnect storm, mis-configured topology) does not
+// block bootstrap indefinitely. 30s aligns with Uber fx StartTimeout default.
+// Set to a non-positive value via WithReadyTimeout to disable the bound.
+const DefaultReadyTimeout = 30 * time.Second
+
+// Option configures a Router.
 type Option func(*Router)
+
+// WithReadyTimeout overrides the default ready-wait budget. A value <= 0
+// disables the timeout (waits indefinitely on Ready channels and ctx).
+func WithReadyTimeout(d time.Duration) Option {
+	return func(r *Router) { r.readyTimeout = d }
+}
 
 type handlerConfig struct {
 	topic         string
@@ -42,18 +54,19 @@ type handlerConfig struct {
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
 type Router struct {
-	subscriber  outbox.Subscriber
-	handlers    []handlerConfig
-	mu          sync.Mutex
-	running     chan struct{}
-	runGuard    sync.Once // ensures Run is called at most once
-	runningOnce sync.Once // ensures close(r.running) is called at most once
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	statusMu    sync.RWMutex
-	started     bool
-	shutdown    bool
-	healthErr   error
+	subscriber   outbox.Subscriber
+	handlers     []handlerConfig
+	mu           sync.Mutex
+	readyTimeout time.Duration
+	running      chan struct{}
+	runGuard     sync.Once // ensures Run is called at most once
+	runningOnce  sync.Once // ensures close(r.running) is called at most once
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	statusMu     sync.RWMutex
+	started      bool
+	shutdown     bool
+	healthErr    error
 }
 
 // Compile-time interface check.
@@ -62,8 +75,9 @@ var _ cell.EventRouter = (*Router)(nil)
 // New creates a Router that will use the given Subscriber for all subscriptions.
 func New(sub outbox.Subscriber, opts ...Option) *Router {
 	r := &Router{
-		subscriber: sub,
-		running:    make(chan struct{}),
+		subscriber:   sub,
+		readyTimeout: DefaultReadyTimeout,
+		running:      make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(r)
@@ -239,6 +253,13 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan error) error {
 	allReady := r.awaitAllReady(ctx, handlers)
 
+	var deadlineCh <-chan time.Time
+	if r.readyTimeout > 0 {
+		timer := time.NewTimer(r.readyTimeout)
+		defer timer.Stop()
+		deadlineCh = timer.C
+	}
+
 	select {
 	case <-allReady:
 		// All subscriptions are ready.
@@ -249,17 +270,48 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 			slog.Any("error", err))
 		cancel()
 		r.wg.Wait()
-		// Drain setupErr to prevent goroutine leak in runSubscribe goroutines
-		// that may still be trying to send after ctx cancellation.
-		go func() {
-			for range setupErr { //nolint:revive
-			}
-		}()
+		// No drain needed: setupErr buffer == len(handlers) guarantees every
+		// runSubscribe goroutine can send once without blocking. ctx cancel
+		// stops further sends; remaining buffered errors are GC'd with the
+		// channel when Run returns.
+		return err
+	case <-deadlineCh:
+		notReady := r.diagnoseNotReady(handlers)
+		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
+			len(notReady), len(handlers), r.readyTimeout, notReady)
+		r.markHealthError(err)
+		slog.Error("eventrouter: ready timeout exceeded, shutting down",
+			slog.Duration("timeout", r.readyTimeout),
+			slog.Int("not_ready_count", len(notReady)),
+			slog.Any("not_ready", notReady))
+		cancel()
+		r.wg.Wait()
 		return err
 	case <-ctx.Done():
 		r.wg.Wait()
 		return ctx.Err()
 	}
+}
+
+// diagnoseNotReady returns "consumerGroup/topic" identifiers for subscriptions
+// whose Ready channel has not closed. Used by ready-timeout error reporting
+// so operators can see which subscription is stuck without trawling logs.
+func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
+	var notReady []string
+	for _, h := range handlers {
+		sub := outbox.Subscription{
+			Topic:         h.topic,
+			ConsumerGroup: h.consumerGroup,
+			CellID:        h.consumerGroup,
+		}
+		select {
+		case <-r.subscriber.Ready(sub):
+			// ready
+		default:
+			notReady = append(notReady, fmt.Sprintf("%s/%s", h.consumerGroup, h.topic))
+		}
+	}
+	return notReady
 }
 
 // awaitAllReady launches one goroutine per handler that waits on Ready, then
