@@ -26,6 +26,6 @@ type NoopWatcherCollector struct{}
 // collector is configured. Real implementations live in adapters/ (e.g.
 // Prometheus, OTel) and are injected via WithMetrics.
 
-func (NoopWatcherCollector) RecordEvent(string)                {}
+func (NoopWatcherCollector) RecordEvent(string)                 {}
 func (NoopWatcherCollector) RecordLastEventTimestamp(time.Time) {}
 func (NoopWatcherCollector) RecordDebounceCoalesced()           {}

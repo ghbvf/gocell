@@ -128,6 +128,9 @@ func TestMockReceipt_WithErrors(t *testing.T) {
 }
 
 func TestFeatures_SetDefaults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("setDefaults uses reduced values in -short mode; full defaults tested in normal mode only")
+	}
 	f := Features{}
 	f.setDefaults()
 

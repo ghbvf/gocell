@@ -133,7 +133,7 @@ type Watcher struct {
 	readyOnce  sync.Once
 
 	cfg           watcherConfig
-	lastResolved  string     // last resolved symlink target
+	lastResolved  string // last resolved symlink target
 	debounceTimer *time.Timer
 	maxTimer      *time.Timer
 	pendingPivot  bool           // true if any coalesced event was a symlink pivot
