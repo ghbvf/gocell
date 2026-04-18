@@ -113,6 +113,12 @@ const (
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"
 
+	// Outbox relay health error codes.
+	// ErrRelayBudgetExhausted signals that an outbox relay operation (poll /
+	// reclaim / cleanup) has exceeded its consecutive-failure threshold, tripping
+	// the failure budget and marking /readyz unhealthy.
+	ErrRelayBudgetExhausted Code = "ERR_RELAY_BUDGET_EXHAUSTED"
+
 	// Observability configuration error.
 	// Raised by kernel / runtime observability constructors when a
 	// required dependency (Provider, cellID) is missing or malformed.
