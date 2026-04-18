@@ -95,7 +95,7 @@ func truncate(s string, n int) string {
 type Entry struct {
 	// ID is the canonical idempotency identifier. Consumers SHOULD use this
 	// field to construct idempotency keys.
-	ID string
+	ID            string
 	AggregateID   string
 	AggregateType string
 	EventType     string

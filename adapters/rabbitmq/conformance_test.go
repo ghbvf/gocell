@@ -10,10 +10,11 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // envelopingPublisher wraps a raw Publisher to serialize payloads into the
-// outboxWireMessage envelope expected by the RabbitMQ subscriber's
+// outboxrt.WireMessage envelope expected by the RabbitMQ subscriber's
 // unmarshalDelivery. Without this wrapper, the conformance harness publishes
 // bare JSON payloads (e.g., {"seq":0}), but the subscriber expects an envelope
 // with id, eventType, and an embedded payload field.
@@ -27,7 +28,7 @@ type envelopingPublisher struct {
 
 func (p *envelopingPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
 	entry := outboxtest.NewEntry(topic, payload)
-	wire := outboxWireMessage{
+	wire := outboxrt.WireMessage{
 		ID:        entry.ID,
 		EventType: entry.EventType,
 		Topic:     entry.Topic,

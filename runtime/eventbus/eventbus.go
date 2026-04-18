@@ -9,7 +9,6 @@ package eventbus
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"math/rand/v2"
@@ -19,7 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 const (
@@ -432,69 +431,10 @@ func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string
 // Wire envelope unwrap
 // ---------------------------------------------------------------------------
 
-// outboxWireMessage mirrors the envelope produced by
-// adapters/postgres/outbox_relay.go publishAll and consumed by
-// adapters/rabbitmq/subscriber.go unmarshalDelivery. Keeping the struct here
-// lets the in-memory bus treat relay output symmetrically with the broker
-// path, closing the F1 contract asymmetry identified in PR#174 review.
-//
-// When OUTBOX-ENVELOPE-KERNEL-SHARE-01 lands, this struct + detection move
-// to kernel/outbox and both transports depend on a single source of truth.
-type outboxWireMessage struct {
-	ID            string            `json:"id"`
-	AggregateID   string            `json:"aggregateId,omitempty"`
-	AggregateType string            `json:"aggregateType,omitempty"`
-	EventType     string            `json:"eventType"`
-	Topic         string            `json:"topic,omitempty"`
-	Payload       json.RawMessage   `json:"payload"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-}
-
 // unmarshalInboundEntry constructs an outbox.Entry for delivery to subscribers.
-// If payload is a relay envelope it is unwrapped; otherwise the raw payload
-// is wrapped in a freshly stamped Entry (preserves the pre-envelope direct-
-// publish semantics).
-//
-// Discriminator mirrors adapters/rabbitmq/subscriber.go: require non-empty
-// ID + EventType and payload that starts with '{'/'[' so business payloads
-// happening to parse as an envelope (unlikely but possible) do not flip the
-// detection.
+// Delegates to outboxrt.UnmarshalEnvelope which handles both relay wire envelopes
+// and the raw-payload fallback (direct-publish semantics).
 func unmarshalInboundEntry(topic string, payload []byte) outbox.Entry {
-	var msg outboxWireMessage
-	if err := json.Unmarshal(payload, &msg); err == nil &&
-		msg.ID != "" && msg.EventType != "" && isEmbeddedJSON(msg.Payload) {
-		return outbox.Entry{
-			ID:            msg.ID,
-			AggregateID:   msg.AggregateID,
-			AggregateType: msg.AggregateType,
-			EventType:     msg.EventType,
-			Topic:         msg.Topic,
-			Payload:       []byte(msg.Payload),
-			Metadata:      msg.Metadata,
-			CreatedAt:     msg.CreatedAt,
-		}
-	}
-	return outbox.Entry{
-		ID:        "evt-" + uuid.NewString(),
-		EventType: topic,
-		Payload:   payload,
-		CreatedAt: time.Now(),
-	}
-}
-
-// isEmbeddedJSON returns true if the raw JSON value is an object or array
-// (relay envelope payload), not a base64 string or primitive.
-func isEmbeddedJSON(raw json.RawMessage) bool {
-	for _, b := range raw {
-		switch b {
-		case ' ', '\t', '\n', '\r':
-			continue
-		case '{', '[':
-			return true
-		default:
-			return false
-		}
-	}
-	return false
+	entry, _ := outboxrt.UnmarshalEnvelope(topic, payload)
+	return entry
 }

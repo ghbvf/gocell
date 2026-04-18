@@ -6,7 +6,7 @@ import "time"
 // Used by RelayCollector.RecordPollCycle to avoid a long parameter list
 // and to support future extensions without breaking the interface.
 type PollCycleResult struct {
-	Published, Retried, Dead, Skipped int
+	Published, Retried, Dead, Skipped  int
 	ClaimDur, PublishDur, WriteBackDur time.Duration
 }
 

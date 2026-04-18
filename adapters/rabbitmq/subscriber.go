@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // errSubscriptionLost is a sentinel error returned by subscribeOnce when the
@@ -248,18 +249,19 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 	for {
 		err := s.subscribeOnce(subCtx, topic, queueName, handler)
 		if err == nil {
-			// Clean exit: ctx cancelled or subscriber closed.
-			return nil
+			return nil // Clean exit: ctx cancelled or subscriber closed.
 		}
-
 		// Only reconnect on delivery channel lost. Topology/permission errors
-		// (ExchangeDeclare, QueueDeclare, QueueBind) are permanent — return
-		// immediately so the caller can handle them.
+		// are permanent — return immediately.
 		if !errors.Is(err, errSubscriptionLost) {
 			return err
 		}
-
-		// Check if we should stop retrying.
+		if reconnErr := s.awaitReconnect(subCtx, topic, queueName, err); reconnErr != nil {
+			return reconnErr
+		}
+		// awaitReconnect returns nil both on successful reconnect AND on clean
+		// exit (ctx cancelled / subscriber closed). Re-check before looping back
+		// into subscribeOnce to avoid spinning when ctx is already done.
 		select {
 		case <-subCtx.Done():
 			return nil
@@ -268,29 +270,41 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 		if s.closed.Load() {
 			return nil
 		}
-
-		slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
-			slog.String(logKeyTopic, topic),
-			slog.String("queue", queueName),
-			slog.String("error", err.Error()))
-
-		// Wait for connection recovery before re-subscribing.
-		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
-			// Terminal connection error — propagate to caller so upstream
-			// (EventRouter/Bootstrap) can detect and handle terminal failure.
-			// Covers both ErrAdapterAMQPConnectPermanent (bad credentials)
-			// and ErrAdapterAMQPReconnectExhausted (max attempts exceeded).
-			if isTerminalConnectionError(waitErr) {
-				return waitErr
-			}
-			// ctx cancelled or subscriber closed during wait — clean exit.
-			return nil
-		}
-
-		slog.Info("rabbitmq: resubscribing after reconnect",
-			slog.String(logKeyTopic, topic),
-			slog.String("queue", queueName))
 	}
+}
+
+// awaitReconnect logs the subscription loss and waits for the connection to
+// recover before the outer Subscribe loop retries subscribeOnce. Returns nil
+// when the connection recovers (or clean exit), non-nil on terminal error or
+// if the subscriber was stopped.
+func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string, lostErr error) error {
+	// Check if we should stop retrying before blocking on WaitConnected.
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
+	if s.closed.Load() {
+		return nil
+	}
+
+	slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
+		slog.String(logKeyTopic, topic),
+		slog.String("queue", queueName),
+		slog.String("error", lostErr.Error()))
+
+	if waitErr := s.conn.WaitConnected(ctx); waitErr != nil {
+		// Terminal connection error — propagate so EventRouter/Bootstrap can handle.
+		if isTerminalConnectionError(waitErr) {
+			return waitErr
+		}
+		return nil // ctx cancelled or subscriber closed during wait.
+	}
+
+	slog.Info("rabbitmq: resubscribing after reconnect",
+		slog.String(logKeyTopic, topic),
+		slog.String("queue", queueName))
+	return nil
 }
 
 // subscribeOnce performs a single subscription lifecycle: acquire channel,
@@ -603,67 +617,41 @@ func (s *Subscriber) Close() error {
 // Wire format deserialization
 // ---------------------------------------------------------------------------
 
-// outboxWireMessage is the wire envelope produced by the three-phase relay.
-// Fields use camelCase JSON tags.
-//
-// NOTE: adapters/postgres/outbox_relay.go defines an identical outboxMessage
-// for serialization — keep the two structs in sync when modifying fields.
-type outboxWireMessage struct {
-	ID            string            `json:"id"`
-	AggregateID   string            `json:"aggregateId,omitempty"`
-	AggregateType string            `json:"aggregateType,omitempty"`
-	EventType     string            `json:"eventType"`
-	Topic         string            `json:"topic,omitempty"`
-	Payload       json.RawMessage   `json:"payload"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-}
-
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
-// It first tries the new outboxWireMessage envelope, then falls back to the
-// legacy full outbox.Entry format for backward compatibility.
 //
-// Discriminator: In the new wire format, payload is embedded JSON (starts
-// with '{' or '[' as json.RawMessage). In legacy format, outbox.Entry.Payload
-// is []byte which json.Marshal encodes as base64 (starts with '"'). Go's
-// json.Unmarshal does case-insensitive key matching, so we cannot rely on
-// PascalCase vs camelCase to distinguish formats — we must check the payload
-// shape instead.
+// Primary path: the body is a WireMessage envelope produced by MarshalEnvelope
+// (relay path). Detected by calling UnmarshalEnvelope with topic="" — a real
+// WireMessage always has EventType set, so the returned entry has EventType != "".
+//
+// Fallback path: the body is a legacy outbox.Entry JSON (PascalCase field names,
+// no envelope). This format is used by adapter-level integration tests that
+// publish raw Entry JSON directly to test pub/sub primitives, predating the
+// WireMessage contract. When UnmarshalEnvelope falls back (EventType == ""),
+// we attempt json.Unmarshal into outbox.Entry. Success requires a non-empty ID.
+//
+// Broken JSON: if neither path produces a non-empty ID, we return an error so
+// that processDelivery NACKs without requeue (permanent error).
+//
+// Discriminator: UnmarshalEnvelope called with topic="" sets EventType="" on the
+// fallback path (since EventType = topic = ""), while a real WireMessage always
+// has EventType set by the relay producer. This replaces the previous "evt-"
+// ID-prefix heuristic, which collided with outboxtest.NewEntry IDs.
+//
+// ref: runtime/outbox/envelope.go UnmarshalEnvelope
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
-	var msg outboxWireMessage
-	if err := json.Unmarshal(body, &msg); err == nil && msg.ID != "" && msg.EventType != "" && isEmbeddedJSON(msg.Payload) {
-		return outbox.Entry{
-			ID:            msg.ID,
-			AggregateID:   msg.AggregateID,
-			AggregateType: msg.AggregateType,
-			EventType:     msg.EventType,
-			Topic:         msg.Topic,
-			Payload:       []byte(msg.Payload),
-			Metadata:      msg.Metadata,
-			CreatedAt:     msg.CreatedAt,
-		}, nil
+	entry, _ := outboxrt.UnmarshalEnvelope("", body)
+	if entry.EventType != "" {
+		// WireMessage envelope decoded successfully.
+		return entry, nil
 	}
-
-	// Fallback: legacy full Entry (PascalCase, Payload is base64-encoded []byte).
-	var entry outbox.Entry
-	if err := json.Unmarshal(body, &entry); err != nil {
-		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: %w", err)
+	// Fall back to legacy outbox.Entry JSON (predates WireMessage contract,
+	// still used by adapter-level integration tests that bypass the relay).
+	var legacy outbox.Entry
+	if legacyErr := json.Unmarshal(body, &legacy); legacyErr == nil && legacy.ID != "" {
+		return legacy, nil
 	}
-	return entry, nil
-}
-
-// isEmbeddedJSON returns true if the raw JSON value is an object or array
-// (new wire format), as opposed to a base64 string (legacy format).
-func isEmbeddedJSON(raw json.RawMessage) bool {
-	for _, b := range raw {
-		switch b {
-		case ' ', '\t', '\n', '\r':
-			continue
-		case '{', '[':
-			return true
-		default:
-			return false
-		}
-	}
-	return false
+	// Neither a valid WireMessage envelope nor a valid legacy Entry with a non-empty
+	// ID could be extracted. Treat as a permanent unmarshal error so the delivery
+	// is NACKed without requeue.
+	return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope or legacy Entry JSON")
 }
