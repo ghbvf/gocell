@@ -77,17 +77,18 @@ func MarshalEnvelope(entry ClaimedEntry) ([]byte, error) {
 // business JSON bytes that handlers will receive in Entry.Payload after the
 // bus unwraps.
 //
-// Returns ErrEnvelopeSchema if any required field is missing, to make
-// producer-side contract violations fail-fast instead of silently producing
-// an envelope that the bus would dead-letter.
-func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) ([]byte, error) {
+// Panics on empty id or eventType — these are programmer errors (internal
+// producers pass compile-time constants / NewEntryID()), not runtime
+// conditions. Follows the stdlib Must-style convention (regexp.MustCompile,
+// netip.MustParseAddr) so callers are not forced to handle unreachable
+// branches. json.Marshal of a WireMessage with valid string/byte fields
+// does not fail, so the internal marshal error is also treated as unreachable.
+func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
 	if id == "" {
-		return nil, errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox: direct envelope missing required field: id")
+		panic("outbox.MarshalDirectEnvelope: empty id")
 	}
 	if eventType == "" {
-		return nil, errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox: direct envelope missing required field: eventType")
+		panic("outbox.MarshalDirectEnvelope: empty eventType")
 	}
 	msg := WireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
@@ -99,9 +100,12 @@ func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) ([]byte,
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrEnvelopeSchema, "outbox: marshal direct envelope", err)
+		// Unreachable: WireMessage fields are strings and []byte; json.Marshal
+		// only fails on cyclic references or unsupported types, neither of which
+		// applies here. Panic so any regression surfaces at the call site.
+		panic("outbox.MarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
 	}
-	return b, nil
+	return b
 }
 
 // UnmarshalEnvelope decodes a v1 wire envelope from raw bytes into a kernel/outbox.Entry.

@@ -103,12 +103,8 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 	// Fallback direct publish when outbox is not in use. Wrap in v1 wire envelope
 	// so the eventbus fail-closed schema check (P1-14) accepts the message.
 	if s.outboxWriter == nil {
-		envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicIntegrityVerified, TopicIntegrityVerified, outbox.NewEntryID(), payload)
-		if envErr != nil {
-			s.logger.Warn("audit-verify: failed to marshal event envelope (demo mode)",
-				slog.Any("error", envErr),
-				slog.String("topic", TopicIntegrityVerified))
-		} else if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, envelope); pubErr != nil {
+		envelope := outboxrt.MarshalDirectEnvelope(TopicIntegrityVerified, TopicIntegrityVerified, outbox.NewEntryID(), payload)
+		if pubErr := s.publisher.Publish(ctx, TopicIntegrityVerified, envelope); pubErr != nil {
 			s.logger.Warn("audit-verify: failed to publish event (demo mode)",
 				slog.Any("error", pubErr),
 				slog.String("topic", TopicIntegrityVerified))

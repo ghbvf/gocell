@@ -238,10 +238,7 @@ func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
 	id := "direct-id-1"
 	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
 
-	raw, err := outbox.MarshalDirectEnvelope(topic, topic, id, payload)
-	if err != nil {
-		t.Fatalf("MarshalDirectEnvelope: %v", err)
-	}
+	raw := outbox.MarshalDirectEnvelope(topic, topic, id, payload)
 
 	got, err := outbox.UnmarshalEnvelope(topic, raw)
 	if err != nil {
@@ -262,10 +259,12 @@ func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
 	}
 }
 
-// TestMarshalDirectEnvelope_RejectsEmptyRequiredFields verifies fail-fast on
-// producer-side contract violation (empty id / eventType) — distinct from
-// silently producing an envelope the bus would dead-letter.
-func TestMarshalDirectEnvelope_RejectsEmptyRequiredFields(t *testing.T) {
+// TestMarshalDirectEnvelope_PanicsOnEmptyRequiredFields verifies fail-fast on
+// programmer-error input (empty id / eventType). Follows stdlib Must-style
+// convention — callers pass compile-time constants / NewEntryID(), so these
+// inputs never arise at runtime and returning error would force unreachable
+// handling at every call site.
+func TestMarshalDirectEnvelope_PanicsOnEmptyRequiredFields(t *testing.T) {
 	tests := []struct {
 		name, topic, eventType, id string
 	}{
@@ -274,17 +273,12 @@ func TestMarshalDirectEnvelope_RejectsEmptyRequiredFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := outbox.MarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			var ce *errcode.Error
-			if !errors.As(err, &ce) {
-				t.Fatalf("expected *errcode.Error, got: %T", err)
-			}
-			if ce.Code != errcode.ErrEnvelopeSchema {
-				t.Errorf("code: got %q, want %q", ce.Code, errcode.ErrEnvelopeSchema)
-			}
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatal("expected panic, got none")
+				}
+			}()
+			_ = outbox.MarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
 		})
 	}
 }

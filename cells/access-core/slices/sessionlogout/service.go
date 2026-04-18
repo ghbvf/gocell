@@ -116,12 +116,8 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 	// Fallback direct publish when outbox is not in use. Wrap in v1 wire envelope
 	// so the eventbus fail-closed schema check (P1-14) accepts the message.
 	if s.outboxWriter == nil {
-		envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicSessionRevoked, TopicSessionRevoked, outbox.NewEntryID(), payload)
-		if envErr != nil {
-			s.logger.Warn("session-logout: failed to marshal event envelope (demo mode)",
-				slog.Any("error", envErr),
-				slog.String("topic", TopicSessionRevoked))
-		} else if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, envelope); pubErr != nil {
+		envelope := outboxrt.MarshalDirectEnvelope(TopicSessionRevoked, TopicSessionRevoked, outbox.NewEntryID(), payload)
+		if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, envelope); pubErr != nil {
 			s.logger.Warn("session-logout: failed to publish event (demo mode)",
 				slog.Any("error", pubErr),
 				slog.String("topic", TopicSessionRevoked))

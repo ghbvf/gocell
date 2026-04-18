@@ -75,14 +75,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil
 	}
-	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicDeviceRegistered, TopicDeviceRegistered, outbox.NewEntryID(), payload)
-	if envErr != nil {
-		s.logger.Error("device-register: marshal envelope failed",
-			slog.String("device_id", device.ID),
-			slog.Any("error", envErr),
-		)
-		return device, nil
-	}
+	envelope := outboxrt.MarshalDirectEnvelope(TopicDeviceRegistered, TopicDeviceRegistered, outbox.NewEntryID(), payload)
 
 	if err := s.publisher.Publish(ctx, TopicDeviceRegistered, envelope); err != nil {
 		s.logger.Error("device-register: publish event failed",

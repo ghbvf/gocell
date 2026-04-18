@@ -199,14 +199,7 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 	// Demo mode: publisher failure is logged but not propagated since
 	// demo mode does not guarantee L2 atomicity. Wrap in v1 wire envelope so
 	// the eventbus fail-closed schema check (P1-14) accepts the message.
-	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicConfigChanged, TopicConfigChanged, outbox.NewEntryID(), payload)
-	if envErr != nil {
-		s.logger.Warn("config-write: failed to marshal event envelope (demo mode)",
-			slog.Any("error", envErr),
-			slog.String("key", entry.Key),
-		)
-		return nil
-	}
+	envelope := outboxrt.MarshalDirectEnvelope(TopicConfigChanged, TopicConfigChanged, outbox.NewEntryID(), payload)
 	if err := s.publisher.Publish(ctx, TopicConfigChanged, envelope); err != nil {
 		s.logger.Warn("config-write: failed to publish event (demo mode)",
 			slog.Any("error", err),

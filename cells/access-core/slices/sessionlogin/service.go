@@ -205,13 +205,7 @@ func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 	if s.outboxWriter != nil {
 		return
 	}
-	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicSessionCreated, TopicSessionCreated, outbox.NewEntryID(), payload)
-	if envErr != nil {
-		s.logger.Warn("session-login: failed to marshal event envelope (demo mode)",
-			slog.Any("error", envErr),
-			slog.String("topic", TopicSessionCreated))
-		return
-	}
+	envelope := outboxrt.MarshalDirectEnvelope(TopicSessionCreated, TopicSessionCreated, outbox.NewEntryID(), payload)
 	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, envelope); pubErr != nil {
 		s.logger.Warn("session-login: failed to publish event (demo mode)",
 			slog.Any("error", pubErr),

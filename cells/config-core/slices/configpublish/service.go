@@ -189,10 +189,7 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 	}
 	// Wrap in v1 wire envelope so the eventbus fail-closed schema check (P1-14)
 	// accepts the message.
-	envelope, envErr := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
-	if envErr != nil {
-		return fmt.Errorf("config-publish: marshal envelope for topic %s: %w", topic, envErr)
-	}
+	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
 	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
 		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
 	}

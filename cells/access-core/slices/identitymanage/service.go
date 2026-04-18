@@ -355,12 +355,7 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 	// Demo mode: publisher failure is logged but not propagated since
 	// demo mode does not guarantee L2 atomicity. Wrap in v1 wire envelope so
 	// the eventbus fail-closed schema check (P1-14) accepts the message.
-	envelope, envErr := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), data)
-	if envErr != nil {
-		s.logger.Warn("identity-manage: failed to marshal event envelope (demo mode)",
-			slog.Any("error", envErr), slog.String("topic", topic))
-		return nil
-	}
+	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), data)
 	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
 		s.logger.Warn("identity-manage: failed to publish event (demo mode)",
 			slog.Any("error", err), slog.String("topic", topic))
