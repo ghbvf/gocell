@@ -64,8 +64,14 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 		s.logger.Info("config-receive: config published (no action)",
 			slog.String("key", event.Key))
 	default:
-		s.logger.Warn("config-receive: unknown action, skipping",
-			slog.String("key", event.Key), slog.String("action", event.Action))
+		// Fail-closed: unknown actions are permanent errors routed to DLX.
+		//
+		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
+		s.logger.Warn("config-receive: unknown action, routing to dead letter",
+			slog.String("action", event.Action), slog.String("key", event.Key))
+		return outbox.NewPermanentError(
+			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
+		)
 	}
 
 	return nil

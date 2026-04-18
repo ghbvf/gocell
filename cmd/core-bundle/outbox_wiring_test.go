@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -240,9 +241,19 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 		t.Fatal("timed out waiting for audit-core subscription to be ready")
 	}
 
-	// Publish exactly 1 event.
-	payload := []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`)
-	require.NoError(t, eb.Publish(ctx, topic, payload))
+	// Publish exactly 1 event wrapped in a v1 envelope so the bus envelope
+	// schema check (fail-closed, P1-14 A1/A2) accepts it.
+	entry := outboxrt.ClaimedEntry{
+		Entry: outbox.Entry{
+			ID:        "e2e-fanout-1",
+			EventType: topic,
+			Topic:     topic,
+			Payload:   []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`),
+		},
+	}
+	envelope, err := outboxrt.MarshalEnvelope(entry)
+	require.NoError(t, err, "MarshalEnvelope must not fail")
+	require.NoError(t, eb.Publish(ctx, topic, envelope))
 
 	// Assert both handlers are called exactly once.
 	// Before the Subscription-first-class refactor (Commit 1), the shared

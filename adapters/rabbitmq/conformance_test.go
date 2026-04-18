@@ -3,44 +3,12 @@
 package rabbitmq
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
-
-// envelopingPublisher wraps a raw Publisher to serialize payloads into the
-// outboxrt.WireMessage envelope expected by the RabbitMQ subscriber's
-// unmarshalDelivery. Without this wrapper, the conformance harness publishes
-// bare JSON payloads (e.g., {"seq":0}), but the subscriber expects an envelope
-// with id, eventType, and an embedded payload field.
-//
-// This is NOT needed in production — the outbox relay serializes entries
-// into the wire format. It is only needed for conformance tests that bypass
-// the relay and test Publisher+Subscriber directly.
-type envelopingPublisher struct {
-	inner outbox.Publisher
-}
-
-func (p *envelopingPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
-	entry := outboxtest.NewEntry(topic, payload)
-	wire := outboxrt.WireMessage{
-		ID:        entry.ID,
-		EventType: entry.EventType,
-		Topic:     entry.Topic,
-		Payload:   json.RawMessage(payload),
-		CreatedAt: entry.CreatedAt,
-	}
-	body, err := json.Marshal(wire)
-	if err != nil {
-		return err
-	}
-	return p.inner.Publish(ctx, topic, body)
-}
 
 // TestRabbitMQ_Conformance runs the full outboxtest conformance suite against
 // a real RabbitMQ broker via testcontainers.
@@ -82,6 +50,9 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 			ShutdownTimeout: 5 * time.Second,
 		})
 		t.Cleanup(func() { _ = sub.Close() })
-		return &envelopingPublisher{inner: pub}, sub
+		// outboxtest.PublishN wraps payloads in a v1 wire envelope, matching
+		// the RabbitMQ subscriber's unmarshalDelivery contract — no additional
+		// envelope wrapper is needed here.
+		return pub, sub
 	})
 }

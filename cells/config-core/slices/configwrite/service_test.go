@@ -309,3 +309,25 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.calls, "Delete must call RunInTx exactly once")
 }
+
+// failingPublisher returns an error on every Publish call, used to drive the
+// publisher-error warn-log branch in Service.publishChange (demo mode).
+type failingPublisher struct{ err error }
+
+func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+var _ outbox.Publisher = failingPublisher{}
+
+// TestService_Create_PublishError_DoesNotFailCreate verifies that demo-mode
+// publisher failure in Service.publishChange is logged but does not propagate
+// as an error — covering the warn-log branch introduced when the direct
+// publish path was wrapped in a v1 envelope (P1-14 follow-up).
+func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	fp := failingPublisher{err: errors.New("broker unavailable")}
+	svc := NewService(repo, fp, slog.Default())
+
+	entry, err := svc.Create(context.Background(), CreateInput{Key: "pub-err", Value: "v"})
+	require.NoError(t, err, "publish failure in demo mode must not fail Create")
+	assert.Equal(t, "pub-err", entry.Key)
+}
