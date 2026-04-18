@@ -101,6 +101,20 @@ end
 return 0
 `
 
+// extendScript: atomic Extend (token-guarded):
+//
+//	KEYS[1] = lease:{key}
+//	ARGV[1] = token
+//	ARGV[2] = new TTL in milliseconds (PEXPIRE)
+//
+// Returns 1 on success, 0 if token mismatch (lease lost).
+const extendScript = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 0
+`
+
 // Claim attempts to acquire a processing lease for the given key.
 func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	if leaseTTL <= 0 {
@@ -160,10 +174,10 @@ type redisReceipt struct {
 	token    string
 	doneTTL  time.Duration
 
-	mu        sync.Mutex
-	committed bool
-	commitErr error
-	released  bool
+	mu         sync.Mutex
+	committed  bool
+	commitErr  error
+	released   bool
 	releaseErr error
 }
 
@@ -227,6 +241,27 @@ func (r *redisReceipt) Release(ctx context.Context) error {
 	}
 	r.releaseErr = nil // clear stale error from a previous transient failure
 	r.released = true
+	return nil
+}
+
+// Extend resets the processing-lease TTL to the given duration from now.
+// Returns idempotency.ErrLeaseExpired if the lease key is missing or the token
+// does not match (fencing failure). Redis errors are wrapped but not classified
+// as ErrLeaseExpired so callers can distinguish infrastructure failures from
+// intentional lease preemption.
+func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
+	ttlMs := ttl.Milliseconds()
+	if ttlMs < 1 {
+		ttlMs = 1
+	}
+	res, err := r.rdb.Eval(ctx, extendScript, []string{r.leaseKey}, r.token, ttlMs).Result()
+	if err != nil {
+		return fmt.Errorf("redis claimer: extend lease: %w", err)
+	}
+	code, ok := res.(int64)
+	if !ok || code == 0 {
+		return idempotency.ErrLeaseExpired
+	}
 	return nil
 }
 

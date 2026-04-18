@@ -26,8 +26,9 @@ type mockClaimer struct {
 
 type mockReceipt struct{}
 
-func (mockReceipt) Commit(context.Context) error { return nil }
-func (mockReceipt) Release(context.Context) error { return nil }
+func (mockReceipt) Commit(context.Context) error                    { return nil }
+func (mockReceipt) Release(context.Context) error                   { return nil }
+func (mockReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
 var _ Receipt = mockReceipt{}
 

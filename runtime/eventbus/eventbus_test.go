@@ -524,6 +524,10 @@ func (r *mockReceipt) Release(_ context.Context) error {
 	return nil
 }
 
+func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
+	return nil
+}
+
 func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	bus := New(WithBufferSize(16))
 	defer func() { _ = bus.Close() }()

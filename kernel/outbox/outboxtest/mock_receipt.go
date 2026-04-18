@@ -3,6 +3,7 @@ package outboxtest
 import (
 	"context"
 	"sync/atomic"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -49,4 +50,10 @@ func (r *MockReceipt) Committed() bool {
 // Released reports whether Release was called.
 func (r *MockReceipt) Released() bool {
 	return r.released.Load()
+}
+
+// Extend is a no-op stub that always succeeds. Override in tests that need
+// to exercise lease-renewal behavior.
+func (r *MockReceipt) Extend(_ context.Context, _ time.Duration) error {
+	return nil
 }
