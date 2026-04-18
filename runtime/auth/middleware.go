@@ -96,9 +96,19 @@ func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts
 		}
 	}
 
+	// Build the delegated check (set via WithDelegatedMatcher or
+	// WithDelegatedEndpoints). Delegated paths forward to next without any JWT
+	// check, letting downstream middleware (service-token guard, mTLS, …) own
+	// authentication for that route.
+	isDelegated := cfg.delegatedMatcher // nil = no delegated paths
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isPublic(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if isDelegated != nil && isDelegated(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

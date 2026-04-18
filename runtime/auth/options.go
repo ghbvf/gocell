@@ -13,6 +13,7 @@ type authConfig struct {
 	logger                          *slog.Logger
 	metrics                         *AuthMetrics
 	publicMatcher                   func(*http.Request) bool                 // nil = use []string publicEndpoints path
+	delegatedMatcher                func(*http.Request) bool                 // nil = no delegated paths
 	passwordResetExempt             func(method string, urlPath string) bool // nil = fail-closed (nothing exempt)
 	passwordResetChangeEndpointHint string                                   // empty = no hint in 403 body
 }
@@ -72,6 +73,27 @@ func WithPasswordResetChangeEndpointHint(hint string) AuthOption {
 func WithPublicEndpointMatcher(fn func(*http.Request) bool) AuthOption {
 	return func(c *authConfig) {
 		c.publicMatcher = fn
+	}
+}
+
+// WithDelegatedMatcher installs a per-request predicate that marks paths where
+// JWT authentication is delegated to a downstream middleware (e.g. a
+// service-token guard or mTLS check). When the predicate returns true, the auth
+// middleware calls next.ServeHTTP directly — no JWT verification, no 401 — and
+// lets the downstream middleware claim authentication authority.
+//
+// Distinct from WithPublicEndpointMatcher (truly unauthenticated): delegated
+// means "JWT is not the right credential for this route — defer to the guard
+// installed further down the chain."
+//
+// The companion option WithDelegatedEndpoints accepts a "METHOD /path" slice and
+// compiles it into a predicate of this shape automatically.
+//
+// ref: Kratos middleware/selector matcher-based middleware selection
+// ref: go-zero rest/engine route-group JWT metadata
+func WithDelegatedMatcher(fn func(*http.Request) bool) AuthOption {
+	return func(c *authConfig) {
+		c.delegatedMatcher = fn
 	}
 }
 
