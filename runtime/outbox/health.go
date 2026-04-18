@@ -69,6 +69,13 @@ func (b *FailureBudget) Record(err error) {
 }
 
 // recordFailure handles the err!=nil path of Record.
+//
+// Invariant: each state transition clears only the *opposite* side's log flag.
+// The trip path (false→true) clears loggedRecover so the next recovery logs.
+// The recover path (true→false) clears loggedTrip so the next trip logs.
+// This prevents the ABA window where clearing the same-side flag could race
+// with a concurrent recordSuccess that just set it — each CAS winner owns
+// exactly one side and only resets the other.
 func (b *FailureBudget) recordFailure() {
 	newConsec := b.consec.Add(1)
 	if newConsec < b.threshold {
@@ -76,8 +83,11 @@ func (b *FailureBudget) recordFailure() {
 	}
 	// At or past threshold: try to trip.
 	if b.tripped.CompareAndSwap(false, true) {
-		// We were the goroutine that tripped it — log once.
-		b.loggedRecover.Store(false) // reset recover-log flag for next recovery
+		// We tripped: clear the recover-log flag so the next recovery logs.
+		// Do NOT touch loggedTrip here — the CAS already guarantees we are the
+		// sole goroutine entering this branch; loggedTrip is cleared by the
+		// preceding recover path.
+		b.loggedRecover.Store(false)
 		if b.loggedTrip.CompareAndSwap(false, true) {
 			b.logger.Warn("outbox relay: failure budget exhausted",
 				slog.String("name", b.name),
@@ -89,11 +99,15 @@ func (b *FailureBudget) recordFailure() {
 }
 
 // recordSuccess handles the err==nil path of Record.
+//
+// Invariant: see recordFailure. The recover path (true→false) clears
+// loggedTrip so the next exhaustion logs. It does NOT touch loggedRecover,
+// which is cleared by the trip path, eliminating the ABA window.
 func (b *FailureBudget) recordSuccess() {
 	b.consec.Store(0)
 	if b.tripped.CompareAndSwap(true, false) {
-		// We were the goroutine that cleared the trip — log once.
-		b.loggedTrip.Store(false) // reset trip-log flag for next trip
+		// We recovered: clear the trip-log flag so the next exhaustion logs.
+		b.loggedTrip.Store(false)
 		if b.loggedRecover.CompareAndSwap(false, true) {
 			b.logger.Info("outbox relay: failure budget recovered",
 				slog.String("name", b.name),
