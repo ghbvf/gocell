@@ -23,7 +23,9 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("accepts_gocell_audience", func(t *testing.T) {
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+			Audience: []string{"gocell"},
+		})
 		require.NoError(t, err)
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
@@ -31,7 +33,9 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 	})
 
 	t.Run("rejects_wrong_audience", func(t *testing.T) {
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", nil, []string{"wrong-service"}, "")
+		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+			Audience: []string{"wrong-service"},
+		})
 		require.NoError(t, err)
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
@@ -42,7 +46,7 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 
 	t.Run("rejects_missing_audience", func(t *testing.T) {
 		// Issue a token with nil audience (no aud claim).
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", nil, nil, "")
+		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
 		require.NoError(t, err)
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
@@ -61,9 +65,11 @@ func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 
 	// Simulate what sessionlogin.Service.issueAccessToken does: issue with []string{"gocell"}.
 	tok, err := deps.issuer.Issue(
-		auth.TokenIntentAccess, "user-1", []string{"admin"},
-		[]string{jwtAudience}, // same constant used by buildJWTDeps
-		"sess-1",
+		auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+			Roles:     []string{"admin"},
+			Audience:  []string{jwtAudience}, // same constant used by buildJWTDeps
+			SessionID: "sess-1",
+		},
 	)
 	require.NoError(t, err)
 

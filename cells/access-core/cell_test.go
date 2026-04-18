@@ -485,8 +485,8 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	claims, err := verifier.VerifyIntent(ctx, accessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "token should be valid before revocation")
 
-	sid, ok := claims.Extra["sid"].(string)
-	require.True(t, ok, "token must contain sid claim")
+	sid := claims.SessionID
+	require.NotEmpty(t, sid, "token must contain sid claim")
 	require.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
 
 	// Revoke the session.
@@ -569,7 +569,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	claims, err := verifier.VerifyIntent(ctx, refreshedToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "refreshed token should be valid")
 
-	sid := claims.Extra["sid"].(string)
+	sid := claims.SessionID
 	require.NotEmpty(t, sid)
 
 	// Revoke the session.

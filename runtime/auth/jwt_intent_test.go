@@ -51,7 +51,11 @@ func TestJWTIssuer_IssueWithIntent_Access_EmbedsTokenUseClaimAndAtJWTHeader(t *t
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "sess-1")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:     []string{"admin"},
+		Audience:  []string{"gocell"},
+		SessionID: "sess-1",
+	})
 	require.NoError(t, err)
 
 	header := decodeJWTHeader(t, tokenStr)
@@ -66,7 +70,10 @@ func TestJWTIssuer_IssueWithIntent_Refresh_EmbedsTokenUseClaimAndRefreshHeader(t
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, []string{"gocell"}, "sess-1")
+	tokenStr, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{
+		Audience:  []string{"gocell"},
+		SessionID: "sess-1",
+	})
 	require.NoError(t, err)
 
 	header := decodeJWTHeader(t, tokenStr)
@@ -81,7 +88,7 @@ func TestJWTIssuer_IssueWithIntent_InvalidIntent_Rejected(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	_, err = issuer.Issue(TokenIntent("bogus"), "user-1", nil, nil, "")
+	_, err = issuer.Issue(TokenIntent("bogus"), "user-1", IssueOptions{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
@@ -93,7 +100,9 @@ func TestJWTVerifier_VerifyIntent_PopulatesTokenUseOnClaims(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -108,14 +117,21 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingIntent(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	access, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "sid-1")
+	access, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:     []string{"admin"},
+		Audience:  []string{"gocell"},
+		SessionID: "sid-1",
+	})
 	require.NoError(t, err)
 	claims, err := verifier.VerifyIntent(context.Background(), access, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, TokenIntentAccess, claims.TokenUse)
 
-	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, []string{"gocell"}, "sid-1")
+	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{
+		Audience:  []string{"gocell"},
+		SessionID: "sid-1",
+	})
 	require.NoError(t, err)
 	rc, err := verifier.VerifyIntent(context.Background(), refresh, TokenIntentRefresh)
 	require.NoError(t, err)
@@ -129,7 +145,7 @@ func TestJWTVerifier_VerifyIntent_RejectsWrongIntent_Access(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, nil, "")
+	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), refresh, TokenIntentAccess)
@@ -144,7 +160,7 @@ func TestJWTVerifier_VerifyIntent_RejectsWrongIntent_Refresh(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	access, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	access, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), access, TokenIntentRefresh)
@@ -212,7 +228,7 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tok, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntent("bogus"))
@@ -229,14 +245,14 @@ func TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", DefaultAccessTokenTTL, WithIssuerClock(func() time.Time { return fixedNow }))
 	require.NoError(t, err)
 
-	accessStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	accessStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 	accessPayload := decodeJWTPayload(t, accessStr)
 	accessExp := int64(accessPayload["exp"].(float64))
 	assert.Equal(t, fixedNow.Add(DefaultAccessTokenTTL).Unix(), accessExp,
 		"access token exp must be now+DefaultAccessTokenTTL (15min)")
 
-	refreshStr, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, nil, "")
+	refreshStr, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{})
 	require.NoError(t, err)
 	refreshPayload := decodeJWTPayload(t, refreshStr)
 	refreshExp := int64(refreshPayload["exp"].(float64))

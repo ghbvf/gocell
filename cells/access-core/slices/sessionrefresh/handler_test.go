@@ -22,7 +22,10 @@ import (
 // testIssuer/testVerifier are declared in service_test.go
 
 func issueRefreshToken(userID string) string {
-	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, userID, nil, []string{"gocell"}, "sess-handler-test")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, userID, auth.IssueOptions{
+		Audience:  []string{"gocell"},
+		SessionID: "sess-handler-test",
+	})
 	return tok
 }
 

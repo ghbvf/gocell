@@ -38,7 +38,7 @@ func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepo
 // additionally:
 //   - requires the token to declare token_use=access (intent check); refresh
 //     tokens replayed at business endpoints are rejected as invalid.
-//   - checks session revocation status when the Extra["sid"] claim is present.
+//   - checks session revocation status when the SessionID claim is present.
 //
 // All failure modes map to the uniform errMsgAuthFailed response to prevent
 // token-type and session-state enumeration.
@@ -84,8 +84,8 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 // follow a successful JWT verification. Tokens missing the sid claim are
 // rejected when sessionRepo is configured (fail-closed).
 func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (auth.Claims, error) {
-	sid, ok := claims.Extra["sid"].(string)
-	if !ok || sid == "" {
+	sid := claims.SessionID
+	if sid == "" {
 		s.logger.Warn("session-validate: token missing sid",
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)

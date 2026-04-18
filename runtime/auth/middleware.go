@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -136,10 +137,74 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	}
 	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
 
+	// Password-reset enforcement: when the token carries password_reset_required=true,
+	// only the exempt endpoints (change-password, logout) are allowed. All other
+	// business routes receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the
+	// subject changes their password and obtains a new token without the claim.
+	if claims.PasswordResetRequired && !isPasswordResetExempt(r.Method, r.URL.Path) {
+		httputil.WriteError(r.Context(), w, http.StatusForbidden,
+			string(errcode.ErrAuthPasswordResetRequired),
+			"password reset required before accessing this endpoint")
+		return
+	}
+
 	ctx := WithClaims(r.Context(), claims)
 	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// isPasswordResetExempt reports whether the given HTTP method and URL path are
+// exempt from the password-reset enforcement check. Only two endpoints are
+// exempt:
+//   - POST /api/v1/access/users/{id}/password — change password
+//   - DELETE /api/v1/access/sessions/{id}    — logout
+//
+// Path matching uses matchPathTemplate, which treats {xxx} segments as
+// single-segment wildcards (no "/" allowed within a wildcard).
+func isPasswordResetExempt(method, urlPath string) bool {
+	switch {
+	case method == http.MethodPost &&
+		matchPathTemplate("/api/v1/access/users/{id}/password", urlPath):
+		return true
+	case method == http.MethodDelete &&
+		matchPathTemplate("/api/v1/access/sessions/{id}", urlPath):
+		return true
+	default:
+		return false
+	}
+}
+
+// matchPathTemplate reports whether the concrete path matches the template.
+// Template segments of the form {xxx} match any single non-empty path segment
+// that does not contain "/". All other segments must match exactly.
+//
+// Examples:
+//
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users/usr-abc/password") → true
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users/usr-abc/other")    → false
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users//password")        → false (empty segment)
+func matchPathTemplate(template, concrete string) bool {
+	tParts := strings.Split(strings.Trim(template, "/"), "/")
+	cParts := strings.Split(strings.Trim(concrete, "/"), "/")
+	if len(tParts) != len(cParts) {
+		return false
+	}
+	for i, t := range tParts {
+		c := cParts[i]
+		if strings.HasPrefix(t, "{") && strings.HasSuffix(t, "}") {
+			// Wildcard segment: must be non-empty and must not contain "/"
+			// (already guaranteed by the split, but guard empty segment).
+			if c == "" {
+				return false
+			}
+			continue
+		}
+		if t != c {
+			return false
+		}
+	}
+	return true
 }
 
 // RequireRole checks that the authenticated subject has at least one of the

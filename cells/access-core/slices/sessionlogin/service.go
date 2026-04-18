@@ -209,12 +209,19 @@ func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 // issueAccessToken signs a short-lived JWT with intent=access for calling
 // business endpoints. Access tokens carry roles for RBAC decisions.
 func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{auth.DefaultJWTAudience}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+		Roles:     roles,
+		Audience:  []string{auth.DefaultJWTAudience},
+		SessionID: sessionID,
+	})
 }
 
 // issueRefreshToken signs a longer-lived JWT with intent=refresh. Refresh
 // tokens do not carry roles: they are consumed only by /auth/refresh, which
 // looks up the current roles from the session's user on each rotation.
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{auth.DefaultJWTAudience}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, auth.IssueOptions{
+		Audience:  []string{auth.DefaultJWTAudience},
+		SessionID: sessionID,
+	})
 }

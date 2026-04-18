@@ -79,6 +79,12 @@ const (
 	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
 	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
+	// ErrAuthPasswordResetRequired signals that the authenticated subject must
+	// change their password before accessing business endpoints. The middleware
+	// enforces this when the JWT claim password_reset_required is true.
+	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
+	// DELETE /api/v1/access/sessions/{id}) bypass this check.
+	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
 
 	// Config-core cell error codes.
 	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"

@@ -27,7 +27,7 @@ func makeTokenWithAud(t *testing.T, ks *KeySet, aud []string) string {
 	t.Helper()
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
-	tok, err := issuer.Issue(TokenIntentAccess, "user-1", nil, aud, "")
+	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{Audience: aud})
 	require.NoError(t, err)
 	return tok
 }
@@ -148,7 +148,7 @@ func TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck(t *testin
 	require.NoError(t, err)
 
 	// Refresh token with wrong audience: intent check fires first.
-	refreshTok, err := issuer.Issue(TokenIntentRefresh, "user-1", nil, []string{"wrong"}, "")
+	refreshTok, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{Audience: []string{"wrong"}})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), refreshTok, TokenIntentAccess)

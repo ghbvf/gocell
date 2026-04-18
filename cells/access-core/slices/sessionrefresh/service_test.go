@@ -39,7 +39,9 @@ func newTestService() (*Service, *mem.SessionRepository) {
 }
 
 func issueTestToken(sub string) string {
-	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, nil, []string{auth.DefaultJWTAudience}, "")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, auth.IssueOptions{
+		Audience: []string{auth.DefaultJWTAudience},
+	})
 	return tok
 }
 
@@ -142,7 +144,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 	require.NoError(t, err)
 	otherIssuer, err := auth.NewJWTIssuer(otherKS, "gocell-access-core", time.Hour)
 	require.NoError(t, err)
-	tokenStr, _ := otherIssuer.Issue(auth.TokenIntentRefresh, "usr-1", nil, nil, "")
+	tokenStr, _ := otherIssuer.Issue(auth.TokenIntentRefresh, "usr-1", auth.IssueOptions{})
 
 	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
@@ -212,11 +214,11 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, "sess-r1", accessClaims.Extra["sid"], "new access token must carry the session ID")
+	assert.Equal(t, "sess-r1", accessClaims.SessionID, "new access token must carry the session ID")
 
 	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
-	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
+	assert.Equal(t, "sess-r1", refreshClaims.SessionID, "new refresh token must carry the session ID")
 }
 
 // TestService_Refresh_SessionAwareVerifier proves that sessionrefresh still
@@ -233,7 +235,10 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
-	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", nil, []string{auth.DefaultJWTAudience}, "sess-sa")
+	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", auth.IssueOptions{
+		Audience:  []string{auth.DefaultJWTAudience},
+		SessionID: "sess-sa",
+	})
 	require.NoError(t, err)
 
 	sess, err := domain.NewSession("usr-sa", "at", rt, time.Now().Add(time.Hour))
