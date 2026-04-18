@@ -73,9 +73,11 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		// Permanent error: return error so ConsumerBase routes to dead letter
-		// after exhausting retries.
-		return fmt.Errorf("config-subscribe: unmarshal payload: %w", err)
+		// Permanent error: malformed payload must not be retried.
+		// WrapLegacyHandler detects PermanentError and returns DispositionReject.
+		//
+		// ref: configreceive/service.go:53 — same pattern
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal payload: %w", err))
 	}
 
 	switch event.Action {

@@ -73,10 +73,27 @@ func TestService_HandleEvent_InvalidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
 	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
 
-	// Should return error so ConsumerBase routes to dead letter after retries.
+	// Should return PermanentError so WrapLegacyHandler routes to DLX, not retry.
 	err := svc.HandleEvent(context.Background(), entry)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Equal(t, 0, svc.Cache().Len())
+
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "invalid payload must be PermanentError")
+}
+
+// TestWrapLegacyHandler_InvalidPayload_Reject verifies the full disposition
+// chain: invalid payload → PermanentError → WrapLegacyHandler → DispositionReject.
+func TestWrapLegacyHandler_InvalidPayload_Reject(t *testing.T) {
+	svc := NewService(slog.Default())
+	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+
+	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
+	result := handler(context.Background(), entry)
+
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"invalid payload via WrapLegacyHandler must produce DispositionReject")
+	assert.Error(t, result.Err)
 }
 
 // TestHandleEvent_UnknownAction_PermanentError verifies that an unknown action
