@@ -2,7 +2,6 @@ package rabbitmq
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -605,30 +604,22 @@ func (s *Subscriber) Close() error {
 // ---------------------------------------------------------------------------
 
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
-// It delegates envelope detection to outboxrt.UnmarshalEnvelope (canonical
-// WireMessage format). When that returns an empty entry (non-envelope payload),
-// it falls back to the legacy PascalCase full outbox.Entry JSON format used by
-// older queues, preserving backward compatibility with pre-envelope messages.
+// All messages on RabbitMQ are expected to be WireMessage envelopes produced
+// by MarshalEnvelope. A body that does not parse as a WireMessage (non-empty
+// ID + EventType + embedded JSON payload) is treated as a permanent error and
+// NACK'd without requeue — legacy PascalCase Entry JSON is not supported.
 //
-// Discriminator: outboxrt.UnmarshalEnvelope requires non-empty ID + EventType
-// AND an embedded JSON payload (starts with '{' or '['). If any condition fails
-// the function returns a fresh stamped entry — we detect this by checking whether
-// the returned entry's ID has the "evt-" prefix (fallback path). In that case we
-// attempt the legacy PascalCase unmarshal before accepting the fallback.
+// GoCell does not maintain backward compatibility with pre-envelope wire formats
+// (see CLAUDE.md: "Review 和重构时不考虑向后兼容").
 //
-// Note: the "evt-" prefix check is a deliberate heuristic; real relay-produced
-// IDs are plain UUIDs without that prefix.
+// ref: runtime/outbox/envelope.go UnmarshalEnvelope
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
+	// UnmarshalEnvelope("", body) falls back to a synthetic entry with empty
+	// EventType when the body is not a valid WireMessage. For RabbitMQ all
+	// queued messages must be relay envelopes, so the fallback is an error.
 	entry, _ := outboxrt.UnmarshalEnvelope("", body)
-	// UnmarshalEnvelope returns a freshly-stamped entry (ID starts with "evt-")
-	// when the body does not match the WireMessage discriminator. In that case try
-	// the legacy PascalCase full Entry JSON (backward-compatible RabbitMQ path).
-	if len(entry.ID) >= 4 && entry.ID[:4] == "evt-" {
-		var legacy outbox.Entry
-		if err := json.Unmarshal(body, &legacy); err != nil {
-			return outbox.Entry{}, fmt.Errorf("unmarshal delivery: %w", err)
-		}
-		return legacy, nil
+	if entry.EventType == "" {
+		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope")
 	}
 	return entry, nil
 }

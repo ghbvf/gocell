@@ -47,10 +47,9 @@ func newEntryAt(id, eventType string, attempts int, createdAt time.Time) outbox.
 // supplied factory. Both FakeStore (runtime/outbox/outboxtest) and
 // PGOutboxStore (adapters/postgres testcontainers) must pass this suite.
 //
-// Note: This package (runtime/outbox/outboxtest) intentionally imports
-// runtime/outbox to access the Store interface and ClaimedEntry type.
-// This is an approved exception to the kernel→runtime direction rule:
-// outboxtest is a test helper package, not core kernel logic.
+// outboxtest lives in runtime/outbox/outboxtest/ (not kernel/outbox/outboxtest/)
+// because it imports runtime/outbox.Store and ClaimedEntry — it must sit in
+// the same layer as the interface it tests.
 func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	t.Run("ClaimPending_Empty", func(t *testing.T) { conformClaimPendingEmpty(t, factory) })
@@ -60,14 +59,14 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("MarkPublished_TransitionsClaimingToPublished", func(t *testing.T) { conformMarkPublished(t, factory) })
 	t.Run("MarkPublished_AlreadyReclaimed_UpdatedFalse", func(t *testing.T) { conformMarkPublishedReclaimed(t, factory) })
 	t.Run("MarkRetry_TransitionsClaimingToPending", func(t *testing.T) { conformMarkRetry(t, factory) })
-	t.Run("MarkRetry_SetsAttemptsAndNextRetryAt", func(t *testing.T) { conformMarkRetryFields(t, factory) })
+	t.Run("MarkRetry_SetsAttemptsAndNextRetryAt", func(t *testing.T) { conformMarkRetryFields(t) })
 	t.Run("MarkDead_TransitionsClaimingToDead", func(t *testing.T) { conformMarkDead(t, factory) })
-	t.Run("ReclaimStale_RecoversExpiredClaims", func(t *testing.T) { conformReclaimStaleRecovers(t) })
-	t.Run("ReclaimStale_IgnoresFreshClaims", func(t *testing.T) { conformReclaimStaleFresh(t) })
-	t.Run("ReclaimStale_EscalatesToDeadOnMaxAttempts", func(t *testing.T) { conformReclaimStaleEscalates(t) })
-	t.Run("CleanupPublished_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupPublished(t) })
-	t.Run("CleanupPublished_BatchLimit", func(t *testing.T) { conformCleanupPublishedBatch(t) })
-	t.Run("CleanupDead_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupDead(t) })
+	t.Run("ReclaimStale_RecoversExpiredClaims", func(t *testing.T) { conformReclaimStaleRecovers(t, factory) })
+	t.Run("ReclaimStale_IgnoresFreshClaims", func(t *testing.T) { conformReclaimStaleFresh(t, factory) })
+	t.Run("ReclaimStale_EscalatesToDeadOnMaxAttempts", func(t *testing.T) { conformReclaimStaleEscalates(t, factory) })
+	t.Run("CleanupPublished_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupPublished(t, factory) })
+	t.Run("CleanupPublished_BatchLimit", func(t *testing.T) { conformCleanupPublishedBatch(t, factory) })
+	t.Run("CleanupDead_DeletesOlderThanCutoff", func(t *testing.T) { conformCleanupDead(t, factory) })
 }
 
 func conformClaimPendingEmpty(t *testing.T, factory StoreFactory) {
@@ -233,7 +232,12 @@ func conformMarkRetry(t *testing.T, factory StoreFactory) {
 	}
 }
 
-func conformMarkRetryFields(t *testing.T, _ StoreFactory) {
+// conformMarkRetryFields is FakeStore-only because it relies on Snapshot() to
+// inspect internal row fields (Attempts, NextRetryAt, LastError). There is no
+// generic Store API to retrieve those fields; this sub-test intentionally does
+// not accept a factory. Behavioral correctness (retry transitions pending) is
+// already verified by conformMarkRetry which runs against all store factories.
+func conformMarkRetryFields(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)}
@@ -284,44 +288,61 @@ func conformMarkDead(t *testing.T, factory StoreFactory) {
 	}
 }
 
-func conformReclaimStaleRecovers(t *testing.T) {
+// conformReclaimStaleRecovers verifies that a claiming entry with an expired
+// claim is transitioned back to pending by ReclaimStale.
+//
+// Clock strategy: pass claimTTL = -1h so that the condition
+// "claimed_at < now() - claimTTL" becomes "claimed_at < now() + 1h", which
+// is satisfied for any just-set claimed_at. This avoids clock-injection
+// dependencies and works identically on FakeStore and PGOutboxStore.
+func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
-	fs.Seed(newEntry("e1", "test.v1", 0))
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
 
-	_, _ = fs.ClaimPending(ctx, 10)
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+	}
 
-	fs.WithClock(func() time.Time { return now.Add(61 * time.Second) })
-	count, err := fs.ReclaimStale(ctx, 60*time.Second, 5, 5*time.Second, 5*time.Minute)
+	// Negative TTL → every claiming entry is immediately stale.
+	// Zero baseDelay + maxDelay so the recovered entry gets next_retry_at = now()
+	// and is immediately claimable in the next ClaimPending call.
+	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
 	if count != 1 {
 		t.Errorf("expected 1 reclaimed, got %d", count)
 	}
-	// Advance clock to pass the computed nextRetryAt.
-	fs.WithClock(func() time.Time { return now.Add(130 * time.Second) })
-	got, _ := fs.ClaimPending(ctx, 10)
+
+	// The recovered entry is pending with next_retry_at = now() (zero delay),
+	// so ClaimPending must find it immediately.
+	got, err := store.ClaimPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimPending after reclaim: %v", err)
+	}
 	if len(got) != 1 {
 		t.Errorf("expected 1 claimable after reclaim, got %d", len(got))
 	}
 }
 
-func conformReclaimStaleFresh(t *testing.T) {
+// conformReclaimStaleFresh verifies that a freshly claimed entry (claimTTL not
+// yet elapsed) is NOT recovered by ReclaimStale.
+//
+// Uses a 1-hour TTL so that a just-set claimed_at is still fresh.
+func conformReclaimStaleFresh(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
-	fs.Seed(newEntry("e1", "test.v1", 0))
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
 
-	_, _ = fs.ClaimPending(ctx, 10)
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+	}
 
-	// Clock not advanced — claim is fresh.
-	count, err := fs.ReclaimStale(ctx, 60*time.Second, 5, 5*time.Second, 5*time.Minute)
+	// 1-hour TTL: claimed_at (set just above) is well within TTL.
+	count, err := store.ReclaimStale(ctx, time.Hour, 99, 5*time.Second, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
@@ -330,81 +351,104 @@ func conformReclaimStaleFresh(t *testing.T) {
 	}
 }
 
-func conformReclaimStaleEscalates(t *testing.T) {
+// conformReclaimStaleEscalates verifies that a stale entry at maxAttempts-1 is
+// escalated to dead (not retried) by ReclaimStale.
+//
+// Uses the same negative-TTL strategy as conformReclaimStaleRecovers.
+// FakeStore-specific Snapshot checks are guarded by a type assertion so the
+// test still exercises PGOutboxStore (via behavioral assertions on ClaimPending).
+func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
 	// attempts=4, maxAttempts=5 → attempts+1=5 >= maxAttempts → dead.
-	fs.Seed(newEntry("e1", "test.v1", 4))
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 4)})
 
-	_, _ = fs.ClaimPending(ctx, 10)
-	fs.WithClock(func() time.Time { return now.Add(61 * time.Second) })
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+	}
 
-	count, err := fs.ReclaimStale(ctx, 60*time.Second, 5, 5*time.Second, 5*time.Minute)
+	count, err := store.ReclaimStale(ctx, -time.Hour, 5, 5*time.Second, 5*time.Minute)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}
 	if count != 1 {
 		t.Errorf("expected 1 reclaimed, got %d", count)
 	}
-	snap := fs.Snapshot()
-	if snap[0].Status != "dead" {
-		t.Errorf("expected status=dead, got %s", snap[0].Status)
+
+	// Dead entries must not be claimable.
+	got, err := store.ClaimPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimPending after escalation: %v", err)
 	}
-	if snap[0].Attempts != 5 {
-		t.Errorf("expected attempts=5, got %d", snap[0].Attempts)
+	if len(got) != 0 {
+		t.Errorf("expected 0 claimable (entry escalated to dead), got %d", len(got))
+	}
+
+	// FakeStore-only: verify internal state via Snapshot.
+	if fs, ok := store.(*FakeStore); ok {
+		snap := fs.Snapshot()
+		if len(snap) != 1 {
+			t.Fatalf("FakeStore snapshot: expected 1 row, got %d", len(snap))
+		}
+		if snap[0].Status != "dead" {
+			t.Errorf("FakeStore: expected status=dead, got %s", snap[0].Status)
+		}
+		if snap[0].Attempts != 5 {
+			t.Errorf("FakeStore: expected attempts=5, got %d", snap[0].Attempts)
+		}
 	}
 }
 
-func conformCleanupPublished(t *testing.T) {
+// conformCleanupPublished verifies that CleanupPublished deletes published
+// entries older than the cutoff.
+//
+// Clock strategy: publish the entry first, then call Cleanup with
+// cutoff = time.Now().Add(time.Hour) which covers any just-published row.
+func conformCleanupPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
-	fs.Seed(newEntry("e1", "test.v1", 0))
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
 
-	_, _ = fs.ClaimPending(ctx, 10)
-	_, _ = fs.MarkPublished(ctx, "e1")
+	_, _ = store.ClaimPending(ctx, 10)
+	_, _ = store.MarkPublished(ctx, "e1")
 
-	fs.WithClock(func() time.Time { return now.Add(2 * time.Hour) })
-	cutoff := now.Add(time.Hour)
-
-	deleted, err := fs.CleanupPublished(ctx, cutoff, 100)
+	// cutoff 1 hour in the future covers the just-set published_at.
+	cutoff := time.Now().Add(time.Hour)
+	deleted, err := store.CleanupPublished(ctx, cutoff, 100)
 	if err != nil {
 		t.Fatalf("CleanupPublished: %v", err)
 	}
 	if deleted != 1 {
 		t.Errorf("expected 1 deleted, got %d", deleted)
 	}
-	if snap := fs.Snapshot(); len(snap) != 0 {
-		t.Errorf("expected 0 rows after cleanup, got %d", len(snap))
+
+	// FakeStore-only: verify row is gone via Snapshot.
+	if fs, ok := store.(*FakeStore); ok {
+		if snap := fs.Snapshot(); len(snap) != 0 {
+			t.Errorf("FakeStore: expected 0 rows after cleanup, got %d", len(snap))
+		}
 	}
 }
 
-func conformCleanupPublishedBatch(t *testing.T) {
+// conformCleanupPublishedBatch verifies that the batchSize limit is respected.
+func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
 	seed := []outbox.ClaimedEntry{
 		newEntry("e1", "test.v1", 0),
 		newEntry("e2", "test.v1", 0),
 		newEntry("e3", "test.v1", 0),
 	}
-	fs.Seed(seed...)
+	store := factory(t, seed)
 
 	for _, ce := range seed {
-		_, _ = fs.ClaimPending(ctx, 1)
-		_, _ = fs.MarkPublished(ctx, ce.ID)
+		_, _ = store.ClaimPending(ctx, 1)
+		_, _ = store.MarkPublished(ctx, ce.ID)
 	}
-	fs.WithClock(func() time.Time { return now.Add(2 * time.Hour) })
-	cutoff := now.Add(time.Hour)
 
-	deleted, err := fs.CleanupPublished(ctx, cutoff, 2)
+	cutoff := time.Now().Add(time.Hour)
+	deleted, err := store.CleanupPublished(ctx, cutoff, 2)
 	if err != nil {
 		t.Fatalf("CleanupPublished: %v", err)
 	}
@@ -413,28 +457,29 @@ func conformCleanupPublishedBatch(t *testing.T) {
 	}
 }
 
-func conformCleanupDead(t *testing.T) {
+// conformCleanupDead verifies that CleanupDead deletes dead entries older than
+// the cutoff.
+func conformCleanupDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	now := time.Now()
-	fs := NewFakeStore()
-	fs.WithClock(func() time.Time { return now })
-	fs.Seed(newEntry("e1", "test.v1", 4))
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 4)})
 
-	_, _ = fs.ClaimPending(ctx, 10)
-	_, _ = fs.MarkDead(ctx, "e1", 5, "perm error")
+	_, _ = store.ClaimPending(ctx, 10)
+	_, _ = store.MarkDead(ctx, "e1", 5, "perm error")
 
-	fs.WithClock(func() time.Time { return now.Add(2 * time.Hour) })
-	cutoff := now.Add(time.Hour)
-
-	deleted, err := fs.CleanupDead(ctx, cutoff, 100)
+	cutoff := time.Now().Add(time.Hour)
+	deleted, err := store.CleanupDead(ctx, cutoff, 100)
 	if err != nil {
 		t.Fatalf("CleanupDead: %v", err)
 	}
 	if deleted != 1 {
 		t.Errorf("expected 1 deleted, got %d", deleted)
 	}
-	if snap := fs.Snapshot(); len(snap) != 0 {
-		t.Errorf("expected 0 rows after cleanup, got %d", len(snap))
+
+	// FakeStore-only: verify row is gone via Snapshot.
+	if fs, ok := store.(*FakeStore); ok {
+		if snap := fs.Snapshot(); len(snap) != 0 {
+			t.Errorf("FakeStore: expected 0 rows after cleanup, got %d", len(snap))
+		}
 	}
 }

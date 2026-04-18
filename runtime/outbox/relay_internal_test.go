@@ -266,22 +266,22 @@ func TestCappedDelay_CapsAtMax(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// truncateError / sanitizeError
+// TruncateError / SanitizeError
 // ---------------------------------------------------------------------------
 
 func TestTruncateError_UTF8Safe(t *testing.T) {
 	msg := "错误消息测试用例"
-	truncated := truncateError(msg, 4)
+	truncated := TruncateError(msg, 4)
 	assert.Equal(t, "错误消息", truncated)
 }
 
 func TestTruncateError_ShortMessage(t *testing.T) {
-	assert.Equal(t, "short", truncateError("short", 100))
+	assert.Equal(t, "short", TruncateError("short", 100))
 }
 
 func TestSanitizeError_RedactsSensitive(t *testing.T) {
 	msg := "dial failed: password=secret123 host=db.internal"
-	sanitized := sanitizeError(msg, 1000)
+	sanitized := SanitizeError(msg, 1000)
 	assert.NotContains(t, sanitized, "secret123")
 	assert.Contains(t, sanitized, "password=<REDACTED>")
 }

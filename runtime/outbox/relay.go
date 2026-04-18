@@ -4,11 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"math/rand/v2"
-	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -384,10 +382,15 @@ func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publ
 // recovers the entry between Phase 2 and Phase 3.
 func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (pollStats, error) {
 	var stats pollStats
-	for _, res := range results {
+	for i, res := range results {
 		if res.err == nil {
 			updated, err := r.store.MarkPublished(ctx, res.entry.ID)
 			if err != nil {
+				remaining := len(results) - i
+				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
+					slog.Int("completed", i),
+					slog.Int("remaining", remaining),
+					slog.Any("error", err))
 				return stats, err
 			}
 			if !updated {
@@ -398,6 +401,11 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 			}
 		} else {
 			if err := r.handleFailedEntry(ctx, res, &stats); err != nil {
+				remaining := len(results) - i
+				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
+					slog.Int("completed", i),
+					slog.Int("remaining", remaining),
+					slog.Any("error", err))
 				return stats, err
 			}
 		}
@@ -409,7 +417,7 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 // Extracted to keep writeBackResults below cognitive-complexity ceiling.
 func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats *pollStats) error {
 	newAttempts := res.entry.Attempts + 1
-	errMsg := sanitizeError(res.err.Error(), 1000)
+	errMsg := SanitizeError(res.err.Error(), 1000)
 
 	if newAttempts >= r.cfg.MaxAttempts {
 		_, err := r.store.MarkDead(ctx, res.entry.ID, newAttempts, errMsg)
@@ -535,31 +543,4 @@ func (r *Relay) retryDelay(attempts int) time.Duration {
 		delay += jitter
 	}
 	return delay
-}
-
-// ---------------------------------------------------------------------------
-// Error sanitization helpers
-// ---------------------------------------------------------------------------
-
-// truncateError truncates an error message to maxLen runes, preserving valid
-// UTF-8 (avoids splitting multi-byte characters at byte boundaries).
-func truncateError(msg string, maxLen int) string {
-	if utf8.RuneCountInString(msg) <= maxLen {
-		return msg
-	}
-	runes := []rune(msg)
-	return string(runes[:maxLen])
-}
-
-// sensitivePatterns matches common sensitive substrings in error messages
-// (connection strings, hostnames, credentials) to redact before storage.
-var sensitivePatterns = regexp.MustCompile(
-	`(?i)(password|passwd|secret|token|dsn|connection[_ ]?string)=[^\s;,]+`,
-)
-
-// sanitizeError truncates and redacts sensitive patterns from an error message
-// before storing it in the last_error column.
-func sanitizeError(errMsg string, maxLen int) string {
-	redacted := sensitivePatterns.ReplaceAllString(errMsg, "$1=<REDACTED>")
-	return truncateError(redacted, maxLen)
 }

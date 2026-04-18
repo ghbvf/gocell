@@ -2,11 +2,11 @@ package postgres
 
 import (
 	"context"
-	"regexp"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,29 +33,10 @@ type relayDB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-// ---------------------------------------------------------------------------
-// Error sanitization helpers
-// ---------------------------------------------------------------------------
-
-// sensitivePatterns matches common sensitive substrings in error messages
-// (connection strings, hostnames, credentials) to redact before storage.
-var sensitivePatterns = regexp.MustCompile(
-	`(?i)(password|passwd|secret|token|dsn|connection[_ ]?string)=[^\s;,]+`,
-)
-
-// truncateError truncates an error message to maxLen runes, preserving valid
-// UTF-8 (avoids splitting multi-byte characters at byte boundaries).
-func truncateError(msg string, maxLen int) string {
-	if utf8.RuneCountInString(msg) <= maxLen {
-		return msg
-	}
-	runes := []rune(msg)
-	return string(runes[:maxLen])
-}
-
-// sanitizeError truncates and redacts sensitive patterns from an error message
-// before storing it in the last_error column.
+// sanitizeError is a package-local alias for outboxrt.SanitizeError.
+// Adapters/postgres calls this to redact sensitive data before storing error
+// messages in the last_error column. The implementation lives in
+// runtime/outbox/errors.go to avoid duplication with relay.go.
 func sanitizeError(errMsg string, maxLen int) string {
-	redacted := sensitivePatterns.ReplaceAllString(errMsg, "$1=<REDACTED>")
-	return truncateError(redacted, maxLen)
+	return outboxrt.SanitizeError(errMsg, maxLen)
 }
