@@ -73,10 +73,12 @@ func intentForJWTTyp(typ string) (TokenIntent, bool) {
 // Extended: kid-based key lookup from VerificationKeyStore (RFC 7638 thumbprint).
 //
 // ref: golang-jwt/jwt v5 parser_option.go -- WithTimeFunc for clock injection.
+// ref: coreos/go-oidc v3 oidc.go IDTokenVerifier -- issuer validation pattern.
 type JWTVerifier struct {
 	keys              VerificationKeyStore
 	parserOpts        []jwt.ParserOption
 	expectedAudiences []string
+	expectedIssuer    string
 }
 
 // JWTVerifierOption configures a JWTVerifier.
@@ -102,6 +104,18 @@ func WithExpectedAudiences(first string, rest ...string) JWTVerifierOption {
 			}
 		}
 	}
+}
+
+// WithExpectedIssuer configures VerifyIntent to enforce that the token's iss
+// claim exactly matches the given issuer string. The check is applied after
+// audience validation so audience errors remain distinguishable in structured
+// logs. An empty iss argument is silently ignored (no-op), preserving the
+// previous behaviour of accepting any issuer.
+//
+// ref: coreos/go-oidc v3 IDTokenVerifier — issuer validation with equality check
+// ref: golang-jwt/jwt v5 WithIssuer ParserOption — functional option pattern
+func WithExpectedIssuer(iss string) JWTVerifierOption {
+	return func(v *JWTVerifier) { v.expectedIssuer = iss }
 }
 
 // WithVerifierClock overrides the time source used for token expiry validation.
@@ -183,7 +197,29 @@ func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expecte
 			"token audience validation failed",
 			fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience))
 	}
+	// Issuer validation: when expectedIssuer is configured, the token's iss claim
+	// must match exactly. Placed after audience check so each failure type remains
+	// independently distinguishable in structured logs.
+	if err := v.checkIssuer(claims); err != nil {
+		return Claims{}, err
+	}
 	return claims, nil
+}
+
+// checkIssuer validates the token issuer when expectedIssuer is non-empty.
+// Returns nil when no expected issuer is configured (no-op).
+//
+// ref: coreos/go-oidc v3 IDTokenVerifier.Verify — strict equality issuer check
+func (v *JWTVerifier) checkIssuer(claims Claims) error {
+	if v.expectedIssuer == "" {
+		return nil
+	}
+	if claims.Issuer != v.expectedIssuer {
+		return errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+			"token issuer validation failed",
+			fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer))
+	}
+	return nil
 }
 
 // audContainsAny reports whether any element of expected appears in aud.
