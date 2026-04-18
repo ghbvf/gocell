@@ -30,9 +30,11 @@ func makeDeliveryBodyWithID(t *testing.T, id string) []byte {
 	return makeDeliveryBody(t, entry)
 }
 
-// TestProcessDelivery_EmptyEntryID_RejectsToDLX verifies that an entry with
-// an empty ID is Nacked without requeue and the handler is never called.
-func TestProcessDelivery_EmptyEntryID_RejectsToDLX(t *testing.T) {
+// TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX verifies that a legacy
+// (non-v1 envelope) delivery is Nacked without requeue and the handler is
+// never called. After P1-14 (A2), unmarshalDelivery rejects any body that is
+// not a v1 envelope — ErrUnknownEnvelopeVersion routes to DLX, not retry.
+func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
 	ch := newMockChannel()
