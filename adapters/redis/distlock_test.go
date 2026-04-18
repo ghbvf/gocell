@@ -2,9 +2,11 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,9 +85,12 @@ func TestDistLock_ReleaseIdempotent(t *testing.T) {
 	err = lock.Release(ctx)
 	assert.NoError(t, err)
 
-	// Second release is a no-op (Lua returns 0, no error).
-	err = lock.Release(ctx)
-	assert.NoError(t, err)
+	// Second release returns ErrLockLost — Lua returns 0, key is already gone.
+	err2 := lock.Release(ctx)
+	require.Error(t, err2, "second release should report lock no longer owned")
+	var ec *errcode.Error
+	require.True(t, errors.As(err2, &ec))
+	assert.Equal(t, distlock.ErrLockLost, ec.Code)
 
 	// Guard: sync.Once prevents double-close; Lost() channel stays closed.
 	select {
@@ -339,8 +344,9 @@ func TestLock_Key_ReturnsAcquiredKey(t *testing.T) {
 	assert.Equal(t, wantKey, lock.Key())
 }
 
-// TestLock_Release_IsIdempotent confirms the second Release call is a no-op.
-// (Preserves existing TestDistLock_ReleaseIdempotent behaviour via the new interface.)
+// TestLock_Release_IsIdempotent confirms the second Release call returns ErrLockLost.
+// Idempotent in the sense of: safe to call twice, no panic, but explicitly surfaces
+// that the lock is no longer owned on the second call.
 func TestLock_Release_IsIdempotent(t *testing.T) {
 	mock := newMockCmdable()
 	dl := newDistLockFromCmdable(mock, 30*time.Second)
@@ -352,9 +358,12 @@ func TestLock_Release_IsIdempotent(t *testing.T) {
 	err = lock.Release(ctx)
 	assert.NoError(t, err)
 
-	// Second release must be a no-op (Lua returns 0, no error).
-	err = lock.Release(ctx)
-	assert.NoError(t, err)
+	// Second release returns ErrLockLost — Lua returns 0, key is already gone.
+	err2 := lock.Release(ctx)
+	require.Error(t, err2, "second release should report lock no longer owned")
+	var ec *errcode.Error
+	require.True(t, errors.As(err2, &ec))
+	assert.Equal(t, distlock.ErrLockLost, ec.Code)
 
 	// Guard: sync.Once prevents double-close; Lost() channel stays closed.
 	select {
@@ -384,5 +393,201 @@ func TestLock_Lost_ClosedAfterRelease(t *testing.T) {
 		// Good.
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("Lost() channel was not closed after Release")
+	}
+}
+
+// TestDistLock_Release_WhenLockTTLExpired_SkipsDEL verifies that Release skips
+// the DEL command when the lock's expiresAt is already in the past.  When the
+// TTL has elapsed Redis will have self-cleaned the key, so the DEL would be a
+// no-op anyway. The function must return nil and close Lost().
+func TestDistLock_Release_WhenLockTTLExpired_SkipsDEL(t *testing.T) {
+	rec := newRecordingCmdable()
+	dl := newDistLockFromCmdable(rec, 30*time.Second)
+
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:ttl-expired", 10*time.Second)
+	require.NoError(t, err)
+	lock := lockIface.(*Lock)
+
+	// Snapshot Eval calls made so far (SetNX, possible early renewals).
+	rec.mu.Lock()
+	evalsBefore := rec.evalCallCount
+	rec.mu.Unlock()
+
+	// Simulate the lock already being past its natural expiry.
+	lock.expiresAt.Store(time.Now().Add(-time.Second).UnixNano())
+
+	err = lock.Release(context.Background())
+	assert.NoError(t, err, "Release must return nil when lock already expired via TTL")
+
+	// No Eval (DEL) should have been issued after the snapshot.
+	rec.mu.Lock()
+	evalsAfter := rec.evalCallCount
+	rec.mu.Unlock()
+	assert.Equal(t, evalsBefore, evalsAfter, "DEL must not be issued when lock already expired via TTL")
+
+	// Lost() must still be closed.
+	select {
+	case <-lock.Lost():
+		// Good.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Lost() channel must be closed even when DEL is skipped")
+	}
+}
+
+// TestDistLock_Release_DeadlineIsLockExpiry verifies that the DEL context
+// deadline is bounded by the lock's natural expiry (no artificial constant).
+func TestDistLock_Release_DeadlineIsLockExpiry(t *testing.T) {
+	rec := newRecordingCmdable()
+	ttl := 5 * time.Second
+	dl := newDistLockFromCmdable(rec, ttl)
+
+	before := time.Now()
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:deadline-expiry", ttl)
+	require.NoError(t, err)
+	after := time.Now()
+
+	// Drain any renewal Eval calls from before Release.
+	rec.mu.Lock()
+	rec.evalContexts = nil
+	rec.mu.Unlock()
+
+	err = lockIface.Release(context.Background())
+	require.NoError(t, err)
+
+	ctx := rec.lastEvalCtx()
+	require.NotNil(t, ctx, "expected Eval to be called during Release")
+	dl2, hasDeadline := ctx.Deadline()
+	require.True(t, hasDeadline, "DEL context must have a deadline")
+
+	// The deadline must be between before+ttl and after+ttl+100ms slack.
+	assert.True(t, !dl2.Before(before.Add(ttl)),
+		"DEL deadline %v must be >= acquire-time + ttl (%v)", dl2, before.Add(ttl))
+	assert.True(t, !dl2.After(after.Add(ttl+100*time.Millisecond)),
+		"DEL deadline %v must be <= acquire-time + ttl + 100ms slack (%v)", dl2, after.Add(ttl+100*time.Millisecond))
+}
+
+// TestDistLock_Release_RespectsCallerDeadlineWhenEarlier verifies that when
+// the caller's ctx deadline is earlier than the lock's natural expiry, the
+// tighter (caller) deadline wins.
+func TestDistLock_Release_RespectsCallerDeadlineWhenEarlier(t *testing.T) {
+	rec := newRecordingCmdable()
+	ttl := 10 * time.Second
+	dl := newDistLockFromCmdable(rec, ttl)
+
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:caller-deadline", ttl)
+	require.NoError(t, err)
+
+	// Drain renewal Eval contexts from Acquire path.
+	rec.mu.Lock()
+	rec.evalContexts = nil
+	rec.mu.Unlock()
+
+	// Caller context with a 1s deadline — much shorter than lock's 10s expiry.
+	callerCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err = lockIface.Release(callerCtx)
+	// May succeed (DEL completed within 1s) or fail — either way check deadline.
+	_ = err
+
+	ctx := rec.lastEvalCtx()
+	require.NotNil(t, ctx, "expected Eval to be called during Release")
+	dl2, hasDeadline := ctx.Deadline()
+	require.True(t, hasDeadline, "DEL context must have a deadline")
+
+	// The deadline must be at most ~1s from now (caller's deadline), definitely
+	// not 10s from now (lock's natural expiry).
+	assert.True(t, time.Until(dl2) <= 2*time.Second,
+		"DEL deadline %v should honour the caller's 1s ctx, not the lock's 10s expiry; time until deadline: %v",
+		dl2, time.Until(dl2))
+}
+
+// TestDistLock_Release_OwnershipLost_ReturnsErrLockLost verifies that when
+// the Lua release script returns 0 (another holder took the key), Release
+// returns an errcode.Error with Code == ErrLockLost.
+func TestDistLock_Release_OwnershipLost_ReturnsErrLockLost(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:ownership-lost-release", 10*time.Second)
+	require.NoError(t, err)
+	lock := lockIface.(*Lock)
+
+	// Remove the key from the mock store so the Lua script returns 0
+	// (simulating another holder taking over or TTL expiry between check and DEL).
+	mock.mu.Lock()
+	delete(mock.store, "test:lock:ownership-lost-release")
+	mock.mu.Unlock()
+
+	err = lockIface.Release(context.Background())
+	require.Error(t, err, "Release must return error when lock is no longer owned")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error, got: %T %v", err, err)
+	assert.Equal(t, distlock.ErrLockLost, ec.Code)
+
+	// Lost() must also be closed.
+	select {
+	case <-lock.Lost():
+		// Good.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Lost() channel must be closed when ownership is lost on Release")
+	}
+}
+
+// TestDistLock_Renewal_UpdatesExpiresAt verifies that the background renewal
+// loop updates lock.expiresAt after each successful renewal Eval.
+func TestDistLock_Renewal_UpdatesExpiresAt(t *testing.T) {
+	mock := newMockCmdable()
+	ttl := 200 * time.Millisecond // short so renewal fires quickly
+	dl := newDistLockFromCmdable(mock, ttl)
+
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:renewal-expiresAt", ttl)
+	require.NoError(t, err)
+	lock := lockIface.(*Lock)
+	defer func() { _ = lockIface.Release(context.Background()) }()
+
+	// Snapshot the expiresAt right after Acquire.
+	initialExpiry := lock.expiresAt.Load()
+	require.NotZero(t, initialExpiry, "expiresAt must be set after Acquire")
+
+	// Wait long enough for the renewal ticker (ttl/2 = 100ms) to fire at least once.
+	time.Sleep(250 * time.Millisecond)
+
+	updatedExpiry := lock.expiresAt.Load()
+	assert.Greater(t, updatedExpiry, initialExpiry,
+		"expiresAt must be updated after a successful renewal (initial=%d, updated=%d)",
+		initialExpiry, updatedExpiry)
+}
+
+// TestRenewLoop_CtxDone_ClosesLost verifies the O1 fix: when the renewCtx is
+// cancelled (ctx.Done() fires in renewLoop), Lost() is also closed via the
+// defensive closeLost() call in that branch.
+func TestRenewLoop_CtxDone_ClosesLost(t *testing.T) {
+	mock := newMockCmdable()
+	ttl := 10 * time.Second // long TTL so the ticker doesn't fire
+	dl := newDistLockFromCmdable(mock, ttl)
+
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:ctx-done-lost", ttl)
+	require.NoError(t, err)
+	lock := lockIface.(*Lock)
+
+	// Lost() must not be closed yet.
+	select {
+	case <-lock.Lost():
+		t.Fatal("Lost() must not be closed immediately after Acquire")
+	default:
+	}
+
+	// Cancel the renewal context directly by calling lock.cancel (white-box).
+	// This simulates the "ctx.Done()" path in renewLoop without going through Release.
+	lock.cancel()
+
+	// The renewLoop's ctx.Done branch should now call closeLost() and exit.
+	select {
+	case <-lock.Lost():
+		// Good — O1 fix confirmed: Lost() closed via ctx.Done path.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Lost() channel was not closed when renewCtx was cancelled (O1 fix missing)")
 	}
 }

@@ -16,11 +16,12 @@ const (
 	ErrLockRelease errcode.Code = "ERR_DISTLOCK_RELEASE" // release I/O failure
 	ErrLockTimeout errcode.Code = "ERR_DISTLOCK_TIMEOUT" // another holder owns the key
 
-	// ErrLockLost identifies a lost lock (renewal failed or ownership taken by
-	// another holder). The redis impl signals loss via Lock.Lost() channel close,
-	// not an error return, so this code is not produced by current adapters.
-	// Reserved for future impls that prefer error-return over channel signalling
-	// (e.g. a synchronous session-revocation backend) and for consumers that want
-	// a stable taxonomy entry to assert on in metrics labels.
+	// ErrLockLost identifies a lost lock. Returned by Release when the Lua
+	// script finds result==0 — meaning the key is no longer owned by this
+	// holder (TTL expired before our DEL, another holder took over, or Release
+	// was called twice). Callers can errors.Is/errors.As on this code to branch
+	// on loss semantics. The redis impl also signals loss via Lock.Lost()
+	// channel close when renewal fails; both paths share this code so consumers
+	// have a single stable taxonomy entry for metrics labels and alerting.
 	ErrLockLost errcode.Code = "ERR_DISTLOCK_LOST"
 )

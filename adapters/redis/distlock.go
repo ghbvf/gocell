@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -18,12 +19,6 @@ var (
 	_ distlock.Locker = (*DistLock)(nil)
 	_ distlock.Lock   = (*Lock)(nil)
 )
-
-// releaseTimeout bounds the single Redis DEL command issued during Release.
-// Matches K8s pod terminationGracePeriodSeconds minimum (3s) — long enough
-// for a healthy Redis round-trip, short enough to not extend a kubelet-level
-// shutdown timeline.
-const releaseTimeout = 3 * time.Second
 
 // releaseLockScript is a Lua script that atomically releases a lock only if
 // the caller still owns it (value matches). This prevents releasing a lock
@@ -50,9 +45,9 @@ end
 // critical section is complete. Use a fresh context for Release, not the
 // Acquire context, to avoid early cancellation:
 //
-//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	defer lock.Release(cleanupCtx)
+//	lock, err := dl.Acquire(requestCtx, key, ttl)
+//	if err != nil { return err }
+//	defer lock.Release(context.Background())
 //
 // Safety: DistLock provides distributed mutual exclusion on a best-effort
 // basis (efficiency lock). It is suitable for avoiding duplicate work. For
@@ -66,6 +61,12 @@ type Lock struct {
 	done     chan struct{} // closed when renewLoop exits
 	lost     chan struct{} // closed when lock is lost (renewal failure or Release)
 	lostOnce sync.Once     // guards against double-close of lost
+
+	// expiresAt holds the Unix nanosecond timestamp of the lock's current
+	// expected expiry. It is set after SetNX success in Acquire and updated on
+	// each successful renewal in renewLoop. Release reads this to compute its
+	// DEL deadline without any hardcoded constant.
+	expiresAt atomic.Int64
 }
 
 // Key returns the key that was passed to Acquire.
@@ -85,22 +86,37 @@ func (l *Lock) closeLost() {
 }
 
 // Release releases the distributed lock. It stops the background renewal
-// goroutine and waits for it to exit before issuing the release command.
-// It is safe to call multiple times; subsequent calls are no-ops.
+// goroutine, waits for it to exit (bounded by the supplied ctx), closes
+// Lost(), then issues the DEL command.
 //
-// Release uses a fresh 3-second context for the DEL command; the supplied ctx
-// is only used to bound the wait for the renewal goroutine to exit. This
-// ensures the Redis key is cleaned up even when the caller-supplied ctx has
-// already expired (e.g. HTTP request timeout), avoiding the lock lingering
-// until natural TTL expiry.
+// The DEL's deadline is the lock's own natural expiry (acquire time + ttl,
+// updated on each successful renewal). This guarantees Release never blocks
+// longer than the lock could have existed anyway — beyond expiresAt, Redis'
+// own TTL handling has already removed the key, so a DEL is redundant.
+// No artificial timeout constant is required.
+//
+// When the caller-supplied ctx is still alive, it is kept as the DEL's
+// parent so cancellation still propagates. When the ctx has already been
+// cancelled, DEL proceeds anyway on a fresh Background-derived deadline,
+// because the caller ctx being dead does not mean we should leave a key
+// lingering — cleanup is best effort.
+//
+// It is safe to call multiple times; subsequent calls find the key already
+// gone and return ErrLockLost (see below) rather than succeeding silently.
+//
+// Returns:
+//   - nil on success (DEL removed our key) or when the lock already expired
+//     via Redis TTL before Release was issued
+//   - ErrLockRelease wrapping any Redis I/O error
+//   - ErrLockLost when the lock is no longer owned (another holder took it,
+//     our TTL expired between the script's GET and our DEL, or Release was
+//     called twice on the same Lock)
 //
 // Use a fresh context for Release, not the Acquire context:
 //
 //	lock, err := dl.Acquire(requestCtx, key, ttl)
 //	if err != nil { return err }
-//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	defer lock.Release(cleanupCtx)
+//	defer lock.Release(context.Background())
 func (l *Lock) Release(ctx context.Context) error {
 	// Stop renewal goroutine and wait for it to exit.
 	if l.cancel != nil {
@@ -119,23 +135,46 @@ func (l *Lock) Release(ctx context.Context) error {
 	// immediately even if the DEL takes time or fails.
 	l.closeLost()
 
-	// Use a fresh bounded context for the DEL — caller ctx may already be
-	// done (timeout / cancellation), in which case issuing Eval on it would
-	// return ctx error without touching Redis and leave the key lingering
-	// until natural TTL. We want DEL to have a best-effort chance regardless.
-	delCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	// F5: compute the DEL deadline from the lock's natural expiry — no hardcoded
+	// timeout constant. If expiresAt is already past, the key has self-cleaned via
+	// Redis TTL and issuing a DEL would be redundant.
+	expiresAt := time.Unix(0, l.expiresAt.Load())
+	if time.Now().After(expiresAt) {
+		// Lock already expired via Redis-side TTL. The key is self-cleaning
+		// (Redis removes expired keys lazily + actively). Issuing DEL is
+		// redundant and would only confirm the key is gone. Skip.
+		slog.Debug("redis: release skipped, lock expired via TTL",
+			"key", l.key,
+			"expiredAgo", time.Since(expiresAt).String())
+		return nil
+	}
+
+	// Build DEL context: inherit caller's parent cancellation when alive (so a
+	// subsequent caller-cancel still aborts the Eval), otherwise start fresh.
+	// In either case, deadline is the lock's own natural expiry — waiting past
+	// that is pointless because the key would self-expire anyway.
+	parent := ctx
+	if ctx.Err() != nil {
+		parent = context.Background()
+	}
+	delCtx, cancel := context.WithDeadline(parent, expiresAt)
 	defer cancel()
+
 	result, err := l.rdb.Eval(delCtx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
 		return errcode.Wrap(distlock.ErrLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
 	}
 	if result == 0 {
+		// The Lua script found a different (or missing) value at the key,
+		// meaning we no longer own this lock. Causes: TTL expired before our
+		// DEL, another holder took over, or a prior Release already removed it.
 		slog.Warn("redis: lock already released or expired",
 			"key", l.key)
-	} else {
-		slog.Debug("redis: lock released", "key", l.key)
+		return errcode.New(distlock.ErrLockLost,
+			fmt.Sprintf("redis: lock no longer owned (key=%s)", l.key))
 	}
+	slog.Debug("redis: lock released", "key", l.key)
 	return nil
 }
 
@@ -206,6 +245,9 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 		done:   done,
 		lost:   make(chan struct{}),
 	}
+	// Record the initial expected expiry time so Release can compute its
+	// DEL deadline without any hardcoded constant.
+	lock.expiresAt.Store(time.Now().Add(ttl).UnixNano())
 
 	// Start background renewal at half the TTL interval.
 	go func() {
@@ -229,6 +271,12 @@ func (d *DistLock) renewLoop(ctx context.Context, lock *Lock, ttl time.Duration)
 	for {
 		select {
 		case <-ctx.Done():
+			// O1: explicitly close Lost() here via sync.Once so that callers
+			// selecting on Lost() are unblocked when the renewal context is
+			// cancelled (e.g. by Release or external cancellation). Previously
+			// relied on an unwritten invariant that Release always calls
+			// closeLost — making it explicit removes the coupling.
+			lock.closeLost()
 			return
 		case <-ticker.C:
 			ttlMs := ttl.Milliseconds()
@@ -247,6 +295,8 @@ func (d *DistLock) renewLoop(ctx context.Context, lock *Lock, ttl time.Duration)
 				lock.closeLost()
 				return
 			}
+			// Update the expected expiry so Release can use it as a DEL deadline.
+			lock.expiresAt.Store(time.Now().Add(ttl).UnixNano())
 			slog.Debug("redis: lock renewed",
 				"key", lock.key,
 				"ttl", ttl.String())

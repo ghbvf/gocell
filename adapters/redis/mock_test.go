@@ -222,6 +222,37 @@ func toInt64(v any) (int64, bool) {
 // errMock is a sentinel error used in tests.
 var errMock = errors.New("mock error")
 
+// recordingCmdable wraps mockCmdable and records the context passed to each
+// Eval call. Used by deadline-shape tests that need to inspect the deadline
+// the production code computes.
+type recordingCmdable struct {
+	*mockCmdable
+	mu           sync.Mutex
+	evalContexts []context.Context
+}
+
+func newRecordingCmdable() *recordingCmdable {
+	return &recordingCmdable{
+		mockCmdable: newMockCmdable(),
+	}
+}
+
+func (r *recordingCmdable) Eval(ctx context.Context, script string, keys []string, args ...any) *goredis.Cmd {
+	r.mu.Lock()
+	r.evalContexts = append(r.evalContexts, ctx)
+	r.mu.Unlock()
+	return r.mockCmdable.Eval(ctx, script, keys, args...)
+}
+
+func (r *recordingCmdable) lastEvalCtx() context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.evalContexts) == 0 {
+		return nil
+	}
+	return r.evalContexts[len(r.evalContexts)-1]
+}
+
 // mockPoolStatsProvider implements poolStatsProvider for testing.
 type mockPoolStatsProvider struct {
 	stats *goredis.PoolStats
