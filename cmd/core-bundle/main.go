@@ -34,6 +34,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -265,8 +266,8 @@ func validateAdapterMode(mode string) error {
 // "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
 // "memory" or unset = in-memory repos (dev/test only).
 //
-// The relay worker (adapterpg.OutboxRelay) satisfies runtime/worker.Worker via
-// structural typing (Start/Stop methods). It must be registered via
+// The relay worker (outboxruntime.Relay) satisfies runtime/worker.Worker via
+// a compile-time assertion in runtime/outbox. It must be registered via
 // bootstrap.WithWorkers so the bootstrap lifecycle starts it in Step 8 and
 // stops it LIFO on shutdown — see docs/references/202604181900-outbox-wire-
 // framework-comparison.md for the Kratos/fx rationale.
@@ -314,14 +315,15 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		// Wire K2 relay metrics into production relay (OBS-RELAY-REGISTER-ATOMIC-01).
 		// Falls back to NoopRelayCollector only when provider registration fails,
 		// which surfaces as an error rather than silently losing metrics.
-		relayCfg := adapterpg.DefaultRelayConfig()
+		relayCfg := outboxruntime.DefaultRelayConfig()
 		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
 		if rmErr != nil {
 			pool.Close()
 			return mode, nil, nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
-		relayWorker := adapterpg.NewOutboxRelay(pool.DB(), pub, relayCfg)
+		pgStore := adapterpg.NewOutboxStore(pool.DB())
+		relayWorker := outboxruntime.NewRelay(pgStore, pub, relayCfg)
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
 		return mode, []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),

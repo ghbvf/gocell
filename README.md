@@ -257,7 +257,7 @@ examples/  ← all layers
 
 | Adapter | Capabilities | Kernel Interface |
 |---------|-------------|-----------------|
-| `adapters/postgres` | Pool, TxManager, Migrator (goose v3), OutboxWriter, OutboxRelay | `outbox.Writer`, `outbox.BatchWriter`, `outbox.Relay` |
+| `adapters/postgres` | Pool, TxManager, Migrator (goose v3), OutboxWriter, PGOutboxStore | `outbox.Writer`, `outbox.BatchWriter`, `runtime/outbox.Store` |
 | `adapters/redis` | Client, DistLock, IdempotencyClaimer, Cache | `idempotency.Claimer` |
 | `adapters/oidc` | Thin go-oidc v3 wrapper (Config, Provider, Refresh, Verifier, OAuth2Config) | — |
 | `adapters/s3` | Thin aws-sdk-go-v2 wrapper (Config, Upload, Health, SDK escape hatch) | — |
@@ -265,6 +265,22 @@ examples/  ← all layers
 | `adapters/websocket` | WebSocket Hub, signal-first push | — |
 | `adapters/otel` | OTel SDK tracer + MetricProvider + pool collector (OTLP gRPC exporter, semconv `db.client.connection.*`) | `tracing.Tracer`, `kernel/observability/metrics.Provider` |
 | `adapters/prometheus` | MetricProvider (backs runtime/outbox collectors) + LifecycleHookObserver | `kernel/observability/metrics.Provider`, `cell.LifecycleHookObserver` |
+
+### Outbox Wiring
+
+The transactional outbox is split across three layers — write at the cell, store + relay loop in `runtime/outbox`, persistence in `adapters/postgres`:
+
+```go
+// 1. Write inside the cell's business transaction (any package)
+postgres.NewOutboxWriter().Write(txCtx, entry)
+
+// 2. Compose the relay at bootstrap (cmd/core-bundle, examples, etc.)
+store := postgres.NewOutboxStore(pool.DB())
+relay := outbox.NewRelay(store, publisher, outbox.DefaultRelayConfig())
+// relay implements worker.Worker — register with bootstrap to manage lifecycle.
+```
+
+`runtime/outbox` defines the SQL-dialect-neutral `Store` interface (`ClaimPending` / `MarkPublished` / `MarkRetry` / `MarkDead` / `ReclaimStale` / `CleanupPublished` / `CleanupDead` / `OldestEligibleAt`) and the `Relay` worker that owns the poll / reclaim / cleanup goroutines. Cleanup is data-driven: it sleeps until the next published / dead row crosses its retention window, so an idle table costs zero DB cycles.
 
 ### Outbox Observability Bridge
 

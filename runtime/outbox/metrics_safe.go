@@ -1,13 +1,13 @@
-package postgres
+package outbox
 
 import (
 	"log/slog"
 	"runtime/debug"
 
-	"github.com/ghbvf/gocell/kernel/outbox"
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// safeRelayCollector wraps an outbox.RelayCollector and recovers from any
+// safeRelayCollector wraps a kout.RelayCollector and recovers from any
 // panic so that a misbehaving collector cannot crash relay worker goroutines.
 //
 // This follows the same pattern as runtime/http/middleware/safe_observe.go
@@ -17,13 +17,13 @@ import (
 // an interface value) are handled implicitly: the nil-pointer dereference
 // panic is caught by the deferred recover() in safeCall.
 type safeRelayCollector struct {
-	inner outbox.RelayCollector
+	inner kout.RelayCollector
 }
 
 // Compile-time interface check.
-var _ outbox.RelayCollector = (*safeRelayCollector)(nil)
+var _ kout.RelayCollector = (*safeRelayCollector)(nil)
 
-func (s *safeRelayCollector) RecordPollCycle(r outbox.PollCycleResult) {
+func (s *safeRelayCollector) RecordPollCycle(r kout.PollCycleResult) {
 	s.safeCall(func() { s.inner.RecordPollCycle(r) })
 }
 

@@ -1,11 +1,10 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-18（PR#174 同步）
-> 基线: develop@dde5cae（PR#165 合并后）
-> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard
+> 更新日期: 2026-04-18（PR#511 S30 落地同步）
+> 基线: develop@fdb6561（PR#174 合并 + backlog sync 后）
+> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard / PR#511 S30+S28+X7 outbox store abstraction (runtime/outbox.Store interface + envelope 共享 + 删除 ~2.8kloc adapter relay)
 > 未合入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
-> 待合入 PR: PR#173 (fix/294-pg-harden) — review 发现 9 issues；F-1 P0 compile error 阻塞 CI，F-2/F-3 P1 测试覆盖缺口；修复后方可 merge
 > 标记说明:
 > 🟡 可延后 = 不卡正确性或安全；latent risk / DX / 测试覆盖 / 纯 tech debt / 供应链加固 / 架构打磨 — 可机会性纳入或 v1.0 后做
 > 🟠 条件延后 = 有明确触发条件（如首次 prod migration / PG 接线），触发前可延
@@ -59,9 +58,8 @@
 |---|------|------|------|------|
 | A1 | **READYZ-BROKER-HEALTH-01** (Cx3): `Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关。对标 K8s readiness probe | 2h | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` + `runtime/http/health/` | 2026-04-18 外部审查 |
 | A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
-| ~~A3~~ | ✅ **RL-INT-01**: Relay PG 集成测试（5 个 testcontainers PG+RMQ 测试：happy-path、transient publish failure retry、dead-letter、concurrent claim no double-publish、clean shutdown via reclaimStale recovery）。真实 broker TCP 断连/恢复职责归属 `adapters/rabbitmq/integration_test.go::TestIntegration_ConnectionRecovery`（`rabbitmqctl close_all_connections`）；AMQP 501 reclassification 由 `adapters/rabbitmq/rabbitmq_test.go::TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely` 单测覆盖。 | — | `adapters/postgres/outbox_relay_integration_test.go` | PR-PG-HARDEN |
-| ~~A4~~ | ✅ **RL-MIG-01**: `CREATE INDEX CONCURRENTLY` online-safe 索引 + INVALID index pre-check at `Migrator.Up` boundary（startup-time detection as defense-in-depth）+ migrations/README.md 规范 | — | `adapters/postgres/migrations/` + `migrator.go` | PR-PG-HARDEN |
-| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 006_add_config_versions_config_id_index.sql + TestMigration006 | — | adapters/postgres/migrations/006_*.sql | PR-PG-HARDEN |
+| ~~A3~~ | ~~**RL-INT-01**~~ ✅ PR#173：5 个 testcontainers PG+RMQ 测试 + 真实 TCP 断连/恢复测试移至 rabbitmq integration test | — | — | PR#173 |
+| ~~A4~~ | ~~**RL-MIG-01**~~ ✅ PR#173：`CREATE INDEX CONCURRENTLY` migration 006 + Up() 边界 INVALID index pre-check | — | — | PR#173 |
 | A5 | **RL-SUB-01** (🟡 可延后): 入站 ID 校验（空/过长 message ID） | 1h | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **#31 RabbitMQ backoff + FailOpen enum 清理** (🟡 可延后) | 2h | `adapters/rabbitmq/` | Wave 2 残留 |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
@@ -69,7 +67,7 @@
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
 | ~~A11~~ | ~~**OUTBOX-RELAY-WIRE-PG-01**~~ ✅ PR#174（S25+S26+S27）: relay worker 接入 bootstrap OnStart/OnStop（S25 relayWorker≠nil guard）；eventbus envelope 解包修复事件丢失（S26）；pool leak on metrics fail 修复（S27）；e2e test 重写为真实 PG→eventbus→subscriber 链路（移除 RMQ 依赖）| — | — | PR#174 |
-| ~~A12~~ | ✅ **READYZ-PG-SCHEMA-01**: 启动期 fail-fast — VerifyExpectedVersion 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | `adapters/postgres/schema_guard.go` + `cmd/core-bundle/main.go` | PR-PG-HARDEN |
+| ~~A12~~ | ~~**READYZ-PG-SCHEMA-01**~~ ✅ PR#173：启动期 fail-fast — `VerifyExpectedVersion` 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | — | PR#173 |
 | A13 | **BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01** (🟠 条件延后): `cmd/core-bundle` 当前 publisher 是 in-memory eventbus（outbox relay 将 PG entries 转发至此）；`bootstrap.WithBrokerHealth` 未接线，/readyz 缺 RMQ 健康检查。触发条件：core-bundle 接入真实 RabbitMQ connection（替换 in-memory eventbus 为 rabbitmq.Publisher），此时同步通过 `bootstrap.WithBrokerHealth` 将 RMQ readiness 纳入 /readyz。当前 in-memory eventbus 无需 broker health probe。 | 2h | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | PR#174 review F8 |
 
 ### slice / cell 收口
@@ -106,9 +104,9 @@
 | ~~S25~~ | ~~**OUTBOX-E2E-REAL-WIRE-GUARD-01**~~ ✅ PR#174 2949487: `cmd/core-bundle/outbox_e2e_integration_test.go` 改为调用真实 `buildConfigCoreOpts`，assert `relayWorker != nil` 作为 A11 regression guard，取代原来手工 `adapterpg.NewOutboxRelay` 绕过生产路径的写法 | — | — | PR#174 review /fix 派生 |
 | ~~S26~~ | ~~**OUTBOX-ENVELOPE-EVENTBUS-UNWRAP-01**~~ ✅ PR#174 81dba4f: 真实 PG 生产路径用 in-memory eventbus 作为 relay publisher，relay 封 `outboxMessage` envelope 后 eventbus 不解包，subscribers 解析 envelope 当业务 payload → Action 空 → default "unknown action" 静默 ACK → 事件丢失。修复：eventbus.Publish 识别 envelope 并解包，镜像 rabbitmq.unmarshalDelivery；测试覆盖 envelope + 直发两路径；e2e test 重写为真实 PG→eb→subscriber 链路（移除 RMQ，core-bundle 不构造 RMQ 连接） | — | — | PR#174 review F1 |
 | ~~S27~~ | ~~**OUTBOX-POOL-LEAK-ON-METRICS-FAIL-01**~~ ✅ PR#174 faefc29: `buildConfigCoreOpts` NewPool 成功后 NewProviderRelayCollector 失败路径返回 pool=nil 导致 DB 连接泄漏。修复：metrics 错误路径加 pool.Close()，acquire/rollback 职责收在同层 | — | — | PR#174 review F2 |
-| S28 | **OUTBOX-ENVELOPE-KERNEL-SHARE-01** (P2, Cx3, 🟡 可延后): `outboxWireMessage` 与 `unmarshalDelivery`/`isEmbeddedJSON` 检测逻辑当前在 `adapters/rabbitmq/subscriber.go` 和 `runtime/eventbus/eventbus.go` 各维护一份。彻底方案是把 envelope struct + 检测函数提升到 `kernel/outbox`，两个 transport 依赖同一 source of truth；对标 Watermill/go-micro/MassTransit 的"envelope 是 transport contract 的一部分" | 3h | `kernel/outbox/envelope.go`（新）+ adapters/rabbitmq + runtime/eventbus 引用更新 | PR#174 review F1 跟进 |
+| ~~S28~~ | ~~**OUTBOX-ENVELOPE-KERNEL-SHARE-01**~~ ✅ PR#511（S30 搭车）：envelope struct + UnmarshalEnvelope/MarshalEnvelope 提升到 `runtime/outbox/envelope.go`（不是 kernel/outbox —— 因 Store interface 同期落在 runtime 层，envelope 与 Store 共包更内聚）；`runtime/eventbus` + `adapters/rabbitmq` 全部改调 `outbox.UnmarshalEnvelope`；rabbitmq 保留 PascalCase legacy Entry fallback | — | — | PR#174 review F1 跟进 |
 | S29 | **CORE-BUNDLE-APP-BUILDER-01** (P2, Cx3, 🟡 可延后): `cmd/core-bundle/main.go` 的装配逻辑与 integration tests 里的装配是两条代码路径；`buildConfigCoreOpts` 是共享点，但 bootstrap options 列表（publisher/subscriber/workers/adapterInfo/public endpoints/durability mode）目前只在 main.go 维护，测试靠手工复制。抽出 `cmd/core-bundle.BuildApp(opts...) (*bootstrap.Bootstrap, func(), error)` 被 main 和 integration test 共用，避免拓扑事实源再次分裂。对标 Uber fx `App.New` + Kratos `App.Run` 统一入口模式 | 6-8h | `cmd/core-bundle/app.go`（新）+ `main.go` + `outbox_e2e_integration_test.go` | PR#174 review F1 跟进 |
-| S30 | **OUTBOX-STORE-ABSTRACTION-01**（原 X7 搬迁 + 方案 c 领域化）(P2, Cx3, 🟡 可延后): PR-OUTBOX-WIRE 方案 α 决策把 X7（`adapters/postgres/outbox_relay.go` → `runtime/outbox/relay.go`）移出，与方案 c（领域化 `outbox.Store` interface）绑定一次做到位。彻底方案：`runtime/outbox` 定义 `type Store interface { ClaimPending/WriteBack/Reclaim/Cleanup }` 等领域语义方法，SQL 细节全部封装在 `adapters/postgres/outbox_store.go`，`runtime/outbox` 零 pgx 依赖、完全存储中立。对标 Kratos `transport.Server{Start/Stop}` — runtime 层只定义领域契约，adapter 实现。**零 interim 代码**：PR-OUTBOX-WIRE 保留 relay 在 adapters/postgres 原地，通过 `bootstrap.WithWorkers` 接线 worker.Worker 接口达到"framework 托管 worker"语义，与文件物理位置正交。触发条件：第二个 SQL 后端需求（MySQL outbox）或 v1.0 架构收口 | 6-8h | `runtime/outbox/`（新 relay.go + store.go）+ `adapters/postgres/outbox_store.go`（新）+ 删除 `adapters/postgres/outbox_relay.go` + `cmd/core-bundle/main.go` 替换 `adapterpg.NewOutboxRelay` 调用 + `tests/integration/outbox_fullchain_test.go` + `cmd/core-bundle/outbox_e2e_integration_test.go` 更新 import | PR-OUTBOX-WIRE 方案 α 裁定（`docs/plans/202604181700-domain-driven-plan.md` 域 4 + `/Users/shengming/.claude/plans/lively-swimming-wozniak.md`）|
+| ~~S30~~ | ~~**OUTBOX-STORE-ABSTRACTION-01**~~ ✅ PR#511: `runtime/outbox.Store` 7 方法 interface（ClaimPending/MarkPublished/MarkRetry/MarkDead/ReclaimStale/CleanupPublished/CleanupDead），`adapters/postgres.PGOutboxStore` 实现并通过 `runtime/outbox/outboxtest.RunStoreConformanceSuite` 验证；relay 编排从 adapter 搬到 `runtime/outbox/relay.go`（三 goroutine 架构保留）；`outboxtest.FakeStore` 暴露为 public in-memory 实现（cell/slice 单测可用，覆盖 91.8%）；同 PR 搭车 S28 envelope 共享 + X7（AL-01）outbox_relay.go 搬迁。净减 ~2.8kloc adapter 代码 | — | — | PR-OUTBOX-WIRE 方案 α 裁定 + PR#511 落地 |
 
 ### 发布 + 文档
 
@@ -137,7 +135,7 @@
 | X4 | **WM-7 泛型 BulkResult** | 1d | — | 历史 Batch 8 |
 | X5 | **P3-TD-11 access-core domain 拆分** User/Session/Role | 4h | X1 | 历史 Batch 8 |
 | X6 | **28 SOL-B-01 Claimer lease 续租** | 4h | L4 API ✅ | Wave 2 |
-| X7 | **AL-01 outbox_relay.go 轮询调度 → `runtime/outbox/relay.go`** | 2h | — | 依赖替换分析 |
+| ~~X7~~ | ~~**AL-01 outbox_relay.go 轮询调度 → `runtime/outbox/relay.go`**~~ ✅ PR#511（S30 搭车）：`adapters/postgres/outbox_relay.go` + `safe_relay_collector.go` 已删除，relay 循环住在 `runtime/outbox/relay.go` | — | — | 依赖替换分析 |
 | X8 | **AL-02 distlock.go 续期/TTL → `runtime/`** | 2h | — | 依赖替换分析 |
 | X9 | **LINT-MODERN-01** (Cx2, P3): 全仓库 modernization baseline 清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder/websocket）。独立 PR，不混入功能 | 6h | — | PR#163 post-review |
 | X10 | **AUTH-REFRESH-OPAQUE-01** (Cx3, 🟠 条件延后，X1 PG-DOMAIN-REPO 上线后触发): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7 |
@@ -204,7 +202,7 @@
 | T4 | **CB-RESILIENCE-PACKAGE-01** 把 `Allower` / `CircuitBreakerRetryAfter` 从 `runtime/http/middleware` 迁移到 `runtime/resilience/circuitbreaker/` 独立包 | 4h | 出现第二个非 HTTP 的 CB 消费方 |
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
-| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 新增 migration 006 创建 `idx_config_versions_config_id`（CONCURRENTLY + no-transaction） | — | `adapters/postgres/migrations/006_add_config_versions_config_id_index.sql` | PR-PG-HARDEN |
+| ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
 
 ---
 

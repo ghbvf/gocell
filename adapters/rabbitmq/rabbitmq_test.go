@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	logctx "github.com/ghbvf/gocell/runtime/observability/logging"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 type testContextKey string
@@ -283,6 +284,30 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 	})
 
 	return conn, mockConn
+}
+
+// makeDeliveryBody serializes an outbox.Entry into a WireMessage envelope
+// suitable for delivery to unmarshalDelivery. RabbitMQ now only accepts relay
+// envelope format (legacy PascalCase Entry JSON is no longer supported).
+func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
+	t.Helper()
+	payload := entry.Payload
+	if payload == nil {
+		payload = []byte(`{}`)
+	}
+	wire := outboxrt.WireMessage{
+		ID:            entry.ID,
+		AggregateID:   entry.AggregateID,
+		AggregateType: entry.AggregateType,
+		EventType:     entry.EventType,
+		Topic:         entry.Topic,
+		Payload:       json.RawMessage(payload),
+		Metadata:      entry.Metadata,
+		CreatedAt:     entry.CreatedAt,
+	}
+	b, err := json.Marshal(wire)
+	require.NoError(t, err)
+	return b
 }
 
 // =============================================================================
@@ -1291,8 +1316,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		EventType: "test.created",
 		Payload:   []byte(`{"key":"value"}`),
 	}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handled := make(chan outbox.Entry, 1)
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1379,6 +1403,56 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	assert.NoError(t, sub.Close())
 }
 
+// TestUnmarshalDelivery covers the three discriminator paths in unmarshalDelivery:
+//  1. WireMessage envelope (primary relay path) — EventType is decoded from JSON.
+//  2. Legacy outbox.Entry JSON (pre-envelope format, used by integration tests).
+//  3. Broken JSON (neither path yields a valid entry) — returns an error.
+func TestUnmarshalDelivery(t *testing.T) {
+	t.Run("wire_message_envelope", func(t *testing.T) {
+		entry := outbox.Entry{
+			ID:        "entry-uuid-001",
+			EventType: "test.created",
+			Payload:   []byte(`{"x":1}`),
+		}
+		body := makeDeliveryBody(t, entry)
+
+		got, err := unmarshalDelivery(body)
+		require.NoError(t, err)
+		assert.Equal(t, "entry-uuid-001", got.ID)
+		assert.Equal(t, "test.created", got.EventType)
+		assert.JSONEq(t, `{"x":1}`, string(got.Payload))
+	})
+
+	t.Run("legacy_entry_json", func(t *testing.T) {
+		// Publish raw outbox.Entry JSON (PascalCase, no WireMessage envelope).
+		// This is the format used by the three failing integration tests.
+		entry := outbox.Entry{
+			ID:        "evt-legacy-001",
+			EventType: "test.legacy",
+			Payload:   []byte(`{"legacy":true}`),
+		}
+		body, err := json.Marshal(entry)
+		require.NoError(t, err)
+
+		got, legacyErr := unmarshalDelivery(body)
+		require.NoError(t, legacyErr)
+		assert.Equal(t, "evt-legacy-001", got.ID)
+		assert.Equal(t, "test.legacy", got.EventType)
+		assert.JSONEq(t, `{"legacy":true}`, string(got.Payload))
+	})
+
+	t.Run("broken_json_returns_error", func(t *testing.T) {
+		_, err := unmarshalDelivery([]byte("not valid json{{{"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal delivery")
+	})
+
+	t.Run("empty_body_returns_error", func(t *testing.T) {
+		_, err := unmarshalDelivery([]byte(""))
+		require.Error(t, err)
+	})
+}
+
 func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -1394,8 +1468,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	})
 
 	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error")}
@@ -1525,7 +1598,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "subscriber did not reconnect to ch2")
 
 	entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
-	entryBytes, _ := json.Marshal(entry)
+	entryBytes := makeDeliveryBody(t, entry)
 	ch2.consumeDeliveries <- amqp.Delivery{
 		DeliveryTag: 1,
 		Body:        entryBytes,
@@ -1995,8 +2068,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	})
 
 	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2817,8 +2889,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-ack-receipt", EventType: "test.ack"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
@@ -2855,8 +2926,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-reject-receipt", EventType: "test.reject"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
@@ -2897,8 +2967,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	})
 
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -2940,8 +3009,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 			"trace_id":       "trace-sub-1",
 		},
 	}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	const sentinelKey testContextKey = "sentinel"
 	parentCtx, cancel := context.WithCancel(context.WithValue(context.Background(), sentinelKey, "parent-value"))
@@ -3002,8 +3070,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 			"trace_id":       "trace-log-1",
 		},
 	}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	var capturedRequestID, capturedTraceID string
 	handler := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -3038,8 +3105,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-detached-ctx", EventType: "test.ctx"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
@@ -3078,8 +3144,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-requeue-receipt", EventType: "test.requeue"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
@@ -3157,8 +3222,7 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-broker-fail", EventType: "test.brokerfail"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
@@ -3322,8 +3386,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	})
 
 	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	// Handler returns DispositionAck but also an error (e.g., a warning).
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -3362,8 +3425,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-requeue-nack-fail", EventType: "test.requeue.nackfail"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
@@ -3474,8 +3536,7 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 
 	receipt := &mockReceipt{}
 	entry := outbox.Entry{ID: "evt-unknown-disp", EventType: "test.unknown"}
-	entryBytes, err := json.Marshal(entry)
-	require.NoError(t, err)
+	entryBytes := makeDeliveryBody(t, entry)
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{

@@ -284,7 +284,7 @@
 
 | 任务 | 工时 | 涉及文件 |
 |------|------|----------|
-| **AL-01**: `outbox_relay.go` 轮询调度 → `runtime/outbox/relay.go` | 2h | `adapters/postgres/outbox_relay.go` → `runtime/outbox/relay.go` |
+| ~~**AL-01**~~ ✅ PR#511（S30 搭车）：`adapters/postgres/outbox_relay.go` 已删除，relay 循环住 `runtime/outbox/relay.go`，SQL 封 `adapters/postgres/outbox_store.go` | — | — |
 | **AL-02**: `distlock.go` 续期/TTL → `runtime/` | 2h | `adapters/redis/distlock.go` → `runtime/` |
 
 ### PR-X-LINT-MODERN: 全仓 golangci-lint 现代化（6h）
