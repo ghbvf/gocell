@@ -808,3 +808,131 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 	// With very fast handler, no Extend should have been called.
 	assert.Equal(t, int32(0), receipt.extendCalls.Load())
 }
+
+// =============================================================================
+// Lease-lost hard fence tests (Commit 2)
+// =============================================================================
+
+// TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck verifies
+// Layer 1 hard fence: if the lease expires (ErrLeaseExpired during Extend) and
+// the handler ignores ctx.Done() returning DispositionAck, runWithRenewal must
+// force-downgrade the result to DispositionRequeue.
+func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	callCount := atomic.Int32{}
+	baseReceipt := &fakeReceipt{}
+
+	// Fail on 2nd Extend call with ErrLeaseExpired.
+	spyR := &spyExtendReceipt{
+		receipt: baseReceipt,
+		failOn:  2,
+		err:     idempotency.ErrLeaseExpired,
+		calls:   &callCount,
+	}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	// Handler deliberately ignores ctx.Done() and returns Ack — simulates a
+	// stale holder that is not ctx-aware. It blocks for several intervals so
+	// the renewal goroutine can fire and detect the expired lease.
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
+		// Block to allow renewal goroutine to fire and set leaseLost.
+		// The handler deliberately does NOT check ctx.Done() to simulate a
+		// stale handler that ignores cancellation.
+		time.Sleep(5 * interval)
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-lease-lost-ack"})
+
+	// The hard fence must downgrade Ack → Requeue.
+	assert.Equal(t, DispositionRequeue, res.Disposition,
+		"lease-lost hard fence must downgrade DispositionAck to DispositionRequeue")
+}
+
+// TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue verifies that
+// when the lease is lost AND the handler is ctx-aware (returns Requeue on
+// ctx.Done()), the final result is still Requeue — the same safe path.
+func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	callCount := atomic.Int32{}
+	baseReceipt := &fakeReceipt{}
+
+	spyR := &spyExtendReceipt{
+		receipt: baseReceipt,
+		failOn:  2,
+		err:     idempotency.ErrLeaseExpired,
+		calls:   &callCount,
+	}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	ctxCancelSeen := make(chan struct{}, 1)
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
+		select {
+		case <-ctx.Done():
+			ctxCancelSeen <- struct{}{}
+			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
+		case <-time.After(5 * time.Second):
+			t.Error("handler blocked without ctx cancellation")
+			return HandleResult{Disposition: DispositionAck}
+		}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-lease-lost-requeue"})
+
+	select {
+	case <-ctxCancelSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler context was not cancelled after ErrLeaseExpired")
+	}
+
+	assert.Equal(t, DispositionRequeue, res.Disposition,
+		"ctx-aware handler returning Requeue after lease-lost must remain Requeue")
+}
+
+// TestConsumerBase_LeaseHeld_NormalAck verifies that the hard fence does NOT
+// interfere with the normal path where the lease is always valid and the
+// handler returns DispositionAck.
+func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{} // extendErr defaults to nil → always succeeds
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: 20 * time.Millisecond,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-normal-ack"})
+	assert.Equal(t, DispositionAck, res.Disposition,
+		"hard fence must not downgrade Ack when lease is always held")
+	assert.Same(t, receipt, res.Receipt,
+		"receipt must be threaded through on normal Ack path")
+}

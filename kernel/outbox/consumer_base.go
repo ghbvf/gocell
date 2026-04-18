@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/bits"
 	"math/rand/v2"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -486,6 +487,12 @@ func (cb *ConsumerBase) retryLoop(
 // retryLoop with a cancellable context. If Extend returns ErrLeaseExpired the
 // context is cancelled so the handler can detect it via ctx.Done().
 //
+// Hard fence (Layer 1): an atomic.Bool latch tracks whether the lease was lost
+// during processing. After retryLoop returns, if leaseLost is set AND the
+// handler returned DispositionAck, the result is force-downgraded to
+// DispositionRequeue. This prevents a stale handler that ignores ctx.Done()
+// from successfully committing after losing its lease.
+//
 // The renewal goroutine exits after retryLoop returns (via cancel + done channel).
 // context.WithoutCancel wraps the Extend ctx so a shutdown-triggered cancellation
 // of the outer ctx does not prevent the last renewal/log from completing.
@@ -504,13 +511,18 @@ func (cb *ConsumerBase) runWithRenewal(
 		return cb.retryLoop(ctx, topic, entry, handler, receipt)
 	}
 
+	var leaseLost atomic.Bool
+
 	renewCtx, cancelRenew := context.WithCancel(ctx)
 	defer cancelRenew()
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cb.leaseRenewalLoop(renewCtx, topic, entry, receipt, interval, cancelRenew)
+		cb.leaseRenewalLoop(renewCtx, topic, entry, receipt, interval, func() {
+			leaseLost.Store(true)
+			cancelRenew()
+		})
 	}()
 
 	result := cb.retryLoop(renewCtx, topic, entry, handler, receipt)
@@ -519,11 +531,22 @@ func (cb *ConsumerBase) runWithRenewal(
 	cancelRenew()
 	<-done
 
+	// Hard fence: if the lease was lost during processing and the handler
+	// still returned Ack (e.g., it ignored ctx.Done()), force-downgrade to
+	// Requeue so a stale holder cannot commit a dead lease.
+	if leaseLost.Load() && result.Disposition == DispositionAck {
+		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
+			slog.String(logKeyEventID, entry.ID),
+			slog.String(logKeyTopic, topic))
+		return HandleResult{Disposition: DispositionRequeue, Receipt: receipt, Err: idempotency.ErrLeaseExpired}
+	}
+
 	return result
 }
 
 // leaseRenewalLoop ticks every interval and extends the processing lease.
-// It cancels cancelFn if Extend returns ErrLeaseExpired (fencing failure).
+// It calls onLeaseLost (which sets the leaseLost latch and cancels the handler
+// context) if Extend returns ErrLeaseExpired (fencing failure).
 // Exits when ctx is cancelled (handler finished or lease lost).
 func (cb *ConsumerBase) leaseRenewalLoop(
 	ctx context.Context,
@@ -531,7 +554,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 	entry Entry,
 	receipt Receipt,
 	interval time.Duration,
-	cancelFn context.CancelFunc,
+	onLeaseLost func(),
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -547,7 +570,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, cancelling handler",
 						slog.String(logKeyEventID, entry.ID),
 						slog.String(logKeyTopic, topic))
-					cancelFn()
+					onLeaseLost()
 					return
 				}
 				logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",

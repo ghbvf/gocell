@@ -542,42 +542,7 @@ func (s *Subscriber) processDelivery(
 	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
 	res := handler(deliveryCtx, entry)
 
-	// Execute broker-level disposition.
-	var brokerErr error
-	switch res.Disposition {
-	case outbox.DispositionAck:
-		brokerErr = ch.Ack(delivery.DeliveryTag, false)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: ack failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	case outbox.DispositionReject:
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(reject) failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	case outbox.DispositionRequeue:
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(requeue) failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	default:
-		slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
-			slog.String(logKeyTopic, topic),
-			slog.String(logKeyEventID, entry.ID),
-			slog.String("disposition", res.Disposition.String()))
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
-	}
-
-	// Log handler-level error if present (separate from broker error).
+	// Log handler-level error if present (separate from broker disposition).
 	if res.Err != nil {
 		slog.LogAttrs(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
 			slog.String(logKeyTopic, topic),
@@ -586,50 +551,115 @@ func (s *Subscriber) processDelivery(
 			slog.String("error", res.Err.Error()))
 	}
 
-	s.settleReceipt(deliveryCtx, res, topic, entry.ID, brokerErr)
+	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry.ID)
 }
 
-// settleReceipt commits or releases the idempotency receipt after the broker
-// Ack/Nack outcome is known. Uses a detached context with a 5s timeout so
-// the operation completes even during graceful shutdown.
-func (s *Subscriber) settleReceipt(
+// dispatchDisposition executes the broker-level disposition and settles the
+// idempotency receipt.
+//
+// DispositionAck: Commit FIRST (token-guarded), then broker Ack. If Commit
+// fails (lease expired, Redis Lua token mismatch), Nack(requeue=true) so
+// another holder retries. The previous Ack→Commit order could not roll back
+// a broker delivery after Commit failure.
+// ref: Temporal task-token validation (commit-time fencing)
+// ref: MassTransit ValidateLockStatus (Ack 前最后一道门)
+//
+// DispositionReject/Requeue: broker Nack first, then Release the receipt so
+// DLQ replay or redelivery can re-enter the Claim/Commit cycle cleanly.
+func (s *Subscriber) dispatchDisposition(
 	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
 	res outbox.HandleResult,
 	topic, eventID string,
-	brokerErr error,
 ) {
-	if res.Receipt == nil {
+	switch res.Disposition {
+	case outbox.DispositionAck:
+		s.dispatchAck(ctx, ch, tag, res, topic, eventID)
+	case outbox.DispositionReject:
+		if nackErr := ch.Nack(tag, false, false); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+	case outbox.DispositionRequeue:
+		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+	default:
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("disposition", res.Disposition.String()))
+		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed for unknown disposition",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+	}
+}
+
+// dispatchAck handles the Commit→Ack path for DispositionAck.
+// If Commit fails, Nack(requeue=true) is issued instead of Ack.
+func (s *Subscriber) dispatchAck(
+	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
+	res outbox.HandleResult,
+	topic, eventID string,
+) {
+	if res.Receipt != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		commitErr := res.Receipt.Commit(rctx)
+		cancel()
+		if commitErr != nil {
+			slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: receipt commit failed (lease may have expired); requeuing instead of acking",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", commitErr.Error()))
+			if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+				slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed after commit failure",
+					slog.String(logKeyTopic, topic),
+					slog.String(logKeyEventID, eventID),
+					slog.String("error", nackErr.Error()))
+			}
+			return
+		}
+	}
+	if ackErr := ch.Ack(tag, false); ackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: ack failed",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("error", ackErr.Error()))
+		// Receipt already committed; broker ack failure means the message will
+		// be redelivered, but the idempotency key (ClaimDone) prevents double
+		// processing on the next delivery.
+	}
+}
+
+// releaseReceipt releases the idempotency receipt with a 5s detached timeout.
+// Uses context.WithoutCancel so the operation completes even during graceful shutdown.
+// reason is used for structured log fields.
+func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID, reason string) {
+	if receipt == nil {
 		return
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-
-	if brokerErr != nil {
-		if relErr := res.Receipt.Release(rctx); relErr != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed after broker error",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", relErr.Error()))
-		}
-		return
-	}
-
-	switch res.Disposition {
-	case outbox.DispositionAck:
-		if err := res.Receipt.Commit(rctx); err != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt commit failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", err.Error()))
-		}
-	default:
-		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
-		if err := res.Receipt.Release(rctx); err != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", err.Error()))
-		}
+	if relErr := receipt.Release(rctx); relErr != nil {
+		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("reason", reason),
+			slog.String("error", relErr.Error()))
 	}
 }
 

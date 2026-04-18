@@ -3193,7 +3193,13 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "ClaimBusy should backoff before requeue")
 }
 
-func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
+// TestProcessDelivery_BrokerAckFails_CommitAlreadyDone verifies the new
+// Commit→Ack ordering: if broker Ack fails after a successful Commit, the
+// Receipt is already committed (idempotency key is marked done). The message
+// will be redelivered, but the ClaimDone state ensures redelivery is a no-op.
+// We do NOT Release after a committed receipt — the idempotency key protects
+// against duplicate processing on redelivery.
+func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	ch.ackErr = errors.New("channel closed")
@@ -3206,7 +3212,7 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 		ShutdownTimeout: 2 * time.Second,
 	})
 
-	receipt := &mockReceipt{}
+	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
 	entry := outbox.Entry{ID: "evt-broker-fail", EventType: "test.brokerfail"}
 	entryBytes := makeDeliveryBody(t, entry)
 
@@ -3222,8 +3228,10 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 	}, "test.topic", handler)
 
 	receipt.mu.Lock()
-	assert.False(t, receipt.commitCalled, "should not Commit when broker Ack fails")
-	assert.True(t, receipt.releaseCalled, "should Release when broker Ack fails")
+	// With Commit→Ack ordering, Commit is called before Ack.
+	// Commit succeeds, then Ack fails. Receipt is already committed.
+	assert.True(t, receipt.commitCalled, "Commit must be called before Ack attempt")
+	assert.False(t, receipt.releaseCalled, "must NOT Release after committed receipt — idempotency key is already done")
 	receipt.mu.Unlock()
 }
 

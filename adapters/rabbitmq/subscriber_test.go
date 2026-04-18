@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -132,6 +133,137 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	assert.False(t, nackRequeue, "too-long entry.ID must Nack without requeue")
 	assert.Equal(t, uint64(8), nackTag)
 	assert.False(t, handlerCalled, "handler must not be called for too-long entry.ID")
+}
+
+// ---------------------------------------------------------------------------
+// Commit→Ack ordering tests (Commit 2, Layer 2 hard fence)
+// ---------------------------------------------------------------------------
+
+// TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue verifies Layer 2
+// hard fence: if Receipt.Commit fails (e.g., lease expired, token mismatch),
+// processDelivery must Nack(requeue=true) and NOT call ch.Ack.
+func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Receipt:     receipt,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-commit-fail-1",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 10, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	// Wait for Nack to be called (Commit fails → Nack requeue=true).
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Nack was not called after Commit failure")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	ackCalled := ch.ackCalled
+	nackRequeue := ch.nackRequeue
+	nackTag := ch.nackTag
+	ch.mu.Unlock()
+
+	assert.False(t, ackCalled, "ch.Ack must NOT be called when Commit fails")
+	assert.True(t, nackRequeue, "Nack must requeue=true when Commit fails")
+	assert.Equal(t, uint64(10), nackTag)
+
+	receipt.mu.Lock()
+	commitCalled := receipt.commitCalled
+	receipt.mu.Unlock()
+	assert.True(t, commitCalled, "Receipt.Commit must be called before broker Ack attempt")
+}
+
+// TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease verifies that when
+// Receipt.Commit succeeds, ch.Ack is called and Receipt.Release is NOT called.
+func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "test-queue",
+		DLXExchange:     "test.dlx",
+		ShutdownTimeout: 2 * time.Second,
+	})
+
+	receipt := &mockReceipt{} // commitErr = nil → success
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Receipt:     receipt,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-commit-ok-1",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 11, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.ackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Ack was not called after successful Commit")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	ackTag := ch.ackTag
+	ch.mu.Unlock()
+
+	assert.Equal(t, uint64(11), ackTag)
+
+	receipt.mu.Lock()
+	commitCalled := receipt.commitCalled
+	releaseCalled := receipt.releaseCalled
+	receipt.mu.Unlock()
+
+	assert.True(t, commitCalled, "Receipt.Commit must be called on DispositionAck")
+	assert.False(t, releaseCalled, "Receipt.Release must NOT be called on successful Commit+Ack")
 }
 
 // TestProcessDelivery_ValidEntryID_PassesToHandler verifies that an entry with
