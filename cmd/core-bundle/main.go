@@ -557,6 +557,39 @@ func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, err
 	return nil, nil
 }
 
+// internalGuardFromEnv builds a ServiceTokenMiddleware guard for /internal/v1/*
+// from GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
+//
+//   - In "real" adapter mode, the env var is required; missing value returns an error.
+//   - In dev mode (any non-"real" mode), an empty secret returns (nil, nil), meaning
+//     "no guard installed" — the caller then skips WithInternalEndpointGuard.
+//
+// The returned guard is nil only in dev mode with an empty secret. In all other
+// cases a functioning guard (or an error) is returned.
+//
+// ref: Kubernetes kube-apiserver service-account verification — guard only when
+// key material is present; no guard is better than a broken guard.
+func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, error) {
+	secret := os.Getenv(auth.EnvServiceSecret)
+	if secret == "" {
+		if adapterMode == "real" {
+			return nil, fmt.Errorf("GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
+		}
+		slog.Warn("controlplane guard disabled: GOCELL_SERVICE_SECRET is empty (dev mode only)")
+		return nil, nil
+	}
+	prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
+	var prevBytes []byte
+	if prevSecret != "" {
+		prevBytes = []byte(prevSecret)
+	}
+	ring, err := auth.NewHMACKeyRing([]byte(secret), prevBytes)
+	if err != nil {
+		return nil, fmt.Errorf("build service HMAC key ring: %w", err)
+	}
+	return auth.ServiceTokenMiddleware(ring), nil
+}
+
 // logInitialAdminCredPath emits a startup info log so operators know where to
 // find the initial admin credential on first run. Uses
 // accesscore.ResolveBootstrapCredentialPath so the logged path always matches
@@ -687,6 +720,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Build the /internal/v1/* service-token guard. In real mode, the guard is
+	// required (missing secret aborts startup). In dev mode, empty secret skips
+	// the guard entirely (nil guard means WithInternalEndpointGuard is not added).
+	internalGuard, err := internalGuardFromEnv(adapterMode)
+	if err != nil {
+		return err
+	}
+
 	// Wire ConsumerBase so every subscriber handler inherits two-phase Claimer
 	// idempotency, backoff retry, and DLX routing. An in-memory Claimer is used
 	// here so the in-process EventBus path has the same semantics as a future
@@ -715,6 +756,7 @@ func run(ctx context.Context) error {
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
 		adminWorkerOpt:  adminWorkerOpt,
+		internalGuard:   internalGuard,
 	})...)
 	return app.Run(ctx)
 }
@@ -732,6 +774,9 @@ type bootstrapDeps struct {
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
 	adminWorkerOpt  bootstrap.Option
+	// internalGuard is the service-token middleware protecting /internal/v1/*.
+	// nil means no guard is installed (dev mode with empty GOCELL_SERVICE_SECRET).
+	internalGuard func(http.Handler) http.Handler
 }
 
 // assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
@@ -776,6 +821,12 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 	// after the assembly has Init'd. No-op when admin already existed.
 	if d.adminWorkerOpt != nil {
 		opts = append(opts, d.adminWorkerOpt)
+	}
+	// Wire the service-token guard for /internal/v1/* when a guard was built.
+	// guard is nil in dev mode when GOCELL_SERVICE_SECRET is empty; real mode
+	// fail-fasts in internalGuardFromEnv before reaching here.
+	if d.internalGuard != nil {
+		opts = append(opts, bootstrap.WithInternalEndpointGuard("/internal/v1/", d.internalGuard))
 	}
 	return opts
 }

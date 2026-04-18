@@ -263,6 +263,35 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 		"real mode must fail fast when metrics token is unset")
 }
 
+// TestRun_RealMode_MissingServiceSecret_FailsFast verifies that in real mode
+// run() fails fast when GOCELL_SERVICE_SECRET is unset. The secret is required
+// in real mode to protect /internal/v1/* paths.
+func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+	// The trip-wire: service secret is empty.
+	t.Setenv("GOCELL_SERVICE_SECRET", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
+		"real mode must fail fast when service secret is unset")
+}
+
 func TestMetricsTokenGuard_RejectsMissingToken(t *testing.T) {
 	sentinel := "inner-handler-ran"
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
