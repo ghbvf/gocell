@@ -2317,7 +2317,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(verifier, []string{"/api/v1/access/sessions/login"}),
+		WithAuthMiddleware(verifier, []string{"POST /api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3305,7 +3305,7 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 	t.Run("WithAuthMiddleware then WithPublicEndpoints", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
-			WithAuthMiddleware(verifier, []string{"/login"}),
+			WithAuthMiddleware(verifier, []string{"POST /login"}),
 			WithPublicEndpoints([]string{"POST /login"}),
 		)
 		err := b.Run(context.Background())
@@ -3317,7 +3317,7 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
 			WithPublicEndpoints([]string{"POST /login"}),
-			WithAuthMiddleware(verifier, []string{"/login"}),
+			WithAuthMiddleware(verifier, []string{"POST /login"}),
 		)
 		err := b.Run(context.Background())
 		require.Error(t, err)
