@@ -90,6 +90,27 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
 }
 
+// --- Error response contract tests ---
+
+// validErrBody constructs a minimal canonical error body matching pkg/httputil envelope.
+func validErrBody(code, msg string) []byte {
+	return []byte(`{"error":{"code":"` + code + `","message":"` + msg + `","details":{}}}`)
+}
+
+func TestHttpConfigPublishV1_401Response(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
+	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
+}
+
+func TestHttpConfigRollbackV1_401Response(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
+	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
+	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
+}
+
 // --- Event contract tests ---
 
 func TestEventConfigChangedV1Publish(t *testing.T) {
