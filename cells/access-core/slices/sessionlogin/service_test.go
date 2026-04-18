@@ -194,6 +194,34 @@ func TestService_IssueForUser(t *testing.T) {
 	assert.NotEmpty(t, pair.RefreshToken)
 	assert.False(t, pair.ExpiresAt.IsZero())
 	assert.False(t, pair.PasswordResetRequired)
+	// Regression guard (PR#183 round-2): the session must be persisted so that
+	// sessionvalidate.enforceSessionState can look it up by sid claim. Without
+	// persistence, every subsequent authenticated request returns 401.
+	assert.NotEmpty(t, pair.SessionID, "IssueForUser must return a non-empty SessionID")
+}
+
+func TestService_IssueForUser_SessionPersisted(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	eb := eventbus.New()
+	svc := NewService(userRepo, sessionRepo, roleRepo, eb, testIssuer, slog.Default())
+	seedUser(userRepo, "issue-persist", "pass123")
+
+	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, pair.SessionID)
+
+	// The session must be findable by its ID so sessionvalidate does not fail.
+	session, err := sessionRepo.GetByID(context.Background(), pair.SessionID)
+	require.NoError(t, err, "session must be persisted after IssueForUser so sessionvalidate can look it up")
+	assert.Equal(t, pair.SessionID, session.ID)
+	assert.Equal(t, u.ID, session.UserID)
+	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
+	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
 }
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {

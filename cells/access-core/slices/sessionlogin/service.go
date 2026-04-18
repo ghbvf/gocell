@@ -226,6 +226,11 @@ func (s *Service) issueAccessToken(subject string, roles []string, sessionID str
 // after ChangePassword clears PasswordResetRequired). Used by identitymanage
 // ChangePassword to issue a replacement token pair without forcing a re-login.
 //
+// A new Session record is persisted to sessionRepo so that sessionvalidate can
+// look up the session by its sid claim and enforce revocation/expiry. Without
+// this step, sessionvalidate.enforceSessionState fails with "not found" → 401
+// on the very next authenticated request (root cause of PR#183 round-2 CI failure).
+//
 // Returns *dto.TokenPair (internal/dto) so this method implements the
 // identitymanage.TokenIssuer interface without a cross-slice import (F-ARCH-1).
 func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
@@ -252,6 +257,21 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPa
 	if err != nil {
 		return nil, fmt.Errorf("session-login: IssueForUser refresh token: %w", err)
 	}
+
+	// Persist the session so sessionvalidate can look it up by sid claim.
+	// Without this, the token carries a sessionID that has no backing row, and
+	// every subsequent request fails with 401 (session not found).
+	session, err := domain.NewSession(userID, accessToken, refreshToken, expiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("session-login: IssueForUser create session: %w", err)
+	}
+	session.ID = sessionID
+	if err := s.sessionRepo.Create(ctx, session); err != nil {
+		return nil, fmt.Errorf("session-login: IssueForUser persist session: %w", err)
+	}
+
+	s.logger.Info("session-login: IssueForUser issued new session",
+		slog.String("user_id", userID), slog.String("session_id", sessionID))
 
 	return &dto.TokenPair{
 		AccessToken:           accessToken,
