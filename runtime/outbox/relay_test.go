@@ -739,11 +739,14 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 		return ok && fn() != nil
 	}, 2*time.Second, 5*time.Millisecond, "reclaim budget must trip")
 
-	// Poll checker must still be healthy.
-	checkers := relay.HealthCheckers()
-	if fn, ok := checkers["outbox-relay-poll"]; ok {
-		assert.Nil(t, fn(), "poll checker must remain healthy when only reclaim fails")
-	}
+	// Poll checker must never become unhealthy while only reclaim fails.
+	assert.Never(t, func() bool {
+		checkers := relay.HealthCheckers()
+		if fn, ok := checkers["outbox-relay-poll"]; ok {
+			return fn() != nil
+		}
+		return false
+	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only reclaim fails")
 }
 
 func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
@@ -762,11 +765,14 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 		return ok && fn() != nil
 	}, 2*time.Second, 5*time.Millisecond, "cleanup budget must trip")
 
-	// Poll checker must still be healthy.
-	checkers := relay.HealthCheckers()
-	if fn, ok := checkers["outbox-relay-poll"]; ok {
-		assert.Nil(t, fn(), "poll checker must remain healthy when only cleanup fails")
-	}
+	// Poll checker must never become unhealthy while only cleanup fails.
+	assert.Never(t, func() bool {
+		checkers := relay.HealthCheckers()
+		if fn, ok := checkers["outbox-relay-poll"]; ok {
+			return fn() != nil
+		}
+		return false
+	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only cleanup fails")
 }
 
 func TestRelay_HealthCheckers_RegistersThree(t *testing.T) {
