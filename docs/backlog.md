@@ -202,6 +202,7 @@
 | T3 | **DEVICE-ENQUEUE-RBAC** HandleEnqueue 无设备维度鉴权 | 2h | 多租户 operator |
 | T4 | **CB-RESILIENCE-PACKAGE-01** 把 `Allower` / `CircuitBreakerRetryAfter` 从 `runtime/http/middleware` 迁移到 `runtime/resilience/circuitbreaker/` 独立包 | 4h | 出现第二个非 HTTP 的 CB 消费方 |
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
+| T8 | **PUBLIC-ENDPOINT-STRUCT-MIGRATE-01** `WithPublicEndpoints([]string)` 迁移为 `[]PublicEndpoint{{Method,Path, ...}}` 结构体（go-zero 风格）；当前字符串方案对齐 Go 1.22 stdlib ServeMux + otelhttp 预测函数，启动期 `CompilePublicEndpoints` fail-fast 已覆盖手误；保留结构体方案作为触发项以便扩展元数据 | 3h | 满足任一：(1) 公共端点数量 > 20（当前 2）(2) 需要 per-endpoint 元数据（rate-limit 豁免 / audit skip flag 等）(3) 线上复盘出现 method 字符串手误绕过 fail-fast |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
 | ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
 
