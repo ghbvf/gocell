@@ -1,0 +1,20 @@
+id: http.test.errresp.v1
+kind: http
+ownerCell: test-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: test-cell
+  clients: []
+  http:
+    method: POST
+    path: /api/v1/test/errresp
+    successStatus: 201
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized"
+        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden"
+        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"

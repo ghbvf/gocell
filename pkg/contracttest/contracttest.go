@@ -51,6 +51,13 @@ type HTTPTransport struct {
 	Path          string
 	SuccessStatus int
 	NoContent     bool
+	Responses     map[int]HTTPResponseEntry
+}
+
+// HTTPResponseEntry describes a declared error response for a specific HTTP status code.
+type HTTPResponseEntry struct {
+	Description string
+	SchemaRef   string
 }
 
 // contractYAML is a local struct for parsing contract.yaml without
@@ -69,10 +76,16 @@ type endpointsYAML struct {
 }
 
 type httpTransportYAML struct {
-	Method        string `yaml:"method"`
-	Path          string `yaml:"path"`
-	SuccessStatus int    `yaml:"successStatus"`
-	NoContent     bool   `yaml:"noContent"`
+	Method        string                        `yaml:"method"`
+	Path          string                        `yaml:"path"`
+	SuccessStatus int                           `yaml:"successStatus"`
+	NoContent     bool                          `yaml:"noContent"`
+	Responses     map[int]httpResponseEntryYAML `yaml:"responses,omitempty"`
+}
+
+type httpResponseEntryYAML struct {
+	Description string `yaml:"description"`
+	SchemaRef   string `yaml:"schemaRef"`
 }
 
 type schemaRefsYAML struct {
@@ -321,10 +334,73 @@ func newHTTPTransport(meta *httpTransportYAML) *HTTPTransport {
 	if meta == nil {
 		return nil
 	}
-	return &HTTPTransport{
+	t := &HTTPTransport{
 		Method:        meta.Method,
 		Path:          meta.Path,
 		SuccessStatus: meta.SuccessStatus,
 		NoContent:     meta.NoContent,
 	}
+	if len(meta.Responses) > 0 {
+		t.Responses = make(map[int]HTTPResponseEntry, len(meta.Responses))
+		for status, entry := range meta.Responses {
+			t.Responses[status] = HTTPResponseEntry(entry)
+		}
+	}
+	return t
+}
+
+// ValidateErrorResponse validates body against the JSON Schema declared for
+// the given HTTP status code in the contract's endpoints.http.responses map.
+// It calls t.Errorf if:
+//   - the contract has no endpoints.http metadata
+//   - no response entry is declared for status
+//   - body fails schema validation
+func (c *Contract) ValidateErrorResponse(t testing.TB, status int, body []byte) {
+	t.Helper()
+	if c.HTTP == nil {
+		t.Errorf("contracttest: contract %q has no endpoints.http metadata", c.ID)
+		return
+	}
+	entry, ok := c.HTTP.Responses[status]
+	if !ok {
+		t.Errorf("contracttest: no response declared for status %d in contract %q", status, c.ID)
+		return
+	}
+	if entry.SchemaRef == "" {
+		t.Errorf("contracttest: response entry for status %d in contract %q has empty schemaRef", status, c.ID)
+		return
+	}
+	schema := compileSchemaFileAbsolute(t, c.Dir, entry.SchemaRef)
+	validateJSON(t, schema, body, fmt.Sprintf("error response %d", status))
+}
+
+// compileSchemaFileAbsolute reads and compiles a JSON Schema relative to dir,
+// allowing traversal outside dir (needed for shared schemas via relative paths
+// like "../../../../shared/errors/...").
+func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.Schema {
+	t.Helper()
+	fullPath := filepath.Join(dir, filename)
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
+	}
+
+	var doc any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("contracttest: parse schema JSON %q: %v", fullPath, err)
+	}
+
+	compiler := jsonschema.NewCompiler()
+	url := "file:///" + filepath.Base(filename)
+	if err := compiler.AddResource(url, doc); err != nil {
+		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
+	}
+
+	schema, err := compiler.Compile(url)
+	if err != nil {
+		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
+	}
+
+	return schema
 }

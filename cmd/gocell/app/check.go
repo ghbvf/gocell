@@ -144,6 +144,16 @@ func validateHTTPSchemaRefs(c *metadata.ContractMeta) []string {
 		if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
 			issues = append(issues, fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method))
 		}
+
+		// Structural check: every declared responses[N] entry must have a non-empty
+		// schemaRef. Whether that file actually exists on disk is validated by REF-12
+		// in the governance layer; this check ensures the declaration itself is complete.
+		for status, resp := range c.Endpoints.HTTP.Responses {
+			if resp.SchemaRef == "" {
+				issues = append(issues, fmt.Sprintf(
+					"%s: responses[%d] declared but missing schemaRef", c.ID, status))
+			}
+		}
 	}
 
 	return issues

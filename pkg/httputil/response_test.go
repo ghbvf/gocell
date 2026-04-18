@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -238,7 +239,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 
 func TestWriteDomainError_PlainError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec,errors.New("something went wrong"))
+	WriteDomainError(context.Background(), rec, errors.New("something went wrong"))
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -260,7 +261,7 @@ func TestWriteDomainError_WithDetails(t *testing.T) {
 	)
 
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec,ecErr)
+	WriteDomainError(context.Background(), rec, ecErr)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -669,8 +670,8 @@ type brokenWriter struct {
 	code   int
 }
 
-func newBrokenWriter() *brokenWriter { return &brokenWriter{header: http.Header{}} }
-func (w *brokenWriter) Header() http.Header { return w.header }
+func newBrokenWriter() *brokenWriter         { return &brokenWriter{header: http.Header{}} }
+func (w *brokenWriter) Header() http.Header  { return w.header }
 func (w *brokenWriter) WriteHeader(code int) { w.code = code }
 func (w *brokenWriter) Write([]byte) (int, error) {
 	return 0, errors.New("broken pipe")
@@ -709,6 +710,177 @@ func TestWriteDecodeError_EncodeFail(t *testing.T) {
 	assert.NotPanics(t, func() {
 		WriteDecodeError(context.Background(), w2, errors.New("raw error"))
 	})
+}
+
+// captureHandler is an slog.Handler that captures all log records for inspection.
+type captureHandler struct {
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(name string) slog.Handler       { return h }
+
+// attrValue searches a slog.Record for an attribute by key and returns its string value.
+func attrValue(r slog.Record, key string) (string, bool) {
+	var result string
+	var found bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			result = a.Value.String()
+			found = true
+			return false
+		}
+		return true
+	})
+	return result, found
+}
+
+// findWarnRecord returns the first slog.Record at Warn level captured by h,
+// or nil if none was recorded.
+func findWarnRecord(h *captureHandler) *slog.Record {
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn {
+			return &h.records[i]
+		}
+	}
+	return nil
+}
+
+// assertStringAttr asserts that the named attr is present on the record and
+// equals want.
+func assertStringAttr(t *testing.T, rec slog.Record, key, want string) {
+	t.Helper()
+	got, ok := attrValue(rec, key)
+	assert.True(t, ok, "log record must contain %q attr", key)
+	assert.Equal(t, want, got)
+}
+
+// assertAttrAbsent asserts that the named attr is NOT present on the record.
+func assertAttrAbsent(t *testing.T, rec slog.Record, key, reason string) {
+	t.Helper()
+	_, has := attrValue(rec, key)
+	assert.False(t, has, reason)
+}
+
+// assertInternalAttr asserts either the 'internal' attr matches internalMessage
+// (when non-empty) or is absent (when empty).
+func assertInternalAttr(t *testing.T, rec slog.Record, internalMessage string) {
+	t.Helper()
+	if internalMessage != "" {
+		assertStringAttr(t, rec, "internal", internalMessage)
+		return
+	}
+	assertAttrAbsent(t, rec, "internal", "log record must NOT contain 'internal' attr when InternalMessage is empty")
+}
+
+func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
+	tests := []struct {
+		name            string
+		code            errcode.Code
+		wantStatus      int
+		internalMessage string // non-empty → expect 'internal' attr in log
+	}{
+		{name: string(errcode.ErrValidationFailed), code: errcode.ErrValidationFailed, wantStatus: http.StatusBadRequest},
+		{name: string(errcode.ErrAuthUnauthorized), code: errcode.ErrAuthUnauthorized, wantStatus: http.StatusUnauthorized},
+		{name: string(errcode.ErrAuthForbidden), code: errcode.ErrAuthForbidden, wantStatus: http.StatusForbidden},
+		{name: string(errcode.ErrMetadataNotFound), code: errcode.ErrMetadataNotFound, wantStatus: http.StatusNotFound},
+		{name: string(errcode.ErrConfigDuplicate), code: errcode.ErrConfigDuplicate, wantStatus: http.StatusConflict},
+		{name: string(errcode.ErrBodyTooLarge), code: errcode.ErrBodyTooLarge, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: string(errcode.ErrRateLimited), code: errcode.ErrRateLimited, wantStatus: http.StatusTooManyRequests},
+		// With InternalMessage: 'internal' attr must be emitted; client 'message' still absent.
+		{
+			name:            "with_internal_message",
+			code:            errcode.ErrAuthUnauthorized,
+			wantStatus:      http.StatusUnauthorized,
+			internalMessage: "subject missing from ctx — auth middleware did not run",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &captureHandler{}
+			orig := slog.Default()
+			slog.SetDefault(slog.New(handler))
+			t.Cleanup(func() { slog.SetDefault(orig) })
+
+			ctx := context.Background()
+			ctx = ctxkeys.WithRequestID(ctx, "req-4xx-001")
+			ctx = ctxkeys.WithTraceID(ctx, "trace-4xx-001")
+			ctx = ctxkeys.WithSpanID(ctx, "span-4xx-001")
+
+			err := errcode.New(tt.code, "test message")
+			if tt.internalMessage != "" {
+				err = errcode.Safe(tt.code, "client-facing message", tt.internalMessage)
+			}
+
+			rec := httptest.NewRecorder()
+			WriteDomainError(ctx, rec, err)
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			warnRec := findWarnRecord(handler)
+			require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
+
+			assertStringAttr(t, *warnRec, "code", string(tt.code))
+			assertStringAttr(t, *warnRec, "status", slog.IntValue(tt.wantStatus).String())
+			// Client-facing 'message' must NOT appear in server logs — it may
+			// contain user identifiers interpolated by the caller into errcode.New.
+			assertAttrAbsent(t, *warnRec, "message", "log record must NOT contain 'message' attr — use InternalMessage for diagnostics")
+			assertInternalAttr(t, *warnRec, tt.internalMessage)
+			assertStringAttr(t, *warnRec, "request_id", "req-4xx-001")
+			assertStringAttr(t, *warnRec, "trace_id", "trace-4xx-001")
+			assertStringAttr(t, *warnRec, "span_id", "span-4xx-001")
+		})
+	}
+}
+
+// TestWriteDomainError_4xx_LogsWarn_NoCorrelation verifies that the slog.Warn
+// record is emitted even when the context carries no request_id/trace_id/span_id,
+// and that those attrs are absent in that case. The client-facing 'message' attr
+// must also be absent (F3: log4xx omits Message to prevent identifier leakage).
+func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx := context.Background() // no correlation IDs
+	rec := httptest.NewRecorder()
+	WriteDomainError(ctx, rec, errcode.New(errcode.ErrAuthUnauthorized, "no ctx"))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var warnRec *slog.Record
+	for i := range handler.records {
+		if handler.records[i].Level == slog.LevelWarn {
+			warnRec = &handler.records[i]
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
+
+	_, hasCode := attrValue(*warnRec, "code")
+	assert.True(t, hasCode, "log record must contain 'code' attr")
+
+	_, hasStatus := attrValue(*warnRec, "status")
+	assert.True(t, hasStatus, "log record must contain 'status' attr")
+
+	// Client-facing message must NOT appear in server WARN logs.
+	_, hasMsg := attrValue(*warnRec, "message")
+	assert.False(t, hasMsg, "log record must NOT contain 'message' attr")
+
+	_, hasReqID := attrValue(*warnRec, "request_id")
+	assert.False(t, hasReqID, "log record must NOT contain 'request_id' attr when not set in ctx")
+
+	_, hasTraceID := attrValue(*warnRec, "trace_id")
+	assert.False(t, hasTraceID, "log record must NOT contain 'trace_id' attr when not set in ctx")
+
+	_, hasSpanID := attrValue(*warnRec, "span_id")
+	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,

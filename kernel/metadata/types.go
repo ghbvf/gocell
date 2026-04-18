@@ -119,13 +119,22 @@ type EndpointsMeta struct {
 	Readers  []string `yaml:"readers,omitempty"`
 }
 
+// HTTPResponseMeta describes an expected error response for a specific HTTP
+// status code. It references a JSON Schema file (relative to the contract
+// directory) that describes the error response body.
+type HTTPResponseMeta struct {
+	Description string `yaml:"description"`
+	SchemaRef   string `yaml:"schemaRef"`
+}
+
 // HTTPTransportMeta holds transport-level details for migrated HTTP contracts.
 // It is optional so legacy HTTP contracts can remain schema-only until migrated.
 type HTTPTransportMeta struct {
-	Method        string `yaml:"method"`
-	Path          string `yaml:"path"`
-	SuccessStatus int    `yaml:"successStatus"`
-	NoContent     bool   `yaml:"noContent"`
+	Method        string                   `yaml:"method"`
+	Path          string                   `yaml:"path"`
+	SuccessStatus int                      `yaml:"successStatus"`
+	NoContent     bool                     `yaml:"noContent"`
+	Responses     map[int]HTTPResponseMeta `yaml:"responses,omitempty"`
 }
 
 // SchemaRefsMeta holds JSON Schema file references relative to the contract directory.

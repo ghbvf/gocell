@@ -289,6 +289,34 @@ func TestActorMetaRoundTrip(t *testing.T) {
 	assert.Equal(t, orig, got)
 }
 
+func TestHTTPTransportMetaResponsesRoundTrip(t *testing.T) {
+	orig := HTTPTransportMeta{
+		Method:        "POST",
+		Path:          "/api/v1/test",
+		SuccessStatus: 200,
+		NoContent:     false,
+		Responses: map[int]HTTPResponseMeta{
+			401: {Description: "Unauthorized", SchemaRef: "error.json"},
+			403: {Description: "Forbidden", SchemaRef: "error.json"},
+		},
+	}
+	data, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "responses")
+	assert.Contains(t, string(data), "description: Unauthorized")
+}
+
+func TestHTTPTransportMetaResponsesOmitEmpty(t *testing.T) {
+	orig := HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/test",
+		SuccessStatus: 200,
+		NoContent:     false,
+	}
+	data, _ := roundTrip(t, orig)
+	assert.NotContains(t, string(data), "responses")
+}
+
 func TestEndpointsMetaOmitEmpty(t *testing.T) {
 	tests := []struct {
 		name    string

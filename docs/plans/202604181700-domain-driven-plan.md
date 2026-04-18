@@ -74,9 +74,9 @@
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
 | ~~P1-2~~ | ~~**CONFIG-DEMO-FAILOPEN-01**~~ ✅ `publishEvent` fail-open 已用 `runMode.IsDemo()` 守护；durable 模式 `runMode=RunModeProd`，`IsDemo()` 返回 false，不可触发 | — | — | — | PR#157 post-merge |
-| S2 | **CONTRACT-ERROR-SCHEMA-01** 🟡：`publish/v1` + `rollback/v1` contract.yaml `responses` 新增 401/403 entries | 1h | 🟡 | `contracts/http/config/{publish,rollback}/v1/contract.yaml` | PR#157 post-merge |
-| S11 | **CONFIG-CORE-INIT-COGNIT-01** 🟡：`cell.go::Init()` 认知复杂度 19（nolint 临时抑制）；拆三段式降至 ≈9 | 3h | 🟡 | `cells/config-core/cell.go` | PR#168 发现 |
-| S13 | **CONFIGWRITE-4XX-OBSERVABILITY-01** 🟡：`writeErrcodeError` 4xx 分支加 code+path+request_id 采样日志 | 1h | 🟡 | `pkg/httputil/response.go` | PR#168 六席审查 P2 |
+| ~~S2~~ | ~~**CONTRACT-ERROR-SCHEMA-01**~~ ✅ PR-CONFIG-POLISH：`publish/v1` + `rollback/v1` contract.yaml `responses` 401/403 + kernel HTTPResponseMeta + shared error schema + contracttest.ValidateErrorResponse | — | — | — | PR-CONFIG-POLISH |
+| ~~S11~~ | ~~**CONFIG-CORE-INIT-COGNIT-01**~~ ✅ commit 8552b6c：`cell.go::Init()` 认知复杂度降至 ≈7，nolint 已移除 | — | — | — | PR#168 发现 |
+| ~~S13~~ | ~~**CONFIGWRITE-4XX-OBSERVABILITY-01**~~ ✅ PR-CONFIG-POLISH：`writeErrcodeError` 4xx 分支 slog.Warn {code, status, message, request_id, trace_id, span_id} | — | — | — | PR-CONFIG-POLISH |
 | ~~S10~~ | ~~**MODE-SEMANTIC-SPLIT-01**~~ ❌ 方向错误：P1-2 正确修法是删除 `configpublish.Service.runMode` + fail-open 整体，写路径不再有 mode 字段，PublishFailureMode 无处安放；裁定废弃 | — | — | — | PR#167 round-2 |
 
 **域内 PR 拆分**：
@@ -84,7 +84,7 @@
 | PR | 内容 | 工时 |
 |----|------|------|
 | ~~PR-CONFIG-FAILOPEN~~ | ~~P1-2：demo fail-open 修复~~ ✅ 已完成，无需单独 PR | — |
-| PR-CONFIG-POLISH | S2 + S11 + S13：契约 schema + Init 重构 + 4xx 日志（🟡，合并一 PR）| 5h |
+| ~~PR-CONFIG-POLISH~~ | ~~S2 + S11 + S13：契约 schema + Init 重构 + 4xx 日志~~ ✅ 已完成 | — |
 | ~~PR-CONFIG-MODE~~ | ~~S10：读写 RunMode 解耦~~ ❌ 废弃，随 P1-2 正确修法一并消除 | — |
 
 **主线工时**：0h（P1-2 已完成）；🟡 全做约 5h（S10 废弃）。

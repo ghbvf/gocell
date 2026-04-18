@@ -130,10 +130,60 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), msgInternalServerError)
 }
 
+// log4xx emits a structured WARN record for client-error responses.
+//
+// 4xx WARN logs stable fields only (code/status/correlation IDs + optional
+// InternalMessage). The client-facing Message is intentionally omitted to
+// prevent leaking user identifiers that callers may interpolate into
+// errcode.New(code, fmt.Sprintf("…%s…", userID)) — see errcode.Message vs
+// InternalMessage contract: Message is supplied to response writers, while
+// InternalMessage is diagnostic-only and safe for server logs.
+func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
+	logAttrs := []any{
+		slog.String("code", string(ecErr.Code)),
+		slog.Int("status", status),
+	}
+	if ecErr.InternalMessage != "" {
+		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+	}
+	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+	slog.Warn(label+" (4xx)", logAttrs...)
+}
+
+// log5xx emits a slog.Error record for a 5xx response, including cause and correlation IDs.
+func log5xx(ctx context.Context, label string, ecErr *errcode.Error) {
+	logAttrs := []any{
+		slog.String("code", string(ecErr.Code)),
+		slog.String("message", ecErr.Message),
+	}
+	if ecErr.InternalMessage != "" {
+		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+	}
+	if ecErr.Cause != nil {
+		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+	}
+	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+	slog.Error(label+" (5xx)", logAttrs...)
+}
+
+// appendCorrelationAttrs appends request_id, trace_id, span_id from ctx to attrs.
+func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
+	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
+		attrs = append(attrs, slog.String("request_id", reqID))
+	}
+	if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
+		attrs = append(attrs, slog.String("trace_id", traceID))
+	}
+	if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
+		attrs = append(attrs, slog.String("span_id", spanID))
+	}
+	return attrs
+}
+
 // writeErrcodeError is the shared implementation for WriteDecodeError and
 // WriteDomainError when the error is an *errcode.Error. It handles:
 //   - Status mapping via MapCodeToStatus
-//   - 4xx: details pass-through, original message
+//   - 4xx: details pass-through, original message, slog.Warn per observability.md
 //   - 5xx: details stripped, message masked, structured logging with
 //     cause/internal/request_id/trace_id/span_id per observability.md
 func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string, ecErr *errcode.Error) {
@@ -144,30 +194,14 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	}
 
 	msg := ecErr.Message
-	if status >= 500 {
+	switch {
+	case status >= 400 && status < 500:
+		log4xx(ctx, label, ecErr, status)
+	case status >= 500:
 		// Never expose internal details in 5xx responses.
 		// Log structured fields per observability.md:
 		// "Error 级别必须含完整 error + 关联业务字段"
-		logAttrs := []any{
-			slog.String("code", string(ecErr.Code)),
-			slog.String("message", ecErr.Message),
-		}
-		if ecErr.InternalMessage != "" {
-			logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
-		}
-		if ecErr.Cause != nil {
-			logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
-		}
-		if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-			logAttrs = append(logAttrs, slog.String("request_id", reqID))
-		}
-		if traceID, ok := ctxkeys.TraceIDFrom(ctx); ok {
-			logAttrs = append(logAttrs, slog.String("trace_id", traceID))
-		}
-		if spanID, ok := ctxkeys.SpanIDFrom(ctx); ok {
-			logAttrs = append(logAttrs, slog.String("span_id", spanID))
-		}
-		slog.Error(label+" (5xx)", logAttrs...)
+		log5xx(ctx, label, ecErr)
 		msg = msgInternalServerError
 		details = map[string]any{}
 	}

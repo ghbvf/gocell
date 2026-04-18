@@ -107,6 +107,22 @@
                   "noContent": {
                     "type": "boolean",
                     "description": "Whether the success response must be bodyless."
+                  },
+                  "responses": {
+                    "type": "object",
+                    "description": "Optional map of HTTP error responses, keyed by status code. Value references a JSON Schema describing the error body.",
+                    "patternProperties": {
+                      "^[1-5][0-9][0-9]$": {
+                        "type": "object",
+                        "required": ["description", "schemaRef"],
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {"type": "string"},
+                          "schemaRef": {"type": "string"}
+                        }
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 }
               }
