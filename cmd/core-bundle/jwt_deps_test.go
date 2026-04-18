@@ -23,26 +23,24 @@ import (
 // returns an error containing the env var name.
 func TestLoadJWTIssuer_MissingEnvVar_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, _, err := loadJWTIssuer("")
+	_, err := loadJWTIssuer("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
 		"error must name the missing env var")
 }
 
-// TestLoadJWTIssuer_SetEnvVar_Used verifies that a set GOCELL_JWT_ISSUER is
-// returned with source="env".
+// TestLoadJWTIssuer_SetEnvVar_Used verifies that a set GOCELL_JWT_ISSUER is returned.
 func TestLoadJWTIssuer_SetEnvVar_Used(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-prod")
-	val, src, err := loadJWTIssuer("")
+	val, err := loadJWTIssuer("")
 	require.NoError(t, err)
 	assert.Equal(t, "gocell-prod", val)
-	assert.Equal(t, "env", src)
 }
 
 // TestLoadJWTIssuer_RealMode_AlsoRequired ensures real mode is equally strict.
 func TestLoadJWTIssuer_RealMode_AlsoRequired(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, _, err := loadJWTIssuer("real")
+	_, err := loadJWTIssuer("real")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER")
 }
@@ -53,20 +51,18 @@ func TestLoadJWTIssuer_RealMode_AlsoRequired(t *testing.T) {
 // returns an error containing the env var name.
 func TestLoadJWTAudience_MissingEnvVar_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	_, _, err := loadJWTAudience("")
+	_, err := loadJWTAudience("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
 		"error must name the missing env var")
 }
 
-// TestLoadJWTAudience_SetEnvVar_Used verifies that a set GOCELL_JWT_AUDIENCE is
-// returned with source="env".
+// TestLoadJWTAudience_SetEnvVar_Used verifies that a set GOCELL_JWT_AUDIENCE is returned.
 func TestLoadJWTAudience_SetEnvVar_Used(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "my-service")
-	val, src, err := loadJWTAudience("")
+	val, err := loadJWTAudience("")
 	require.NoError(t, err)
 	assert.Equal(t, "my-service", val)
-	assert.Equal(t, "env", src)
 }
 
 // --- buildJWTDeps integration ---

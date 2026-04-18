@@ -30,14 +30,14 @@ func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
 }
 
 func TestInternalGuardFromEnv_WithSecret_ReturnsGuard(t *testing.T) {
-	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	guard, err := internalGuardFromEnv("")
 	require.NoError(t, err)
 	assert.NotNil(t, guard, "non-empty secret must produce a non-nil guard")
 }
 
 func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.T) {
-	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	guard, err := internalGuardFromEnv("")
 	require.NoError(t, err)
 	require.NotNil(t, guard)

@@ -69,7 +69,10 @@ func loadSecret(envKey, devDefault, adapterMode string) ([]byte, error) {
 	if adapterMode == "real" {
 		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envKey)
 	}
-	slog.Warn("using dev-only default; set env var for production", slog.String("var", envKey))
+	slog.Warn("using dev-only default; set env var for production",
+		slog.String("var", envKey),
+		slog.String("mode", "dev-fallback"),
+		slog.String("action_required", "set env var before real mode"))
 	return []byte(devDefault), nil
 }
 
@@ -379,28 +382,27 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 	}
 }
 
+// loadRequiredEnv loads a required env var. Returns an error if the value is
+// empty; there is no fallback default. Used for env vars that are mandatory
+// in all adapter modes (e.g. GOCELL_JWT_ISSUER, GOCELL_JWT_AUDIENCE).
+func loadRequiredEnv(envKey, description string) (string, error) {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return "", fmt.Errorf("%s must be set (%s)", envKey, description)
+	}
+	return v, nil
+}
+
 // loadJWTIssuer loads the JWT issuer string from GOCELL_JWT_ISSUER.
 // The env var is required in all adapter modes — there is no fallback default.
-//
-// Returns (value, "env", nil) on success or ("", "", error) when unset.
-func loadJWTIssuer(adapterMode string) (string, string, error) {
-	v := os.Getenv("GOCELL_JWT_ISSUER")
-	if v == "" {
-		return "", "", fmt.Errorf("GOCELL_JWT_ISSUER must be set (adapter mode %q)", adapterMode)
-	}
-	return v, "env", nil
+func loadJWTIssuer(adapterMode string) (string, error) {
+	return loadRequiredEnv("GOCELL_JWT_ISSUER", fmt.Sprintf("adapter mode %q", adapterMode))
 }
 
 // loadJWTAudience loads the JWT audience string from GOCELL_JWT_AUDIENCE.
 // The env var is required in all adapter modes — there is no fallback default.
-//
-// Returns (value, "env", nil) on success or ("", "", error) when unset.
-func loadJWTAudience(adapterMode string) (string, string, error) {
-	v := os.Getenv("GOCELL_JWT_AUDIENCE")
-	if v == "" {
-		return "", "", fmt.Errorf("GOCELL_JWT_AUDIENCE must be set (adapter mode %q)", adapterMode)
-	}
-	return v, "env", nil
+func loadJWTAudience(adapterMode string) (string, error) {
+	return loadRequiredEnv("GOCELL_JWT_AUDIENCE", fmt.Sprintf("adapter mode %q", adapterMode))
 }
 
 // jwtDeps groups JWT signing and verification components built at startup.
@@ -415,11 +417,11 @@ type jwtDeps struct {
 //
 // ref: kube-apiserver --service-account-issuer — required at startup.
 func buildJWTDeps(adapterMode string) (jwtDeps, error) {
-	iss, issSource, err := loadJWTIssuer(adapterMode)
+	iss, err := loadJWTIssuer(adapterMode)
 	if err != nil {
 		return jwtDeps{}, err
 	}
-	aud, audSource, err := loadJWTAudience(adapterMode)
+	aud, err := loadJWTAudience(adapterMode)
 	if err != nil {
 		return jwtDeps{}, err
 	}
@@ -447,8 +449,6 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	slog.Info("core-bundle: JWT deps built",
 		slog.String("issuer", iss),
 		slog.String("audience", aud),
-		slog.String("issuer_source", issSource),
-		slog.String("audience_source", audSource),
 		slog.String("adapter_mode", adapterMode))
 
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// freshTestServiceSecret returns a cryptographically random 32-byte hex string
+// (64 hex chars, all >= MinHMACKeyBytes) for use as GOCELL_SERVICE_SECRET in
+// tests. Using a random value prevents accidental inclusion of well-known demo
+// keys in test fixtures that could be blacklisted by rejectDemoKey in future.
+func freshTestServiceSecret(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	require.NoError(t, err, "crypto/rand must not fail in test setup")
+	return "ts-" + fmt.Sprintf("%x", b) // "ts-" prefix makes it recognisably a test secret
+}
 
 func TestLoadKeySet_DevMode(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrivateKey, "")
@@ -220,7 +233,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
-	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	// The trip-wire: verbose token is empty.
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
 
@@ -249,7 +262,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
-	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	// The trip-wire: metrics token is empty.
 	t.Setenv("GOCELL_METRICS_TOKEN", "")
@@ -416,7 +429,6 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 	freshHMAC := "prod-hmac-key-replace-32bytes!!!"
 	freshAudit := "audit-cursor-key-32-bytes-padded!"
 	freshConfig := "config-cursor-key-32b-padded-xx!"
-	freshService := "service-secret-32-bytes-xxxxxx!!"
 
 	type envPatch struct {
 		name, value string
@@ -456,7 +468,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 			t.Setenv("GOCELL_AUDIT_CURSOR_KEY", freshAudit)
 			t.Setenv("GOCELL_CONFIG_CURSOR_KEY", freshConfig)
-			t.Setenv("GOCELL_SERVICE_SECRET", freshService)
+			t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 			t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
 			// Trip-wire: replace just one env with a well-known demo value.
