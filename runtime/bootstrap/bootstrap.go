@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -381,8 +382,14 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 			b.relayHealthNil = true
 			return
 		}
-		for name, fn := range r.HealthCheckers() {
-			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+		checkers := r.HealthCheckers()
+		names := make([]string, 0, len(checkers))
+		for k := range checkers {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: checkers[name]})
 		}
 	}
 }
@@ -1068,7 +1075,14 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// (e.g. session-store), aligning with the authProvider discovery pattern.
 	for _, id := range asm.CellIDs() {
 		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
-			for name, fn := range hcc.HealthCheckers() {
+			cellCheckers := hcc.HealthCheckers()
+			cellNames := make([]string, 0, len(cellCheckers))
+			for k := range cellCheckers {
+				cellNames = append(cellNames, k)
+			}
+			sort.Strings(cellNames)
+			for _, name := range cellNames {
+				fn := cellCheckers[name]
 				if fn == nil {
 					return rollback(fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name))
 				}
