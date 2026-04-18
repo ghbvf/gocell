@@ -289,32 +289,47 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		sub1Received atomic.Int32
 		sub2Received atomic.Int32
 		wg           sync.WaitGroup
+		sub1Ready    = make(chan struct{})
+		sub2Ready    = make(chan struct{})
 	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
-	// Subscriber 1.
+	// Per-sub readiness signals: Subscribe is blocking, and the bus-level
+	// Ready() channel only synchronizes the FIRST Subscribe call for a given
+	// (consumerGroup, topic) pair. With two broadcast subscribers we need each
+	// goroutine to confirm its own registration before the test publishes,
+	// otherwise the second sub may miss the event.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		close(sub1Ready)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
-	// Subscriber 2.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		close(sub2Ready)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 
+	<-sub1Ready
+	<-sub2Ready
 	waitForSubscription(t, ctx, sub, topic, "")
+	// In-memory bus signals Ready after the FIRST Subscribe registration; the
+	// second broadcast sub may still be entering its Subscribe call. A brief
+	// sleep covers the tail registration window without coupling the test to
+	// bus internals. Persistent brokers (RabbitMQ) skip this path entirely
+	// (BroadcastSubscribe=false → testCompetingConsumers).
+	time.Sleep(subscribeInitDelay)
 
 	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"fan-out"}`)))
 
