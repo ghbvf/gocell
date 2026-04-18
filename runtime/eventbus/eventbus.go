@@ -24,6 +24,7 @@ import (
 const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
+	maxRetryDelay  = 30 * time.Second
 
 	// TopicConfigChanged is the canonical event topic for config change
 	// events. Cells that publish or subscribe to config changes should
@@ -64,6 +65,10 @@ type InMemoryEventBus struct {
 	closed        bool
 	deadLettersMu sync.Mutex
 	deadLetters   []DeadLetter
+
+	// readyMu guards readyChans. Separate from mu to avoid lock ordering issues.
+	readyMu    sync.Mutex
+	readyChans map[string]chan struct{} // key: consumerGroup + "|" + topic
 }
 
 // groupState tracks subscribers and round-robin index for a consumer group.
@@ -87,8 +92,9 @@ func WithBufferSize(size int) Option {
 // New creates an InMemoryEventBus.
 func New(opts ...Option) *InMemoryEventBus {
 	b := &InMemoryEventBus{
-		groupSubs: make(map[string]map[string]*groupState),
-		bufSize:   256,
+		groupSubs:  make(map[string]map[string]*groupState),
+		readyChans: make(map[string]chan struct{}),
+		bufSize:    256,
 	}
 	for _, o := range opts {
 		o(b)
@@ -178,31 +184,23 @@ func (b *InMemoryEventBus) Setup(_ context.Context, _ outbox.Subscription) error
 	return nil
 }
 
-// Ready implements outbox.Subscriber. Returns a channel that closes once at
-// least one goroutine has called Subscribe for sub.Topic (i.e., the subscription
-// is actually registered and ready to receive messages). This prevents the
+// Ready implements outbox.Subscriber. Returns a channel that closes once
+// Subscribe has been called for the given subscription (i.e., the subscription
+// is registered and ready to receive messages). This prevents the
 // publish-before-subscribe race in tests that use waitForSubscription.
+//
+// The key is sub.ConsumerGroup + "|" + sub.Topic so that different consumer
+// groups on the same topic each get an independent ready signal.
 func (b *InMemoryEventBus) Ready(sub outbox.Subscription) <-chan struct{} {
+	key := sub.ConsumerGroup + "|" + sub.Topic
+	b.readyMu.Lock()
+	defer b.readyMu.Unlock()
+	if ch, ok := b.readyChans[key]; ok {
+		return ch
+	}
+	// No Subscribe call yet — create an open channel that Subscribe will close.
 	ch := make(chan struct{})
-	go func() {
-		for {
-			b.mu.RLock()
-			groups := b.groupSubs[sub.Topic]
-			registered := false
-			for _, gs := range groups {
-				if len(gs.subs) > 0 {
-					registered = true
-					break
-				}
-			}
-			b.mu.RUnlock()
-			if registered {
-				close(ch)
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
+	b.readyChans[key] = ch
 	return ch
 }
 
@@ -245,6 +243,9 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscriptio
 	}
 	gs.subs = append(gs.subs, s)
 	b.mu.Unlock()
+
+	// Signal readiness: close (or create+close) the per-subscription ready channel.
+	b.signalReady(consumerGroup, topic)
 
 	// Process messages in the current goroutine (Subscribe blocks per interface contract).
 	defer func() {
@@ -313,6 +314,31 @@ func (b *InMemoryEventBus) DrainDeadLetters() []DeadLetter {
 	dl := b.deadLetters
 	b.deadLetters = nil
 	return dl
+}
+
+// signalReady closes the per-subscription ready channel for the given
+// consumerGroup + topic key. Safe to call multiple times (idempotent via sync.Once
+// semantics implemented with the closed channel check).
+func (b *InMemoryEventBus) signalReady(consumerGroup, topic string) {
+	key := consumerGroup + "|" + topic
+	b.readyMu.Lock()
+	defer b.readyMu.Unlock()
+	ch, ok := b.readyChans[key]
+	if !ok {
+		// Ready was never called; create an already-closed channel so future
+		// calls to Ready(sub) return an immediately-closed channel.
+		ch = make(chan struct{})
+		b.readyChans[key] = ch
+		close(ch)
+		return
+	}
+	// Only close if still open (guard against double-close on re-subscribe).
+	select {
+	case <-ch:
+		// already closed
+	default:
+		close(ch)
+	}
 }
 
 // removeSub removes a specific subscription from the group's subscriber list.
@@ -422,9 +448,9 @@ func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entr
 
 // handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
 // with an Error-level log so the programming mistake is surfaced.
-func (b *InMemoryEventBus) handleInvalidDisposition(_ context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) handleInvalidDisposition(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
 	if res.Receipt != nil {
-		releaseReceipt(context.Background(), res.Receipt, topic, entry.ID)
+		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 	}
 	delay := retryDelay(attempt)
 	slog.Error("eventbus: invalid disposition, treating as requeue",
@@ -438,9 +464,11 @@ func (b *InMemoryEventBus) handleInvalidDisposition(_ context.Context, topic str
 }
 
 // retryDelay calculates exponential backoff with jitter for the given attempt.
+// Delegates to outbox.ExponentialDelay for overflow-safe computation, capped at maxRetryDelay.
 func retryDelay(attempt int) time.Duration {
+	base := outbox.ExponentialDelay(baseRetryDelay, maxRetryDelay, attempt)
 	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
-	return baseRetryDelay*(1<<attempt) + jitter
+	return base + jitter
 }
 
 // awaitRetry sleeps for the retry delay then returns true, or returns false

@@ -185,10 +185,10 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Run subscriber in a goroutine since Subscribe blocks.
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "integration-test")
+		})
 	}()
 
 	// Wait until Subscribe has declared, bound, and started consuming from the queue.
@@ -295,7 +295,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	cb, cbErr := outbox.NewConsumerBase(
 		&noopClaimer{},
 		outbox.ConsumerBaseConfig{
-			ConsumerGroup:  "test-retry-e2e",
 			RetryCount:     2,
 			RetryBaseDelay: 50 * time.Millisecond,
 			IdempotencyTTL: time.Hour,
@@ -315,14 +314,14 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer subCancel()
 
-	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
 	})
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, wrappedHandler, "test-retry-e2e")
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, wrappedHandler)
 	}()
 
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
@@ -485,14 +484,14 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	handlerCalled := make(chan struct{}, 1)
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, topic, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test-dlx"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			handlerCalled <- struct{}{}
 			// Permanent rejection — broker should route to DLX.
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         assert.AnError,
 			}
-		}, "integration-test-dlx")
+		})
 	}()
 
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)

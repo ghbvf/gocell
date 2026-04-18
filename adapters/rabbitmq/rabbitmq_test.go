@@ -3553,27 +3553,27 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 }
 
 func TestSafeDelay_LargeAttempt_NoPanic(t *testing.T) {
-	result := safeDelay(time.Second, 30*time.Second, 100)
+	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 100)
 	assert.Equal(t, 30*time.Second, result)
 }
 
 func TestSafeDelay_ZeroBase(t *testing.T) {
-	result := safeDelay(0, 30*time.Second, 5)
+	result := outbox.ExponentialDelay(0, 30*time.Second, 5)
 	assert.Equal(t, time.Duration(0), result)
 }
 
 func TestSafeDelay_NormalRange(t *testing.T) {
-	result := safeDelay(time.Second, 30*time.Second, 3)
+	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 3)
 	assert.Equal(t, 8*time.Second, result)
 }
 
 func TestSafeDelay_ExceedsMax(t *testing.T) {
-	result := safeDelay(time.Second, 30*time.Second, 10)
+	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 10)
 	assert.Equal(t, 30*time.Second, result) // 1024s > 30s → capped
 }
 
 func TestSafeDelay_NegativeBase(t *testing.T) {
-	result := safeDelay(-time.Second, 30*time.Second, 3)
+	result := outbox.ExponentialDelay(-time.Second, 30*time.Second, 3)
 	assert.Equal(t, time.Duration(0), result)
 }
 
@@ -3676,11 +3676,11 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 // TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
 
 // =============================================================================
-// safeDelay boundary tests (S3 P2)
+// ExponentialDelay boundary tests (S3 P2)
 // =============================================================================
 
 func TestSafeDelay_AttemptZero(t *testing.T) {
-	result := safeDelay(time.Second, 30*time.Second, 0)
+	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 0)
 	assert.Equal(t, time.Second, result) // base * 2^0 = base
 }
 
@@ -3688,10 +3688,10 @@ func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
 	base := time.Second
 	maxSafeShift := 63 - bits.Len64(uint64(base))
 	// At maxSafeShift, result should still be capped to maxDelay.
-	result := safeDelay(base, 30*time.Second, maxSafeShift)
+	result := outbox.ExponentialDelay(base, 30*time.Second, maxSafeShift)
 	assert.Equal(t, 30*time.Second, result)
 	// At maxSafeShift+1, also capped (overflow guard).
-	result2 := safeDelay(base, 30*time.Second, maxSafeShift+1)
+	result2 := outbox.ExponentialDelay(base, 30*time.Second, maxSafeShift+1)
 	assert.Equal(t, 30*time.Second, result2)
 }
 

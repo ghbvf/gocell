@@ -227,13 +227,18 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 		})
 	}()
 
-	// Give both goroutines time to call eb.Subscribe and acquire the mutex.
-	// eb.Subscribe registers under eb.mu.Lock before entering the blocking receive
-	// loop, so a 50ms sleep (matching the existing e2e test) is sufficient on
-	// any modern scheduler. This is a deliberate small sleep, not a busy-poll,
-	// because there is no external signal from the subscribe goroutine that fires
-	// after its mutex section completes.
-	time.Sleep(50 * time.Millisecond)
+	// Wait until both subscribe goroutines have registered (Finding F5: replace
+	// fixed sleep with explicit ready signal from eb.Ready).
+	select {
+	case <-eb.Ready(accessSub):
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for access-core subscription to be ready")
+	}
+	select {
+	case <-eb.Ready(auditSub):
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for audit-core subscription to be ready")
+	}
 
 	// Publish exactly 1 event.
 	payload := []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`)

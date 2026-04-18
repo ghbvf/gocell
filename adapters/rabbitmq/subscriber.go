@@ -679,6 +679,15 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 }
 
 // Close terminates all active subscriptions and waits for in-flight messages.
+//
+// Two-phase shutdown:
+//  1. Signal all goroutines to stop via closeCh, then wait up to ShutdownTimeout
+//     for processDelivery goroutines to complete (WaitGroup).
+//  2. Only close tracked AMQP channels when ALL goroutines have exited cleanly.
+//     If the timeout expires, channels are NOT force-closed (they may still be
+//     held by in-flight processDelivery goroutines); a warning is logged instead
+//     and cleanup is deferred to process exit. This prevents a closed-channel
+//     panic inside processDelivery after the consumer is drained by subscribeOnce.
 func (s *Subscriber) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
@@ -696,11 +705,19 @@ func (s *Subscriber) Close() error {
 	case <-done:
 		slog.Info("rabbitmq: subscriber closed gracefully")
 	case <-time.After(s.config.ShutdownTimeout):
-		slog.Warn("rabbitmq: subscriber shutdown timed out",
-			slog.Duration("timeout", s.config.ShutdownTimeout))
+		// Do not force-close AMQP channels here — processDelivery goroutines may
+		// still hold references and a close would cause a panic on the next send.
+		// Log the goroutine count and let the OS clean up on process exit.
+		s.mu.Lock()
+		remaining := len(s.channels)
+		s.mu.Unlock()
+		slog.Warn("rabbitmq: subscriber shutdown timed out, channels not force-closed",
+			slog.Duration("timeout", s.config.ShutdownTimeout),
+			slog.Int("remaining_channels", remaining))
+		return nil
 	}
 
-	// Close all channels.
+	// All goroutines have exited — safe to close the AMQP channels.
 	s.mu.Lock()
 	channels := s.channels
 	s.channels = nil

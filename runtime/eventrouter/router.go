@@ -229,33 +229,65 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 	}
 }
 
-// runAwaitReady waits for Subscriber.Ready(sub) for each handler sequentially
-// (Phase 3). It also monitors setupErr and ctx cancellation.
-// On error, it cancels the context, waits for goroutines, and returns the error.
+// runAwaitReady waits for Subscriber.Ready(sub) for ALL handlers concurrently
+// (Phase 3). Concurrent fan-out avoids goroutine-schedule coupling where a
+// serial wait on handler[0] would block if handler[1]'s goroutine happened to
+// register first with the in-memory bus.
+//
+// It also monitors setupErr and ctx cancellation. On error, it cancels the
+// context, waits for goroutines, and returns the error.
 func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan error) error {
+	allReady := r.awaitAllReady(ctx, handlers)
+
+	select {
+	case <-allReady:
+		// All subscriptions are ready.
+		return nil
+	case err := <-setupErr:
+		r.markHealthError(err)
+		slog.Error("eventrouter: subscription error during ready wait, shutting down",
+			slog.Any("error", err))
+		cancel()
+		r.wg.Wait()
+		// Drain setupErr to prevent goroutine leak in runSubscribe goroutines
+		// that may still be trying to send after ctx cancellation.
+		go func() {
+			for range setupErr { //nolint:revive
+			}
+		}()
+		return err
+	case <-ctx.Done():
+		r.wg.Wait()
+		return ctx.Err()
+	}
+}
+
+// awaitAllReady launches one goroutine per handler that waits on Ready, then
+// returns a channel that closes when all goroutines complete (or ctx cancels).
+func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-chan struct{} {
+	doneCh := make(chan struct{})
+	var wg sync.WaitGroup
 	for _, h := range handlers {
+		h := h
 		sub := outbox.Subscription{
 			Topic:         h.topic,
 			ConsumerGroup: h.consumerGroup,
 			CellID:        h.consumerGroup,
 		}
-		readyCh := r.subscriber.Ready(sub)
-		select {
-		case <-readyCh:
-			// subscription is ready
-		case err := <-setupErr:
-			r.markHealthError(err)
-			slog.Error("eventrouter: subscription error during ready wait, shutting down",
-				slog.Any("error", err))
-			cancel()
-			r.wg.Wait()
-			return err
-		case <-ctx.Done():
-			r.wg.Wait()
-			return ctx.Err()
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case <-r.subscriber.Ready(sub):
+			case <-ctx.Done():
+			}
+		}()
 	}
-	return nil
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+	return doneCh
 }
 
 // closeRunning safely closes the running channel exactly once.

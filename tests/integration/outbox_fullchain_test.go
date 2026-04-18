@@ -296,12 +296,12 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner:      sub,
-		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
 	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
@@ -312,7 +312,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 				traceID:       traceID,
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "fullchain-test")
+		})
 	}()
 
 	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.queue", subErrCh, 5*time.Second)
@@ -539,12 +539,12 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner:      sub,
-		Middleware: []outbox.TopicHandlerMiddleware{outbox.ObservabilityContextMiddleware()},
+		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
 	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.Subscribe(subCtx, topic, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-notrace-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)
@@ -556,7 +556,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 				traceOK:       traceOK,
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "fullchain-notrace-test")
+		})
 	}()
 
 	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.notrace.queue", subErrCh, 5*time.Second)
