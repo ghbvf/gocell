@@ -160,10 +160,10 @@ type redisReceipt struct {
 	token    string
 	doneTTL  time.Duration
 
-	mu        sync.Mutex
-	committed bool
-	commitErr error
-	released  bool
+	mu         sync.Mutex
+	committed  bool
+	commitErr  error
+	released   bool
 	releaseErr error
 }
 

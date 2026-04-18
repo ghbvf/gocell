@@ -133,7 +133,7 @@
 | A5 | **RL-SUB-01** 🟡：入站 ID 校验（空/过长 message ID）| 1h | 🟡 | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **RabbitMQ backoff + FailOpen enum 清理** 🟡 | 2h | 🟡 | `adapters/rabbitmq/` | Wave 2 残留 |
 | X6 | **SOL-B-01 Claimer lease 续租** 🟡（前置 L4 API ✅）：两阶段 Claim/Commit/Release 幂等路径补 lease 续租 | 4h | 🟡 | `kernel/outbox/` + `adapters/rabbitmq/consumer_base.go` | Wave 2 残留 |
-| X8 | **AL-02 distlock 续期/TTL → runtime/** 🟡：distlock 生命周期上抬到 runtime，与 relay 共同组成 outbox 交付基础设施 | 2h | 🟡 | `adapters/redis/distlock.go` → `runtime/` | 依赖替换分析 |
+| ~~X8~~ | ~~**AL-02 distlock 续期/TTL → runtime/**~~ ✅ PR-DISTLOCK-HOIST (PR#178)：`runtime/distlock` 接口上抬完成，`adapters/redis.DistLock` 实现；`Lock.Lost()` 新增续租失败信号；`ERR_ADAPTER_REDIS_LOCK_ACQUIRED` typo 已修 → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
 
 **搭车说明**：
 - A1 改 `adapters/rabbitmq/connection.go`，A7（POOLSTATS-IFACE-01，见域 9）也改同一文件，合并到 PR-OUTBOX-WIRE 一次落地。
@@ -146,7 +146,7 @@
 |----|------|------|
 | ~~PR-OUTBOX-WIRE（A11 部分）~~ | ~~A11 relay 接线 + e2e~~ ✅ PR#174 | — |
 | PR-OUTBOX-WIRE（剩余） | K2（头部 commit）+ A1 完整（Health() + 注册）+ X7 搭车 + A7 搭车 | ~5h |
-| PR-OUTBOX-HARDEN | A5 + A6 + X6 + X8（🟡）| ~9h |
+| PR-OUTBOX-HARDEN | A5 + A6 + X6（🟡，X8 已由 PR-DISTLOCK-HOIST 独立完成）| ~7h |
 
 **主线工时**：5h（PR-OUTBOX-WIRE 剩余）；全做约 14h。
 
@@ -363,7 +363,7 @@ Wave 3（依赖 Wave 1-2 完成）— 约 2-3 工作日
 Wave 4（🟡 可延后，机会性纳入）— 按资源排期
   ├── 可观测性/Bootstrap 域  R1 + R2 + R3 + A10 (9h)
   ├── DX/CI/工具链域         S7 + A8 + A9 (3h) + P1-4/K1 (9h) + P1-5 (4h) + X9 (6h)
-  ├── Outbox 域              PR-OUTBOX-HARDEN (9h, 含 X6 + X8)
+  ├── Outbox 域              PR-OUTBOX-HARDEN (~7h, X8 已由 PR-DISTLOCK-HOIST 独立完成)
   ├── HTTP 域                PR-ROUTER-GUARD (2h) + PR-ROUTER-INTERNAL (4-8h, 规模评估)
   └── Features 域            PR-FEAT-TOPOLOGY (4h, 🟡)
 
