@@ -270,7 +270,7 @@ func (r *Relay) pollLoop(ctx context.Context) {
 		case <-ticker.C:
 			err := r.pollOnce(ctx)
 			if err != nil {
-				slog.Error("outbox relay: poll failed",
+				slog.Warn("outbox relay: poll failed",
 					slog.Any("error", err),
 				)
 			}
@@ -293,7 +293,7 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 		case <-ticker.C:
 			err := r.reclaimStale(ctx)
 			if err != nil {
-				slog.Error("outbox relay: reclaim failed",
+				slog.Warn("outbox relay: reclaim failed",
 					slog.Any("error", err),
 				)
 			}
@@ -314,7 +314,7 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 	for {
 		err := r.cleanup(ctx)
 		if err != nil {
-			slog.Error("outbox relay: cleanup failed", slog.Any("error", err))
+			slog.Warn("outbox relay: cleanup failed", slog.Any("error", err))
 		}
 		if r.cleanupBudget != nil {
 			r.cleanupBudget.Record(err)
