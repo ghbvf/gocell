@@ -97,18 +97,52 @@ func validErrBody(code, msg string) []byte {
 	return []byte(`{"error":{"code":"` + code + `","message":"` + msg + `","details":{}}}`)
 }
 
-func TestHttpConfigPublishV1_401Response(t *testing.T) {
+func TestHttpConfigPublishV1_ErrorResponses(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
 	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
 	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
 }
 
-func TestHttpConfigRollbackV1_401Response(t *testing.T) {
+func TestHttpConfigRollbackV1_ErrorResponses(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
 	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
 	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
+}
+
+// TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for
+// 401 (no auth ctx) and 403 (authenticated but lacks admin role) paths, then
+// validates the response body shape against the contract's declared error schema.
+func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
+	svc, _, _ := newContractService()
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/{key}/publish", http.HandlerFunc(h.HandlePublish))
+
+	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
+
+	t.Run("401_no_subject", func(t *testing.T) {
+		// context.Background() carries no subject → RequireAnyRole → ErrAuthUnauthorized → 401
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, path, nil).
+			WithContext(context.Background())
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusUnauthorized, rec.Code)
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	})
+
+	t.Run("403_insufficient_role", func(t *testing.T) {
+		// auth.TestContext with a non-admin role → RequireAnyRole → ErrAuthForbidden → 403
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, path, nil).
+			WithContext(auth.TestContext("user-readonly", []string{"viewer"}))
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+	})
 }
 
 // --- Event contract tests ---

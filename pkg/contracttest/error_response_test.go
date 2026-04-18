@@ -47,6 +47,14 @@ func TestValidateErrorResponse(t *testing.T) {
 			wantFail:   true,
 			wantMsg:    "no response declared for status 500",
 		},
+		{
+			name:       "contract with no endpoints.http",
+			contractID: "http.test.nohttp.v1",
+			status:     401,
+			body:       []byte(`{"error":{"code":"ERR_AUTH_INVALID_TOKEN","message":"unauthorized","details":{}}}`),
+			wantFail:   true,
+			wantMsg:    "no endpoints.http",
+		},
 	}
 
 	for _, tt := range tests {

@@ -757,8 +757,9 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.code), func(t *testing.T) {
 			handler := &captureHandler{}
+			orig := slog.Default()
 			slog.SetDefault(slog.New(handler))
-			t.Cleanup(func() { slog.SetDefault(slog.Default()) })
+			t.Cleanup(func() { slog.SetDefault(orig) })
 
 			ctx := context.Background()
 			ctx = ctxkeys.WithRequestID(ctx, "req-4xx-001")
@@ -805,6 +806,49 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 			assert.Equal(t, "span-4xx-001", spanVal)
 		})
 	}
+}
+
+// TestWriteDomainError_4xx_LogsWarn_NoCorrelation verifies that the slog.Warn
+// record is emitted even when the context carries no request_id/trace_id/span_id,
+// and that those attrs are absent in that case.
+func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx := context.Background() // no correlation IDs
+	rec := httptest.NewRecorder()
+	WriteDomainError(ctx, rec, errcode.New(errcode.ErrAuthUnauthorized, "no ctx"))
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	var warnRec *slog.Record
+	for i := range handler.records {
+		if handler.records[i].Level == slog.LevelWarn {
+			warnRec = &handler.records[i]
+			break
+		}
+	}
+	require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
+
+	_, hasCode := attrValue(*warnRec, "code")
+	assert.True(t, hasCode, "log record must contain 'code' attr")
+
+	_, hasStatus := attrValue(*warnRec, "status")
+	assert.True(t, hasStatus, "log record must contain 'status' attr")
+
+	_, hasMsg := attrValue(*warnRec, "message")
+	assert.True(t, hasMsg, "log record must contain 'message' attr")
+
+	_, hasReqID := attrValue(*warnRec, "request_id")
+	assert.False(t, hasReqID, "log record must NOT contain 'request_id' attr when not set in ctx")
+
+	_, hasTraceID := attrValue(*warnRec, "trace_id")
+	assert.False(t, hasTraceID, "log record must NOT contain 'trace_id' attr when not set in ctx")
+
+	_, hasSpanID := attrValue(*warnRec, "span_id")
+	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,

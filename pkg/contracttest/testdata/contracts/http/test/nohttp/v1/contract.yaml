@@ -1,0 +1,8 @@
+id: http.test.nohttp.v1
+kind: http
+ownerCell: test-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: test-cell
+  clients: []

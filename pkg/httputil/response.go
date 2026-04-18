@@ -130,7 +130,9 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 	WriteError(ctx, w, http.StatusInternalServerError, string(errcode.ErrInternal), msgInternalServerError)
 }
 
-// log4xx emits a slog.Warn record for a 4xx response, including correlation IDs from ctx.
+// log4xx emits a structured WARN record for client-error responses.
+// Callers must ensure ecErr.Message is developer-controlled and does not
+// contain unsanitized user input (avoids log injection in text-format slog handlers).
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
