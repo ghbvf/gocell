@@ -114,8 +114,8 @@ func ContextWithObservabilityMetadata(ctx context.Context, metadata map[string]s
 // ObservabilityContextMiddleware restores observability metadata into the
 // handler context before calling the next handler. This is the canonical
 // injection point; the subscriber adapter does not perform restoration.
-func ObservabilityContextMiddleware() TopicHandlerMiddleware {
-	return func(_ string, next EntryHandler) EntryHandler {
+func ObservabilityContextMiddleware() SubscriptionMiddleware {
+	return func(_ Subscription, next EntryHandler) EntryHandler {
 		return func(ctx context.Context, entry Entry) HandleResult {
 			return next(ContextWithObservabilityMetadata(ctx, entry.Metadata), entry)
 		}

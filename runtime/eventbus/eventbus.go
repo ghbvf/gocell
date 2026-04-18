@@ -125,56 +125,105 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	}
 
 	entry := unmarshalInboundEntry(topic, payload)
-
-	groups := b.groupSubs[topic]
-	for group, gs := range groups {
+	for group, gs := range b.groupSubs[topic] {
 		if len(gs.subs) == 0 {
 			continue
 		}
-		if group == "" {
-			// Empty group → broadcast to all subscribers (backward compatible).
-			for _, sub := range gs.subs {
-				select {
-				case sub.ch <- entry:
-				default:
-					slog.Warn("eventbus: subscriber buffer full, message dropped",
-						slog.String("topic", topic),
-					)
-				}
-			}
-		} else {
-			// Named group → round-robin to one subscriber (competing).
-			rrVal := gs.rrIdx.Add(1) - 1 // atomic increment, use previous value
-			idx := rrVal % uint64(len(gs.subs))
-			sub := gs.subs[idx]
-			select {
-			case sub.ch <- entry:
-			default:
-				slog.Warn("eventbus: subscriber buffer full, message dropped",
-					slog.String("topic", topic),
-					slog.String("consumer_group", group),
-				)
-			}
-		}
+		b.dispatchToGroup(topic, group, gs, entry)
 	}
 	return nil
 }
 
-// Subscribe registers an EntryHandler for the given topic. It blocks until ctx
-// is cancelled or the bus is closed.
+// dispatchToGroup delivers entry to the appropriate subscriber(s) in gs.
+// Empty group: broadcast to all. Named group: round-robin to one.
+func (b *InMemoryEventBus) dispatchToGroup(topic, group string, gs *groupState, entry outbox.Entry) {
+	if group == "" {
+		b.broadcast(topic, gs, entry)
+	} else {
+		b.roundRobin(topic, group, gs, entry)
+	}
+}
+
+// broadcast delivers entry to every subscriber in gs (empty-group fanout).
+func (b *InMemoryEventBus) broadcast(topic string, gs *groupState, entry outbox.Entry) {
+	for _, sub := range gs.subs {
+		select {
+		case sub.ch <- entry:
+		default:
+			slog.Warn("eventbus: subscriber buffer full, message dropped",
+				slog.String("topic", topic),
+			)
+		}
+	}
+}
+
+// roundRobin delivers entry to one subscriber in gs via atomic round-robin.
+func (b *InMemoryEventBus) roundRobin(topic, group string, gs *groupState, entry outbox.Entry) {
+	rrVal := gs.rrIdx.Add(1) - 1 // atomic increment, use previous value
+	idx := rrVal % uint64(len(gs.subs))
+	sub := gs.subs[idx]
+	select {
+	case sub.ch <- entry:
+	default:
+		slog.Warn("eventbus: subscriber buffer full, message dropped",
+			slog.String("topic", topic),
+			slog.String("consumer_group", group),
+		)
+	}
+}
+
+// Setup implements outbox.Subscriber. InMemoryEventBus requires no topology
+// pre-declaration; returns nil immediately.
+func (b *InMemoryEventBus) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+
+// Ready implements outbox.Subscriber. Returns a channel that closes once at
+// least one goroutine has called Subscribe for sub.Topic (i.e., the subscription
+// is actually registered and ready to receive messages). This prevents the
+// publish-before-subscribe race in tests that use waitForSubscription.
+func (b *InMemoryEventBus) Ready(sub outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		for {
+			b.mu.RLock()
+			groups := b.groupSubs[sub.Topic]
+			registered := false
+			for _, gs := range groups {
+				if len(gs.subs) > 0 {
+					registered = true
+					break
+				}
+			}
+			b.mu.RUnlock()
+			if registered {
+				close(ch)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	return ch
+}
+
+// Subscribe registers an EntryHandler for the given subscription. It blocks
+// until ctx is cancelled or the bus is closed.
 //
-// Consumer: cg-eventbus-{consumerGroup}-{topic}
+// Consumer: cg-eventbus-{sub.ConsumerGroup}-{sub.Topic}
 // Idempotency key: N/A (in-memory, no persistence)
 // ACK timing: after handler returns DispositionAck
 // Retry: transient errors -> retry 3x with exponential backoff / permanent -> dead letter
 //
-// consumerGroup selects the dispatch mode:
+// sub.ConsumerGroup selects the dispatch mode:
 //   - non-empty: messages are load-balanced among subscribers in the same group
 //   - empty: each subscriber receives every message (broadcast / fanout)
-func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, consumerGroup string) error {
+func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+	topic := sub.Topic
+	consumerGroup := sub.ConsumerGroup
+
 	subCtx, cancel := context.WithCancel(ctx)
 
-	sub := &subscription{
+	s := &subscription{
 		ch:     make(chan outbox.Entry, b.bufSize),
 		cancel: cancel,
 		done:   make(chan struct{}),
@@ -194,19 +243,19 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, topic string, handler 
 		gs = &groupState{}
 		b.groupSubs[topic][consumerGroup] = gs
 	}
-	gs.subs = append(gs.subs, sub)
+	gs.subs = append(gs.subs, s)
 	b.mu.Unlock()
 
 	// Process messages in the current goroutine (Subscribe blocks per interface contract).
 	defer func() {
-		close(sub.done)
-		b.removeSub(topic, consumerGroup, sub)
+		close(s.done)
+		b.removeSub(topic, consumerGroup, s)
 	}()
 	for {
 		select {
 		case <-subCtx.Done():
 			return subCtx.Err()
-		case entry, ok := <-sub.ch:
+		case entry, ok := <-s.ch:
 			if !ok {
 				return nil
 			}
@@ -299,105 +348,120 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 	var lastErr error
 	for attempt := range maxRetries {
 		res := handler(ctx, entry)
-		switch res.Disposition {
-		case outbox.DispositionAck:
-			if res.Receipt != nil {
-				commitReceipt(ctx, res.Receipt, topic, entry.ID)
-			}
-			return // success or safe duplicate
-		case outbox.DispositionReject:
-			if res.Receipt != nil {
-				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
-			}
-			// Permanent failure — route directly to dead letter.
-			slog.Warn("eventbus: handler rejected message, routing to dead letter",
-				slog.String("topic", topic),
-				slog.String("entry_id", entry.ID),
-				slog.Any("error", res.Err),
-			)
-			b.deadLettersMu.Lock()
-			b.deadLetters = append(b.deadLetters, DeadLetter{
-				Topic:   topic,
-				Entry:   entry,
-				LastErr: res.Err,
-			})
-			b.deadLettersMu.Unlock()
+		done, err := b.processResult(ctx, topic, entry, res, attempt)
+		if done {
 			return
-		case outbox.DispositionRequeue:
-			if res.Receipt != nil {
-				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
-			}
-			// PermanentError in Requeue → upgrade to dead letter (no retry).
-			// Mirrors ConsumerBase behavior: PermanentError takes precedence
-			// over the Disposition, ensuring consistent routing regardless of
-			// whether the handler or WrapLegacyHandler set the Disposition.
-			var permErr *outbox.PermanentError
-			if res.Err != nil && errors.As(res.Err, &permErr) {
-				slog.Warn("eventbus: permanent error in requeue, routing to dead letter",
-					slog.String("topic", topic),
-					slog.String("entry_id", entry.ID),
-					slog.Any("error", res.Err),
-				)
-				b.deadLettersMu.Lock()
-				b.deadLetters = append(b.deadLetters, DeadLetter{
-					Topic:   topic,
-					Entry:   entry,
-					LastErr: res.Err,
-				})
-				b.deadLettersMu.Unlock()
-				return
-			}
-			lastErr = res.Err
-			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
-			delay := baseRetryDelay*(1<<attempt) + jitter // e.g. 100-200ms, 200-300ms, 400-500ms
-			slog.Warn("eventbus: handler requested requeue, retrying",
-				slog.String("topic", topic),
-				slog.Int("attempt", attempt+1),
-				slog.Any("error", res.Err),
-				slog.Duration("retry_delay", delay),
-			)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-				continue
-			}
-		default:
-			// Zero-value or unknown Disposition — treat as requeue (safe degradation)
-			// and log at Error level so the programming mistake is surfaced.
-			if res.Receipt != nil {
-				releaseReceipt(ctx, res.Receipt, topic, entry.ID)
-			}
-			lastErr = res.Err
-			jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
-			delay := baseRetryDelay*(1<<attempt) + jitter
-			slog.Error("eventbus: invalid disposition, treating as requeue",
-				slog.String("topic", topic),
-				slog.String("entry_id", entry.ID),
-				slog.String("disposition", res.Disposition.String()),
-				slog.Int("attempt", attempt+1),
-				slog.Duration("retry_delay", delay),
-			)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
-				continue
-			}
+		}
+		lastErr = err
+		// Wait for retry delay or ctx cancellation.
+		if !awaitRetry(ctx, res.Disposition, attempt) {
+			return
 		}
 	}
-
-	// Exhausted retries → dead letter.
+	b.appendDeadLetter(topic, entry, lastErr)
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),
 		slog.Any("error", lastErr),
 	)
+}
+
+// processResult handles a single handler result. Returns (done=true) when
+// no further retry is needed (Ack, Reject, or permanent error in Requeue).
+// Returns the error to propagate as lastErr when done=false.
+func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+	switch res.Disposition {
+	case outbox.DispositionAck:
+		if res.Receipt != nil {
+			commitReceipt(ctx, res.Receipt, topic, entry.ID)
+		}
+		return true, nil
+	case outbox.DispositionReject:
+		if res.Receipt != nil {
+			releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+		}
+		slog.Warn("eventbus: handler rejected message, routing to dead letter",
+			slog.String("topic", topic),
+			slog.String("entry_id", entry.ID),
+			slog.Any("error", res.Err),
+		)
+		b.appendDeadLetter(topic, entry, res.Err)
+		return true, nil
+	case outbox.DispositionRequeue:
+		return b.handleRequeue(ctx, topic, entry, res, attempt)
+	default:
+		return b.handleInvalidDisposition(ctx, topic, entry, res, attempt)
+	}
+}
+
+// handleRequeue processes DispositionRequeue: upgrades to dead letter on
+// PermanentError, otherwise schedules retry with backoff.
+func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+	if res.Receipt != nil {
+		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+	}
+	var permErr *outbox.PermanentError
+	if res.Err != nil && errors.As(res.Err, &permErr) {
+		slog.Warn("eventbus: permanent error in requeue, routing to dead letter",
+			slog.String("topic", topic),
+			slog.String("entry_id", entry.ID),
+			slog.Any("error", res.Err),
+		)
+		b.appendDeadLetter(topic, entry, res.Err)
+		return true, nil
+	}
+	delay := retryDelay(attempt)
+	slog.Warn("eventbus: handler requested requeue, retrying",
+		slog.String("topic", topic),
+		slog.Int("attempt", attempt+1),
+		slog.Any("error", res.Err),
+		slog.Duration("retry_delay", delay),
+	)
+	return false, res.Err
+}
+
+// handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
+// with an Error-level log so the programming mistake is surfaced.
+func (b *InMemoryEventBus) handleInvalidDisposition(_ context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+	if res.Receipt != nil {
+		releaseReceipt(context.Background(), res.Receipt, topic, entry.ID)
+	}
+	delay := retryDelay(attempt)
+	slog.Error("eventbus: invalid disposition, treating as requeue",
+		slog.String("topic", topic),
+		slog.String("entry_id", entry.ID),
+		slog.String("disposition", res.Disposition.String()),
+		slog.Int("attempt", attempt+1),
+		slog.Duration("retry_delay", delay),
+	)
+	return false, res.Err
+}
+
+// retryDelay calculates exponential backoff with jitter for the given attempt.
+func retryDelay(attempt int) time.Duration {
+	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
+	return baseRetryDelay*(1<<attempt) + jitter
+}
+
+// awaitRetry sleeps for the retry delay then returns true, or returns false
+// if ctx is cancelled. For invalid disposition, uses the same delay logic.
+func awaitRetry(ctx context.Context, _ outbox.Disposition, attempt int) bool {
+	delay := retryDelay(attempt)
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(delay):
+		return true
+	}
+}
+
+// appendDeadLetter records an entry in the dead letter queue.
+func (b *InMemoryEventBus) appendDeadLetter(topic string, entry outbox.Entry, err error) {
 	b.deadLettersMu.Lock()
 	b.deadLetters = append(b.deadLetters, DeadLetter{
 		Topic:   topic,
 		Entry:   entry,
-		LastErr: lastErr,
+		LastErr: err,
 	})
 	b.deadLettersMu.Unlock()
 }

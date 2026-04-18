@@ -372,7 +372,7 @@ func WithDisableObservabilityRestore() Option {
 // ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
 // at router level; MassTransit UseMessageRetry — pipeline middleware at
 // receive-endpoint configuration.
-func WithConsumerMiddleware(mw ...outbox.TopicHandlerMiddleware) Option {
+func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
 	return func(b *Bootstrap) {
 		b.consumerMiddleware = append(b.consumerMiddleware, mw...)
 	}
@@ -459,7 +459,7 @@ type Bootstrap struct {
 	verboseToken                string            // token for /readyz?verbose access control
 	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
-	consumerMiddleware          []outbox.TopicHandlerMiddleware
+	consumerMiddleware          []outbox.SubscriptionMiddleware
 	hookTimeout                 time.Duration // applied when assembly not pre-built
 	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                cell.LifecycleHookObserver
@@ -995,7 +995,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		}
 	}
 	if sub != nil {
-		var mws []outbox.TopicHandlerMiddleware
+		var mws []outbox.SubscriptionMiddleware
 		if !b.disableObservabilityRestore {
 			mws = append(mws, outbox.ObservabilityContextMiddleware())
 		}

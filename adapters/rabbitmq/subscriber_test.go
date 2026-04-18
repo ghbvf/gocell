@@ -59,7 +59,7 @@ func TestProcessDelivery_EmptyEntryID_RejectsToDLX(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 7, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -113,7 +113,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 8, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -167,7 +167,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 9, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()

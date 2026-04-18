@@ -233,7 +233,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topicA, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 			select {
 			case deliveryA <- struct{}{}:
 			default:
@@ -245,7 +245,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 			}
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
 
@@ -298,20 +298,20 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	// Subscriber 2.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	waitForSubscription(t, ctx, sub, topic, "")
@@ -352,14 +352,14 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				select {
 				case delivery <- struct{}{}:
 				default:
 				}
 				totalReceived.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}, "")
+			})
 		}()
 	}
 
@@ -650,9 +650,9 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
-		err := sub.Subscribe(ctx, TestTopic(t), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 		subscribeReturned <- err
 	}()
 
@@ -682,9 +682,9 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	subscribeReturned := make(chan struct{})
 	go func() {
 		defer close(subscribeReturned)
-		_ = sub.Subscribe(ctx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
@@ -766,7 +766,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	h := newHarness(t, constructor)
 
 	var middlewareCalled atomic.Bool
-	middleware := func(_ string, next outbox.EntryHandler) outbox.EntryHandler {
+	middleware := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			middlewareCalled.Store(true)
 			return next(ctx, entry)
@@ -776,7 +776,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	// Wrap inner subscriber with middleware.
 	h.Sub = &outbox.SubscriberWithMiddleware{
 		Inner:      h.Sub,
-		Middleware: []outbox.TopicHandlerMiddleware{middleware},
+		Middleware: []outbox.SubscriptionMiddleware{middleware},
 	}
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {

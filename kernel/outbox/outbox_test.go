@@ -37,13 +37,23 @@ var _ Publisher = (*mockPublisher)(nil)
 // plainSubscriber implements Subscriber but NOT SubscriberInitializer.
 type plainSubscriber struct{}
 
-func (m *plainSubscriber) Subscribe(context.Context, string, EntryHandler, string) error { return nil }
-func (m *plainSubscriber) Close() error                                                  { return nil }
+func (m *plainSubscriber) Setup(_ context.Context, _ Subscription) error { return nil }
+func (m *plainSubscriber) Ready(_ Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
+	return nil
+}
+func (m *plainSubscriber) Close() error { return nil }
 
 func TestSubscriberInitializer_IsOptional(t *testing.T) {
+	// SubscriberInitializer is deprecated; all Subscribers now implement Setup.
+	// plainSubscriber does not separately implement the deprecated interface.
 	var sub Subscriber = &plainSubscriber{}
 	_, ok := sub.(SubscriberInitializer)
-	assert.False(t, ok, "plainSubscriber should not implement SubscriberInitializer")
+	assert.False(t, ok, "plainSubscriber should not separately implement deprecated SubscriberInitializer")
 }
 
 func TestNoopWriter_Write(t *testing.T) {
@@ -91,7 +101,13 @@ func TestDiscardPublisher_IsExplicitDiscardSink(t *testing.T) {
 
 type mockSubscriber struct{}
 
-func (m *mockSubscriber) Subscribe(ctx context.Context, topic string, handler EntryHandler, _ string) error {
+func (m *mockSubscriber) Setup(_ context.Context, _ Subscription) error { return nil }
+func (m *mockSubscriber) Ready(_ Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (m *mockSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
 	return nil
 }
 func (m *mockSubscriber) Close() error { return nil }
@@ -105,7 +121,7 @@ func TestSubscriberInterface(t *testing.T) {
 		handler := func(ctx context.Context, entry Entry) HandleResult {
 			return HandleResult{Disposition: DispositionAck}
 		}
-		err := sub.Subscribe(context.Background(), "test.topic", handler, "")
+		err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 		assert.NoError(t, err)
 	})
 
@@ -142,9 +158,15 @@ type recordingSubscriber struct {
 	closeErr        error
 }
 
-func (r *recordingSubscriber) Subscribe(_ context.Context, topic string, handler EntryHandler, _ string) error {
+func (r *recordingSubscriber) Setup(_ context.Context, _ Subscription) error { return nil }
+func (r *recordingSubscriber) Ready(_ Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (r *recordingSubscriber) Subscribe(_ context.Context, sub Subscription, handler EntryHandler) error {
 	r.subscribeCalled = true
-	r.subscribeTopic = topic
+	r.subscribeTopic = sub.Topic
 	r.capturedHandler = handler
 	return nil
 }
@@ -169,7 +191,7 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
+	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 	assert.NoError(t, err)
 	assert.True(t, inner.subscribeCalled)
 	assert.Equal(t, "test.topic", inner.subscribeTopic)
@@ -184,8 +206,8 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	inner := &recordingSubscriber{}
 
 	var middlewareTopic string
-	middleware := func(topic string, next EntryHandler) EntryHandler {
-		middlewareTopic = topic
+	middleware := func(sub Subscription, next EntryHandler) EntryHandler {
+		middlewareTopic = sub.Topic
 		return func(ctx context.Context, e Entry) HandleResult {
 			e.Metadata = map[string]string{"wrapped": "true"}
 			return next(ctx, e)
@@ -194,7 +216,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 
 	sub := &SubscriberWithMiddleware{
 		Inner:      inner,
-		Middleware: []TopicHandlerMiddleware{middleware},
+		Middleware: []SubscriptionMiddleware{middleware},
 	}
 
 	var receivedEntry Entry
@@ -203,7 +225,7 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "orders.created", handler, "")
+	err := sub.Subscribe(context.Background(), Subscription{Topic: "orders.created"}, handler)
 	assert.NoError(t, err)
 	assert.Equal(t, "orders.created", middlewareTopic)
 
@@ -219,8 +241,8 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 
 	var order []string
 
-	makeMiddleware := func(name string) TopicHandlerMiddleware {
-		return func(topic string, next EntryHandler) EntryHandler {
+	makeMiddleware := func(name string) SubscriptionMiddleware {
+		return func(_ Subscription, next EntryHandler) EntryHandler {
 			return func(ctx context.Context, e Entry) HandleResult {
 				order = append(order, name+"-before")
 				res := next(ctx, e)
@@ -232,7 +254,7 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 
 	sub := &SubscriberWithMiddleware{
 		Inner: inner,
-		Middleware: []TopicHandlerMiddleware{
+		Middleware: []SubscriptionMiddleware{
 			makeMiddleware("outer"),
 			makeMiddleware("inner"),
 		},
@@ -243,7 +265,7 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
+	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 	assert.NoError(t, err)
 
 	_ = inner.capturedHandler(context.Background(), Entry{})
@@ -278,7 +300,7 @@ func TestSubscriberWithMiddleware_Close_PropagatesError(t *testing.T) {
 func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	inner := &recordingSubscriber{}
 
-	shortCircuit := func(_ string, _ EntryHandler) EntryHandler {
+	shortCircuit := func(_ Subscription, _ EntryHandler) EntryHandler {
 		return func(_ context.Context, _ Entry) HandleResult {
 			return HandleResult{
 				Disposition: DispositionReject,
@@ -289,7 +311,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 
 	sub := &SubscriberWithMiddleware{
 		Inner:      inner,
-		Middleware: []TopicHandlerMiddleware{shortCircuit},
+		Middleware: []SubscriptionMiddleware{shortCircuit},
 	}
 
 	handlerCalled := false
@@ -298,7 +320,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), "test.topic", handler, "")
+	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 	assert.NoError(t, err)
 
 	// Call captured handler — middleware should short-circuit.
@@ -308,41 +330,40 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	assert.False(t, handlerCalled)
 }
 
-// --- SubscriberWithMiddleware + SubscriberInitializer forwarding (F1-1) ---
+// --- SubscriberWithMiddleware backward-compat InitializeSubscription (F1-1) ---
 
-// initializerSubscriber implements both Subscriber and SubscriberInitializer.
-type initializerSubscriber struct {
+// setupSubscriber tracks Setup calls for tests.
+type setupSubscriber struct {
 	recordingSubscriber
-	initCalled bool
-	initTopic  string
-	initGroup  string
-	initErr    error
+	setupCalled bool
+	setupSub    Subscription
+	setupErr    error
 }
 
-func (s *initializerSubscriber) InitializeSubscription(_ context.Context, topic, consumerGroup string) error {
-	s.initCalled = true
-	s.initTopic = topic
-	s.initGroup = consumerGroup
-	return s.initErr
+func (s *setupSubscriber) Setup(_ context.Context, sub Subscription) error {
+	s.setupCalled = true
+	s.setupSub = sub
+	return s.setupErr
 }
 
 func TestSubscriberWithMiddleware_ForwardsSubscriberInitializer(t *testing.T) {
-	inner := &initializerSubscriber{}
+	inner := &setupSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	// SubscriberWithMiddleware must implement SubscriberInitializer.
+	// SubscriberWithMiddleware must implement SubscriberInitializer for backward compat.
 	init, ok := Subscriber(sub).(SubscriberInitializer)
 	assert.True(t, ok, "SubscriberWithMiddleware should implement SubscriberInitializer")
 
+	// InitializeSubscription delegates to Inner.Setup.
 	err := init.InitializeSubscription(context.Background(), "test.topic", "cg-1")
 	assert.NoError(t, err)
-	assert.True(t, inner.initCalled)
-	assert.Equal(t, "test.topic", inner.initTopic)
-	assert.Equal(t, "cg-1", inner.initGroup)
+	assert.True(t, inner.setupCalled)
+	assert.Equal(t, "test.topic", inner.setupSub.Topic)
+	assert.Equal(t, "cg-1", inner.setupSub.ConsumerGroup)
 }
 
 func TestSubscriberWithMiddleware_InitializeSubscription_PropagatesError(t *testing.T) {
-	inner := &initializerSubscriber{initErr: errors.New("init failed")}
+	inner := &setupSubscriber{setupErr: errors.New("init failed")}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	err := sub.InitializeSubscription(context.Background(), "t", "g")
@@ -351,15 +372,14 @@ func TestSubscriberWithMiddleware_InitializeSubscription_PropagatesError(t *test
 }
 
 func TestSubscriberWithMiddleware_InitializeSubscription_InnerNotInitializer(t *testing.T) {
-	// Inner does NOT implement SubscriberInitializer — must return
-	// ErrInitializerNotSupported so callers (e.g., waitForSubscription)
-	// can fall back to sleep-based waiting instead of assuming success.
+	// All Subscribers now implement Setup, so InitializeSubscription always delegates
+	// to Setup. ErrInitializerNotSupported is no longer returned.
 	inner := &recordingSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	err := sub.InitializeSubscription(context.Background(), "t", "g")
-	assert.ErrorIs(t, err, ErrInitializerNotSupported,
-		"must return ErrInitializerNotSupported when inner does not implement SubscriberInitializer")
+	assert.NoError(t, err,
+		"InitializeSubscription must delegate to Setup which returns nil for recordingSubscriber")
 }
 
 func TestEntry_RoutingTopic(t *testing.T) {
@@ -853,6 +873,51 @@ func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(1), dp.DiscardCount())
 }
+
+// TestSubscriberWithMiddleware_PassesFullSubscription asserts that when Subscribe
+// is called with a Subscription, the middleware receives the *full* Subscription
+// (both Topic and ConsumerGroup), not only the topic string.
+// This test will fail until SubscriptionMiddleware replaces TopicHandlerMiddleware.
+func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
+	inner := &recordingSubscriberFull{}
+
+	var capturedSub Subscription
+	mw := func(sub Subscription, next EntryHandler) EntryHandler {
+		capturedSub = sub
+		return next
+	}
+
+	swm := &SubscriberWithMiddleware{
+		Inner:      inner,
+		Middleware: []SubscriptionMiddleware{mw},
+	}
+
+	wantSub := Subscription{Topic: "orders.created.v1", ConsumerGroup: "cg-audit-core", CellID: "audit-core"}
+	err := swm.Subscribe(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, wantSub.Topic, capturedSub.Topic, "middleware must receive Topic")
+	assert.Equal(t, wantSub.ConsumerGroup, capturedSub.ConsumerGroup, "middleware must receive ConsumerGroup")
+	assert.Equal(t, wantSub.CellID, capturedSub.CellID, "middleware must receive CellID")
+}
+
+// recordingSubscriberFull implements the new Subscriber interface (Subscribe takes Subscription).
+type recordingSubscriberFull struct {
+	subscribedSub Subscription
+}
+
+func (r *recordingSubscriberFull) Setup(_ context.Context, _ Subscription) error { return nil }
+func (r *recordingSubscriberFull) Ready(_ Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription, _ EntryHandler) error {
+	r.subscribedSub = sub
+	return nil
+}
+func (r *recordingSubscriberFull) Close() error { return nil }
 
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.

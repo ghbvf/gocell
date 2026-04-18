@@ -1192,6 +1192,7 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 
 func TestSubscriber_InterfaceCompliance(t *testing.T) {
 	var _ outbox.Subscriber = (*Subscriber)(nil)
+	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
 	var _ outbox.SubscriberInitializer = (*Subscriber)(nil)
 }
 
@@ -1331,7 +1332,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: entryBytes}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	// Deterministic wait: poll until Ack is recorded instead of time.Sleep.
 	require.Eventually(t, func() bool {
@@ -1385,7 +1386,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: []byte("not valid json{{{")}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -1480,7 +1481,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: entryBytes}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -1515,7 +1516,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits.
 
-	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1537,7 +1538,7 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 
 	assert.NoError(t, sub.Close())
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
@@ -1580,7 +1581,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	// from the main test goroutine (t.FailNow must not be called from a helper goroutine).
 	subscribeDone := make(chan error, 1)
 	go func() {
-		subscribeDone <- sub.Subscribe(ctx, "test.topic", handler, "")
+		subscribeDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler)
 	}()
 
 	// Drive the reconnect sequence from the main goroutine (safe for require).
@@ -1658,7 +1659,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		cancel()
 	}()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
 
@@ -1836,8 +1837,8 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	// reach Y" sleeps are needed.
 	subscribeDone := make(chan error, 1)
 	go func() {
-		subscribeDone <- sub.Subscribe(context.Background(), "test.topic",
-			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
+			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	}()
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
@@ -1883,7 +1884,7 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
-	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1912,7 +1913,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "session.created", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1939,7 +1940,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "my.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1966,7 +1967,7 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1996,7 +1997,7 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sub.Subscribe(ctx, "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2016,7 +2017,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 		// DLXExchange deliberately left empty.
 	})
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -2082,7 +2083,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 42, Body: entryBytes}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, "test.topic", handler, "") }()
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
 
 	// Deterministic wait for NACK instead of fixed sleep — handler cancels
 	// ctx synchronously, so Subscribe will exit shortly after processDelivery
@@ -2115,17 +2116,15 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "mw-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
-	// AsMiddleware's return type is outbox.TopicHandlerMiddleware — compile
+	// AsMiddleware's return type is outbox.SubscriptionMiddleware — compile
 	// enforces the test name's contract.
 	mw := cb.AsMiddleware()
 
 	handlerCalled := false
-	wrapped := mw("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	wrapped := mw(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "mw-group"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		assert.Equal(t, "evt-mw-001", e.ID)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -2141,15 +2140,13 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "mw-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	mw := cb.AsMiddleware()
 
 	handlerCalled := false
-	wrapped := mw("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	wrapped := mw(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "mw-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2165,7 +2162,6 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "mw-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
@@ -2173,7 +2169,7 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 
 	mw := cb.AsMiddleware()
 
-	wrapped := mw("orders.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	wrapped := mw(outbox.Subscription{Topic: "orders.created", ConsumerGroup: "mw-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
 			Err:         outbox.NewPermanentError(errors.New("corrupted payload")),
@@ -2196,9 +2192,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 		{state: idempotency.ClaimDone},
 	}}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "integration-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	// Use a simple recording subscriber to verify the chain works end-to-end.
@@ -2212,7 +2206,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner:      innerSub,
-		Middleware: []outbox.TopicHandlerMiddleware{cb.AsMiddleware()},
+		Middleware: []outbox.SubscriptionMiddleware{cb.AsMiddleware()},
 	}
 
 	var receivedEntry outbox.Entry
@@ -2223,7 +2217,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
+	err := wrappedSub.Subscribe(context.Background(), outbox.Subscription{Topic: "events.test"}, handler)
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
@@ -2248,9 +2242,7 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "integration-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	var capturedHandler outbox.EntryHandler
@@ -2263,7 +2255,7 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner: innerSub,
-		Middleware: []outbox.TopicHandlerMiddleware{
+		Middleware: []outbox.SubscriptionMiddleware{
 			outbox.ObservabilityContextMiddleware(),
 			cb.AsMiddleware(),
 		},
@@ -2277,7 +2269,7 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
+	err := wrappedSub.Subscribe(context.Background(), outbox.Subscription{Topic: "events.test"}, handler)
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
@@ -2315,9 +2307,7 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "integration-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	var capturedHandler outbox.EntryHandler
@@ -2330,7 +2320,7 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner: innerSub,
-		Middleware: []outbox.TopicHandlerMiddleware{
+		Middleware: []outbox.SubscriptionMiddleware{
 			outbox.ObservabilityContextMiddleware(),
 			cb.AsMiddleware(),
 		},
@@ -2343,7 +2333,7 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		}
 	}
 
-	err := wrappedSub.Subscribe(context.Background(), "events.test", handler, "")
+	err := wrappedSub.Subscribe(context.Background(), outbox.Subscription{Topic: "events.test"}, handler)
 	assert.NoError(t, err)
 	require.NotNil(t, capturedHandler)
 
@@ -2370,13 +2360,18 @@ type stubSubscriber struct {
 	onSubscribe func(context.Context, string, outbox.EntryHandler) error
 }
 
-func (s *stubSubscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, _ string) error {
+func (s *stubSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *stubSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *stubSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	if s.onSubscribe != nil {
-		return s.onSubscribe(ctx, topic, handler)
+		return s.onSubscribe(ctx, sub.Topic, handler)
 	}
 	return nil
 }
-
 func (s *stubSubscriber) Close() error { return nil }
 
 var _ outbox.Subscriber = (*stubSubscriber)(nil)
@@ -2490,13 +2485,11 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2517,13 +2510,11 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2537,13 +2528,11 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-	})
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2558,13 +2547,12 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     1,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("fail")}
 	})
 
@@ -2584,13 +2572,12 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 
 	handlerCallCount := 0
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCallCount++
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionReject,
@@ -2610,13 +2597,12 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *
 
 	handlerCallCount := 0
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCallCount++
 		// Wrapped PermanentError — must be detected by errors.As through fmt.Errorf wrapping.
 		return outbox.HandleResult{
@@ -2673,14 +2659,13 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 	}}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2701,14 +2686,13 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
 	// With jitter, we assert >= base delay only (not exact).
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 20 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2730,13 +2714,12 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -2759,13 +2742,12 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     1,
 		ClaimRetryBaseDelay: 5 * time.Second,
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -2790,7 +2772,6 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	}}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		RetryCount:          5,                     // handler retries — should not affect claim
 		RetryBaseDelay:      1 * time.Second,       // handler backoff — should not affect claim
 		ClaimRetryCount:     2,                     // claim retries
@@ -2799,7 +2780,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -2823,14 +2804,13 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 100 * time.Millisecond,
 		MaxRetryDelay:       50 * time.Millisecond, // cap below base — forces all delays to 50ms
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -2848,13 +2828,12 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -2867,14 +2846,13 @@ func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
 		MaxRetryDelay:       -1 * time.Second, // negative — must not panic
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -3189,7 +3167,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 		// DLXExchange deliberately left empty.
 	})
 
-	err := sub.Subscribe(context.Background(), "test.topic", outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }), "")
+	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -3198,12 +3176,11 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryBaseDelay: 50 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		t.Fatal("handler should not be called for ClaimBusy")
 		return outbox.HandleResult{}
 	})
@@ -3258,7 +3235,6 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:       "test-group",
 		ClaimPolicy:         outbox.ClaimPolicyFailClosed,
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -3266,7 +3242,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -3282,13 +3258,12 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test-group",
-		ClaimPolicy:   outbox.ClaimPolicyFailOpen,
+		ClaimPolicy: outbox.ClaimPolicyFailOpen,
 	})
 	require.NoError(t, cbErr)
 
 	handlerCalled := false
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -3307,8 +3282,7 @@ func TestClaimPolicy_Valid(t *testing.T) {
 
 func TestNewConsumerBase_InvalidClaimPolicy_ReturnsError(t *testing.T) {
 	_, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test",
-		ClaimPolicy:   outbox.ClaimPolicy(99),
+		ClaimPolicy: outbox.ClaimPolicy(99),
 	})
 	require.Error(t, err, "NewConsumerBase must return error on invalid ClaimPolicy")
 	assert.Contains(t, err.Error(), "invalid ClaimPolicy 99")
@@ -3325,8 +3299,7 @@ func TestNewConsumerBase_ValidClaimPolicy_Succeeds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cb, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
-				ConsumerGroup: "test",
-				ClaimPolicy:   tt.policy,
+				ClaimPolicy: tt.policy,
 			})
 			require.NoError(t, err)
 			assert.NotNil(t, cb)
@@ -3340,8 +3313,7 @@ func TestNewConsumerBase_ExplicitFailClosed_Preserved(t *testing.T) {
 	// confirm fail-closed semantics (single Claim attempt returns a wrapped result
 	// that is_NOT_ fail-open's proceed-without-receipt path).
 	cb, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
-		ConsumerGroup: "test",
-		ClaimPolicy:   outbox.ClaimPolicyFailClosed,
+		ClaimPolicy: outbox.ClaimPolicyFailClosed,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, cb)
@@ -3358,7 +3330,6 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     1, // single attempt, no inter-attempt sleep
 		RetryBaseDelay: time.Millisecond,
 	})
@@ -3366,7 +3337,7 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		// Cancel context during the handler — simulates shutdown mid-processing.
 		cancel()
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
@@ -3608,14 +3579,13 @@ func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
 	attempt := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		n := attempt
 		attempt++
 		if n == 0 {
@@ -3641,14 +3611,13 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     5,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
 	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount++
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionReject,
@@ -3671,14 +3640,13 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ConsumerGroup:  "test-group",
 		RetryCount:     5,
 		RetryBaseDelay: 10 * time.Millisecond,
 	})
 	require.NoError(t, cbErr)
 
 	callCount := 0
-	handler := cb.Wrap("test.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount++
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
@@ -4278,7 +4246,6 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 	cb, cbErr := outbox.NewConsumerBase(
 		claimer,
 		outbox.ConsumerBaseConfig{
-			ConsumerGroup:  "test-retry-group",
 			RetryCount:     2,
 			RetryBaseDelay: 10 * time.Millisecond,
 			IdempotencyTTL: time.Hour,
@@ -4286,9 +4253,8 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 	)
 	require.NoError(t, cbErr)
 
-	topic := "test.retry.unit"
 	callCount := 0
-	wrappedHandler := cb.Wrap(topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: "test.retry.unit", ConsumerGroup: "test-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		callCount++
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: assert.AnError}
 	})

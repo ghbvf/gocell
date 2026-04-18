@@ -56,7 +56,8 @@ func isRecoverableAMQPError(err error) bool {
 
 // Compile-time interface checks.
 var (
-	_ outbox.Subscriber            = (*Subscriber)(nil)
+	_ outbox.Subscriber = (*Subscriber)(nil)
+	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
 	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
 )
 
@@ -188,44 +189,63 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) er
 	return nil
 }
 
-// InitializeSubscription pre-declares the AMQP topology (exchange, DLX, queue,
-// binding) for the given topic and consumer group. After this returns, messages
-// published to the topic are queued by the broker — even before Subscribe
+// Setup implements outbox.Subscriber by pre-declaring AMQP topology (exchange,
+// DLX, queue, binding) for the given subscription. After this returns, messages
+// published to the topic are queued by the broker -- even before Subscribe
 // starts consuming. This enables deterministic conformance testing without sleep.
 //
-// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
-func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+// ref: Watermill message.SubscribeInitializer -- synchronous topology pre-creation.
+func (s *Subscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	if s.config.DLXExchange == "" {
 		return errcode.New(ErrAdapterAMQPSubscribe,
-			"rabbitmq: DLXExchange is required for InitializeSubscription")
+			"rabbitmq: DLXExchange is required for Setup")
 	}
 
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		return fmt.Errorf("rabbitmq: acquire channel for init: %w", err)
+		return fmt.Errorf("rabbitmq: acquire channel for setup: %w", err)
 	}
 	defer s.conn.ReleaseChannel(ch)
 
-	queueName := s.resolveQueueName(topic, consumerGroup)
-	return s.declareTopology(ch, topic, queueName)
+	queueName := s.resolveQueueName(sub.Topic, sub.ConsumerGroup)
+	return s.declareTopology(ch, sub.Topic, queueName)
 }
 
-// Subscribe registers a handler for the given topic and blocks until ctx is
-// cancelled or the subscriber is closed.
+// Ready implements outbox.Subscriber. RabbitMQ topology is declared synchronously
+// in Setup; once Setup returns, the subscription is immediately ready. Returns an
+// already-closed channel so callers do not block.
+func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// InitializeSubscription implements outbox.SubscriberInitializer for backward
+// compatibility. Delegates to Setup.
+//
+// Deprecated: callers should use Setup directly.
+func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	return s.Setup(ctx, outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup})
+}
+
+// Subscribe registers a handler for the given subscription and blocks until ctx
+// is cancelled or the subscriber is closed.
 //
 // Subscribe automatically reconnects when the underlying AMQP channel is lost
 // (e.g., due to a broker restart or network partition). It waits for the
 // Connection to re-establish via WaitConnected, then re-declares the exchange,
 // queue, and binding on a fresh channel.
 //
-// The topic is used as a fanout exchange name. A queue (from SubscriberConfig
+// sub.Topic is used as a fanout exchange name. A queue (from SubscriberConfig
 // or defaulting to the topic) is declared and bound to the exchange.
 //
-// Consumer: cg-{QueueName}-{topic}
+// Consumer: cg-{QueueName}-{sub.Topic}
 // Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
 // ACK timing: after handler returns DispositionAck
-// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) → DLX
-func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, consumerGroup string) error {
+// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) -> DLX
+func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+	topic := sub.Topic
+	consumerGroup := sub.ConsumerGroup
 	if s.closed.Load() {
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}

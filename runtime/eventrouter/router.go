@@ -164,9 +164,15 @@ func (r *Router) Run(ctx context.Context) error {
 					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", h.topic, rv)
 				}
 			}()
+			sub := outbox.Subscription{
+				Topic:         h.topic,
+				ConsumerGroup: h.consumerGroup,
+				CellID:        h.consumerGroup,
+			}
 			slog.Info("eventrouter: starting subscription",
-				slog.String("topic", h.topic))
-			err := r.subscriber.Subscribe(runCtx, h.topic, h.handler, h.consumerGroup)
+				slog.String("topic", h.topic),
+				slog.String("consumer_group", h.consumerGroup))
+			err := r.subscriber.Subscribe(runCtx, sub, h.handler)
 			if err != nil && runCtx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", h.topic, err)
 			}

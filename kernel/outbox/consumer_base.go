@@ -65,9 +65,6 @@ func (p ClaimPolicy) String() string {
 
 // ConsumerBaseConfig configures ConsumerBase behavior.
 type ConsumerBaseConfig struct {
-	// ConsumerGroup identifies this consumer group for idempotency keys.
-	ConsumerGroup string
-
 	// RetryCount is the maximum number of retries for transient errors.
 	// Default: 3.
 	RetryCount int
@@ -212,24 +209,28 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) (*C
 	}, nil
 }
 
-// AsMiddleware returns a TopicHandlerMiddleware that applies this
+// AsMiddleware returns a SubscriptionMiddleware that applies this
 // ConsumerBase's idempotency/retry wrapping to any EntryHandler.
 // It can be used with SubscriberWithMiddleware to transparently inject
 // ConsumerBase behavior into a raw Subscriber pipeline.
-func (cb *ConsumerBase) AsMiddleware() TopicHandlerMiddleware {
-	return func(topic string, next EntryHandler) EntryHandler {
-		return cb.Wrap(topic, next)
+func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
+	return func(sub Subscription, next EntryHandler) EntryHandler {
+		return cb.Wrap(sub, next)
 	}
 }
 
 // Wrap returns an EntryHandler that wraps the given business handler with
 // two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
-// The Receipt is threaded through HandleResult — ConsumerBase never calls
+// The idempotency key is constructed as "{sub.ConsumerGroup}:{entry.ID}",
+// ensuring cross-cell fanout correctness: each cell's ConsumerGroup forms a
+// separate namespace so ClaimDone in one cell does not silence another.
+//
+// The Receipt is threaded through HandleResult -- ConsumerBase never calls
 // Commit/Release itself; that is the delivery loop's job after broker Ack/Nack.
 //
 // Fail-open (ClaimPolicyFailOpen): single Claim attempt; on error, proceed
-// without idempotency — avoids total consumer stall, but risks duplicate
+// without idempotency -- avoids total consumer stall, but risks duplicate
 // processing during outage.
 //
 // Fail-closed (ClaimPolicyFailClosed, default zero-value): all Claim attempts
@@ -238,16 +239,18 @@ func (cb *ConsumerBase) AsMiddleware() TopicHandlerMiddleware {
 // stops until the idempotency backend recovers.
 //
 // Rules:
-//   - handler returns DispositionAck → pass through as Ack
-//   - handler returns DispositionRequeue → pass through as Requeue
-//   - handler returns DispositionReject → pass through as Reject
-//   - handler returns error with non-Ack disposition → retry with backoff
-//   - PermanentError → Reject (broker routes to DLX)
-//   - retry budget exhausted → Reject
-//   - ctx cancelled / shutdown → Requeue
-func (cb *ConsumerBase) Wrap(topic string, handler EntryHandler) EntryHandler {
+//   - handler returns DispositionAck -> pass through as Ack
+//   - handler returns DispositionRequeue -> pass through as Requeue
+//   - handler returns DispositionReject -> pass through as Reject
+//   - handler returns error with non-Ack disposition -> retry with backoff
+//   - PermanentError -> Reject (broker routes to DLX)
+//   - retry budget exhausted -> Reject
+//   - ctx cancelled / shutdown -> Requeue
+func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandler {
+	topic := sub.Topic
+	consumerGroup := sub.ConsumerGroup
 	return func(ctx context.Context, entry Entry) HandleResult {
-		idempotencyKey := fmt.Sprintf("%s:%s", cb.config.ConsumerGroup, entry.ID)
+		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.ID)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
 		if cb.config.ClaimPolicy == ClaimPolicyFailOpen {
@@ -256,7 +259,7 @@ func (cb *ConsumerBase) Wrap(topic string, handler EntryHandler) EntryHandler {
 				logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, proceeding without receipt (fail-open)",
 					slog.String(logKeyEventID, entry.ID),
 					slog.String(logKeyTopic, topic),
-					slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
+					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.String("error", err.Error()))
 				return cb.retryLoop(ctx, topic, entry, handler, nil)
 			}
@@ -264,12 +267,12 @@ func (cb *ConsumerBase) Wrap(topic string, handler EntryHandler) EntryHandler {
 		}
 
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
-		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey)
+		state, receipt, err := cb.claimWithRetry(ctx, topic, entry, idempotencyKey, consumerGroup)
 		if err != nil {
 			logWithContext(ctx, slog.LevelError, "outbox: idempotency claim exhausted, requeuing (fail-closed)",
 				slog.String(logKeyEventID, entry.ID),
 				slog.String(logKeyTopic, topic),
-				slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
+				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
 				slog.String("error", err.Error()))
 			return HandleResult{Disposition: DispositionRequeue, Err: err}
@@ -293,6 +296,7 @@ func (cb *ConsumerBase) claimWithRetry(
 	topic string,
 	entry Entry,
 	idempotencyKey string,
+	consumerGroup string,
 ) (idempotency.ClaimState, Receipt, error) {
 	var lastErr error
 
@@ -321,6 +325,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",
 				slog.String(logKeyEventID, entry.ID),
 				slog.String(logKeyTopic, topic),
+				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", cb.config.ClaimRetryCount),
 				slog.Duration("backoff", delay),
@@ -350,15 +355,13 @@ func (cb *ConsumerBase) handleClaimState(
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
 			slog.String(logKeyEventID, entry.ID),
-			slog.String(logKeyTopic, topic),
-			slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup))
+			slog.String(logKeyTopic, topic))
 		return HandleResult{Disposition: DispositionAck}
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic),
-			slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 			slog.Duration("backoff", delay))
 		select {
 		case <-time.After(delay):
@@ -366,7 +369,7 @@ func (cb *ConsumerBase) handleClaimState(
 		}
 		return HandleResult{Disposition: DispositionRequeue}
 	default:
-		// ClaimAcquired — start lease-renewal goroutine before invoking handler.
+		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
 		return cb.runWithRenewal(ctx, topic, entry, handler, receipt)
 	}
 }
@@ -442,7 +445,6 @@ func (cb *ConsumerBase) retryLoop(
 			logWithContext(ctx, slog.LevelWarn, "outbox: permanent error, rejecting to DLX",
 				slog.String(logKeyEventID, entry.ID),
 				slog.String(logKeyTopic, topic),
-				slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 				slog.Any("error", lastResult.Err))
 			return HandleResult{
 				Disposition: DispositionReject,
@@ -467,11 +469,10 @@ func (cb *ConsumerBase) retryLoop(
 		return requeueResult(ctx.Err(), receipt)
 	}
 
-	// Exhausted all retries — reject so broker routes to DLX.
+	// Exhausted all retries -- reject so broker routes to DLX.
 	logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
 		slog.String(logKeyEventID, entry.ID),
 		slog.String(logKeyTopic, topic),
-		slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
@@ -545,8 +546,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 				if errors.Is(err, idempotency.ErrLeaseExpired) {
 					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, cancelling handler",
 						slog.String(logKeyEventID, entry.ID),
-						slog.String(logKeyTopic, topic),
-						slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup))
+						slog.String(logKeyTopic, topic))
 					cancelFn()
 					return
 				}

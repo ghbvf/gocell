@@ -155,64 +155,75 @@ func TestFeatures_SetDefaults_PreservesExplicit(t *testing.T) {
 // waitForSubscription tests
 // ---------------------------------------------------------------------------
 
-// fakeInitializerSub implements both Subscriber and SubscriberInitializer.
-type fakeInitializerSub struct {
-	fakePubSub
-	initCalled bool
-	initTopic  string
-	initGroup  string
+// recordingSubscriber records Setup/Ready calls to verify waitForSubscription
+// uses the new Subscriber interface. Embeds immediateReadySub so Ready() returns
+// a pre-closed channel and waitForSubscription exits immediately.
+type recordingSubscriber struct {
+	immediateReadySub
+	mu          sync.Mutex
+	setupCalled bool
+	setupSub    outbox.Subscription
 }
 
-func (f *fakeInitializerSub) InitializeSubscription(_ context.Context, topic, group string) error {
-	f.initCalled = true
-	f.initTopic = topic
-	f.initGroup = group
+func (r *recordingSubscriber) Setup(_ context.Context, sub outbox.Subscription) error {
+	r.mu.Lock()
+	r.setupCalled = true
+	r.setupSub = sub
+	r.mu.Unlock()
 	return nil
 }
 
-func TestWaitForSubscription_UsesInitializerWhenAvailable(t *testing.T) {
-	sub := &fakeInitializerSub{}
+func TestWaitForSubscription_CallsSetupWithSubscription(t *testing.T) {
+	// waitForSubscription must call Setup with the correct Subscription.
+	sub := &recordingSubscriber{}
 	ctx := context.Background()
 
 	waitForSubscription(t, ctx, sub, "my.topic", "cg-1")
 
-	if !sub.initCalled {
-		t.Fatal("expected InitializeSubscription to be called")
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if !sub.setupCalled {
+		t.Fatal("expected Setup to be called")
 	}
-	if sub.initTopic != "my.topic" {
-		t.Fatalf("want topic 'my.topic', got %q", sub.initTopic)
+	if sub.setupSub.Topic != "my.topic" {
+		t.Fatalf("want topic 'my.topic', got %q", sub.setupSub.Topic)
 	}
-	if sub.initGroup != "cg-1" {
-		t.Fatalf("want group 'cg-1', got %q", sub.initGroup)
+	if sub.setupSub.ConsumerGroup != "cg-1" {
+		t.Fatalf("want group 'cg-1', got %q", sub.setupSub.ConsumerGroup)
 	}
 }
 
-// subscribeInitThreshold is 80% of subscribeInitDelay (50ms). Used as the
-// lower bound in sleep-fallback assertions to tolerate scheduling jitter.
-const subscribeInitThreshold = 40 * time.Millisecond
+// immediateReadySub is a subscriber whose Ready channel is always pre-closed.
+// Used to verify that waitForSubscription returns immediately when Ready is done.
+type immediateReadySub struct {
+	fakePubSub
+}
 
-func TestWaitForSubscription_FallsBackToSleep(t *testing.T) {
-	// fakePubSub does NOT implement SubscriberInitializer.
-	sub := &fakePubSub{}
+func (s *immediateReadySub) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func TestWaitForSubscription_WaitsForReadyChannel(t *testing.T) {
+	// When Ready returns a pre-closed channel, waitForSubscription returns fast.
+	sub := &immediateReadySub{}
 	ctx := context.Background()
 
 	start := time.Now()
 	waitForSubscription(t, ctx, sub, "any.topic", "")
 	elapsed := time.Since(start)
 
-	// Should have slept at least subscribeInitDelay (50ms).
-	if elapsed < subscribeInitThreshold {
-		t.Fatalf("expected sleep fallback (~50ms), but returned in %v", elapsed)
+	// Should return quickly since Ready() is already closed (pre-closed channel).
+	if elapsed >= subscribeInitDelay {
+		t.Fatalf("expected fast return (pre-closed Ready channel), but took %v", elapsed)
 	}
 }
 
-func TestWaitForSubscription_MiddlewareWrappedNonInitializer_FallsBack(t *testing.T) {
-	// This is the exact regression path from PR#141 CI failure:
-	// SubscriberWithMiddleware wraps a non-SubscriberInitializer (e.g.,
-	// InMemoryEventBus). Before the fix, InitializeSubscription returned nil
-	// (false success), skipping the sleep fallback → publish before subscribe
-	// registers → message lost → test timeout.
-	inner := &fakePubSub{} // does NOT implement SubscriberInitializer
+func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T) {
+	// SubscriberWithMiddleware uses Subscriber.Setup/Ready via Inner.
+	// When Inner.Ready returns a pre-closed channel, the fast path is taken.
+	inner := &immediateReadySub{} // Ready() returns pre-closed channel
 	wrapped := &outbox.SubscriberWithMiddleware{
 		Inner:      inner,
 		Middleware: nil,
@@ -223,9 +234,10 @@ func TestWaitForSubscription_MiddlewareWrappedNonInitializer_FallsBack(t *testin
 	waitForSubscription(t, ctx, wrapped, "test.topic", "")
 	elapsed := time.Since(start)
 
-	// Must fall back to sleep, NOT return instantly.
-	if elapsed < subscribeInitThreshold {
-		t.Fatalf("middleware-wrapped non-initializer must fall back to sleep (~50ms), but returned in %v", elapsed)
+	// Must NOT fall back to sleep -- Setup returns nil immediately and
+	// Inner.Ready returns a pre-closed channel.
+	if elapsed >= subscribeInitDelay {
+		t.Fatalf("middleware-wrapped subscriber must not sleep (Setup+Ready fast path), but took %v", elapsed)
 	}
 }
 
@@ -236,8 +248,19 @@ func TestWaitForSubscription_MiddlewareWrappedNonInitializer_FallsBack(t *testin
 // fakePubSub is a minimal channel-based Publisher+Subscriber for testing
 // the collector helper without importing runtime/eventbus.
 type fakePubSub struct {
-	mu   sync.Mutex
-	subs []chan outbox.Entry
+	mu      sync.Mutex
+	subs    []chan outbox.Entry
+	readyCh chan struct{} // closed on first Subscribe call
+	once    sync.Once
+}
+
+func (f *fakePubSub) readyChannel() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.readyCh == nil {
+		f.readyCh = make(chan struct{})
+	}
+	return f.readyCh
 }
 
 func (f *fakePubSub) Publish(_ context.Context, topic string, payload []byte) error {
@@ -255,11 +278,28 @@ func (f *fakePubSub) Publish(_ context.Context, topic string, payload []byte) er
 	return nil
 }
 
-func (f *fakePubSub) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler, _ string) error {
+func (f *fakePubSub) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+
+// Ready returns a channel that closes once the first Subscribe call has
+// registered its handler. This prevents publish-before-subscribe races in
+// the test harness when waitForSubscription is used.
+func (f *fakePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
+	return f.readyChannel()
+}
+
+func (f *fakePubSub) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	ch := make(chan outbox.Entry, 64)
 	f.mu.Lock()
 	f.subs = append(f.subs, ch)
+	rch := f.readyCh
+	if rch == nil {
+		f.readyCh = make(chan struct{})
+		rch = f.readyCh
+	}
 	f.mu.Unlock()
+
+	// Signal readiness after registering the subscription.
+	f.once.Do(func() { close(rch) })
 
 	for {
 		select {

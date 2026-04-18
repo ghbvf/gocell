@@ -578,38 +578,66 @@ func run(ctx context.Context) error {
 	//
 	// ref: runtime-api.md WithConsumerMiddleware — middleware order is
 	// observability-restore (prepended by bootstrap) then ConsumerBase.
-	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{
-		ConsumerGroup: "core-bundle",
-	})
+	// ConsumerGroup is no longer set here; each subscription's ConsumerGroup is
+	// provided by the Cell via EventRouter.AddHandler and flows through
+	// Subscription.ConsumerGroup into the idempotency key namespace.
+	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{})
 	if err != nil {
 		return fmt.Errorf("construct ConsumerBase: %w", err)
 	}
 
-	bootstrapOpts := append([]bootstrap.Option{
-		bootstrap.WithAssembly(asm),
+	app := bootstrap.New(assembleBootstrapOpts(bootstrapDeps{
+		assembly:        asm,
+		eventBus:        eb,
+		consumerBase:    consumerBase,
+		adapterInfo:     adapterInfo,
+		metricsHandler:  metricsHandler,
+		metricsProvider: ps.metricProvider,
+		verboseOpts:     verboseOpts,
+		pgPool:          pgPool,
+		relayWorker:     relayWorker,
+	})...)
+	return app.Run(ctx)
+}
+
+// bootstrapDeps groups the inputs to assembleBootstrapOpts so the call site in
+// run() stays under the cognitive-complexity ceiling.
+type bootstrapDeps struct {
+	assembly        *assembly.CoreAssembly
+	eventBus        *eventbus.InMemoryEventBus
+	consumerBase    *outbox.ConsumerBase
+	adapterInfo     map[string]string
+	metricsHandler  http.Handler
+	metricsProvider *adapterprom.MetricProvider
+	verboseOpts     []bootstrap.Option
+	pgPool          *adapterpg.Pool
+	relayWorker     worker.Worker
+}
+
+// assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
+// from run() to keep run cognitive complexity ≤ 15. Conditional appends
+// (verboseOpts, pgHealthChecker, relayWorker) live here so run() stays linear.
+//
+// ref: Uber fx OnStart non-blocking + goroutine + OnStop blocking pattern.
+// GoCell WorkerGroup already implements this contract; OutboxRelay satisfies
+// worker.Worker — wiring is conditional on PG mode (A11).
+func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
+	opts := append([]bootstrap.Option{
+		bootstrap.WithAssembly(d.assembly),
 		bootstrap.WithHTTPAddr(":8080"),
-		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
+		bootstrap.WithPublisher(d.eventBus), bootstrap.WithSubscriber(d.eventBus),
+		bootstrap.WithConsumerMiddleware(d.consumerBase.AsMiddleware()),
 		bootstrap.WithPublicEndpoints([]string{
 			"/api/v1/access/sessions/login",
 			"/api/v1/access/sessions/refresh",
 		}),
-		bootstrap.WithAdapterInfo(adapterInfo),
-		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
-		bootstrap.WithMetricsProvider(ps.metricProvider),
-	}, verboseOpts...)
-	bootstrapOpts = append(bootstrapOpts, pgHealthCheckerOpts(pgPool)...)
-	// Wire outbox relay worker: PG mode only. relayWorker is nil in memory mode;
-	// bootstrap.WithWorkers with a nil worker is safe (it appends, but WorkerGroup
-	// skips nil — however we guard here to be explicit and avoid log noise).
-	//
-	// ref: Uber fx OnStart non-blocking + goroutine + OnStop blocking pattern.
-	// GoCell WorkerGroup already implements this contract; OutboxRelay already
-	// satisfies worker.Worker — only the wiring was missing (A11 fix).
-	if relayWorker != nil {
-		bootstrapOpts = append(bootstrapOpts, bootstrap.WithWorkers(relayWorker))
+		bootstrap.WithAdapterInfo(d.adapterInfo),
+		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
+		bootstrap.WithMetricsProvider(d.metricsProvider),
+	}, d.verboseOpts...)
+	opts = append(opts, pgHealthCheckerOpts(d.pgPool)...)
+	if d.relayWorker != nil {
+		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
 	}
-
-	app := bootstrap.New(bootstrapOpts...)
-	return app.Run(ctx)
+	return opts
 }

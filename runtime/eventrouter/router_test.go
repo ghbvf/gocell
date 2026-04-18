@@ -26,14 +26,19 @@ type blockingSubscriber struct {
 	topics []string
 }
 
-func (s *blockingSubscriber) Subscribe(ctx context.Context, topic string, _ outbox.EntryHandler, _ string) error {
+func (s *blockingSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *blockingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *blockingSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
 	s.mu.Lock()
-	s.topics = append(s.topics, topic)
+	s.topics = append(s.topics, sub.Topic)
 	s.mu.Unlock()
 	<-ctx.Done()
 	return ctx.Err()
 }
-
 func (s *blockingSubscriber) Close() error { return nil }
 
 func (s *blockingSubscriber) Topics() []string {
@@ -49,10 +54,15 @@ type failingSubscriber struct {
 	err error
 }
 
-func (s *failingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
+func (s *failingSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *failingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *failingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return s.err
 }
-
 func (s *failingSubscriber) Close() error { return nil }
 
 // delayedFailSubscriber blocks briefly then returns an error (simulates
@@ -62,7 +72,13 @@ type delayedFailSubscriber struct {
 	err   error
 }
 
-func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ string, _ outbox.EntryHandler, _ string) error {
+func (s *delayedFailSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *delayedFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	select {
 	case <-time.After(s.delay):
 		return s.err
@@ -70,7 +86,6 @@ func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ string, _ outbo
 		return ctx.Err()
 	}
 }
-
 func (s *delayedFailSubscriber) Close() error { return nil }
 
 // --- Tests ---
@@ -459,8 +474,14 @@ type stuckSubscriber struct {
 	block chan struct{}
 }
 
-func (s *stuckSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
-	<-s.block // ignores ctx — simulates unresponsive subscriber
+func (s *stuckSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *stuckSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *stuckSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+	<-s.block // ignores ctx -- simulates unresponsive subscriber
 	return nil
 }
 func (s *stuckSubscriber) Close() error { return nil }
@@ -468,7 +489,13 @@ func (s *stuckSubscriber) Close() error { return nil }
 // panickingSubscriber panics on Subscribe.
 type panickingSubscriber struct{}
 
-func (s *panickingSubscriber) Subscribe(_ context.Context, _ string, _ outbox.EntryHandler, _ string) error {
+func (s *panickingSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *panickingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *panickingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	panic("boom")
 }
 func (s *panickingSubscriber) Close() error { return nil }
@@ -489,7 +516,7 @@ func (m *mockCell) RegisterSubscriptions(r cell.EventRouter) error {
 	return nil
 }
 
-// newTestEventBus creates an InMemoryEventBus for testing, registered for cleanup.
+// newTestEventBus creates an in-memory pub/sub for Router tests, registered for cleanup.
 func newTestEventBus(t *testing.T) *testBus {
 	t.Helper()
 	b := &testBus{
@@ -531,7 +558,15 @@ func (b *testBus) Publish(_ context.Context, topic string, payload []byte) error
 	return nil
 }
 
-func (b *testBus) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, _ string) error {
+func (b *testBus) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+
+func (b *testBus) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func (b *testBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	s := &testSub{ch: make(chan outbox.Entry, b.bufSize), cancel: cancel}
 
@@ -541,7 +576,7 @@ func (b *testBus) Subscribe(ctx context.Context, topic string, handler outbox.En
 		cancel()
 		return errcode.New(errcode.ErrBusClosed, "closed")
 	}
-	b.subs[topic] = append(b.subs[topic], s)
+	b.subs[sub.Topic] = append(b.subs[sub.Topic], s)
 	b.mu.Unlock()
 
 	for {
@@ -575,8 +610,8 @@ func (b *testBus) Close() error {
 
 // recordingGroupSubscriber records which consumerGroup was passed to Subscribe.
 type recordingGroupSubscriber struct {
-	mu     sync.Mutex
-	calls  []groupSubscribeCall
+	mu    sync.Mutex
+	calls []groupSubscribeCall
 }
 
 type groupSubscribeCall struct {
@@ -584,14 +619,19 @@ type groupSubscribeCall struct {
 	ConsumerGroup string
 }
 
-func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, topic string, _ outbox.EntryHandler, consumerGroup string) error {
+func (s *recordingGroupSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *recordingGroupSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
 	s.mu.Lock()
-	s.calls = append(s.calls, groupSubscribeCall{Topic: topic, ConsumerGroup: consumerGroup})
+	s.calls = append(s.calls, groupSubscribeCall{Topic: sub.Topic, ConsumerGroup: sub.ConsumerGroup})
 	s.mu.Unlock()
 	<-ctx.Done()
 	return ctx.Err()
 }
-
 func (s *recordingGroupSubscriber) Close() error { return nil }
 
 func (s *recordingGroupSubscriber) Calls() []groupSubscribeCall {
@@ -603,7 +643,7 @@ func (s *recordingGroupSubscriber) Calls() []groupSubscribeCall {
 }
 
 // TestRouter_ConsumerGroup_PropagatesToSubscriber verifies that the consumerGroup
-// passed to AddHandler is forwarded verbatim to Subscriber.Subscribe.
+// passed to AddHandler is forwarded verbatim to Subscriber.Subscribe via Subscription.
 func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	sub := &recordingGroupSubscriber{}
 	r := New(sub, WithStartupTimeout(200*time.Millisecond))
