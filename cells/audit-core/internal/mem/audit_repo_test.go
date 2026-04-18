@@ -80,6 +80,32 @@ func TestAuditRepository_GetRange(t *testing.T) {
 	}
 }
 
+// TestAuditRepository_GetRange_EmptyNonNil verifies that an empty range
+// returns a non-nil empty slice, not nil. This is a hygiene guard against
+// future callers that serialize the result directly (nil → JSON null).
+func TestAuditRepository_GetRange_EmptyNonNil(t *testing.T) {
+	repo := NewAuditRepository()
+	ctx := context.Background()
+
+	cases := []struct {
+		name string
+		from int
+		to   int
+	}{
+		{name: "from equals to", from: 3, to: 3},
+		{name: "from greater than to", from: 5, to: 2},
+		{name: "empty repo with zero range", from: 0, to: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := repo.GetRange(ctx, tc.from, tc.to)
+			require.NoError(t, err)
+			require.NotNil(t, got, "empty result must be non-nil slice")
+			require.Empty(t, got)
+		})
+	}
+}
+
 func TestAuditRepository_Query_Sort_ByEventType(t *testing.T) {
 	repo := NewAuditRepository()
 	ctx := context.Background()
