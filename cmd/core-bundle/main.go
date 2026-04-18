@@ -5,6 +5,22 @@
 // DurabilityDurable is set to reject noop placeholders (NoopWriter,
 // NoopTxRunner, DiscardPublisher) even in dev mode. Set GOCELL_ADAPTER_MODE=real
 // to require all secrets from env vars (fail-fast on missing).
+//
+// # Required env vars (all adapter modes)
+//
+//   - GOCELL_JWT_ISSUER: JWT iss claim written into tokens and verified on
+//     inbound requests via VerifyIntent. Must be set before startup.
+//
+//   - GOCELL_JWT_AUDIENCE: JWT aud claim written into tokens and verified on
+//     inbound requests via VerifyIntent. Must be set before startup.
+//
+// # Required env vars (real adapter mode only)
+//
+//   - GOCELL_SERVICE_SECRET: HMAC-SHA256 secret (≥32 bytes) protecting
+//     /internal/v1/* paths via ServiceTokenMiddleware. Missing in real mode
+//     aborts startup; missing in dev mode disables the guard with a Warn log.
+//
+// See also: docs/ops/env-vars.md for the full env var reference.
 package main
 
 import (
