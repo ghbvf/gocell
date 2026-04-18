@@ -1,4 +1,4 @@
-package metadata
+package contracttest
 
 import (
 	"encoding/json"
@@ -17,7 +17,7 @@ func sharedErrorSchemaPath(t *testing.T) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller failed")
-	// thisFile = .../kernel/metadata/shared_error_schema_test.go
+	// thisFile = .../pkg/contracttest/shared_error_schema_test.go
 	// walk up 2 dirs to project root, then into contracts/shared/errors/
 	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 	return filepath.Join(projectRoot, "contracts", "shared", "errors", "error-response-v1.schema.json")
