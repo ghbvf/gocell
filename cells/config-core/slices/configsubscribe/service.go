@@ -78,16 +78,17 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 		return fmt.Errorf("config-subscribe: unmarshal payload: %w", err)
 	}
 
-	s.cache.mu.Lock()
-	defer s.cache.mu.Unlock()
-
 	switch event.Action {
 	case "deleted":
+		s.cache.mu.Lock()
 		delete(s.cache.values, event.Key)
+		s.cache.mu.Unlock()
 		s.logger.Info("config-subscribe: key deleted from cache",
 			slog.String("key", event.Key))
 	case "created", "updated":
+		s.cache.mu.Lock()
 		s.cache.values[event.Key] = event.Value
+		s.cache.mu.Unlock()
 		s.logger.Info("config-subscribe: cache updated",
 			slog.String("key", event.Key), slog.String("action", event.Action))
 	case "published":
@@ -97,8 +98,15 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 		s.logger.Info("config-subscribe: published event (no cache update)",
 			slog.String("key", event.Key))
 	default:
-		s.logger.Warn("config-subscribe: unknown action, skipping",
-			slog.String("key", event.Key), slog.String("action", event.Action))
+		// Fail-closed: unknown actions are permanent errors routed to DLX.
+		// The cache is NOT modified.
+		//
+		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
+		s.logger.Warn("config-subscribe: unknown action, routing to dead letter",
+			slog.String("action", event.Action), slog.String("key", event.Key))
+		return outbox.NewPermanentError(
+			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
+		)
 	}
 
 	return nil

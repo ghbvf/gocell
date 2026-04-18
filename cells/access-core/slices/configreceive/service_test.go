@@ -45,11 +45,13 @@ func TestHandleEvent_ValidPayload(t *testing.T) {
 	}
 }
 
-func TestHandleEvent_UnknownAction(t *testing.T) {
+// TestHandleEvent_UnknownAction_PermanentError verifies that an unknown action
+// returns a PermanentError (fail-closed, P1-14 A3).
+func TestHandleEvent_UnknownAction_PermanentError(t *testing.T) {
 	svc := NewService(slog.Default())
 
 	payload, _ := json.Marshal(map[string]string{
-		"action": "unknown-action",
+		"action": "bogus",
 		"key":    "some.key",
 	})
 
@@ -59,9 +61,13 @@ func TestHandleEvent_UnknownAction(t *testing.T) {
 		Payload: payload,
 	}
 
-	// Unknown action is logged but not an error (no side effects to fail).
 	err := svc.HandleEvent(context.Background(), entry)
-	assert.NoError(t, err)
+	require.Error(t, err, "unknown action must return error")
+
+	// Must be PermanentError so WrapLegacyHandler routes to DLX, not retry.
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "unknown action must be PermanentError")
+	assert.Contains(t, err.Error(), "bogus", "error message should include the unknown action name")
 }
 
 func TestHandleEvent_InvalidJSON(t *testing.T) {
@@ -115,16 +121,19 @@ func TestWrapLegacyHandler_InvalidJSON_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-func TestWrapLegacyHandler_UnknownAction_Ack(t *testing.T) {
+// TestWrapLegacyHandler_UnknownAction_Reject verifies that unknown actions
+// produce DispositionReject via WrapLegacyHandler (P1-14 A3).
+func TestWrapLegacyHandler_UnknownAction_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
 
-	payload, err := json.Marshal(ConfigChangedEvent{Action: "unknown-future-action", Key: "x"})
+	payload, err := json.Marshal(ConfigChangedEvent{Action: "bogus-action", Key: "x"})
 	require.NoError(t, err)
 
 	entry := outbox.Entry{ID: "evt-wrap-3", Topic: TopicConfigChanged, Payload: payload}
 	result := handler(context.Background(), entry)
 
-	assert.Equal(t, outbox.DispositionAck, result.Disposition)
-	assert.NoError(t, result.Err)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition,
+		"unknown action via WrapLegacyHandler must produce DispositionReject → DLX")
+	assert.Error(t, result.Err)
 }
