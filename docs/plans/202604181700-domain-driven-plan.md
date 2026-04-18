@@ -130,10 +130,12 @@
 | ~~A11~~ | ~~**OUTBOX-RELAY-WIRE-PG-01**~~ ✅ PR#174：relay worker 接入 bootstrap OnStart/OnStop（S25）；eventbus envelope 解包修复 PG→eb 路径事件丢失（S26）；pool leak on metrics fail 修复（S27）；e2e 重写为真实 PG→eventbus→subscriber 链路（RMQ 依赖移除，以 in-memory eventbus 覆盖）| — | — | PR#174 |
 | A1 | **READYZ-BROKER-HEALTH-01** (Cx3)：`Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关（**S24 PR#174 已完成 nil fail-fast 部分；`Connection.Health()` + health checker 注册仍待**）| 1.5h | P1 | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` | 2026-04-18 外部审查 |
 | X7 | **AL-01 outbox_relay 调度 → runtime/outbox/relay.go** 🟡（搭车 A11）：轮询调度从 adapter 上抬到 runtime，使 A11 bootstrap 接线语义正确（框架托管 worker，非 adapter 自运行）| 2h | 🟡 | `adapters/postgres/outbox_relay.go` → `runtime/outbox/relay.go` | 依赖替换分析 |
-| A5 | **RL-SUB-01** 🟡：入站 ID 校验（空/过长 message ID）| 1h | 🟡 | `adapters/rabbitmq/subscriber.go` | PR#46 review |
-| A6 | **RabbitMQ backoff + FailOpen enum 清理** 🟡 | 2h | 🟡 | `adapters/rabbitmq/` | Wave 2 残留 |
-| X6 | **SOL-B-01 Claimer lease 续租** 🟡（前置 L4 API ✅）：两阶段 Claim/Commit/Release 幂等路径补 lease 续租 | 4h | 🟡 | `kernel/outbox/` + `adapters/rabbitmq/consumer_base.go` | Wave 2 残留 |
+| ~~A5~~ | ~~**RL-SUB-01**~~ ✅ PR#180：subscriber `processDelivery` 入口加 entry.ID guard（空 / >255 字节 → DispositionReject 到 DLX）；`maxEntryIDLength = 255` 对齐 AMQP 0-9-1 shortstr | — | — | PR#46 review |
+| ~~A6~~ | ~~**RabbitMQ backoff + FailOpen enum 清理**~~ ✅ PR#180（轻量打磨范围）：`ClaimPolicy.String()` + GoDoc + `backoffJitterDivisor` 命名常量；不改默认参数（explorer 报告确认 1s/30s/2× 在 RabbitMQ 消费场景合理） | — | — | Wave 2 残留 |
+| ~~X6~~ | ~~**SOL-B-01 Claimer lease 续租**~~ ✅ PR#180：`Receipt.Extend(ctx, ttl) error` + `ErrLeaseExpired`；ConsumerBase 启动 `LeaseTTL/3` 续租 goroutine（fail-closed：Extend 失败 cancel handler ctx → Requeue）；Redis Lua 脚本 fencing token 校验；goleak 验证无残留 | — | — | Wave 2 残留 |
 | ~~X8~~ | ~~**AL-02 distlock 续期/TTL → runtime/**~~ ✅ PR-DISTLOCK-HOIST (PR#178)：`runtime/distlock` 接口上抬完成，`adapters/redis.DistLock` 实现；`Lock.Lost()` 新增续租失败信号；`ERR_ADAPTER_REDIS_LOCK_ACQUIRED` typo 已修 → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
+| A13 | **SUBSCRIBER-CONCURRENCY-DECISION-01** 🟠（PR#180 review 暴露）：`subscriber.go::consumeLoop` 同步调用 `processDelivery`，使 `PrefetchCount=10` 默认值的并发语义退化为串行。需先决定 PrefetchCount 真实意图：(a) 改文档明确串行；或 (b) 改 `go s.processDelivery(...)` 走真并发并补并发安全测试（审 settleReceipt / Receipt.Commit/Release 多 goroutine 安全）| 1-3h（视方向）| 🟠 | `adapters/rabbitmq/subscriber.go` | PR#180 reviewer |
+| A14 | **BACKOFF-DEDUP-01** 🟡（PR#180 review 暴露）：`exponentialDelay` 在 `adapters/rabbitmq/backoff.go` 与 `kernel/outbox/consumer_base.go` 重复实现。两路径：(a) export `kernel/outbox.ExponentialDelay` 并删 adapters 副本；或 (b) 抽 `pkg/backoff` 共享。需调整 `adapters/rabbitmq/connection.go` 调用点 | 1-2h | 🟡 | `adapters/rabbitmq/backoff.go` + `adapters/rabbitmq/connection.go` + `kernel/outbox/consumer_base.go`（或新建 `pkg/backoff/`）| PR#180 reviewer |
 
 **搭车说明**：
 - A1 改 `adapters/rabbitmq/connection.go`，A7（POOLSTATS-IFACE-01，见域 9）也改同一文件，合并到 PR-OUTBOX-WIRE 一次落地。
@@ -146,9 +148,11 @@
 |----|------|------|
 | ~~PR-OUTBOX-WIRE（A11 部分）~~ | ~~A11 relay 接线 + e2e~~ ✅ PR#174 | — |
 | PR-OUTBOX-WIRE（剩余） | K2（头部 commit）+ A1 完整（Health() + 注册）+ X7 搭车 + A7 搭车 | ~5h |
-| PR-OUTBOX-HARDEN | A5 + A6 + X6（🟡，X8 已由 PR-DISTLOCK-HOIST 独立完成）| ~7h |
+| ~~PR-OUTBOX-HARDEN-RMQ~~ | ~~A5 + A6（轻量打磨）+ X6~~ ✅ PR#180 | — |
+| PR-OUTBOX-A13-CONCURRENCY | A13：subscriber 串行/并发裁决（🟠，需先定 PrefetchCount 意图）| 1-3h |
+| PR-OUTBOX-A14-DEDUP | A14：exponentialDelay 去重（🟡）| 1-2h |
 
-**主线工时**：5h（PR-OUTBOX-WIRE 剩余）；全做约 14h。
+**主线工时**：5h（PR-OUTBOX-WIRE 剩余）；全做约 14h（含 A13/A14 follow-up）。
 
 ---
 
