@@ -363,13 +363,29 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 	}
 }
 
-// jwtAudience is the expected audience for all tokens issued by this assembly.
-// It must match the audience written by sessionlogin/sessionrefresh services.
-// Tokens carrying a different aud are rejected by VerifyIntent per RFC 8725 §3.3.
+// loadJWTIssuer loads the JWT issuer string from GOCELL_JWT_ISSUER.
+// The env var is required in all adapter modes — there is no fallback default.
 //
-// Deprecated: this constant is a temporary placeholder. Commit 5 (C5) replaces
-// this with env-var loading (GOCELL_JWT_AUDIENCE). Do not add new references.
-const jwtAudience = "gocell"
+// Returns (value, "env", nil) on success or ("", "", error) when unset.
+func loadJWTIssuer(adapterMode string) (string, string, error) {
+	v := os.Getenv("GOCELL_JWT_ISSUER")
+	if v == "" {
+		return "", "", fmt.Errorf("GOCELL_JWT_ISSUER must be set (adapter mode %q)", adapterMode)
+	}
+	return v, "env", nil
+}
+
+// loadJWTAudience loads the JWT audience string from GOCELL_JWT_AUDIENCE.
+// The env var is required in all adapter modes — there is no fallback default.
+//
+// Returns (value, "env", nil) on success or ("", "", error) when unset.
+func loadJWTAudience(adapterMode string) (string, string, error) {
+	v := os.Getenv("GOCELL_JWT_AUDIENCE")
+	if v == "" {
+		return "", "", fmt.Errorf("GOCELL_JWT_AUDIENCE must be set (adapter mode %q)", adapterMode)
+	}
+	return v, "env", nil
+}
 
 // jwtDeps groups JWT signing and verification components built at startup.
 type jwtDeps struct {
@@ -378,23 +394,47 @@ type jwtDeps struct {
 }
 
 // buildJWTDeps loads the key set and constructs issuer + verifier.
-// Extracted from run() to keep cognitive complexity within bounds.
+// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes;
+// missing values cause fail-fast before any assembly init.
+//
+// ref: kube-apiserver --service-account-issuer — required at startup.
 func buildJWTDeps(adapterMode string) (jwtDeps, error) {
+	iss, issSource, err := loadJWTIssuer(adapterMode)
+	if err != nil {
+		return jwtDeps{}, err
+	}
+	aud, audSource, err := loadJWTAudience(adapterMode)
+	if err != nil {
+		return jwtDeps{}, err
+	}
+
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
 	}
-	issuer, err := auth.NewJWTIssuer(keySet, "core-bundle", auth.DefaultAccessTokenTTL)
+	issuer, err := auth.NewJWTIssuer(keySet, iss, auth.DefaultAccessTokenTTL,
+		auth.WithDefaultAudience(aud))
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT issuer: %w", err)
 	}
 	// WithExpectedAudiences enforces RFC 8725 §3.3 audience validation in
-	// VerifyIntent: tokens whose aud claim does not contain jwtAudience are
-	// rejected with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(jwtAudience))
+	// VerifyIntent: tokens whose aud claim does not contain aud are rejected
+	// with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
+	// WithExpectedIssuer enforces iss claim equality per RFC 7519 §4.1.1.
+	verifier, err := auth.NewJWTVerifier(keySet,
+		auth.WithExpectedAudiences(aud),
+		auth.WithExpectedIssuer(iss))
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
 	}
+
+	slog.Info("core-bundle: JWT deps built",
+		slog.String("issuer", iss),
+		slog.String("audience", aud),
+		slog.String("issuer_source", issSource),
+		slog.String("audience_source", audSource),
+		slog.String("adapter_mode", adapterMode))
+
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil
 }
 

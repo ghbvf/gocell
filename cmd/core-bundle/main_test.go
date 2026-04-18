@@ -129,6 +129,9 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
 	// can write the credential file (default /run/gocell is not writable in CI).
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — run() should exit cleanly
@@ -166,6 +169,38 @@ func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "adapter mode")
 }
 
+// TestRun_MissingJWTIssuer_FailsFast verifies that run() fails fast when
+// GOCELL_JWT_ISSUER is unset. The env var is required in all adapter modes (C5).
+func TestRun_MissingJWTIssuer_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	t.Setenv("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
+		"run() must fail fast when GOCELL_JWT_ISSUER is unset")
+}
+
+// TestRun_MissingJWTAudience_FailsFast verifies that run() fails fast when
+// GOCELL_JWT_AUDIENCE is unset. The env var is required in all adapter modes (C5).
+func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "")
+	t.Setenv("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
+		"run() must fail fast when GOCELL_JWT_AUDIENCE is unset")
+}
+
 // TestRun_RealMode_MissingVerboseToken_FailsFast ensures the H1-6
 // READYZ-VERBOSE-TOKEN fail-fast integration point — empty
 // GOCELL_READYZ_VERBOSE_TOKEN in real mode must error out before the
@@ -180,6 +215,9 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	// Secrets required in real mode (would otherwise fail earlier than
 	// the verbose-token check; we want verbose-token to be the trip-wire).
 	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
@@ -206,6 +244,9 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
 	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
@@ -298,6 +339,9 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
 	// can write the credential file (default /run/gocell is not writable in CI).
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — we only need Init(), not server start
@@ -320,6 +364,10 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 // before attempting any DB connections.
 func TestBootstrap_UnknownCellAdapterMode_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "cassandra")
+	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5);
+	// must be set so run() reaches the cell adapter mode validation step.
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -374,6 +422,9 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 			t.Setenv(auth.EnvJWTPrevPublicKey, "")
 			t.Setenv("GOCELL_HMAC_KEY", freshHMAC)
+			// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
+			t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+			t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 			t.Setenv("GOCELL_AUDIT_CURSOR_KEY", freshAudit)
 			t.Setenv("GOCELL_CONFIG_CURSOR_KEY", freshConfig)
 			t.Setenv("GOCELL_SERVICE_SECRET", freshService)
