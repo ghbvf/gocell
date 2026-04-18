@@ -88,10 +88,12 @@ func UnmarshalEnvelope(topic string, raw []byte) (kout.Entry, error) {
 	}
 
 	if msg.ID == "" {
-		return kout.Entry{}, fmt.Errorf("outbox: envelope missing required field: id")
+		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox: envelope missing required field: id")
 	}
 	if msg.EventType == "" {
-		return kout.Entry{}, fmt.Errorf("outbox: envelope missing required field: eventType")
+		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox: envelope missing required field: eventType")
 	}
 
 	return kout.Entry{
