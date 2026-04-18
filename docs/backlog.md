@@ -1,9 +1,9 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-18（PR#511 S30 落地同步）
-> 基线: develop@fdb6561（PR#174 合并 + backlog sync 后）
-> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard / PR#511 S30+S28+X7 outbox store abstraction (runtime/outbox.Store interface + envelope 共享 + 删除 ~2.8kloc adapter relay)
+> 更新日期: 2026-04-18（PR#184 同步）
+> 基线: develop@fbd4244（PR#184 合并后）
+> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard / PR#175 P1-2 configpublish fail-open 删除 / PR#176 S8 RBAC-OUTBOX-MIGRATION transactional outbox / PR#177 S30+S28+X7 outbox store abstraction / PR#178 X8 distlock hoist to runtime / PR#180 A5/A6/X6 outbox harden + RMQ polish / PR#181 S2+S13 config-core polish / PR#182 P1-3 公共端点 method-aware / PR#184 Subscription first-class + lease-lost fence + Commit→Ack ordering
 > 未合入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
 > 标记说明:
 > 🟡 可延后 = 不卡正确性或安全；latent risk / DX / 测试覆盖 / 纯 tech debt / 供应链加固 / 架构打磨 — 可机会性纳入或 v1.0 后做
@@ -11,32 +11,21 @@
 
 ---
 
-## P0 阻塞项（2026-04-18 外部审查 + PR#157 post-merge，~11h）
-
-| # | 任务 | 工时 | 文件 | 来源 |
-|---|------|------|------|------|
-| P0-1 | ✅ **AUTH-TOKEN-INTENT-01** (Cx3): login/refresh 共用 `JWTIssuer.Issue`，token 无 audience/purpose claim；全局 Bearer 中间件只做 `verifier.Verify`，session-validate 只看 `sid`，不区分用途 → **refresh token 可直接访问业务接口**。**修复**: Issue() 增 `TokenIntent`（"access"/"refresh"）→ `token_use` claim + JOSE `typ` header；新增 `IntentTokenVerifier.VerifyIntent`；`AuthMiddleware` 签名收紧为 `IntentTokenVerifier`（编译期强制）；`/auth/refresh` 只接 refresh、其它只接 access。对标 RFC 9068 / AWS Cognito token_use / Keycloak TokenUtil. | 5h | `runtime/auth/jwt.go` + `runtime/auth/middleware.go` + `cells/access-core/slices/{sessionlogin,sessionrefresh,sessionvalidate}/service.go` | PR#166 ✅ |
-| P0-2 | ✅ **AUTHZ-WRITE-CONFIG-WRITE-01** (Cx2, 阻塞): configwrite create/update/delete 三端点无 `auth.RequireAnyRole(ctx, "admin")`，与 configpublish publish/rollback admin gate 不一致（同一资源域授权策略漂移）。**修复**: 复用 `roleAdmin` const（提取到 `cells/config-core/internal/dto/authz.go` 共享），三端点入口加 gate + 401/403/200 测试 | 1.5h | `cells/config-core/slices/configwrite/handler.go` + `cells/config-core/internal/dto/authz.go`（新建）| PR#168 ✅ |
-
----
-
 ## P1 待办
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| ~~P1-1~~ | ~~**AUTH-INT-REACHABILITY-01**~~ ✅ `cells/access-core/auth_integration_test.go`：4 测试覆盖合法 access 到达、refresh 被拦、access/refresh 路径互拦、refresh token 轮转；`loginAndGetPair` 精确断言 201 + accessToken/refreshToken/expiresAt 三字段 | — | — | 2026-04-18 外部审查 |
-| P1-2 | **CONFIG-DEMO-FAILOPEN-01** (Cx2, PR-X1 进行中): `configpublish/service.go:188-194` demo 模式 publisher 发布失败仅 `logger.Warn` 后 `return nil`，与 cell.yaml L2 声明不符。**修复**: durable 模式移除 fail-open；demo fail-open 仅保留在显式 `DiscardPublisher{}` 或 `Assembly.Mode == Demo` | 2h | `cells/config-core/slices/configpublish/service.go` | PR#157 post-merge |
-| ~~P1-3~~ | ~~**PUBLIC-ENDPOINT-METHOD-MATCH-01**~~ ✅ PR#300: 公共端点声明升级为强制 `"METHOD /path"` 格式；无前缀启动 fail-fast；新建共享解析器 `CompilePublicEndpoints`（单点解析消除双实现漂移）；GET 条目自动别名 HEAD（RFC 7231 §4.3.2，对齐 stdlib ServeMux + chi v5）；`WithPublicEndpointMatcher` AuthOption 接入方法感知 matcher；三处信任边界（auth bypass / tracing new-root / request-id reject）联合 (method+path) 键 | — | — | PR#300 |
-| P1-3a | **CORS-OPTIONS-PUBLIC-ENDPOINT-01** (P2, 🟠 条件延后，触发条件：新增 CORS middleware 时): 当前无 CORS middleware，OPTIONS 预检请求未处理。若未来引入 CORS middleware，需评估 `OPTIONS *` 是否应自动加入公共端点，或由 CORS middleware 自身短路（推荐）。新增 `"OPTIONS /api/v1/auth/login"` 等条目或 CORS middleware 自处理两条路由可选。引入 CORS 时同步更新 `.claude/rules/gocell/runtime-api.md` 和 `WithPublicEndpoints` godoc | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/`（新 CORS 文件）+ `runtime/http/router/router.go` | PR#300 计划文件 CORS 风险登记 |
+| P1-3a | **CORS-OPTIONS-PUBLIC-ENDPOINT-01** (P2, 🟠 条件延后，触发条件：新增 CORS middleware 时): 当前无 CORS middleware，OPTIONS 预检请求未处理。若未来引入 CORS middleware，需评估 `OPTIONS *` 是否应自动加入公共端点，或由 CORS middleware 自身短路（推荐）。引入 CORS 时同步更新 `.claude/rules/gocell/runtime-api.md` 和 `WithPublicEndpoints` godoc | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/`（新 CORS 文件）+ `runtime/http/router/router.go` | PR#182 |
 | P1-4 | **OUTPUT-JSON-SARIF-01** (Cx3, 🟡 可延后): `gocell validate` 缺机器可读输出通道（JSON/SARIF）。统一诊断模型（单一 `Issue` struct → 多 printer 映射）。对标 golangci-lint / staticcheck / ESLint / kubectl print flags | 6h | `cmd/gocell/` + `kernel/governance/` 序列化 | PR#152 round-2 review |
 | P1-5 | **METADATA-PERF-BENCH-01** (Cx3, 🟡 可延后): `BenchmarkParseFS_500Files` 性能基准 + goccy/go-yaml 单次解码迁移成本评估 | 4h | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
-| ~~P1-6~~ | ~~**PR#160 PR-X2 pkg/query 稳定性**~~ ✅ PR-P-QUERY: codec nil Service 层 fail-fast（5 slice 各自 panic）/ `ParsePageRequest` cursor 长度上限 / `WithDemoFailOpen`→`WithRunMode` 整合 / `loadCursorCodec` wrap 链单测 / `RunModeForDemo` godoc "Do not extend" 警告 | — | — | PR-P-QUERY 合入 |
-| ~~P1-7~~ | ~~**PR#160 PR-X3 cursor key rotation 接线**~~ ✅ PR-P-QUERY: `NewCursorCodec(current, previous)` 接线 + `GOCELL_{AUDIT,CONFIG}_CURSOR_PREVIOUS_KEY` 双 env + 轮换生效 slog.Info + 7 条 loadCursorCodec 测试覆盖 3 步 rotation lifecycle | — | — | PR-P-QUERY 合入 |
 | P1-8 | **FEAT-1 DEVICE-LIST-API**: 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步触发 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
 | P1-9 | **FEAT-2 FLAG-WRITE-API**: `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
 | ~~P1-10~~ | ~~**AUTH-DX-01**~~ ✅ PR#172：sso-bff walkthrough 修复（refreshToken curl drift、.timestamp audit 字段、随机 seed 密码）；config-core walkthrough + HMAC key 注释（S20/S21）；seed admin 改用 generateDevPassword() 消除明文日志 | — | — | PR#172 |
 | ~~P1-12~~ | ~~**AUTH-SETUP-01 First-Run Setup 模式**~~ ✅ AUTH-SETUP-01 完成（含 P1-12a/b 完整改密硬强制 + admin-driven RequirePasswordReset 字段闭环）：`initialadmin` 工具包 + 24h TTL cleaner worker + Bootstrapper + domain.PasswordResetRequired + JWT claim + AuthMiddleware 拦截 + ChangePassword 自动脱困 + IssueOptions T2 重构 + sso-bff/cmd/core-bundle cutover；明文密码 slog PR#172 F1 彻底解决 | — | — | PR feat/159 |
 | ~~P1-11~~ | ~~**PR-R-AUTH-AUD-VALIDATION**~~ ✅ PR#170 + PR#293: `WithExpectedAudiences` + `VerifyIntent` aud check (RFC 8725 §3.3) + `DefaultJWTAudience` 常量统一 + sessionlogin/sessionrefresh 引用；PR#293 round-2 追加：`TokenVerifier` 接口 + `Verify()` 方法删除（双 API 合并为单一 `VerifyIntent`）+ `ErrAuthVerifierConfig` 构造期 fail-fast + `msgInvalidServiceTokenFormat` 常量提取 | — | — | PR#166 R1-F2-5 |
+| P1-13 | **SSO-BFF-WALKTHROUGH-JWT-FIX-01** (P0 DX, Cx1): README walkthrough 第 10/11 步（读配置/feature flags）未携带 Bearer JWT，但这两个端点非 public，按文档操作直接 401。同时 `walkthrough_test.go` 与运行时 `WithPublicEndpoints` 列表无绑定，文档/测试/白名单三处无单一真源。**修复**: README 补 `-H "Authorization: Bearer $ACCESS_TOKEN"`；walkthrough test 覆盖对应路径需鉴权的断言 | 1h | `examples/sso-bff/README.md` + `examples/sso-bff/walkthrough_test.go` | 2026-04-18 六席审查 |
+| P1-14 | **ENVELOPE-FAILCLOSED-01** (P1, Cx2): relay 发布 `outboxMessage` envelope 后，eventbus consumer 遇 unknown action 直接 `continue`（静默 ACK），envelope 解析不完整时走 legacy fallback，两者组合 fail-open——业务事件看似投递成功实际未处理。**修复**: ① envelope 加版本位/magic field，"形似但不完整" → `DispositionReject`（DLX）而非 fallback；② consumer dispatch unknown action → `DispositionRequeue`（可恢复）而非静默跳过 | 2h | `runtime/outbox/envelope.go` + `runtime/eventbus/` consumer dispatch + 覆盖测试 | 2026-04-18 六席审查 |
+| P1-15 | **RELAY-READINESS-BUDGET-01** (P1, Cx3): relay 轮询/发布/回写连续失败仅写日志并继续循环，进程 `/readyz` 仍健康——形成"活着但业务不可服务"假健康。**修复**: relay 引入连续失败计数器，超阈值（5 次 / 持续 30s）降级 readiness；`/readyz` 侧暴露 unhealthy；对标 K8s workqueue 失败预算 + go-micro critical probe | 3h | `runtime/outbox/relay.go` + `runtime/bootstrap/bootstrap.go` + health checker 接线 | 2026-04-18 六席审查 |
 
 ---
 
@@ -59,35 +48,24 @@
 |---|------|------|------|------|
 | A1 | **READYZ-BROKER-HEALTH-01** (Cx3): `Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关。对标 K8s readiness probe | 2h | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` + `runtime/http/health/` | 2026-04-18 外部审查 |
 | A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
-| ~~A3~~ | ~~**RL-INT-01**~~ ✅ PR#173：5 个 testcontainers PG+RMQ 测试 + 真实 TCP 断连/恢复测试移至 rabbitmq integration test | — | — | PR#173 |
-| ~~A4~~ | ~~**RL-MIG-01**~~ ✅ PR#173：`CREATE INDEX CONCURRENTLY` migration 006 + Up() 边界 INVALID index pre-check | — | — | PR#173 |
-| A5 | **RL-SUB-01** (🟡 可延后): 入站 ID 校验（空/过长 message ID） | 1h | `adapters/rabbitmq/subscriber.go` | PR#46 review |
-| A6 | **#31 RabbitMQ backoff + FailOpen enum 清理** (🟡 可延后) | 2h | `adapters/rabbitmq/` | Wave 2 残留 |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
 | A8 | **CI-DIGEST-01** (🟡 可延后): testcontainers 镜像 tag+digest 双固定 | 1h | `adapters/*/integration_test.go` | PR#139 review |
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
-| ~~A11~~ | ~~**OUTBOX-RELAY-WIRE-PG-01**~~ ✅ PR#174（S25+S26+S27）: relay worker 接入 bootstrap OnStart/OnStop（S25 relayWorker≠nil guard）；eventbus envelope 解包修复事件丢失（S26）；pool leak on metrics fail 修复（S27）；e2e test 重写为真实 PG→eventbus→subscriber 链路（移除 RMQ 依赖）| — | — | PR#174 |
-| ~~A12~~ | ~~**READYZ-PG-SCHEMA-01**~~ ✅ PR#173：启动期 fail-fast — `VerifyExpectedVersion` 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | — | PR#173 |
 | A13 | **BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01** (🟠 条件延后): `cmd/core-bundle` 当前 publisher 是 in-memory eventbus（outbox relay 将 PG entries 转发至此）；`bootstrap.WithBrokerHealth` 未接线，/readyz 缺 RMQ 健康检查。触发条件：core-bundle 接入真实 RabbitMQ connection（替换 in-memory eventbus 为 rabbitmq.Publisher），此时同步通过 `bootstrap.WithBrokerHealth` 将 RMQ readiness 纳入 /readyz。当前 in-memory eventbus 无需 broker health probe。 | 2h | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | PR#174 review F8 |
+| A14 | **DISTLOCK-LOST-METRIC-01** (P3, Cx2, 🟡 可延后, 🟠 出现首个 distlock 消费方后触发): `Lock.Release` 返回 `ErrLockLost` 路径（past-expiry skip / Lua result==0 / double-Release）目前仅写 slog，无独立 metric label；对标 Redsync/Consul 惯例，应发射 `distlock_release_total{outcome="success|lost|error"}` 让 Grafana 能监控"锁失主"率。前置：runtime/observability 层需要先设计 label taxonomy（与 outbox_relayed_total 同族）。独立 PR 评审更聚焦。| 2h | `runtime/distlock/` + `adapters/redis/distlock.go` + collector wiring | PR#178 round-4 dev agent 自创 |
+| A15 | **DISTLOCK-RENEW-JITTER-01** (P3, Cx2, 🟡 可延后): `adapters/redis/distlock.go::renewLoop` ticker 硬编码 `ttl/2`，多 holder 并发拿锁会同步续租 → Redis 侧 thundering-herd。对标 Redsync `driftFactor`，续租间隔应加 ±10-20% jitter。独立 PR 改 renewLoop + 加 miniredis 压测覆盖。触发条件：生产出现 Redis 并发 Eval 峰值告警。| 2h | `adapters/redis/distlock.go` + test harness | PR#178 round-4 dev agent 自创 |
+| A16 | **DISTLOCK-RENEW-RATIO-CONFIGURABLE-01** (P3, Cx2, 🟡 可延后): renewLoop 续租比例写死 `ttl/2`，caller 无法按负载调成 `ttl/3`（更保守）或 `ttl*3/4`（低开销）。需要在 `DistLock` 构造器上增 `WithRenewRatio(float64)` option 并在 `Acquire` 传给 renewLoop。API surface 演进属于独立 PR 评审范畴。触发条件：首个 caller 提出续租开销或可靠性调优诉求。| 2h | `adapters/redis/distlock.go` 构造 + renewLoop + Acquire 参数 | PR#178 round-4 dev agent 自创 |
 
 ### slice / cell 收口
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| ~~S1~~ | ✅ **REPO-SCAN-CLASSIFY-01**: `errors.Is(err, sql.ErrNoRows)` 判 not found，其他返回 `ErrInternal` | — | — | PR#169 合入 |
-| ~~S2~~ | ~~**CONTRACT-ERROR-SCHEMA-01**~~ ✅ PR-CONFIG-POLISH: `publish/v1` + `rollback/v1` contract.yaml `responses` 401/403 + `kernel.HTTPResponseMeta` + `contracts/shared/errors/error-response-v1.schema.json` + `contracttest.ValidateErrorResponse` (+PR#181 follow-up: responses.schemaRef now validated by REF-12 + check contract-health) | — | — | PR-CONFIG-POLISH |
 | S3 | **DTO-NIL-SEMANTIC-01** (Cx2): 12+ handler 写成功响应前校验领域对象非 nil，避免 converter nil guard 把上游不变量异常"平滑"为空 data 成功响应 | 3h | 12+ `cells/*/slices/*/handler.go` | PR#158 six-seat review |
 | S4 | **EVENT-PAYLOAD-TYPED-01** (Cx2): sessionlogin/sessionlogout/configwrite/configpublish/auditappend/auditverify 事件 payload `map[string]any` → typed event struct | 3h | 6 个 `service.go` + event contract schemas | PR#133 re-review |
-| S5 | **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/access-core/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
-| S6 | **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/access-core/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
 | S7 | **VALIDATE-EVIDENCE-CI-01** (Cx2, 根治声明-代码漂移): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
-| S8 | **H1-7 RBAC-OUTBOX-MIGRATION**: `rbacassign.Service` "角色变更 → 会话失效"双写 → transactional outbox 原子写入 + consumer 异步失效 session。前置 outbox consumer 基础设施 | 6h | `cells/access-core/slices/rbacassign/service.go` + `cells/access-core/slices/sessionlogout/consumer.go`（新）+ contract event schemas | PR#149 review round 2 |
-| ~~S9~~ | ~~**AUTH-LEGACY-TOKEN-STRICT-01**~~ ✅ PR#162 删 2-part 分支；PR#293 落地可观测性（warn log + metrics `legacy_format` label）；项目无外部消费方、不向后兼容，strict 模式开关和淘汰计划不再需要 | — | — | PR#159 外部审查 |
 | S10 | **MODE-SEMANTIC-SPLIT-01** (Cx2, 🟡 可延后): 读路径 `query.RunMode`（cursor 容错）与写路径 `configpublish.WithRunMode`（publisher fail-open）当前共用同一枚举，为后续任一方向演进埋下耦合。保留"Init 单点翻译"前提，新增写路径独立类型（如 `configpublish.PublishFailureMode` with `FailClosed`/`FailOpen`），Cell Init 并行映射 `DurabilityMode → (RunMode, PublishFailureMode)` 后注入。触发条件：任一方向需要新增非二元模式值时。对标 Uber fx Provide/Decorate — 每个决策独立类型注入。 | 3h | `pkg/query/runmode.go` + `cells/config-core/slices/configpublish/service.go` + 4 处 `cell.go` Init | PR#167 round-2 review（finding 3 改进项，发现时建议暂缓） |
-| ~~S11~~ | ~~**CONFIG-CORE-INIT-COGNIT-01**~~ ✅ commit 8552b6c (PR-CONFIG-POLISH base): `cell.go::Init()` 认知复杂度降至 ≈7，nolint 已移除 | — | — | PR-CONFIG-POLISH base |
 | S12 | **AUTH-GUARD-INLINE-UNIFY-01** (Cx3, 🟡 可延后): `RequireAnyRole → WriteDomainError → return` 三行 guard 在全库 11 处 inline；若统一提取为 `httputil` 辅助需同改 access-core + config-core + configpublish，横跨 3 cell。局部提取反而不一致，建议全库同期统一或维持现状。来源：PR#168 code-review P2 | 2h | `cells/*/slices/*/handler.go` × 11 处 | PR#168 review P2（维持现状待全库统一） |
-| ~~S13~~ | ~~**CONFIGWRITE-4XX-OBSERVABILITY-01**~~ ✅ PR-CONFIG-POLISH: `writeErrcodeError` 4xx 分支 slog.Warn {code, status, message, request_id, trace_id, span_id}；5xx 分支逻辑提取为 `log4xx`/`log5xx`/`appendCorrelationAttrs` 辅助函数，认知复杂度降到 ≤15 (+PR#181 follow-up: log4xx now omits client message per errcode Message vs InternalMessage separation — review F3) | — | — | PR-CONFIG-POLISH |
 | S2-follow | **CONTRACT-ERROR-SCHEMA-EXTEND-01** (P2, Cx1, 🟡 可延后): 其余 HTTP contract (config/write、config/get、auth/login 等) 补充 401/403 responses 声明，使错误响应 schema 覆盖全库所有受保护端点 | 2h | `contracts/http/**/{publish,get,write,flags}/v*/contract.yaml` | PR-CONFIG-POLISH 后续 |
 | S13-follow | **4XX-LOG-SAMPLING-01** (P3, Cx1, 🟡 可延后): 高频端点（如 GET config）4xx 日志可加采样（1%）或在 rate-limiter 触发后限速，避免大量 429 日志淹没告警通道。注：PR#181 F3 已把 log4xx 字段最小化（移除 client message，仅保留 code/status/correlation IDs/internal），采样必要性已大幅下降；仅在真实运维告警通道过载时再做 | 1h | `pkg/httputil/response.go` | PR-CONFIG-POLISH 后续 |
 | S14 | **CONFIG-VALUE-ENCRYPTION-01** (P1↑, Cx3): `config_entries.value` + `config_versions.value` 明文写库；sensitive=true 脱敏只在响应层（`config_entry.go` + `handler.go`），持久化边界无保护，DB 读权限即可拖取全量历史值。修法：加密放到 repo 写边界之前，同时覆盖 entries + versions；需 KMS 选型 + key rotation 独立 ADR，不混入普通 bugfix。优先级从 P2 升 P1。来源: PR#169 review F-S-2 + 2026-04-18 静态审查 | — | `cells/config-core/internal/adapters/postgres/config_repo.go` + `adapters/postgres/migrations/` | PR#169 + 2026-04-18 |
@@ -95,28 +73,26 @@
 | S16 | **RUNTIME-TOPOLOGY-SINGLE-SOURCE-01** (P2, Cx3, 🟡 可延后): PR#169 只做了最小修复（validateModeCoupling fail-fast + adapterInfo 派生自 cellAdapterMode），彻底方案是把"已解析的实际运行拓扑"抽象为单一事实源 struct，同时驱动 repo wiring / adapterInfo / /readyz / /metrics / 生产门禁，避免未来新增 adapter 再一次出现 `GOCELL_ADAPTER_MODE` vs `GOCELL_CELL_ADAPTER_MODE` 分裂。对标 go-zero serviceconf / Kratos config。来源: PR#169 review F-NEW-2 彻底方案 | 6h | `cmd/core-bundle/main.go` + 新 runtime 抽象 | PR#169 review F-NEW-2（最小修复已合；彻底方案待） |
 | S17 | **POOL-FRAMEWORK-LIFECYCLE-01** (P2, Cx3, 🟡 可延后): PR#169 在 cmd/core-bundle 层手工接 `defer pgPool.Close()` + `bootstrap.WithHealthChecker("postgres", pool.Health)`；彻底方案是把 `*adapterpg.Pool`（以及 Redis / RMQ 等外部资源）提升为 bootstrap/assembly 层面的托管资源，统一 shutdown LIFO + 自动 health checker 注册，对标 Uber fx OnStart/OnStop + K8s readyz storage_readiness_hook。来源: PR#169 review F-NEW-3 彻底方案 | 4h | `runtime/bootstrap/` + `kernel/assembly/` | PR#169 review F-NEW-3（最小修复已合；彻底方案待） |
 | S18 | **JWT-AUDIENCE-ENV-VAR-01** (P1, Cx2, 🟠 条件延后，多环境部署前触发): `jwtAudience` 为编译期常量，多环境（staging/prod）无法通过 env var 区分（如 `gocell-staging` / `gocell-prod`）；同时 sessionlogin/sessionrefresh 内 audience 需同步注入，否则 issuer 与 verifier drift 风险仍在。**修法**：新增 `GOCELL_JWT_AUDIENCE` env var；`adapterMode=real` 时强制要求；access-core cell 新增 `WithTokenAudience(string)` option 让 Init 注入而非硬编码。**前置**：与 F-O-1/F-A-1 配套，需独立 ADR。来源: PR#170 review F-O-1 + F-A-1 | 3h | `cmd/core-bundle/main.go` + `cells/access-core/cell.go` + `cells/access-core/slices/sessionlogin/service.go` + `sessionrefresh/service.go` | PR#170 review |
-| ~~S20~~ | ~~**SSO-BFF-CONFIG-WALKTHROUGH-TEST-01**~~ ✅ PR#172: config-core 接入测试服务器，补 POST/PUT/GET config + feature flags 4 个子测试，10/10 PASS | — | — | PR#172 review P2 |
-| ~~S21~~ | ~~**SSO-BFF-HMAC-KEY-DOC-01**~~ ✅ PR#172: `auditHMACKey` 加注释说明 32 字节原因（SHA-256 block size） | — | — | PR#172 review P2 |
 | S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): `runtime/auth/middleware_aud_test.go` 的 refresh-path audience 回归测试手造 fake handler 直接调 `VerifyIntent`，不经过真实 route registration / body binding / `Service.Refresh`，无法检测 public-route bypass 或 body decode 回归。**修法**：在 `cells/access-core/auth_integration_test.go` 补一条真实 HTTP 测试：POST `{"refreshToken": wrong-aud-token}` 到 `/api/v1/access/sessions/refresh`，断言返回 401；再补 missing-aud token 场景。**前置**：可独立于 S18 实施。来源: PR#171 外部审查 F2 | 2h | `cells/access-core/auth_integration_test.go` + `runtime/auth/middleware_aud_test.go` | PR#171 外部审查 |
 | S19 | **JWT-AUDIENCE-DRIFT-INTEG-TEST-01** (P2, Cx1, 🟡 可延后): `cmd/core-bundle/jwt_aud_integration_test.go` 直接调 `deps.issuer.Issue(…, []string{jwtAudience}, …)` 而非真实 sessionlogin 路径，无法检测 sessionlogin/sessionrefresh 硬编码与 `DefaultJWTAudience` 的 drift。**修法**：集成测试调用 sessionlogin.Service.Login → 解析响应 token → VerifyIntent，使 drift 编译失败而非运行时静默放行。**前置**：S18（access-core WithTokenAudience 注入）落地后更易实现。来源: PR#170 review F-T-3 | 2h | `cmd/core-bundle/` + `cells/access-core/slices/sessionlogin/` | PR#170 review F-T-3 |
 | S20 | **JWT-AUDIENCE-STARTUP-LOG-01** (P3, Cx1, 🟡 可延后): `buildJWTDeps` 构建时未打印 effective audience 值；ops 无法通过启动日志或 `/readyz?verbose` 确认运行时 audience 配置。**修法**：`slog.Info("JWT audience enforcement enabled", slog.String("audience", jwtAudience))` 紧接 verifier 构造后添加。来源: PR#170 review F-S-5 | 0.5h | `cmd/core-bundle/main.go` | PR#170 review F-S-5 |
 | S21 | **JWT-AUD-TEST-TABLE-DRIVEN-01** (P3, Cx1, 🟡 可延后): `runtime/auth/jwt_aud_test.go` 9 个场景为独立函数，违反 CLAUDE.md table-driven 规范。**修法**：重构为 `struct { name; expectedAuds []string; tokenAud []string; wantErr bool; errContains string }` 结构。来源: PR#170 review F-T-5 | 1h | `runtime/auth/jwt_aud_test.go` | PR#170 review F-T-5 |
 | S23 | **AUTH-WALKTHROUGH-COMPOSE-01** (P2, Cx3, 🟡 可延后): `examples/sso-bff/walkthrough_test.go` 手装精简 server（无 bootstrap lifecycle），与 `main.go` 的真实组装路径、README 步骤三份语义各自独立，可掩盖 public-endpoint wiring / config-core 接线 / audit event delivery 的回归。**修法**：提取 `NewSSOBFFApp(opts...)` 组装函数被 `main.go` 和 walkthrough test 共用；test server 走同一 bootstrap + Start/Stop 路径。来源: PR#172 review F3（OUT_OF_SCOPE） | 4h | `examples/sso-bff/bootstrap.go`（新）+ `main.go` + `walkthrough_test.go` | PR#172 review F3 |
 | S22 | **AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** (P3, Cx2, 🟡 可延后): `TestAuthMiddleware_WrongAudience_RefreshPath_Returns401` 直接调 `verifier.VerifyIntent()`，未经过 `AuthMiddleware` 真实中间件链（parse req → call verifier → write error）。本质是在测 verifier 行为而非 middleware 集成。生产 refresh 路径确实也是 `VerifyIntent` 直调，无实际安全风险；但若未来 middleware 有 early-return/short-circuit 改动，该测试无法检测 regression。**修法**：用 `httptest.NewServer` + 真实 `AuthMiddleware` + `makeTokenWithAud` 覆盖 refresh-path wrong-audience 场景，使测试打到完整链路。来源: PR#293 round-2 /fix 分析 | 1h | `runtime/auth/middleware_aud_test.go` | PR#293 round-2 |
-| ~~S24~~ | ~~**BROKER-HEALTH-NIL-FAILFAST-01**~~ ✅ PR#174 6462614: `WithBrokerHealth(nil)` 和 typed-nil 检测 + `brokerHealthNil` 标记 + Run step 0 fail-fast，与 `WithCircuitBreaker` 模式对齐；测试覆盖 plain nil 和 typed-nil 两种场景 | — | — | PR#174 review /fix 派生 |
-| ~~S25~~ | ~~**OUTBOX-E2E-REAL-WIRE-GUARD-01**~~ ✅ PR#174 2949487: `cmd/core-bundle/outbox_e2e_integration_test.go` 改为调用真实 `buildConfigCoreOpts`，assert `relayWorker != nil` 作为 A11 regression guard，取代原来手工 `adapterpg.NewOutboxRelay` 绕过生产路径的写法 | — | — | PR#174 review /fix 派生 |
-| ~~S26~~ | ~~**OUTBOX-ENVELOPE-EVENTBUS-UNWRAP-01**~~ ✅ PR#174 81dba4f: 真实 PG 生产路径用 in-memory eventbus 作为 relay publisher，relay 封 `outboxMessage` envelope 后 eventbus 不解包，subscribers 解析 envelope 当业务 payload → Action 空 → default "unknown action" 静默 ACK → 事件丢失。修复：eventbus.Publish 识别 envelope 并解包，镜像 rabbitmq.unmarshalDelivery；测试覆盖 envelope + 直发两路径；e2e test 重写为真实 PG→eb→subscriber 链路（移除 RMQ，core-bundle 不构造 RMQ 连接） | — | — | PR#174 review F1 |
-| ~~S27~~ | ~~**OUTBOX-POOL-LEAK-ON-METRICS-FAIL-01**~~ ✅ PR#174 faefc29: `buildConfigCoreOpts` NewPool 成功后 NewProviderRelayCollector 失败路径返回 pool=nil 导致 DB 连接泄漏。修复：metrics 错误路径加 pool.Close()，acquire/rollback 职责收在同层 | — | — | PR#174 review F2 |
-| ~~S28~~ | ~~**OUTBOX-ENVELOPE-KERNEL-SHARE-01**~~ ✅ PR#511（S30 搭车）：envelope struct + UnmarshalEnvelope/MarshalEnvelope 提升到 `runtime/outbox/envelope.go`（不是 kernel/outbox —— 因 Store interface 同期落在 runtime 层，envelope 与 Store 共包更内聚）；`runtime/eventbus` + `adapters/rabbitmq` 全部改调 `outbox.UnmarshalEnvelope`；rabbitmq 保留 PascalCase legacy Entry fallback | — | — | PR#174 review F1 跟进 |
 | S29 | **CORE-BUNDLE-APP-BUILDER-01** (P2, Cx3, 🟡 可延后): `cmd/core-bundle/main.go` 的装配逻辑与 integration tests 里的装配是两条代码路径；`buildConfigCoreOpts` 是共享点，但 bootstrap options 列表（publisher/subscriber/workers/adapterInfo/public endpoints/durability mode）目前只在 main.go 维护，测试靠手工复制。抽出 `cmd/core-bundle.BuildApp(opts...) (*bootstrap.Bootstrap, func(), error)` 被 main 和 integration test 共用，避免拓扑事实源再次分裂。对标 Uber fx `App.New` + Kratos `App.Run` 统一入口模式 | 6-8h | `cmd/core-bundle/app.go`（新）+ `main.go` + `outbox_e2e_integration_test.go` | PR#174 review F1 跟进 |
-| ~~S30~~ | ~~**OUTBOX-STORE-ABSTRACTION-01**~~ ✅ PR#511: `runtime/outbox.Store` 7 方法 interface（ClaimPending/MarkPublished/MarkRetry/MarkDead/ReclaimStale/CleanupPublished/CleanupDead），`adapters/postgres.PGOutboxStore` 实现并通过 `runtime/outbox/outboxtest.RunStoreConformanceSuite` 验证；relay 编排从 adapter 搬到 `runtime/outbox/relay.go`（三 goroutine 架构保留）；`outboxtest.FakeStore` 暴露为 public in-memory 实现（cell/slice 单测可用，覆盖 91.8%）；同 PR 搭车 S28 envelope 共享 + X7（AL-01）outbox_relay.go 搬迁。净减 ~2.8kloc adapter 代码 | — | — | PR-OUTBOX-WIRE 方案 α 裁定 + PR#511 落地 |
-| S31 | **BOOTSTRAP-INRUN-COMPENSATION-01** (P3, Cx2, 🟠 条件延后，PG 多副本 + ops 反馈触发): PR feat/159 round 5 采纳方向 B（orphan-user 重启自愈：`resolveDuplicateUser` 在 duplicate+recount==0 时 `GetByUsername` → 重写 hash → 续接 AssignToUser），**不做** in-run 补偿。对标结论（explorer 2026-04-18）：GitLab `001_admin.rb` 单事务、Keycloak `ApplianceBootstrap` catch-return-false、Vault `operator init` 部分初始化检测、Consul bootstrap 服务端不变量，**零家做 saga step-compensation**。触发条件：X1 PG-DOMAIN-REPO 上线后，若运维反馈"AssignToUser 崩溃到下次启动之间的中间态"造成真实可见性问题（例如诊断日志混乱、监控误报），再评估 in-run 回滚。当前 in-memory 重启清零，PG 模式 orphan 自动恢复，无紧迫必要 | 2h | `cells/access-core/internal/initialadmin/bootstrap.go` + `bootstrap_test.go` | PR feat/159 round 5 review P1-2 + explorer research |
+| ~~S30~~ | ~~**OUTBOX-STORE-ABSTRACTION-01**~~ ✅ PR#511: `runtime/outbox.Store` 7 方法 interface，`adapters/postgres.PGOutboxStore` 实现；relay 编排搬到 `runtime/outbox/relay.go`；`outboxtest.FakeStore` public；同 PR 搭车 S28 + X7。净减 ~2.8kloc | — | — | PR#511 |
+| S31 | **BOOTSTRAP-INRUN-COMPENSATION-01** (P3, Cx2, 🟠 条件延后，PG 多副本 + ops 反馈触发): 采纳方向 B（orphan-user 重启自愈），**不做** in-run 补偿。触发条件：X1 PG-DOMAIN-REPO 上线后，若运维反馈中间态造成真实可见性问题（诊断日志混乱、监控误报），再评估 in-run 回滚 | 2h | `cells/access-core/internal/initialadmin/bootstrap.go` | PR feat/159 round 5 review |
+| S32 | **JWT-ISSUER-STRICT-01** (P2, Cx2, 🟡 可延后): `VerifyIntent` 缺 issuer 强约束；跨环境密钥复用时 staging token 可通过 prod 验证。`NewJWTVerifier` 增 `WithExpectedIssuer(string)` option；`real` 模式下 issuer 非空强制；补负向测试。建议搭车 S18 | 1h | `runtime/auth/jwt.go` + `cmd/core-bundle/main.go` | 2026-04-18 六席审查 |
+| S33 | **CONTROLPLANE-TOKEN-PROD-GATE-01** (P2, Cx2, 🟠 条件延后，real 模式部署前触发): bootstrap 启动时 `real` 模式断言 service-token/mTLS 至少一项；补 CI real-mode smoke | 1h | `cmd/core-bundle/main.go` + `runtime/bootstrap/bootstrap.go` | 2026-04-18 六席审查 |
+| S34 | **WALKTHROUGH-CI-SMOKE-01** (P2, Cx1, 🟡 可延后): `examples/sso-bff/walkthrough_test.go` 带 `//go:build integration` 未进 CI 主门禁；增 `walkthrough-smoke` job 或拆 unit subtests | 1h | `.github/workflows/ci.yml` + `examples/sso-bff/walkthrough_test.go` | 2026-04-18 六席审查 |
+| S35 | **AUTH-ADMIN-FORCE-RESET-01** (P2, Cx2, 🟡 可延后): admin-only 强制密码重置端点 `POST /api/v1/access/users/{id}/password/reset`；生成临时密码 + `PasswordResetRequired=true` | 4h | `cells/access-core/slices/identitymanage/` + `contracts/http/auth/user/reset/v1/`（新）| PR#183 reviewer round 2 |
+| S36 | **AUTH-MIDDLEWARE-EXEMPT-INJECTION-01** (P3, Cx3, 🟡 可延后): `isPasswordResetExempt` hardcode 业务路径，违反 runtime/cells 分层；用 `auth.WithSkipPasswordResetCheck(func(method, path) bool)` Option 由 cell 注入 | 3h | `runtime/auth/middleware.go` + `cells/access-core/cell.go` | PR#183 reviewer round 2 |
+| S37 | **WORKER-LAZY-HOIST-01** (P3, Cx2, 🟡 可延后): `lazyBootstrapWorker` / `ssoBFFLazyWorker` / `e2eLazyWorker` 三处完全相同；提到 `runtime/worker.Lazy(get func() Worker) Worker` 框架级抽象 | 2h | `runtime/worker/lazy.go`（新）+ `cmd/core-bundle/main.go` + `examples/sso-bff/main.go` | PR#183 reviewer round 2 |
 
 ### 发布 + 文档
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| ~~F1~~ | ~~**ADR-RUNMODE-TRANSLATION-01**~~ ✅ PR-P-QUERY: `docs/architecture/202604180100-adr-runmode-translation.md` 记录 pkg 不依赖 kernel、cell Init 单次翻译、禁止二次翻译，对标 go-zero `ServiceConf.Mode` | — | — | PR-P-QUERY 合入 |
 | F2 | **SYSTEM-TOPOLOGY-API** (🟡 可延后): `GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON；基于 `kernel/registry` | 4h | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 | F3 | **P2-T-02 audit e2e 测试**: Journey 级验收 | 2h | `journeys/` + integration test | 历史 Batch 8 |
 | F4 | Review cells/ | 4h | — | Wave 4 |
@@ -140,9 +116,6 @@
 | X3 | **WM-36 SecureCookie key rotation** ★ | 1.5d | WM-35 | 长期 roadmap |
 | X4 | **WM-7 泛型 BulkResult** | 1d | — | 历史 Batch 8 |
 | X5 | **P3-TD-11 access-core domain 拆分** User/Session/Role | 4h | X1 | 历史 Batch 8 |
-| X6 | **28 SOL-B-01 Claimer lease 续租** | 4h | L4 API ✅ | Wave 2 |
-| ~~X7~~ | ~~**AL-01 outbox_relay.go 轮询调度 → `runtime/outbox/relay.go`**~~ ✅ PR#511（S30 搭车）：`adapters/postgres/outbox_relay.go` + `safe_relay_collector.go` 已删除，relay 循环住在 `runtime/outbox/relay.go` | — | — | 依赖替换分析 |
-| ~~X8~~ | ~~**AL-02 distlock.go 续期/TTL → `runtime/`**~~ ✅ PR-DISTLOCK-HOIST (PR#178): `runtime/distlock` 新增 `Locker`/`Lock` provider-neutral 接口（镜像 PR#177 `runtime/outbox.Store` 分层模式）；`adapters/redis.DistLock`/`Lock` 实现新接口；新增 `Lock.Lost() <-chan struct{}` 续租失败信号；修正 `ERR_ADAPTER_REDIS_LOCK_ACQUIRED` 拼写 typo → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
 | X9 | **LINT-MODERN-01** (Cx2, P3): 全仓库 modernization baseline 清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder/websocket）。独立 PR，不混入功能 | 6h | — | PR#163 post-review |
 | X10 | **AUTH-REFRESH-OPAQUE-01** (Cx3, 🟠 条件延后，X1 PG-DOMAIN-REPO 上线后触发): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7 |
 
@@ -211,9 +184,9 @@
 | T9 | **AUTH-BYPASS-METRICS-01** public endpoint 命中率指标 `auth_bypass_total{method,path}`；collector 层暴露信任边界偏离信号 | 2h | 触发条件：observability 专项落地（配合 R2 OBS-HTTP-COLLECTOR-AUTOWIRE-01），或 401 baseline 需要 method 维度审计时 |
 | T10 | **RMQ-STATTER-RENAME-01** 删除 `(*rabbitmq.Connection).Statter` 旧方法（旧名暗示 DB pool 语义错误，`ChannelStatter` 清楚表达 AMQP channel pool）。迁移 `adapters/rabbitmq/connection_statter_test.go:37` 的唯一调用点到 `ChannelStatter`。宪法不考虑向后兼容——直接删，不标 Deprecated | 15min | 独立小 PR，可随时做（无阻塞） |
 | T11 | **AUTH-LOADKEYSFROMENV-UNEXPORT-01** `runtime/auth.LoadKeysFromEnv` 实为内部基础构件（仅被同包 `LoadKeySetFromEnv` 和 4 个测试引用，无外部生产调用）。unexport 为 `loadKeysFromEnv`，移除 `// Deprecated:` 注释（宪法不留兼容期）。改 `LoadKeySetFromEnv` 内部调用 + 4 个测试（改走 `LoadKeySetFromEnv` 或直接测 unexported） | 30min | 独立小 PR，可随时做（无阻塞） |
-| ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
+| ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入，per-cell 覆盖仅过渡期有价值，全量接完后变死代码 | — | — | 2026-04-18 设计裁决 |
 | ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
-| T-PG-ADVISORY-LOCK-01 | **多副本 PG bootstrap 竞态防护**：PostgresUserRepository.Create 之前用 `pg_try_advisory_lock(hashtext('gocell_initial_admin'))`，确保多 pod 启动时只有一个进程进入 bootstrap 临界段。当前 in-memory + ErrAuthUserDuplicate silent skip 已防 mem 单进程；PG 仅靠 unique constraint 仍可能多 pod 并发触发不必要的密码生成与日志告警。 | 2h | `adapters/postgres/user_repo.go`（X1 落地时）| X1 PG-DOMAIN-REPO 上线 |
+| T-PG-ADVISORY-LOCK-01 | **多副本 PG bootstrap 竞态防护**：`pg_try_advisory_lock(hashtext('gocell_initial_admin'))` 确保多 pod 启动时只有一个进程进入 bootstrap 临界段 | 2h | `adapters/postgres/user_repo.go`（X1 落地时）| X1 PG-DOMAIN-REPO 上线 |
 
 ---
 
@@ -235,12 +208,12 @@
 | 分类 | 工时 |
 |------|------|
 | P0 阻塞 | ~6.5h |
-| P1 | ~32.5h |
+| P1 | ~38.5h（+6h: P1-13/14/15） |
 | P2 kernel/runtime | ~12-16h |
 | P2 adapter | ~16h |
-| P2 slice/cell | ~18h |
+| P2 slice/cell | ~21h（+3h: S31/S32/S33） |
 | P2 发布 + 文档 | ~23h + v1.0 tag |
-| **核心路径合计（不含 P3）** | **~108-112h（约 13-14 工作日）** |
+| **核心路径合计（不含 P3）** | **~117-121h（约 14-15 工作日）** |
 | P3 长期 | 3-5d + 4.5d + 若干独立项 |
 
 ---
