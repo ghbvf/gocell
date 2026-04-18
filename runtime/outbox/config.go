@@ -40,6 +40,16 @@ type RelayConfig struct {
 	// ref: Temporal client.Options{MetricsHandler} — inject-at-construction pattern
 	Metrics kout.RelayCollector
 
+	// Failure budget semantics — IMPORTANT:
+	//
+	// The zero value of RelayConfig{} leaves all three *FailureBudget fields at 0,
+	// which disables all health checkers entirely.  This is NOT the same as
+	// DefaultRelayConfig(), which sets each budget to 5.  Callers that construct
+	// a RelayConfig literal and want health reporting must either call
+	// DefaultRelayConfig() or set at least one *FailureBudget to a positive value.
+	// A relay whose three budgets are all zero will never report unhealthy in
+	// /readyz, regardless of how many consecutive loop failures occur.
+
 	// PollFailureBudget is the consecutive poll-loop failure count that trips
 	// /readyz unhealthy. 0 disables the checker. Default 5.
 	// ref: K8s workqueue ItemExponentialFailureRateLimiter — absolute count + Forget.
