@@ -381,6 +381,28 @@ func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
 	}
 }
 
+// validateInternalGuard validates the internal endpoint guard configuration.
+// Returns an error when prefix or guard violate their constraints so Run()
+// can fail-fast before any side effects.
+func (b *Bootstrap) validateInternalGuard() error {
+	if b.internalGuardPrefix == "" && b.internalGuard == nil {
+		return nil // option not used
+	}
+	if b.internalGuardPrefix == "" {
+		return fmt.Errorf("bootstrap: internal guard prefix must not be empty")
+	}
+	if !strings.HasPrefix(b.internalGuardPrefix, "/") {
+		return fmt.Errorf("bootstrap: internal guard prefix %q must start with '/'", b.internalGuardPrefix)
+	}
+	if !strings.HasSuffix(b.internalGuardPrefix, "/") {
+		return fmt.Errorf("bootstrap: internal guard prefix %q must end with '/'", b.internalGuardPrefix)
+	}
+	if b.internalGuard == nil {
+		return fmt.Errorf("bootstrap: internal guard must not be nil when prefix %q is set", b.internalGuardPrefix)
+	}
+	return nil
+}
+
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
 // in /readyz?verbose output. Helps operators verify which storage/bus backends
 // are active without inspecting application logs.
@@ -480,6 +502,31 @@ func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	}
 }
 
+// WithInternalEndpointGuard registers a guard middleware that protects every
+// HTTP route whose path starts with prefix. The canonical value for prefix is
+// "/internal/v1/" (must start and end with '/').
+//
+// guard is a standard http.Handler middleware factory (func(http.Handler) http.Handler).
+// Run() validates both constraints and returns an error immediately (fail-fast)
+// when either is violated:
+//   - prefix empty / not starting with '/' / not ending with '/'
+//   - guard nil
+//
+// The guard is wired into the router's business mux via
+// router.WithInternalPathPrefixGuard; infrastructure endpoints (/healthz,
+// /readyz, /metrics) are on outerMux and are never reached by the guard.
+//
+// Actual token-validation logic lives in the guard function — this option is
+// a pure wiring point (injection, not policy).
+//
+// ref: go-kratos/kratos middleware/selector — default-deny + Option injection.
+func WithInternalEndpointGuard(prefix string, guard func(http.Handler) http.Handler) Option {
+	return func(b *Bootstrap) {
+		b.internalGuardPrefix = prefix
+		b.internalGuard = guard
+	}
+}
+
 // WithHookObserver registers a cell lifecycle hook observer for the
 // default assembly built when no WithAssembly option is supplied.
 //
@@ -550,6 +597,12 @@ type Bootstrap struct {
 	// of registering a closure that would nil-deref on the first /readyz
 	// probe. Mirrors the circuitBreakerNil contract.
 	brokerHealthNil bool
+
+	// internalGuardPrefix and internalGuard hold the configuration set by
+	// WithInternalEndpointGuard. Both are forwarded to the router at Run()
+	// time via router.WithInternalPathPrefixGuard after prefix validation.
+	internalGuardPrefix string
+	internalGuard       func(http.Handler) http.Handler
 }
 
 // New creates a Bootstrap with the given options.
@@ -628,6 +681,13 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// /readyz probe instead of surfacing the misconfiguration at startup.
 	if b.brokerHealthNil {
 		return fmt.Errorf("bootstrap: broker health checker must not be nil")
+	}
+
+	// Fail-fast: validate internal endpoint guard before any side effects.
+	// Mirrors the circuitBreakerNil pattern: surface misconfiguration at Run()
+	// rather than silently operating without the intended protection.
+	if err := b.validateInternalGuard(); err != nil {
+		return err
 	}
 
 	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
@@ -1036,6 +1096,12 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 		if authMetrics != nil {
 			routerOpts = append(routerOpts, router.WithAuthMetrics(authMetrics))
 		}
+	}
+	// Wire the internal path-prefix guard when configured.
+	// Validation already passed (Step 0), so b.internalGuard is non-nil iff
+	// b.internalGuardPrefix is also a valid prefix — safe to forward unconditionally.
+	if b.internalGuard != nil {
+		routerOpts = append(routerOpts, router.WithInternalPathPrefixGuard(b.internalGuardPrefix, b.internalGuard))
 	}
 	routerOpts = append(routerOpts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(routerOpts...)

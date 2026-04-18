@@ -61,40 +61,10 @@ func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts
 		o(&cfg)
 	}
 
-	// Build the bypass check. Prefer the compiled method-aware matcher (set via
-	// WithPublicEndpointMatcher) over the legacy path-only []string approach.
-	var isPublic func(*http.Request) bool
-	if cfg.publicMatcher != nil {
-		// Method-aware path: used when wired through router.WithPublicEndpoints.
-		isPublic = cfg.publicMatcher
-	} else {
-		// Legacy path-only path: used by direct callers of WithAuthMiddleware.
-		publicPaths := publicEndpoints
-		if publicPaths == nil {
-			publicPaths = DefaultPublicEndpoints
-		}
-
-		// Defense-in-depth: detect callers that accidentally pass "METHOD /path" format
-		// to the legacy []string path (which does path.Clean on the whole string and
-		// never matches). Panic to fail-fast — caller should use
-		// router.WithPublicEndpoints instead (which compiles into publicMatcher).
-		for _, p := range publicPaths {
-			if strings.ContainsRune(p, ' ') {
-				panic(fmt.Sprintf(
-					"auth.AuthMiddleware: legacy publicEndpoints entry %q looks like METHOD /path format; "+
-						"pass it through router.WithPublicEndpoints (which sets WithPublicEndpointMatcher) instead",
-					p))
-			}
-		}
-
-		publicSet := make(map[string]bool, len(publicPaths))
-		for _, p := range publicPaths {
-			publicSet[path.Clean(p)] = true
-		}
-		isPublic = func(r *http.Request) bool {
-			return publicSet[path.Clean(r.URL.Path)]
-		}
-	}
+	isPublic := buildPublicMatcher(publicEndpoints, cfg)
+	// delegated = authentication is deferred to downstream middleware
+	// (service-token guard, mTLS, ...) for that route.
+	isDelegated := cfg.delegatedMatcher // nil = no delegated paths
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,8 +72,47 @@ func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts
 				next.ServeHTTP(w, r)
 				return
 			}
+			if isDelegated != nil && isDelegated(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			handleAuthRequest(w, r, next, verifier, cfg)
 		})
+	}
+}
+
+// buildPublicMatcher returns the public-endpoint bypass predicate. Prefers the
+// compiled method-aware matcher (set via WithPublicEndpointMatcher, e.g. from
+// router.WithPublicEndpoints) over the legacy path-only []string.
+func buildPublicMatcher(publicEndpoints []string, cfg authConfig) func(*http.Request) bool {
+	if cfg.publicMatcher != nil {
+		return cfg.publicMatcher
+	}
+
+	publicPaths := publicEndpoints
+	if publicPaths == nil {
+		publicPaths = DefaultPublicEndpoints
+	}
+
+	// Defense-in-depth: detect callers that accidentally pass "METHOD /path"
+	// format to the legacy []string path (path.Clean on the whole string never
+	// matches). Panic to fail-fast — caller should use router.WithPublicEndpoints
+	// instead (which compiles into publicMatcher).
+	for _, p := range publicPaths {
+		if strings.ContainsRune(p, ' ') {
+			panic(fmt.Sprintf(
+				"auth.AuthMiddleware: legacy publicEndpoints entry %q looks like METHOD /path format; "+
+					"pass it through router.WithPublicEndpoints (which sets WithPublicEndpointMatcher) instead",
+				p))
+		}
+	}
+
+	publicSet := make(map[string]bool, len(publicPaths))
+	for _, p := range publicPaths {
+		publicSet[path.Clean(p)] = true
+	}
+	return func(r *http.Request) bool {
+		return publicSet[path.Clean(r.URL.Path)]
 	}
 }
 

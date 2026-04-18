@@ -15,10 +15,12 @@ import (
 )
 
 // TestBuildJWTDeps_VerifierEnforcesAudience verifies that the JWTVerifier returned
-// by buildJWTDeps rejects tokens whose aud claim does not contain jwtAudience.
+// by buildJWTDeps rejects tokens whose aud claim does not contain the configured audience.
 // This exercises the RFC 8725 §3.3 audience validation wiring end-to-end:
-// loadKeySet → NewJWTVerifier(WithExpectedAudiences) → VerifyIntent.
+// GOCELL_JWT_AUDIENCE → NewJWTVerifier(WithExpectedAudiences) → VerifyIntent.
 func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	deps, err := buildJWTDeps("") // dev mode: ephemeral key pair
 	require.NoError(t, err)
 
@@ -44,31 +46,38 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 			"audience mismatch must surface as ERR_AUTH_INVALID_TOKEN_INTENT")
 	})
 
-	t.Run("rejects_missing_audience", func(t *testing.T) {
-		// Issue a token with nil audience (no aud claim).
-		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
+	t.Run("rejects_explicitly_empty_audience", func(t *testing.T) {
+		// Issue a token with an explicit wrong audience to test rejection.
+		// (nil audience now falls back to the configured default "gocell" via
+		// WithDefaultAudience, so we must supply an explicit wrong value instead.)
+		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+			Audience: []string{"not-gocell"},
+		})
 		require.NoError(t, err)
 
 		_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-		require.Error(t, err, "token without aud claim must be rejected when expected audience is configured")
+		require.Error(t, err, "token with wrong aud must be rejected when expected audience is configured")
 		assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 	})
 }
 
 // TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault verifies that the
-// audience constant used by buildJWTDeps (jwtAudience = "gocell") matches the
-// audience written by sessionlogin/sessionrefresh in production. This test pins
-// the contract so a future rename in either location fails loudly.
+// audience configured via GOCELL_JWT_AUDIENCE is written into issued tokens and
+// accepted by the paired verifier, forming a self-consistent configuration.
+// This test pins the contract so a future drift in env-var vs. issuer audience fails loudly.
 func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	deps, err := buildJWTDeps("")
 	require.NoError(t, err)
 
-	// Simulate what sessionlogin.Service.issueAccessToken does: issue with []string{"gocell"}.
+	// issuer.DefaultAudience() returns the audience configured via GOCELL_JWT_AUDIENCE.
+	// Simulate what sessionlogin.Service.issueAccessToken does: rely on issuer.DefaultAudience().
 	tok, err := deps.issuer.Issue(
 		auth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Roles:     []string{"admin"},
-			Audience:  []string{jwtAudience}, // same constant used by buildJWTDeps
 			SessionID: "sess-1",
+			// Audience left nil — issuer writes deps.issuer.DefaultAudience() automatically.
 		},
 	)
 	require.NoError(t, err)

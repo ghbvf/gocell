@@ -26,6 +26,9 @@ var wellKnownDemoKeys = []string{
 	"gocell-demo-DEVICE-CELL-key-32!!",
 	"core-bundle-audit-cursor-key-32!",
 	"core-bundle-cfg-cursor-key--32b!",
+
+	// Service token HMAC (shipped as test fixture; never use in production)
+	"service-secret-32-bytes-xxxxxx!!",
 }
 
 // rejectDemoKey returns an error if adapterMode == "real" and key matches a

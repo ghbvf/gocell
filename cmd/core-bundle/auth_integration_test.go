@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -51,7 +52,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute, auth.WithDefaultAudience("gocell"))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
@@ -202,6 +203,167 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// unregistered route would also produce. The drift guard is covered by
 	// the positive assertion above (POST /internal/v1/access/roles/revoke
 	// returns 401), which proves POST is the registered handler.
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestAuthWiring_InternalGuard_RequiresServiceToken verifies that
+// /internal/v1/* endpoints are protected by the ServiceTokenMiddleware guard
+// when wired via bootstrap.WithInternalEndpointGuard.
+//
+// Chain order: JWT auth middleware → InternalGuard → handler.
+// The guard is the inner protection layer for the /internal/v1/* prefix.
+//
+// Test assertions:
+//   - Request without Authorization → 401 from guard.
+//   - Request with valid service token → guard passes (handler may return 400/404).
+//   - Request to /api/v1/* with no token → 401 from JWT auth (guard not involved).
+func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	// JWT key pair for auth middleware.
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	keySet, err := auth.NewKeySet(privKey, pubKey)
+	require.NoError(t, err)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", 15*time.Minute,
+		auth.WithDefaultAudience("gocell"))
+	require.NoError(t, err)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Service HMAC key ring for the internal guard.
+	serviceSecret := freshTestServiceSecret(t)
+	ring, err := auth.NewHMACKeyRing([]byte(serviceSecret), nil)
+	require.NoError(t, err)
+	guard := auth.ServiceTokenMiddleware(ring)
+
+	eb := eventbus.New()
+	var nw outbox.Writer = outbox.NoopWriter{}
+
+	auditCursorCodec, err := query.NewCursorCodec([]byte("guard-test-audit-key-32-bytes!!!"))
+	require.NoError(t, err)
+	configCursorCodec, err := query.NewCursorCodec([]byte("guard-test-config-key-32bytes!!!"))
+	require.NoError(t, err)
+
+	ac := accesscore.NewAccessCore(
+		accesscore.WithInMemoryDefaults(),
+		accesscore.WithPublisher(eb),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
+		accesscore.WithOutboxWriter(nw),
+		accesscore.WithTxManager(noopTxRunner{}),
+	)
+	cc := configcore.NewConfigCore(
+		configcore.WithInMemoryDefaults(),
+		configcore.WithPublisher(eb),
+		configcore.WithOutboxWriter(nw),
+		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithCursorCodec(configCursorCodec),
+	)
+	auc := auditcore.NewAuditCore(
+		auditcore.WithInMemoryDefaults(),
+		auditcore.WithPublisher(eb),
+		auditcore.WithHMACKey([]byte("guard-test-hmac-key-32-bytes!!!!!")),
+		auditcore.WithOutboxWriter(nw),
+		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithCursorCodec(auditCursorCodec),
+	)
+
+	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(ac))
+	require.NoError(t, asm.Register(cc))
+	require.NoError(t, asm.Register(auc))
+
+	// /internal/v1/* endpoints are auto-delegated by WithInternalEndpointGuard:
+	// JWT AuthMiddleware skips those paths entirely and the guard becomes the sole
+	// authentication layer. No /internal/v1/* entries are needed in publicEndpoints.
+	publicEndpoints := []string{
+		"POST /api/v1/access/sessions/login",
+		"POST /api/v1/access/sessions/refresh",
+	}
+
+	app := bootstrap.New(
+		bootstrap.WithAssembly(asm),
+		bootstrap.WithListener(ln),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithInternalEndpointGuard("/internal/v1/", guard),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+
+	// Request /internal/v1/* without Authorization → 401 from guard.
+	t.Run("internal_without_service_token_401", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), nil)
+		require.NoError(t, err)
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"/internal/v1/* without service token must return 401 from guard")
+	})
+
+	// Request /internal/v1/* with valid service token → guard passes.
+	// The downstream handler may return any status (400/401/404 from business
+	// logic are all acceptable). We verify the guard did NOT reject by checking
+	// that the response body does not contain "missing service token" — the
+	// sentinel message emitted by ServiceTokenMiddleware on guard rejection.
+	t.Run("internal_with_valid_service_token_passes_guard", func(t *testing.T) {
+		token := auth.GenerateServiceToken(ring,
+			http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
+		require.NotEmpty(t, token, "service token generation must succeed")
+
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "ServiceToken "+token)
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		require.NoError(t, readErr)
+
+		// "missing service token" in the body means the guard rejected — test fails.
+		// Any other response (including 401 from business-logic RBAC check) means
+		// the guard passed and the handler ran.
+		assert.NotContains(t, string(bodyBytes), "missing service token",
+			"/internal/v1/* with valid service token must pass the guard; "+
+				"body=%s", string(bodyBytes))
+	})
+
+	// /api/v1/* without token → 401 from JWT auth (guard not involved).
+	t.Run("api_without_token_401_from_jwt_auth", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodGet,
+			fmt.Sprintf("http://%s/api/v1/access/users/x", addr), nil)
+		require.NoError(t, err)
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"/api/v1/* without JWT must return 401 from auth middleware")
+	})
 
 	cancel()
 	select {

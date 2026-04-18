@@ -163,10 +163,13 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
 
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-test", 15*time.Minute)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-test", 15*time.Minute,
+		auth.WithDefaultAudience("gocell"))
 	require.NoError(t, err)
 
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(auth.DefaultJWTAudience))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet,
+		auth.WithExpectedAudiences("gocell"),
+		auth.WithExpectedIssuer("sso-bff-test"))
 	require.NoError(t, err)
 
 	// The bootstrap sink captures the cleaner worker. In tests the cleaner

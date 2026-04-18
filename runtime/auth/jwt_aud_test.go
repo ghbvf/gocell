@@ -1,4 +1,5 @@
-// Tests for VerifyIntent audience validation (PR-R-AUTH-AUD-VALIDATION).
+// Tests for VerifyIntent audience validation (PR-R-AUTH-AUD-VALIDATION) and
+// JWTIssuer default audience configuration (AUTH-TRUST-BOUNDARY-160).
 //
 // Covers RFC 8725 §3.3: "recipients MUST validate the aud claim to determine
 // that the JWT is indeed intended for the recipient."
@@ -227,4 +228,88 @@ func TestJWTVerifier_VerifyIntent_RejectsNonStringTypeAud(t *testing.T) {
 	require.Error(t, err, "non-string aud type must be rejected")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
 		"non-string aud type must return ERR_AUTH_INVALID_TOKEN_INTENT")
+}
+
+// --- WithDefaultAudience + DefaultAudience accessor tests (AUTH-TRUST-BOUNDARY-160) ---
+
+// decodeTokenAudience parses a signed JWT and returns its aud claim as []string.
+func decodeTokenAudience(t *testing.T, tokenStr string) []string {
+	t.Helper()
+	// jwt.ParseUnsecured is not available; use ParseWithClaims with no validation.
+	tok, _, err := new(jwt.Parser).ParseUnverified(tokenStr, jwt.MapClaims{})
+	require.NoError(t, err)
+	mc, ok := tok.Claims.(jwt.MapClaims)
+	require.True(t, ok)
+	return parseAudience(mc["aud"])
+}
+
+// TestJWTIssuer_WithDefaultAudience_UsedWhenOptsEmpty verifies that when the
+// issuer is constructed with WithDefaultAudience and Issue is called with an
+// empty IssueOptions.Audience, the default audience is written into the token.
+func TestJWTIssuer_WithDefaultAudience_UsedWhenOptsEmpty(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+		WithDefaultAudience("gocell"),
+	)
+	require.NoError(t, err)
+
+	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
+	require.NoError(t, err)
+
+	aud := decodeTokenAudience(t, tok)
+	assert.Equal(t, []string{"gocell"}, aud,
+		"default audience must be written when IssueOptions.Audience is nil")
+}
+
+// TestJWTIssuer_WithDefaultAudience_OverriddenByIssueOpts verifies that when
+// IssueOptions.Audience is non-nil, it takes precedence over the default audience.
+func TestJWTIssuer_WithDefaultAudience_OverriddenByIssueOpts(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+		WithDefaultAudience("gocell"),
+	)
+	require.NoError(t, err)
+
+	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{Audience: []string{"other"}})
+	require.NoError(t, err)
+
+	aud := decodeTokenAudience(t, tok)
+	assert.Equal(t, []string{"other"}, aud,
+		"IssueOptions.Audience must override the default audience")
+}
+
+// TestJWTIssuer_DefaultAudience_ReturnsConfiguredValue verifies the DefaultAudience
+// accessor: returns a copy of the configured slice; nil when not configured;
+// mutating the returned slice does not affect future calls (copy semantics).
+func TestJWTIssuer_DefaultAudience_ReturnsConfiguredValue(t *testing.T) {
+	ks := mustTestKeySet(t)
+
+	t.Run("returns configured value", func(t *testing.T) {
+		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+			WithDefaultAudience("gocell", "api-gateway"),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"gocell", "api-gateway"}, issuer.DefaultAudience())
+	})
+
+	t.Run("returns nil when not configured", func(t *testing.T) {
+		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+		require.NoError(t, err)
+		assert.Nil(t, issuer.DefaultAudience(),
+			"DefaultAudience must return nil when WithDefaultAudience was not called")
+	})
+
+	t.Run("mutating returned slice does not affect next call", func(t *testing.T) {
+		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+			WithDefaultAudience("gocell"),
+		)
+		require.NoError(t, err)
+
+		got := issuer.DefaultAudience()
+		got[0] = "mutated"
+
+		// Second call must return original value, proving copy semantics.
+		assert.Equal(t, []string{"gocell"}, issuer.DefaultAudience(),
+			"DefaultAudience must return an independent copy each call")
+	})
 }
