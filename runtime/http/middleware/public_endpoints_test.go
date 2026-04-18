@@ -131,6 +131,16 @@ func TestCompilePublicEndpoints_ErrorCases(t *testing.T) {
 			entries: []string{"POST /api/v1/auth/login", "POST /api/v1/auth/login"},
 			wantErr: "duplicate",
 		},
+		{
+			name:    "GET then HEAD duplicate",
+			entries: []string{"GET /foo", "HEAD /foo"},
+			wantErr: "duplicate",
+		},
+		{
+			name:    "HEAD then GET aliases existing HEAD",
+			entries: []string{"HEAD /foo", "GET /foo"},
+			wantErr: "duplicate",
+		},
 	}
 
 	for _, tc := range tests {

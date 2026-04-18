@@ -218,8 +218,8 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 //   - Request-ID: matching requests reject client-supplied X-Request-Id headers.
 //
 // WithPublicEndpoints must not be combined with WithAuthMiddleware — use one
-// or the other. If both are called, the last one wins for publicEndpoints and
-// a warning is logged at startup.
+// or the other. If both are called, Run() returns an error immediately
+// (fail-fast) and the service will not start.
 //
 // Example:
 //

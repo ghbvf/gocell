@@ -63,6 +63,10 @@ func CompilePublicEndpoints(entries []string) (func(*http.Request) bool, error) 
 		// so that "GET /api/v1/.well-known/jwks" also covers HEAD pre-flight checks.
 		if method == http.MethodGet {
 			headKey := matchKey(http.MethodHead, cleanPath)
+			if set[headKey] {
+				return nil, fmt.Errorf("public endpoint entry %q: duplicate — GET auto-alias HEAD conflicts with an existing HEAD %s entry",
+					raw, cleanPath)
+			}
 			set[headKey] = true
 		}
 	}

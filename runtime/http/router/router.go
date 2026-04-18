@@ -427,7 +427,7 @@ func (r *Router) applyPublicEndpoints() error {
 		return nil
 	}
 	if len(r.tracingOpts) > 0 {
-		slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
+		slog.Warn("router: WithPublicEndpoints appends a publicEndpointFn; if TracingOptions already contains WithPublicEndpointFn, last-write-wins")
 	}
 
 	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)

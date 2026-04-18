@@ -3306,7 +3306,7 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
 			WithAuthMiddleware(verifier, []string{"/login"}),
-			WithPublicEndpoints([]string{"/login"}),
+			WithPublicEndpoints([]string{"POST /login"}),
 		)
 		err := b.Run(context.Background())
 		require.Error(t, err)
@@ -3316,7 +3316,7 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 	t.Run("WithPublicEndpoints then WithAuthMiddleware", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
-			WithPublicEndpoints([]string{"/login"}),
+			WithPublicEndpoints([]string{"POST /login"}),
 			WithAuthMiddleware(verifier, []string{"/login"}),
 		)
 		err := b.Run(context.Background())
