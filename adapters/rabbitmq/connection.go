@@ -14,6 +14,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -27,6 +28,7 @@ const (
 	ErrAdapterAMQPConsume            errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
 	ErrAdapterAMQPReconnectExhausted errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
 	ErrAdapterAMQPReconnecting       errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
+	ErrAdapterAMQPCloseTimeout       errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
 )
 
 // Pre-allocated Health() errors to avoid per-call allocation.
@@ -469,7 +471,7 @@ func (c *Connection) reconnectWithBackoff() bool {
 // capped result is always in [0.75*max, max]. This prevents thundering-herd
 // at the cap while keeping ReconnectMaxBackoff as a true upper bound.
 func (c *Connection) backoffDelay(attempt int) time.Duration {
-	delay := exponentialDelay(c.config.ReconnectBaseDelay, c.config.ReconnectMaxBackoff, attempt)
+	delay := outbox.ExponentialDelay(c.config.ReconnectBaseDelay, c.config.ReconnectMaxBackoff, attempt)
 	if delay >= c.config.ReconnectMaxBackoff {
 		return addDownJitter(c.config.ReconnectMaxBackoff)
 	}

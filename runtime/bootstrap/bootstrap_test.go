@@ -274,7 +274,13 @@ type invokeOnceSubscriber struct {
 	once  sync.Once
 }
 
-func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ string, handler outbox.EntryHandler, _ string) error {
+func (s *invokeOnceSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *invokeOnceSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, handler outbox.EntryHandler) error {
 	s.once.Do(func() {
 		handler(ctx, s.entry)
 	})

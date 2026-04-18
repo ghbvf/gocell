@@ -56,7 +56,8 @@ func isRecoverableAMQPError(err error) bool {
 
 // Compile-time interface checks.
 var (
-	_ outbox.Subscriber            = (*Subscriber)(nil)
+	_ outbox.Subscriber = (*Subscriber)(nil)
+	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
 	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
 )
 
@@ -188,44 +189,63 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) er
 	return nil
 }
 
-// InitializeSubscription pre-declares the AMQP topology (exchange, DLX, queue,
-// binding) for the given topic and consumer group. After this returns, messages
-// published to the topic are queued by the broker — even before Subscribe
+// Setup implements outbox.Subscriber by pre-declaring AMQP topology (exchange,
+// DLX, queue, binding) for the given subscription. After this returns, messages
+// published to the topic are queued by the broker -- even before Subscribe
 // starts consuming. This enables deterministic conformance testing without sleep.
 //
-// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
-func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+// ref: Watermill message.SubscribeInitializer -- synchronous topology pre-creation.
+func (s *Subscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	if s.config.DLXExchange == "" {
 		return errcode.New(ErrAdapterAMQPSubscribe,
-			"rabbitmq: DLXExchange is required for InitializeSubscription")
+			"rabbitmq: DLXExchange is required for Setup")
 	}
 
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		return fmt.Errorf("rabbitmq: acquire channel for init: %w", err)
+		return fmt.Errorf("rabbitmq: acquire channel for setup: %w", err)
 	}
 	defer s.conn.ReleaseChannel(ch)
 
-	queueName := s.resolveQueueName(topic, consumerGroup)
-	return s.declareTopology(ch, topic, queueName)
+	queueName := s.resolveQueueName(sub.Topic, sub.ConsumerGroup)
+	return s.declareTopology(ch, sub.Topic, queueName)
 }
 
-// Subscribe registers a handler for the given topic and blocks until ctx is
-// cancelled or the subscriber is closed.
+// Ready implements outbox.Subscriber. RabbitMQ topology is declared synchronously
+// in Setup; once Setup returns, the subscription is immediately ready. Returns an
+// already-closed channel so callers do not block.
+func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// InitializeSubscription implements outbox.SubscriberInitializer for backward
+// compatibility. Delegates to Setup.
+//
+// Deprecated: callers should use Setup directly.
+func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	return s.Setup(ctx, outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup})
+}
+
+// Subscribe registers a handler for the given subscription and blocks until ctx
+// is cancelled or the subscriber is closed.
 //
 // Subscribe automatically reconnects when the underlying AMQP channel is lost
 // (e.g., due to a broker restart or network partition). It waits for the
 // Connection to re-establish via WaitConnected, then re-declares the exchange,
 // queue, and binding on a fresh channel.
 //
-// The topic is used as a fanout exchange name. A queue (from SubscriberConfig
+// sub.Topic is used as a fanout exchange name. A queue (from SubscriberConfig
 // or defaulting to the topic) is declared and bound to the exchange.
 //
-// Consumer: cg-{QueueName}-{topic}
+// Consumer: cg-{QueueName}-{sub.Topic}
 // Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
 // ACK timing: after handler returns DispositionAck
-// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) → DLX
-func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox.EntryHandler, consumerGroup string) error {
+// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) -> DLX
+func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+	topic := sub.Topic
+	consumerGroup := sub.ConsumerGroup
 	if s.closed.Load() {
 		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
@@ -413,6 +433,21 @@ func (s *Subscriber) untrackChannel(ch AMQPChannel) {
 	s.mu.Unlock()
 }
 
+// consumeLoop drains the deliveries channel and dispatches each delivery in a
+// dedicated goroutine, honouring PrefetchCount as real concurrency.
+//
+// Concurrent safety audit:
+//   - ch.Ack/Nack: guarded by amqp091-go's internal channel mutex; safe to call
+//     from multiple goroutines simultaneously.
+//     ref: rabbitmq/amqp091-go channel.go (sendMethod holds ch.m.Lock).
+//   - Receipt: per-delivery local variable passed into processDelivery — no
+//     sharing across goroutines.
+//   - dispatchAck/releaseReceipt/dispatchDisposition: use only the per-delivery
+//     ch, tag, and Receipt; no Subscriber-level mutable state.
+//   - s.wg: sync.WaitGroup — concurrency-safe by design.
+//   - topic/handler: immutable after Subscribe call.
+//
+// ref: ThreeDotsLabs/watermill message/router.go h.run — per-message goroutine
 func (s *Subscriber) consumeLoop(
 	ctx context.Context,
 	ch AMQPChannel,
@@ -440,7 +475,7 @@ func (s *Subscriber) consumeLoop(
 			}
 
 			s.wg.Add(1)
-			s.processDelivery(ctx, ch, delivery, topic, handler)
+			go s.processDelivery(ctx, ch, delivery, topic, handler)
 		}
 	}
 }
@@ -455,16 +490,11 @@ func (s *Subscriber) nackPermanent(ch AMQPChannel, tag uint64, topic string) {
 	}
 }
 
-// validateEntryID returns the reason string if entry.ID is invalid ("empty" or
-// "too_long"), or empty string if the ID is acceptable.
-func validateEntryID(id string) string {
-	if id == "" {
-		return "empty"
-	}
-	if len(id) > maxEntryIDLength {
-		return "too_long"
-	}
-	return ""
+// validateEntryIDLength returns true if entry.ID exceeds the AMQP shortstr
+// limit. Kept separate so that the too-long branch can log the truncated
+// length for diagnostics; outbox.Entry.Validate covers the empty-ID case.
+func validateEntryIDLength(id string) bool {
+	return len(id) > maxEntryIDLength
 }
 
 func (s *Subscriber) processDelivery(
@@ -487,21 +517,27 @@ func (s *Subscriber) processDelivery(
 		return
 	}
 
-	// Guard: reject entries with invalid ID before touching metadata or invoking handler.
-	// Defense-in-depth — valid WireMessage envelopes always have a non-empty ID, but
-	// the legacy fallback path and future format changes could produce invalid IDs.
-	if reason := validateEntryID(entry.ID); reason != "" {
-		attrs := []slog.Attr{
+	// AMQP shortstr cap: too-long IDs cannot survive a broker round-trip, so
+	// reject before touching metadata. Logged with capped length to indicate
+	// overflow magnitude without exposing the full byte count.
+	if validateEntryIDLength(entry.ID) {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: entry.ID exceeds AMQP shortstr limit, nacking without requeue",
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
-			slog.String("reason", reason),
-		}
-		if reason == "too_long" {
-			// Cap the logged length to 2× maxEntryIDLength (510) to indicate
-			// overflow magnitude without exposing the full byte count.
-			attrs = append(attrs, slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
-		}
-		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry.ID, nacking without requeue", attrs...)
+			slog.Int("len_capped", min(len(entry.ID), maxEntryIDLength*2)))
+		s.nackPermanent(ch, delivery.DeliveryTag, topic)
+		return
+	}
+
+	// Unified Entry validation at consumer entry: covers empty ID, missing
+	// Topic+EventType, empty Payload, and metadata size limits in one place.
+	// Defense-in-depth — production senders satisfy these invariants, but a
+	// malformed broker delivery (e.g. tampered payload) must not reach handlers.
+	if err := entry.Validate(); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry, nacking without requeue",
+			slog.String(logKeyTopic, topic),
+			slog.Uint64("delivery_tag", delivery.DeliveryTag),
+			slog.String("error", err.Error()))
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -522,42 +558,7 @@ func (s *Subscriber) processDelivery(
 	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
 	res := handler(deliveryCtx, entry)
 
-	// Execute broker-level disposition.
-	var brokerErr error
-	switch res.Disposition {
-	case outbox.DispositionAck:
-		brokerErr = ch.Ack(delivery.DeliveryTag, false)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: ack failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	case outbox.DispositionReject:
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, false)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(reject) failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	case outbox.DispositionRequeue:
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
-		if brokerErr != nil {
-			slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: nack(requeue) failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, entry.ID),
-				slog.String("error", brokerErr.Error()))
-		}
-	default:
-		slog.LogAttrs(deliveryCtx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
-			slog.String(logKeyTopic, topic),
-			slog.String(logKeyEventID, entry.ID),
-			slog.String("disposition", res.Disposition.String()))
-		brokerErr = ch.Nack(delivery.DeliveryTag, false, true)
-	}
-
-	// Log handler-level error if present (separate from broker error).
+	// Log handler-level error if present (separate from broker disposition).
 	if res.Err != nil {
 		slog.LogAttrs(deliveryCtx, slog.LevelWarn, "rabbitmq: handler reported error",
 			slog.String(logKeyTopic, topic),
@@ -566,54 +567,128 @@ func (s *Subscriber) processDelivery(
 			slog.String("error", res.Err.Error()))
 	}
 
-	s.settleReceipt(deliveryCtx, res, topic, entry.ID, brokerErr)
+	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry.ID)
 }
 
-// settleReceipt commits or releases the idempotency receipt after the broker
-// Ack/Nack outcome is known. Uses a detached context with a 5s timeout so
-// the operation completes even during graceful shutdown.
-func (s *Subscriber) settleReceipt(
+// dispatchDisposition executes the broker-level disposition and settles the
+// idempotency receipt.
+//
+// DispositionAck: Commit FIRST (token-guarded), then broker Ack. If Commit
+// fails (lease expired, Redis Lua token mismatch), Nack(requeue=true) so
+// another holder retries. The previous Ack→Commit order could not roll back
+// a broker delivery after Commit failure.
+// ref: Temporal task-token validation (commit-time fencing)
+// ref: MassTransit ValidateLockStatus (Ack 前最后一道门)
+//
+// DispositionReject/Requeue: broker Nack first, then Release the receipt so
+// DLQ replay or redelivery can re-enter the Claim/Commit cycle cleanly.
+func (s *Subscriber) dispatchDisposition(
 	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
 	res outbox.HandleResult,
 	topic, eventID string,
-	brokerErr error,
 ) {
-	if res.Receipt == nil {
+	switch res.Disposition {
+	case outbox.DispositionAck:
+		s.dispatchAck(ctx, ch, tag, res, topic, eventID)
+	case outbox.DispositionReject:
+		if nackErr := ch.Nack(tag, false, false); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+	case outbox.DispositionRequeue:
+		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+	default:
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("disposition", res.Disposition.String()))
+		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed for unknown disposition",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", nackErr.Error()))
+		}
+		releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+	}
+}
+
+// dispatchAck handles the Commit→Ack path for DispositionAck.
+// If Commit fails, Nack(requeue=true) is issued instead of Ack.
+func (s *Subscriber) dispatchAck(
+	ctx context.Context,
+	ch AMQPChannel,
+	tag uint64,
+	res outbox.HandleResult,
+	topic, eventID string,
+) {
+	if res.Receipt != nil {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		commitErr := res.Receipt.Commit(rctx)
+		cancel()
+		if commitErr != nil {
+			slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: receipt commit failed (lease may have expired); requeuing instead of acking",
+				slog.String(logKeyTopic, topic),
+				slog.String(logKeyEventID, eventID),
+				slog.String("error", commitErr.Error()))
+			if nackErr := ch.Nack(tag, false, true); nackErr != nil {
+				slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed after commit failure",
+					slog.String(logKeyTopic, topic),
+					slog.String(logKeyEventID, eventID),
+					slog.String("error", nackErr.Error()))
+			}
+			return
+		}
+	}
+	if ackErr := ch.Ack(tag, false); ackErr != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: ack failed",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("error", ackErr.Error()))
+		// Receipt already committed; broker ack failure means the message will
+		// be redelivered, but the idempotency key (ClaimDone) prevents double
+		// processing on the next delivery.
+	}
+}
+
+// releaseReceipt releases the idempotency receipt with a 5s detached timeout.
+// Uses context.WithoutCancel so the operation completes even during graceful shutdown.
+// reason is used for structured log fields.
+func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID, reason string) {
+	if receipt == nil {
 		return
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-
-	if brokerErr != nil {
-		if relErr := res.Receipt.Release(rctx); relErr != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed after broker error",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", relErr.Error()))
-		}
-		return
-	}
-
-	switch res.Disposition {
-	case outbox.DispositionAck:
-		if err := res.Receipt.Commit(rctx); err != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt commit failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", err.Error()))
-		}
-	default:
-		// Reject/Requeue/unknown — release so DLQ replay or redelivery can re-enter.
-		if err := res.Receipt.Release(rctx); err != nil {
-			slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
-				slog.String(logKeyTopic, topic),
-				slog.String(logKeyEventID, eventID),
-				slog.String("error", err.Error()))
-		}
+	if relErr := receipt.Release(rctx); relErr != nil {
+		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
+			slog.String(logKeyTopic, topic),
+			slog.String(logKeyEventID, eventID),
+			slog.String("reason", reason),
+			slog.String("error", relErr.Error()))
 	}
 }
 
 // Close terminates all active subscriptions and waits for in-flight messages.
+//
+// Two-phase shutdown:
+//  1. Signal all goroutines to stop via closeCh, then wait up to ShutdownTimeout
+//     for processDelivery goroutines to complete (WaitGroup).
+//  2. Only close tracked AMQP channels when ALL goroutines have exited cleanly.
+//     If the timeout expires, channels are NOT force-closed (they may still be
+//     held by in-flight processDelivery goroutines); a warning is logged instead
+//     and cleanup is deferred to process exit. This prevents a closed-channel
+//     panic inside processDelivery after the consumer is drained by subscribeOnce.
 func (s *Subscriber) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
@@ -631,11 +706,24 @@ func (s *Subscriber) Close() error {
 	case <-done:
 		slog.Info("rabbitmq: subscriber closed gracefully")
 	case <-time.After(s.config.ShutdownTimeout):
-		slog.Warn("rabbitmq: subscriber shutdown timed out",
-			slog.Duration("timeout", s.config.ShutdownTimeout))
+		// Do not force-close AMQP channels here — processDelivery goroutines may
+		// still hold references and a close would cause a panic on the next send.
+		// Log the goroutine count and let the OS clean up on process exit.
+		s.mu.Lock()
+		remaining := len(s.channels)
+		s.mu.Unlock()
+		slog.Warn("rabbitmq: subscriber shutdown timed out, channels not force-closed",
+			slog.Duration("timeout", s.config.ShutdownTimeout),
+			slog.Int("remaining_channels", remaining))
+		// Surface the timeout to the caller so bootstrap teardown does not
+		// report success when in-flight handlers are still holding channels.
+		// Channels are deferred to process exit (see Two-phase shutdown above).
+		return errcode.New(ErrAdapterAMQPCloseTimeout,
+			fmt.Sprintf("rabbitmq: subscriber Close timed out after %s with %d channel(s) still in use",
+				s.config.ShutdownTimeout, remaining))
 	}
 
-	// Close all channels.
+	// All goroutines have exited — safe to close the AMQP channels.
 	s.mu.Lock()
 	channels := s.channels
 	s.channels = nil

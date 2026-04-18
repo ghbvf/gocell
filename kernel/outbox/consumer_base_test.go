@@ -177,7 +177,38 @@ func TestConsumerBaseConfig_SetDefaults_PositiveValuesPreserved(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.MaxRetryDelay)
 }
 
-// --- exponentialDelay ------------------------------------------------------
+// --- exponentialDelay / ExponentialDelay -----------------------------------
+
+// TestExponentialDelay_PublicAPI verifies the exported ExponentialDelay
+// function that adapters should use instead of maintaining their own copies.
+func TestExponentialDelay_PublicAPI(t *testing.T) {
+	base := 100 * time.Millisecond
+	maxDelay := 5 * time.Second
+	cases := []struct {
+		name     string
+		base     time.Duration
+		maxDelay time.Duration
+		attempt  int
+		want     time.Duration
+	}{
+		{"zero_base_returns_zero", 0, maxDelay, 3, 0},
+		{"attempt_0_equals_base", base, maxDelay, 0, base},
+		{"attempt_1_double", base, maxDelay, 1, 2 * base},
+		{"attempt_5_capped_by_base_shift", base, maxDelay, 5, 3200 * time.Millisecond},
+		{"capped_at_max", base, maxDelay, 10, maxDelay},
+		{"overflow_protection_63", base, maxDelay, 63, maxDelay},
+		{"overflow_protection_65", base, maxDelay, 65, maxDelay},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExponentialDelay(tc.base, tc.maxDelay, tc.attempt)
+			if got != tc.want {
+				t.Errorf("ExponentialDelay(%v, %v, %d) = %v, want %v",
+					tc.base, tc.maxDelay, tc.attempt, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestExponentialDelay_Table(t *testing.T) {
 	tests := []struct {
@@ -198,7 +229,7 @@ func TestExponentialDelay_Table(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := exponentialDelay(tt.base, tt.maxDelay, tt.attempt)
+			got := ExponentialDelay(tt.base, tt.maxDelay, tt.attempt)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -207,31 +238,29 @@ func TestExponentialDelay_Table(t *testing.T) {
 func TestExponentialDelay_ExactMaxSafeShift(t *testing.T) {
 	base := time.Second
 	maxSafeShift := 63 - bits.Len64(uint64(base))
-	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift))
-	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift+1))
+	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift))
+	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift+1))
 }
 
 // --- NewConsumerBase -------------------------------------------------------
 
 func TestNewConsumerBase_InvalidClaimPolicy(t *testing.T) {
 	_, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
-		ConsumerGroup: "g",
-		ClaimPolicy:   ClaimPolicy(99),
+		ClaimPolicy: ClaimPolicy(99),
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid ClaimPolicy")
 }
 
 func TestNewConsumerBase_DefaultClaimPolicyFailClosed(t *testing.T) {
-	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{ConsumerGroup: "g"})
+	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{})
 	require.NoError(t, err)
 	assert.Equal(t, ClaimPolicyFailClosed, cb.config.ClaimPolicy)
 }
 
 func TestNewConsumerBase_ExplicitFailOpenPreserved(t *testing.T) {
 	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
-		ConsumerGroup: "g",
-		ClaimPolicy:   ClaimPolicyFailOpen,
+		ClaimPolicy: ClaimPolicyFailOpen,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, ClaimPolicyFailOpen, cb.config.ClaimPolicy)
@@ -243,11 +272,11 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -267,11 +296,11 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 func TestConsumerBase_Wrap_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimDone}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -286,13 +315,12 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimBusy}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryBaseDelay: 5 * time.Millisecond, // short backoff for test
 	})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -309,14 +337,13 @@ func TestConsumerBase_Wrap_TransientError_RetriesUntilAck(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryCount:     3,
 		RetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	attempts := 0
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
 		if attempts == 1 {
 			return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
@@ -335,14 +362,13 @@ func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryCount:     2,
 		RetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	attempts := 0
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
 		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("always fail")}
 	})
@@ -358,14 +384,13 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryCount:     5,
 		RetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	attempts := 0
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
 		return HandleResult{Disposition: DispositionReject, Err: errors.New("bad payload")}
 	})
@@ -381,14 +406,13 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryCount:     5,
 		RetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	attempts := 0
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		attempts++
 		return HandleResult{
 			Disposition: DispositionRequeue,
@@ -405,13 +429,12 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:  "cg",
 		RetryCount:     5,
 		RetryBaseDelay: 5 * time.Second, // long enough that ctx cancel wins
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("transient")}
 	})
 
@@ -440,14 +463,13 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_LocalRetryThenSuccess(t *testin
 	}}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:       "cg",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -466,14 +488,13 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:       "cg",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: time.Millisecond,
 	})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -488,13 +509,12 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:       "cg",
 		ClaimRetryCount:     5,
 		ClaimRetryBaseDelay: 5 * time.Second,
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -516,13 +536,12 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup: "cg",
-		ClaimPolicy:   ClaimPolicyFailOpen,
+		ClaimPolicy: ClaimPolicyFailOpen,
 	})
 	require.NoError(t, err)
 
 	called := false
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -537,14 +556,13 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	claimer := &fakeClaimer{err: errors.New("redis down")}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:       "cg",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 200 * time.Millisecond,
 		MaxRetryDelay:       20 * time.Millisecond, // clamp well below base
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -562,14 +580,14 @@ func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimDone, receipt: receipt}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{ConsumerGroup: "cg"})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
 	require.NoError(t, err)
 
 	mw := cb.AsMiddleware()
 	require.NotNil(t, mw)
 
 	called := false
-	wrapped := mw("topic", func(_ context.Context, _ Entry) HandleResult {
+	wrapped := mw(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -594,14 +612,13 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:        "cg",
 		LeaseTTL:             200 * time.Millisecond,
 		LeaseRenewalInterval: interval,
 	})
 	require.NoError(t, err)
 
 	handlerDone := make(chan struct{})
-	handler := cb.Wrap("topic", func(ctx context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
 		// Block for ~3 intervals so renewal fires at least twice.
 		select {
 		case <-time.After(3 * interval):
@@ -634,7 +651,6 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:        "cg",
 		LeaseTTL:             200 * time.Millisecond,
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
@@ -643,7 +659,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	require.NoError(t, err)
 
 	ctxCancelSeen := make(chan struct{}, 1)
-	handler := cb.Wrap("topic", func(ctx context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
 		// Block until context is cancelled or timeout.
 		select {
 		case <-ctx.Done():
@@ -695,6 +711,59 @@ func (s *spyExtendReceipt) Extend(ctx context.Context, ttl time.Duration) error 
 
 var _ Receipt = (*spyExtendReceipt)(nil)
 
+// TestConsumerBase_DifferentConsumerGroupsNoCollision verifies that two distinct
+// ConsumerGroups processing the same entry.ID each reach ClaimAcquired independently
+// — they use different idempotency keys so neither sees ClaimDone from the other.
+// This is the critical regression test for PR#180 P0.
+func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
+	receipt1 := &fakeReceipt{}
+	claimer1 := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt1}
+	receipt2 := &fakeReceipt{}
+	claimer2 := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt2}
+
+	sub1 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-audit-core"}
+	sub2 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-config-core"}
+
+	cb1, err := NewConsumerBase(claimer1, ConsumerBaseConfig{})
+	require.NoError(t, err)
+	cb2, err := NewConsumerBase(claimer2, ConsumerBaseConfig{})
+	require.NoError(t, err)
+
+	calls1 := 0
+	handler1 := cb1.Wrap(sub1, func(_ context.Context, _ Entry) HandleResult {
+		calls1++
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	calls2 := 0
+	handler2 := cb2.Wrap(sub2, func(_ context.Context, _ Entry) HandleResult {
+		calls2++
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	entry := Entry{ID: "shared-event-id-001"}
+	res1 := handler1(context.Background(), entry)
+	res2 := handler2(context.Background(), entry)
+
+	assert.Equal(t, DispositionAck, res1.Disposition, "handler1 must reach ClaimAcquired")
+	assert.Equal(t, DispositionAck, res2.Disposition, "handler2 must reach ClaimAcquired")
+	assert.Equal(t, 1, calls1, "handler1 must be invoked")
+	assert.Equal(t, 1, calls2, "handler2 must be invoked — different namespace, no collision")
+
+	// Verify the idempotency keys differ — each claimer was called with its own namespace.
+	claimer1.mu.Lock()
+	key1 := claimer1.calls[0]
+	claimer1.mu.Unlock()
+
+	claimer2.mu.Lock()
+	key2 := claimer2.calls[0]
+	claimer2.mu.Unlock()
+
+	assert.Equal(t, "cg-audit-core:shared-event-id-001", key1)
+	assert.Equal(t, "cg-config-core:shared-event-id-001", key2)
+	assert.NotEqual(t, key1, key2, "idempotency keys must differ across ConsumerGroups")
+}
+
 // TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine verifies that when the
 // handler completes normally, the lease renewal goroutine exits cleanly (no
 // goroutine leak).
@@ -705,13 +774,12 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:        "cg",
 		LeaseTTL:             1 * time.Second,
 		LeaseRenewalInterval: 50 * time.Millisecond,
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		// Return immediately — renewal goroutine must exit.
 		return HandleResult{Disposition: DispositionAck}
 	})
@@ -732,13 +800,12 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:        "cg",
 		LeaseTTL:             idempotency.DefaultLeaseTTL,
 		LeaseRenewalInterval: -1, // negative disables renewal
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -758,13 +825,12 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 
 	// Use a very large interval that will never fire during the test.
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		ConsumerGroup:        "cg",
 		LeaseTTL:             idempotency.DefaultLeaseTTL,
 		LeaseRenewalInterval: 0, // should default to LeaseTTL/3
 	})
 	require.NoError(t, err)
 
-	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -772,4 +838,132 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 	assert.Equal(t, DispositionAck, res.Disposition)
 	// With very fast handler, no Extend should have been called.
 	assert.Equal(t, int32(0), receipt.extendCalls.Load())
+}
+
+// =============================================================================
+// Lease-lost hard fence tests (Commit 2)
+// =============================================================================
+
+// TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck verifies
+// Layer 1 hard fence: if the lease expires (ErrLeaseExpired during Extend) and
+// the handler ignores ctx.Done() returning DispositionAck, runWithRenewal must
+// force-downgrade the result to DispositionRequeue.
+func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	callCount := atomic.Int32{}
+	baseReceipt := &fakeReceipt{}
+
+	// Fail on 2nd Extend call with ErrLeaseExpired.
+	spyR := &spyExtendReceipt{
+		receipt: baseReceipt,
+		failOn:  2,
+		err:     idempotency.ErrLeaseExpired,
+		calls:   &callCount,
+	}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	// Handler deliberately ignores ctx.Done() and returns Ack — simulates a
+	// stale holder that is not ctx-aware. It blocks for several intervals so
+	// the renewal goroutine can fire and detect the expired lease.
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
+		// Block to allow renewal goroutine to fire and set leaseLost.
+		// The handler deliberately does NOT check ctx.Done() to simulate a
+		// stale handler that ignores cancellation.
+		time.Sleep(5 * interval)
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-lease-lost-ack"})
+
+	// The hard fence must downgrade Ack → Requeue.
+	assert.Equal(t, DispositionRequeue, res.Disposition,
+		"lease-lost hard fence must downgrade DispositionAck to DispositionRequeue")
+}
+
+// TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue verifies that
+// when the lease is lost AND the handler is ctx-aware (returns Requeue on
+// ctx.Done()), the final result is still Requeue — the same safe path.
+func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	callCount := atomic.Int32{}
+	baseReceipt := &fakeReceipt{}
+
+	spyR := &spyExtendReceipt{
+		receipt: baseReceipt,
+		failOn:  2,
+		err:     idempotency.ErrLeaseExpired,
+		calls:   &callCount,
+	}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	ctxCancelSeen := make(chan struct{}, 1)
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
+		select {
+		case <-ctx.Done():
+			ctxCancelSeen <- struct{}{}
+			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
+		case <-time.After(5 * time.Second):
+			t.Error("handler blocked without ctx cancellation")
+			return HandleResult{Disposition: DispositionAck}
+		}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-lease-lost-requeue"})
+
+	select {
+	case <-ctxCancelSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler context was not cancelled after ErrLeaseExpired")
+	}
+
+	assert.Equal(t, DispositionRequeue, res.Disposition,
+		"ctx-aware handler returning Requeue after lease-lost must remain Requeue")
+}
+
+// TestConsumerBase_LeaseHeld_NormalAck verifies that the hard fence does NOT
+// interfere with the normal path where the lease is always valid and the
+// handler returns DispositionAck.
+func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{} // extendErr defaults to nil → always succeeds
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: 20 * time.Millisecond,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-normal-ack"})
+	assert.Equal(t, DispositionAck, res.Disposition,
+		"hard fence must not downgrade Ack when lease is always held")
+	assert.Same(t, receipt, res.Receipt,
+		"receipt must be threaded through on normal Ack path")
 }

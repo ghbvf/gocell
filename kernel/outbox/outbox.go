@@ -1,7 +1,7 @@
 // Package outbox defines interfaces for the transactional outbox pattern.
 // Implementations live in adapters/ (e.g., adapters/postgres).
 //
-// ref: ThreeDotsLabs/watermill message/ — Message 統一模型, Publisher/Subscriber 接口
+// ref: ThreeDotsLabs/watermill message/ -- Message unified model, Publisher/Subscriber interfaces
 package outbox
 
 import (
@@ -22,10 +22,10 @@ import (
 // These constants prevent unbounded metadata from degrading broker throughput
 // or exceeding transport-level control-line limits.
 //
-// ref: OTel sdk/trace/span_limits.go — 128 attributes/span (GoCell uses 64
+// ref: OTel sdk/trace/span_limits.go -- 128 attributes/span (GoCell uses 64
 //      as a tighter balance between overhead prevention and practical use)
-// ref: NATS server/const.go — MAX_CONTROL_LINE_SIZE = 4096 bytes
-// ref: RabbitMQ — no hard header-size limit, but 64 KB total is a pragmatic
+// ref: NATS server/const.go -- MAX_CONTROL_LINE_SIZE = 4096 bytes
+// ref: RabbitMQ -- no hard header-size limit, but 64 KB total is a pragmatic
 //      ceiling aligned with most broker implementations
 // ---------------------------------------------------------------------------
 
@@ -37,7 +37,7 @@ const (
 	MaxMetadataKeys = 64
 
 	// MaxMetadataKeyLen is the maximum byte length of a single metadata key.
-	// Measured in bytes (len()), not runes — multi-byte UTF-8 keys are counted
+	// Measured in bytes (len()), not runes -- multi-byte UTF-8 keys are counted
 	// by their wire size, consistent with transport-level limits.
 	MaxMetadataKeyLen = 256
 
@@ -166,7 +166,7 @@ type Writer interface {
 // WriteBatchFallback which auto-detects batch support and falls back
 // to sequential Write calls.
 //
-// ref: ThreeDotsLabs/watermill message/pubsub.go — Publish(topic, ...msgs)
+// ref: ThreeDotsLabs/watermill message/pubsub.go -- Publish(topic, ...msgs)
 // variadic pattern. GoCell uses a separate interface instead to preserve
 // the existing Writer contract and enable optimized multi-row INSERT.
 type BatchWriter interface {
@@ -330,7 +330,7 @@ func isDiscardPublisher(p Publisher) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Disposition / Receipt / HandleResult — Solution B types
+// Disposition / Receipt / HandleResult -- Solution B types
 // ---------------------------------------------------------------------------
 
 // Disposition describes the broker-level action for a consumed message.
@@ -347,8 +347,8 @@ const (
 	// IMPORTANT: iota+1 ensures the zero value (0) is NOT a valid Disposition.
 	// A forgotten/uninitialised HandleResult.Disposition will NOT silently ACK.
 	DispositionAck     Disposition = iota + 1 // = 1
-	DispositionRequeue                        // NACK+requeue — transient / shutdown
-	DispositionReject                         // NACK+no-requeue — permanent failure → DLX
+	DispositionRequeue                        // NACK+requeue -- transient / shutdown
+	DispositionReject                         // NACK+no-requeue -- permanent failure -> DLX
 )
 
 // Valid reports whether d is a recognised Disposition value.
@@ -397,7 +397,7 @@ type HandleResult struct {
 type EntryHandler func(context.Context, Entry) HandleResult
 
 // ---------------------------------------------------------------------------
-// PermanentError — error classification (domain concept)
+// PermanentError -- error classification (domain concept)
 // ---------------------------------------------------------------------------
 
 // PermanentError wraps an error to indicate it should not be retried
@@ -405,7 +405,7 @@ type EntryHandler func(context.Context, Entry) HandleResult
 // alongside Disposition and HandleResult.
 //
 // ref: Temporal SDK temporal.ApplicationError (NonRetryable flag in SDK core);
-// Watermill delegates error classification to middleware — GoCell makes it
+// Watermill delegates error classification to middleware -- GoCell makes it
 // explicit at the kernel level so WrapLegacyHandler and InMemoryEventBus
 // can detect it without depending on adapter-layer types.
 type PermanentError struct {
@@ -437,9 +437,9 @@ func NewPermanentError(err error) *PermanentError {
 type LegacyHandler = func(context.Context, Entry) error
 
 // WrapLegacyHandler adapts a LegacyHandler to the new EntryHandler contract:
-//   - nil error         → DispositionAck
-//   - PermanentError    → DispositionReject (routed to DLX)
-//   - other non-nil err → DispositionRequeue (transient by default)
+//   - nil error         -> DispositionAck
+//   - PermanentError    -> DispositionReject (routed to DLX)
+//   - other non-nil err -> DispositionRequeue (transient by default)
 //
 // This allows existing cell handlers to compile against the new Subscriber
 // interface without immediate rewrite.
@@ -466,85 +466,92 @@ func WrapLegacyHandler(fn LegacyHandler) EntryHandler {
 // Adopted: Close() for clean shutdown; topic-based subscription model.
 // Deviated: callback-based EntryHandler instead of channel-based (<-chan *Message)
 // to align with GoCell's ConsumerBase pattern and simplify consumer lifecycle.
+// Extended: Setup/Ready split mirrors Watermill Router's setup-before-run pattern,
+// eliminating the 500ms startup-timeout heuristic in eventrouter (Commit 3).
 //
-// ref: Kafka sarama ConsumerGroup — consumerGroup isolates consumption; same group
+// ref: Kafka sarama ConsumerGroup -- consumerGroup isolates consumption; same group
 // competes, different groups each get a full copy (fanout).
-// ref: go-micro broker.SubscribeOptions.Queue — same concept, different name.
+// ref: go-micro broker.SubscribeOptions.Queue -- same concept, different name.
 type Subscriber interface {
-	// Subscribe registers a handler for the given topic. The handler is called
-	// for each incoming entry and returns a HandleResult that declares the
-	// intended broker disposition.
+	// Setup pre-declares broker topology (exchanges, queues, bindings) for the
+	// given subscription before Subscribe is called. Callers SHOULD await Ready
+	// before publishing to ensure messages are queued deterministically.
+	// In-memory implementations MUST return nil immediately.
+	Setup(ctx context.Context, sub Subscription) error
+
+	// Ready returns a channel that is closed when the subscription is ready to
+	// consume. In-memory implementations SHOULD return an already-closed channel.
+	Ready(sub Subscription) <-chan struct{}
+
+	// Subscribe registers a handler for the given subscription and blocks until
+	// ctx is cancelled or an unrecoverable error occurs.
 	//
-	// consumerGroup identifies the logical consumer group. Subscribers in
-	// the same group compete for messages (load-balanced); different groups
-	// each receive a full copy (fanout).
-	//
-	// Empty consumerGroup is accepted for backward compatibility but its
-	// semantics are backend-specific and NOT portable:
-	//   - InMemoryEventBus: broadcast to all subscribers (fanout)
-	//   - RabbitMQ: falls back to topic-named queue (competing)
-	// Cell code SHOULD always pass a non-empty group via EventRouter.AddHandler.
-	//
-	// Subscribe blocks until ctx is cancelled or an unrecoverable error occurs.
-	Subscribe(ctx context.Context, topic string, handler EntryHandler, consumerGroup string) error
+	// Subscription.ConsumerGroup identifies the logical consumer group.
+	// Subscribers sharing the same group compete for messages (load-balanced);
+	// different groups each receive a full copy (fanout).
+	Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error
 
 	// Close terminates all active subscriptions and releases resources.
 	Close() error
 }
 
-// ErrInitializerNotSupported is returned by InitializeSubscription when the
-// underlying subscriber does not support topology pre-declaration. Callers
-// that receive this error should use an alternative readiness mechanism
-// (e.g., polling or timed delay) instead of assuming initialization succeeded.
+// ErrInitializerNotSupported is kept for backward-compatible callers that still
+// perform SubscriberInitializer detection. Deprecated: use Subscriber.Setup.
 var ErrInitializerNotSupported = errors.New("subscriber does not implement SubscriberInitializer")
 
-// SubscriberInitializer is optionally implemented by Subscriber to pre-declare
-// broker topology (exchanges, queues, bindings) before Subscribe is called.
-// This allows the conformance harness to publish messages deterministically —
-// with a persistent broker, messages are queued even before Subscribe starts
-// consuming.
+// SubscriberInitializer is deprecated. Topology pre-declaration is now part of
+// the Subscriber interface (Setup method). Kept so existing callers compile
+// during migration.
 //
-// Implementations that do not support pre-initialization (e.g., in-memory)
-// need not implement this interface; the harness falls back to a brief sleep.
-//
-// ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
+// Deprecated: implement Subscriber.Setup instead.
 type SubscriberInitializer interface {
 	InitializeSubscription(ctx context.Context, topic, consumerGroup string) error
 }
 
-// TopicHandlerMiddleware transforms an EntryHandler, receiving the topic name.
-// It is the event-consumer analogue of HTTP middleware.
+// TopicHandlerMiddleware is kept for backward compatibility with existing code
+// that uses ObservabilityContextMiddleware and bootstrap wiring.
+//
+// Deprecated: new code should use SubscriptionMiddleware (subscription.go)
+// which carries the full Subscription identity.
 type TopicHandlerMiddleware func(topic string, next EntryHandler) EntryHandler
 
-// SubscriberWithMiddleware wraps a Subscriber so that every handler passed
-// to Subscribe is first wrapped by the given middleware chain.
+// SubscriberWithMiddleware wraps a Subscriber so that every handler passed to
+// Subscribe is first wrapped by the SubscriptionMiddleware chain.
 // Middleware is applied in order: [0] is outermost, [len-1] is innermost.
 type SubscriberWithMiddleware struct {
 	Inner      Subscriber
-	Middleware []TopicHandlerMiddleware
+	Middleware []SubscriptionMiddleware
 }
 
 // Compile-time interface check.
 var _ Subscriber = (*SubscriberWithMiddleware)(nil)
 
-// Subscribe wraps the handler with the middleware chain, then delegates to Inner.
-func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, topic string, handler EntryHandler, consumerGroup string) error {
-	wrapped := handler
-	for i := len(s.Middleware) - 1; i >= 0; i-- {
-		wrapped = s.Middleware[i](topic, wrapped)
-	}
-	return s.Inner.Subscribe(ctx, topic, wrapped, consumerGroup)
+// Setup delegates topology pre-declaration to Inner.
+func (s *SubscriberWithMiddleware) Setup(ctx context.Context, sub Subscription) error {
+	return s.Inner.Setup(ctx, sub)
 }
 
-// InitializeSubscription delegates to Inner if it implements SubscriberInitializer.
-// Returns ErrInitializerNotSupported when Inner does not implement the interface,
-// so callers (e.g., outboxtest.waitForSubscription) can fall back to sleep-based
-// waiting instead of assuming initialization succeeded.
-func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
-	if init, ok := s.Inner.(SubscriberInitializer); ok {
-		return init.InitializeSubscription(ctx, topic, consumerGroup)
+// Ready delegates to Inner.
+func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
+	return s.Inner.Ready(sub)
+}
+
+// Subscribe wraps the handler with the middleware chain, passing the full
+// Subscription to each middleware, then delegates to Inner.
+func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error {
+	wrapped := handler
+	for i := len(s.Middleware) - 1; i >= 0; i-- {
+		wrapped = s.Middleware[i](sub, wrapped)
 	}
-	return ErrInitializerNotSupported
+	return s.Inner.Subscribe(ctx, sub, wrapped)
+}
+
+// InitializeSubscription implements SubscriberInitializer for backward
+// compatibility. Delegates to Inner.Setup using a synthetic Subscription.
+//
+// Deprecated: callers should use Setup directly.
+func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
+	return s.Inner.Setup(ctx, Subscription{Topic: topic, ConsumerGroup: consumerGroup})
 }
 
 // Close delegates to the inner subscriber.

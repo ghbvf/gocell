@@ -15,28 +15,30 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// waitForSubscription replaces time.Sleep(subscribeInitDelay) with a
-// deterministic readiness check when the subscriber implements
-// outbox.SubscriberInitializer. For persistent brokers (e.g., RabbitMQ),
-// InitializeSubscription pre-declares the topology so that published messages
-// are queued before Subscribe starts consuming — eliminating the race.
-// For in-memory implementations that lack InitializeSubscription, it falls
-// back to the brief sleep.
+// waitForSubscription waits until the subscriber is ready to receive messages
+// for the given topic. It calls Setup to declare topology, then waits for the
+// Ready channel to close. For persistent brokers, Setup pre-declares queues so
+// messages are durably queued before Subscribe starts consuming. For in-memory
+// implementations, Ready blocks until the goroutine calls Subscribe.
 //
 // ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
 func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
 	t.Helper()
-	if init, ok := sub.(outbox.SubscriberInitializer); ok {
-		err := init.InitializeSubscription(ctx, topic, consumerGroup)
-		if err == nil {
-			return // deterministic initialization succeeded
-		}
-		if !errors.Is(err, outbox.ErrInitializerNotSupported) {
-			t.Fatalf("InitializeSubscription(%s, %s): %v", topic, consumerGroup, err)
-		}
-		// Inner does not support initialization — fall through to sleep.
+	subSpec := outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup}
+	if err := sub.Setup(ctx, subSpec); err != nil {
+		t.Fatalf("waitForSubscription: Setup(%s): %v", topic, err)
 	}
-	time.Sleep(subscribeInitDelay)
+	select {
+	case <-sub.Ready(subSpec):
+	case <-ctx.Done():
+		t.Fatalf("waitForSubscription: context cancelled before subscriber ready: %v", ctx.Err())
+	case <-time.After(subscribeInitDelay):
+		// Fallback: subscriber did not signal Ready within init delay. This is
+		// acceptable for implementations that return a never-closing Ready channel
+		// (e.g., persistent brokers where setup is fire-and-forget). The caller
+		// may experience delivery loss on the first message; that is acceptable
+		// for non-persistent test setups.
+	}
 }
 
 // TestTopic returns a unique topic name scoped to the given test.
@@ -131,11 +133,11 @@ func CollectN(
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
-	// Subscribe blocks — run in goroutine.
+	// Subscribe blocks -- run in goroutine.
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topic, handler, "")
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, handler)
 	}()
 
 	// Wait for subscription to register. Uses SubscriberInitializer if available,
@@ -198,7 +200,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 	go func() {
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
-		err := sub.Subscribe(subCtx, topic, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 			c.mu.Lock()
 			c.collected = append(c.collected, entry)
 			count := len(c.collected)
@@ -207,7 +209,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				c.closeOnce.Do(func() { close(c.done) })
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf("unexpected Subscribe error: %v", err)
 		}
@@ -315,7 +317,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	go func() {
 		defer close(h.subDone)
 		close(ready)
-		err := h.Sub.Subscribe(ctx, h.Topic, wrapped, "")
+		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			h.T.Errorf("unexpected Subscribe error: %v", err)
 		}

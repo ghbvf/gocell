@@ -173,7 +173,7 @@ func TestIsReservedMetadataKey(t *testing.T) {
 func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 	mw := ObservabilityContextMiddleware()
 
-	wrapped := mw("event.test.v1", func(ctx context.Context, _ Entry) HandleResult {
+	wrapped := mw(Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
 		requestID, ok := ctxkeys.RequestIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "req-789", requestID)

@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -179,4 +182,79 @@ func TestValidateModeCoupling_Matrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOutboxE2E_CrossCellFanout is the P0 regression guard for the cross-cell
+// fanout bug: before Commit 1, all cells in core-bundle shared a single
+// ConsumerGroup ("core-bundle"), causing the idempotency key to be the same for
+// every cell. The second cell to process an event saw ClaimDone and silently
+// Acked without calling its handler.
+//
+// This test uses the in-memory eventbus (no Docker required) to verify that
+// two subscribers with DIFFERENT ConsumerGroups on the same topic both receive
+// and process the published event independently.
+//
+// Chain: eventbus.Publish → fanout dispatch → access-group handler called +
+//
+//	audit-group handler called (both independently, no shared idempotency namespace)
+func TestOutboxE2E_CrossCellFanout(t *testing.T) {
+	const topic = "test.fanout.cross-cg.v1"
+
+	eb := eventbus.New()
+	t.Cleanup(func() { _ = eb.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Two counters — one per consumer group.
+	var accessCalls, auditCalls atomic.Int64
+
+	// Subscribe with ConsumerGroup "access-core" (simulates cells/access-core).
+	accessSub := outbox.Subscription{Topic: topic, ConsumerGroup: "access-core"}
+	go func() {
+		_ = eb.Subscribe(ctx, accessSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			accessCalls.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	// Subscribe with ConsumerGroup "audit-core" (simulates cells/audit-core).
+	auditSub := outbox.Subscription{Topic: topic, ConsumerGroup: "audit-core"}
+	go func() {
+		_ = eb.Subscribe(ctx, auditSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			auditCalls.Add(1)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	// Wait until both subscribe goroutines have registered (Finding F5: replace
+	// fixed sleep with explicit ready signal from eb.Ready).
+	select {
+	case <-eb.Ready(accessSub):
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for access-core subscription to be ready")
+	}
+	select {
+	case <-eb.Ready(auditSub):
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for audit-core subscription to be ready")
+	}
+
+	// Publish exactly 1 event.
+	payload := []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`)
+	require.NoError(t, eb.Publish(ctx, topic, payload))
+
+	// Assert both handlers are called exactly once.
+	// Before the Subscription-first-class refactor (Commit 1), the shared
+	// "core-bundle" ConsumerGroup caused the second cell to see ClaimDone and
+	// silently Ack without calling its handler — one of the two counts would
+	// stay at 0.
+	require.Eventually(t, func() bool {
+		return accessCalls.Load() == 1 && auditCalls.Load() == 1
+	}, 3*time.Second, 5*time.Millisecond,
+		"P0 regression: both consumer groups must receive the event; "+
+			"access=%d audit=%d", accessCalls.Load(), auditCalls.Load())
+
+	assert.Equal(t, int64(1), accessCalls.Load(), "access-core handler must be called exactly once")
+	assert.Equal(t, int64(1), auditCalls.Load(), "audit-core handler must be called exactly once")
 }

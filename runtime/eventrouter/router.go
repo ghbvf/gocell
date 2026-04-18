@@ -5,8 +5,15 @@
 // ref: ThreeDotsLabs/watermill message/router.go — AddHandler/Run/Close pattern.
 // Adopted: declaration-then-run split, Running() readiness signal, WaitGroup goroutine tracking.
 // Deviated: no publish-side in AddHandler (GoCell publishes via outbox.Writer, not Router);
-// startup detection uses a configurable timeout because outbox.Subscriber.Subscribe blocks
-// without a separate setup/run split.
+// startup readiness uses an explicit Ready signal from the Subscriber interface rather
+// than a timeout heuristic — aligned with Uber fx OnStart synchronous return semantics.
+//
+// Run lifecycle (4 phases):
+//
+//	Phase 1: serially call Subscriber.Setup(sub) for each handler — blocking topology declaration.
+//	Phase 2: launch one Subscribe goroutine per handler concurrently.
+//	Phase 3: wait on Subscriber.Ready(sub) for every handler (explicit signal, no timeout).
+//	Phase 4: block until ctx cancel or a runtime subscription error.
 package eventrouter
 
 import (
@@ -20,27 +27,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// DefaultStartupTimeout is the duration Run waits for Subscribe calls to
-// either return an error (setup failure) or remain blocking (consuming).
-// If no error arrives within this window, all subscriptions are assumed ready.
-//
-// Note: this is a heuristic. If broker topology setup (e.g., RabbitMQ
-// ExchangeDeclare + QueueBind) takes longer than this timeout, bootstrap
-// will proceed before subscriptions are actually ready. The timeout is
-// configurable via WithStartupTimeout. A future Subscriber interface split
-// (Setup + Run) would eliminate this heuristic entirely.
-const DefaultStartupTimeout = 500 * time.Millisecond
+// DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
+// signals Ready (broker reconnect storm, mis-configured topology) does not
+// block bootstrap indefinitely. 30s aligns with Uber fx StartTimeout default.
+// Set to a non-positive value via WithReadyTimeout to disable the bound.
+const DefaultReadyTimeout = 30 * time.Second
 
 // Option configures a Router.
 type Option func(*Router)
 
-// WithStartupTimeout overrides the default startup detection timeout.
-func WithStartupTimeout(d time.Duration) Option {
-	return func(r *Router) {
-		if d > 0 {
-			r.startupTimeout = d
-		}
-	}
+// WithReadyTimeout overrides the default ready-wait budget. A value <= 0
+// disables the timeout (waits indefinitely on Ready channels and ctx).
+func WithReadyTimeout(d time.Duration) Option {
+	return func(r *Router) { r.readyTimeout = d }
 }
 
 type handlerConfig struct {
@@ -55,19 +54,19 @@ type handlerConfig struct {
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
 type Router struct {
-	subscriber     outbox.Subscriber
-	handlers       []handlerConfig
-	mu             sync.Mutex
-	startupTimeout time.Duration
-	running        chan struct{}
-	runGuard       sync.Once // ensures Run is called at most once
-	runningOnce    sync.Once // ensures close(r.running) is called at most once
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	statusMu       sync.RWMutex
-	started        bool
-	shutdown       bool
-	healthErr      error
+	subscriber   outbox.Subscriber
+	handlers     []handlerConfig
+	mu           sync.Mutex
+	readyTimeout time.Duration
+	running      chan struct{}
+	runGuard     sync.Once // ensures Run is called at most once
+	runningOnce  sync.Once // ensures close(r.running) is called at most once
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	statusMu     sync.RWMutex
+	started      bool
+	shutdown     bool
+	healthErr    error
 }
 
 // Compile-time interface check.
@@ -76,9 +75,9 @@ var _ cell.EventRouter = (*Router)(nil)
 // New creates a Router that will use the given Subscriber for all subscriptions.
 func New(sub outbox.Subscriber, opts ...Option) *Router {
 	r := &Router{
-		subscriber:     sub,
-		startupTimeout: DefaultStartupTimeout,
-		running:        make(chan struct{}),
+		subscriber:   sub,
+		readyTimeout: DefaultReadyTimeout,
+		running:      make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(r)
@@ -118,13 +117,16 @@ var errAlreadyRunning = fmt.Errorf("eventrouter: Run called more than once")
 //
 // Run MUST be called at most once; a second call returns errAlreadyRunning.
 //
-// Setup-error detection: each Subscribe call is launched in a goroutine.
-// If any returns an error within the startup timeout, Run cancels all
-// goroutines and returns the error. If no error arrives within the timeout,
-// all subscriptions are assumed to be consuming and Running() is closed.
+// Lifecycle (4 phases):
 //
-// On context cancellation, Run waits for all goroutines to finish before
-// returning.
+//	Phase 1: serially call Subscriber.Setup(sub) — blocking topology declaration.
+//	         Any Setup error causes Run to return immediately without starting subscriptions.
+//	Phase 2: launch one Subscribe goroutine per handler concurrently.
+//	Phase 3: wait on Subscriber.Ready(sub) for every handler.
+//	         Running() is closed only after ALL Ready channels close.
+//	Phase 4: block until ctx cancel or a runtime subscription error.
+//
+// On context cancellation, Run waits for all goroutines to finish before returning.
 func (r *Router) Run(ctx context.Context) error {
 	var firstRun bool
 	r.runGuard.Do(func() { firstRun = true })
@@ -147,54 +149,33 @@ func (r *Router) Run(ctx context.Context) error {
 		r.markRunning()
 		r.closeRunning()
 		<-runCtx.Done()
+		cancel()
 		return nil
 	}
 
-	// setupErr receives the first subscription setup error.
+	// Phase 1: serially Setup each subscription (topology declaration).
+	if err := r.runSetup(runCtx, cancel, handlers); err != nil {
+		return err
+	}
+
+	// setupErr receives the first subscription runtime error.
 	// Buffer size = len(handlers) to avoid goroutine leaks if multiple fail.
 	setupErr := make(chan error, len(handlers))
 
-	for _, h := range handlers {
-		h := h
-		r.wg.Add(1)
-		go func() {
-			defer r.wg.Done()
-			defer func() {
-				if rv := recover(); rv != nil {
-					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", h.topic, rv)
-				}
-			}()
-			slog.Info("eventrouter: starting subscription",
-				slog.String("topic", h.topic))
-			err := r.subscriber.Subscribe(runCtx, h.topic, h.handler, h.consumerGroup)
-			if err != nil && runCtx.Err() == nil {
-				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", h.topic, err)
-			}
-		}()
-	}
+	// Phase 2: launch Subscribe goroutines concurrently.
+	r.runSubscribe(runCtx, handlers, setupErr)
 
-	// Wait for setup phase: either an error arrives or startup timeout passes.
-	select {
-	case err := <-setupErr:
-		r.markHealthError(err)
-		slog.Error("eventrouter: subscription setup failed, shutting down",
-			slog.Any("error", err))
-		cancel()
-		r.wg.Wait()
+	// Phase 3: wait for all Ready signals before marking Running.
+	if err := r.runAwaitReady(runCtx, cancel, handlers, setupErr); err != nil {
 		return err
-	case <-time.After(r.startupTimeout):
-		// No errors within timeout — all handlers are consuming.
-		r.markRunning()
-		slog.Info("eventrouter: all subscriptions started",
-			slog.Int("count", len(handlers)))
-		r.closeRunning()
-	case <-runCtx.Done():
-		// Context cancelled during startup.
-		r.wg.Wait()
-		return runCtx.Err()
 	}
 
-	// Block until context cancelled or a runtime error surfaces.
+	r.markRunning()
+	slog.Info("eventrouter: all subscriptions ready (explicit Ready signal)",
+		slog.Int("count", len(handlers)))
+	r.closeRunning()
+
+	// Phase 4: block until context cancelled or a runtime error surfaces.
 	select {
 	case <-runCtx.Done():
 		r.markShutdown()
@@ -209,6 +190,156 @@ func (r *Router) Run(ctx context.Context) error {
 
 	r.wg.Wait()
 	return nil
+}
+
+// runSetup calls Subscriber.Setup for each handler sequentially (Phase 1).
+// On error, it cancels the context and returns the wrapped error.
+func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig) error {
+	for _, h := range handlers {
+		sub := outbox.Subscription{
+			Topic:         h.topic,
+			ConsumerGroup: h.consumerGroup,
+			CellID:        h.consumerGroup,
+		}
+		if err := r.subscriber.Setup(ctx, sub); err != nil {
+			wrapped := fmt.Errorf("eventrouter: setup %s: %w", sub.Topic, err)
+			r.markHealthError(wrapped)
+			slog.Error("eventrouter: subscription setup failed, aborting",
+				slog.String("topic", sub.Topic),
+				slog.Any("error", err))
+			cancel()
+			return wrapped
+		}
+	}
+	return nil
+}
+
+// runSubscribe starts one goroutine per handler that calls Subscriber.Subscribe
+// (Phase 2). Errors are sent to setupErr.
+func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- error) {
+	for _, h := range handlers {
+		h := h
+		sub := outbox.Subscription{
+			Topic:         h.topic,
+			ConsumerGroup: h.consumerGroup,
+			CellID:        h.consumerGroup,
+		}
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer func() {
+				if rv := recover(); rv != nil {
+					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
+				}
+			}()
+			slog.Info("eventrouter: starting subscription",
+				slog.String("topic", sub.Topic),
+				slog.String("consumer_group", sub.ConsumerGroup))
+			err := r.subscriber.Subscribe(ctx, sub, h.handler)
+			if err != nil && ctx.Err() == nil {
+				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
+			}
+		}()
+	}
+}
+
+// runAwaitReady waits for Subscriber.Ready(sub) for ALL handlers concurrently
+// (Phase 3). Concurrent fan-out avoids goroutine-schedule coupling where a
+// serial wait on handler[0] would block if handler[1]'s goroutine happened to
+// register first with the in-memory bus.
+//
+// It also monitors setupErr and ctx cancellation. On error, it cancels the
+// context, waits for goroutines, and returns the error.
+func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig, setupErr <-chan error) error {
+	allReady := r.awaitAllReady(ctx, handlers)
+
+	var deadlineCh <-chan time.Time
+	if r.readyTimeout > 0 {
+		timer := time.NewTimer(r.readyTimeout)
+		defer timer.Stop()
+		deadlineCh = timer.C
+	}
+
+	select {
+	case <-allReady:
+		// All subscriptions are ready.
+		return nil
+	case err := <-setupErr:
+		r.markHealthError(err)
+		slog.Error("eventrouter: subscription error during ready wait, shutting down",
+			slog.Any("error", err))
+		cancel()
+		r.wg.Wait()
+		// No drain needed: setupErr buffer == len(handlers) guarantees every
+		// runSubscribe goroutine can send once without blocking. ctx cancel
+		// stops further sends; remaining buffered errors are GC'd with the
+		// channel when Run returns.
+		return err
+	case <-deadlineCh:
+		notReady := r.diagnoseNotReady(handlers)
+		err := fmt.Errorf("eventrouter: %d/%d subscriptions not ready after %s: %v",
+			len(notReady), len(handlers), r.readyTimeout, notReady)
+		r.markHealthError(err)
+		slog.Error("eventrouter: ready timeout exceeded, shutting down",
+			slog.Duration("timeout", r.readyTimeout),
+			slog.Int("not_ready_count", len(notReady)),
+			slog.Any("not_ready", notReady))
+		cancel()
+		r.wg.Wait()
+		return err
+	case <-ctx.Done():
+		r.wg.Wait()
+		return ctx.Err()
+	}
+}
+
+// diagnoseNotReady returns "consumerGroup/topic" identifiers for subscriptions
+// whose Ready channel has not closed. Used by ready-timeout error reporting
+// so operators can see which subscription is stuck without trawling logs.
+func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
+	var notReady []string
+	for _, h := range handlers {
+		sub := outbox.Subscription{
+			Topic:         h.topic,
+			ConsumerGroup: h.consumerGroup,
+			CellID:        h.consumerGroup,
+		}
+		select {
+		case <-r.subscriber.Ready(sub):
+			// ready
+		default:
+			notReady = append(notReady, fmt.Sprintf("%s/%s", h.consumerGroup, h.topic))
+		}
+	}
+	return notReady
+}
+
+// awaitAllReady launches one goroutine per handler that waits on Ready, then
+// returns a channel that closes when all goroutines complete (or ctx cancels).
+func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-chan struct{} {
+	doneCh := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, h := range handlers {
+		h := h
+		sub := outbox.Subscription{
+			Topic:         h.topic,
+			ConsumerGroup: h.consumerGroup,
+			CellID:        h.consumerGroup,
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case <-r.subscriber.Ready(sub):
+			case <-ctx.Done():
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+	return doneCh
 }
 
 // closeRunning safely closes the running channel exactly once.

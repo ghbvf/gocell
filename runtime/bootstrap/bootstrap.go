@@ -383,6 +383,19 @@ func WithDisableObservabilityRestore() Option {
 	}
 }
 
+// WithEventRouterReadyTimeout overrides the EventRouter Phase-3 ready-wait
+// budget. A non-positive value disables the bound (router waits indefinitely
+// until ctx cancel). Default: eventrouter.DefaultReadyTimeout (30s).
+//
+// On timeout, Bootstrap.Run returns an error listing not-ready
+// "consumerGroup/topic" pairs so operators can pinpoint the stuck subscription.
+func WithEventRouterReadyTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.eventRouterReadyTimeoutSet = true
+		b.eventRouterReadyTimeout = d
+	}
+}
+
 // WithConsumerMiddleware registers subscriber-side middleware applied to every
 // topic handler before it is passed to the underlying Subscriber.Subscribe call.
 // Middleware is applied in registration order; each entry wraps the next, so the
@@ -398,7 +411,7 @@ func WithDisableObservabilityRestore() Option {
 // ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
 // at router level; MassTransit UseMessageRetry — pipeline middleware at
 // receive-endpoint configuration.
-func WithConsumerMiddleware(mw ...outbox.TopicHandlerMiddleware) Option {
+func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
 	return func(b *Bootstrap) {
 		b.consumerMiddleware = append(b.consumerMiddleware, mw...)
 	}
@@ -485,7 +498,9 @@ type Bootstrap struct {
 	verboseToken                string            // token for /readyz?verbose access control
 	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
-	consumerMiddleware          []outbox.TopicHandlerMiddleware
+	eventRouterReadyTimeout     time.Duration
+	eventRouterReadyTimeoutSet  bool
+	consumerMiddleware          []outbox.SubscriptionMiddleware
 	hookTimeout                 time.Duration // applied when assembly not pre-built
 	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                cell.LifecycleHookObserver
@@ -1021,7 +1036,7 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 		}
 	}
 	if sub != nil {
-		var mws []outbox.TopicHandlerMiddleware
+		var mws []outbox.SubscriptionMiddleware
 		if !b.disableObservabilityRestore {
 			mws = append(mws, outbox.ObservabilityContextMiddleware())
 		}
@@ -1029,10 +1044,14 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 		// that any log lines or metrics emitted by ConsumerBase / custom middleware
 		// see the restored request_id / correlation_id / trace_id fields.
 		mws = append(mws, b.consumerMiddleware...)
+		var routerOpts []eventrouter.Option
+		if b.eventRouterReadyTimeoutSet {
+			routerOpts = append(routerOpts, eventrouter.WithReadyTimeout(b.eventRouterReadyTimeout))
+		}
 		evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 			Inner:      sub,
 			Middleware: mws,
-		})
+		}, routerOpts...)
 		for _, id := range asm.CellIDs() {
 			c := asm.Cell(id)
 			if er, ok := c.(cell.EventRegistrar); ok {

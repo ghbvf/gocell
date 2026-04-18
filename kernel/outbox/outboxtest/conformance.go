@@ -113,6 +113,9 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("ReceiptReleasedOnRequeue", func(t *testing.T) {
 		testReceiptReleasedOnRequeue(t, features, constructor)
 	})
+	t.Run("ReceiptCommitFailureDoesNotAck", func(t *testing.T) {
+		testReceiptCommitFailureDoesNotAck(t, features, constructor)
+	})
 
 	// Batch 5: Lifecycle
 	t.Run("SubscribeBlocksUntilCancel", func(t *testing.T) {
@@ -233,7 +236,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, topicA, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 			select {
 			case deliveryA <- struct{}{}:
 			default:
@@ -245,7 +248,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 			}
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
 
@@ -289,32 +292,47 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 		sub1Received atomic.Int32
 		sub2Received atomic.Int32
 		wg           sync.WaitGroup
+		sub1Ready    = make(chan struct{})
+		sub2Ready    = make(chan struct{})
 	)
 
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
-	// Subscriber 1.
+	// Per-sub readiness signals: Subscribe is blocking, and the bus-level
+	// Ready() channel only synchronizes the FIRST Subscribe call for a given
+	// (consumerGroup, topic) pair. With two broadcast subscribers we need each
+	// goroutine to confirm its own registration before the test publishes,
+	// otherwise the second sub may miss the event.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		close(sub1Ready)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
-	// Subscriber 2.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		close(sub2Ready)
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
+	<-sub1Ready
+	<-sub2Ready
 	waitForSubscription(t, ctx, sub, topic, "")
+	// In-memory bus signals Ready after the FIRST Subscribe registration; the
+	// second broadcast sub may still be entering its Subscribe call. A brief
+	// sleep covers the tail registration window without coupling the test to
+	// bus internals. Persistent brokers (RabbitMQ) skip this path entirely
+	// (BroadcastSubscribe=false → testCompetingConsumers).
+	time.Sleep(subscribeInitDelay)
 
 	assertNoError(t, pub.Publish(ctx, topic, []byte(`{"test":"fan-out"}`)))
 
@@ -352,14 +370,14 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = sub.Subscribe(subCtx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				select {
 				case delivery <- struct{}{}:
 				default:
 				}
 				totalReceived.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}, "")
+			})
 		}()
 	}
 
@@ -636,6 +654,48 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 	h.teardown()
 }
 
+// testReceiptCommitFailureDoesNotAck guards the cross-transport invariant
+// added in the F2 fix (PR #184): when handler returns DispositionAck but
+// Receipt.Commit fails (lease lost / token mismatch / backend error), the
+// adapter must NOT treat the message as successfully acknowledged. RabbitMQ
+// translates this to Nack(requeue=true); InMemoryEventBus retries via its
+// internal retry loop. Either way the handler must be re-invoked, evidenced
+// by an additional Receipt.Commit attempt or a redelivery.
+//
+// Without this guard, regression to the pre-F2 semantics (eventbus silently
+// promoting Commit failure to success) would cause stale lease holders to
+// "succeed" — see PR #184 review F2 / commit 87475b9.
+func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constructor PubSubConstructor) {
+	if !features.SupportsReceipt {
+		t.Skip(skipNoReceipt)
+	}
+
+	h := newHarness(t, constructor)
+	// Receipt whose Commit always returns an error — emulates lease-lost /
+	// token-mismatch backend response.
+	receipt := NewMockReceiptWithErrors(errors.New("commit fails (test)"), nil)
+
+	var deliveries atomic.Int32
+	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		n := deliveries.Add(1)
+		if n == 1 {
+			h.signalDone() // wake publisher after first delivery
+		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+	})
+
+	h.publishAndWait([]byte(`{"test":"commit-fail"}`))
+	// Adapter must retry / redeliver after Commit failure. We assert at least
+	// one extra Commit attempt OR an extra delivery within a generous window.
+	// Both rabbitmq (Nack→requeue→re-consume) and eventbus (handleWithRetry
+	// loop) satisfy "Commit was tried more than once" within retry budget.
+	assertEventually(t, func() bool {
+		return receipt.CommitCount() >= 2 || deliveries.Load() >= 2
+	}, 5*time.Second, 20*time.Millisecond,
+		"adapter must NOT promote Commit failure to success — expected retry/redelivery")
+	h.teardown()
+}
+
 // ---------------------------------------------------------------------------
 // Batch 5: Metadata + lifecycle
 // ---------------------------------------------------------------------------
@@ -650,9 +710,9 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
-		err := sub.Subscribe(ctx, TestTopic(t), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 		subscribeReturned <- err
 	}()
 
@@ -682,9 +742,9 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	subscribeReturned := make(chan struct{})
 	go func() {
 		defer close(subscribeReturned)
-		_ = sub.Subscribe(ctx, topic, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
@@ -766,7 +826,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	h := newHarness(t, constructor)
 
 	var middlewareCalled atomic.Bool
-	middleware := func(_ string, next outbox.EntryHandler) outbox.EntryHandler {
+	middleware := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			middlewareCalled.Store(true)
 			return next(ctx, entry)
@@ -776,7 +836,7 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	// Wrap inner subscriber with middleware.
 	h.Sub = &outbox.SubscriberWithMiddleware{
 		Inner:      h.Sub,
-		Middleware: []outbox.TopicHandlerMiddleware{middleware},
+		Middleware: []outbox.SubscriptionMiddleware{middleware},
 	}
 
 	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {

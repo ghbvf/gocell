@@ -32,13 +32,13 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "test.envelope.topic",
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.envelope.topic"},
 			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 				mu.Lock()
 				got = e
 				mu.Unlock()
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}, "")
+			})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -93,13 +93,13 @@ func TestPublish_NonEnvelopePayload_ForwardedUnchanged(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "test.direct.topic",
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.direct.topic"},
 			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 				mu.Lock()
 				got = e
 				mu.Unlock()
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}, "")
+			})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -134,12 +134,12 @@ func TestPublishSubscribe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "test.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			mu.Lock()
 			received = append(received, e)
 			mu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	// Give subscriber time to register.
@@ -186,10 +186,10 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "retry.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "retry.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -229,10 +229,10 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "reject.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "reject.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: testErr}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -264,7 +264,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "perm.requeue", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "perm.requeue"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			// Return Requeue with PermanentError — eventbus should detect
 			// the PermanentError and route directly to dead letter.
@@ -272,7 +272,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 				Disposition: outbox.DispositionRequeue,
 				Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -319,9 +319,9 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "race.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	require.Eventually(t, func() bool {
@@ -378,9 +378,9 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 	bus := New()
 	_ = bus.Close()
 
-	err := bus.Subscribe(context.Background(), "topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	err := bus.Subscribe(context.Background(), outbox.Subscription{Topic: "topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "")
+	})
 	assert.Error(t, err)
 }
 
@@ -396,17 +396,17 @@ func TestMultipleSubscribers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count1.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "multi.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			count2.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -431,13 +431,13 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "partial.fail", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "partial.fail"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			n := attempts.Add(1)
 			if n < 3 {
 				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("not yet")}
 			}
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -476,9 +476,9 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "cleanup.topic", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cleanup.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	// Wait for subscriber to register.
@@ -537,12 +537,12 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "receipt.ack", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.ack"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionAck,
 				Receipt:     receipt,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -569,13 +569,13 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "receipt.reject", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.reject"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         errors.New("permanent"),
 				Receipt:     receipt,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -603,7 +603,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "receipt.requeue", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.requeue"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			r := &mockReceipt{}
 			receiptsMu.Lock()
 			receipts = append(receipts, r)
@@ -613,7 +613,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 				Err:         errors.New("transient"),
 				Receipt:     r,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -654,7 +654,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "receipt.exhaust", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.exhaust"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			r := &mockReceipt{}
 			receiptsMu.Lock()
 			receipts = append(receipts, r)
@@ -664,7 +664,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 				Err:         testErr,
 				Receipt:     r,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -708,7 +708,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "zero.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "zero.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			r := &mockReceipt{}
 			receiptsMu.Lock()
@@ -719,7 +719,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 				Err:     errors.New("forgot disposition"),
 				Receipt: r,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -771,13 +771,13 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "unknown.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "unknown.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
 			return outbox.HandleResult{
 				Disposition: outbox.Disposition(99), // not a valid Disposition
 				Err:         testErr,
 			}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -814,7 +814,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, "cancel.disp", func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cancel.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			n := attempts.Add(1)
 			if n == 1 {
 				// After first attempt with invalid disposition, cancel ctx
@@ -825,7 +825,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 				}()
 			}
 			return outbox.HandleResult{} // zero-value
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -869,17 +869,17 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "audit-core")
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "audit-core")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond) // let subscriptions register
@@ -925,17 +925,17 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCount.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "audit-core")
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "config-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			configCount.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "config-core")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -976,17 +976,17 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "events.v1", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, "events.v1", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "")
+		})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -1029,10 +1029,10 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	for range numSubs {
 		go func() {
 			defer wg.Done()
-			_ = bus.Subscribe(ctx, "race.topic", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic", ConsumerGroup: "race-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				totalReceived.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}, "race-group")
+			})
 		}()
 	}
 
