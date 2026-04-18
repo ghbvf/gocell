@@ -399,7 +399,26 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, code, errObj["code"])
-	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a change_password_endpoint hint
+	// in details (P2-10 fix). All other codes must have an empty details object.
+	if code != "ERR_AUTH_PASSWORD_RESET_REQUIRED" {
+		assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+	}
+}
+
+// assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// response and verifies the change_password_endpoint hint is present (P2-10).
+func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "details must be a map")
+	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["change_password_endpoint"],
+		"403 password-reset response must include change_password_endpoint hint (P2-10)")
 }
 
 // --- Phase 3.5: PasswordResetRequired middleware enforcement tests ---
@@ -420,7 +439,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) 
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertErrorCode(t, rec, "ERR_AUTH_PASSWORD_RESET_REQUIRED")
+	assertPasswordResetErrorWithHint(t, rec)
 }
 
 // TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate verifies
@@ -518,7 +537,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertErrorCode(t, rec, "ERR_AUTH_PASSWORD_RESET_REQUIRED")
+	assertPasswordResetErrorWithHint(t, rec)
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

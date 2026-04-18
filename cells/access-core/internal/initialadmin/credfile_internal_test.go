@@ -60,21 +60,19 @@ func TestFormatPayload_Content(t *testing.T) {
 }
 
 // TestWriteCredentialFile_WritePayloadError exercises the writeErr != nil
-// cleanup branch by injecting a failing payloadWriter.
+// cleanup branch by injecting a failing writer via withPayloadWriter option.
+// Now parallel-safe: no longer mutates a package-level variable (P2-8 fix).
 func TestWriteCredentialFile_WritePayloadError(t *testing.T) {
-	// Not parallel: mutates package-level payloadWriter.
-	orig := payloadWriter
-	payloadWriter = func(_ io.Writer, _ CredentialPayload) error {
-		return io.ErrClosedPipe
-	}
-	t.Cleanup(func() { payloadWriter = orig })
+	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
 	err := WriteCredentialFile(path, CredentialPayload{
 		Username:  "admin",
 		Password:  "pass",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
-	})
+	}, withPayloadWriter(func(_ io.Writer, _ CredentialPayload) error {
+		return io.ErrClosedPipe
+	}))
 	if err == nil {
 		t.Fatal("expected error from failing payloadWriter, got nil")
 	}

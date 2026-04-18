@@ -11,18 +11,6 @@ import (
 	"time"
 )
 
-// CredentialPayload holds the fields serialised into the credential file.
-type CredentialPayload struct {
-	Username  string
-	Password  string
-	ExpiresAt time.Time
-}
-
-// payloadWriter is the function used to write a CredentialPayload into an
-// io.Writer. It is a package-level variable so that tests can inject a
-// failing writer to exercise error-cleanup branches without OS-level tricks.
-var payloadWriter = formatPayload
-
 // WriteCredentialFile atomically writes a credential file at path:
 //  1. MkdirAll(dir, 0o700) — creates the directory with strict permissions.
 //  2. Creates a sibling .tmp file with O_EXCL|O_CREATE + mode 0o600.
@@ -31,7 +19,11 @@ var payloadWriter = formatPayload
 //
 // If path already exists, ErrCredFileExists is returned to prevent a second
 // bootstrap run from silently overwriting an existing credential.
-func WriteCredentialFile(path string, payload CredentialPayload) error {
+func WriteCredentialFile(path string, payload CredentialPayload, opts ...WriteCredentialFileOption) error {
+	cfg := &writeCredentialFileConfig{writer: formatPayload}
+	for _, o := range opts {
+		o(cfg)
+	}
 	// Refuse to overwrite.
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%w: %s", ErrCredFileExists, path)
@@ -53,7 +45,7 @@ func WriteCredentialFile(path string, payload CredentialPayload) error {
 		return fmt.Errorf("initialadmin: create temp file %s: %w", tmpPath, err)
 	}
 
-	writeErr := payloadWriter(f, payload)
+	writeErr := cfg.writer(f, payload)
 	closeErr := f.Close()
 
 	if writeErr != nil || closeErr != nil {
@@ -74,8 +66,9 @@ func WriteCredentialFile(path string, payload CredentialPayload) error {
 
 // RemoveCredentialFile safely removes the credential file at path:
 //   - If the file does not exist, returns nil (idempotent).
-//   - If the file's permission is not 0o600, returns ErrCredFileTampered
-//     (passive tamper detection).
+//   - If the file's permission is not 0o600, removes the file unconditionally
+//     (security intent: destroy the credential regardless of tampering) and
+//     returns a wrapped ErrCredFileTampered so the caller can log the anomaly.
 //   - Otherwise removes the file.
 func RemoveCredentialFile(path string) error {
 	info, err := os.Stat(path)
@@ -86,15 +79,61 @@ func RemoveCredentialFile(path string) error {
 		return fmt.Errorf("initialadmin: stat credential file: %w", err)
 	}
 
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		return fmt.Errorf("%w: got mode %o, want 0600", ErrCredFileTampered, perm)
-	}
+	tampered := info.Mode().Perm() != 0o600
 
-	if err := os.Remove(path); err != nil {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("initialadmin: remove credential file: %w", err)
 	}
 
+	if tampered {
+		return fmt.Errorf("%w: got mode %o, want 0600", ErrCredFileTampered, info.Mode().Perm())
+	}
+
 	return nil
+}
+
+// ReadCredentialExpiresAt reads the expires_at unix timestamp from the
+// credential file at path and returns the corresponding time.Time (UTC).
+// Returns an error when the file cannot be read, the expires_at line is
+// missing, or the value cannot be parsed.
+func ReadCredentialExpiresAt(path string) (time.Time, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("initialadmin: read credential file: %w", err)
+	}
+	for _, line := range splitLines(string(data)) {
+		const prefix = "expires_at="
+		if len(line) > len(prefix) && line[:len(prefix)] == prefix {
+			var ts int64
+			if _, scanErr := fmt.Sscanf(line[len(prefix):], "%d", &ts); scanErr != nil {
+				return time.Time{}, fmt.Errorf("initialadmin: parse expires_at: %w", scanErr)
+			}
+			return time.Unix(ts, 0).UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("initialadmin: expires_at not found in credential file")
+}
+
+// splitLines splits s into non-empty lines (handles \n and \r\n).
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			line := s[start:i]
+			if len(line) > 0 && line[len(line)-1] == '\r' {
+				line = line[:len(line)-1]
+			}
+			if line != "" {
+				lines = append(lines, line)
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) && s[start:] != "" {
+		lines = append(lines, s[start:])
+	}
+	return lines
 }
 
 // formatPayload serialises payload into w using the canonical file format:

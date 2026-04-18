@@ -515,14 +515,19 @@ func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, err
 }
 
 // logInitialAdminCredPath emits a startup info log so operators know where to
-// find the initial admin credential on first run. Resolved in the same order as
-// initialadmin.resolveCredentialPath: GOCELL_STATE_DIR → /run/gocell.
+// find the initial admin credential on first run. Uses
+// accesscore.ResolveBootstrapCredentialPath so the logged path always matches
+// the path actually written by the bootstrapper (P2-6: no duplicated path
+// resolution logic).
 func logInitialAdminCredPath() {
-	stateDir := os.Getenv("GOCELL_STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/run/gocell"
+	credPath, err := accesscore.ResolveBootstrapCredentialPath("")
+	if err != nil {
+		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
+		// so log the error here and let the user fix the config.
+		slog.Warn("core-bundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
+			slog.String("error", err.Error()))
+		return
 	}
-	credPath := stateDir + "/initial_admin_password"
 	slog.Info("core-bundle: starting; if first run, initial admin credentials are written to "+credPath,
 		slog.String("cred_path", credPath))
 }

@@ -14,8 +14,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// WithUserRepository sets the UserRepository for sessionrefresh. Required when
-// PasswordResetRequired propagation is needed (always in production).
+// WithUserRepository is retained for backward compatibility with tests that
+// build the service incrementally. In production, userRepo is a required
+// positional parameter in NewService (P1-3 fix).
+//
+// Deprecated: pass userRepo as a positional argument to NewService instead.
 func WithUserRepository(repo ports.UserRepository) Option {
 	return func(s *Service) { s.userRepo = repo }
 }
@@ -42,9 +45,16 @@ type Service struct {
 }
 
 // NewService creates a session-refresh Service.
+//
+// userRepo is required (P1-3 fix): fetchPasswordResetRequired silently returns
+// false when userRepo is nil, which bypasses the password-reset security gate.
+// Passing nil will panic early in the call chain when the gate is exercised in
+// production. Pass mem.NewUserRepository() in tests that do not exercise the
+// flag.
 func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
 	issuer *auth.JWTIssuer,
 	verifier auth.IntentTokenVerifier,
 	logger *slog.Logger,
@@ -53,6 +63,7 @@ func NewService(
 	s := &Service{
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
+		userRepo:    userRepo,
 		issuer:      issuer,
 		verifier:    verifier,
 		logger:      logger,
@@ -164,12 +175,9 @@ func (s *Service) fetchRoleNames(ctx context.Context, userID string) []string {
 }
 
 // fetchPasswordResetRequired reads the current PasswordResetRequired flag from
-// the user repo. Returns false on error or when no userRepo is wired.
-// Failures are logged at Warn level.
+// the user repo. Returns false on transient error (logged at Warn).
+// userRepo must not be nil (enforced by NewService positional parameter).
 func (s *Service) fetchPasswordResetRequired(ctx context.Context, userID string) bool {
-	if s.userRepo == nil {
-		return false
-	}
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		s.logger.Warn("session-refresh: failed to fetch user for reset flag",

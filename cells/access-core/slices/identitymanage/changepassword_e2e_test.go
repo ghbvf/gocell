@@ -1,10 +1,16 @@
+//go:build integration
+
 // Package identitymanage — e2e test for the full ChangePassword flow.
+//
+// Build tag: integration. Run with: go test -tags=integration ./...
+// Not included in the default go test ./... run (P1-12 fix: this test starts
+// a full HTTP-routed service and is too heavy for the unit test suite).
 //
 // Flow:
 //  1. Bootstrap an admin user with PasswordResetRequired=true via in-memory repo.
 //  2. Login → assert TokenPair.PasswordResetRequired==true and JWT claim=true.
 //  3. Assert that the password-endpoint path is exempt from reset enforcement
-//     (the actual middleware enforcement is tested in runtime/auth/middleware_test.go).
+//     via real AuthMiddleware (no local stub — F-SEC-3 fix from P1-10).
 //  4. Call POST /{id}/password → assert 200 + new TokenPair with PasswordResetRequired==false.
 //  5. Verify new JWT claim is false.
 //  6. Call GET /{id} with new token → assert 200.

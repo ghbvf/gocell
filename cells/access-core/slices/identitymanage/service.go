@@ -257,6 +257,14 @@ type ChangePasswordInput struct {
 // ChangePassword verifies the old password, hashes the new one, clears the
 // PasswordResetRequired flag, updates the user, and issues a fresh TokenPair.
 //
+// Validation order (P1-9 fix: cheap checks before bcrypt to avoid wasted CPU):
+//  1. Required-field check (empty userID / oldPassword / newPassword).
+//  2. Cheap string equality check (new == old rejected before bcrypt cost).
+//  3. bcrypt.CompareHashAndPassword (old password verification).
+//  4. Hash new password.
+//  5. Persist updated user.
+//  6. Issue new TokenPair via tokenIssuer.
+//
 // Consistency level: L1 (single-cell local transaction, no outbox event).
 // The token pair is issued synchronously so the client can replace stale tokens
 // without a forced re-login — this is critical when the old token carried
@@ -266,17 +274,21 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
 	}
 
+	// Step 2: Cheap equality check before the expensive bcrypt call.
+	// An authenticated user submitting new==old is a client error regardless of
+	// whether the old password is correct; no bcrypt cost is warranted.
+	if input.NewPassword == input.OldPassword {
+		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
+	}
+
 	user, err := s.repo.GetByID(ctx, input.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}
 
+	// Step 3: Verify old password (expensive).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
 		return nil, errcode.New(errcode.ErrAuthLoginFailed, "old password incorrect")
-	}
-
-	if input.NewPassword == input.OldPassword {
-		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)

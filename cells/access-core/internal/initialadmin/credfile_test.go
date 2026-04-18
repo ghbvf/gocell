@@ -149,7 +149,11 @@ func TestRemoveCredentialFile_IdempotentMissing(t *testing.T) {
 	}
 }
 
-func TestRemoveCredentialFile_RefusesIfModeChanged(t *testing.T) {
+// TestRemoveCredentialFile_DeletesEvenWhenModeTampered verifies that
+// RemoveCredentialFile removes the file even when the mode has been tampered
+// (security intent: destroy the credential regardless of the anomaly) and
+// that the returned error wraps ErrCredFileTampered so callers can log it.
+func TestRemoveCredentialFile_DeletesEvenWhenModeTampered(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
@@ -164,10 +168,17 @@ func TestRemoveCredentialFile_RefusesIfModeChanged(t *testing.T) {
 	}
 
 	err := initialadmin.RemoveCredentialFile(path)
+
+	// Must still return ErrCredFileTampered so caller can log the anomaly.
 	if err == nil {
 		t.Fatal("expected ErrCredFileTampered, got nil")
 	}
 	if !errors.Is(err, initialadmin.ErrCredFileTampered) {
 		t.Errorf("expected ErrCredFileTampered, got: %v", err)
+	}
+
+	// File must have been removed despite the tamper.
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("expected file to be removed after tamper detection, but file still exists")
 	}
 }

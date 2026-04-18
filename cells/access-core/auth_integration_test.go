@@ -132,7 +132,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	// Build a refresh-service that mirrors production wiring (jwtVerifier,
 	// not validateSvc) so intent enforcement flows through.
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
+		c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
 	)
 
 	_, err := refreshSvc.Refresh(context.Background(), accessToken)
@@ -150,7 +150,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	require.NotNil(t, c.sessionRepo, "session repo must be wired")
 
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
+		c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
 	)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), refreshToken)

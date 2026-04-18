@@ -34,18 +34,26 @@ func init() {
 	}
 }
 
+// newTestService creates a refresh service with a minimal in-memory userRepo
+// (P1-11: userRepo is now a required positional parameter in NewService).
+// Tests that do not assert on PasswordResetRequired may pass this helper
+// without setting up user fixtures; the userRepo is empty and GetByID will
+// return not-found, causing fetchPasswordResetRequired to return false (safe
+// default for tests that do not exercise the flag).
 func newTestService() (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	return NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
+	userRepo := mem.NewUserRepository()
+	return NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
 }
 
+// newTestServiceWithUserRepo creates a service and returns the userRepo for
+// tests that need to seed user fixtures and assert on the PasswordResetRequired flag.
 func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default(),
-		WithUserRepository(userRepo))
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
 	return svc, sessionRepo, userRepo
 }
 
@@ -243,7 +251,8 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 
 	// Wire refresh service with the intent-aware JWT verifier (production path).
-	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default())
+	userRepo := mem.NewUserRepository()
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
 	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", auth.IssueOptions{

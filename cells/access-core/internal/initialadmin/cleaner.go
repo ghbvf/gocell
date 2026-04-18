@@ -93,9 +93,13 @@ func NewCleaner(cfg CleanerConfig) (*Cleaner, error) {
 	}, nil
 }
 
-// Start registers a TTL timer and blocks until ctx is cancelled or the timer
-// fires. If Stop was already called before Start, an error is returned
-// immediately (no reuse).
+// Start recovers the remaining TTL from the credential file's expires_at field
+// and registers a timer for that duration, then blocks until ctx is cancelled
+// or the timer fires. If the credential file is missing, Start logs at Info and
+// returns immediately (operator-managed cleanup). If the TTL has already elapsed,
+// expire() is called synchronously before Start blocks.
+//
+// If Stop was already called before Start, an error is returned immediately.
 func (c *Cleaner) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state == stateStopped {
@@ -106,9 +110,35 @@ func (c *Cleaner) Start(ctx context.Context) error {
 		c.mu.Unlock()
 		return fmt.Errorf("initialadmin: cleaner is already running")
 	}
+	c.mu.Unlock()
 
-	// Register the expiry callback.
-	c.canceller = c.scheduler.AfterFunc(c.ttl, c.expire)
+	// Recover remaining TTL from the credential file. This handles process
+	// restarts: the TTL is always measured from the file's expires_at timestamp,
+	// not from the current process start time.
+	remaining, err := c.resolveRemaining()
+	if err != nil {
+		// File missing — operator already removed it or it never existed.
+		c.logger.Info("initial admin credential file not found; no cleanup needed",
+			slog.String("event", "initial_admin_credential_expired"),
+			slog.String("path", c.path),
+		)
+		c.mu.Lock()
+		c.state = stateStopped
+		c.mu.Unlock()
+		return nil
+	}
+
+	c.mu.Lock()
+	if remaining <= 0 {
+		// Already expired — call expire synchronously then return.
+		c.state = stateRunning
+		c.mu.Unlock()
+		c.expire()
+		return nil
+	}
+
+	// Register the expiry callback with the recovered remaining duration.
+	c.canceller = c.scheduler.AfterFunc(remaining, c.expire)
 	c.state = stateRunning
 	c.mu.Unlock()
 
@@ -124,6 +154,17 @@ func (c *Cleaner) Start(ctx context.Context) error {
 	c.mu.Unlock()
 
 	return nil
+}
+
+// resolveRemaining reads the expires_at from the credential file and returns
+// the duration until expiry (may be negative if already expired).
+// Returns an error when the file does not exist or cannot be parsed.
+func (c *Cleaner) resolveRemaining() (time.Duration, error) {
+	expiresAt, err := ReadCredentialExpiresAt(c.path)
+	if err != nil {
+		return 0, err
+	}
+	return expiresAt.Sub(c.clock.Now()), nil
 }
 
 // Stop cancels the pending TTL timer. It is safe to call multiple times
@@ -157,8 +198,10 @@ func (c *Cleaner) expire() {
 
 	switch {
 	case errors.Is(err, ErrCredFileTampered):
-		// File existed but permissions changed — security event.
-		c.logger.Error("initial admin credential file tampered; could not remove",
+		// File permissions were tampered, but RemoveCredentialFile still deleted
+		// the file before returning (P1-1 fix). Log at Warn: credential has been
+		// destroyed, but the anomaly warrants operator attention.
+		c.logger.Warn("initial admin credential file had unexpected mode; deleted anyway (tamper detected)",
 			slog.String("event", "initial_admin_credential_expired"),
 			slog.String("path", c.path),
 			slog.Any("error", err),

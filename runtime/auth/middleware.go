@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -142,9 +145,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// business routes receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the
 	// subject changes their password and obtains a new token without the claim.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(r.Method, r.URL.Path) {
-		httputil.WriteError(r.Context(), w, http.StatusForbidden,
-			string(errcode.ErrAuthPasswordResetRequired),
-			"password reset required before accessing this endpoint")
+		writePasswordResetRequired(r.Context(), w)
 		return
 	}
 
@@ -152,6 +153,25 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// response with a details.change_password_endpoint hint to help clients
+// navigate to the correct endpoint (P2-10 fix).
+func writePasswordResetRequired(ctx context.Context, w http.ResponseWriter) {
+	errBody := map[string]any{
+		"code":    string(errcode.ErrAuthPasswordResetRequired),
+		"message": "password reset required before accessing this endpoint",
+		"details": map[string]any{
+			"change_password_endpoint": "POST /api/v1/access/users/{id}/password",
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	if err := json.NewEncoder(w).Encode(map[string]any{"error": errBody}); err != nil {
+		slog.Error("auth middleware: encode password-reset-required response",
+			slog.Any("error", err))
+	}
 }
 
 // isPasswordResetExempt reports whether the given HTTP method and URL path are
