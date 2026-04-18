@@ -45,7 +45,8 @@ var (
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(ks, "gocell-access-core", 15*time.Minute)
+	i, err := auth.NewJWTIssuer(ks, "gocell-access-core", 15*time.Minute,
+		auth.WithDefaultAudience("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

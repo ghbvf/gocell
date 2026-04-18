@@ -86,7 +86,7 @@ func main() {
 		logger.Error("failed to create JWT issuer", slog.Any("error", err))
 		os.Exit(1)
 	}
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences(auth.DefaultJWTAudience))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		logger.Error("failed to create JWT verifier", slog.Any("error", err))
 		os.Exit(1)
