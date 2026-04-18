@@ -141,6 +141,7 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 		pub:     pub,
 		cfg:     cfg,
 		metrics: metrics,
+		readyCh: make(chan struct{}),
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {
@@ -168,17 +169,15 @@ func (r *Relay) Start(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	ready := make(chan struct{})
 
 	r.mu.Lock()
 	r.cancel = cancel
 	r.done = done
-	r.readyCh = ready
 	r.wg.Add(3)
 	r.mu.Unlock()
 
 	r.state.Store(int32(relayRunning))
-	close(ready)
+	close(r.readyCh)
 
 	defer func() {
 		r.wg.Wait()
@@ -186,7 +185,7 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.cancel = nil
 		r.done = nil
-		r.readyCh = nil // clear so Ready() returns nil between Stop and next Start
+		r.readyCh = make(chan struct{}) // fresh open channel; next Start() will close it
 		r.state.Store(int32(relayStopped))
 		close(done)
 		r.mu.Unlock()
@@ -222,12 +221,15 @@ func (r *Relay) Start(ctx context.Context) error {
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
 func (r *Relay) Stop(ctx context.Context) error {
-	// If never started, no-op (consistent with worker.Worker contract).
+	// If never started (or already stopped), no-op (consistent with worker.Worker
+	// contract).  We detect this by checking cancel under mu: cancel is only set
+	// during an active Start() call and cleared by the Start() defer on shutdown.
 	r.mu.Lock()
+	notStarted := r.cancel == nil && relayState(r.state.Load()) == relayStopped
 	ready := r.readyCh
 	r.mu.Unlock()
 
-	if ready == nil {
+	if notStarted {
 		return nil
 	}
 
@@ -667,8 +669,10 @@ func (r *Relay) HealthCheckers() map[string]func() error {
 //	    // timeout
 //	}
 //
-// If Start() has not been called yet, Ready() returns nil — a nil channel
-// blocks forever, which callers should handle with a timeout.
+// Ready() never returns nil. Before Start() completes (or after Stop()), the
+// returned channel is open and will not close until the next Start() runs to
+// completion. Callers that want to detect the "not yet started" state should
+// still guard the select with a timeout.
 func (r *Relay) Ready() <-chan struct{} {
 	r.mu.Lock()
 	ch := r.readyCh

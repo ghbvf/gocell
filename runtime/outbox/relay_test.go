@@ -806,14 +806,10 @@ func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 	_, stop := startRelay(t, relay)
 	defer stop()
 
-	// Ready() returns nil before Start() has set up readyCh. Poll until non-nil,
-	// then read from it. Design: nil channel blocks forever — caller must handle
-	// with a timeout or poll as shown here.
+	// Ready() never returns nil (B1: pre-allocated in NewRelay). Before Start()
+	// completes, the channel is open (blocks); after relayRunning, it is closed.
 	require.Eventually(t, func() bool {
 		ch := relay.Ready()
-		if ch == nil {
-			return false
-		}
 		select {
 		case <-ch:
 			return true
