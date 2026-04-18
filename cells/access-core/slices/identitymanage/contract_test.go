@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -320,7 +320,7 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.change-password.v1")
 
-	stubIssuer := &stubTokenIssuer{pair: &sessionlogin.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
 		AccessToken:  "new-at",
 		RefreshToken: "new-rt",
 		ExpiresAt:    time.Now().Add(time.Hour),

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -56,9 +58,30 @@ type scheduledEntry struct {
 }
 
 type fakeScheduler struct {
-	mu      sync.Mutex
-	entries []scheduledEntry
-	elapsed time.Duration
+	mu       sync.Mutex
+	entries  []scheduledEntry
+	elapsed  time.Duration
+	timerCh  chan struct{} // closed when first timer is registered; must be non-nil before use
+	timerOne sync.Once
+}
+
+// newFakeScheduler constructs a fakeScheduler with an initialised timerCh.
+// Always use this constructor so timerCh is available before any goroutine
+// calls AfterFunc or waitForTimer.
+func newFakeScheduler() *fakeScheduler {
+	return &fakeScheduler{timerCh: make(chan struct{})}
+}
+
+// waitForTimer blocks until at least one timer has been registered (i.e.
+// Start has called AfterFunc). This replaces time.Sleep(10ms) pre-Advance
+// waits with a deterministic signal (F-TEST-3).
+func (s *fakeScheduler) waitForTimer(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.timerCh:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for fakeScheduler timer registration")
+	}
 }
 
 // AfterFunc records the timer and returns a Cancellable. The fn is stored but
@@ -68,6 +91,7 @@ func (s *fakeScheduler) AfterFunc(d time.Duration, fn func()) Cancellable {
 	s.mu.Lock()
 	s.entries = append(s.entries, scheduledEntry{d: d, timer: t})
 	s.mu.Unlock()
+	s.timerOne.Do(func() { close(s.timerCh) })
 	return t
 }
 
@@ -188,25 +212,27 @@ func TestCleaner_DeletesAfterTTL(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	writeTestCredFile(t, path)
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 	defer cancel()
 
-	// Give Start a moment to register the timer.
-	time.Sleep(10 * time.Millisecond)
+	// Wait deterministically for Start to register the timer.
+	sched.waitForTimer(t)
 
-	// Advance past 24h TTL — triggers expire().
+	// Advance past 24h TTL — triggers expire() synchronously.
 	sched.Advance(24 * time.Hour)
 
-	// Wait for expiry to propagate (expire runs synchronously in Advance).
-	time.Sleep(20 * time.Millisecond)
-
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("expected credential file to be removed after TTL, got stat err: %v", err)
-	}
+	// Await file removal (expire runs synchronously in Advance, but the OS
+	// unlink may race with stat on some filesystems — require.Eventually is
+	// the canonical non-sleep wait pattern).
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 500*time.Millisecond, 5*time.Millisecond,
+		"expected credential file to be removed after TTL")
 
 	cancel()
 	<-done
@@ -217,14 +243,14 @@ func TestCleaner_StopBeforeTTL_FilePersists(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	writeTestCredFile(t, path)
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 
-	// Give Start a moment to register the timer.
-	time.Sleep(10 * time.Millisecond)
+	// Wait deterministically for Start to register the timer before cancelling.
+	sched.waitForTimer(t)
 
 	// Stop before advancing time (timer never fires).
 	cancel()
@@ -241,23 +267,27 @@ func TestCleaner_FileGoneByOperator(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	// Do NOT write the file — simulates operator having already deleted it.
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 	defer cancel()
 
-	time.Sleep(10 * time.Millisecond)
+	sched.waitForTimer(t)
 	sched.Advance(24 * time.Hour)
-	time.Sleep(20 * time.Millisecond)
 
 	// expire() must not return an error (RemoveCredentialFile is idempotent
 	// when the file is absent) and must log at Info level.
-	rec, found := handler.findByEvent("initial_admin_credential_expired")
-	if !found {
-		t.Fatal("expected a log record with event=initial_admin_credential_expired")
-	}
+	var rec logRecord
+	require.Eventually(t, func() bool {
+		r, found := handler.findByEvent("initial_admin_credential_expired")
+		if found {
+			rec = r
+		}
+		return found
+	}, 500*time.Millisecond, 5*time.Millisecond,
+		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelInfo {
 		t.Errorf("expected Info log for missing file, got %s", rec.level)
 	}
@@ -271,21 +301,25 @@ func TestCleaner_LogsWarnOnExpiry(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	writeTestCredFile(t, path)
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 	defer cancel()
 
-	time.Sleep(10 * time.Millisecond)
+	sched.waitForTimer(t)
 	sched.Advance(24 * time.Hour)
-	time.Sleep(20 * time.Millisecond)
 
-	rec, found := handler.findByEvent("initial_admin_credential_expired")
-	if !found {
-		t.Fatal("expected log record with event=initial_admin_credential_expired")
-	}
+	var rec logRecord
+	require.Eventually(t, func() bool {
+		r, found := handler.findByEvent("initial_admin_credential_expired")
+		if found {
+			rec = r
+		}
+		return found
+	}, 500*time.Millisecond, 5*time.Millisecond,
+		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelWarn {
 		t.Errorf("expected Warn log on successful expiry, got %s", rec.level)
 	}
@@ -299,13 +333,13 @@ func TestCleaner_StopIsIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	writeTestCredFile(t, path)
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 
-	time.Sleep(10 * time.Millisecond)
+	sched.waitForTimer(t)
 	cancel()
 	<-done
 
@@ -324,7 +358,7 @@ func TestCleaner_StartAfterStop(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 	writeTestCredFile(t, path)
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
@@ -350,21 +384,25 @@ func TestCleaner_LogsErrorOnTamperedFile(t *testing.T) {
 		t.Fatalf("chmod: %v", err)
 	}
 
-	sched := &fakeScheduler{}
+	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c := newTestCleaner(t, path, sched, handler)
 
 	cancel, done := startBackground(c)
 	defer cancel()
 
-	time.Sleep(10 * time.Millisecond)
+	sched.waitForTimer(t)
 	sched.Advance(24 * time.Hour)
-	time.Sleep(20 * time.Millisecond)
 
-	rec, found := handler.findByEvent("initial_admin_credential_expired")
-	if !found {
-		t.Fatal("expected log record with event=initial_admin_credential_expired")
-	}
+	var rec logRecord
+	require.Eventually(t, func() bool {
+		r, found := handler.findByEvent("initial_admin_credential_expired")
+		if found {
+			rec = r
+		}
+		return found
+	}, 500*time.Millisecond, 5*time.Millisecond,
+		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelError {
 		t.Errorf("expected Error log for tampered file, got %s", rec.level)
 	}

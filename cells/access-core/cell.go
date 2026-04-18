@@ -254,7 +254,11 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 	}
 	if c.bootstrapWorkerSink == nil {
 		return errcode.New(errcode.ErrCellInvalidConfig,
-			"WithInitialAdminBootstrap requires WithBootstrapWorkerSink to manage the cleanup worker lifecycle")
+			"WithInitialAdminBootstrap requires WithBootstrapWorkerSink; example:\n"+
+				"  var w worker.Worker\n"+
+				"  accesscore.WithInitialAdminBootstrap(),\n"+
+				"  accesscore.WithBootstrapWorkerSink(func(x worker.Worker) { w = x }),\n"+
+				"  /* later */ bootstrap.WithWorkers(w)")
 	}
 	bsDeps := initialadmin.BootstrapDeps{
 		UserRepo: c.userRepo,

@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -421,7 +421,7 @@ func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username, passwo
 }
 
 func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
-	stubIssuer := &stubTokenIssuer{pair: &sessionlogin.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
 		AccessToken:           "new-access-token",
 		RefreshToken:          "new-refresh-token",
 		PasswordResetRequired: false,
@@ -442,7 +442,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 }
 
 func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
-	stubIssuer := &stubTokenIssuer{pair: &sessionlogin.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
 		AccessToken:  "admin-issued-at",
 		RefreshToken: "admin-issued-rt",
 	}}
@@ -472,6 +472,30 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// TestHandler_ChangePassword_NilPair_ServerError verifies that the handler
+// returns 500 when ChangePassword succeeds but the service returns a nil pair
+// (tokenIssuer not configured). This is a defense-in-depth check (F-SEC-2):
+// production always wires a tokenIssuer, but mis-configuration must not silently
+// emit 200 + empty token pair.
+func TestHandler_ChangePassword_NilPair_ServerError(t *testing.T) {
+	// stubTokenIssuer with nil pair simulates a missing issuer (service returns nil, nil).
+	// The handler guard converts this to a 500 response.
+	nilIssuer := &stubTokenIssuer{pair: nil, err: nil}
+	r, repo := setupWithIssuer(nilIssuer)
+	seedUserInRepo(t, repo, "usr-nilpair", "nilpair-user", "oldpass")
+
+	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
+	req := httptest.NewRequest(http.MethodPost, "/usr-nilpair/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("usr-nilpair", nil))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"nil pair from service must yield 500, not 200 + empty token pair")
+	assert.Contains(t, w.Body.String(), "ERR_INTERNAL")
 }
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {

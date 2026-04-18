@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -224,7 +225,10 @@ func (s *Service) issueAccessToken(subject string, roles []string, sessionID str
 // user and their roles so the returned tokens reflect the current state (e.g.
 // after ChangePassword clears PasswordResetRequired). Used by identitymanage
 // ChangePassword to issue a replacement token pair without forcing a re-login.
-func (s *Service) IssueForUser(ctx context.Context, userID string) (*TokenPair, error) {
+//
+// Returns *dto.TokenPair (internal/dto) so this method implements the
+// identitymanage.TokenIssuer interface without a cross-slice import (F-ARCH-1).
+func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: IssueForUser get user: %w", err)
@@ -249,7 +253,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (*TokenPair, 
 		return nil, fmt.Errorf("session-login: IssueForUser refresh token: %w", err)
 	}
 
-	return &TokenPair{
+	return &dto.TokenPair{
 		AccessToken:           accessToken,
 		RefreshToken:          refreshToken,
 		ExpiresAt:             expiresAt,

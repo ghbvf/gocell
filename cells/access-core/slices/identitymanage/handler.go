@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -70,8 +69,8 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	mux.Handle("POST /{id}/password", http.HandlerFunc(h.handleChangePassword))
 }
 
-// toTokenPairResponse converts a sessionlogin.TokenPair to a shared DTO.
-func toTokenPairResponse(p *sessionlogin.TokenPair) dto.TokenPairResponse {
+// toTokenPairResponse converts a dto.TokenPair to the HTTP response DTO.
+func toTokenPairResponse(p *dto.TokenPair) dto.TokenPairResponse {
 	if p == nil {
 		return dto.TokenPairResponse{}
 	}
@@ -293,6 +292,14 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+	// Defense-in-depth: ChangePassword returns nil pair when no tokenIssuer is
+	// wired (production always wires one; this guard catches mis-configuration
+	// so the handler does not silently emit 200 + empty token pair).
+	if pair == nil {
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
+			string(errcode.ErrInternal), "token issuer not configured")
 		return
 	}
 

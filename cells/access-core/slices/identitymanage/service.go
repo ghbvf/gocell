@@ -12,8 +12,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -22,9 +22,11 @@ import (
 
 // TokenIssuer is a narrow interface for issuing a new token pair after a
 // password change. The implementation is sessionlogin.Service.IssueForUser,
-// injected via WithTokenIssuer to avoid a circular import chain.
+// injected via WithTokenIssuer to avoid a cross-slice import. The returned
+// type is *dto.TokenPair (internal/dto) so identitymanage does not import
+// sessionlogin directly (F-ARCH-1).
 type TokenIssuer interface {
-	IssueForUser(ctx context.Context, userID string) (*sessionlogin.TokenPair, error)
+	IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error)
 }
 
 const (
@@ -259,7 +261,7 @@ type ChangePasswordInput struct {
 // The token pair is issued synchronously so the client can replace stale tokens
 // without a forced re-login — this is critical when the old token carried
 // password_reset_required=true and would be rejected by the middleware.
-func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (*sessionlogin.TokenPair, error) {
+func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (*dto.TokenPair, error) {
 	if input.UserID == "" || input.OldPassword == "" || input.NewPassword == "" {
 		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
 	}

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -408,15 +409,19 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 // When admin already exists: sink is not called, adminWorker stays nil, lazyWorker
 // Start/Stop are no-ops.
 //
+// Thread safety: the sink (writer) and Start/Stop (readers) may run on
+// different goroutines in the bootstrap lifecycle. The lazyBootstrapWorker uses
+// atomic.Pointer to eliminate the race (F-OPS-2).
+//
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
 func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
-	var adminWorker worker.Worker
-	sink := func(w worker.Worker) { adminWorker = w }
+	lazy := &lazyBootstrapWorker{}
+	sink := func(w worker.Worker) { lazy.ptr.Store(&w) }
 	accessOpts = append(base,
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithBootstrapWorkerSink(sink),
 	)
-	lazyWorkerOpt = bootstrap.WithWorkers(&lazyBootstrapWorker{get: func() worker.Worker { return adminWorker }})
+	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
 	return accessOpts, lazyWorkerOpt
 }
 
@@ -424,22 +429,25 @@ func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore
 // worker.Worker produced during asm.Init (inside bootstrap.Run Step 3-4) can be
 // registered with bootstrap.WithWorkers before bootstrap.New is called.
 //
-// If get() returns nil (admin already existed, sink was never called), Start and
+// If ptr holds nil (admin already existed, sink was never called), Start and
 // Stop are safe no-ops.
+//
+// ptr uses atomic.Pointer to synchronise the sink (writer, runs during asm.Init)
+// with Start/Stop (readers, run during WorkerGroup lifecycle) without a mutex.
 type lazyBootstrapWorker struct {
-	get func() worker.Worker
+	ptr atomic.Pointer[worker.Worker]
 }
 
 func (l *lazyBootstrapWorker) Start(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Start(ctx)
+	if p := l.ptr.Load(); p != nil {
+		return (*p).Start(ctx)
 	}
 	return nil
 }
 
 func (l *lazyBootstrapWorker) Stop(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Stop(ctx)
+	if p := l.ptr.Load(); p != nil {
+		return (*p).Stop(ctx)
 	}
 	return nil
 }

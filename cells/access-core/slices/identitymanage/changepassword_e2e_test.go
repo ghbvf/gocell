@@ -17,13 +17,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
@@ -57,11 +57,13 @@ var e2eVerifier = func() *auth.JWTVerifier {
 }()
 
 // e2eTokenIssuer bridges sessionlogin.Service to the identitymanage.TokenIssuer interface.
+// sessionlogin.Service.IssueForUser returns *dto.TokenPair so this bridge is a
+// transparent delegation (no conversion needed).
 type e2eTokenIssuer struct {
 	svc *sessionlogin.Service
 }
 
-func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (*sessionlogin.TokenPair, error) {
+func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
 	return ti.svc.IssueForUser(ctx, userID)
 }
 
@@ -111,7 +113,7 @@ func newE2EFixture() *e2eFixture {
 // the in-memory repos. Returns the userID.
 func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword string) string {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), domain.BcryptCost)
 	require.NoError(t, err)
 
 	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
@@ -131,18 +133,6 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 	require.NoError(t, err)
 
 	return user.ID
-}
-
-// isPasswordResetExemptLocal mirrors the allowlist logic in
-// runtime/auth/middleware.go for use in local assertions.
-func isPasswordResetExemptLocal(method, path string) bool {
-	if method == http.MethodPost && strings.HasSuffix(path, "/password") {
-		return true
-	}
-	if method == http.MethodDelete && strings.Contains(path, "/sessions/") {
-		return true
-	}
-	return false
 }
 
 // TestChangePassword_FullFlow is the e2e closure test:
@@ -175,12 +165,37 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	assert.True(t, loginClaims.PasswordResetRequired,
 		"access token must carry password_reset_required=true claim after bootstrap login")
 
-	// --- Step 3: allowlist assertions ---
-	assert.False(t, isPasswordResetExemptLocal(http.MethodGet, "/api/v1/access/users/"+userID),
-		"GET /users/{id} must NOT be exempt from password reset enforcement")
-	assert.True(t, isPasswordResetExemptLocal(http.MethodPost, "/api/v1/access/users/"+userID+"/password"),
+	// --- Step 3: allowlist assertions via real AuthMiddleware ---
+	// Verify that the actual middleware enforces password-reset correctly:
+	// - GET /users/{id} is NOT exempt → middleware returns 403
+	// - POST /users/{id}/password IS exempt → middleware forwards to handler (200)
+	// - DELETE /sessions/{id} IS exempt → middleware forwards to handler (204)
+	//
+	// We use a real AuthMiddleware wired with the e2eVerifier and a token that
+	// carries PasswordResetRequired=true. The downstream handler is a stub that
+	// always returns 200 (or the method-appropriate code). This avoids the
+	// isPasswordResetExemptLocal stub which mirrored allowlist logic locally and
+	// could diverge from the real implementation (F-SEC-3).
+	muxWithMiddleware := func(method, path string) int {
+		stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if method == http.MethodDelete {
+				w.WriteHeader(http.StatusNoContent)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		})
+		mid := auth.AuthMiddleware(e2eVerifier, nil)(stub)
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)
+		rec := httptest.NewRecorder()
+		mid.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	assert.Equal(t, http.StatusForbidden, muxWithMiddleware(http.MethodGet, "/api/v1/access/users/"+userID),
+		"GET /users/{id} must be blocked (403) by password-reset enforcement")
+	assert.Equal(t, http.StatusOK, muxWithMiddleware(http.MethodPost, "/api/v1/access/users/"+userID+"/password"),
 		"POST /users/{id}/password must be exempt from password reset enforcement")
-	assert.True(t, isPasswordResetExemptLocal(http.MethodDelete, "/api/v1/access/sessions/sess-x"),
+	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/sess-x"),
 		"DELETE /sessions/{id} must be exempt from password reset enforcement")
 
 	// --- Step 4: ChangePassword ---

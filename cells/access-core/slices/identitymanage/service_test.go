@@ -10,8 +10,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,11 +119,11 @@ func TestService_Update(t *testing.T) {
 
 // stubTokenIssuer is a test double for TokenIssuer.
 type stubTokenIssuer struct {
-	pair *sessionlogin.TokenPair
+	pair *dto.TokenPair
 	err  error
 }
 
-func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (*sessionlogin.TokenPair, error) {
+func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (*dto.TokenPair, error) {
 	return s.pair, s.err
 }
 
@@ -180,7 +180,7 @@ func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 }
 
 func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &sessionlogin.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
+	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-ok", "oldpass", false)
 
@@ -250,7 +250,7 @@ func TestService_ChangePassword_BcryptError(t *testing.T) {
 }
 
 func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &sessionlogin.TokenPair{}}
+	stub := &stubTokenIssuer{pair: &dto.TokenPair{}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-reset", "oldpass", true) // PasswordResetRequired=true
 
