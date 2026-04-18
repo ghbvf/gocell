@@ -164,7 +164,7 @@ type CommandTimeouts struct {
 type CommandEntry struct {
 	ID          string
 	DeviceID    string
-	CommandType string            // e.g., "reboot", "cert-renew", "config-push"
+	CommandType string // e.g., "reboot", "cert-renew", "config-push"
 	Payload     []byte
 	Status      CommandStatus
 	Metadata    map[string]string // extensible key-value pairs
