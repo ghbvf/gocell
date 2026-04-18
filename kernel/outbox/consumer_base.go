@@ -141,9 +141,13 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 	}
 }
 
-// exponentialDelay computes base * 2^attempt with overflow protection,
+// ExponentialDelay computes base * 2^attempt with overflow protection,
 // capped at maxDelay. Used by both claimWithRetry and retryLoop.
-func exponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
+//
+// This is the single source of truth for exponential-backoff delay
+// computation; adapters (e.g., rabbitmq) should call this function
+// instead of maintaining their own copies.
+func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		return 0
 	}
@@ -317,7 +321,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			return 0, nil, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
-			base := exponentialDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
+			base := ExponentialDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			var jitter time.Duration
 			if base > 0 {
 				jitter = time.Duration(rand.Int64N(int64(base/backoffJitterDivisor) + 1))
@@ -405,7 +409,7 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 	if ctx.Err() != nil {
 		return true
 	}
-	delay := exponentialDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
+	delay := ExponentialDelay(cb.config.RetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 	logWithContext(ctx, slog.LevelWarn, "outbox: transient error, retrying",
 		slog.String(logKeyEventID, entry.ID),
 		slog.String(logKeyTopic, topic),

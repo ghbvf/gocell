@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 func TestExponentialDelay(t *testing.T) {
@@ -31,13 +33,13 @@ func TestExponentialDelay(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := exponentialDelay(tt.base, tt.maxDelay, tt.attempt)
+			got := outbox.ExponentialDelay(tt.base, tt.maxDelay, tt.attempt)
 			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestExponentialDelay_DoublesEachAttempt verifies that exponentialDelay
+// TestExponentialDelay_DoublesEachAttempt verifies that ExponentialDelay
 // produces exactly 2x growth per attempt: base * 2^attempt.
 func TestExponentialDelay_DoublesEachAttempt(t *testing.T) {
 	const base = 100 * time.Millisecond
@@ -53,7 +55,7 @@ func TestExponentialDelay_DoublesEachAttempt(t *testing.T) {
 		{3, 800 * time.Millisecond},
 	}
 	for _, c := range cases {
-		got := exponentialDelay(base, maxDelay, c.attempt)
+		got := outbox.ExponentialDelay(base, maxDelay, c.attempt)
 		assert.Equal(t, c.want, got, "attempt=%d", c.attempt)
 	}
 }

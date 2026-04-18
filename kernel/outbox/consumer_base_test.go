@@ -177,7 +177,38 @@ func TestConsumerBaseConfig_SetDefaults_PositiveValuesPreserved(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.MaxRetryDelay)
 }
 
-// --- exponentialDelay ------------------------------------------------------
+// --- exponentialDelay / ExponentialDelay -----------------------------------
+
+// TestExponentialDelay_PublicAPI verifies the exported ExponentialDelay
+// function that adapters should use instead of maintaining their own copies.
+func TestExponentialDelay_PublicAPI(t *testing.T) {
+	base := 100 * time.Millisecond
+	maxDelay := 5 * time.Second
+	cases := []struct {
+		name     string
+		base     time.Duration
+		maxDelay time.Duration
+		attempt  int
+		want     time.Duration
+	}{
+		{"zero_base_returns_zero", 0, maxDelay, 3, 0},
+		{"attempt_0_equals_base", base, maxDelay, 0, base},
+		{"attempt_1_double", base, maxDelay, 1, 2 * base},
+		{"attempt_5_capped_by_base_shift", base, maxDelay, 5, 3200 * time.Millisecond},
+		{"capped_at_max", base, maxDelay, 10, maxDelay},
+		{"overflow_protection_63", base, maxDelay, 63, maxDelay},
+		{"overflow_protection_65", base, maxDelay, 65, maxDelay},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ExponentialDelay(tc.base, tc.maxDelay, tc.attempt)
+			if got != tc.want {
+				t.Errorf("ExponentialDelay(%v, %v, %d) = %v, want %v",
+					tc.base, tc.maxDelay, tc.attempt, got, tc.want)
+			}
+		})
+	}
+}
 
 func TestExponentialDelay_Table(t *testing.T) {
 	tests := []struct {
@@ -198,7 +229,7 @@ func TestExponentialDelay_Table(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := exponentialDelay(tt.base, tt.maxDelay, tt.attempt)
+			got := ExponentialDelay(tt.base, tt.maxDelay, tt.attempt)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -207,8 +238,8 @@ func TestExponentialDelay_Table(t *testing.T) {
 func TestExponentialDelay_ExactMaxSafeShift(t *testing.T) {
 	base := time.Second
 	maxSafeShift := 63 - bits.Len64(uint64(base))
-	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift))
-	assert.Equal(t, 30*time.Second, exponentialDelay(base, 30*time.Second, maxSafeShift+1))
+	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift))
+	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift+1))
 }
 
 // --- NewConsumerBase -------------------------------------------------------
