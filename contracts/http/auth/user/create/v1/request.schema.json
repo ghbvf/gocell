@@ -11,6 +11,9 @@
     },
     "password": {
       "type": "string"
+    },
+    "requirePasswordReset": {
+      "type": "boolean"
     }
   },
   "required": ["username", "email", "password"],

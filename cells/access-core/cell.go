@@ -322,19 +322,8 @@ func (c *AccessCore) validateDemoMode() error {
 // initSlices constructs all 9 slice services and handlers.
 // Extracted from Init to reduce cognitive complexity.
 func (c *AccessCore) initSlices() {
-	// identity-manage
-	var identityOpts []identitymanage.Option
-	if c.outboxWriter != nil {
-		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
-	}
-	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
-	c.identityHandler = identitymanage.NewHandler(identitySvc)
-	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
-
-	// session-login
+	// session-login must be constructed before identity-manage because
+	// ChangePassword injects loginSvc as the TokenIssuer.
 	var loginOpts []sessionlogin.Option
 	if c.outboxWriter != nil {
 		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
@@ -346,6 +335,19 @@ func (c *AccessCore) initSlices() {
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
 
+	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
+	var identityOpts []identitymanage.Option
+	if c.outboxWriter != nil {
+		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
+	}
+	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
+	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
+	c.identityHandler = identitymanage.NewHandler(identitySvc)
+	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
+
 	// session-validate (before session-refresh: provides session-aware verifier)
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
@@ -354,7 +356,10 @@ func (c *AccessCore) initSlices() {
 	// validateSvc hard-requires token_use=access and would reject every
 	// refresh token. sessionrefresh still enforces session revocation via
 	// sessionRepo + Session.IsRevoked checks after JWT verification.
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
+	// WithUserRepository is injected so Refresh can read PasswordResetRequired
+	// from the current user state (e.g. after ChangePassword clears the flag).
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger,
+		sessionrefresh.WithUserRepository(c.userRepo))
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 

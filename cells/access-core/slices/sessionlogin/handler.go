@@ -12,10 +12,11 @@ func toTokenPairResponse(p *TokenPair) dto.TokenPairResponse {
 		return dto.TokenPairResponse{}
 	}
 	return dto.TokenPairResponse{
-		AccessToken:  p.AccessToken,
-		RefreshToken: p.RefreshToken,
-		ExpiresAt:    p.ExpiresAt,
-		SessionID:    p.SessionID,
+		AccessToken:           p.AccessToken,
+		RefreshToken:          p.RefreshToken,
+		ExpiresAt:             p.ExpiresAt,
+		SessionID:             p.SessionID,
+		PasswordResetRequired: p.PasswordResetRequired,
 	}
 }
 

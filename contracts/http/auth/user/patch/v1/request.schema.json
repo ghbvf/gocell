@@ -11,6 +11,9 @@
     },
     "status": {
       "type": "string"
+    },
+    "requirePasswordReset": {
+      "type": "boolean"
     }
   },
   "additionalProperties": true

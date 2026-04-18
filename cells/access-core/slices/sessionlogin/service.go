@@ -24,10 +24,11 @@ const TopicSessionCreated = "event.session.created.v1"
 
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
-	SessionID    string
+	AccessToken           string
+	RefreshToken          string
+	ExpiresAt             time.Time
+	SessionID             string
+	PasswordResetRequired bool
 }
 
 // Option configures a session-login Service.
@@ -114,7 +115,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
 	sessionID := "sess" + "-" + uuid.NewString()
 
-	accessToken, err := s.issueAccessToken(user.ID, roleNames, sessionID)
+	accessToken, err := s.issueAccessToken(user.ID, roleNames, sessionID, user.PasswordResetRequired)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: issue access token: %w", err)
 	}
@@ -143,10 +144,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	s.logger.Info("user logged in",
 		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
 	return &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    expiresAt,
-		SessionID:    sessionID,
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		ExpiresAt:             expiresAt,
+		SessionID:             sessionID,
+		PasswordResetRequired: user.PasswordResetRequired,
 	}, nil
 }
 
@@ -207,13 +209,53 @@ func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 }
 
 // issueAccessToken signs a short-lived JWT with intent=access for calling
-// business endpoints. Access tokens carry roles for RBAC decisions.
-func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
+// business endpoints. Access tokens carry roles for RBAC decisions and the
+// passwordResetRequired flag so middleware can enforce server-side reset.
+func (s *Service) issueAccessToken(subject string, roles []string, sessionID string, passwordResetRequired bool) (string, error) {
 	return s.issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
-		Roles:     roles,
-		Audience:  []string{auth.DefaultJWTAudience},
-		SessionID: sessionID,
+		Roles:                 roles,
+		Audience:              []string{auth.DefaultJWTAudience},
+		SessionID:             sessionID,
+		PasswordResetRequired: passwordResetRequired,
 	})
+}
+
+// IssueForUser issues a fresh token pair for a user by ID. It re-fetches the
+// user and their roles so the returned tokens reflect the current state (e.g.
+// after ChangePassword clears PasswordResetRequired). Used by identitymanage
+// ChangePassword to issue a replacement token pair without forcing a re-login.
+func (s *Service) IssueForUser(ctx context.Context, userID string) (*TokenPair, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("session-login: IssueForUser get user: %w", err)
+	}
+
+	roleNames, err := s.fetchRoleNames(ctx, userID)
+	if err != nil {
+		s.logger.Warn("session-login: IssueForUser failed to fetch roles",
+			slog.Any("error", err), slog.String("user_id", userID))
+	}
+
+	sessionID := "sess" + "-" + uuid.NewString()
+	expiresAt := time.Now().Add(auth.DefaultAccessTokenTTL)
+
+	accessToken, err := s.issueAccessToken(userID, roleNames, sessionID, user.PasswordResetRequired)
+	if err != nil {
+		return nil, fmt.Errorf("session-login: IssueForUser access token: %w", err)
+	}
+
+	refreshToken, err := s.issueRefreshToken(userID, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session-login: IssueForUser refresh token: %w", err)
+	}
+
+	return &TokenPair{
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		ExpiresAt:             expiresAt,
+		SessionID:             sessionID,
+		PasswordResetRequired: user.PasswordResetRequired,
+	}, nil
 }
 
 // issueRefreshToken signs a longer-lived JWT with intent=refresh. Refresh

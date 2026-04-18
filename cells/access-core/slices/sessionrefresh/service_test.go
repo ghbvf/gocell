@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -36,6 +38,15 @@ func newTestService() (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	return NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
+}
+
+func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRepository) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default(),
+		WithUserRepository(userRepo))
+	return svc, sessionRepo, userRepo
 }
 
 func issueTestToken(sub string) string {
@@ -261,4 +272,62 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	// should reject it at the Verify() step because the session is revoked.
 	_, err = svc.Refresh(context.Background(), pair.RefreshToken)
 	assert.Error(t, err, "session-aware verifier should reject revoked session at Verify step")
+}
+
+// TestRefresh_FlagPropagatesFromCurrentUser_AfterClear ensures that after a user
+// clears PasswordResetRequired (e.g. via ChangePassword), the next refresh
+// produces a new access token with password_reset_required=false.
+func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
+	svc, sessionRepo, userRepo := newTestServiceWithUserRepo()
+
+	// Seed a user with reset flag = false (already cleared).
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+	user, _ := domain.NewUser("ref-user-clear", "ref-clear@test.com", string(hash))
+	user.ID = "usr-ref-clear"
+	// PasswordResetRequired is false by default.
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	rt := issueTestToken("usr-ref-clear")
+	sess, _ := domain.NewSession("usr-ref-clear", "at", rt, time.Now().Add(time.Hour))
+	sess.ID = "sess-ref-clear"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+	assert.False(t, pair.PasswordResetRequired, "after clearing flag, refreshed token must have claim=false")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired, "access token claim must be false after flag cleared")
+}
+
+// TestRefresh_FlagStillSetWhenUserNotChanged ensures that a user who has not
+// changed their password keeps getting tokens with password_reset_required=true
+// on each refresh.
+func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
+	svc, sessionRepo, userRepo := newTestServiceWithUserRepo()
+
+	// Seed a user with reset flag = true (bootstrap user who hasn't changed password yet).
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+	user, _ := domain.NewUser("ref-user-reset", "ref-reset@test.com", string(hash))
+	user.ID = "usr-ref-reset"
+	user.MarkPasswordResetRequired()
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	rt := issueTestToken("usr-ref-reset")
+	sess, _ := domain.NewSession("usr-ref-reset", "at", rt, time.Now().Add(time.Hour))
+	sess.ID = "sess-ref-reset"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+	assert.True(t, pair.PasswordResetRequired, "refreshed token must still have claim=true when user hasn't changed password")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired, "access token claim must be true when flag not cleared")
 }

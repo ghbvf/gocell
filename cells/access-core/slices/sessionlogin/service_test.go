@@ -140,6 +140,62 @@ type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
 
+func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
+	svc, userRepo := newTestService()
+
+	// Seed user with PasswordResetRequired=true.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
+	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash))
+	user.ID = "usr-reset"
+	user.MarkPasswordResetRequired()
+	_ = userRepo.Create(context.Background(), user)
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
+	require.NoError(t, err)
+
+	// TokenPair flag must be true.
+	assert.True(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must mirror user flag")
+
+	// JWT claim must also be true.
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired, "access token must carry password_reset_required=true claim")
+}
+
+func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
+	svc, userRepo := newTestService()
+	seedUser(userRepo, "normal-user", "pass123")
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "normal-user", Password: "pass123"})
+	require.NoError(t, err)
+
+	assert.False(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must be false for normal user")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired, "access token must not carry reset claim for normal user")
+}
+
+func TestService_IssueForUser(t *testing.T) {
+	svc, userRepo := newTestService()
+	seedUser(userRepo, "issue-user", "pass123")
+
+	// Fetch the user ID.
+	u, err := userRepo.GetByUsername(context.Background(), "issue-user")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
+	assert.NotEmpty(t, pair.RefreshToken)
+	assert.False(t, pair.ExpiresAt.IsZero())
+	assert.False(t, pair.PasswordResetRequired)
+}
+
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()

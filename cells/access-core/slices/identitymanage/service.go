@@ -13,11 +13,19 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
+	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/google/uuid"
 )
+
+// TokenIssuer is a narrow interface for issuing a new token pair after a
+// password change. The implementation is sessionlogin.Service.IssueForUser,
+// injected via WithTokenIssuer to avoid a circular import chain.
+type TokenIssuer interface {
+	IssueForUser(ctx context.Context, userID string) (*sessionlogin.TokenPair, error)
+}
 
 const (
 	TopicUserCreated = "event.user.created.v1"
@@ -37,6 +45,13 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
+// WithTokenIssuer injects the token issuer used by ChangePassword to issue a
+// fresh TokenPair after a successful password change. Without this option,
+// ChangePassword returns nil for the token pair instead of issuing new tokens.
+func WithTokenIssuer(ti TokenIssuer) Option {
+	return func(s *Service) { s.tokenIssuer = ti }
+}
+
 // Service implements identity management business logic.
 type Service struct {
 	repo         ports.UserRepository
@@ -45,6 +60,7 @@ type Service struct {
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
 	logger       *slog.Logger
+	tokenIssuer  TokenIssuer
 }
 
 // NewService creates an identity-manage Service.
@@ -58,9 +74,10 @@ func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, 
 
 // CreateInput holds parameters for creating a user.
 type CreateInput struct {
-	Username string
-	Email    string
-	Password string
+	Username             string
+	Email                string
+	Password             string
+	RequirePasswordReset bool
 }
 
 // Create creates a new user and publishes an event.
@@ -81,6 +98,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 	}
 
 	user.ID = "usr" + "-" + uuid.NewString()
+	if input.RequirePasswordReset {
+		user.MarkPasswordResetRequired()
+	}
 
 	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
@@ -111,10 +131,11 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.User, error) 
 // UpdateInput holds parameters for updating a user (JSON merge patch semantics).
 // Nil pointer fields mean "do not update"; non-nil means "set to this value".
 type UpdateInput struct {
-	ID     string
-	Name   *string
-	Email  *string
-	Status *string
+	ID                   string
+	Name                 *string
+	Email                *string
+	Status               *string
+	RequirePasswordReset *bool // nil=no change, true=mark, false=clear
 }
 
 // Update modifies user attributes using JSON merge patch semantics:
@@ -141,6 +162,13 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 			return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 		}
 		user.Status = status
+	}
+	if input.RequirePasswordReset != nil {
+		if *input.RequirePasswordReset {
+			user.MarkPasswordResetRequired()
+		} else {
+			user.ClearPasswordResetRequired()
+		}
 	}
 	user.UpdatedAt = time.Now()
 
@@ -215,6 +243,62 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 
 	s.logger.Info("user unlocked", slog.String("user_id", id))
 	return nil
+}
+
+// ChangePasswordInput holds the parameters for changing a user password.
+type ChangePasswordInput struct {
+	UserID      string
+	OldPassword string
+	NewPassword string
+}
+
+// ChangePassword verifies the old password, hashes the new one, clears the
+// PasswordResetRequired flag, updates the user, and issues a fresh TokenPair.
+//
+// Consistency level: L1 (single-cell local transaction, no outbox event).
+// The token pair is issued synchronously so the client can replace stale tokens
+// without a forced re-login — this is critical when the old token carried
+// password_reset_required=true and would be rejected by the middleware.
+func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (*sessionlogin.TokenPair, error) {
+	if input.UserID == "" || input.OldPassword == "" || input.NewPassword == "" {
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
+	}
+
+	user, err := s.repo.GetByID(ctx, input.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: change-password get user: %w", err)
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
+		return nil, errcode.New(errcode.ErrAuthLoginFailed, "old password incorrect")
+	}
+
+	if input.NewPassword == input.OldPassword {
+		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: change-password hash: %w", err)
+	}
+
+	user.PasswordHash = string(newHash)
+	user.ClearPasswordResetRequired()
+
+	if err := s.repo.Update(ctx, user); err != nil {
+		return nil, fmt.Errorf("identity-manage: change-password update: %w", err)
+	}
+
+	s.logger.Info("user password changed", slog.String("user_id", user.ID))
+
+	if s.tokenIssuer == nil {
+		return nil, nil //nolint:nilnil // caller must handle nil pair when no tokenIssuer is wired
+	}
+	pair, err := s.tokenIssuer.IssueForUser(ctx, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("identity-manage: change-password issue token: %w", err)
+	}
+	return pair, nil
 }
 
 func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) error {

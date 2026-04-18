@@ -1,6 +1,7 @@
 package identitymanage
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,11 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -24,6 +28,16 @@ func setup() http.Handler {
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
+}
+
+// setupWithIssuer wires a service with a stub TokenIssuer for ChangePassword tests.
+func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+	repo := mem.NewUserRepository()
+	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(issuer))
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux, repo
 }
 
 // adminCtx returns a context carrying admin credentials for test requests.
@@ -389,4 +403,141 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// handleChangePassword tests
+// ---------------------------------------------------------------------------
+
+// seedUserInRepo creates a user with a bcrypt-hashed password directly in the repo.
+func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username, password string) {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	require.NoError(t, err)
+	user, err := domain.NewUser(username, username+"@test.com", string(hash))
+	require.NoError(t, err)
+	user.ID = id
+	require.NoError(t, repo.Create(context.Background(), user))
+}
+
+func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
+	stubIssuer := &stubTokenIssuer{pair: &sessionlogin.TokenPair{
+		AccessToken:           "new-access-token",
+		RefreshToken:          "new-refresh-token",
+		PasswordResetRequired: false,
+	}}
+	r, repo := setupWithIssuer(stubIssuer)
+	seedUserInRepo(t, repo, "usr-self", "self-user", "oldpass")
+
+	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
+	req := httptest.NewRequest(http.MethodPost, "/usr-self/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("usr-self", nil)) // self-access
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "new-access-token")
+	assert.Contains(t, w.Body.String(), `"passwordResetRequired":false`)
+}
+
+func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
+	stubIssuer := &stubTokenIssuer{pair: &sessionlogin.TokenPair{
+		AccessToken:  "admin-issued-at",
+		RefreshToken: "admin-issued-rt",
+	}}
+	r, repo := setupWithIssuer(stubIssuer)
+	seedUserInRepo(t, repo, "usr-target", "target-user", "oldpass")
+
+	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
+	req := httptest.NewRequest(http.MethodPost, "/usr-target/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "admin-issued-at")
+}
+
+func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
+	r, repo := setupWithIssuer(nil)
+	seedUserInRepo(t, repo, "usr-victim", "victim-user", "oldpass")
+
+	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
+	req := httptest.NewRequest(http.MethodPost, "/usr-victim/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("usr-stranger", []string{"viewer"})) // not self, not admin
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestHandler_ChangePassword_BadJSON(t *testing.T) {
+	r, repo := setupWithIssuer(nil)
+	seedUserInRepo(t, repo, "usr-badjson", "badjson-user", "oldpass")
+
+	req := httptest.NewRequest(http.MethodPost, "/usr-badjson/password", strings.NewReader(`{bad json`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("usr-badjson", nil)) // self
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
+	r := setup()
+
+	// Create with requirePasswordReset=true.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass","requirePasswordReset":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// Verify no password hash leaks and response has expected shape.
+	assert.NotContains(t, w.Body.String(), "passwordHash")
+}
+
+func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
+	r := setup()
+
+	// Create a user first.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+
+	// PATCH with requirePasswordReset=true (admin sets flag).
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+		strings.NewReader(`{"requirePasswordReset":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// PATCH with invalid type for requirePasswordReset.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+		strings.NewReader(`{"requirePasswordReset":"yes"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
