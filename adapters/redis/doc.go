@@ -7,7 +7,10 @@
 //   - Cache: typed Get/Set/Delete with TTL and JSON generics helpers
 //
 // Configuration follows the Options pattern inspired by go-micro store/redis.
-// Error codes use the ERR_ADAPTER_REDIS_* prefix via pkg/errcode.
+// Error codes use the ERR_ADAPTER_REDIS_* prefix via pkg/errcode for adapter-
+// specific failures (connect / ping). Distributed-lock errors live in
+// runtime/distlock (ERR_DISTLOCK_*) because the Locker/Lock contract is
+// defined there — see runtime/distlock/errors.go.
 //
 // # Distributed Locking Safety
 //
@@ -25,13 +28,17 @@
 //
 // The Acquire context only governs the acquisition attempt (SetNX). The
 // renewal goroutine runs independently until [Lock.Release] is called.
-// Always release with a bounded cleanup context, not the request context:
+// Release's DEL uses the lock's own natural expiry (acquire time + ttl,
+// updated on each successful renewal) as its deadline — no artificial
+// timeout is required because DEL cannot usefully block past the point
+// where Redis would have self-cleaned the key anyway.
+//
+// Pass a fresh context (not the Acquire/request context) so Release's
+// goroutine-drain phase survives request-scope cancellation:
 //
 //	lock, err := dl.Acquire(requestCtx, key, ttl)
 //	if err != nil { return err }
-//	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	defer cancel()
-//	defer lock.Release(cleanupCtx)
+//	defer lock.Release(context.Background())
 //
 // ref: Martin Kleppmann "How to do distributed locking" (2016)
 // ref: go-redsync/redsync — no fencing tokens, manual Extend

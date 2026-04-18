@@ -16,12 +16,18 @@ const (
 	ErrLockRelease errcode.Code = "ERR_DISTLOCK_RELEASE" // release I/O failure
 	ErrLockTimeout errcode.Code = "ERR_DISTLOCK_TIMEOUT" // another holder owns the key
 
-	// ErrLockLost identifies a lost lock. Returned by Release when the Lua
-	// script finds result==0 — meaning the key is no longer owned by this
-	// holder (TTL expired before our DEL, another holder took over, or Release
-	// was called twice). Callers can errors.Is/errors.As on this code to branch
-	// on loss semantics. The redis impl also signals loss via Lock.Lost()
-	// channel close when renewal fails; both paths share this code so consumers
-	// have a single stable taxonomy entry for metrics labels and alerting.
+	// ErrLockLost indicates the caller no longer owns the lock at the point of
+	// Release. Covers every case where the Release call finds the lock is gone:
+	//   - The lock TTL expired before Release was issued (implementation detects
+	//     this locally via expiresAt and skips DEL; returns ErrLockLost).
+	//   - The Redis Lua release script found a non-matching value (another
+	//     holder took over, or our TTL expired between the script's GET and DEL).
+	//   - Release was called twice on the same Lock (second call finds the key
+	//     gone from the first).
+	//
+	// Callers can errors.Is / errors.As on this code to branch on loss semantics.
+	// The collapsed Lost() channel (see runtime/distlock.Lock doc) also closes
+	// in all these cases, giving callers two independent views on the same event
+	// (channel-for-select, error-for-branch).
 	ErrLockLost errcode.Code = "ERR_DISTLOCK_LOST"
 )

@@ -399,7 +399,8 @@ func TestLock_Lost_ClosedAfterRelease(t *testing.T) {
 // TestDistLock_Release_WhenLockTTLExpired_SkipsDEL verifies that Release skips
 // the DEL command when the lock's expiresAt is already in the past.  When the
 // TTL has elapsed Redis will have self-cleaned the key, so the DEL would be a
-// no-op anyway. The function must return nil and close Lost().
+// no-op anyway. The function must return ErrLockLost (past-expiry is a loss
+// event symmetric with Lua result==0) and close Lost().
 func TestDistLock_Release_WhenLockTTLExpired_SkipsDEL(t *testing.T) {
 	rec := newRecordingCmdable()
 	dl := newDistLockFromCmdable(rec, 30*time.Second)
@@ -417,7 +418,10 @@ func TestDistLock_Release_WhenLockTTLExpired_SkipsDEL(t *testing.T) {
 	lock.expiresAt.Store(time.Now().Add(-time.Second).UnixNano())
 
 	err = lock.Release(context.Background())
-	assert.NoError(t, err, "Release must return nil when lock already expired via TTL")
+	require.Error(t, err, "Release must return ErrLockLost when lock already expired via TTL")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must wrap errcode.Error")
+	assert.Equal(t, distlock.ErrLockLost, ec.Code, "error code must be ErrLockLost")
 
 	// No Eval (DEL) should have been issued after the snapshot.
 	rec.mu.Lock()

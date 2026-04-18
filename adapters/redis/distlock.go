@@ -87,31 +87,30 @@ func (l *Lock) closeLost() {
 }
 
 // Release releases the distributed lock. It stops the background renewal
-// goroutine, waits for it to exit (bounded by the supplied ctx), closes
-// Lost(), then issues the DEL command.
+// goroutine (waiting for it to exit under the supplied ctx's deadline),
+// closes Lost() — matching the collapsed "grant ended" contract described
+// on runtime/distlock.Lock — and then issues the DEL command via Redis.
 //
 // The DEL's deadline is the lock's own natural expiry (acquire time + ttl,
-// updated on each successful renewal). This guarantees Release never blocks
-// longer than the lock could have existed anyway — beyond expiresAt, Redis'
-// own TTL handling has already removed the key, so a DEL is redundant.
-// No artificial timeout constant is required.
-//
-// When the caller-supplied ctx is still alive, it is kept as the DEL's
-// parent so cancellation still propagates. When the ctx has already been
-// cancelled, DEL proceeds anyway on a fresh Background-derived deadline,
-// because the caller ctx being dead does not mean we should leave a key
-// lingering — cleanup is best effort.
-//
-// It is safe to call multiple times; subsequent calls find the key already
-// gone and return ErrLockLost (see below) rather than succeeding silently.
+// updated on each successful renewal), so Release never blocks longer than
+// the lock could have existed anyway. No hardcoded timeout constant is
+// required. When the caller-supplied ctx is still alive, it is kept as
+// the DEL's parent so cancellation propagates; when it has already been
+// cancelled, Background is used so cleanup still runs — caller ctx being
+// dead does not mean we should leave a key lingering.
 //
 // Returns:
-//   - nil on success (DEL removed our key) or when the lock already expired
-//     via Redis TTL before Release was issued
-//   - ErrLockRelease wrapping any Redis I/O error
-//   - ErrLockLost when the lock is no longer owned (another holder took it,
-//     our TTL expired between the script's GET and our DEL, or Release was
-//     called twice on the same Lock)
+//   - nil  — DEL succeeded and removed our key (we held, we released)
+//   - ErrLockLost  — we no longer own the lock; covers:
+//   - lock TTL expired before Release was called (past-expiry skip)
+//   - Lua script returned 0 (TTL expired between GET and DEL, or
+//     another holder already took over, or double-Release)
+//   - ErrLockRelease  — wraps any Redis I/O error
+//
+// It is safe to call multiple times: the second call returns ErrLockLost
+// because the key is already gone from Redis. Callers that ignore the
+// return (defer lock.Release(ctx)) accept that loss-signalling path
+// silently; those that need to know inspect the error.
 //
 // Use a fresh context for Release, not the Acquire context:
 //
@@ -141,13 +140,15 @@ func (l *Lock) Release(ctx context.Context) error {
 	// Redis TTL and issuing a DEL would be redundant.
 	expiresAt := time.Unix(0, l.expiresAt.Load())
 	if time.Now().After(expiresAt) {
-		// Lock already expired via Redis-side TTL. The key is self-cleaning
-		// (Redis removes expired keys lazily + actively). Issuing DEL is
-		// redundant and would only confirm the key is gone. Skip.
+		// Lock already expired via Redis-side TTL — key is self-cleaning.
+		// Issuing DEL is redundant. Return ErrLockLost so callers who care
+		// can distinguish "I released" from "the grant was already gone"
+		// symmetrically with the Lua-result==0 branch below.
 		slog.Debug("redis: release skipped, lock expired via TTL",
 			"key", l.key,
 			"expiredAgo", time.Since(expiresAt).String())
-		return nil
+		return errcode.New(distlock.ErrLockLost,
+			fmt.Sprintf("redis: lock already expired via TTL (key=%s)", l.key))
 	}
 
 	// Build DEL context: inherit caller's parent cancellation when alive (so a
