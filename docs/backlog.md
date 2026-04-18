@@ -35,7 +35,7 @@
 | P1-8 | **FEAT-1 DEVICE-LIST-API**: 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步触发 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
 | P1-9 | **FEAT-2 FLAG-WRITE-API**: `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
 | ~~P1-10~~ | ~~**AUTH-DX-01**~~ ✅ PR#172：sso-bff walkthrough 修复（refreshToken curl drift、.timestamp audit 字段、随机 seed 密码）；config-core walkthrough + HMAC key 注释（S20/S21）；seed admin 改用 generateDevPassword() 消除明文日志 | — | — | PR#172 |
-| P1-12 | **AUTH-SETUP-01 First-Run Setup 模式**：`GET /api/v1/setup/status`（返回 `{"data":{"setupRequired":bool}}`）+ `POST /api/v1/setup/admin`（仅在无 admin 时有效，之后返回 409）；两个端点加入 `WithPublicEndpoints`；新 `setup` slice + contract；前端后续可检测 `setupRequired=true` 自动跳转建账页面。**去掉 sso-bff seed 用户**（含 `slog.Info` 明文密码日志 — PR#172 review F1 deferred here）改由 setup 流程创建 | 6h | `cells/access-core/slices/setup/` + `contracts/http/auth/setup/` + `examples/sso-bff/` | AUTH-DX-01 讨论 + PR#172 F1 |
+| ~~P1-12~~ | ~~**AUTH-SETUP-01 First-Run Setup 模式**~~ ✅ AUTH-SETUP-01 完成（含 P1-12a/b 完整改密硬强制 + admin-driven RequirePasswordReset 字段闭环）：`initialadmin` 工具包 + 24h TTL cleaner worker + Bootstrapper + domain.PasswordResetRequired + JWT claim + AuthMiddleware 拦截 + ChangePassword 自动脱困 + IssueOptions T2 重构 + sso-bff/cmd/core-bundle cutover；明文密码 slog PR#172 F1 彻底解决 | — | — | PR feat/159 |
 | ~~P1-11~~ | ~~**PR-R-AUTH-AUD-VALIDATION**~~ ✅ PR#170 + PR#293: `WithExpectedAudiences` + `VerifyIntent` aud check (RFC 8725 §3.3) + `DefaultJWTAudience` 常量统一 + sessionlogin/sessionrefresh 引用；PR#293 round-2 追加：`TokenVerifier` 接口 + `Verify()` 方法删除（双 API 合并为单一 `VerifyIntent`）+ `ErrAuthVerifierConfig` 构造期 fail-fast + `msgInvalidServiceTokenFormat` 常量提取 | — | — | PR#166 R1-F2-5 |
 
 ---
@@ -200,7 +200,7 @@
 | # | 任务 | 工时 | 触发条件 |
 |---|------|------|----------|
 | T1 | **AUTH-PROVIDER-EXPORT-01** `authProvider` 接口 unexported，需移动出 `runtime/bootstrap` | 1h | 第二个 auth provider cell |
-| T2 | **AUTH-ISSUE-OPTIONS-01** `JWTIssuer.Issue()` 重构为 `IssueOptions` struct | 1h | Issue() 第 5 个参数 |
+| ~~T2~~ | ~~**AUTH-ISSUE-OPTIONS-01**~~ ✅ JWTIssuer.Issue → IssueOptions struct 重构落地（PR feat/159 一并完成）：`Issue(intent, subject, IssueOptions)` + `IssueOptions{Roles, Audience, SessionID, PasswordResetRequired}`；消除参数列表膨胀 tech debt | — | — | PR feat/159 |
 | T3 | **DEVICE-ENQUEUE-RBAC** HandleEnqueue 无设备维度鉴权 | 2h | 多租户 operator |
 | T4 | **CB-RESILIENCE-PACKAGE-01** 把 `Allower` / `CircuitBreakerRetryAfter` 从 `runtime/http/middleware` 迁移到 `runtime/resilience/circuitbreaker/` 独立包 | 4h | 出现第二个非 HTTP 的 CB 消费方 |
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
@@ -210,6 +210,7 @@
 | T11 | **AUTH-LOADKEYSFROMENV-UNEXPORT-01** `runtime/auth.LoadKeysFromEnv` 实为内部基础构件（仅被同包 `LoadKeySetFromEnv` 和 4 个测试引用，无外部生产调用）。unexport 为 `loadKeysFromEnv`，移除 `// Deprecated:` 注释（宪法不留兼容期）。改 `LoadKeySetFromEnv` 内部调用 + 4 个测试（改走 `LoadKeySetFromEnv` 或直接测 unexported） | 30min | 独立小 PR，可随时做（无阻塞） |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
 | ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
+| T-PG-ADVISORY-LOCK-01 | **多副本 PG bootstrap 竞态防护**：PostgresUserRepository.Create 之前用 `pg_try_advisory_lock(hashtext('gocell_initial_admin'))`，确保多 pod 启动时只有一个进程进入 bootstrap 临界段。当前 in-memory + ErrAuthUserDuplicate silent skip 已防 mem 单进程；PG 仅靠 unique constraint 仍可能多 pod 并发触发不必要的密码生成与日志告警。 | 2h | `adapters/postgres/user_repo.go`（X1 落地时）| X1 PG-DOMAIN-REPO 上线 |
 
 ---
 
