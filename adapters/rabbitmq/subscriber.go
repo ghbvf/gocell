@@ -433,6 +433,21 @@ func (s *Subscriber) untrackChannel(ch AMQPChannel) {
 	s.mu.Unlock()
 }
 
+// consumeLoop drains the deliveries channel and dispatches each delivery in a
+// dedicated goroutine, honouring PrefetchCount as real concurrency.
+//
+// Concurrent safety audit:
+//   - ch.Ack/Nack: guarded by amqp091-go's internal channel mutex; safe to call
+//     from multiple goroutines simultaneously.
+//     ref: rabbitmq/amqp091-go channel.go (sendMethod holds ch.m.Lock).
+//   - Receipt: per-delivery local variable passed into processDelivery — no
+//     sharing across goroutines.
+//   - dispatchAck/releaseReceipt/dispatchDisposition: use only the per-delivery
+//     ch, tag, and Receipt; no Subscriber-level mutable state.
+//   - s.wg: sync.WaitGroup — concurrency-safe by design.
+//   - topic/handler: immutable after Subscribe call.
+//
+// ref: ThreeDotsLabs/watermill message/router.go h.run — per-message goroutine
 func (s *Subscriber) consumeLoop(
 	ctx context.Context,
 	ch AMQPChannel,
@@ -460,7 +475,7 @@ func (s *Subscriber) consumeLoop(
 			}
 
 			s.wg.Add(1)
-			s.processDelivery(ctx, ch, delivery, topic, handler)
+			go s.processDelivery(ctx, ch, delivery, topic, handler)
 		}
 	}
 }
