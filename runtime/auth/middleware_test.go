@@ -327,6 +327,56 @@ func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
 }
 
+func TestAuthMiddleware_WithPublicEndpointMatcher_MethodAware(t *testing.T) {
+	// WithPublicEndpointMatcher: only POST /foo is public; GET must require auth.
+	verifier := &mockVerifier{err: errors.New("should not be called for POST")}
+
+	matcher := func(r *http.Request) bool {
+		return r.Method == "POST" && r.URL.Path == "/foo"
+	}
+
+	handler := AuthMiddleware(verifier, nil, WithPublicEndpointMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	// POST /foo → public, no token needed.
+	req := httptest.NewRequest(http.MethodPost, "/foo", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "POST /foo must bypass auth via matcher")
+
+	// GET /foo → not public, 401.
+	req = httptest.NewRequest(http.MethodGet, "/foo", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"GET /foo must require auth when only POST is declared public via matcher")
+}
+
+func TestAuthMiddleware_WithPublicEndpointMatcher_OverridesSliceParam(t *testing.T) {
+	// When WithPublicEndpointMatcher is set, the []string publicEndpoints param
+	// is ignored for bypass decisions.
+	verifier := &mockVerifier{err: errors.New("should not be called")}
+
+	// Matcher allows nothing — even though the publicEndpoints param has /bar.
+	matcher := func(_ *http.Request) bool { return false }
+
+	handler := AuthMiddleware(verifier, []string{"/bar"}, WithPublicEndpointMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	// /bar is in the []string list but matcher says no → must require auth.
+	req := httptest.NewRequest(http.MethodGet, "/bar", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"matcher must take precedence over []string publicEndpoints parameter")
+}
+
 func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) {
 	t.Helper()
 	var body map[string]any

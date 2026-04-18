@@ -100,8 +100,8 @@ func buildWalkthroughServer(t *testing.T, seedPass string) (*httptest.Server, fu
 	require.NoError(t, cc.Init(ctx, deps))
 
 	publicEndpoints := []string{
-		"/api/v1/access/sessions/login",
-		"/api/v1/access/sessions/refresh",
+		"POST /api/v1/access/sessions/login",
+		"POST /api/v1/access/sessions/refresh",
 	}
 
 	r := router.New(

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path"
 
 	"github.com/go-chi/chi/v5"
 
@@ -247,6 +246,7 @@ type Router struct {
 	circuitBreakerNil   bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
 	authVerifier        auth.IntentTokenVerifier
 	authPublicEndpoints []string
+	authPublicMatcher   func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
 	authMetrics         *auth.AuthMetrics
 	publicEndpoints     []string
 	securityHeadersOpts []middleware.SecurityHeadersOption
@@ -298,7 +298,9 @@ func NewE(opts ...Option) (*Router, error) {
 		o(r)
 	}
 
-	r.applyPublicEndpoints()
+	if err := r.applyPublicEndpoints(); err != nil {
+		return nil, err
+	}
 
 	// Fail-fast: nil circuit breaker means the operator called
 	// WithCircuitBreaker(nil) which would silently skip CB installation.
@@ -306,26 +308,45 @@ func NewE(opts ...Option) (*Router, error) {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
 	}
 
-	// Fail-fast: validate and construct the proxy checker once. The validated
-	// checker is passed to RealIPFromChecker so proxies are only parsed once.
-	//
-	// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
-	var realIPMW func(http.Handler) http.Handler
+	realIPMW, err := r.buildRealIPMiddleware()
+	if err != nil {
+		return nil, err
+	}
+
+	r.buildOuterMux(realIPMW)
+	r.buildBusinessMux()
+
+	// Mount business mux on outerMux. Paths not matched by infra routes
+	// (/healthz, /readyz, /metrics) fall through to business routes.
+	r.outerMux.Mount("/", r.mux)
+
+	return r, nil
+}
+
+// buildRealIPMiddleware constructs the RealIP middleware, validating trusted
+// proxy configuration eagerly so NewE returns an error on startup rather than
+// panicking at request time.
+//
+// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
+func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error) {
 	if len(r.trustedProxies) > 0 {
 		checker, err := middleware.ValidateTrustedProxies(r.trustedProxies)
 		if err != nil {
 			return nil, fmt.Errorf("router: invalid trusted proxy configuration: %w", err)
 		}
-		realIPMW = middleware.RealIPFromChecker(checker)
-	} else {
-		realIPMW = middleware.RealIP(nil)
+		return middleware.RealIPFromChecker(checker), nil
 	}
+	return middleware.RealIP(nil), nil
+}
 
-	// --- Phase 1: outerMux — shared observability + infra ---
-	// All requests pass through: RequestID → RealIP → Recorder → [Tracing]
-	// → AccessLog → [Metrics] → Recovery → SecurityHeaders.
-	// Metrics is placed before RL/CB so 429/503 short-circuit responses are
-	// counted. Recovery + SecurityHeaders apply to all paths.
+// buildOuterMux wires shared observability middleware and infra endpoints onto
+// r.outerMux. All requests pass through this chain before reaching the
+// business mux.
+//
+// Chain: RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//
+//	→ Recovery → SecurityHeaders → [infra routes] → mount(mux)
+func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	r.outerMux.Use(
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
@@ -343,10 +364,7 @@ func NewE(opts ...Option) (*Router, error) {
 		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
 	)
 
-	// Infrastructure endpoints: registered on outerMux before business mount.
-	// They get shared observability + Recovery + SecurityHeaders but NOT
-	// RateLimit or CircuitBreaker, so probes and scrapes work during overload.
-	//
+	// Infrastructure endpoints bypass RateLimit and CircuitBreaker.
 	// ref: go-zero rest/engine.go — management endpoints on separate chain
 	if r.healthHandler != nil {
 		r.outerMux.Get("/healthz", r.healthHandler.LivezHandler())
@@ -359,11 +377,14 @@ func NewE(opts ...Option) (*Router, error) {
 	if r.metricsHandler != nil {
 		r.outerMux.Handle("/metrics", r.metricsHandler)
 	}
+}
 
-	// --- Phase 2: mux — business routes with RL/CB/Auth ---
-	// Cells register routes on mux via Handle/Route/Mount/Group/With.
-	// Business chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
-	// Recovery + SecurityHeaders already applied by outerMux.
+// buildBusinessMux wires rate limiter, circuit breaker, auth, and body-limit
+// middleware onto r.mux. Cells register their routes on this mux.
+//
+// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
+// Recovery + SecurityHeaders are already applied by outerMux.
+func (r *Router) buildBusinessMux() {
 	if r.rateLimiter != nil {
 		r.mux.Use(middleware.RateLimit(r.rateLimiter))
 	}
@@ -371,48 +392,61 @@ func NewE(opts ...Option) (*Router, error) {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		var authOpts []auth.AuthOption
-		if r.authMetrics != nil {
-			authOpts = append(authOpts, auth.WithMetrics(r.authMetrics))
-		}
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, authOpts...))
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+}
 
-	// Mount business mux on outerMux. Paths not matched by infra routes
-	// (/healthz, /readyz, /metrics) fall through to business routes.
-	r.outerMux.Mount("/", r.mux)
-
-	return r, nil
+// buildAuthOpts constructs the AuthOption slice for the auth middleware.
+// Prefers the compiled method-aware matcher (set by applyPublicEndpoints) over
+// the legacy []string path so that direct WithAuthMiddleware callers remain
+// unaffected.
+func (r *Router) buildAuthOpts() []auth.AuthOption {
+	var opts []auth.AuthOption
+	if r.authMetrics != nil {
+		opts = append(opts, auth.WithMetrics(r.authMetrics))
+	}
+	// Prefer the compiled method-aware matcher (set by applyPublicEndpoints) over
+	// the legacy []string path. Direct callers of WithAuthMiddleware that do NOT
+	// call WithPublicEndpoints continue to use the []string path (no regression).
+	if r.authPublicMatcher != nil {
+		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
+	}
+	return opts
 }
 
 // applyPublicEndpoints derives trust-boundary policy from WithPublicEndpoints:
-// builds isPublic function and auto-wires tracing, request_id, and auth.
+// compiles the "METHOD /path" entries into a per-request predicate and
+// auto-wires tracing, request_id, and auth. Returns an error if any entry is
+// malformed (fail-fast; the caller NewE propagates it to Bootstrap.Run).
 //
 // ref: go-zero rest/server.go — single-point route group auth config
 // ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func (r *Router) applyPublicEndpoints() {
+func (r *Router) applyPublicEndpoints() error {
 	if len(r.publicEndpoints) == 0 {
-		return
+		return nil
 	}
 	if len(r.tracingOpts) > 0 {
 		slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
 	}
-	publicSet := make(map[string]bool, len(r.publicEndpoints))
-	for _, p := range r.publicEndpoints {
-		publicSet[path.Clean(p)] = true
+
+	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)
+	if err != nil {
+		return fmt.Errorf("router: %w", err)
 	}
-	isPublic := func(req *http.Request) bool {
-		return publicSet[path.Clean(req.URL.Path)]
-	}
+
 	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
 	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
+
 	// Standalone callers using WithPublicEndpoints without WithAuthMiddleware
-	// need authPublicEndpoints populated for the auth middleware. When bootstrap
-	// calls both, WithAuthMiddleware already sets this — the guard is a no-op.
+	// need the matcher populated for the auth middleware. When bootstrap calls
+	// both, WithAuthMiddleware already sets authPublicEndpoints — the guard is
+	// a no-op for the legacy []string path. The matcher path supersedes it.
+	r.authPublicMatcher = isPublic
 	if len(r.authPublicEndpoints) == 0 {
 		r.authPublicEndpoints = r.publicEndpoints
 	}
+	return nil
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.

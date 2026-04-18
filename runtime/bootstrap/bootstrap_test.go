@@ -2722,7 +2722,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2822,7 +2822,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2854,7 +2854,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2887,7 +2887,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"/api/v1/access/sessions/login"}),
+		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3222,7 +3222,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 		WithListener(ln),
 		WithTracer(tracer),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"/api/v1/public/ping"}),
+		WithPublicEndpoints([]string{"GET /api/v1/public/ping"}),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

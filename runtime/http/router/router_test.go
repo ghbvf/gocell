@@ -934,7 +934,7 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 func TestWithPublicEndpoints_AuthBypass(t *testing.T) {
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := New(
-		WithPublicEndpoints([]string{"/api/v1/auth/login"}),
+		WithPublicEndpoints([]string{"GET /api/v1/auth/login"}),
 		WithAuthMiddleware(verifier, nil),
 	)
 
@@ -952,11 +952,32 @@ func TestWithPublicEndpoints_AuthBypass(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestWithPublicEndpoints_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
+	// POST /api/v1/auth/login is public; GET must be rejected.
+	verifier := &routerTestVerifier{err: fmt.Errorf("should not be called")}
+	r, err := NewE(
+		WithPublicEndpoints([]string{"POST /api/v1/auth/login"}),
+		WithAuthMiddleware(verifier, nil),
+	)
+	require.NoError(t, err)
+
+	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("GET must not bypass auth when only POST is public")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"GET must be rejected when only POST /api/v1/auth/login is declared public")
+}
+
 func TestWithPublicEndpoints_TracingNewRoot(t *testing.T) {
 	tracer := tracing.NewTracer("test-combined")
 	r := New(
 		WithTracer(tracer),
-		WithPublicEndpoints([]string{"/public"}),
+		WithPublicEndpoints([]string{"GET /public"}),
 	)
 
 	var publicTraceID, internalTraceID string
@@ -989,7 +1010,7 @@ func TestWithPublicEndpoints_TracingNewRoot(t *testing.T) {
 
 func TestWithPublicEndpoints_RequestIDRejectsClient(t *testing.T) {
 	r := New(
-		WithPublicEndpoints([]string{"/public"}),
+		WithPublicEndpoints([]string{"GET /public"}),
 	)
 
 	var publicID, internalID string
@@ -1020,7 +1041,7 @@ func TestWithPublicEndpoints_RequestIDRejectsClient(t *testing.T) {
 func TestWithPublicEndpoints_ProtectedStillRequiresAuth(t *testing.T) {
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := New(
-		WithPublicEndpoints([]string{"/api/v1/auth/login"}),
+		WithPublicEndpoints([]string{"GET /api/v1/auth/login"}),
 		WithAuthMiddleware(verifier, nil),
 	)
 
@@ -1046,7 +1067,7 @@ func TestWithPublicEndpoints_OverridesFineGrained(t *testing.T) {
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
 		})),
-		WithPublicEndpoints([]string{"/public"}),
+		WithPublicEndpoints([]string{"GET /public"}),
 	)
 
 	var publicTraceID, fineTraceID string
@@ -1152,7 +1173,7 @@ func TestWithPublicEndpoints_EmptySlice_IsNoop(t *testing.T) {
 
 func TestWithPublicEndpoints_PathNormalization(t *testing.T) {
 	r := New(
-		WithPublicEndpoints([]string{"//api/v1//login"}),
+		WithPublicEndpoints([]string{"GET /api/v1//login"}),
 	)
 
 	var gotID string
@@ -1167,5 +1188,43 @@ func TestWithPublicEndpoints_PathNormalization(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	assert.NotEqual(t, "attacker-id", gotID,
-		"path.Clean must normalize //api/v1//login to /api/v1/login for matching")
+		"path.Clean must normalize /api/v1//login to /api/v1/login for matching")
+}
+
+func TestNewE_MalformedPublicEndpoint_ReturnsError(t *testing.T) {
+	// No METHOD prefix — must cause NewE to return error (fail-fast).
+	r, err := NewE(WithPublicEndpoints([]string{"/api/v1/auth/login"}))
+	require.Error(t, err, "path-only entry must cause NewE to return error")
+	assert.Nil(t, r)
+	assert.Contains(t, err.Error(), "router")
+}
+
+func TestWithPublicEndpoints_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
+	// POST /api/v1/auth/login is the only public endpoint.
+	// GET requests to the same path must require auth.
+	verifier := &routerTestVerifier{
+		claims: auth.Claims{Subject: "user-1"},
+	}
+	r, err := NewE(
+		WithPublicEndpoints([]string{"POST /api/v1/auth/login"}),
+		WithAuthMiddleware(verifier, nil),
+	)
+	require.NoError(t, err)
+
+	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// POST without token → public, 200.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "POST must bypass auth (public endpoint)")
+
+	// GET without token → not public, 401.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"GET must require auth when only POST is declared public")
 }

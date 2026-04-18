@@ -200,13 +200,35 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 	}
 }
 
-// WithPublicEndpoints sets paths that bypass authentication when an
+// WithPublicEndpoints declares endpoints that bypass authentication when an
 // AuthProvider cell is discovered post-Init. Unlike WithAuthMiddleware
 // (which provides the verifier explicitly), this option defers verifier
 // resolution to Run() time.
-// WithPublicEndpoints must not be combined with WithAuthMiddleware —
-// use one or the other. If both are called, the last one wins for
-// publicEndpoints and a warning is logged at startup.
+//
+// Each entry must be in "METHOD /path" format (e.g. "POST /api/v1/auth/login").
+// Entries without a method prefix cause Run() to return an error immediately
+// (fail-fast — the service will not start). Entries with method GET also
+// automatically cover HEAD requests, following stdlib ServeMux and chi v5
+// semantics (RFC 7231 §4.3.2).
+//
+// The same entries configure all three trust boundaries simultaneously:
+//   - Auth bypass: the matching (method + path) pair skips JWT verification.
+//   - Tracing: matching requests start a new trace root instead of inheriting
+//     an upstream traceparent header.
+//   - Request-ID: matching requests reject client-supplied X-Request-Id headers.
+//
+// WithPublicEndpoints must not be combined with WithAuthMiddleware — use one
+// or the other. If both are called, the last one wins for publicEndpoints and
+// a warning is logged at startup.
+//
+// Example:
+//
+//	bootstrap.WithPublicEndpoints([]string{
+//	    "POST /api/v1/auth/login",
+//	    "POST /api/v1/auth/refresh",
+//	})
+//
+// ref: Go 1.22 net/http ServeMux pattern grammar "[METHOD] PATH"
 func WithPublicEndpoints(endpoints []string) Option {
 	return func(b *Bootstrap) {
 		if b.authVerifier != nil {

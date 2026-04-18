@@ -34,24 +34,53 @@ var DefaultPublicEndpoints = []string{}
 // publicEndpoints specifies paths that bypass authentication. If nil,
 // DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
 // matching, consistent with other security middleware in this package.
+// AuthMiddleware extracts a Bearer token from the Authorization header,
+// verifies it using the provided IntentTokenVerifier (always enforcing
+// token_use=access for business endpoints), and stores the resulting Claims
+// in the request context. On failure, it returns a 401 JSON response.
+//
+// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
+// access-vs-refresh distinction is a hard safety invariant — any verifier
+// plugged into business routes must be able to enforce it at the type level,
+// so we refuse to compile call sites that pass an intent-unaware verifier.
+//
+// publicEndpoints specifies paths that bypass authentication. If nil,
+// DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
+// matching, consistent with other security middleware in this package.
+//
+// Pass WithPublicEndpointMatcher(fn) to use a method-aware compiled predicate
+// instead of the []string path-only list. When the matcher is provided, the
+// publicEndpoints parameter is ignored for bypass decisions.
 func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
 	cfg := defaultAuthConfig()
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	publicPaths := publicEndpoints
-	if publicPaths == nil {
-		publicPaths = DefaultPublicEndpoints
-	}
-	publicSet := make(map[string]bool, len(publicPaths))
-	for _, p := range publicPaths {
-		publicSet[path.Clean(p)] = true
+	// Build the bypass check. Prefer the compiled method-aware matcher (set via
+	// WithPublicEndpointMatcher) over the legacy path-only []string approach.
+	var isPublic func(*http.Request) bool
+	if cfg.publicMatcher != nil {
+		// Method-aware path: used when wired through router.WithPublicEndpoints.
+		isPublic = cfg.publicMatcher
+	} else {
+		// Legacy path-only path: used by direct callers of WithAuthMiddleware.
+		publicPaths := publicEndpoints
+		if publicPaths == nil {
+			publicPaths = DefaultPublicEndpoints
+		}
+		publicSet := make(map[string]bool, len(publicPaths))
+		for _, p := range publicPaths {
+			publicSet[path.Clean(p)] = true
+		}
+		isPublic = func(r *http.Request) bool {
+			return publicSet[path.Clean(r.URL.Path)]
+		}
 	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if publicSet[path.Clean(r.URL.Path)] {
+			if isPublic(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

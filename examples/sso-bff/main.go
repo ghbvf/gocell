@@ -154,8 +154,8 @@ func main() {
 
 	// Public endpoints — login and refresh accessible without JWT.
 	publicEndpoints := []string{
-		"/api/v1/access/sessions/login",
-		"/api/v1/access/sessions/refresh",
+		"POST /api/v1/access/sessions/login",
+		"POST /api/v1/access/sessions/refresh",
 	}
 
 	app := bootstrap.New(

@@ -196,8 +196,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		bootstrap.WithPublicEndpoints([]string{
-			"/api/v1/access/sessions/login",
-			"/api/v1/access/sessions/refresh",
+			"POST /api/v1/access/sessions/login",
+			"POST /api/v1/access/sessions/refresh",
 		}),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
