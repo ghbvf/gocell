@@ -133,7 +133,7 @@
 | A5 | **RL-SUB-01** 🟡：入站 ID 校验（空/过长 message ID）| 1h | 🟡 | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **RabbitMQ backoff + FailOpen enum 清理** 🟡 | 2h | 🟡 | `adapters/rabbitmq/` | Wave 2 残留 |
 | X6 | **SOL-B-01 Claimer lease 续租** 🟡（前置 L4 API ✅）：两阶段 Claim/Commit/Release 幂等路径补 lease 续租 | 4h | 🟡 | `kernel/outbox/` + `adapters/rabbitmq/consumer_base.go` | Wave 2 残留 |
-| ~~X8~~ | ~~**AL-02 distlock 续期/TTL → runtime/**~~ ✅ PR-DISTLOCK-HOIST (PR#TBD)：`runtime/distlock` 接口上抬完成，`adapters/redis.DistLock` 实现；`Lock.Lost()` 新增续租失败信号；`ERR_ADAPTER_REDIS_LOCK_ACQUIRED` typo 已修 → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
+| ~~X8~~ | ~~**AL-02 distlock 续期/TTL → runtime/**~~ ✅ PR-DISTLOCK-HOIST (PR#178)：`runtime/distlock` 接口上抬完成，`adapters/redis.DistLock` 实现；`Lock.Lost()` 新增续租失败信号；`ERR_ADAPTER_REDIS_LOCK_ACQUIRED` typo 已修 → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
 
 **搭车说明**：
 - A1 改 `adapters/rabbitmq/connection.go`，A7（POOLSTATS-IFACE-01，见域 9）也改同一文件，合并到 PR-OUTBOX-WIRE 一次落地。
