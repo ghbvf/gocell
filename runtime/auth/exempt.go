@@ -48,7 +48,7 @@ func parseExemptEntry(raw string) (exemptEntry, error) {
 	if len(parts) != 2 {
 		return exemptEntry{}, fmt.Errorf(
 			"auth: password-reset exempt entry %q: must be %q format (e.g. %q)",
-			raw, "METHOD /path", "POST /api/v1/access/users/{id}/password")
+			raw, "METHOD /path", "POST /path/{id}/action")
 	}
 	method := strings.ToUpper(strings.TrimSpace(parts[0]))
 	rawPath := strings.TrimSpace(parts[1])
