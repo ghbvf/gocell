@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -162,6 +163,12 @@ func (l *Lock) Release(ctx context.Context) error {
 
 	result, err := l.rdb.Eval(delCtx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			slog.Warn("redis: lock release deadline exceeded (lock may linger until natural TTL)",
+				"key", l.key,
+				"deadline", expiresAt,
+				"error", err)
+		}
 		return errcode.Wrap(distlock.ErrLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
 	}

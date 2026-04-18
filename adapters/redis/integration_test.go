@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/tests/testutil"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
@@ -151,4 +152,75 @@ func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
 	assert.Nil(t, receipt2)
+}
+
+// TestIntegration_DistLock_Release_WithCancelledCtx_StillDeletesKey verifies
+// the F5 contract: DEL executes and the key is removed from Redis even when
+// the caller ctx passed to Release is already cancelled. Release must use a
+// fresh Background-derived deadline (bounded by expiresAt) when the caller ctx
+// is dead, so the Eval still runs.
+func TestIntegration_DistLock_Release_WithCancelledCtx_StillDeletesKey(t *testing.T) {
+	client, cleanup := startRedis(t)
+	defer cleanup()
+
+	dl := NewDistLock(client, 0) // use default TTL from client config
+	key := "test:f5:cancelled-ctx:" + t.Name()
+
+	acquireCtx, acquireCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer acquireCancel()
+	lock, err := dl.Acquire(acquireCtx, key, 30*time.Second)
+	require.NoError(t, err)
+
+	// Verify the key exists pre-Release (Get returns nil error when key is present).
+	_, err = client.cmdable().Get(context.Background(), key).Result()
+	require.NoError(t, err, "key must exist before Release")
+
+	// Cancel the ctx, then call Release with it — F5 contract: DEL still runs.
+	releaseCtx, releaseCancel := context.WithCancel(context.Background())
+	releaseCancel() // pre-cancel
+	require.Error(t, releaseCtx.Err(), "sanity: ctx must be cancelled")
+
+	require.NoError(t, lock.Release(releaseCtx), "Release with cancelled ctx must still succeed")
+
+	// Verify key is actually gone from Redis (Get returns goredis.Nil when absent).
+	_, err = client.cmdable().Get(context.Background(), key).Result()
+	require.ErrorIs(t, err, goredis.Nil, "F5: key must be DELd from Redis even with cancelled caller ctx")
+}
+
+// TestIntegration_DistLock_Release_AfterNaturalExpiry_SkipsDEL verifies that
+// when the lock's expiresAt is already in the past (simulating Redis TTL
+// self-cleanup), Release returns nil without issuing a DEL to Redis.
+//
+// Implementation note: this test manipulates *Lock internals directly
+// (same-package white-box) because stopping the renewal goroutine and
+// backdating expiresAt is the only reliable way to drive this branch without
+// waiting for real Redis TTL (which would require a multi-second sleep and
+// a non-renewable lock).
+func TestIntegration_DistLock_Release_AfterNaturalExpiry_SkipsDEL(t *testing.T) {
+	client, cleanup := startRedis(t)
+	defer cleanup()
+
+	dl := NewDistLock(client, 0)
+	key := "test:f5:natural-expiry:" + t.Name()
+
+	ctx := context.Background()
+	lock, err := dl.Acquire(ctx, key, 200*time.Millisecond)
+	require.NoError(t, err)
+
+	// Cast to concrete type (same-package so internals are accessible).
+	concrete, ok := lock.(*Lock)
+	require.True(t, ok, "expected *Lock concrete type")
+
+	// Stop the renewal goroutine so our manipulated expiresAt sticks.
+	concrete.cancel()
+	<-concrete.done
+
+	// Simulate "already expired": backdate expiresAt, and DEL the Redis
+	// key out-of-band to match what Redis TTL would have done.
+	concrete.expiresAt.Store(time.Now().Add(-time.Second).UnixNano())
+	_, err = client.cmdable().Del(context.Background(), key).Result()
+	require.NoError(t, err)
+
+	// Release should detect expired and skip DEL entirely.
+	require.NoError(t, lock.Release(ctx), "Release must be nil when lock already expired")
 }

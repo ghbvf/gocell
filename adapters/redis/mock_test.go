@@ -151,7 +151,7 @@ func (m *mockCmdable) SetNX(_ context.Context, key string, value any, expiration
 	return cmd
 }
 
-func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args ...any) *goredis.Cmd {
+func (m *mockCmdable) Eval(_ context.Context, _ string, keys []string, args ...any) *goredis.Cmd {
 	cmd := goredis.NewCmd(context.Background())
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,37 +160,37 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 		cmd.SetErr(m.evalErr)
 		return cmd
 	}
-
-	// Simulate the release lock script: GET key == value → DEL → 1, else → 0.
-	// Also simulate the renew lock script: GET key == value → PEXPIRE → 1, else → 0.
-	if len(keys) == 1 && len(args) >= 1 {
-		key := keys[0]
-		expectedValue := toString(args[0])
-		entry, ok := m.store[key]
-		if ok && entry.value == expectedValue {
-			// Distinguish between release (1 arg) and renew (2 args).
-			if len(args) == 1 {
-				// Release: delete the key.
-				delete(m.store, key)
-				cmd.SetVal(int64(1))
-			} else {
-				// Renew: allow override for ownership-loss simulation.
-				if m.evalRenewResult != nil {
-					cmd.SetVal(*m.evalRenewResult)
-					return cmd
-				}
-				ttlMs, _ := toInt64(args[1])
-				entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
-				m.store[key] = entry
-				cmd.SetVal(int64(1))
-			}
-		} else {
-			cmd.SetVal(int64(0))
-		}
-	} else {
-		cmd.SetVal(int64(0))
-	}
+	cmd.SetVal(m.simulateScript(keys, args))
 	return cmd
+}
+
+// simulateScript simulates the release-lock and renew-lock Lua scripts used
+// by DistLock. Both scripts check "GET key == expected value" before acting;
+// the scripts are distinguished by argument count (release=1, renew=2).
+// Caller MUST hold m.mu.
+func (m *mockCmdable) simulateScript(keys []string, args []any) int64 {
+	if len(keys) != 1 || len(args) < 1 {
+		return 0
+	}
+	key := keys[0]
+	expectedValue := toString(args[0])
+	entry, ok := m.store[key]
+	if !ok || entry.value != expectedValue {
+		return 0
+	}
+	if len(args) == 1 {
+		// Release script: delete the key.
+		delete(m.store, key)
+		return 1
+	}
+	// Renew script: allow override for ownership-loss simulation.
+	if m.evalRenewResult != nil {
+		return *m.evalRenewResult
+	}
+	ttlMs, _ := toInt64(args[1])
+	entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
+	m.store[key] = entry
+	return 1
 }
 
 // toString converts various types to string for mock storage.
