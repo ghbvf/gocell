@@ -686,7 +686,7 @@ func unmarshalDelivery(body []byte) (outbox.Entry, error) {
 	// Fall back to legacy outbox.Entry JSON (predates WireMessage contract,
 	// still used by adapter-level integration tests that bypass the relay).
 	var legacy outbox.Entry
-	if legacyErr := json.Unmarshal(body, &legacy); legacyErr == nil {
+	if json.Unmarshal(body, &legacy) == nil {
 		return legacy, nil
 	}
 	// Neither a valid WireMessage envelope nor a parseable legacy Entry JSON.
