@@ -58,14 +58,8 @@
 |---|------|------|------|------|
 | A1 | **READYZ-BROKER-HEALTH-01** (Cx3): `Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关。对标 K8s readiness probe | 2h | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` + `runtime/http/health/` | 2026-04-18 外部审查 |
 | A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
-<<<<<<< Updated upstream
-| ~~A3~~ | ✅ **RL-INT-01**: Relay PG 集成测试（5 个 testcontainers PG+RMQ 测试：happy-path、transient publish failure retry、dead-letter、concurrent claim no double-publish、clean shutdown via reclaimStale recovery）。真实 broker TCP 断连/恢复职责归属 `adapters/rabbitmq/integration_test.go::TestIntegration_ConnectionRecovery`（`rabbitmqctl close_all_connections`）；AMQP 501 reclassification 由 `adapters/rabbitmq/rabbitmq_test.go::TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely` 单测覆盖。 | — | `adapters/postgres/outbox_relay_integration_test.go` | PR-PG-HARDEN |
-| ~~A4~~ | ✅ **RL-MIG-01**: `CREATE INDEX CONCURRENTLY` online-safe 索引 + INVALID index pre-check at `Migrator.Up` boundary（startup-time detection as defense-in-depth）+ migrations/README.md 规范 | — | `adapters/postgres/migrations/` + `migrator.go` | PR-PG-HARDEN |
-| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 006_add_config_versions_config_id_index.sql + TestMigration006 | — | adapters/postgres/migrations/006_*.sql | PR-PG-HARDEN |
-=======
-| ~~A3~~ | ~~**RL-INT-01**~~ ✅ PR#173（pending merge）：5 个 testcontainers PG+RMQ 测试 + 真实 TCP 断连/恢复测试移至 rabbitmq integration test | — | — | PR#173 |
-| ~~A4~~ | ~~**RL-MIG-01**~~ ✅ PR#173（pending merge）：`CREATE INDEX CONCURRENTLY` migration 006 + Up() 边界 INVALID index pre-check | — | — | PR#173 |
->>>>>>> Stashed changes
+| ~~A3~~ | ~~**RL-INT-01**~~ ✅ PR#173：5 个 testcontainers PG+RMQ 测试 + 真实 TCP 断连/恢复测试移至 rabbitmq integration test | — | — | PR#173 |
+| ~~A4~~ | ~~**RL-MIG-01**~~ ✅ PR#173：`CREATE INDEX CONCURRENTLY` migration 006 + Up() 边界 INVALID index pre-check | — | — | PR#173 |
 | A5 | **RL-SUB-01** (🟡 可延后): 入站 ID 校验（空/过长 message ID） | 1h | `adapters/rabbitmq/subscriber.go` | PR#46 review |
 | A6 | **#31 RabbitMQ backoff + FailOpen enum 清理** (🟡 可延后) | 2h | `adapters/rabbitmq/` | Wave 2 残留 |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
@@ -73,12 +67,8 @@
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
 | ~~A11~~ | ~~**OUTBOX-RELAY-WIRE-PG-01**~~ ✅ PR#174（S25+S26+S27）: relay worker 接入 bootstrap OnStart/OnStop（S25 relayWorker≠nil guard）；eventbus envelope 解包修复事件丢失（S26）；pool leak on metrics fail 修复（S27）；e2e test 重写为真实 PG→eventbus→subscriber 链路（移除 RMQ 依赖）| — | — | PR#174 |
-<<<<<<< Updated upstream
-| ~~A12~~ | ✅ **READYZ-PG-SCHEMA-01**: 启动期 fail-fast — VerifyExpectedVersion 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | `adapters/postgres/schema_guard.go` + `cmd/core-bundle/main.go` | PR-PG-HARDEN |
+| ~~A12~~ | ~~**READYZ-PG-SCHEMA-01**~~ ✅ PR#173：启动期 fail-fast — `VerifyExpectedVersion` 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1) | — | — | PR#173 |
 | A13 | **BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01** (🟠 条件延后): `cmd/core-bundle` 当前 publisher 是 in-memory eventbus（outbox relay 将 PG entries 转发至此）；`bootstrap.WithBrokerHealth` 未接线，/readyz 缺 RMQ 健康检查。触发条件：core-bundle 接入真实 RabbitMQ connection（替换 in-memory eventbus 为 rabbitmq.Publisher），此时同步通过 `bootstrap.WithBrokerHealth` 将 RMQ readiness 纳入 /readyz。当前 in-memory eventbus 无需 broker health probe。 | 2h | `cmd/core-bundle/main.go` + `runtime/bootstrap/` | PR#174 review F8 |
-=======
-| ~~A12~~ | ~~**READYZ-PG-SCHEMA-01**~~ ✅ PR#173（pending merge）：启动期 fail-fast — `VerifyExpectedVersion` 比对 goose_db_version vs embed FS max，不匹配直接 return err → os.Exit(1)；review 9 issues 全部修复，CI 通过后可合入 | — | — | PR#173 |
->>>>>>> Stashed changes
 
 ### slice / cell 收口
 
@@ -212,11 +202,7 @@
 | T4 | **CB-RESILIENCE-PACKAGE-01** 把 `Allower` / `CircuitBreakerRetryAfter` 从 `runtime/http/middleware` 迁移到 `runtime/resilience/circuitbreaker/` 独立包 | 4h | 出现第二个非 HTTP 的 CB 消费方 |
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
-<<<<<<< Updated upstream
-| ~~T7~~ | ✅ **CONFIG-VERSIONS-CONFIG-ID-INDEX**: 新增 migration 006 创建 `idx_config_versions_config_id`（CONCURRENTLY + no-transaction） | — | `adapters/postgres/migrations/006_add_config_versions_config_id_index.sql` | PR-PG-HARDEN |
-=======
-| ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173（pending merge）：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
->>>>>>> Stashed changes
+| ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
 
 ---
 
