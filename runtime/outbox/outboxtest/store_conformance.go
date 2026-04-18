@@ -11,6 +11,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
 
+// deduplicated per SonarCloud S1192
+const (
+	testEventType          = "test.v1"
+	msgClaimPending        = "ClaimPending: %v"
+	msgClaimPendingWithLen = "ClaimPending: err=%v len=%d"
+	msgReclaimStale        = "ReclaimStale: %v"
+	errSome                = "some error"
+)
+
 // StoreFactory constructs a fresh Store (typically with pre-seeded rows)
 // for each test subcase. Called at the START of each subcase.
 type StoreFactory func(t *testing.T, seed []outbox.ClaimedEntry) outbox.Store
@@ -75,7 +84,7 @@ func conformClaimPendingEmpty(t *testing.T, factory StoreFactory) {
 	store := factory(t, nil)
 	got, err := store.ClaimPending(ctx, 10)
 	if err != nil {
-		t.Fatalf("ClaimPending: %v", err)
+		t.Fatalf(msgClaimPending, err)
 	}
 	if len(got) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(got))
@@ -86,14 +95,14 @@ func conformClaimPendingBatchCap(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
 	seed := []outbox.ClaimedEntry{
-		newEntry("e1", "test.v1", 0),
-		newEntry("e2", "test.v1", 0),
-		newEntry("e3", "test.v1", 0),
+		newEntry("e1", testEventType, 0),
+		newEntry("e2", testEventType, 0),
+		newEntry("e3", testEventType, 0),
 	}
 	store := factory(t, seed)
 	got, err := store.ClaimPending(ctx, 2)
 	if err != nil {
-		t.Fatalf("ClaimPending: %v", err)
+		t.Fatalf(msgClaimPending, err)
 	}
 	if len(got) != 2 {
 		t.Errorf("expected 2 entries with batchSize=2, got %d", len(got))
@@ -105,9 +114,9 @@ func conformClaimPendingSecondCall(t *testing.T, factory StoreFactory) {
 	ctx := context.Background()
 	now := time.Now()
 	seed := []outbox.ClaimedEntry{
-		newEntryAt("e1", "test.v1", 0, now.Add(-3*time.Second)),
-		newEntryAt("e2", "test.v1", 0, now.Add(-2*time.Second)),
-		newEntryAt("e3", "test.v1", 0, now.Add(-1*time.Second)),
+		newEntryAt("e1", testEventType, 0, now.Add(-3*time.Second)),
+		newEntryAt("e2", testEventType, 0, now.Add(-2*time.Second)),
+		newEntryAt("e3", testEventType, 0, now.Add(-1*time.Second)),
 	}
 	store := factory(t, seed)
 
@@ -137,7 +146,7 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 	const total = 20
 	seed := make([]outbox.ClaimedEntry, total)
 	for i := range total {
-		seed[i] = newEntry(fmt.Sprintf("e%02d", i), "test.v1", 0)
+		seed[i] = newEntry(fmt.Sprintf("e%02d", i), testEventType, 0)
 	}
 	store := factory(t, seed)
 
@@ -148,7 +157,7 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 		wg.Go(func() {
 			got, err := store.ClaimPending(ctx, total)
 			if err != nil {
-				t.Errorf("ClaimPending: %v", err)
+				t.Errorf(msgClaimPending, err)
 				resultsCh <- nil
 				return
 			}
@@ -172,12 +181,12 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 func conformMarkPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
 	store := factory(t, seed)
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 	updated, err := store.MarkPublished(ctx, "e1")
 	if err != nil {
@@ -195,7 +204,7 @@ func conformMarkPublished(t *testing.T, factory StoreFactory) {
 func conformMarkPublishedReclaimed(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -213,7 +222,7 @@ func conformMarkPublishedReclaimed(t *testing.T, factory StoreFactory) {
 func conformMarkRetry(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -240,14 +249,14 @@ func conformMarkRetry(t *testing.T, factory StoreFactory) {
 func conformMarkRetryFields(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
 	fs := NewFakeStore()
 	fs.Seed(seed...)
 
 	_, _ = fs.ClaimPending(ctx, 10)
 
 	nextRetry := time.Now().Add(5 * time.Second)
-	_, _ = fs.MarkRetry(ctx, "e1", 2, nextRetry, "some error")
+	_, _ = fs.MarkRetry(ctx, "e1", 2, nextRetry, errSome)
 
 	snap := fs.Snapshot()
 	if len(snap) != 1 {
@@ -262,15 +271,15 @@ func conformMarkRetryFields(t *testing.T) {
 	} else if !row.NextRetryAt.Equal(nextRetry) {
 		t.Errorf("NextRetryAt: got %v, want %v", *row.NextRetryAt, nextRetry)
 	}
-	if row.LastError != "some error" {
-		t.Errorf("LastError: got %q, want %q", row.LastError, "some error")
+	if row.LastError != errSome {
+		t.Errorf("LastError: got %q, want %q", row.LastError, errSome)
 	}
 }
 
 func conformMarkDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	seed := []outbox.ClaimedEntry{newEntry("e1", "test.v1", 4)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -298,11 +307,11 @@ func conformMarkDead(t *testing.T, factory StoreFactory) {
 func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 
 	// Negative TTL → every claiming entry is immediately stale.
@@ -310,7 +319,7 @@ func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 	// and is immediately claimable in the next ClaimPending call.
 	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0)
 	if err != nil {
-		t.Fatalf("ReclaimStale: %v", err)
+		t.Fatalf(msgReclaimStale, err)
 	}
 	if count != 1 {
 		t.Errorf("expected 1 reclaimed, got %d", count)
@@ -334,17 +343,17 @@ func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 func conformReclaimStaleFresh(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 
 	// 1-hour TTL: claimed_at (set just above) is well within TTL.
 	count, err := store.ReclaimStale(ctx, time.Hour, 99, 5*time.Second, 5*time.Minute)
 	if err != nil {
-		t.Fatalf("ReclaimStale: %v", err)
+		t.Fatalf(msgReclaimStale, err)
 	}
 	if count != 0 {
 		t.Errorf("expected 0 reclaimed (fresh claim), got %d", count)
@@ -361,16 +370,16 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
 	// attempts=4, maxAttempts=5 → attempts+1=5 >= maxAttempts → dead.
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 4)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimPending: err=%v len=%d", err, len(claimed))
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 
 	count, err := store.ReclaimStale(ctx, -time.Hour, 5, 5*time.Second, 5*time.Minute)
 	if err != nil {
-		t.Fatalf("ReclaimStale: %v", err)
+		t.Fatalf(msgReclaimStale, err)
 	}
 	if count != 1 {
 		t.Errorf("expected 1 reclaimed, got %d", count)
@@ -408,7 +417,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 func conformCleanupPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
 
 	_, _ = store.ClaimPending(ctx, 10)
 	_, _ = store.MarkPublished(ctx, "e1")
@@ -436,9 +445,9 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
 	seed := []outbox.ClaimedEntry{
-		newEntry("e1", "test.v1", 0),
-		newEntry("e2", "test.v1", 0),
-		newEntry("e3", "test.v1", 0),
+		newEntry("e1", testEventType, 0),
+		newEntry("e2", testEventType, 0),
+		newEntry("e3", testEventType, 0),
 	}
 	store := factory(t, seed)
 
@@ -462,7 +471,7 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 func conformCleanupDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := context.Background()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", "test.v1", 4)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
 
 	_, _ = store.ClaimPending(ctx, 10)
 	_, _ = store.MarkDead(ctx, "e1", 5, "perm error")
