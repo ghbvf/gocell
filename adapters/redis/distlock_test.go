@@ -86,6 +86,14 @@ func TestDistLock_ReleaseIdempotent(t *testing.T) {
 	// Second release is a no-op (Lua returns 0, no error).
 	err = lock.Release(ctx)
 	assert.NoError(t, err)
+
+	// Guard: sync.Once prevents double-close; Lost() channel stays closed.
+	select {
+	case <-lock.Lost():
+		// expected — lost channel closed exactly once on first Release
+	default:
+		t.Fatal("Lost() channel must remain closed after double-Release")
+	}
 }
 
 func TestDistLock_ReleaseEvalError(t *testing.T) {
@@ -137,6 +145,10 @@ func TestDistLock_ReleaseWaitsForRenewalGoroutine(t *testing.T) {
 
 	lockIface, err := dl.Acquire(ctx, "test:lock:done", 10*time.Second)
 	require.NoError(t, err)
+	// White-box test: accesses *Lock internals (done channel) to verify the
+	// renewal goroutine has drained before Release returns. Same-package test
+	// (package redis) so this is legitimate; callers outside the adapter see
+	// only the distlock.Lock interface surface.
 	lock := lockIface.(*Lock)
 	require.NotNil(t, lock.done)
 
@@ -179,6 +191,46 @@ func TestDistLock_AcquireTimeoutCtxDoesNotKillRenewal(t *testing.T) {
 	// Release with a fresh context.
 	err = lock.Release(context.Background())
 	assert.NoError(t, err)
+}
+
+// TestDistLock_Release_WithExpiredCtx_StillAttemptsDEL verifies that Release
+// issues the Redis DEL command even when the supplied ctx is already cancelled.
+// Without a fresh bounded context, an expired caller ctx would cause Eval to
+// return immediately with a ctx error, leaving the lock key in Redis until TTL.
+func TestDistLock_Release_WithExpiredCtx_StillAttemptsDEL(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+
+	// Acquire with a valid context.
+	lockIface, err := dl.Acquire(context.Background(), "test:lock:expired-ctx", 10*time.Second)
+	require.NoError(t, err)
+
+	// Snapshot Eval calls so far (renewal may have fired none yet for a fresh lock).
+	mock.mu.Lock()
+	evalsBefore := mock.evalCallCount
+	mock.mu.Unlock()
+
+	// Cancel the context before calling Release.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // immediately cancel
+
+	// Release with the already-cancelled ctx — DEL must still be issued.
+	err = lockIface.Release(cancelledCtx)
+	assert.NoError(t, err)
+
+	mock.mu.Lock()
+	evalsAfter := mock.evalCallCount
+	mock.mu.Unlock()
+
+	if evalsAfter <= evalsBefore {
+		t.Fatalf("expected at least one Eval (DEL) after Release with expired ctx; got evalsBefore=%d evalsAfter=%d", evalsBefore, evalsAfter)
+	}
+
+	// Key must have been deleted from the mock store.
+	mock.mu.Lock()
+	_, exists := mock.store["test:lock:expired-ctx"]
+	mock.mu.Unlock()
+	assert.False(t, exists, "lock key must be removed from store after Release, even with expired ctx")
 }
 
 // --- New tests for runtime/distlock interface compliance ---
@@ -303,6 +355,14 @@ func TestLock_Release_IsIdempotent(t *testing.T) {
 	// Second release must be a no-op (Lua returns 0, no error).
 	err = lock.Release(ctx)
 	assert.NoError(t, err)
+
+	// Guard: sync.Once prevents double-close; Lost() channel stays closed.
+	select {
+	case <-lock.Lost():
+		// expected — lost channel closed exactly once on first Release
+	default:
+		t.Fatal("Lost() channel must remain closed after double-Release")
+	}
 }
 
 // TestLock_Lost_ClosedAfterRelease asserts that Release also closes Lost()

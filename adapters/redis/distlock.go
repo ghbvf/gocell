@@ -19,6 +19,12 @@ var (
 	_ distlock.Lock   = (*Lock)(nil)
 )
 
+// releaseTimeout bounds the single Redis DEL command issued during Release.
+// Matches K8s pod terminationGracePeriodSeconds minimum (3s) — long enough
+// for a healthy Redis round-trip, short enough to not extend a kubelet-level
+// shutdown timeline.
+const releaseTimeout = 3 * time.Second
+
 // releaseLockScript is a Lua script that atomically releases a lock only if
 // the caller still owns it (value matches). This prevents releasing a lock
 // that has been acquired by another holder after expiry.
@@ -82,6 +88,12 @@ func (l *Lock) closeLost() {
 // goroutine and waits for it to exit before issuing the release command.
 // It is safe to call multiple times; subsequent calls are no-ops.
 //
+// Release uses a fresh 3-second context for the DEL command; the supplied ctx
+// is only used to bound the wait for the renewal goroutine to exit. This
+// ensures the Redis key is cleaned up even when the caller-supplied ctx has
+// already expired (e.g. HTTP request timeout), avoiding the lock lingering
+// until natural TTL expiry.
+//
 // Use a fresh context for Release, not the Acquire context:
 //
 //	lock, err := dl.Acquire(requestCtx, key, ttl)
@@ -103,9 +115,17 @@ func (l *Lock) Release(ctx context.Context) error {
 	}
 
 	// Signal Lost so any goroutine selecting on it can unblock after Release.
+	// This happens before the DEL so that selectors waiting on Lost() unblock
+	// immediately even if the DEL takes time or fails.
 	l.closeLost()
 
-	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
+	// Use a fresh bounded context for the DEL — caller ctx may already be
+	// done (timeout / cancellation), in which case issuing Eval on it would
+	// return ctx error without touching Redis and leave the key lingering
+	// until natural TTL. We want DEL to have a best-effort chance regardless.
+	delCtx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	defer cancel()
+	result, err := l.rdb.Eval(delCtx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
 		return errcode.Wrap(distlock.ErrLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
@@ -113,6 +133,8 @@ func (l *Lock) Release(ctx context.Context) error {
 	if result == 0 {
 		slog.Warn("redis: lock already released or expired",
 			"key", l.key)
+	} else {
+		slog.Debug("redis: lock released", "key", l.key)
 	}
 	return nil
 }

@@ -31,6 +31,10 @@ type mockCmdable struct {
 	// renew Lua script (2-arg Eval). Set to pointer-to-zero to simulate
 	// ownership loss (another holder took over).
 	evalRenewResult *int64
+
+	// evalCallCount counts the total number of Eval invocations.
+	// Used by tests that assert DEL was issued regardless of caller ctx state.
+	evalCallCount int
 }
 
 type mockEntry struct {
@@ -151,6 +155,7 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 	cmd := goredis.NewCmd(context.Background())
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.evalCallCount++
 	if m.evalErr != nil {
 		cmd.SetErr(m.evalErr)
 		return cmd

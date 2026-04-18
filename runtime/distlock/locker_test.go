@@ -31,40 +31,13 @@ var (
 	_ distlock.Lock   = lockShapeCheck{}
 )
 
-// TestLocker_InterfaceShape asserts Acquire(ctx, key, ttl) (Lock, error) exists.
-// The real assertion is the compile-time var block above; the test body
-// confirms the types appear in test output.
-func TestLocker_InterfaceShape(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "Locker_has_Acquire_method"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Assign via interface variable so the type is exercised at runtime.
-			// Avoid nil comparison (SA4023 — concrete type is never nil).
-			_ = tc.name
-			var locker distlock.Locker = lockerShapeCheck{}
-			_ = locker
-		})
-	}
-}
-
-// TestLock_InterfaceShape asserts Release / Key / Lost methods exist on Lock.
-func TestLock_InterfaceShape(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "Lock_has_Release_method"},
-		{name: "Lock_has_Key_method"},
-		{name: "Lock_has_Lost_method"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_ = tc.name
-			var lock distlock.Lock = lockShapeCheck{}
-			_ = lock
-		})
-	}
+// TestInterfaces_CompileTimeAssertions ensures the test binary links and the
+// package is exercised by "go test ./runtime/distlock/...". The real gate is
+// the compile-time var block above — if the method sets diverge the binary
+// will not build.
+func TestInterfaces_CompileTimeAssertions(t *testing.T) {
+	// Compile-time assertions live at package scope above.
+	// This runtime stub ensures the test binary links and the package is
+	// covered by "go test ./runtime/distlock/...".
+	t.Log("interface assertions compiled")
 }
