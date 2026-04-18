@@ -237,7 +237,8 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 6, r.HandlerCount(), "audit-core should register 6 topic handlers")
+	assert.Equal(t, 8, r.HandlerCount(),
+		"audit-core should register 8 topic handlers (6 legacy + 2 role events)")
 }
 
 // stubMux implements cell.RouteMux for testing.

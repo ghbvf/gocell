@@ -49,7 +49,7 @@ func TestService_Assign(t *testing.T) {
 			userID: "usr-1",
 			roleID: "admin",
 			setup: func(r *mem.RoleRepository) {
-				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			wantErr: false,
 		},
@@ -119,8 +119,8 @@ func TestService_Revoke(t *testing.T) {
 			userID: "usr-1",
 			roleID: "admin",
 			setup: func(r *mem.RoleRepository) {
-				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
-				_ = r.AssignToUser(context.Background(), "usr-2", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")
 			},
 			wantErr: false,
 		},
@@ -129,7 +129,7 @@ func TestService_Revoke(t *testing.T) {
 			userID: "usr-1",
 			roleID: "admin",
 			setup: func(r *mem.RoleRepository) {
-				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthForbidden,
@@ -185,8 +185,8 @@ func TestService_Revoke_InvalidatesSessions(t *testing.T) {
 	svc, roleRepo, sessionRepo := newTestService()
 	ctx := context.Background()
 
-	_ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
-	_ = roleRepo.AssignToUser(ctx, "usr-2", "admin") // second admin to pass last-admin guard
+	_, _ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
+	_, _ = roleRepo.AssignToUser(ctx, "usr-2", "admin") // second admin to pass last-admin guard
 	sess := &domain.Session{ID: "sess-1", UserID: "usr-1"}
 	require.NoError(t, sessionRepo.Create(ctx, sess))
 
@@ -221,8 +221,8 @@ func (failingSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
 func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	_ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
-	_ = roleRepo.AssignToUser(context.Background(), "usr-2", "admin") // second admin to pass last-admin guard
+	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "usr-2", "admin") // second admin to pass last-admin guard
 
 	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
 	err := svc.Revoke(context.Background(), "usr-1", "admin")
@@ -238,4 +238,74 @@ func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
 	err := svc.Assign(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "assign must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
+}
+
+// TestService_DemoMode_* proves that in demo mode (no WithOutboxWriter / WithTxManager),
+// sessionRepo.RevokeByUserID is still called exactly once per Assign and Revoke, preserving
+// backward-compatible dual-write behaviour.
+func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
+	tests := []struct {
+		name   string
+		userID string
+		roleID string
+	}{
+		{name: "demo assign calls session revoke", userID: "usr-demo", roleID: "admin"},
+		{name: "demo assign second user also calls session revoke", userID: "usr-demo-2", roleID: "admin"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			roleRepo := mem.NewRoleRepository()
+			roleRepo.SeedRole(&domain.Role{
+				ID:          "admin",
+				Name:        "admin",
+				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
+			})
+			sessionRepo := mem.NewSessionRepository()
+			// Create a session for the user so we can verify revocation.
+			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
+			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+			// No opts → demo mode.
+			svc := NewService(roleRepo, sessionRepo, slog.Default())
+			require.NoError(t, svc.Assign(context.Background(), tc.userID, tc.roleID))
+
+			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			require.NoError(t, err)
+			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Assign")
+		})
+	}
+}
+
+func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
+	tests := []struct {
+		name   string
+		userID string
+		roleID string
+	}{
+		{name: "demo revoke calls session revoke", userID: "usr-demo-r", roleID: "admin"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			roleRepo := mem.NewRoleRepository()
+			roleRepo.SeedRole(&domain.Role{
+				ID:          "admin",
+				Name:        "admin",
+				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
+			})
+			_, _ = roleRepo.AssignToUser(context.Background(), tc.userID, "admin")
+			_, _ = roleRepo.AssignToUser(context.Background(), "usr-other", "admin") // second admin
+			sessionRepo := mem.NewSessionRepository()
+			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
+			require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+			svc := NewService(roleRepo, sessionRepo, slog.Default())
+			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
+
+			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
+			require.NoError(t, err)
+			assert.True(t, s.IsRevoked(), "demo mode: session must be revoked after Revoke")
+		})
+	}
 }

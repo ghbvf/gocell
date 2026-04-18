@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 )
 
 const (
@@ -88,7 +87,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		}
 		if s.outboxWriter != nil {
 			entry := outbox.Entry{
-				ID:        "evt" + "-" + uuid.NewString(),
+				ID:        outbox.NewEntryID(),
 				EventType: TopicSessionRevoked,
 				Payload:   payload,
 			}

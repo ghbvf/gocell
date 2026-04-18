@@ -24,7 +24,7 @@ func setupHandler() (http.Handler, *mem.RoleRepository) {
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
-	_ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	mux := celltest.NewTestMux()
@@ -129,7 +129,7 @@ func TestHandler_Revoke(t *testing.T) {
 			name: "admin revokes role returns 200 (multiple holders)",
 			setup: func(r *mem.RoleRepository) {
 				// Ensure 2 admins so last-admin guard doesn't block.
-				_ = r.AssignToUser(context.Background(), "usr-2", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")
 			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-1",

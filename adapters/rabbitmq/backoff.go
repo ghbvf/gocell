@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+// safeDelay is an alias for exponentialDelay retained so existing rabbitmq
+// tests can reference the helper without churn.
+func safeDelay(base, maxDelay time.Duration, attempt int) time.Duration {
+	return exponentialDelay(base, maxDelay, attempt)
+}
+
 // exponentialDelay computes base * 2^attempt with overflow protection, capped at maxDelay.
 // If base is zero or negative, it returns 0. The bits.Len64 technique determines
 // the maximum safe left-shift to avoid integer overflow before comparing against maxDelay.

@@ -186,7 +186,7 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 	}
 	if s.outboxWriter != nil {
 		outboxEntry := outbox.Entry{
-			ID:        "evt" + "-" + uuid.NewString(),
+			ID:        outbox.NewEntryID(),
 			EventType: TopicConfigChanged,
 			Payload:   payload,
 		}

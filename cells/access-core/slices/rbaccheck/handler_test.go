@@ -61,7 +61,7 @@ func setup() http.Handler {
 			{Resource: "users", Action: "write"},
 		},
 	})
-	_ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
+	_, _ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
 
 	svc := NewService(roleRepo, slog.Default())
 	mux := celltest.NewTestMux()

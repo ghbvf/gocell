@@ -705,29 +705,35 @@ func (s *stubRoleRepo) Create(_ context.Context, role *domain.Role) error {
 	s.roles[role.ID] = role
 	return nil
 }
-func (s *stubRoleRepo) AssignToUser(_ context.Context, userID, roleID string) error {
+func (s *stubRoleRepo) AssignToUser(_ context.Context, userID, roleID string) (bool, error) {
 	if s.userRoles[userID] == nil {
 		s.userRoles[userID] = make(map[string]struct{})
 	}
+	if _, already := s.userRoles[userID][roleID]; already {
+		return false, nil
+	}
 	s.userRoles[userID][roleID] = struct{}{}
-	return nil
+	return true, nil
 }
 func (s *stubRoleRepo) RemoveFromUser(_ context.Context, userID, roleID string) error {
 	delete(s.userRoles[userID], roleID)
 	return nil
 }
-func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) error {
+func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
+	if _, holds := s.userRoles[userID][roleID]; !holds {
+		return false, nil
+	}
 	count := 0
 	for _, roles := range s.userRoles {
 		if _, ok := roles[roleID]; ok {
 			count++
 		}
 	}
-	if _, holds := s.userRoles[userID][roleID]; holds && count == 1 {
-		return fmt.Errorf("sole holder")
+	if count == 1 {
+		return false, fmt.Errorf("sole holder")
 	}
 	delete(s.userRoles[userID], roleID)
-	return nil
+	return true, nil
 }
 func (s *stubRoleRepo) CountByRole(_ context.Context, roleID string) (int, error) {
 	count := 0

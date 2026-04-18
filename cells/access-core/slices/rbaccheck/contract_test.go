@@ -26,7 +26,7 @@ func newContractRBACHandler() http.Handler {
 			{Resource: "users", Action: "read"},
 		},
 	})
-	_ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
+	_, _ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
 	svc := NewService(roleRepo, slog.Default())
 
 	inner := celltest.NewTestMux()

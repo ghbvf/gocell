@@ -292,9 +292,9 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	conn.ReleaseChannel(rawCh)
 
 	// --- Create ConsumerBase with short retry ---
-	cb, cbErr := NewConsumerBase(
+	cb, cbErr := outbox.NewConsumerBase(
 		&noopClaimer{},
-		ConsumerBaseConfig{
+		outbox.ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-e2e",
 			RetryCount:     2,
 			RetryBaseDelay: 50 * time.Millisecond,

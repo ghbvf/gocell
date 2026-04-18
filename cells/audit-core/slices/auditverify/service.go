@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/google/uuid"
 )
 
 const (
@@ -122,7 +121,7 @@ func (s *Service) buildPersistFn(payload []byte) func(context.Context) error {
 			return nil
 		}
 		return s.outboxWriter.Write(txCtx, outbox.Entry{
-			ID:        "evt-" + uuid.NewString(),
+			ID:        outbox.NewEntryID(),
 			EventType: TopicIntegrityVerified,
 			Payload:   payload,
 		})

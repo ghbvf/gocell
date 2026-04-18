@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide"
@@ -139,11 +140,12 @@ type AccessCore struct {
 	logoutHandler   *sessionlogout.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
-	validateSvc       *sessionvalidate.Service
-	authzSvc          *authorizationdecide.Service
-	rbacHandler       *rbaccheck.Handler
-	rbacAssignHandler *rbacassign.Handler
-	configReceiveSvc  *configreceive.Service
+	validateSvc         *sessionvalidate.Service
+	authzSvc            *authorizationdecide.Service
+	rbacHandler         *rbaccheck.Handler
+	rbacAssignHandler   *rbacassign.Handler
+	configReceiveSvc    *configreceive.Service
+	rbacSessionConsumer *sessionlogout.Consumer
 }
 
 // NewAccessCore creates a new AccessCore Cell.
@@ -297,11 +299,25 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbac-check", "access-core", cell.L0))
 
-	// rbac-assign — L0 is correct for in-memory repos (no transaction semantics).
-	// Upgrade to L1 when PostgreSQL adapter is introduced (needs real tx).
-	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger)
+	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
+	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
+	var rbacOpts []rbacassign.Option
+	if c.outboxWriter != nil {
+		rbacOpts = append(rbacOpts, rbacassign.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		rbacOpts = append(rbacOpts, rbacassign.WithTxManager(c.txRunner))
+	}
+	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
-	c.AddSlice(cell.NewBaseSlice("rbacassign", "access-core", cell.L0))
+	rbacAssignLevel := cell.L0
+	if c.outboxWriter != nil && c.txRunner != nil {
+		rbacAssignLevel = cell.L2
+	}
+	c.AddSlice(cell.NewBaseSlice("rbacassign", "access-core", rbacAssignLevel))
+
+	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
+	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
 
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
@@ -375,7 +391,7 @@ func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 		return fmt.Errorf("persist user: %w", err)
 	}
 
-	if err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
+	if _, err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
 		return fmt.Errorf("assign role: %w", err)
 	}
 
@@ -411,7 +427,14 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 // RegisterSubscriptions declares event subscriptions for access-core.
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
+	// config-receive: config.changed events from config-core.
 	handler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEvent)
 	r.AddHandler(configreceive.TopicConfigChanged, handler, "access-core")
+
+	// rbac-session-sync: invalidate sessions on role assignment or revocation.
+	// Both topics share the same handler and consumer group — HandleRoleChanged is topic-agnostic.
+	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
+	r.AddHandler(dto.TopicRoleAssigned, roleHandler, "access-core-rbac-session-sync")
+	r.AddHandler(dto.TopicRoleRevoked, roleHandler, "access-core-rbac-session-sync")
 	return nil
 }

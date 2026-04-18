@@ -29,7 +29,7 @@ func TestService_HasRole(t *testing.T) {
 			name: "has role",
 			setup: func(r *mem.RoleRepository) {
 				r.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			userID: "usr-1", roleName: "admin", want: true,
 		},
@@ -68,8 +68,8 @@ func TestService_ListRoles(t *testing.T) {
 	svc, repo := newTestService()
 	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	repo.SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
-	_ = repo.AssignToUser(context.Background(), "usr-1", "admin")
-	_ = repo.AssignToUser(context.Background(), "usr-1", "viewer")
+	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
+	_, _ = repo.AssignToUser(context.Background(), "usr-1", "viewer")
 
 	roles, err := svc.ListRoles(context.Background(), "usr-1")
 	require.NoError(t, err)

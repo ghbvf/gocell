@@ -80,19 +80,22 @@ func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domai
 	return result, nil
 }
 
-func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) error {
+func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, ok := r.roles[roleID]; !ok {
-		return errcode.New(errcode.ErrAuthRoleNotFound, "role not found: "+roleID)
+		return false, errcode.New(errcode.ErrAuthRoleNotFound, "role not found: "+roleID)
 	}
 
 	if r.userRoles[userID] == nil {
 		r.userRoles[userID] = make(map[string]struct{})
 	}
+	if _, already := r.userRoles[userID][roleID]; already {
+		return false, nil
+	}
 	r.userRoles[userID][roleID] = struct{}{}
-	return nil
+	return true, nil
 }
 
 func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string) error {
@@ -108,9 +111,21 @@ func (r *RoleRepository) RemoveFromUser(_ context.Context, userID, roleID string
 // RemoveFromUserIfNotLast atomically removes the role from the user only if
 // at least one other holder will remain. Holds the write lock for both the
 // count check and the removal to eliminate TOCTOU races.
-func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) error {
+func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Check if user actually holds the role.
+	userHoldsRole := false
+	if roles, ok := r.userRoles[userID]; ok {
+		_, userHoldsRole = roles[roleID]
+	}
+
+	// Revoking a role the user does not hold is an idempotent no-op — return
+	// changed=false so the caller does not publish a role-change fact.
+	if !userHoldsRole {
+		return false, nil
+	}
 
 	// Count holders under the same lock.
 	count := 0
@@ -120,22 +135,13 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 		}
 	}
 
-	// Check if user actually holds the role.
-	userHoldsRole := false
-	if roles, ok := r.userRoles[userID]; ok {
-		_, userHoldsRole = roles[roleID]
-	}
-
-	if userHoldsRole && count == 1 {
-		return errcode.New(errcode.ErrAuthForbidden,
+	if count == 1 {
+		return false, errcode.New(errcode.ErrAuthForbidden,
 			fmt.Sprintf("cannot revoke role %q from user %q: this is the only holder; assign the role to another user first", roleID, userID))
 	}
 
-	// Safe to remove (either not the last holder, or user doesn't hold it).
-	if roles, ok := r.userRoles[userID]; ok {
-		delete(roles, roleID)
-	}
-	return nil
+	delete(r.userRoles[userID], roleID)
+	return true, nil
 }
 
 // CountByRole returns the number of users assigned to the given role.

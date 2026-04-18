@@ -357,6 +357,27 @@ func WithDisableObservabilityRestore() Option {
 	}
 }
 
+// WithConsumerMiddleware registers subscriber-side middleware applied to every
+// topic handler before it is passed to the underlying Subscriber.Subscribe call.
+// Middleware is applied in registration order; each entry wraps the next, so the
+// first registered middleware is outermost at invocation time.
+//
+// Typical use: inject ConsumerBase.AsMiddleware so every consumer inherits
+// two-phase Claimer idempotency, backoff retry, and DLX routing without each
+// slice wiring it individually. Bootstrap always prepends
+// ObservabilityContextMiddleware (unless disabled via
+// WithDisableObservabilityRestore) so trace_id/request_id restoration runs
+// before any middleware registered here.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
+// at router level; MassTransit UseMessageRetry — pipeline middleware at
+// receive-endpoint configuration.
+func WithConsumerMiddleware(mw ...outbox.TopicHandlerMiddleware) Option {
+	return func(b *Bootstrap) {
+		b.consumerMiddleware = append(b.consumerMiddleware, mw...)
+	}
+}
+
 // WithHookTimeout configures the per-hook deadline for the default
 // assembly built when no WithAssembly option is supplied. Zero uses
 // assembly.DefaultHookTimeout. Negative values disable per-hook
@@ -438,6 +459,7 @@ type Bootstrap struct {
 	verboseToken                string            // token for /readyz?verbose access control
 	closers                     []io.Closer       // middleware dependencies that need shutdown
 	disableObservabilityRestore bool
+	consumerMiddleware          []outbox.TopicHandlerMiddleware
 	hookTimeout                 time.Duration // applied when assembly not pre-built
 	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                cell.LifecycleHookObserver
@@ -977,6 +999,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if !b.disableObservabilityRestore {
 			mws = append(mws, outbox.ObservabilityContextMiddleware())
 		}
+		// Application-registered middleware runs inside observability restore so
+		// that any log lines or metrics emitted by ConsumerBase / custom middleware
+		// see the restored request_id / correlation_id / trace_id fields.
+		mws = append(mws, b.consumerMiddleware...)
 		evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 			Inner:      sub,
 			Middleware: mws,

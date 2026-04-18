@@ -130,7 +130,7 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 			defer wg.Done()
 			for i := range iterations {
 				userID := fmt.Sprintf("uid-w%d-i%d", id, i)
-				_ = repo.AssignToUser(ctx, userID, fmt.Sprintf("role-%d", id%5))
+				_, _ = repo.AssignToUser(ctx, userID, fmt.Sprintf("role-%d", id%5))
 			}
 		}(w)
 	}
@@ -164,7 +164,8 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	// its own admin role. The atomic guard must keep at least one holder.
 	const holders = 8
 	for i := range holders {
-		require.NoError(t, repo.AssignToUser(ctx, fmt.Sprintf("uid-%d", i), "admin"))
+		_, err := repo.AssignToUser(ctx, fmt.Sprintf("uid-%d", i), "admin")
+		require.NoError(t, err)
 	}
 
 	var wg sync.WaitGroup
@@ -173,7 +174,8 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			errs <- repo.RemoveFromUserIfNotLast(ctx, fmt.Sprintf("uid-%d", idx), "admin")
+			_, err := repo.RemoveFromUserIfNotLast(ctx, fmt.Sprintf("uid-%d", idx), "admin")
+			errs <- err
 		}(i)
 	}
 	wg.Wait()
@@ -234,8 +236,10 @@ func TestRoleRepository_CountByRole(t *testing.T) {
 	ctx := context.Background()
 
 	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
-	require.NoError(t, repo.AssignToUser(ctx, "usr-1", "admin"))
-	require.NoError(t, repo.AssignToUser(ctx, "usr-2", "admin"))
+	_, err := repo.AssignToUser(ctx, "usr-1", "admin")
+	require.NoError(t, err)
+	_, err = repo.AssignToUser(ctx, "usr-2", "admin")
+	require.NoError(t, err)
 
 	count, err := repo.CountByRole(ctx, "admin")
 	require.NoError(t, err)

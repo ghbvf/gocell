@@ -224,7 +224,7 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 	}
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
-			ID:        "evt" + "-" + uuid.NewString(),
+			ID:        outbox.NewEntryID(),
 			EventType: topic,
 			Payload:   data,
 		}

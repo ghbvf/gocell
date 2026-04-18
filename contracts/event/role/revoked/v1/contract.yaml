@@ -1,0 +1,16 @@
+id: event.role.revoked.v1
+kind: event
+ownerCell: access-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: access-core
+  subscribers:
+    - access-core
+    - audit-core
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: true
+idempotencyKey: event_id
+deliverySemantics: at-least-once

@@ -184,7 +184,7 @@ func (s *Service) writeOutboxEntry(ctx context.Context, payload []byte) error {
 		return nil
 	}
 	entry := outbox.Entry{
-		ID:        "evt" + "-" + uuid.NewString(),
+		ID:        outbox.NewEntryID(),
 		EventType: TopicSessionCreated,
 		Payload:   payload,
 	}
