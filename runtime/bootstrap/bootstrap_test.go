@@ -3653,6 +3653,126 @@ func TestWithRelayHealth_NilRelay_FailsFast(t *testing.T) {
 	assert.Contains(t, err.Error(), "relay")
 }
 
+// bootstrapFailingStore wraps outboxtest.FakeStore to inject a controllable
+// ClaimPending error, enabling budget-trip testing in bootstrap integration tests.
+type bootstrapFailingStore struct {
+	*outboxtest.FakeStore
+	mu       sync.Mutex
+	claimErr error
+}
+
+func (s *bootstrapFailingStore) setClaimErr(err error) {
+	s.mu.Lock()
+	s.claimErr = err
+	s.mu.Unlock()
+}
+
+func (s *bootstrapFailingStore) ClaimPending(ctx context.Context, batchSize int) ([]runtimeoutbox.ClaimedEntry, error) {
+	s.mu.Lock()
+	err := s.claimErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.FakeStore.ClaimPending(ctx, batchSize)
+}
+
+// TestWithRelayHealth_TrippedBudget_Returns503 verifies the P1-15 core contract:
+// poll budget trip → /readyz returns 503; store recovery → /readyz returns 200.
+func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "test-relay-trip", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	store := &bootstrapFailingStore{FakeStore: outboxtest.NewFakeStore()}
+	store.setClaimErr(errors.New("db down"))
+
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    3, // small threshold for fast test
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	relay := runtimeoutbox.NewRelay(store, &outbox.DiscardPublisher{}, cfg)
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithRelayHealth(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("bootstrap did not shut down in time")
+		}
+	}()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Start the relay so its poll loop drives the failure budget.
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	relayDone := make(chan error, 1)
+	go func() { relayDone <- relay.Start(relayCtx) }()
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		_ = relay.Stop(stopCtx)
+		relayCancel()
+		<-relayDone
+	}()
+
+	// Phase 1: store is failing — budget must trip and /readyz must return 503.
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusServiceUnavailable
+	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 503 after poll budget trips")
+
+	// Verify verbose output contains the unhealthy checker name.
+	verboseResp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer verboseResp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
+	pollStatus, _ := deps["outbox-relay-poll"].(string)
+	assert.Equal(t, "unhealthy", pollStatus, "outbox-relay-poll: status must be unhealthy")
+
+	// Phase 2: store recovers — budget must reset and /readyz must return 200.
+	store.setClaimErr(nil)
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 200 after store recovers")
+}
+
 func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
 	asm := assembly.New(assembly.Config{ID: "test-relay-disabled", DurabilityMode: cell.DurabilityDemo})
