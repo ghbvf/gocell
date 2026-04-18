@@ -117,6 +117,7 @@ func fastCfg() outbox.RelayConfig {
 		ClaimTTL:            100 * time.Millisecond,
 		RetentionPeriod:     1 * time.Hour,
 		DeadRetentionPeriod: 24 * time.Hour,
+		CleanupWaitFloor:    5 * time.Millisecond,
 	}
 }
 
@@ -547,6 +548,239 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 	require.Len(t, snap, 1)
 	assert.NotContains(t, snap[0].LastError, "secret123", "sensitive data must be redacted")
 	assert.Contains(t, snap[0].LastError, "<REDACTED>")
+}
+
+// ---------------------------------------------------------------------------
+// B2 FailureBudget integration tests
+// ---------------------------------------------------------------------------
+
+// failingStore is a Store whose ClaimPending / ReclaimStale / CleanupPublished
+// methods can be configured to always return an error.
+type failingStore struct {
+	*outboxtest.FakeStore
+	mu             sync.Mutex
+	claimErr       error
+	reclaimErr     error
+	cleanupPubErr  error
+}
+
+func newFailingStore() *failingStore {
+	return &failingStore{FakeStore: outboxtest.NewFakeStore()}
+}
+
+func (s *failingStore) setClaimErr(err error) {
+	s.mu.Lock()
+	s.claimErr = err
+	s.mu.Unlock()
+}
+
+func (s *failingStore) setReclaimErr(err error) {
+	s.mu.Lock()
+	s.reclaimErr = err
+	s.mu.Unlock()
+}
+
+func (s *failingStore) setCleanupPubErr(err error) {
+	s.mu.Lock()
+	s.cleanupPubErr = err
+	s.mu.Unlock()
+}
+
+func (s *failingStore) ClaimPending(ctx context.Context, batchSize int) ([]outbox.ClaimedEntry, error) {
+	s.mu.Lock()
+	err := s.claimErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.FakeStore.ClaimPending(ctx, batchSize)
+}
+
+func (s *failingStore) ReclaimStale(ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration) (int, error) {
+	s.mu.Lock()
+	err := s.reclaimErr
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return s.FakeStore.ReclaimStale(ctx, claimTTL, maxAttempts, base, maxDelay)
+}
+
+func (s *failingStore) CleanupPublished(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
+	s.mu.Lock()
+	err := s.cleanupPubErr
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	return s.FakeStore.CleanupPublished(ctx, cutoff, batchSize)
+}
+
+// OldestEligibleAt returns a fake "very recent past" time for published status
+// when a cleanupPubErr is set, so nextCleanupWait schedules quickly via floor.
+func (s *failingStore) OldestEligibleAt(ctx context.Context, status string) (time.Time, bool, error) {
+	s.mu.Lock()
+	cpErr := s.cleanupPubErr
+	s.mu.Unlock()
+	if cpErr != nil && status == "published" {
+		// Return a time just barely in the past so nextCleanupWait computes
+		// near-zero and falls to cleanupWaitFloor (set to 5ms in tests).
+		return time.Now().Add(-time.Millisecond), true, nil
+	}
+	return s.FakeStore.OldestEligibleAt(ctx, status)
+}
+
+func budgetCfg() outbox.RelayConfig {
+	cfg := fastCfg()
+	cfg.PollFailureBudget = 3
+	cfg.ReclaimFailureBudget = 3
+	cfg.CleanupFailureBudget = 3
+	// Use a tiny RetentionPeriod so nextCleanupWait returns floor (5ms) when
+	// OldestEligibleAt reports a row was published ~1ms ago.
+	cfg.RetentionPeriod = time.Millisecond
+	cfg.DeadRetentionPeriod = time.Millisecond
+	return cfg
+}
+
+func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
+	store := newFailingStore()
+	store.setClaimErr(errors.New("db down"))
+
+	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+
+	_, stop := startRelay(t, relay)
+	defer stop()
+
+	// Wait for the poll budget checker to become non-nil (trip).
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-poll"]
+		if !ok {
+			return false
+		}
+		return fn() != nil
+	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip after consecutive failures")
+}
+
+func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
+	store := newFailingStore()
+	store.setClaimErr(errors.New("db down"))
+
+	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+
+	_, stop := startRelay(t, relay)
+	defer stop()
+
+	// Trip first.
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-poll"]
+		return ok && fn() != nil
+	}, 2*time.Second, 5*time.Millisecond, "budget must trip")
+
+	// Clear the error so poll succeeds.
+	store.setClaimErr(nil)
+
+	// Checker must recover.
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-poll"]
+		return ok && fn() == nil
+	}, 2*time.Second, 5*time.Millisecond, "poll budget must reset after success")
+}
+
+func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
+	// Only reclaim fails — poll and cleanup must remain healthy.
+	store := newFailingStore()
+	store.setReclaimErr(errors.New("reclaim db down"))
+
+	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+
+	_, stop := startRelay(t, relay)
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-reclaim"]
+		return ok && fn() != nil
+	}, 2*time.Second, 5*time.Millisecond, "reclaim budget must trip")
+
+	// Poll checker must still be healthy.
+	checkers := relay.HealthCheckers()
+	if fn, ok := checkers["outbox-relay-poll"]; ok {
+		assert.Nil(t, fn(), "poll checker must remain healthy when only reclaim fails")
+	}
+}
+
+func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
+	// Only cleanup fails — poll budget must remain healthy.
+	store := newFailingStore()
+	store.setCleanupPubErr(errors.New("cleanup db down"))
+
+	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
+
+	_, stop := startRelay(t, relay)
+	defer stop()
+
+	require.Eventually(t, func() bool {
+		checkers := relay.HealthCheckers()
+		fn, ok := checkers["outbox-relay-cleanup"]
+		return ok && fn() != nil
+	}, 2*time.Second, 5*time.Millisecond, "cleanup budget must trip")
+
+	// Poll checker must still be healthy.
+	checkers := relay.HealthCheckers()
+	if fn, ok := checkers["outbox-relay-poll"]; ok {
+		assert.Nil(t, fn(), "poll checker must remain healthy when only cleanup fails")
+	}
+}
+
+func TestRelay_HealthCheckers_RegistersThree(t *testing.T) {
+	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), budgetCfg())
+	checkers := relay.HealthCheckers()
+
+	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered")
+	require.Contains(t, checkers, "outbox-relay-reclaim", "reclaim checker must be registered")
+	require.Contains(t, checkers, "outbox-relay-cleanup", "cleanup checker must be registered")
+	assert.Len(t, checkers, 3)
+}
+
+func TestRelay_FailureBudgetThresholdZero_DisablesChecker(t *testing.T) {
+	cfg := fastCfg()
+	cfg.PollFailureBudget = 0    // disabled
+	cfg.ReclaimFailureBudget = 3 // enabled
+	cfg.CleanupFailureBudget = 3 // enabled
+
+	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), cfg)
+	checkers := relay.HealthCheckers()
+
+	assert.NotContains(t, checkers, "outbox-relay-poll",
+		"threshold=0 must not register poll checker")
+	assert.Contains(t, checkers, "outbox-relay-reclaim")
+	assert.Contains(t, checkers, "outbox-relay-cleanup")
+}
+
+func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
+	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), fastCfg())
+
+	_, stop := startRelay(t, relay)
+	defer stop()
+
+	// Ready() returns nil before Start() has set up readyCh. Poll until non-nil,
+	// then read from it. Design: nil channel blocks forever — caller must handle
+	// with a timeout or poll as shown here.
+	require.Eventually(t, func() bool {
+		ch := relay.Ready()
+		if ch == nil {
+			return false
+		}
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 2*time.Millisecond, "relay.Ready() must close after Start")
 }
 
 // ---------------------------------------------------------------------------
