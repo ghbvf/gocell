@@ -54,8 +54,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 
@@ -80,8 +79,7 @@ func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 

@@ -20,8 +20,7 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleCreate handles POST / — creates a new config entry.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(dto.RoleAdmin)) {
 		return
 	}
 
@@ -46,8 +45,7 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdate handles PUT /{key} — updates an existing config entry.
 func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(dto.RoleAdmin)) {
 		return
 	}
 
@@ -72,8 +70,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete handles DELETE /{key} — deletes a config entry.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(dto.RoleAdmin)) {
 		return
 	}
 

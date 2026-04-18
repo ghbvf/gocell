@@ -59,8 +59,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
 	// Operator endpoint: require admin or operator role (not self-access).
-	if err := auth.RequireSelfOrRole(r.Context(), "", "admin", "operator"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr("", "admin", "operator")) {
 		return
 	}
 
@@ -87,8 +86,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(deviceID, "admin")) {
 		return
 	}
 
@@ -120,8 +118,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(deviceID, "admin")) {
 		return
 	}
 

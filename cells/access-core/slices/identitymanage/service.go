@@ -48,8 +48,8 @@ func WithTxManager(tx persistence.TxRunner) Option {
 }
 
 // WithTokenIssuer injects the token issuer used by ChangePassword to issue a
-// fresh TokenPair after a successful password change. Without this option,
-// ChangePassword returns nil for the token pair instead of issuing new tokens.
+// fresh TokenPair after a successful password change. tokenIssuer must not be
+// nil; NewService returns an error if it is not provided or is nil.
 func WithTokenIssuer(ti TokenIssuer) Option {
 	return func(s *Service) { s.tokenIssuer = ti }
 }
@@ -65,13 +65,20 @@ type Service struct {
 	tokenIssuer  TokenIssuer
 }
 
-// NewService creates an identity-manage Service.
-func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+// NewService creates an identity-manage Service. tokenIssuer is required;
+// callers must supply it via WithTokenIssuer. Omitting it or passing nil
+// returns errcode.ErrCellMissingTokenIssuer so mis-wired assemblies fail at
+// startup rather than at the first ChangePassword call.
+func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.tokenIssuer == nil {
+		return nil, errcode.New(errcode.ErrCellMissingTokenIssuer,
+			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
+	}
+	return s, nil
 }
 
 // CreateInput holds parameters for creating a user.
@@ -325,9 +332,6 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	s.logger.Info("user password changed; prior sessions revoked",
 		slog.String("user_id", user.ID))
 
-	if s.tokenIssuer == nil {
-		return nil, nil //nolint:nilnil // caller must handle nil pair when no tokenIssuer is wired
-	}
 	pair, err := s.tokenIssuer.IssueForUser(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("identity-manage: change-password issue token: %w", err)

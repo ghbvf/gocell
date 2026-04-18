@@ -84,8 +84,7 @@ func toTokenPairResponse(p *dto.TokenPair) dto.TokenPairResponse {
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 
@@ -116,8 +115,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(id, domain.RoleAdmin)) {
 		return
 	}
 
@@ -131,8 +129,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(id, domain.RoleAdmin)) {
 		return
 	}
 
@@ -158,8 +155,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(id, domain.RoleAdmin)) {
 		return
 	}
 
@@ -219,8 +215,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 
@@ -242,8 +237,7 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 
@@ -256,8 +250,7 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.AnyRole(domain.RoleAdmin)) {
 		return
 	}
 
@@ -271,8 +264,7 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(id, domain.RoleAdmin)) {
 		return
 	}
 
@@ -292,14 +284,6 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-	// Defense-in-depth: ChangePassword returns nil pair when no tokenIssuer is
-	// wired (production always wires one; this guard catches mis-configuration
-	// so the handler does not silently emit 200 + empty token pair).
-	if pair == nil {
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "token issuer not configured")
 		return
 	}
 

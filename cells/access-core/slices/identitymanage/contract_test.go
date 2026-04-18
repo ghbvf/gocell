@@ -44,15 +44,26 @@ func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 
 var _ persistence.TxRunner = contractTxRunner{}
 
+// contractStubIssuer is a minimal TokenIssuer stub for contract tests that do
+// not exercise the ChangePassword token-issuing path.
+var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
+
 func setupContractHandler() http.Handler {
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(contractStubIssuer))
+	if err != nil {
+		panic("setupContractHandler: " + err.Error())
+	}
 	return buildMux(svc)
 }
 
 func setupContractHandlerWithOutbox() (http.Handler, *contractRecordingWriter) {
 	writer := &contractRecordingWriter{}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(contractTxRunner{}))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
+	if err != nil {
+		panic("setupContractHandlerWithOutbox: " + err.Error())
+	}
 	return buildMux(svc), writer
 }
 
@@ -72,8 +83,11 @@ func buildMux(svc *Service) http.Handler {
 
 func setupContractHandlerWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	repo := mem.NewUserRepository()
-	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
 		WithTokenIssuer(issuer))
+	if err != nil {
+		panic("setupContractHandlerWithIssuer: " + err.Error())
+	}
 	return buildMux(svc), repo
 }
 

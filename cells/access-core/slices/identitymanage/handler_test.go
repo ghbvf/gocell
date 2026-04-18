@@ -23,8 +23,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
+// handlerStubIssuer is a minimal TokenIssuer stub used by handler tests that
+// do not exercise the ChangePassword token-issuing path.
+var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
+
 func setup() http.Handler {
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(handlerStubIssuer))
+	if err != nil {
+		panic("setup: " + err.Error())
+	}
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
@@ -33,8 +41,15 @@ func setup() http.Handler {
 // setupWithIssuer wires a service with a stub TokenIssuer for ChangePassword tests.
 func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	repo := mem.NewUserRepository()
-	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithTokenIssuer(issuer))
+	effectiveIssuer := issuer
+	if effectiveIssuer == nil {
+		effectiveIssuer = handlerStubIssuer
+	}
+	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(effectiveIssuer))
+	if err != nil {
+		panic("setupWithIssuer: " + err.Error())
+	}
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux, repo
@@ -472,30 +487,6 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
-}
-
-// TestHandler_ChangePassword_NilPair_ServerError verifies that the handler
-// returns 500 when ChangePassword succeeds but the service returns a nil pair
-// (tokenIssuer not configured). This is a defense-in-depth check (F-SEC-2):
-// production always wires a tokenIssuer, but mis-configuration must not silently
-// emit 200 + empty token pair.
-func TestHandler_ChangePassword_NilPair_ServerError(t *testing.T) {
-	// stubTokenIssuer with nil pair simulates a missing issuer (service returns nil, nil).
-	// The handler guard converts this to a 500 response.
-	nilIssuer := &stubTokenIssuer{pair: nil, err: nil}
-	r, repo := setupWithIssuer(nilIssuer)
-	seedUserInRepo(t, repo, "usr-nilpair", "nilpair-user", "oldpass")
-
-	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
-	req := httptest.NewRequest(http.MethodPost, "/usr-nilpair/password", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-nilpair", nil))
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code,
-		"nil pair from service must yield 500, not 200 + empty token pair")
-	assert.Contains(t, w.Body.String(), "ERR_INTERNAL")
 }
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {

@@ -40,6 +40,10 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return fn(context.Background())
 }
 
+// outboxStubIssuer is a minimal TokenIssuer stub used by outbox tests that do
+// not exercise the ChangePassword token-issuing path.
+var outboxStubIssuer TokenIssuer = &stubTokenIssuer{}
+
 // --- additional handler tests ---
 
 func withAdmin(req *http.Request) *http.Request {
@@ -159,10 +163,11 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 
 func TestService_WithOutboxWriter(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(ow))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(ow), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(context.Background(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -173,10 +178,11 @@ func TestService_WithOutboxWriter(t *testing.T) {
 
 func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithTxManager(tx))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(context.Background(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -185,8 +191,9 @@ func TestService_WithTxManager(t *testing.T) {
 
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(ow))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(ow), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 
 	user, err := svc.Create(context.Background(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
@@ -229,10 +236,11 @@ func TestService_Update_EmptyID(t *testing.T) {
 
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(ow), WithTxManager(&stubTxRunner{}))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(ow), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(context.Background(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.Error(t, err, "Create must propagate outbox.Write error to preserve L2 atomicity")
@@ -242,8 +250,9 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 func TestService_Lock_OutboxWriteError(t *testing.T) {
 	repo := mem.NewUserRepository()
 	// Create user with working outbox
-	svcCreate := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(&stubOutboxWriter{}), WithTxManager(&stubTxRunner{}))
+	svcCreate, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(&stubOutboxWriter{}), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 	user, err := svcCreate.Create(context.Background(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
@@ -251,8 +260,9 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 
 	// Lock with failing outbox
 	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svcLock := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(&stubTxRunner{}))
+	svcLock, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(failWriter), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	require.NoError(t, err)
 
 	err = svcLock.Lock(context.Background(), user.ID)
 	require.Error(t, err, "Lock must propagate outbox.Write error to preserve L2 atomicity")

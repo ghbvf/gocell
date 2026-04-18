@@ -55,8 +55,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
 
-	if err := auth.RequireSelfOrRole(r.Context(), userID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(userID, "admin")) {
 		return
 	}
 
@@ -76,8 +75,7 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
 
-	if err := auth.RequireSelfOrRole(r.Context(), userID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+	if !auth.Guard(w, r, auth.SelfOr(userID, "admin")) {
 		return
 	}
 

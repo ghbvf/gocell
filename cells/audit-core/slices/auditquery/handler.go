@@ -66,8 +66,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		actorID = subject
 	}
 	if actorID != subject {
-		if err := auth.RequireSelfOrRole(r.Context(), actorID, "admin"); err != nil {
-			httputil.WriteDomainError(r.Context(), w, err)
+		if !auth.Guard(w, r, auth.SelfOr(actorID, "admin")) {
 			return
 		}
 		slog.Info("audit: admin querying other user",
