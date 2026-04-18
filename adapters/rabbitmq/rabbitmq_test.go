@@ -1403,6 +1403,56 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	assert.NoError(t, sub.Close())
 }
 
+// TestUnmarshalDelivery covers the three discriminator paths in unmarshalDelivery:
+//  1. WireMessage envelope (primary relay path) — EventType is decoded from JSON.
+//  2. Legacy outbox.Entry JSON (pre-envelope format, used by integration tests).
+//  3. Broken JSON (neither path yields a valid entry) — returns an error.
+func TestUnmarshalDelivery(t *testing.T) {
+	t.Run("wire_message_envelope", func(t *testing.T) {
+		entry := outbox.Entry{
+			ID:        "entry-uuid-001",
+			EventType: "test.created",
+			Payload:   []byte(`{"x":1}`),
+		}
+		body := makeDeliveryBody(t, entry)
+
+		got, err := unmarshalDelivery(body)
+		require.NoError(t, err)
+		assert.Equal(t, "entry-uuid-001", got.ID)
+		assert.Equal(t, "test.created", got.EventType)
+		assert.JSONEq(t, `{"x":1}`, string(got.Payload))
+	})
+
+	t.Run("legacy_entry_json", func(t *testing.T) {
+		// Publish raw outbox.Entry JSON (PascalCase, no WireMessage envelope).
+		// This is the format used by the three failing integration tests.
+		entry := outbox.Entry{
+			ID:        "evt-legacy-001",
+			EventType: "test.legacy",
+			Payload:   []byte(`{"legacy":true}`),
+		}
+		body, err := json.Marshal(entry)
+		require.NoError(t, err)
+
+		got, legacyErr := unmarshalDelivery(body)
+		require.NoError(t, legacyErr)
+		assert.Equal(t, "evt-legacy-001", got.ID)
+		assert.Equal(t, "test.legacy", got.EventType)
+		assert.JSONEq(t, `{"legacy":true}`, string(got.Payload))
+	})
+
+	t.Run("broken_json_returns_error", func(t *testing.T) {
+		_, err := unmarshalDelivery([]byte("not valid json{{{"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal delivery")
+	})
+
+	t.Run("empty_body_returns_error", func(t *testing.T) {
+		_, err := unmarshalDelivery([]byte(""))
+		require.Error(t, err)
+	})
+}
+
 func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 

@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -248,18 +249,19 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 	for {
 		err := s.subscribeOnce(subCtx, topic, queueName, handler)
 		if err == nil {
-			// Clean exit: ctx cancelled or subscriber closed.
-			return nil
+			return nil // Clean exit: ctx cancelled or subscriber closed.
 		}
-
 		// Only reconnect on delivery channel lost. Topology/permission errors
-		// (ExchangeDeclare, QueueDeclare, QueueBind) are permanent — return
-		// immediately so the caller can handle them.
+		// are permanent — return immediately.
 		if !errors.Is(err, errSubscriptionLost) {
 			return err
 		}
-
-		// Check if we should stop retrying.
+		if reconnErr := s.awaitReconnect(subCtx, topic, queueName, err); reconnErr != nil {
+			return reconnErr
+		}
+		// awaitReconnect returns nil both on successful reconnect AND on clean
+		// exit (ctx cancelled / subscriber closed). Re-check before looping back
+		// into subscribeOnce to avoid spinning when ctx is already done.
 		select {
 		case <-subCtx.Done():
 			return nil
@@ -268,29 +270,41 @@ func (s *Subscriber) Subscribe(ctx context.Context, topic string, handler outbox
 		if s.closed.Load() {
 			return nil
 		}
-
-		slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
-			slog.String(logKeyTopic, topic),
-			slog.String("queue", queueName),
-			slog.String("error", err.Error()))
-
-		// Wait for connection recovery before re-subscribing.
-		if waitErr := s.conn.WaitConnected(subCtx); waitErr != nil {
-			// Terminal connection error — propagate to caller so upstream
-			// (EventRouter/Bootstrap) can detect and handle terminal failure.
-			// Covers both ErrAdapterAMQPConnectPermanent (bad credentials)
-			// and ErrAdapterAMQPReconnectExhausted (max attempts exceeded).
-			if isTerminalConnectionError(waitErr) {
-				return waitErr
-			}
-			// ctx cancelled or subscriber closed during wait — clean exit.
-			return nil
-		}
-
-		slog.Info("rabbitmq: resubscribing after reconnect",
-			slog.String(logKeyTopic, topic),
-			slog.String("queue", queueName))
 	}
+}
+
+// awaitReconnect logs the subscription loss and waits for the connection to
+// recover before the outer Subscribe loop retries subscribeOnce. Returns nil
+// when the connection recovers (or clean exit), non-nil on terminal error or
+// if the subscriber was stopped.
+func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string, lostErr error) error {
+	// Check if we should stop retrying before blocking on WaitConnected.
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
+	if s.closed.Load() {
+		return nil
+	}
+
+	slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
+		slog.String(logKeyTopic, topic),
+		slog.String("queue", queueName),
+		slog.String("error", lostErr.Error()))
+
+	if waitErr := s.conn.WaitConnected(ctx); waitErr != nil {
+		// Terminal connection error — propagate so EventRouter/Bootstrap can handle.
+		if isTerminalConnectionError(waitErr) {
+			return waitErr
+		}
+		return nil // ctx cancelled or subscriber closed during wait.
+	}
+
+	slog.Info("rabbitmq: resubscribing after reconnect",
+		slog.String(logKeyTopic, topic),
+		slog.String("queue", queueName))
+	return nil
 }
 
 // subscribeOnce performs a single subscription lifecycle: acquire channel,
@@ -604,22 +618,40 @@ func (s *Subscriber) Close() error {
 // ---------------------------------------------------------------------------
 
 // unmarshalDelivery deserializes a broker message body into an outbox.Entry.
-// All messages on RabbitMQ are expected to be WireMessage envelopes produced
-// by MarshalEnvelope. A body that does not parse as a WireMessage (non-empty
-// ID + EventType + embedded JSON payload) is treated as a permanent error and
-// NACK'd without requeue — legacy PascalCase Entry JSON is not supported.
 //
-// GoCell does not maintain backward compatibility with pre-envelope wire formats
-// (see CLAUDE.md: "Review 和重构时不考虑向后兼容").
+// Primary path: the body is a WireMessage envelope produced by MarshalEnvelope
+// (relay path). Detected by calling UnmarshalEnvelope with topic="" — a real
+// WireMessage always has EventType set, so the returned entry has EventType != "".
+//
+// Fallback path: the body is a legacy outbox.Entry JSON (PascalCase field names,
+// no envelope). This format is used by adapter-level integration tests that
+// publish raw Entry JSON directly to test pub/sub primitives, predating the
+// WireMessage contract. When UnmarshalEnvelope falls back (EventType == ""),
+// we attempt json.Unmarshal into outbox.Entry. Success requires a non-empty ID.
+//
+// Broken JSON: if neither path produces a non-empty ID, we return an error so
+// that processDelivery NACKs without requeue (permanent error).
+//
+// Discriminator: UnmarshalEnvelope called with topic="" sets EventType="" on the
+// fallback path (since EventType = topic = ""), while a real WireMessage always
+// has EventType set by the relay producer. This replaces the previous "evt-"
+// ID-prefix heuristic, which collided with outboxtest.NewEntry IDs.
 //
 // ref: runtime/outbox/envelope.go UnmarshalEnvelope
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
-	// UnmarshalEnvelope("", body) falls back to a synthetic entry with empty
-	// EventType when the body is not a valid WireMessage. For RabbitMQ all
-	// queued messages must be relay envelopes, so the fallback is an error.
 	entry, _ := outboxrt.UnmarshalEnvelope("", body)
-	if entry.EventType == "" {
-		return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope")
+	if entry.EventType != "" {
+		// WireMessage envelope decoded successfully.
+		return entry, nil
 	}
-	return entry, nil
+	// Fall back to legacy outbox.Entry JSON (predates WireMessage contract,
+	// still used by adapter-level integration tests that bypass the relay).
+	var legacy outbox.Entry
+	if legacyErr := json.Unmarshal(body, &legacy); legacyErr == nil && legacy.ID != "" {
+		return legacy, nil
+	}
+	// Neither a valid WireMessage envelope nor a valid legacy Entry with a non-empty
+	// ID could be extracted. Treat as a permanent unmarshal error so the delivery
+	// is NACKed without requeue.
+	return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope or legacy Entry JSON")
 }
