@@ -436,7 +436,7 @@ func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username, passwo
 }
 
 func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
-	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: dto.TokenPair{
 		AccessToken:           "new-access-token",
 		RefreshToken:          "new-refresh-token",
 		PasswordResetRequired: false,
@@ -457,7 +457,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 }
 
 func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
-	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: dto.TokenPair{
 		AccessToken:  "admin-issued-at",
 		RefreshToken: "admin-issued-rt",
 	}}

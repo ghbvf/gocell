@@ -23,10 +23,11 @@ import (
 // TokenIssuer is a narrow interface for issuing a new token pair after a
 // password change. The implementation is sessionlogin.Service.IssueForUser,
 // injected via WithTokenIssuer to avoid a cross-slice import. The returned
-// type is *dto.TokenPair (internal/dto) so identitymanage does not import
-// sessionlogin directly (F-ARCH-1).
+// type is dto.TokenPair (internal/dto, value not pointer) so identitymanage
+// does not import sessionlogin directly (F-ARCH-1). Returning a value type
+// makes (nil, nil) unrepresentable at the type level.
 type TokenIssuer interface {
-	IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error)
+	IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error)
 }
 
 const (
@@ -279,31 +280,31 @@ type ChangePasswordInput struct {
 // The token pair is issued synchronously so the client can replace stale tokens
 // without a forced re-login — this is critical when the old token carried
 // password_reset_required=true and would be rejected by the middleware.
-func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (*dto.TokenPair, error) {
+func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
 	if input.UserID == "" || input.OldPassword == "" || input.NewPassword == "" {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
 	}
 
 	// Step 2: Cheap equality check before the expensive bcrypt call.
 	// An authenticated user submitting new==old is a client error regardless of
 	// whether the old password is correct; no bcrypt cost is warranted.
 	if input.NewPassword == input.OldPassword {
-		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
 	}
 
 	user, err := s.repo.GetByID(ctx, input.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("identity-manage: change-password get user: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password get user: %w", err)
 	}
 
 	// Step 3: Verify old password (expensive).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
-		return nil, errcode.New(errcode.ErrAuthLoginFailed, "old password incorrect")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "old password incorrect")
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)
 	if err != nil {
-		return nil, fmt.Errorf("identity-manage: change-password hash: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password hash: %w", err)
 	}
 
 	user.PasswordHash = string(newHash)
@@ -326,7 +327,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	s.logger.Info("user password changed; prior sessions revoked",
@@ -334,7 +335,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 
 	pair, err := s.tokenIssuer.IssueForUser(ctx, user.ID)
 	if err != nil {
-		return nil, fmt.Errorf("identity-manage: change-password issue token: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password issue token: %w", err)
 	}
 	return pair, nil
 }

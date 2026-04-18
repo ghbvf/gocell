@@ -240,6 +240,10 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
+	// securedHandler wraps HandleQuery with auditQueryPolicy so that trust
+	// boundary tests go through the policy as in production.
+	securedHandler := auth.Secured(h.HandleQuery, auditQueryPolicy)
+
 	// Seed entries for two actors
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
@@ -305,7 +309,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
-			h.HandleQuery(w, req)
+			securedHandler.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCount >= 0 {

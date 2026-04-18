@@ -29,44 +29,43 @@ func assertErrorBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any 
 	return errObj
 }
 
-// --- TestGuard ---
+// --- TestSecured ---
 
-func TestGuard(t *testing.T) {
+func TestSecured(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
 	tests := []struct {
 		name       string
 		policy     Policy
-		wantOK     bool
 		wantStatus int
 		wantCode   string
 	}{
 		{
-			name:       "policy nil — Guard returns true, response untouched",
-			policy:     func(_ context.Context) error { return nil },
-			wantOK:     true,
-			wantStatus: 200,
+			name:       "policy permits — inner handler called, 200",
+			policy:     func(_ *http.Request) error { return nil },
+			wantStatus: http.StatusOK,
 		},
 		{
-			name: "policy ErrAuthUnauthorized — Guard returns false, 401",
-			policy: func(_ context.Context) error {
+			name: "policy ErrAuthUnauthorized — short-circuits, 401",
+			policy: func(_ *http.Request) error {
 				return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 			},
-			wantOK:     false,
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "ERR_AUTH_UNAUTHORIZED",
 		},
 		{
-			name: "policy ErrAuthForbidden — Guard returns false, 403",
-			policy: func(_ context.Context) error {
+			name: "policy ErrAuthForbidden — short-circuits, 403",
+			policy: func(_ *http.Request) error {
 				return errcode.New(errcode.ErrAuthForbidden, "access denied")
 			},
-			wantOK:     false,
 			wantStatus: http.StatusForbidden,
 			wantCode:   "ERR_AUTH_FORBIDDEN",
 		},
 		{
-			name:       "AnyRole empty roles — Guard returns false, 403 ERR_AUTH_FORBIDDEN",
+			name:       "AnyRole empty roles — short-circuits, 403",
 			policy:     AnyRole(),
-			wantOK:     false,
 			wantStatus: http.StatusForbidden,
 			wantCode:   "ERR_AUTH_FORBIDDEN",
 		},
@@ -77,30 +76,26 @@ func TestGuard(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := buildRequest(TestContext("user-1", []string{"admin"}))
 
-			got := Guard(w, r, tc.policy)
+			h := Secured(inner, tc.policy)
+			h.ServeHTTP(w, r)
 
-			assert.Equal(t, tc.wantOK, got)
 			assert.Equal(t, tc.wantStatus, w.Code)
 
-			if !tc.wantOK {
+			if tc.wantCode != "" {
 				errObj := assertErrorBody(t, w)
 				assert.Equal(t, tc.wantCode, errObj["code"])
 				assert.NotNil(t, errObj["details"])
-			} else {
-				// Success path: response body must be empty (no write occurred).
-				assert.Empty(t, w.Body.String())
 			}
 		})
 	}
 }
 
-// TestGuard_NilPolicy_Panics verifies that passing a nil policy to Guard panics
-// immediately, making misuse detectable at test time rather than silently
-// skipping authorization.
-func TestGuard_NilPolicy_Panics(t *testing.T) {
-	w := httptest.NewRecorder()
-	r := buildRequest(context.Background())
-	require.Panics(t, func() { Guard(w, r, nil) })
+// TestSecured_NilPolicy_Panics verifies that passing a nil policy to Secured
+// panics immediately at wrap time, making misuse detectable at startup/test
+// rather than silently skipping authorization at request time.
+func TestSecured_NilPolicy_Panics(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})
+	require.Panics(t, func() { Secured(inner, nil) })
 }
 
 // --- TestAuthenticated ---
@@ -133,7 +128,8 @@ func TestAuthenticated(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Authenticated()(tc.ctx)
+			r := buildRequest(tc.ctx)
+			err := Authenticated()(r)
 
 			if !tc.wantErr {
 				assert.NoError(t, err)
@@ -188,7 +184,8 @@ func TestAnyRole(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := AnyRole(tc.policyRoles...)(tc.ctx)
+			r := buildRequest(tc.ctx)
+			err := AnyRole(tc.policyRoles...)(r)
 
 			if !tc.wantErr {
 				assert.NoError(t, err)
@@ -208,28 +205,32 @@ func TestSelfOr(t *testing.T) {
 	tests := []struct {
 		name        string
 		ctx         context.Context
-		targetID    string
+		pathParam   string
+		pathValue   string
 		bypassRoles []string
 		wantErr     bool
 		wantCode    errcode.Code
 	}{
 		{
-			name:     "subject == targetID — nil",
-			ctx:      TestContext("user-1", nil),
-			targetID: "user-1",
-			wantErr:  false,
+			name:      "subject == path value — nil",
+			ctx:       TestContext("user-1", nil),
+			pathParam: "id",
+			pathValue: "user-1",
+			wantErr:   false,
 		},
 		{
-			name:        "subject != targetID, bypass role matches — nil",
+			name:        "subject != path value, bypass role matches — nil",
 			ctx:         TestContext("user-2", []string{"admin"}),
-			targetID:    "user-1",
+			pathParam:   "id",
+			pathValue:   "user-1",
 			bypassRoles: []string{"admin"},
 			wantErr:     false,
 		},
 		{
-			name:        "subject != targetID, no bypass — ErrAuthForbidden",
+			name:        "subject != path value, no bypass — ErrAuthForbidden",
 			ctx:         TestContext("user-2", []string{"viewer"}),
-			targetID:    "user-1",
+			pathParam:   "id",
+			pathValue:   "user-1",
 			bypassRoles: []string{"admin"},
 			wantErr:     true,
 			wantCode:    errcode.ErrAuthForbidden,
@@ -237,7 +238,8 @@ func TestSelfOr(t *testing.T) {
 		{
 			name:        "no subject — ErrAuthUnauthorized",
 			ctx:         context.Background(),
-			targetID:    "user-1",
+			pathParam:   "id",
+			pathValue:   "user-1",
 			bypassRoles: []string{"admin"},
 			wantErr:     true,
 			wantCode:    errcode.ErrAuthUnauthorized,
@@ -246,7 +248,9 @@ func TestSelfOr(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := SelfOr(tc.targetID, tc.bypassRoles...)(tc.ctx)
+			r := buildRequest(tc.ctx)
+			r.SetPathValue(tc.pathParam, tc.pathValue)
+			err := SelfOr(tc.pathParam, tc.bypassRoles...)(r)
 
 			if !tc.wantErr {
 				assert.NoError(t, err)

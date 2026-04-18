@@ -231,12 +231,13 @@ func (s *Service) issueAccessToken(subject string, roles []string, sessionID str
 // this step, sessionvalidate.enforceSessionState fails with "not found" → 401
 // on the very next authenticated request (root cause of PR#183 round-2 CI failure).
 //
-// Returns *dto.TokenPair (internal/dto) so this method implements the
-// identitymanage.TokenIssuer interface without a cross-slice import (F-ARCH-1).
-func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
+// Returns dto.TokenPair (internal/dto, value not pointer) so this method
+// implements the identitymanage.TokenIssuer interface without a cross-slice
+// import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.
+func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("session-login: IssueForUser get user: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser get user: %w", err)
 	}
 
 	roleNames, err := s.fetchRoleNames(ctx, userID)
@@ -250,12 +251,12 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPa
 
 	accessToken, err := s.issueAccessToken(userID, roleNames, sessionID, user.PasswordResetRequired)
 	if err != nil {
-		return nil, fmt.Errorf("session-login: IssueForUser access token: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser access token: %w", err)
 	}
 
 	refreshToken, err := s.issueRefreshToken(userID, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("session-login: IssueForUser refresh token: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser refresh token: %w", err)
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
@@ -263,17 +264,17 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (*dto.TokenPa
 	// every subsequent request fails with 401 (session not found).
 	session, err := domain.NewSession(userID, accessToken, refreshToken, expiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("session-login: IssueForUser create session: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
 	session.ID = sessionID
 	if err := s.sessionRepo.Create(ctx, session); err != nil {
-		return nil, fmt.Errorf("session-login: IssueForUser persist session: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser persist session: %w", err)
 	}
 
 	s.logger.Info("session-login: IssueForUser issued new session",
 		slog.String("user_id", userID), slog.String("session_id", sessionID))
 
-	return &dto.TokenPair{
+	return dto.TokenPair{
 		AccessToken:           accessToken,
 		RefreshToken:          refreshToken,
 		ExpiresAt:             expiresAt,

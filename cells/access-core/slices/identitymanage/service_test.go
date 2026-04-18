@@ -155,11 +155,11 @@ func TestService_Update(t *testing.T) {
 
 // stubTokenIssuer is a test double for TokenIssuer.
 type stubTokenIssuer struct {
-	pair *dto.TokenPair
+	pair dto.TokenPair
 	err  error
 }
 
-func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (*dto.TokenPair, error) {
+func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
 	return s.pair, s.err
 }
 
@@ -223,7 +223,7 @@ func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 }
 
 func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-ok", "oldpass", false)
 
@@ -233,7 +233,6 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 		NewPassword: "newpass",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, pair)
 	assert.Equal(t, "new-at", pair.AccessToken)
 
 	// Verify stored hash changed.
@@ -285,7 +284,7 @@ func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 	// Confirm that a service with a working issuer returns a real pair,
 	// proving the issuer is always invoked (no nil short-circuit path remains).
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-issuer-required", "oldpass", false)
 
@@ -295,12 +294,12 @@ func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 		NewPassword: "newpass",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, pair, "tokenIssuer is always wired; pair must never be nil on success")
+	assert.NotEmpty(t, pair.AccessToken, "tokenIssuer is always wired; pair must never be zero-value on success")
 	assert.Equal(t, "at", pair.AccessToken)
 }
 
 func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-reset", "oldpass", true) // PasswordResetRequired=true
 
@@ -337,7 +336,7 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
 	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
 		WithTokenIssuer(stub))
 	require.NoError(t, err)
@@ -421,7 +420,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	}
 	issuerCalled := false
 	stub := &stubTokenIssuer{
-		pair: &dto.TokenPair{AccessToken: "must-not-see"},
+		pair: dto.TokenPair{AccessToken: "must-not-see"},
 	}
 	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
 	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
@@ -437,7 +436,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 		NewPassword: "newpass",
 	})
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken, "zero-value pair must be returned on error")
 	assert.Contains(t, err.Error(), "revoke sessions",
 		"error must propagate from the transactional fn, not the token issuer")
 	assert.False(t, issuerCalled,
@@ -460,7 +459,7 @@ type recordingTokenIssuer struct {
 	called *bool
 }
 
-func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
+func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	*r.called = true
 	return r.inner.IssueForUser(ctx, userID)
 }

@@ -10,6 +10,10 @@ import (
 // RequireSelfOrRole checks that the authenticated subject matches targetID
 // or holds one of the specified bypass roles. Returns nil on success.
 //
+// Deprecated: use auth.SelfOr with auth.Secured instead. This internal
+// function remains for Policy implementation but should not be called
+// directly from handlers.
+//
 // ref: go-kratos/kratos middleware/auth/auth.go — adopted: subject-from-context
 // pattern; deviated: combined self+role check instead of separate authz middleware.
 //
@@ -63,6 +67,10 @@ func hasAnyRole(ctx context.Context, roles []string) bool {
 
 // RequireAnyRole checks that the authenticated subject holds at least one of
 // the specified roles. Returns nil on success.
+//
+// Deprecated: use auth.AnyRole with auth.Secured instead. This internal
+// function remains for Policy implementation but should not be called
+// directly from handlers.
 //
 // Use this instead of RequireSelfOrRole for admin-only endpoints where there
 // is no target resource owner to compare against.

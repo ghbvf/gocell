@@ -47,18 +47,15 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers rbac-check routes on the given mux.
+// Policy is declared at registration time via auth.Secured so that handler
+// bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	mux.Handle("GET /{userID}", http.HandlerFunc(h.handleListRoles))
-	mux.Handle("GET /{userID}/{roleName}", http.HandlerFunc(h.handleHasRole))
+	mux.Handle("GET /{userID}", auth.Secured(h.handleListRoles, auth.SelfOr("userID", "admin")))
+	mux.Handle("GET /{userID}/{roleName}", auth.Secured(h.handleHasRole, auth.SelfOr("userID", "admin")))
 }
 
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
-
-	if !auth.Guard(w, r, auth.SelfOr(userID, "admin")) {
-		return
-	}
-
 	roles, err := h.svc.ListRoles(r.Context(), userID)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -74,11 +71,6 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
-
-	if !auth.Guard(w, r, auth.SelfOr(userID, "admin")) {
-		return
-	}
-
 	roleName := r.PathValue("roleName")
 
 	has, err := h.svc.HasRole(r.Context(), userID, roleName)

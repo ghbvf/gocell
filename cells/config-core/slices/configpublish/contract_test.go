@@ -33,6 +33,19 @@ func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
 	})
 }
 
+// newContractMux registers configpublish routes on a mux at the canonical API
+// prefix using auth.Secured (via RegisterRoutes + http.StripPrefix). This
+// mirrors the production wiring so that contract tests exercise the full
+// auth-guard path.
+func newContractMux(svc *Service) *http.ServeMux {
+	h := NewHandler(svc)
+	sub := http.NewServeMux()
+	h.RegisterRoutes(sub)
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/config/", http.StripPrefix("/api/v1/config", sub))
+	return outer
+}
+
 // --- HTTP contract test ---
 
 func TestHttpConfigPublishV1Serve(t *testing.T) {
@@ -41,9 +54,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	svc, repo, _ := newContractService()
 	seedContractEntry(repo, "app.name", "value")
 
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/{key}/publish", http.HandlerFunc(h.HandlePublish))
+	mux := newContractMux(svc)
 
 	rec := httptest.NewRecorder()
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
@@ -68,9 +79,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	_, err := svc.Publish(context.Background(), "app.name")
 	require.NoError(t, err)
 
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/{key}/rollback", http.HandlerFunc(h.HandleRollback))
+	mux := newContractMux(svc)
 
 	// Request schema acceptance + rejection.
 	c.ValidateRequest(t, []byte(`{"version":1}`))
@@ -106,9 +115,7 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
 	svc, _, _ := newContractService()
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/{key}/publish", http.HandlerFunc(h.HandlePublish))
+	mux := newContractMux(svc)
 
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 
@@ -151,9 +158,7 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
 	svc, _, _ := newContractService()
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/{key}/rollback", http.HandlerFunc(h.HandleRollback))
+	mux := newContractMux(svc)
 
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
 

@@ -25,6 +25,19 @@ func newContractService() (*Service, *mem.ConfigRepository, *recordingWriter) {
 	return svc, repo, writer
 }
 
+// newContractMux registers configwrite routes on a mux at the canonical API
+// prefix using auth.Secured (via RegisterRoutes + http.StripPrefix). This
+// mirrors the production wiring so that contract tests exercise the full
+// auth-guard path, not just the happy-path handler.
+func newContractMux(svc *Service) *http.ServeMux {
+	h := NewHandler(svc)
+	sub := http.NewServeMux()
+	h.RegisterRoutes(sub)
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/config/", http.StripPrefix("/api/v1/config", sub))
+	return outer
+}
+
 // --- HTTP contract test ---
 
 func TestHttpConfigWriteV1Serve(t *testing.T) {
@@ -32,9 +45,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "http.config.write.v1")
 	svc, _, _ := newContractService()
 
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/", http.HandlerFunc(h.HandleCreate))
+	mux := newContractMux(svc)
 
 	c.ValidateRequest(t, []byte(`{"key":"app.name","value":"myapp","sensitive":false}`))
 	c.MustRejectRequest(t, []byte(`{"key":"k","value":"v","extra":"bad"}`))
@@ -55,9 +66,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 // regressions are caught at the contract boundary, not just in unit tests.
 func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 	svc, _, _ := newContractService()
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/config/", http.HandlerFunc(h.HandleCreate))
+	mux := newContractMux(svc)
 	body := `{"key":"app.name","value":"myapp"}`
 
 	cases := []struct {

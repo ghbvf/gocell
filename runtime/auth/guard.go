@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -9,62 +8,72 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-// Policy is a handler-level authorization predicate evaluated against the
-// request context. A nil return means the request may proceed; a non-nil
-// error (typically errcode.ErrAuthUnauthorized or ErrAuthForbidden) short-
-// circuits with a 401/403 response.
+// Policy evaluates an HTTP request for authorization. A nil return permits
+// the request; a non-nil errcode error short-circuits with the mapped status.
+// Taking *http.Request (not just context) lets policies read path/query
+// params for self-access checks without handler cooperation.
 //
-// ref: grpc-ecosystem/go-grpc-middleware interceptors/auth/auth.go@main
-// (AuthFunc = func(ctx) (context.Context, error) — error-only decision).
-// Deviated: we do not return a derived ctx because runtime/auth.AuthMiddleware
-// already attaches Claims upstream; Guard only authorizes.
-type Policy func(ctx context.Context) error
+// ref: go-chi/jwtauth Authenticator — middleware wraps handler; error-only
+// decision. Deviated: Policy takes *http.Request instead of context so that
+// SelfOr can read path values directly (r.PathValue) without the handler
+// passing the target ID in explicitly.
+// ref: grpc-ecosystem/go-grpc-middleware WithServerUnaryInterceptor — interceptor
+// pattern where auth is declared at registration time, not inside handler body.
+type Policy func(r *http.Request) error
 
-// Guard evaluates policy against r.Context. On failure it writes the mapped
-// HTTP error via httputil.WriteDomainError and returns false — the caller
-// should return immediately. On success it returns true.
+// Secured wraps an http.HandlerFunc with a Policy. The returned handler
+// evaluates the policy first; on failure it writes the mapped domain error
+// and returns without invoking the wrapped handler.
 //
-// policy must not be nil; passing nil panics.
+// policy must not be nil; passing nil panics immediately at wrap time to make
+// misuse detectable during startup/test rather than silently skipping authz.
 //
 // ref: go-chi/jwtauth jwtauth.go Authenticator — write response inside the
 // guard, caller only short-circuits.
-func Guard(w http.ResponseWriter, r *http.Request, policy Policy) bool {
-	if err := policy(r.Context()); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return false
+// ref: grpc-ecosystem/go-grpc-middleware — interceptor declared at route
+// registration, not inline in handler body.
+func Secured(h http.HandlerFunc, policy Policy) http.HandlerFunc {
+	if policy == nil {
+		panic("auth.Secured: policy must not be nil")
 	}
-	return true
-}
-
-// AnyRole builds a Policy that requires the subject to hold at least one of
-// the given roles. Wraps RequireAnyRole.
-func AnyRole(roles ...string) Policy {
-	return func(ctx context.Context) error {
-		return RequireAnyRole(ctx, roles...)
-	}
-}
-
-// SelfOr builds a Policy that permits the request when the subject equals
-// targetID, or when the subject holds one of the bypassRoles. Wraps
-// RequireSelfOrRole.
-//
-// targetID must not be empty; passing an empty string logs a Warn and skips
-// the self-match check (role bypass only). For role-only endpoints, prefer
-// auth.AnyRole instead.
-func SelfOr(targetID string, bypassRoles ...string) Policy {
-	return func(ctx context.Context) error {
-		return RequireSelfOrRole(ctx, targetID, bypassRoles...)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := policy(r); err != nil {
+			httputil.WriteDomainError(r.Context(), w, err)
+			return
+		}
+		h(w, r)
 	}
 }
 
-// Authenticated builds a Policy that requires an authenticated subject
+// Authenticated returns a Policy that requires an authenticated subject
 // (any non-empty subject in context). Use for endpoints that only need
 // to verify a user is logged in, regardless of role.
 func Authenticated() Policy {
-	return func(ctx context.Context) error {
-		if subject, ok := ctxkeys.SubjectFrom(ctx); !ok || subject == "" {
+	return func(r *http.Request) error {
+		if subject, ok := ctxkeys.SubjectFrom(r.Context()); !ok || subject == "" {
 			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 		}
 		return nil
+	}
+}
+
+// AnyRole returns a Policy that requires the subject to hold at least one of
+// the given roles. Wraps RequireAnyRole.
+func AnyRole(roles ...string) Policy {
+	return func(r *http.Request) error {
+		return RequireAnyRole(r.Context(), roles...)
+	}
+}
+
+// SelfOr returns a Policy that permits the request when the subject equals the
+// path parameter value, or when the subject holds one of bypassRoles.
+// pathParam is the name of the path parameter (e.g. "id", "userID") whose
+// value is compared against the authenticated subject via r.PathValue.
+//
+// If the path parameter is empty (route does not carry it), the check falls
+// back to role-only; prefer AnyRole for those endpoints.
+func SelfOr(pathParam string, bypassRoles ...string) Policy {
+	return func(r *http.Request) error {
+		return RequireSelfOrRole(r.Context(), r.PathValue(pathParam), bypassRoles...)
 	}
 }

@@ -43,6 +43,15 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandReposit
 	return NewHandler(svc), devRepo, cmdRepo
 }
 
+// setupCommandMux creates a full http.ServeMux with policies registered via
+// Secured, used by trust boundary tests so that policy checks run as in production.
+func setupCommandMux() (http.Handler, *mem.DeviceRepository, *mem.CommandRepository) {
+	h, devRepo, cmdRepo := setupCommandHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	return mux, devRepo, cmdRepo
+}
+
 func TestHandleEnqueue(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -156,15 +165,15 @@ func TestHandleEnqueue_Authorization(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, _ := setupCommandHandler()
+			// Use Secured mux so the policy declared at registration runs.
+			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
+			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
 			req.Header.Set("Content-Type", "application/json")
-			req.SetPathValue("id", "dev-1")
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
-			h.HandleEnqueue(w, req)
+			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
@@ -470,14 +479,14 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, _ := setupCommandHandler()
+			// Use Secured mux so the policy declared at registration runs.
+			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
-			req.SetPathValue("id", tc.deviceID)
+			req := httptest.NewRequest(http.MethodGet, "/"+tc.deviceID+"/commands", nil)
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
-			h.HandleListPending(w, req)
+			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
@@ -523,19 +532,18 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, cmdRepo := setupCommandHandler()
+			// Use Secured mux so the policy declared at registration runs.
+			mux, _, cmdRepo := setupCommandMux()
 			_ = cmdRepo.Create(context.Background(), &domain.Command{
 				ID: "cmd-idor", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
 			})
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-idor/ack", nil)
-			req.SetPathValue("id", "dev-1")
-			req.SetPathValue("cmdId", "cmd-idor")
+			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands/cmd-idor/ack", nil)
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
-			h.HandleAck(w, req)
+			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
