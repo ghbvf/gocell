@@ -274,6 +274,24 @@ func WithTrustedProxies(proxies []string) Option {
 // Actual token-validation logic lives in the guard function supplied by the
 // caller — this option is purely a wiring point (injection, not policy).
 //
+// Chain order for business requests:
+//
+//	RateLimit → CircuitBreaker → Auth (JWT) → BodyLimit → InternalGuard → handler
+//
+// The Auth middleware runs before InternalGuard. Call sites should therefore
+// choose one of the following strategies:
+//
+//	(a) Add the /internal/v1/* paths to the Auth middleware's public-endpoints
+//	    whitelist (bootstrap.WithPublicEndpoints). The guard then becomes the
+//	    sole protection layer for internal endpoints.
+//
+//	(b) Accept double protection: both JWT validation AND the service-token
+//	    guard are required. Callers must present a valid JWT AND a valid
+//	    service token to reach the handler.
+//
+// The current bootstrap default wiring is (b). Option (a) is appropriate when
+// machine-to-machine callers cannot easily obtain a user JWT.
+//
 // ref: go-kratos/kratos middleware/selector — default-deny + Option injection
 // for per-route middleware application.
 func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Handler) Option {
