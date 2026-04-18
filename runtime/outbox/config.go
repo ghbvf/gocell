@@ -39,6 +39,23 @@ type RelayConfig struct {
 	// If nil, a NoopRelayCollector is used (zero overhead).
 	// ref: Temporal client.Options{MetricsHandler} — inject-at-construction pattern
 	Metrics kout.RelayCollector
+
+	// PollFailureBudget is the consecutive poll-loop failure count that trips
+	// /readyz unhealthy. 0 disables the checker. Default 5.
+	// ref: K8s workqueue ItemExponentialFailureRateLimiter — absolute count + Forget.
+	PollFailureBudget int
+	// ReclaimFailureBudget is the consecutive reclaim-loop failure count that
+	// trips /readyz unhealthy. 0 disables. Default 5.
+	ReclaimFailureBudget int
+	// CleanupFailureBudget is the consecutive cleanup-loop failure count that
+	// trips /readyz unhealthy. 0 disables. Default 5.
+	CleanupFailureBudget int
+
+	// CleanupWaitFloor is the minimum sleep between cleanup passes.
+	// Exported so tests can lower it to 1ms without touching the global
+	// constant. <= 0 uses the package default (5s).
+	// Tests can set it directly via the RelayConfig literal.
+	CleanupWaitFloor time.Duration
 }
 
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.
@@ -46,15 +63,18 @@ type RelayConfig struct {
 // zero behaviour change during Phase C migration.
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
-		PollInterval:        1 * time.Second,
-		BatchSize:           100,
-		RetentionPeriod:     72 * time.Hour,
-		MaxAttempts:         5,
-		BaseRetryDelay:      5 * time.Second,
-		ClaimTTL:            60 * time.Second,
-		MaxRetryDelay:       5 * time.Minute,
-		ReclaimInterval:     30 * time.Second,
-		DeadRetentionPeriod: 30 * 24 * time.Hour, // 30 days
+		PollInterval:         1 * time.Second,
+		BatchSize:            100,
+		RetentionPeriod:      72 * time.Hour,
+		MaxAttempts:          5,
+		BaseRetryDelay:       5 * time.Second,
+		ClaimTTL:             60 * time.Second,
+		MaxRetryDelay:        5 * time.Minute,
+		ReclaimInterval:      30 * time.Second,
+		DeadRetentionPeriod:  30 * 24 * time.Hour, // 30 days
+		PollFailureBudget:    5,
+		ReclaimFailureBudget: 5,
+		CleanupFailureBudget: 5,
 	}
 }
 
@@ -89,6 +109,17 @@ func (c RelayConfig) WithDefaults() RelayConfig {
 	}
 	if c.DeadRetentionPeriod <= 0 {
 		c.DeadRetentionPeriod = d.DeadRetentionPeriod
+	}
+	// Failure budget fields: < 0 means "use default"; 0 is the explicit
+	// "disabled" sentinel and must not be overwritten.
+	if c.PollFailureBudget < 0 {
+		c.PollFailureBudget = d.PollFailureBudget
+	}
+	if c.ReclaimFailureBudget < 0 {
+		c.ReclaimFailureBudget = d.ReclaimFailureBudget
+	}
+	if c.CleanupFailureBudget < 0 {
+		c.CleanupFailureBudget = d.CleanupFailureBudget
 	}
 	return c
 }
