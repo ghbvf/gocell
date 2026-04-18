@@ -173,19 +173,19 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// WithAuthMiddleware enables authentication for HTTP business routes. The
-// verifier is applied to the router's middleware chain at Run() time via
+// WithAuthMiddleware enables authentication for HTTP business routes with an
+// explicitly injected verifier. Complementary to WithPublicEndpoints:
+// use this option when the verifier must be supplied directly (tests,
+// advanced scenarios, non-cell composition); use WithPublicEndpoints when a
+// cell in the assembly exposes an AuthProvider for automatic discovery.
+//
+// The verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
-// Deprecated: Use bootstrap.WithPublicEndpoints instead, which discovers the
-// auth verifier automatically and delegates trust boundary policy to
-// router.WithPublicEndpoints (auth bypass + tracing new-root + request_id
-// rejection in a single configuration point).
-//
-// publicEndpoints specifies business-route paths that bypass authentication.
-// If nil, no business routes are public (fail-closed). Callers must
-// explicitly list paths like login and token refresh that should be
-// accessible without a valid JWT.
+// publicEndpoints specifies business-route paths that bypass authentication
+// (path-only match). If nil, no business routes are public (fail-closed).
+// For method-aware bypass, combine with WithPublicEndpoints (but note the two
+// options are mutually exclusive at Run() time; see the Run error path).
 //
 // Infra endpoints (/healthz, /readyz, /metrics) are registered on the
 // router's outer mux and naturally bypass business-route middleware, so they
@@ -974,11 +974,7 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
 	}
 	if b.authVerifier != nil {
-		// Internal bootstrap use: router.WithAuthMiddleware is the advanced path
-		// for explicit-verifier callers (WithAuthMiddleware bootstrap option).
-		// The Deprecated notice targets new production callers; bootstrap itself
-		// is a legitimate "advanced scenario" consumer.
-		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints)) //nolint:staticcheck
+		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
 		var authMetrics *auth.AuthMetrics
 		if b.metricsProvider != nil {
 			am, err := auth.NewAuthMetrics(b.metricsProvider)

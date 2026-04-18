@@ -204,6 +204,8 @@
 | T5 | **AUTH-SIGNER-01** `SigningKeyProvider` 返回 `crypto.Signer` 替代 `*rsa.PrivateKey` | 2h | golang-jwt v6 发布 |
 | T8 | **PUBLIC-ENDPOINT-STRUCT-MIGRATE-01** `WithPublicEndpoints([]string)` 迁移为 `[]PublicEndpoint{{Method,Path, ...}}` 结构体（go-zero 风格）；当前字符串方案对齐 Go 1.22 stdlib ServeMux + otelhttp 预测函数，启动期 `CompilePublicEndpoints` fail-fast 已覆盖手误；保留结构体方案作为触发项以便扩展元数据 | 3h | 满足任一：(1) 公共端点数量 > 20（当前 2）(2) 需要 per-endpoint 元数据（rate-limit 豁免 / audit skip flag 等）(3) 线上复盘出现 method 字符串手误绕过 fail-fast (4) tracing/auth bypass 语义需独立配置时（review I-10 结论：三边界共用 predicate 的解耦触发） |
 | T9 | **AUTH-BYPASS-METRICS-01** public endpoint 命中率指标 `auth_bypass_total{method,path}`；collector 层暴露信任边界偏离信号 | 2h | 触发条件：observability 专项落地（配合 R2 OBS-HTTP-COLLECTOR-AUTOWIRE-01），或 401 baseline 需要 method 维度审计时 |
+| T10 | **RMQ-STATTER-RENAME-01** 删除 `(*rabbitmq.Connection).Statter` 旧方法（旧名暗示 DB pool 语义错误，`ChannelStatter` 清楚表达 AMQP channel pool）。迁移 `adapters/rabbitmq/connection_statter_test.go:37` 的唯一调用点到 `ChannelStatter`。宪法不考虑向后兼容——直接删，不标 Deprecated | 15min | 独立小 PR，可随时做（无阻塞） |
+| T11 | **AUTH-LOADKEYSFROMENV-UNEXPORT-01** `runtime/auth.LoadKeysFromEnv` 实为内部基础构件（仅被同包 `LoadKeySetFromEnv` 和 4 个测试引用，无外部生产调用）。unexport 为 `loadKeysFromEnv`，移除 `// Deprecated:` 注释（宪法不留兼容期）。改 `LoadKeySetFromEnv` 内部调用 + 4 个测试（改走 `LoadKeySetFromEnv` 或直接测 unexported） | 30min | 独立小 PR，可随时做（无阻塞） |
 | ~~T6~~ | ~~**GOCELL-PER-CELL-ADAPTER-01**~~ **不做**：决策全量 PG 接入（所有 cell 共用 `GOCELL_CELL_ADAPTER_MODE` 全局开关），per-cell 覆盖仅过渡期有价值，全量接完后变死代码。`buildAccessCoreOpts` 等直接复用全局开关。 | — | — | 2026-04-18 设计裁决 |
 | ~~T7~~ | ~~**CONFIG-VERSIONS-CONFIG-ID-INDEX**~~ ✅ PR#173：`006_add_config_versions_config_id_index.sql` + TestMigration006 | — | — | PR#173 |
 

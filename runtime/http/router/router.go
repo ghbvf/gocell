@@ -166,20 +166,20 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 	}
 }
 
-// WithAuthMiddleware enables authentication in the default middleware chain.
-//
-// Deprecated: Use WithPublicEndpoints for the composition-root API. Direct
-// WithAuthMiddleware usage remains for tests and advanced scenarios; new
-// production code should prefer WithPublicEndpoints.
+// WithAuthMiddleware enables authentication in the default middleware chain
+// with an explicitly injected verifier. Complementary to WithPublicEndpoints:
+// this option is the primary path for tests and advanced scenarios that must
+// inject a specific (e.g. mock) IntentTokenVerifier; WithPublicEndpoints is the
+// primary path for production cells that expose a discovered verifier.
 //
 // When provided, the auth middleware is placed after CircuitBreaker and before
 // BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
 // affected — they bypass business-route middleware entirely.
 //
-// publicEndpoints specifies paths that bypass authentication. If nil,
-// auth.DefaultPublicEndpoints is used. Callers should include their login and
-// token refresh endpoints.
+// publicEndpoints specifies paths that bypass authentication (path-only match).
+// For method-aware bypass, compose via router.WithPublicEndpoints which wires
+// a WithPublicEndpointMatcher AuthOption that supersedes this list.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
