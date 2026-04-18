@@ -131,13 +131,20 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 }
 
 // log4xx emits a structured WARN record for client-error responses.
-// Callers must ensure ecErr.Message is developer-controlled and does not
-// contain unsanitized user input (avoids log injection in text-format slog handlers).
+//
+// 4xx WARN logs stable fields only (code/status/correlation IDs + optional
+// InternalMessage). The client-facing Message is intentionally omitted to
+// prevent leaking user identifiers that callers may interpolate into
+// errcode.New(code, fmt.Sprintf("…%s…", userID)) — see errcode.Message vs
+// InternalMessage contract: Message is supplied to response writers, while
+// InternalMessage is diagnostic-only and safe for server logs.
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
 		slog.Int("status", status),
-		slog.String("message", ecErr.Message),
+	}
+	if ecErr.InternalMessage != "" {
+		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
 	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Warn(label+" (4xx)", logAttrs...)

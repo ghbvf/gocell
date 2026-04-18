@@ -742,20 +742,29 @@ func attrValue(r slog.Record, key string) (string, bool) {
 
 func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 	tests := []struct {
-		code       errcode.Code
-		wantStatus int
+		name            string
+		code            errcode.Code
+		wantStatus      int
+		internalMessage string // non-empty → expect 'internal' attr in log
 	}{
-		{errcode.ErrValidationFailed, http.StatusBadRequest},
-		{errcode.ErrAuthUnauthorized, http.StatusUnauthorized},
-		{errcode.ErrAuthForbidden, http.StatusForbidden},
-		{errcode.ErrMetadataNotFound, http.StatusNotFound},
-		{errcode.ErrConfigDuplicate, http.StatusConflict},
-		{errcode.ErrBodyTooLarge, http.StatusRequestEntityTooLarge},
-		{errcode.ErrRateLimited, http.StatusTooManyRequests},
+		{name: string(errcode.ErrValidationFailed), code: errcode.ErrValidationFailed, wantStatus: http.StatusBadRequest},
+		{name: string(errcode.ErrAuthUnauthorized), code: errcode.ErrAuthUnauthorized, wantStatus: http.StatusUnauthorized},
+		{name: string(errcode.ErrAuthForbidden), code: errcode.ErrAuthForbidden, wantStatus: http.StatusForbidden},
+		{name: string(errcode.ErrMetadataNotFound), code: errcode.ErrMetadataNotFound, wantStatus: http.StatusNotFound},
+		{name: string(errcode.ErrConfigDuplicate), code: errcode.ErrConfigDuplicate, wantStatus: http.StatusConflict},
+		{name: string(errcode.ErrBodyTooLarge), code: errcode.ErrBodyTooLarge, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: string(errcode.ErrRateLimited), code: errcode.ErrRateLimited, wantStatus: http.StatusTooManyRequests},
+		// With InternalMessage: 'internal' attr must be emitted; client 'message' still absent.
+		{
+			name:            "with_internal_message",
+			code:            errcode.ErrAuthUnauthorized,
+			wantStatus:      http.StatusUnauthorized,
+			internalMessage: "subject missing from ctx — auth middleware did not run",
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run(string(tt.code), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			handler := &captureHandler{}
 			orig := slog.Default()
 			slog.SetDefault(slog.New(handler))
@@ -766,8 +775,15 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 			ctx = ctxkeys.WithTraceID(ctx, "trace-4xx-001")
 			ctx = ctxkeys.WithSpanID(ctx, "span-4xx-001")
 
+			var err error
+			if tt.internalMessage != "" {
+				err = errcode.Safe(tt.code, "client-facing message", tt.internalMessage)
+			} else {
+				err = errcode.New(tt.code, "test message")
+			}
+
 			rec := httptest.NewRecorder()
-			WriteDomainError(ctx, rec, errcode.New(tt.code, "test message"))
+			WriteDomainError(ctx, rec, err)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
@@ -789,9 +805,19 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 			assert.True(t, ok, "log record must contain 'status' attr")
 			assert.Equal(t, slog.IntValue(tt.wantStatus).String(), statusVal)
 
-			msgVal, ok := attrValue(*warnRec, "message")
-			assert.True(t, ok, "log record must contain 'message' attr")
-			assert.Equal(t, "test message", msgVal)
+			// The client-facing 'message' must NOT appear in server logs — it may
+			// contain user identifiers interpolated by the caller into errcode.New.
+			_, hasMsg := attrValue(*warnRec, "message")
+			assert.False(t, hasMsg, "log record must NOT contain 'message' attr — use InternalMessage for diagnostics")
+
+			if tt.internalMessage != "" {
+				internalVal, hasInternal := attrValue(*warnRec, "internal")
+				assert.True(t, hasInternal, "log record must contain 'internal' attr when InternalMessage is set")
+				assert.Equal(t, tt.internalMessage, internalVal)
+			} else {
+				_, hasInternal := attrValue(*warnRec, "internal")
+				assert.False(t, hasInternal, "log record must NOT contain 'internal' attr when InternalMessage is empty")
+			}
 
 			reqIDVal, ok := attrValue(*warnRec, "request_id")
 			assert.True(t, ok, "log record must contain 'request_id' attr")
@@ -810,7 +836,8 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 
 // TestWriteDomainError_4xx_LogsWarn_NoCorrelation verifies that the slog.Warn
 // record is emitted even when the context carries no request_id/trace_id/span_id,
-// and that those attrs are absent in that case.
+// and that those attrs are absent in that case. The client-facing 'message' attr
+// must also be absent (F3: log4xx omits Message to prevent identifier leakage).
 func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
 	handler := &captureHandler{}
 	orig := slog.Default()
@@ -838,8 +865,9 @@ func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
 	_, hasStatus := attrValue(*warnRec, "status")
 	assert.True(t, hasStatus, "log record must contain 'status' attr")
 
+	// Client-facing message must NOT appear in server WARN logs.
 	_, hasMsg := attrValue(*warnRec, "message")
-	assert.True(t, hasMsg, "log record must contain 'message' attr")
+	assert.False(t, hasMsg, "log record must NOT contain 'message' attr")
 
 	_, hasReqID := attrValue(*warnRec, "request_id")
 	assert.False(t, hasReqID, "log record must NOT contain 'request_id' attr when not set in ctx")

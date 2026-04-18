@@ -22,9 +22,13 @@ func TestDecodeJSON(t *testing.T) {
 		wantReason string // expected details["reason"]
 	}{
 		{
-			name:     "valid struct",
-			body:     `{"name":"test"}`,
-			dst:      func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "valid struct",
+			body: `{"name":"test"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode: "", // no error
 		},
 		{
@@ -48,57 +52,89 @@ func TestDecodeJSON(t *testing.T) {
 			wantReason: "malformed JSON",
 		},
 		{
-			name:       "type mismatch",
-			body:       `{"count":"notanumber"}`,
-			dst:        func() any { return &struct{ Count int `json:"count"` }{} },
+			name: "type mismatch",
+			body: `{"count":"notanumber"}`,
+			dst: func() any {
+				return &struct {
+					Count int `json:"count"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "type mismatch",
 		},
 		{
-			name:     "unknown fields accepted",
-			body:     `{"name":"test","unknown":"value"}`,
-			dst:      func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "unknown fields accepted",
+			body: `{"name":"test","unknown":"value"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode: "", // backward compatible: unknown fields are silently ignored
 		},
 		{
-			name:       "truncated JSON",
-			body:       `{"username":`,
-			dst:        func() any { return &struct{ Username string `json:"username"` }{} },
+			name: "truncated JSON",
+			body: `{"username":`,
+			dst: func() any {
+				return &struct {
+					Username string `json:"username"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "malformed JSON",
 		},
 		{
-			name:       "trailing content",
-			body:       `{"name":"test"}garbage`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "trailing content",
+			body: `{"name":"test"}garbage`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
 		{
-			name:       "multiple JSON objects",
-			body:       `{"name":"test"}{"role":"admin"}`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "multiple JSON objects",
+			body: `{"name":"test"}{"role":"admin"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
 		{
-			name:       "trailing close brace",
-			body:       `{"name":"ok"}}`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "trailing close brace",
+			body: `{"name":"ok"}}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
 		{
-			name:       "trailing close bracket",
-			body:       `{"name":"ok"}]`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "trailing close bracket",
+			body: `{"name":"ok"}]`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
 		{
-			name:       "trailing close bracket with space",
-			body:       `{"name":"ok"} ]`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "trailing close bracket with space",
+			body: `{"name":"ok"} ]`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
@@ -194,23 +230,35 @@ func TestDecodeJSONStrict(t *testing.T) {
 		wantField  string // expected details["field"] for unknown field errors
 	}{
 		{
-			name:     "valid struct",
-			body:     `{"name":"test"}`,
-			dst:      func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "valid struct",
+			body: `{"name":"test"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode: "", // no error
 		},
 		{
-			name:       "unknown field rejected",
-			body:       `{"name":"test","extra":"val"}`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "unknown field rejected",
+			body: `{"name":"test","extra":"val"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "unknown field",
 			wantField:  "extra",
 		},
 		{
-			name:       "multiple unknown fields rejects first",
-			body:       `{"name":"test","alpha":"a","beta":"b"}`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "multiple unknown fields rejects first",
+			body: `{"name":"test","alpha":"a","beta":"b"}`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "unknown field",
 			wantField:  "alpha",
@@ -230,16 +278,24 @@ func TestDecodeJSONStrict(t *testing.T) {
 			wantReason: "malformed JSON",
 		},
 		{
-			name:       "type mismatch",
-			body:       `{"count":"notanumber"}`,
-			dst:        func() any { return &struct{ Count int `json:"count"` }{} },
+			name: "type mismatch",
+			body: `{"count":"notanumber"}`,
+			dst: func() any {
+				return &struct {
+					Count int `json:"count"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "type mismatch",
 		},
 		{
-			name:       "trailing content",
-			body:       `{"name":"test"}garbage`,
-			dst:        func() any { return &struct{ Name string `json:"name"` }{} },
+			name: "trailing content",
+			body: `{"name":"test"}garbage`,
+			dst: func() any {
+				return &struct {
+					Name string `json:"name"`
+				}{}
+			},
 			wantCode:   errcode.ErrValidationFailed,
 			wantReason: "trailing content after JSON value",
 		},
