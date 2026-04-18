@@ -58,6 +58,15 @@ func NewService(
 	return s
 }
 
+// persistRevoke wraps the session update + outbox write in a txRunner-aware call.
+// When txRunner is nil (demo mode), fn is called directly without a transaction.
+func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) error) error {
+	if s.txRunner != nil {
+		return s.txRunner.RunInTx(ctx, fn)
+	}
+	return fn(ctx)
+}
+
 // Logout revokes a session by its ID.
 func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
@@ -98,15 +107,8 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
-	// txRunner nil-safe: nil means no transaction support (query-only or demo mode).
-	if s.txRunner != nil {
-		if err := s.txRunner.RunInTx(ctx, persistAndPublish); err != nil {
-			return err
-		}
-	} else {
-		if err := persistAndPublish(ctx); err != nil {
-			return err
-		}
+	if err := s.persistRevoke(ctx, persistAndPublish); err != nil {
+		return err
 	}
 
 	// Fallback direct publish when outbox is not in use.

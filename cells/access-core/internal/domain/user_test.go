@@ -89,7 +89,7 @@ func TestUser_LockUnlock(t *testing.T) {
 			name: "unlock after lock",
 			action: func(u *User) {
 				u.Lock()
-				u.Unlock()
+				u.Unlock() //nolint:staticcheck // Lock/Unlock are domain status methods, not sync.Mutex
 			},
 			wantLocked: false,
 		},
@@ -122,4 +122,35 @@ func TestUser_Lock_UpdatesTimestamp(t *testing.T) {
 	before := user.UpdatedAt
 	user.Lock()
 	assert.True(t, !user.UpdatedAt.Before(before), "UpdatedAt should advance after Lock")
+}
+
+func TestUser_DefaultPasswordResetRequiredFalse(t *testing.T) {
+	user, err := NewUser("dave", "dave@example.com", "$2a$10$hash")
+	require.NoError(t, err)
+	assert.False(t, user.PasswordResetRequired, "NewUser must default PasswordResetRequired to false")
+}
+
+func TestUser_MarkPasswordResetRequiredSetsFlag(t *testing.T) {
+	user, err := NewUser("eve", "eve@example.com", "$2a$10$hash")
+	require.NoError(t, err)
+	require.False(t, user.PasswordResetRequired)
+
+	before := user.UpdatedAt
+	user.MarkPasswordResetRequired()
+
+	assert.True(t, user.PasswordResetRequired, "MarkPasswordResetRequired must set flag to true")
+	assert.True(t, !user.UpdatedAt.Before(before), "MarkPasswordResetRequired must advance UpdatedAt")
+}
+
+func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
+	user, err := NewUser("frank", "frank@example.com", "$2a$10$hash")
+	require.NoError(t, err)
+	user.MarkPasswordResetRequired()
+	require.True(t, user.PasswordResetRequired)
+
+	before := user.UpdatedAt
+	user.ClearPasswordResetRequired()
+
+	assert.False(t, user.PasswordResetRequired, "ClearPasswordResetRequired must set flag to false")
+	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
 }

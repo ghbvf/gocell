@@ -80,13 +80,14 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 // cloneUser creates a deep copy of a User to avoid sharing pointers across map entries.
 func cloneUser(u *domain.User) *domain.User {
 	return &domain.User{
-		ID:           u.ID,
-		Username:     u.Username,
-		Email:        u.Email,
-		PasswordHash: u.PasswordHash,
-		Status:       u.Status,
-		CreatedAt:    u.CreatedAt,
-		UpdatedAt:    u.UpdatedAt,
+		ID:                    u.ID,
+		Username:              u.Username,
+		Email:                 u.Email,
+		PasswordHash:          u.PasswordHash,
+		PasswordResetRequired: u.PasswordResetRequired,
+		Status:                u.Status,
+		CreatedAt:             u.CreatedAt,
+		UpdatedAt:             u.UpdatedAt,
 	}
 }
 

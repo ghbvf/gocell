@@ -584,33 +584,44 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }
 
-// --- Seed admin tests (H1-5) ---
+// --- Repo-prefill helpers (migrated from WithSeedAdmin/WithSeedAdminRole) ---
 
-func TestAccessCore_SeedAdminRole_AlwaysSeeded(t *testing.T) {
-	roleRepo := mem.NewRoleRepository()
-	c := NewAccessCore(
-		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
-		WithRoleRepository(roleRepo),
-		WithPublisher(eventbus.New()),
-		WithJWTIssuer(testIssuer),
-		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
-		WithSeedAdminRole(),
-	)
-	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
-	require.NoError(t, c.Init(ctx, deps))
+// seedAdminUser directly creates an admin user in the given repos without going
+// through the bootstrap flow. Used as a test fixture for tests that need
+// "there is an admin user" as a precondition.
+func seedAdminUser(t *testing.T, ctx context.Context, userRepo *mem.UserRepository, roleRepo *mem.RoleRepository, username, password string) *domain.User {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), domain.BcryptCost)
+	require.NoError(t, err)
 
-	role, err := roleRepo.GetByID(ctx, "admin")
-	require.NoError(t, err, "admin role should be seeded")
-	assert.Equal(t, "admin", role.Name)
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
+	require.NoError(t, err)
+	user.ID = "usr-admin-prefill"
+
+	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
+		ID:   domain.RoleAdmin,
+		Name: domain.RoleAdmin,
+		Permissions: []domain.Permission{
+			{Resource: "*", Action: "*"},
+		},
+	}))
+	require.NoError(t, userRepo.Create(ctx, user))
+	_, err = roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin)
+	require.NoError(t, err)
+	return user
 }
 
-func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
+// TestAccessCore_DirectPrefill_AdminRoleAndUser verifies that a cell can be
+// initialised when the admin role and user are pre-filled directly into repos
+// (equivalent to the old WithSeedAdmin fixture pattern for integration tests).
+func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
+	ctx := context.Background()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+
+	seedAdminUser(t, ctx, userRepo, roleRepo, "admin", "admin-pass-123")
+
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
@@ -620,10 +631,7 @@ func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
-		WithSeedAdmin("admin", "admin-pass-123"),
 	)
-	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(ctx, deps))
 
 	// Admin role exists.
@@ -634,130 +642,16 @@ func TestAccessCore_SeedAdmin_CreatesUserAndAssignsRole(t *testing.T) {
 	// Admin user exists.
 	user, err := userRepo.GetByUsername(ctx, "admin")
 	require.NoError(t, err)
-	assert.Equal(t, "usr-admin-seed", user.ID)
+	assert.Equal(t, "usr-admin-prefill", user.ID)
 
-	// Password is hashed at the shared BcryptCost (not the stdlib default of 10).
+	// Password is hashed at the shared BcryptCost.
 	hashCost, err := bcrypt.Cost([]byte(user.PasswordHash))
 	require.NoError(t, err)
-	assert.Equal(t, domain.BcryptCost, hashCost, "seed admin password must use shared BcryptCost")
+	assert.Equal(t, domain.BcryptCost, hashCost)
 
 	// Role assigned.
 	roles, err := roleRepo.GetByUserID(ctx, user.ID)
 	require.NoError(t, err)
 	require.Len(t, roles, 1)
 	assert.Equal(t, "admin", roles[0].Name)
-}
-
-func TestAccessCore_SeedAdmin_Idempotent(t *testing.T) {
-	userRepo := mem.NewUserRepository()
-	roleRepo := mem.NewRoleRepository()
-	makeCell := func() *AccessCore {
-		return NewAccessCore(
-			WithUserRepository(userRepo),
-			WithSessionRepository(mem.NewSessionRepository()),
-			WithRoleRepository(roleRepo),
-			WithPublisher(eventbus.New()),
-			WithJWTIssuer(testIssuer),
-			WithJWTVerifier(testVerifier),
-			WithOutboxWriter(outbox.NoopWriter{}),
-			WithTxManager(noopTxRunner{}),
-			WithSeedAdmin("admin", "admin-pass-123"),
-		)
-	}
-	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
-
-	// First init seeds admin.
-	require.NoError(t, makeCell().Init(ctx, deps))
-	// Second init should not error (idempotent).
-	require.NoError(t, makeCell().Init(ctx, deps))
-}
-
-// stubRoleRepo is a non-mem RoleRepository for testing doSeedAdmin without type assertion.
-type stubRoleRepo struct {
-	roles     map[string]*domain.Role
-	userRoles map[string]map[string]struct{}
-}
-
-func newStubRoleRepo() *stubRoleRepo {
-	return &stubRoleRepo{
-		roles:     make(map[string]*domain.Role),
-		userRoles: make(map[string]map[string]struct{}),
-	}
-}
-func (s *stubRoleRepo) GetByID(_ context.Context, id string) (*domain.Role, error) {
-	r, ok := s.roles[id]
-	if !ok {
-		return nil, fmt.Errorf("not found: %s", id)
-	}
-	return r, nil
-}
-func (s *stubRoleRepo) GetByUserID(_ context.Context, userID string) ([]*domain.Role, error) {
-	var result []*domain.Role
-	for rid := range s.userRoles[userID] {
-		if r, ok := s.roles[rid]; ok {
-			result = append(result, r)
-		}
-	}
-	return result, nil
-}
-func (s *stubRoleRepo) Create(_ context.Context, role *domain.Role) error {
-	s.roles[role.ID] = role
-	return nil
-}
-func (s *stubRoleRepo) AssignToUser(_ context.Context, userID, roleID string) (bool, error) {
-	if s.userRoles[userID] == nil {
-		s.userRoles[userID] = make(map[string]struct{})
-	}
-	if _, already := s.userRoles[userID][roleID]; already {
-		return false, nil
-	}
-	s.userRoles[userID][roleID] = struct{}{}
-	return true, nil
-}
-func (s *stubRoleRepo) RemoveFromUser(_ context.Context, userID, roleID string) error {
-	delete(s.userRoles[userID], roleID)
-	return nil
-}
-func (s *stubRoleRepo) RemoveFromUserIfNotLast(_ context.Context, userID, roleID string) (bool, error) {
-	if _, holds := s.userRoles[userID][roleID]; !holds {
-		return false, nil
-	}
-	count := 0
-	for _, roles := range s.userRoles {
-		if _, ok := roles[roleID]; ok {
-			count++
-		}
-	}
-	if count == 1 {
-		return false, fmt.Errorf("sole holder")
-	}
-	delete(s.userRoles[userID], roleID)
-	return true, nil
-}
-func (s *stubRoleRepo) CountByRole(_ context.Context, roleID string) (int, error) {
-	count := 0
-	for _, roles := range s.userRoles {
-		if _, ok := roles[roleID]; ok {
-			count++
-		}
-	}
-	return count, nil
-}
-
-// TestAccessCore_SeedAdmin_NonMemRepo_Succeeds verifies that doSeedAdmin works
-// with any RoleRepository implementation (no type assertion to *mem.RoleRepository).
-func TestAccessCore_SeedAdmin_NonMemRepo_Succeeds(t *testing.T) {
-	c := NewAccessCore(
-		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
-		WithRoleRepository(newStubRoleRepo()),
-		WithPublisher(eventbus.New()),
-		WithJWTIssuer(testIssuer),
-		WithJWTVerifier(testVerifier),
-		WithSeedAdminRole(),
-	)
-	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
-	require.NoError(t, c.Init(ctx, deps))
 }

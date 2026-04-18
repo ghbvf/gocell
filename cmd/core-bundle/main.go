@@ -148,6 +148,30 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	return codec, nil
 }
 
+// cursorCodecs holds the parsed cursor codecs for audit-core and config-core.
+type cursorCodecs struct {
+	audit  *query.CursorCodec
+	config *query.CursorCodec
+}
+
+// loadAllCursorCodecs loads and validates the audit and config cursor codecs.
+// Extracted from run() to reduce cognitive complexity.
+func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
+	audit, err := loadCursorCodec(adapterMode,
+		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
+		"core-bundle-audit-cursor-key-32!", "audit")
+	if err != nil {
+		return cursorCodecs{}, err
+	}
+	cfg, err := loadCursorCodec(adapterMode,
+		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
+		"core-bundle-cfg-cursor-key--32b!", "config")
+	if err != nil {
+		return cursorCodecs{}, err
+	}
+	return cursorCodecs{audit: audit, config: cfg}, nil
+}
+
 // buildAssembly constructs the core-bundle Assembly and registers the three
 // cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
 func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *accesscore.AccessCore, auditCell *auditcore.AuditCore) (*assembly.CoreAssembly, error) {
@@ -370,23 +394,24 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil
 }
 
-// buildAdminOpts appends the appropriate admin-seed option to base, reading
-// GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS from the environment.
-// The password env var is unset immediately after reading to minimise its
-// exposure in /proc/{pid}/environ (defense-in-depth).
-func buildAdminOpts(base []accesscore.Option) []accesscore.Option {
-	adminUser := os.Getenv("GOCELL_ADMIN_USER")
-	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
-	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
-	switch {
-	case adminUser != "" && adminPass != "":
-		return append(base, accesscore.WithSeedAdmin(adminUser, adminPass))
-	case adminUser != "" || adminPass != "":
-		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
-		return append(base, accesscore.WithSeedAdminRole())
-	default:
-		return append(base, accesscore.WithSeedAdminRole())
-	}
+// buildAdminOpts appends WithInitialAdminBootstrap to base options and returns
+// a sink that collects the cleanup worker produced by the bootstrap sequence.
+// The collected worker must be passed to bootstrap.WithWorkers by the caller.
+//
+// GOCELL_ADMIN_USER / GOCELL_ADMIN_PASS are no longer read — the new bootstrap
+// scheme (plan H) generates a random credential on first run and writes it to a
+// file. See docs/architecture/202604181900-adr-auth-setup-first-run.md.
+//
+// Note: full Phase 4 wiring (GOCELL_STATE_DIR, TTL override, e2e test migration)
+// is deferred to a follow-up commit. This stub keeps core-bundle compilable.
+func buildAdminOpts(base []accesscore.Option) (opts []accesscore.Option, cleanerSink func(worker.Worker), collectedWorkers *[]worker.Worker) {
+	workers := make([]worker.Worker, 0)
+	sink := func(w worker.Worker) { workers = append(workers, w) }
+	opts = append(base,
+		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithBootstrapWorkerSink(sink),
+	)
+	return opts, sink, &workers
 }
 
 // promStack groups the Prometheus hook observer and metric provider.
@@ -491,15 +516,7 @@ func run(ctx context.Context) error {
 		slog.String("requested", adapterMode),
 		slog.String("effective", effectiveMode))
 
-	auditCursorCodec, err := loadCursorCodec(adapterMode,
-		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
-	if err != nil {
-		return err
-	}
-	configCursorCodec, err := loadCursorCodec(adapterMode,
-		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
-		"core-bundle-cfg-cursor-key--32b!", "config")
+	codecs, err := loadAllCursorCodecs(adapterMode)
 	if err != nil {
 		return err
 	}
@@ -527,23 +544,24 @@ func run(ctx context.Context) error {
 
 	configOpts := append([]configcore.Option{
 		configcore.WithPublisher(eb),
-		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithCursorCodec(codecs.config),
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts := buildAdminOpts([]accesscore.Option{
+	accessOpts, _, bootstrapWorkers := buildAdminOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwt.issuer),
 		accesscore.WithJWTVerifier(jwt.verifier),
 	})
+	_ = bootstrapWorkers // Phase 4 wires sink-collected workers via lifecycle hook
 	accessCell := accesscore.NewAccessCore(accessOpts...)
 
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
-		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithCursorCodec(codecs.audit),
 	)
 
 	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)

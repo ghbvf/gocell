@@ -33,24 +33,42 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// loginAndGetPair seeds a user (via cell's seed-admin option), calls the real
+// loginAndGetPair pre-fills a user directly into repos, calls the real
 // login HTTP handler through the initialized router, and returns the issued
 // token pair on a precise 201 response. Failing this helper means the public
 // login handler's status code or envelope drifted from the contract.
 func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.Router, c *AccessCore) {
 	t.Helper()
 
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	ctx := context.Background()
+
+	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
+	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
+	require.NoError(t, err)
+	alice, err := domain.NewUser("alice", "alice@gocell.local", string(hash))
+	require.NoError(t, err)
+	alice.ID = "usr-alice-integration"
+	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
+		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
+		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
+	}))
+	require.NoError(t, userRepo.Create(ctx, alice))
+	_, err = roleRepo.AssignToUser(ctx, alice.ID, domain.RoleAdmin)
+	require.NoError(t, err)
+
 	c = NewAccessCore(
-		WithUserRepository(mem.NewUserRepository()),
+		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
-		WithRoleRepository(mem.NewRoleRepository()),
+		WithRoleRepository(roleRepo),
 		WithPublisher(noopPublisher{}),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		// Demo mode: no tx+outbox required.
-		WithSeedAdmin("alice", testPassword),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 		Config:         make(map[string]any),
