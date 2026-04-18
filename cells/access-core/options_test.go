@@ -48,9 +48,17 @@ func TestRegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 1, r.HandlerCount(), "access-core should register 1 topic handler")
+	// access-core now registers 3 topic handlers:
+	//   1. event.config.changed.v1    (config-receive, consumer group: access-core)
+	//   2. event.role.assigned.v1     (rbac-session-sync, consumer group: access-core-rbac-session-sync)
+	//   3. event.role.revoked.v1      (rbac-session-sync, consumer group: access-core-rbac-session-sync)
+	assert.Equal(t, 3, r.HandlerCount(), "access-core should register 3 topic handlers")
 	assert.Equal(t, "event.config.changed.v1", r.Topics[0])
 	assert.Equal(t, "access-core", r.ConsumerGroups[0])
+	assert.Equal(t, "event.role.assigned.v1", r.Topics[1])
+	assert.Equal(t, "access-core-rbac-session-sync", r.ConsumerGroups[1])
+	assert.Equal(t, "event.role.revoked.v1", r.Topics[2])
+	assert.Equal(t, "access-core-rbac-session-sync", r.ConsumerGroups[2])
 }
 
 func TestInit_MissingOutboxWriter(t *testing.T) {

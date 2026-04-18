@@ -5,13 +5,25 @@ contractUsages:
     role: serve
   - contract: event.session.revoked.v1
     role: publish
+  - contract: event.role.assigned.v1
+    role: subscribe
+  - contract: event.role.revoked.v1
+    role: subscribe
 verify:
   unit:
     - unit.session-logout.service
   contract:
     - contract.http.auth.session.delete.v1.serve
     - contract.event.session.revoked.v1.publish
-  waivers: []
+  waivers:
+    - contract: event.role.assigned.v1
+      owner: platform-team
+      reason: consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go
+      expiresAt: 2026-07-01
+    - contract: event.role.revoked.v1
+      owner: platform-team
+      reason: consumer contract test tracked under S8-FOLLOWUP; handler tested by consumer_test.go
+      expiresAt: 2026-07-01
 
 allowedFiles:
   - cells/access-core/slices/session-logout/**

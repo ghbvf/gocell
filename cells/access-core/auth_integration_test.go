@@ -20,11 +20,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/access-core/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin"
+	"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -142,6 +146,85 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	accessClaims, err := testVerifier.VerifyIntent(context.Background(), newPair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "rotated access token must carry intent=access")
 	assert.NotEmpty(t, accessClaims.Subject)
+}
+
+// TestAuthIntegration_RoleRevokeInvalidatesSession exercises the full transactional
+// outbox path at the service layer:
+//
+//  1. Seed admin role + two users (bob with session, admin with a second admin role holder).
+//  2. Revoke bob's "member" role via rbacassign.Service in durable mode
+//     (stubOutboxWriter + stubTxRunner injected via WithOutboxWriter / WithTxManager).
+//  3. Deliver the outbox entry synchronously to the sessionlogout consumer.
+//  4. Assert that bob's session is now revoked.
+//
+// This is a slice-layer integration test (not HTTP) because the HTTP round-trip adds
+// noise without testing the outbox→consumer wiring. The test runs the full service
+// composition to mirror cell.Init wiring without the HTTP router overhead.
+//
+// NOTE: The EventRouter / ConsumerBase dispatch path is tested by the kernel/outbox
+// and runtime/eventbus packages. Here we test the application-layer contract: that
+// rbacassign produces the right outbox entry and the consumer handles it correctly.
+func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
+	ctx := context.Background()
+
+	// Shared repos (simulates cell's single repo wiring).
+	roleRepo := mem.NewRoleRepository()
+	sessionRepo := mem.NewSessionRepository()
+
+	// Seed "member" role.
+	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})
+	// Seed "admin" role so bob doesn't become the last admin.
+	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+
+	// Assign bob and carol to "member" so last-holder guard doesn't block.
+	_ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
+	_ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
+
+	// Give bob an active session.
+	bobSession := &domain.Session{ID: "sess-bob", UserID: "usr-bob"}
+	require.NoError(t, sessionRepo.Create(ctx, bobSession))
+
+	// Wire rbacassign with outbox stubs (durable mode).
+	stubWriter := &rbacStubOutboxWriter{}
+	stubTx := &rbacStubTxRunner{}
+	assignSvc := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
+		rbacassign.WithOutboxWriter(stubWriter),
+		rbacassign.WithTxManager(stubTx),
+	)
+
+	// Wire the sessionlogout consumer.
+	consumer := sessionlogout.NewConsumer(sessionRepo, slog.Default())
+
+	// Revoke bob's member role — should produce one outbox entry.
+	require.NoError(t, assignSvc.Revoke(ctx, "usr-bob", "member"))
+	require.Len(t, stubWriter.entries, 1, "Revoke must produce exactly one outbox entry")
+
+	// Deliver the outbox entry synchronously to the consumer (simulates relay dispatch).
+	require.NoError(t, consumer.HandleRoleChanged(ctx, stubWriter.entries[0]))
+
+	// Bob's session must now be revoked.
+	sess, err := sessionRepo.GetByID(ctx, "sess-bob")
+	require.NoError(t, err)
+	assert.True(t, sess.IsRevoked(),
+		"session must be revoked after role-revoke outbox entry is consumed")
+}
+
+// rbacStubOutboxWriter captures entries for slice-layer integration tests.
+// Defined here to avoid package-crossing (rbacassign is a different package).
+type rbacStubOutboxWriter struct {
+	entries []outbox.Entry
+}
+
+func (w *rbacStubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
+	w.entries = append(w.entries, e)
+	return nil
+}
+
+// rbacStubTxRunner executes fn directly (no real transaction), simulating in-memory behaviour.
+type rbacStubTxRunner struct{}
+
+func (rbacStubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	return fn(context.Background())
 }
 
 // noopPublisher implements eventbus.Publisher for tests that do not care

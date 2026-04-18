@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.role.revoked.v1.payload",
+  "type": "object",
+  "properties": {
+    "userId": {"type": "string"},
+    "roleId": {"type": "string"},
+    "action": {"type": "string", "const": "revoked"}
+  },
+  "required": ["userId", "roleId", "action"],
+  "additionalProperties": false
+}
