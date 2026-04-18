@@ -290,11 +290,12 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 // JWTIssuer signs JWT tokens with RS256 using the active key from a SigningKeyProvider.
 // Each issued token carries a kid header derived from the signing key.
 type JWTIssuer struct {
-	keys       SigningKeyProvider
-	issuer     string
-	ttl        time.Duration
-	refreshTTL time.Duration
-	now        func() time.Time
+	keys            SigningKeyProvider
+	issuer          string
+	ttl             time.Duration
+	refreshTTL      time.Duration
+	now             func() time.Time
+	defaultAudience []string
 }
 
 // JWTIssuerOption configures a JWTIssuer.
@@ -318,6 +319,30 @@ func WithRefreshTTL(d time.Duration) JWTIssuerOption {
 			i.refreshTTL = d
 		}
 	}
+}
+
+// WithDefaultAudience sets the audience written into tokens when IssueOptions.Audience
+// is nil. The first argument is required; additional audiences may be provided as
+// variadic arguments. When IssueOptions.Audience is non-nil it takes precedence over
+// the default (override semantics).
+//
+// Upper layers (sessionlogin/sessionrefresh) may read the configured default via
+// DefaultAudience() to share a single source of truth for the expected audience.
+func WithDefaultAudience(first string, rest ...string) JWTIssuerOption {
+	auds := append([]string{first}, rest...)
+	return func(i *JWTIssuer) { i.defaultAudience = auds }
+}
+
+// DefaultAudience returns a copy of the default audience slice configured via
+// WithDefaultAudience. Returns nil when no default audience is configured.
+// The returned slice is an independent copy — mutating it does not affect the issuer.
+func (i *JWTIssuer) DefaultAudience() []string {
+	if i == nil || len(i.defaultAudience) == 0 {
+		return nil
+	}
+	out := make([]string, len(i.defaultAudience))
+	copy(out, i.defaultAudience)
+	return out
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
@@ -388,8 +413,12 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 		"exp":         now.Add(expiry).Unix(),
 		tokenUseClaim: string(intent),
 	}
-	if len(opts.Audience) > 0 {
-		claims["aud"] = opts.Audience
+	aud := opts.Audience
+	if aud == nil {
+		aud = i.defaultAudience // may be nil; upper layer decides whether to reject no-aud tokens
+	}
+	if len(aud) > 0 {
+		claims["aud"] = aud
 	}
 	if len(opts.Roles) > 0 {
 		claims["roles"] = opts.Roles
