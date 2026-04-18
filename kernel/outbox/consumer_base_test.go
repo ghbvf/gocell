@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"math/bits"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 )
@@ -26,6 +28,8 @@ type fakeReceipt struct {
 	mu            sync.Mutex
 	commitCalled  bool
 	releaseCalled bool
+	extendCalls   atomic.Int32
+	extendErr     error
 }
 
 func (r *fakeReceipt) Commit(_ context.Context) error {
@@ -40,6 +44,11 @@ func (r *fakeReceipt) Release(_ context.Context) error {
 	defer r.mu.Unlock()
 	r.releaseCalled = true
 	return nil
+}
+
+func (r *fakeReceipt) Extend(_ context.Context, _ time.Duration) error {
+	r.extendCalls.Add(1)
+	return r.extendErr
 }
 
 var _ Receipt = (*fakeReceipt)(nil)
@@ -97,6 +106,23 @@ func TestClaimPolicy_Valid(t *testing.T) {
 	assert.True(t, ClaimPolicyFailOpen.Valid())
 	assert.False(t, claimPolicySentinel.Valid())
 	assert.False(t, ClaimPolicy(99).Valid())
+}
+
+func TestClaimPolicy_String(t *testing.T) {
+	tests := []struct {
+		policy ClaimPolicy
+		want   string
+	}{
+		{ClaimPolicyFailClosed, "fail-closed"},
+		{ClaimPolicyFailOpen, "fail-open"},
+		{ClaimPolicy(99), "unknown(99)"},
+		{claimPolicySentinel, "unknown(2)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.policy.String())
+		})
+	}
 }
 
 func TestConsumerBaseConfig_SetDefaults_ZeroValues(t *testing.T) {
@@ -551,4 +577,199 @@ func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
 	res := wrapped(context.Background(), Entry{ID: "evt-mw"})
 	assert.False(t, called, "ClaimDone should short-circuit the wrapped handler")
 	assert.Equal(t, DispositionAck, res.Disposition)
+}
+
+// =============================================================================
+// Lease renewal tests (Task X6)
+// =============================================================================
+
+// TestWrap_LeaseRenewal_ExtendsAtInterval verifies that the lease renewal
+// goroutine calls receipt.Extend at each renewal interval while the handler
+// is running.
+func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+	})
+	require.NoError(t, err)
+
+	handlerDone := make(chan struct{})
+	handler := cb.Wrap("topic", func(ctx context.Context, _ Entry) HandleResult {
+		// Block for ~3 intervals so renewal fires at least twice.
+		select {
+		case <-time.After(3 * interval):
+		case <-ctx.Done():
+		}
+		close(handlerDone)
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-renewal"})
+	<-handlerDone
+
+	assert.Equal(t, DispositionAck, res.Disposition)
+	got := int(receipt.extendCalls.Load())
+	assert.GreaterOrEqual(t, got, 2, "Extend should be called at least twice over 3 intervals")
+}
+
+// TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler verifies that when
+// Extend returns ErrLeaseExpired the handler context is cancelled and the
+// result disposition is Requeue.
+func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	receipt := &fakeReceipt{}
+	// Set extendErr to ErrLeaseExpired on 2nd call.
+	callCount := atomic.Int32{}
+	receipt.extendErr = nil // default success; we override per-call below
+
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	ctxCancelSeen := make(chan struct{}, 1)
+	handler := cb.Wrap("topic", func(ctx context.Context, _ Entry) HandleResult {
+		// Block until context is cancelled or timeout.
+		select {
+		case <-ctx.Done():
+			ctxCancelSeen <- struct{}{}
+			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
+		case <-time.After(5 * time.Second):
+			t.Error("handler blocked without ctx cancellation")
+			return HandleResult{Disposition: DispositionAck}
+		}
+	})
+
+	// Override extendErr to fail on 2nd call via a spy receipt.
+	spyReceipt := &spyExtendReceipt{
+		receipt: receipt,
+		failOn:  2,
+		err:     idempotency.ErrLeaseExpired,
+		calls:   &callCount,
+	}
+	claimer.receipt = spyReceipt
+
+	res := handler(context.Background(), Entry{ID: "evt-expire"})
+
+	select {
+	case <-ctxCancelSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler context was not cancelled after Extend failure")
+	}
+
+	assert.Equal(t, DispositionRequeue, res.Disposition)
+}
+
+// spyExtendReceipt delegates to a fakeReceipt but injects an error on the Nth Extend call.
+type spyExtendReceipt struct {
+	receipt *fakeReceipt
+	failOn  int32
+	err     error
+	calls   *atomic.Int32
+}
+
+func (s *spyExtendReceipt) Commit(ctx context.Context) error  { return s.receipt.Commit(ctx) }
+func (s *spyExtendReceipt) Release(ctx context.Context) error { return s.receipt.Release(ctx) }
+func (s *spyExtendReceipt) Extend(ctx context.Context, ttl time.Duration) error {
+	n := s.calls.Add(1)
+	if n >= s.failOn {
+		return s.err
+	}
+	return s.receipt.Extend(ctx, ttl)
+}
+
+var _ Receipt = (*spyExtendReceipt)(nil)
+
+// TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine verifies that when the
+// handler completes normally, the lease renewal goroutine exits cleanly (no
+// goroutine leak).
+func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             1 * time.Second,
+		LeaseRenewalInterval: 50 * time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		// Return immediately — renewal goroutine must exit.
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-quick"})
+	assert.Equal(t, DispositionAck, res.Disposition)
+	// goleak.VerifyNone(t) at defer will catch any leaked goroutines.
+}
+
+// TestWrap_LeaseRenewal_DisabledWhenIntervalNegative verifies that setting
+// LeaseRenewalInterval to a negative value disables the renewal goroutine:
+// Receipt.Extend is never called, no goroutines are leaked, and the handler
+// runs to completion normally.
+func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             idempotency.DefaultLeaseTTL,
+		LeaseRenewalInterval: -1, // negative disables renewal
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-neg-interval"})
+	assert.Equal(t, DispositionAck, res.Disposition)
+	assert.Equal(t, int32(0), receipt.extendCalls.Load(), "Extend must not be called when interval is negative")
+}
+
+// TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero verifies that when
+// both LeaseRenewalInterval and LeaseTTL are zero (after defaults applied),
+// the handler is still called and returns normally.
+func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	receipt := &fakeReceipt{}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	// Use a very large interval that will never fire during the test.
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		ConsumerGroup:        "cg",
+		LeaseTTL:             idempotency.DefaultLeaseTTL,
+		LeaseRenewalInterval: 0, // should default to LeaseTTL/3
+	})
+	require.NoError(t, err)
+
+	handler := cb.Wrap("topic", func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-zero"})
+	assert.Equal(t, DispositionAck, res.Disposition)
+	// With very fast handler, no Extend should have been called.
+	assert.Equal(t, int32(0), receipt.extendCalls.Load())
 }

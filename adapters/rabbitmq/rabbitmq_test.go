@@ -2438,6 +2438,8 @@ type mockReceipt struct {
 	releaseErr    error
 	commitCtx     context.Context
 	releaseCtx    context.Context
+	extendCalls   int
+	extendErr     error
 }
 
 func (r *mockReceipt) Commit(ctx context.Context) error {
@@ -2454,6 +2456,13 @@ func (r *mockReceipt) Release(ctx context.Context) error {
 	r.releaseCalled = true
 	r.releaseCtx = ctx
 	return r.releaseErr
+}
+
+func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.extendCalls++
+	return r.extendErr
 }
 
 var _ outbox.Receipt = (*mockReceipt)(nil)

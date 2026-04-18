@@ -307,15 +307,33 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 		}
 		return cmd
 
+	// Extend script: 1 key (leaseKey), 2 args (token, ttlMs)
+	case len(keys) == 1 && len(args) == 2:
+		leaseKey := keys[0]
+		token := toString(args[0])
+		ttlMs, _ := toInt64(args[1])
+		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
+			entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
+			m.store[leaseKey] = entry
+			cmd.SetVal(int64(1))
+		} else {
+			cmd.SetVal(int64(0))
+		}
+		return cmd
+
 	// Claim script: 2 keys, keys[0] starts with "done:"
 	case len(keys) == 2 && len(args) >= 2 && strings.HasPrefix(keys[0], "done:"):
 		doneKey, leaseKey := keys[0], keys[1]
 		token := toString(args[0])
 		leaseSec, _ := toInt64(args[1])
 
-		if _, ok := m.store[doneKey]; ok {
-			cmd.SetVal(int64(0)) // ClaimDone
-			return cmd
+		if entry, ok := m.store[doneKey]; ok {
+			// Treat expired done key as absent (same as Get with expiry check).
+			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {
+				cmd.SetVal(int64(0)) // ClaimDone
+				return cmd
+			}
+			delete(m.store, doneKey) // expired
 		}
 		if entry, ok := m.store[leaseKey]; ok {
 			if entry.expiry.IsZero() || time.Now().Before(entry.expiry) {

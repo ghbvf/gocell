@@ -19,6 +19,11 @@ const (
 	logKeyConsumerGroup = "consumer_group"
 )
 
+// backoffJitterDivisor controls jitter range for ConsumerBase retry backoff:
+// jitter ∈ [0, base/backoffJitterDivisor). Single-sided jitter (0..+50%)
+// keeps minimum delay ≥ base, avoiding thundering herd on a recovering backend.
+const backoffJitterDivisor = 2
+
 // ClaimPolicy controls ConsumerBase behavior when Claimer.Claim() fails.
 // The zero value (ClaimPolicyFailClosed) is the safe default.
 type ClaimPolicy uint8
@@ -41,6 +46,21 @@ const (
 // Valid returns true if the ClaimPolicy is a recognized enum value.
 func (p ClaimPolicy) Valid() bool {
 	return p < claimPolicySentinel
+}
+
+// String returns the lowercase kebab-case name of the ClaimPolicy.
+// Unknown values render as "unknown(N)".
+// The zero value (ClaimPolicyFailClosed) is the safe-by-default Go convention:
+// any unset ClaimPolicy field automatically uses the stricter fail-closed path.
+func (p ClaimPolicy) String() string {
+	switch p {
+	case ClaimPolicyFailClosed:
+		return "fail-closed"
+	case ClaimPolicyFailOpen:
+		return "fail-open"
+	default:
+		return fmt.Sprintf("unknown(%d)", p)
+	}
 }
 
 // ConsumerBaseConfig configures ConsumerBase behavior.
@@ -84,6 +104,12 @@ type ConsumerBaseConfig struct {
 	// and retryLoop, preventing unbounded growth with large retry counts.
 	// Default: 30s.
 	MaxRetryDelay time.Duration
+
+	// LeaseRenewalInterval is how often the lease renewal goroutine calls
+	// receipt.Extend while the handler is running. Zero falls back to
+	// LeaseTTL/3 so the lease is renewed well before it expires.
+	// Set to a negative value to disable lease renewal entirely.
+	LeaseRenewalInterval time.Duration
 }
 
 // SetDefaults populates zero-valued fields with safe defaults. Called
@@ -111,6 +137,9 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 	}
 	if c.MaxRetryDelay <= 0 {
 		c.MaxRetryDelay = 30 * time.Second
+	}
+	if c.LeaseRenewalInterval == 0 {
+		c.LeaseRenewalInterval = c.LeaseTTL / 3
 	}
 }
 
@@ -286,7 +315,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			base := exponentialDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			var jitter time.Duration
 			if base > 0 {
-				jitter = time.Duration(rand.Int64N(int64(base/2) + 1))
+				jitter = time.Duration(rand.Int64N(int64(base/backoffJitterDivisor) + 1))
 			}
 			delay := min(base+jitter, cb.config.MaxRetryDelay)
 			logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",
@@ -337,8 +366,8 @@ func (cb *ConsumerBase) handleClaimState(
 		}
 		return HandleResult{Disposition: DispositionRequeue}
 	default:
-		// ClaimAcquired — proceed with handler, thread Receipt through.
-		return cb.retryLoop(ctx, topic, entry, handler, receipt)
+		// ClaimAcquired — start lease-renewal goroutine before invoking handler.
+		return cb.runWithRenewal(ctx, topic, entry, handler, receipt)
 	}
 }
 
@@ -449,5 +478,83 @@ func (cb *ConsumerBase) retryLoop(
 		Disposition: DispositionReject,
 		Err:         lastResult.Err,
 		Receipt:     receipt,
+	}
+}
+
+// runWithRenewal starts a background lease-renewal goroutine and then invokes
+// retryLoop with a cancellable context. If Extend returns ErrLeaseExpired the
+// context is cancelled so the handler can detect it via ctx.Done().
+//
+// The renewal goroutine exits after retryLoop returns (via cancel + done channel).
+// context.WithoutCancel wraps the Extend ctx so a shutdown-triggered cancellation
+// of the outer ctx does not prevent the last renewal/log from completing.
+//
+// Cognitive complexity is kept ≤15 by delegating the ticker loop to leaseRenewalLoop.
+func (cb *ConsumerBase) runWithRenewal(
+	ctx context.Context,
+	topic string,
+	entry Entry,
+	handler EntryHandler,
+	receipt Receipt,
+) HandleResult {
+	interval := cb.config.LeaseRenewalInterval
+	// Skip renewal when disabled (negative) or receipt is nil.
+	if interval <= 0 || receipt == nil {
+		return cb.retryLoop(ctx, topic, entry, handler, receipt)
+	}
+
+	renewCtx, cancelRenew := context.WithCancel(ctx)
+	defer cancelRenew()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		cb.leaseRenewalLoop(renewCtx, topic, entry, receipt, interval, cancelRenew)
+	}()
+
+	result := cb.retryLoop(renewCtx, topic, entry, handler, receipt)
+
+	// Signal the renewal goroutine to stop and wait for it.
+	cancelRenew()
+	<-done
+
+	return result
+}
+
+// leaseRenewalLoop ticks every interval and extends the processing lease.
+// It cancels cancelFn if Extend returns ErrLeaseExpired (fencing failure).
+// Exits when ctx is cancelled (handler finished or lease lost).
+func (cb *ConsumerBase) leaseRenewalLoop(
+	ctx context.Context,
+	topic string,
+	entry Entry,
+	receipt Receipt,
+	interval time.Duration,
+	cancelFn context.CancelFunc,
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			extendCtx := context.WithoutCancel(ctx)
+			if err := receipt.Extend(extendCtx, cb.config.LeaseTTL); err != nil {
+				if errors.Is(err, idempotency.ErrLeaseExpired) {
+					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, cancelling handler",
+						slog.String(logKeyEventID, entry.ID),
+						slog.String(logKeyTopic, topic),
+						slog.String(logKeyConsumerGroup, cb.config.ConsumerGroup))
+					cancelFn()
+					return
+				}
+				logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",
+					slog.String(logKeyEventID, entry.ID),
+					slog.String(logKeyTopic, topic),
+					slog.String("error", err.Error()))
+			}
+		}
 	}
 }

@@ -408,6 +408,71 @@ func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *te
 	assert.True(t, hasDone, "done key should exist after successful commit")
 }
 
+// =============================================================================
+// Receipt.Extend tests
+// =============================================================================
+
+func TestReceipt_Extend_Success(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:1", 5*time.Second, 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, receipt)
+
+	// Extend should succeed and update the TTL.
+	err = receipt.Extend(ctx, 10*time.Second)
+	require.NoError(t, err)
+
+	// The lease key must still exist with updated expiry.
+	mock.mu.Lock()
+	entry, hasLease := mock.store["lease:idem:extend:1"]
+	mock.mu.Unlock()
+
+	require.True(t, hasLease, "lease key should still exist after Extend")
+	// Expiry should be approximately 10s from now (within 1s tolerance).
+	assert.WithinDuration(t, time.Now().Add(10*time.Second), entry.expiry, time.Second)
+}
+
+func TestReceipt_Extend_LeaseExpired(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:2", 5*time.Second, 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, receipt)
+
+	// Simulate lease taken by another consumer — delete the lease key.
+	mock.mu.Lock()
+	delete(mock.store, "lease:idem:extend:2")
+	mock.mu.Unlock()
+
+	// Extend on a lost lease must return ErrLeaseExpired.
+	err = receipt.Extend(ctx, 10*time.Second)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, idempotency.ErrLeaseExpired)
+}
+
+func TestReceipt_Extend_BackendDown(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:3", 5*time.Second, 24*time.Hour)
+	require.NoError(t, err)
+	require.NotNil(t, receipt)
+
+	// Inject a backend error.
+	mock.evalErr = errMock
+
+	// Extend should wrap the error but NOT classify it as ErrLeaseExpired.
+	err = receipt.Extend(ctx, 10*time.Second)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, idempotency.ErrLeaseExpired, "backend error should not be ErrLeaseExpired")
+}
+
 func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := newIdempotencyClaimerFromCmdable(mock)
@@ -443,4 +508,27 @@ func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *t
 	mock.mu.Unlock()
 	assert.False(t, hasLease, "lease key should be deleted after successful release")
 	assert.False(t, hasDone, "done key should NOT exist after release")
+}
+
+// TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired verifies that the mock
+// treats an expired done key as absent and returns ClaimAcquired (not ClaimDone).
+// This mirrors the real Redis behavior where TTL-expired keys are invisible.
+func TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired(t *testing.T) {
+	mock := newClaimerMock()
+	ctx := context.Background()
+
+	// Pre-set a done key that is already expired.
+	mock.mu.Lock()
+	mock.store["done:idem:expired-done:1"] = mockEntry{
+		value:  "1",
+		expiry: time.Now().Add(-1 * time.Second), // already expired
+	}
+	mock.mu.Unlock()
+
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	state, receipt, err := claimer.Claim(ctx, "idem:expired-done:1", 5*time.Minute, 24*time.Hour)
+	require.NoError(t, err)
+	// Expired done key must not block re-acquisition.
+	assert.Equal(t, idempotency.ClaimAcquired, state)
+	assert.NotNil(t, receipt)
 }

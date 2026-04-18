@@ -4,8 +4,14 @@ package idempotency
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrLeaseExpired indicates the processing lease is no longer held —
+// either it expired naturally or another consumer claimed it.
+// Callers MUST stop business logic on this error and proceed to Release.
+var ErrLeaseExpired = errors.New("idempotency: processing lease expired")
 
 // DefaultTTL is the standard idempotency key TTL per the EventBus specification.
 const DefaultTTL = 24 * time.Hour
@@ -26,11 +32,19 @@ const DefaultLeaseTTL = 5 * time.Minute
 //   - DispositionRequeue + broker Nack success → Receipt.Release()
 //   - Any broker Ack/Nack failure             → Receipt.Release()
 //
+// For long-running handlers, callers MAY call Extend periodically to prevent
+// the lease from expiring mid-processing.
+//
 // Callers MUST use context.WithoutCancel for Receipt operations to ensure the
 // idempotency state is persisted even during graceful shutdown.
 type Receipt interface {
 	Commit(ctx context.Context) error
 	Release(ctx context.Context) error
+
+	// Extend resets the processing-lease TTL to the given duration from now.
+	// Returns ErrLeaseExpired if the lease is no longer held (fencing failure)
+	// or wraps the underlying backend error otherwise.
+	Extend(ctx context.Context, ttl time.Duration) error
 }
 
 // ---------------------------------------------------------------------------
@@ -60,9 +74,9 @@ const (
 // Flow:
 //  1. Claim(key) → ClaimAcquired + Receipt
 //  2. Execute business logic
-//  3a. Success → broker Ack → receipt.Commit()
-//  3b. Transient failure → broker Nack(requeue) → receipt.Release()
-//  3c. Permanent failure → broker Nack(no-requeue) → receipt.Release()
+//     3a. Success → broker Ack → receipt.Commit()
+//     3b. Transient failure → broker Nack(requeue) → receipt.Release()
+//     3c. Permanent failure → broker Nack(no-requeue) → receipt.Release()
 //
 // Note: Reject (3c) uses Release, not Commit, so that messages replayed
 // from a dead-letter queue can be reprocessed after the root cause is fixed.

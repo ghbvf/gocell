@@ -36,3 +36,24 @@ func TestExponentialDelay(t *testing.T) {
 		})
 	}
 }
+
+// TestExponentialDelay_DoublesEachAttempt verifies that exponentialDelay
+// produces exactly 2x growth per attempt: base * 2^attempt.
+func TestExponentialDelay_DoublesEachAttempt(t *testing.T) {
+	const base = 100 * time.Millisecond
+	const maxDelay = 10 * time.Second
+
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{0, 100 * time.Millisecond},
+		{1, 200 * time.Millisecond},
+		{2, 400 * time.Millisecond},
+		{3, 800 * time.Millisecond},
+	}
+	for _, c := range cases {
+		got := exponentialDelay(base, maxDelay, c.attempt)
+		assert.Equal(t, c.want, got, "attempt=%d", c.attempt)
+	}
+}

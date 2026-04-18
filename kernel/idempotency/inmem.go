@@ -121,6 +121,19 @@ func (r *inMemReceipt) Release(_ context.Context) error {
 	return r.err
 }
 
+// Extend resets the processing-lease TTL. Returns ErrLeaseExpired if the lease
+// was not held (token mismatch or entry evicted by TTL).
+func (r *inMemReceipt) Extend(_ context.Context, ttl time.Duration) error {
+	r.claimer.mu.Lock()
+	defer r.claimer.mu.Unlock()
+	entry, ok := r.claimer.entries[r.key]
+	if !ok || entry.token != r.token {
+		return ErrLeaseExpired
+	}
+	entry.expiresAt = r.claimer.now().Add(ttl)
+	return nil
+}
+
 var errStaleReceipt = errors.New("idempotency: receipt is stale (claim was released or expired)")
 
 func newToken() string {
