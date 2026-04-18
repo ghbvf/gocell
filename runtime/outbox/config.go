@@ -51,11 +51,10 @@ type RelayConfig struct {
 	// trips /readyz unhealthy. 0 disables. Default 5.
 	CleanupFailureBudget int
 
-	// cleanupWaitFloor is the minimum sleep between cleanup passes.
-	// Exported as a field so tests can lower it to 1ms without touching
-	// the global constant. <= 0 uses the package default (5s).
-	// This field is intentionally unexported; tests must use fastCfg() or
-	// set it via the RelayConfig literal.
+	// CleanupWaitFloor is the minimum sleep between cleanup passes.
+	// Exported so tests can lower it to 1ms without touching the global
+	// constant. <= 0 uses the package default (5s).
+	// Tests can set it directly via the RelayConfig literal.
 	CleanupWaitFloor time.Duration
 }
 
