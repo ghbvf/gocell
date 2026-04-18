@@ -9,6 +9,7 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -65,6 +66,21 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	mux.Handle("DELETE /{id}", http.HandlerFunc(h.handleDelete))
 	mux.Handle("POST /{id}/lock", http.HandlerFunc(h.handleLock))
 	mux.Handle("POST /{id}/unlock", http.HandlerFunc(h.handleUnlock))
+	mux.Handle("POST /{id}/password", http.HandlerFunc(h.handleChangePassword))
+}
+
+// toTokenPairResponse converts a dto.TokenPair to the HTTP response DTO.
+func toTokenPairResponse(p *dto.TokenPair) dto.TokenPairResponse {
+	if p == nil {
+		return dto.TokenPairResponse{}
+	}
+	return dto.TokenPairResponse{
+		AccessToken:           p.AccessToken,
+		RefreshToken:          p.RefreshToken,
+		ExpiresAt:             p.ExpiresAt,
+		SessionID:             p.SessionID,
+		PasswordResetRequired: p.PasswordResetRequired,
+	}
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +90,10 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Username             string `json:"username"`
+		Email                string `json:"email"`
+		Password             string `json:"password"`
+		RequirePasswordReset bool   `json:"requirePasswordReset"`
 	}
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
@@ -84,7 +101,10 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.svc.Create(r.Context(), CreateInput{
-		Username: req.Username, Email: req.Email, Password: req.Password,
+		Username:             req.Username,
+		Email:                req.Email,
+		Password:             req.Password,
+		RequirePasswordReset: req.RequirePasswordReset,
 	})
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -180,6 +200,15 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 		}
 		input.Status = &status
 	}
+	if v, ok := raw["requirePasswordReset"]; ok {
+		var flag bool
+		if err := json.Unmarshal(v, &flag); err != nil {
+			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'requirePasswordReset' must be a boolean: %v", err))
+			return
+		}
+		input.RequirePasswordReset = &flag
+	}
 
 	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
@@ -238,4 +267,41 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "active"}})
+}
+
+func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+
+	var req struct {
+		OldPassword string `json:"oldPassword"`
+		NewPassword string `json:"newPassword"`
+	}
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
+		httputil.WriteDecodeError(r.Context(), w, err)
+		return
+	}
+
+	pair, err := h.svc.ChangePassword(r.Context(), ChangePasswordInput{
+		UserID:      id,
+		OldPassword: req.OldPassword,
+		NewPassword: req.NewPassword,
+	})
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+	// Defense-in-depth: ChangePassword returns nil pair when no tokenIssuer is
+	// wired (production always wires one; this guard catches mis-configuration
+	// so the handler does not silently emit 200 + empty token pair).
+	if pair == nil {
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
+			string(errcode.ErrInternal), "token issuer not configured")
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toTokenPairResponse(pair)})
 }

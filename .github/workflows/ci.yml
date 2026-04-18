@@ -150,7 +150,13 @@ jobs:
       - name: Integration tests (testcontainers)
         # cmd/core-bundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
         # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
-        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/core-bundle/... -count=1 -timeout 15m
+        # examples/sso-bff carries the end-to-end walkthrough test (AUTH-SETUP-01
+        # regression guard — bootstrap credential flow, password-reset gate,
+        # change-password / refresh / logout contract shape). Without this job
+        # including it, the "integration" build tag was never compiled in CI.
+        # cells/access-core/slices/identitymanage also has an integration test
+        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/core-bundle/... ./examples/sso-bff/... ./cells/access-core/slices/identitymanage/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

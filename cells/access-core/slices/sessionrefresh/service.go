@@ -8,16 +8,27 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// WithUserRepository is retained for backward compatibility with tests that
+// build the service incrementally. In production, userRepo is a required
+// positional parameter in NewService (P1-3 fix).
+//
+// Deprecated: pass userRepo as a positional argument to NewService instead.
+func WithUserRepository(repo ports.UserRepository) Option {
+	return func(s *Service) { s.userRepo = repo }
+}
+
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresAt    time.Time
+	AccessToken           string
+	RefreshToken          string
+	ExpiresAt             time.Time
+	PasswordResetRequired bool
 }
 
 // Option configures a session-refresh Service.
@@ -26,6 +37,7 @@ type Option func(*Service)
 // Service implements token refresh logic.
 type Service struct {
 	sessionRepo ports.SessionRepository
+	userRepo    ports.UserRepository
 	roleRepo    ports.RoleRepository
 	issuer      *auth.JWTIssuer
 	verifier    auth.IntentTokenVerifier
@@ -33,9 +45,16 @@ type Service struct {
 }
 
 // NewService creates a session-refresh Service.
+//
+// userRepo is required (P1-3 fix): fetchPasswordResetRequired silently returns
+// false when userRepo is nil, which bypasses the password-reset security gate.
+// Passing nil will panic early in the call chain when the gate is exercised in
+// production. Pass mem.NewUserRepository() in tests that do not exercise the
+// flag.
 func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
 	issuer *auth.JWTIssuer,
 	verifier auth.IntentTokenVerifier,
 	logger *slog.Logger,
@@ -44,6 +63,7 @@ func NewService(
 	s := &Service{
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
+		userRepo:    userRepo,
 		issuer:      issuer,
 		verifier:    verifier,
 		logger:      logger,
@@ -62,51 +82,57 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if refreshToken == "" {
 		return nil, errcode.New(errcode.ErrAuthRefreshInvalidInput, "refresh token is required")
 	}
-
 	if err := s.verifyRefreshToken(ctx, refreshToken); err != nil {
 		return nil, err
 	}
-
-	// Look up the session by current refresh token.
-	session, err := s.sessionRepo.GetByRefreshToken(ctx, refreshToken)
+	session, err := s.lookupSession(ctx, refreshToken)
 	if err != nil {
-		// Check for refresh token reuse: if the token was previously valid
-		// but has been rotated out, revoke the entire session to prevent
-		// stolen token replay attacks.
-		if reuseSession, reuseErr := s.sessionRepo.GetByPreviousRefreshToken(ctx, refreshToken); reuseErr == nil {
-			reuseSession.Revoke()
-			if updateErr := s.sessionRepo.Update(ctx, reuseSession); updateErr != nil {
-				s.logger.Error("session-refresh: failed to revoke session on token reuse",
-					slog.Any("error", updateErr),
-					slog.String("session_id", reuseSession.ID))
-			}
-			s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
-				slog.String("session_id", reuseSession.ID),
-				slog.String("user_id", reuseSession.UserID))
-			return nil, errcode.New(errcode.ErrAuthRefreshTokenReuse, "refresh token reuse detected, session revoked")
-		}
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
+		return nil, err
 	}
-
 	if session.IsRevoked() {
 		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session has been revoked")
 	}
+	return s.rotateAndIssue(ctx, session)
+}
 
-	// Fetch roles for new access token.
-	roles, err := s.roleRepo.GetByUserID(ctx, session.UserID)
+// lookupSession retrieves the active session for the given refresh token.
+// On session-not-found it checks for token reuse and revokes the session if detected.
+func (s *Service) lookupSession(ctx context.Context, refreshToken string) (*domain.Session, error) {
+	session, err := s.sessionRepo.GetByRefreshToken(ctx, refreshToken)
+	if err == nil {
+		return session, nil
+	}
+	// Check for refresh token reuse: if the token was previously valid
+	// but has been rotated out, revoke the entire session to prevent
+	// stolen token replay attacks.
+	reuseSession, reuseErr := s.sessionRepo.GetByPreviousRefreshToken(ctx, refreshToken)
+	if reuseErr != nil {
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
+	}
+	reuseSession.Revoke()
+	if updateErr := s.sessionRepo.Update(ctx, reuseSession); updateErr != nil {
+		s.logger.Error("session-refresh: failed to revoke session on token reuse",
+			slog.Any("error", updateErr),
+			slog.String("session_id", reuseSession.ID))
+	}
+	s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
+		slog.String("session_id", reuseSession.ID),
+		slog.String("user_id", reuseSession.UserID))
+	return nil, errcode.New(errcode.ErrAuthRefreshTokenReuse, "refresh token reuse detected, session revoked")
+}
+
+// rotateAndIssue mints new access + refresh tokens, persists the rotated
+// session, and returns the resulting TokenPair.
+func (s *Service) rotateAndIssue(ctx context.Context, session *domain.Session) (*TokenPair, error) {
+	roleNames := s.fetchRoleNames(ctx, session.UserID)
+	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.UserID)
 	if err != nil {
-		s.logger.Warn("session-refresh: failed to fetch roles",
-			slog.Any("error", err), slog.String("user_id", session.UserID))
-	}
-	roleNames := make([]string, 0, len(roles))
-	for _, r := range roles {
-		roleNames = append(roleNames, r.Name)
+		return nil, err
 	}
 
-	now := time.Now()
-	expiresAt := now.Add(auth.DefaultAccessTokenTTL)
+	expiresAt := time.Now().Add(auth.DefaultAccessTokenTTL)
 
-	accessToken, err := s.issueAccessToken(session.UserID, roleNames, session.ID)
+	accessToken, err := s.issueAccessToken(session.UserID, roleNames, session.ID, passwordResetRequired)
 	if err != nil {
 		return nil, fmt.Errorf("session-refresh: issue access token: %w", err)
 	}
@@ -116,7 +142,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, fmt.Errorf("session-refresh: issue refresh token: %w", err)
 	}
 
-	// Rotate refresh token: store old token for reuse detection.
 	session.PreviousRefreshToken = session.RefreshToken
 	session.AccessToken = accessToken
 	session.RefreshToken = newRefreshToken
@@ -129,10 +154,43 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
 
 	return &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: newRefreshToken,
-		ExpiresAt:    expiresAt,
+		AccessToken:           accessToken,
+		RefreshToken:          newRefreshToken,
+		ExpiresAt:             expiresAt,
+		PasswordResetRequired: passwordResetRequired,
 	}, nil
+}
+
+// fetchRoleNames retrieves role names for the given user. Failures are logged
+// at Warn level and an empty slice is returned so token issuance can proceed.
+func (s *Service) fetchRoleNames(ctx context.Context, userID string) []string {
+	roles, err := s.roleRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		s.logger.Warn("session-refresh: failed to fetch roles",
+			slog.Any("error", err), slog.String("user_id", userID))
+		return nil
+	}
+	names := make([]string, 0, len(roles))
+	for _, r := range roles {
+		names = append(names, r.Name)
+	}
+	return names
+}
+
+// fetchPasswordResetRequired reads the current PasswordResetRequired flag from
+// the user repo. Fail-closed: any error (user not found, transient DB failure)
+// returns ErrAuthRefreshFailed so the caller aborts refresh rather than
+// signing a token that omits the password_reset_required claim. Returning a
+// default value on read failure would let an attacker bypass the reset gate
+// during a DB blip. userRepo must not be nil (enforced by NewService).
+func (s *Service) fetchPasswordResetRequired(ctx context.Context, userID string) (bool, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
+			slog.Any("error", err), slog.String("user_id", userID))
+		return false, errcode.New(errcode.ErrAuthRefreshFailed, "session user unavailable")
+	}
+	return user.PasswordResetRequired, nil
 }
 
 // verifyRefreshToken checks the JWT signature AND requires token_use=refresh.
@@ -155,13 +213,22 @@ func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) e
 	return nil
 }
 
-// issueAccessToken signs a short-lived JWT with intent=access carrying roles.
-func (s *Service) issueAccessToken(subject string, roles []string, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentAccess, subject, roles, []string{auth.DefaultJWTAudience}, sessionID)
+// issueAccessToken signs a short-lived JWT with intent=access carrying roles and
+// the passwordResetRequired flag so middleware can enforce server-side reset.
+func (s *Service) issueAccessToken(subject string, roles []string, sessionID string, passwordResetRequired bool) (string, error) {
+	return s.issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+		Roles:                 roles,
+		Audience:              []string{auth.DefaultJWTAudience},
+		SessionID:             sessionID,
+		PasswordResetRequired: passwordResetRequired,
+	})
 }
 
 // issueRefreshToken signs a JWT with intent=refresh. Refresh tokens carry no
 // roles: /auth/refresh refetches roles from the session's user on rotation.
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
-	return s.issuer.Issue(auth.TokenIntentRefresh, subject, nil, []string{auth.DefaultJWTAudience}, sessionID)
+	return s.issuer.Issue(auth.TokenIntentRefresh, subject, auth.IssueOptions{
+		Audience:  []string{auth.DefaultJWTAudience},
+		SessionID: sessionID,
+	})
 }

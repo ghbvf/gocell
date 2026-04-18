@@ -281,13 +281,15 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthInvalidTokenIntent: http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
-	errcode.ErrAuthForbidden:    http.StatusForbidden,
-	errcode.ErrAuthUserLocked:   http.StatusForbidden,
-	errcode.ErrCSRFOriginDenied: http.StatusForbidden,
+	errcode.ErrAuthForbidden:             http.StatusForbidden,
+	errcode.ErrAuthUserLocked:            http.StatusForbidden,
+	errcode.ErrCSRFOriginDenied:          http.StatusForbidden,
+	errcode.ErrAuthPasswordResetRequired: http.StatusForbidden,
 
 	// --- 409 Conflict ---
 	errcode.ErrAuthUserDuplicate:   http.StatusConflict,
 	errcode.ErrAuthSelfDelete:      http.StatusConflict,
+	errcode.ErrAuthRoleDuplicate:   http.StatusConflict,
 	errcode.ErrConfigDuplicate:     http.StatusConflict,
 	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
 	errcode.ErrFlagDuplicate:       http.StatusConflict,
@@ -312,6 +314,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrTestExecution:     http.StatusInternalServerError,
 	errcode.ErrCellMissingOutbox: http.StatusInternalServerError,
 	errcode.ErrCellMissingCodec:  http.StatusInternalServerError,
+	errcode.ErrCellInvalidConfig: http.StatusInternalServerError,
 	errcode.ErrArchiveUpload:     http.StatusInternalServerError,
 	errcode.ErrArchiveMarshal:    http.StatusInternalServerError,
 	errcode.ErrAuditRepoQuery:    http.StatusInternalServerError,

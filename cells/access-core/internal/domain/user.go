@@ -38,13 +38,14 @@ func ValidUserStatus(s UserStatus) bool {
 
 // User is the identity aggregate root for access-core.
 type User struct {
-	ID           string
-	Username     string
-	Email        string
-	PasswordHash string
-	Status       UserStatus
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                    string
+	Username              string
+	Email                 string
+	PasswordHash          string
+	PasswordResetRequired bool
+	Status                UserStatus
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // NewUser creates a new active User with the current timestamp.
@@ -69,6 +70,22 @@ func NewUser(username, email, passwordHash string) (*User, error) {
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}, nil
+}
+
+// MarkPasswordResetRequired sets the PasswordResetRequired flag to true and
+// advances UpdatedAt. Call this when creating an admin-bootstrap user that
+// must change its password on first login.
+func (u *User) MarkPasswordResetRequired() {
+	u.PasswordResetRequired = true
+	u.UpdatedAt = time.Now()
+}
+
+// ClearPasswordResetRequired unsets the PasswordResetRequired flag and
+// advances UpdatedAt. Call this after the user has successfully changed their
+// password.
+func (u *User) ClearPasswordResetRequired() {
+	u.PasswordResetRequired = false
+	u.UpdatedAt = time.Now()
 }
 
 // Lock sets the user status to locked.

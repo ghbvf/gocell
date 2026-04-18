@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,39 +29,69 @@ func seedSession(repo *mem.SessionRepository, id, userID string) {
 
 func TestService_Logout(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(*mem.SessionRepository)
-		sessionID string
-		wantErr   bool
+		name         string
+		setup        func(*mem.SessionRepository)
+		sessionID    string
+		callerUserID string
+		wantErr      bool
+		wantCode     errcode.Code
 	}{
 		{
-			name:      "valid logout",
-			setup:     func(r *mem.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
-			sessionID: "sess-1",
-			wantErr:   false,
+			name:         "valid self logout",
+			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			sessionID:    "sess-1",
+			callerUserID: "usr-1",
+			wantErr:      false,
 		},
 		{
-			name:      "empty session ID",
-			setup:     func(_ *mem.SessionRepository) {},
-			sessionID: "",
-			wantErr:   true,
+			name:         "empty session ID",
+			setup:        func(_ *mem.SessionRepository) {},
+			sessionID:    "",
+			callerUserID: "usr-1",
+			wantErr:      true,
+			wantCode:     errcode.ErrAuthLogoutInvalidInput,
 		},
 		{
-			name:      "non-existent session",
-			setup:     func(_ *mem.SessionRepository) {},
-			sessionID: "sess-missing",
-			wantErr:   true,
+			name:         "empty caller user ID",
+			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			sessionID:    "sess-1",
+			callerUserID: "",
+			wantErr:      true,
+			wantCode:     errcode.ErrAuthLogoutInvalidInput,
 		},
 		{
-			name: "already revoked is idempotent",
+			name:         "non-existent session",
+			setup:        func(_ *mem.SessionRepository) {},
+			sessionID:    "sess-missing",
+			callerUserID: "usr-1",
+			wantErr:      true,
+			wantCode:     errcode.ErrSessionNotFound,
+		},
+		{
+			// IDOR guard: caller attempts to revoke a session belonging to
+			// another user. Must yield ErrSessionNotFound (same code as
+			// missing-session), so no information leaks about whether the
+			// session id belongs to someone else.
+			name:         "other user's session yields not-found",
+			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-other", "usr-victim") },
+			sessionID:    "sess-other",
+			callerUserID: "usr-attacker",
+			wantErr:      true,
+			wantCode:     errcode.ErrSessionNotFound,
+		},
+		{
+			// Double-revoke is idempotent at DB level (UPDATE is no-op after
+			// the first revoke); event is emitted again but consumers must
+			// already dedupe on event_id.
+			name: "already revoked self logout succeeds",
 			setup: func(r *mem.SessionRepository) {
 				seedSession(r, "sess-rev", "usr-1")
-				// Revoke manually.
 				s, _ := r.GetByID(context.Background(), "sess-rev")
 				s.Revoke()
 			},
-			sessionID: "sess-rev",
-			wantErr:   false,
+			sessionID:    "sess-rev",
+			callerUserID: "usr-1",
+			wantErr:      false,
 		},
 	}
 
@@ -69,9 +100,14 @@ func TestService_Logout(t *testing.T) {
 			svc, repo := newTestService()
 			tt.setup(repo)
 
-			err := svc.Logout(context.Background(), tt.sessionID)
+			err := svc.Logout(context.Background(), tt.sessionID, tt.callerUserID)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
+				if tt.wantCode != "" {
+					var coded *errcode.Error
+					require.ErrorAs(t, err, &coded, "expected errcode.Error wrapping %s", tt.wantCode)
+					assert.Equal(t, tt.wantCode, coded.Code)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -90,7 +126,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	svc := NewService(repo, fp, slog.Default())
 
-	err := svc.Logout(context.Background(), "sess-pub")
+	err := svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")
 }
 

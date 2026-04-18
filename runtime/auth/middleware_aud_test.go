@@ -41,7 +41,9 @@ var audProtectedHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.R
 func TestAuthMiddleware_WrongAudience_Returns401(t *testing.T) {
 	issuer, verifier := buildAudTestPair(t)
 	// Issue token for "other-service", not "gocell"
-	token, err := issuer.Issue(TokenIntentAccess, "alice", nil, []string{"other-service"}, "")
+	token, err := issuer.Issue(TokenIntentAccess, "alice", IssueOptions{
+		Audience: []string{"other-service"},
+	})
 	require.NoError(t, err)
 
 	h := AuthMiddleware(verifier, nil)(audProtectedHandler)
@@ -58,7 +60,7 @@ func TestAuthMiddleware_WrongAudience_Returns401(t *testing.T) {
 func TestAuthMiddleware_MissingAudience_Returns401(t *testing.T) {
 	issuer, verifier := buildAudTestPair(t)
 	// Issue token with no audience at all
-	token, err := issuer.Issue(TokenIntentAccess, "alice", nil, nil, "")
+	token, err := issuer.Issue(TokenIntentAccess, "alice", IssueOptions{})
 	require.NoError(t, err)
 
 	h := AuthMiddleware(verifier, nil)(audProtectedHandler)
@@ -75,7 +77,9 @@ func TestAuthMiddleware_MissingAudience_Returns401(t *testing.T) {
 func TestAuthMiddleware_WrongAudience_RefreshPath_Returns401(t *testing.T) {
 	issuer, verifier := buildAudTestPair(t)
 	// Issue a refresh token (right intent) but wrong audience
-	token, err := issuer.Issue(TokenIntentRefresh, "alice", nil, []string{"other-service"}, "")
+	token, err := issuer.Issue(TokenIntentRefresh, "alice", IssueOptions{
+		Audience: []string{"other-service"},
+	})
 	require.NoError(t, err)
 
 	// Mirrors the production refresh-endpoint pattern: the handler extracts the

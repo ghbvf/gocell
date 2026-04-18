@@ -1,13 +1,16 @@
 package auth
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -136,10 +139,90 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	}
 	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
 
+	// Password-reset enforcement: when the token carries password_reset_required=true,
+	// only exempt endpoints (supplied by the composition root via
+	// WithPasswordResetExemptMatcher) are allowed. All other business routes
+	// receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the subject changes
+	// their password and obtains a new token without the claim. If no matcher
+	// is wired, the gate rejects every request — fail-closed default.
+	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
+		writePasswordResetRequired(w, cfg.passwordResetChangeEndpointHint)
+		return
+	}
+
 	ctx := WithClaims(r.Context(), claims)
 	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// response. When changeEndpointHint is non-empty, it is emitted as
+// details.change_password_endpoint so clients can navigate to the correct
+// endpoint; when empty, the details map is omitted — runtime/auth itself
+// carries no knowledge of any specific business path. The hint originates
+// from WithPasswordResetChangeEndpointHint, which the composition root sets
+// alongside WithPasswordResetExemptEndpoints.
+func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint string) {
+	errBody := map[string]any{
+		"code":    string(errcode.ErrAuthPasswordResetRequired),
+		"message": "password reset required before accessing this endpoint",
+	}
+	if changeEndpointHint != "" {
+		errBody["details"] = map[string]any{
+			"change_password_endpoint": changeEndpointHint,
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	if err := json.NewEncoder(w).Encode(map[string]any{"error": errBody}); err != nil {
+		slog.Error("auth middleware: encode password-reset-required response",
+			slog.Any("error", err))
+	}
+}
+
+// isPasswordResetExempt reports whether the given HTTP method and URL path are
+// exempt from the password-reset enforcement check. The decision is delegated
+// to the injected matcher so runtime/auth does not encode cell-specific routes.
+// When no matcher is configured (fail-closed), every request is treated as
+// non-exempt. See WithPasswordResetExemptMatcher for wiring details.
+func isPasswordResetExempt(cfg authConfig, method, urlPath string) bool {
+	if cfg.passwordResetExempt == nil {
+		return false
+	}
+	return cfg.passwordResetExempt(method, urlPath)
+}
+
+// matchPathTemplate reports whether the concrete path matches the template.
+// Template segments of the form {xxx} match any single non-empty path segment
+// that does not contain "/". All other segments must match exactly.
+//
+// Examples:
+//
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users/usr-abc/password") → true
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users/usr-abc/other")    → false
+//	matchPathTemplate("/api/v1/users/{id}/password", "/api/v1/users//password")        → false (empty segment)
+func matchPathTemplate(template, concrete string) bool {
+	tParts := strings.Split(strings.Trim(template, "/"), "/")
+	cParts := strings.Split(strings.Trim(concrete, "/"), "/")
+	if len(tParts) != len(cParts) {
+		return false
+	}
+	for i, t := range tParts {
+		c := cParts[i]
+		if strings.HasPrefix(t, "{") && strings.HasSuffix(t, "}") {
+			// Wildcard segment: must be non-empty and must not contain "/"
+			// (already guaranteed by the split, but guard empty segment).
+			if c == "" {
+				return false
+			}
+			continue
+		}
+		if t != c {
+			return false
+		}
+	}
+	return true
 }
 
 // RequireRole checks that the authenticated subject has at least one of the

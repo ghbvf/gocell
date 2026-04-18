@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -146,6 +147,30 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 			slog.String("previous_env", prevEnvName))
 	}
 	return codec, nil
+}
+
+// cursorCodecs holds the parsed cursor codecs for audit-core and config-core.
+type cursorCodecs struct {
+	audit  *query.CursorCodec
+	config *query.CursorCodec
+}
+
+// loadAllCursorCodecs loads and validates the audit and config cursor codecs.
+// Extracted from run() to reduce cognitive complexity.
+func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
+	audit, err := loadCursorCodec(adapterMode,
+		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
+		"core-bundle-audit-cursor-key-32!", "audit")
+	if err != nil {
+		return cursorCodecs{}, err
+	}
+	cfg, err := loadCursorCodec(adapterMode,
+		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
+		"core-bundle-cfg-cursor-key--32b!", "config")
+	if err != nil {
+		return cursorCodecs{}, err
+	}
+	return cursorCodecs{audit: audit, config: cfg}, nil
 }
 
 // buildAssembly constructs the core-bundle Assembly and registers the three
@@ -370,23 +395,61 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	return jwtDeps{issuer: issuer, verifier: verifier}, nil
 }
 
-// buildAdminOpts appends the appropriate admin-seed option to base, reading
-// GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS from the environment.
-// The password env var is unset immediately after reading to minimise its
-// exposure in /proc/{pid}/environ (defense-in-depth).
-func buildAdminOpts(base []accesscore.Option) []accesscore.Option {
-	adminUser := os.Getenv("GOCELL_ADMIN_USER")
-	adminPass := os.Getenv("GOCELL_ADMIN_PASS")
-	_ = os.Unsetenv("GOCELL_ADMIN_PASS")
-	switch {
-	case adminUser != "" && adminPass != "":
-		return append(base, accesscore.WithSeedAdmin(adminUser, adminPass))
-	case adminUser != "" || adminPass != "":
-		slog.Error("seed admin: both GOCELL_ADMIN_USER and GOCELL_ADMIN_PASS must be set; got only one, skipping admin user creation")
-		return append(base, accesscore.WithSeedAdminRole())
-	default:
-		return append(base, accesscore.WithSeedAdminRole())
+// adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
+// onto the given base access-core options and returns the extended options together
+// with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
+// WorkerGroup.
+//
+// Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
+// bootstrap.Run), before the WorkerGroup starts (Step 8). Using a lazyBootstrapWorker
+// wrapper means bootstrap.WithWorkers can be called at construction time while the
+// actual worker reference is resolved at Start() time — after the assembly has Init'd.
+//
+// When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
+// When admin already exists: sink is not called, adminWorker stays nil, lazyWorker
+// Start/Stop are no-ops.
+//
+// Thread safety: the sink (writer) and Start/Stop (readers) may run on
+// different goroutines in the bootstrap lifecycle. The lazyBootstrapWorker uses
+// atomic.Pointer to eliminate the race (F-OPS-2).
+//
+// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
+func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
+	lazy := &lazyBootstrapWorker{}
+	sink := func(w worker.Worker) { lazy.ptr.Store(&w) }
+	accessOpts = append(base,
+		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithBootstrapWorkerSink(sink),
+	)
+	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
+	return accessOpts, lazyWorkerOpt
+}
+
+// lazyBootstrapWorker defers worker resolution to Start/Stop time so that a
+// worker.Worker produced during asm.Init (inside bootstrap.Run Step 3-4) can be
+// registered with bootstrap.WithWorkers before bootstrap.New is called.
+//
+// If ptr holds nil (admin already existed, sink was never called), Start and
+// Stop are safe no-ops.
+//
+// ptr uses atomic.Pointer to synchronise the sink (writer, runs during asm.Init)
+// with Start/Stop (readers, run during WorkerGroup lifecycle) without a mutex.
+type lazyBootstrapWorker struct {
+	ptr atomic.Pointer[worker.Worker]
+}
+
+func (l *lazyBootstrapWorker) Start(ctx context.Context) error {
+	if p := l.ptr.Load(); p != nil {
+		return (*p).Start(ctx)
 	}
+	return nil
+}
+
+func (l *lazyBootstrapWorker) Stop(ctx context.Context) error {
+	if p := l.ptr.Load(); p != nil {
+		return (*p).Stop(ctx)
+	}
+	return nil
 }
 
 // promStack groups the Prometheus hook observer and metric provider.
@@ -451,6 +514,24 @@ func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, err
 	return nil, nil
 }
 
+// logInitialAdminCredPath emits a startup info log so operators know where to
+// find the initial admin credential on first run. Uses
+// accesscore.ResolveBootstrapCredentialPath so the logged path always matches
+// the path actually written by the bootstrapper (P2-6: no duplicated path
+// resolution logic).
+func logInitialAdminCredPath() {
+	credPath, err := accesscore.ResolveBootstrapCredentialPath("")
+	if err != nil {
+		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
+		// so log the error here and let the user fix the config.
+		slog.Warn("core-bundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
+			slog.String("error", err.Error()))
+		return
+	}
+	slog.Info("core-bundle: starting; if first run, initial admin credentials are written to "+credPath,
+		slog.String("cred_path", credPath))
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -491,15 +572,7 @@ func run(ctx context.Context) error {
 		slog.String("requested", adapterMode),
 		slog.String("effective", effectiveMode))
 
-	auditCursorCodec, err := loadCursorCodec(adapterMode,
-		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
-	if err != nil {
-		return err
-	}
-	configCursorCodec, err := loadCursorCodec(adapterMode,
-		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
-		"core-bundle-cfg-cursor-key--32b!", "config")
+	codecs, err := loadAllCursorCodecs(adapterMode)
 	if err != nil {
 		return err
 	}
@@ -527,11 +600,11 @@ func run(ctx context.Context) error {
 
 	configOpts := append([]configcore.Option{
 		configcore.WithPublisher(eb),
-		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithCursorCodec(codecs.config),
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts := buildAdminOpts([]accesscore.Option{
+	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwt.issuer),
@@ -543,7 +616,7 @@ func run(ctx context.Context) error {
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithPublisher(eb),
 		auditcore.WithHMACKey(hmacKey),
-		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithCursorCodec(codecs.audit),
 	)
 
 	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)
@@ -586,6 +659,8 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("construct ConsumerBase: %w", err)
 	}
 
+	logInitialAdminCredPath()
+
 	app := bootstrap.New(assembleBootstrapOpts(bootstrapDeps{
 		assembly:        asm,
 		eventBus:        eb,
@@ -596,6 +671,7 @@ func run(ctx context.Context) error {
 		verboseOpts:     verboseOpts,
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
+		adminWorkerOpt:  adminWorkerOpt,
 	})...)
 	return app.Run(ctx)
 }
@@ -612,6 +688,7 @@ type bootstrapDeps struct {
 	verboseOpts     []bootstrap.Option
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
+	adminWorkerOpt  bootstrap.Option
 }
 
 // assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
@@ -631,6 +708,17 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 			"POST /api/v1/access/sessions/login",
 			"POST /api/v1/access/sessions/refresh",
 		}),
+		// Password-reset exempt routes: change-password and logout are the only
+		// endpoints reachable while the token carries password_reset_required=true.
+		// Runtime/auth no longer hard-codes these (F6 decoupling).
+		bootstrap.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
+		// Client-navigation hint for the 403 response body; runtime/auth no
+		// longer carries any business path literal, so the composition root
+		// names the endpoint that finishes the reset flow.
+		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
 		bootstrap.WithAdapterInfo(d.adapterInfo),
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
 		bootstrap.WithMetricsProvider(d.metricsProvider),
@@ -638,6 +726,13 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 	opts = append(opts, pgHealthCheckerOpts(d.pgPool)...)
 	if d.relayWorker != nil {
 		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
+	}
+	// Wire the initial-admin bootstrap cleanup worker via a lazy wrapper.
+	// The sink fires during asm.StartWithConfig (Step 3-4 inside bootstrap.Run),
+	// so the lazyBootstrapWorker resolves the worker at Start() time (Step 8),
+	// after the assembly has Init'd. No-op when admin already existed.
+	if d.adminWorkerOpt != nil {
+		opts = append(opts, d.adminWorkerOpt)
 	}
 	return opts
 }

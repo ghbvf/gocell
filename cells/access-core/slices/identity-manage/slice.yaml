@@ -19,6 +19,8 @@ contractUsages:
     role: serve
   - contract: http.auth.user.unlock.v1
     role: serve
+  - contract: http.auth.user.change-password.v1
+    role: serve
 verify:
   unit:
     - unit.identity-manage.service
@@ -32,6 +34,7 @@ verify:
     - contract.http.auth.user.delete.v1.serve
     - contract.http.auth.user.lock.v1.serve
     - contract.http.auth.user.unlock.v1.serve
+    - contract.http.auth.user.change-password.v1.serve
   waivers: []
 
 allowedFiles:

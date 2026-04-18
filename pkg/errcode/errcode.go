@@ -33,6 +33,7 @@ const (
 	ErrBusClosed         Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox Code = "ERR_CELL_MISSING_OUTBOX"
 	ErrCellMissingCodec  Code = "ERR_CELL_MISSING_CODEC"
+	ErrCellInvalidConfig Code = "ERR_CELL_INVALID_CONFIG"
 	ErrSessionNotFound   Code = "ERR_SESSION_NOT_FOUND"
 	ErrSessionConflict   Code = "ERR_SESSION_CONFLICT"
 	ErrOrderNotFound     Code = "ERR_ORDER_NOT_FOUND"
@@ -63,6 +64,7 @@ const (
 	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
 	ErrAuthUserDuplicate        Code = "ERR_AUTH_USER_DUPLICATE"
 	ErrAuthRoleNotFound         Code = "ERR_AUTH_ROLE_NOT_FOUND"
+	ErrAuthRoleDuplicate        Code = "ERR_AUTH_ROLE_DUPLICATE"
 	ErrAuthInvalidInput         Code = "ERR_AUTH_INVALID_INPUT"
 	ErrAuthUserLocked           Code = "ERR_AUTH_USER_LOCKED"
 	ErrAuthSessionInvalidInput  Code = "ERR_AUTH_SESSION_INVALID_INPUT"
@@ -77,6 +79,12 @@ const (
 	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
 	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
+	// ErrAuthPasswordResetRequired signals that the authenticated subject must
+	// change their password before accessing business endpoints. The middleware
+	// enforces this when the JWT claim password_reset_required is true.
+	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
+	// DELETE /api/v1/access/sessions/{id}) bypass this check.
+	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
 
 	// Config-core cell error codes.
 	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"

@@ -123,15 +123,15 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	// Access token must contain sid.
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	sid, ok := accessClaims.Extra["sid"].(string)
-	assert.True(t, ok, "access token must contain sid claim")
+	sid := accessClaims.SessionID
+	assert.NotEmpty(t, sid, "access token must contain sid claim")
 	assert.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
 
 	// Refresh token must contain same sid.
 	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
-	refreshSid, ok := refreshClaims.Extra["sid"].(string)
-	assert.True(t, ok, "refresh token must contain sid claim")
+	refreshSid := refreshClaims.SessionID
+	assert.NotEmpty(t, refreshSid, "refresh token must contain sid claim")
 	assert.Equal(t, sid, refreshSid, "both tokens must share the same session ID")
 }
 
@@ -139,6 +139,90 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+
+func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
+	svc, userRepo := newTestService()
+
+	// Seed user with PasswordResetRequired=true.
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
+	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash))
+	user.ID = "usr-reset"
+	user.MarkPasswordResetRequired()
+	_ = userRepo.Create(context.Background(), user)
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
+	require.NoError(t, err)
+
+	// TokenPair flag must be true.
+	assert.True(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must mirror user flag")
+
+	// JWT claim must also be true.
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired, "access token must carry password_reset_required=true claim")
+}
+
+func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
+	svc, userRepo := newTestService()
+	seedUser(userRepo, "normal-user", "pass123")
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "normal-user", Password: "pass123"})
+	require.NoError(t, err)
+
+	assert.False(t, pair.PasswordResetRequired, "TokenPair.PasswordResetRequired must be false for normal user")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired, "access token must not carry reset claim for normal user")
+}
+
+func TestService_IssueForUser(t *testing.T) {
+	svc, userRepo := newTestService()
+	seedUser(userRepo, "issue-user", "pass123")
+
+	// Fetch the user ID.
+	u, err := userRepo.GetByUsername(context.Background(), "issue-user")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
+	assert.NotEmpty(t, pair.RefreshToken)
+	assert.False(t, pair.ExpiresAt.IsZero())
+	assert.False(t, pair.PasswordResetRequired)
+	// Regression guard (PR#183 round-2): the session must be persisted so that
+	// sessionvalidate.enforceSessionState can look it up by sid claim. Without
+	// persistence, every subsequent authenticated request returns 401.
+	assert.NotEmpty(t, pair.SessionID, "IssueForUser must return a non-empty SessionID")
+}
+
+func TestService_IssueForUser_SessionPersisted(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	eb := eventbus.New()
+	svc := NewService(userRepo, sessionRepo, roleRepo, eb, testIssuer, slog.Default())
+	seedUser(userRepo, "issue-persist", "pass123")
+
+	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, pair.SessionID)
+
+	// The session must be findable by its ID so sessionvalidate does not fail.
+	session, err := sessionRepo.GetByID(context.Background(), pair.SessionID)
+	require.NoError(t, err, "session must be persisted after IssueForUser so sessionvalidate can look it up")
+	assert.Equal(t, pair.SessionID, session.ID)
+	assert.Equal(t, u.ID, session.UserID)
+	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
+	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
+}
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()

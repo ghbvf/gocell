@@ -25,10 +25,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,6 +48,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,8 +72,9 @@ type configChangedBusinessPayload struct {
 // bootstrap.WithWorkers lifecycle.
 //
 // Chain under test: HTTP publish → config-core WriteService (L2) → outbox_entries
-//                   → OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
-//                   → subscriber handler receives business payload.
+//
+//	→ OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
+//	→ subscriber handler receives business payload.
 func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	testutil.RequireDocker(t)
 
@@ -162,17 +167,27 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
+	// Use a temp dir for the bootstrap credential file so the test is isolated.
+	e2eStateDir := t.TempDir()
+	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
+
 	configOpts := append([]configcore.Option{
 		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(cursorCodec),
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
+
+	// Wire access-core with WithInitialAdminBootstrap (replaces WithSeedAdmin).
+	// The sink captures the cleaner worker; we pass it to bootstrap.WithWorkers
+	// via the lazy wrapper so it starts after asm.Init fires the sink.
+	var e2eAdminCleanerWorker worker.Worker
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithSeedAdmin("admin", "adminpass"),
+		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithBootstrapWorkerSink(func(w worker.Worker) { e2eAdminCleanerWorker = w }),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -185,6 +200,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
+
+	// lazyE2EAdminWorker resolves the cleaner at Start() time, after
+	// asm.StartWithConfig has fired the sink (bootstrap Step 3-4 inside Run).
+	lazyE2EAdminWorker := &e2eLazyWorker{get: func() worker.Worker { return e2eAdminCleanerWorker }}
 
 	// --- Step 6: Boot the assembly with the relay worker ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -199,10 +218,22 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			"POST /api/v1/access/sessions/login",
 			"POST /api/v1/access/sessions/refresh",
 		}),
+		// Must mirror cmd/core-bundle/main.go: runtime/auth is fail-closed on
+		// password-reset enforcement (round 4 F6 decoupling), so the composition
+		// root — including this e2e harness — has to declare which endpoints
+		// the bootstrap token can still reach while passwordResetRequired=true.
+		// Without this, the POST change-password call below returns 403 and the
+		// test body cannot proceed.
+		bootstrap.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.
 		bootstrap.WithWorkers(relayWorker),
+		// Wire initial-admin cleanup worker lazily (fires after asm.Init).
+		bootstrap.WithWorkers(lazyE2EAdminWorker),
 	)
 
 	appErrCh := make(chan error, 1)
@@ -222,7 +253,24 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond, "HTTP server must become ready")
 
 	// --- Step 7: Drive HTTP requests ---
-	token := loginAdmin(t, baseURL, "admin", "adminpass")
+	// Read bootstrap credentials from the credential file, then change password
+	// so subsequent requests are not blocked by password-reset enforcement.
+	e2eCredPath := e2eStateDir + "/initial_admin_password"
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(e2eCredPath)
+		return statErr == nil
+	}, 5*time.Second, 50*time.Millisecond, "e2e credential file must exist")
+
+	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
+	require.NoError(t, err, "must read e2e credentials from file")
+
+	// Login with bootstrap credentials (passwordResetRequired=true).
+	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
+	// Change password to obtain a token without passwordResetRequired.
+	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
+	const e2eAdminNewPass = "E2eTest@Pass9876!" //nolint:gosec // test-only credential
+	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, e2eAdminNewPass)
+
 	createConfig(t, baseURL, token, "e2e.test.key", "e2e-value")
 	publishConfig(t, baseURL, token, "e2e.test.key")
 
@@ -265,10 +313,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 }
 
 // loginAdmin posts to /api/v1/access/sessions/login and returns the access token.
+// Kept for backward compatibility with any future callers; for bootstrap flow
+// use loginAdminBootstrap.
 func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
-	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body)) //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must succeed (201 Created per sessionlogin contract)")
@@ -281,6 +331,94 @@ func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.NotEmpty(t, result.Data.AccessToken, "access token must be present")
 	return result.Data.AccessToken
+}
+
+// loginAdminBootstrap posts to the login endpoint and returns the access token.
+// Unlike loginAdmin, it accepts a bootstrap token that may have
+// passwordResetRequired=true.
+func loginAdminBootstrap(t *testing.T, baseURL, user, pass string) string {
+	t.Helper()
+	return loginAdmin(t, baseURL, user, pass)
+}
+
+// readE2ECredentials reads username and password from the credential file written
+// by the initial-admin bootstrap.
+func readE2ECredentials(path string) (username, password string, err error) {
+	data, err := os.ReadFile(path) //nolint:gosec // test helper reads a fixed test-temp path
+	if err != nil {
+		return "", "", fmt.Errorf("read e2e credential file: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "username=") {
+			username = strings.TrimPrefix(line, "username=")
+		} else if strings.HasPrefix(line, "password=") {
+			password = strings.TrimPrefix(line, "password=")
+		}
+	}
+	if username == "" || password == "" {
+		return "", "", fmt.Errorf("credential file missing username or password: %s", path)
+	}
+	return username, password, nil
+}
+
+// extractE2ESubFromJWT extracts the "sub" claim from a JWT without verifying
+// the signature. Used by the e2e test to obtain the user ID for change-password.
+func extractE2ESubFromJWT(t *testing.T, tokenStr string) string {
+	t.Helper()
+	parts := strings.SplitN(tokenStr, ".", 3)
+	require.Len(t, parts, 3, "JWT must have 3 parts")
+	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
+	require.NoError(t, err)
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(decoded, &claims))
+	sub, _ := claims["sub"].(string)
+	return sub
+}
+
+// changeE2EPassword calls POST /api/v1/access/users/{id}/password and returns
+// the new access token (which no longer has passwordResetRequired=true).
+func changeE2EPassword(t *testing.T, baseURL, token, userID, oldPass, newPass string) string {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"oldPassword": oldPass, "newPassword": newPass})
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/access/users/"+userID+"/password", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "change password must return 200")
+
+	var result struct {
+		Data struct {
+			AccessToken string `json:"accessToken"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	require.NotEmpty(t, result.Data.AccessToken, "change-password response must include new accessToken")
+	return result.Data.AccessToken
+}
+
+// e2eLazyWorker defers worker resolution to Start/Stop time so that a
+// worker.Worker produced during asm.Init can be registered with
+// bootstrap.WithWorkers before bootstrap.New is called. No-op when nil.
+type e2eLazyWorker struct {
+	get func() worker.Worker
+}
+
+func (l *e2eLazyWorker) Start(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Start(ctx)
+	}
+	return nil
+}
+
+func (l *e2eLazyWorker) Stop(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Stop(ctx)
+	}
+	return nil
 }
 
 // createConfig creates a config entry via POST /api/v1/config/.

@@ -46,7 +46,7 @@ func TestJWTIssuer_TokenHasKID(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
 	// Decode the token header to check kid.
@@ -67,7 +67,7 @@ func TestJWTIssuer_KIDMatchesThumbprint(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
 	// Parse without verification to inspect header.
@@ -87,7 +87,10 @@ func TestJWTVerifier_VerifiesByKID(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:    []string{"admin"},
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -107,7 +110,9 @@ func TestJWTVerifier_RejectsUnknownKID(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks2, WithExpectedAudiences("gocell")) // different key set
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -146,7 +151,10 @@ func TestJWTVerifier_RS256_ValidToken(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin", "user"}, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:    []string{"admin", "user"},
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -166,7 +174,9 @@ func TestJWTVerifier_RS256_ExpiredToken(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -258,7 +268,9 @@ func TestJWTVerifier_WrongKey(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks2, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -281,7 +293,10 @@ func TestJWTIssuer_RoundTrip(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "svc-audit", []string{"service"}, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "svc-audit", IssueOptions{
+		Roles:    []string{"service"},
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -299,7 +314,9 @@ func TestJWTIssuer_NoRoles(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-2", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-2", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
@@ -365,7 +382,9 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	newTokenStr, err := issuer.Issue(TokenIntentAccess, "user-new", nil, []string{"gocell"}, "")
+	newTokenStr, err := issuer.Issue(TokenIntentAccess, "user-new", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err = verifier.VerifyIntent(context.Background(), newTokenStr, TokenIntentAccess)
@@ -408,7 +427,9 @@ func TestJWTIssuer_AcceptsSigningKeyProvider(t *testing.T) {
 	issuer, err := NewJWTIssuer(stub, "gocell-test", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles: []string{"admin"},
+	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, tokenStr)
 
@@ -428,7 +449,7 @@ func TestJWTIssuer_EmptyKID_ProducesTokenWithEmptyKID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Issue succeeds but produces a token with empty kid — verifier would reject it.
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 	assert.NotEmpty(t, tokenStr)
 }
@@ -440,7 +461,7 @@ func TestJWTIssuer_NilKey_FailsToSign(t *testing.T) {
 	require.NoError(t, err)
 
 	// Sign should fail because the key is nil.
-	_, err = issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	_, err = issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.Error(t, err)
 }
 
@@ -453,7 +474,9 @@ func TestJWTVerifier_AcceptsVerificationKeyStore(t *testing.T) {
 	require.NoError(t, err)
 	issuer, err := NewJWTIssuer(ks, "gocell-test", time.Hour)
 	require.NoError(t, err)
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	// Verify using a stub store with only the public key.
@@ -564,13 +587,17 @@ func TestJWTIssuer_Issue_IncludesSessionID(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", []string{"admin"}, []string{"gocell"}, "sess-abc123")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:     []string{"admin"},
+		Audience:  []string{"gocell"},
+		SessionID: "sess-abc123",
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
-	assert.Equal(t, "sess-abc123", claims.Extra["sid"])
+	assert.Equal(t, "sess-abc123", claims.SessionID, "sid claim must be mapped to Claims.SessionID")
 }
 
 func TestJWTIssuer_Issue_EmptySessionID_OmitsSid(t *testing.T) {
@@ -580,13 +607,14 @@ func TestJWTIssuer_Issue_EmptySessionID_OmitsSid(t *testing.T) {
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", nil, []string{"gocell"}, "")
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience: []string{"gocell"},
+	})
 	require.NoError(t, err)
 
 	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.NoError(t, err)
-	_, hasSid := claims.Extra["sid"]
-	assert.False(t, hasSid, "empty sessionID should not produce a sid claim")
+	assert.Empty(t, claims.SessionID, "empty sessionID should not produce a sid claim")
 }
 
 func TestLoadKeysFromEnv_PKCS8(t *testing.T) {
@@ -615,7 +643,7 @@ func TestWithIssuerClock_NilIgnored(t *testing.T) {
 	issuer, err := NewJWTIssuer(ks, "test", time.Hour, WithIssuerClock(nil))
 	require.NoError(t, err)
 	// Should use time.Now (default), not panic.
-	token, err := issuer.Issue(TokenIntentAccess, "user-1", nil, nil, "")
+	token, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
 }
@@ -626,4 +654,155 @@ func TestWithVerifierClock_NilIgnored(t *testing.T) {
 	require.NoError(t, err)
 	// Should not panic on construction.
 	assert.NotNil(t, verifier)
+}
+
+// --- Phase 3.5: IssueOptions + PasswordResetRequired claim tests ---
+
+// TestIssue_BackwardCompatibleNoResetClaim verifies that omitting
+// PasswordResetRequired (the zero-value) produces a token without the
+// password_reset_required payload claim.
+func TestIssue_BackwardCompatibleNoResetClaim(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Roles:    []string{"admin"},
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	// Verify via Claims struct — PasswordResetRequired must default false.
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired,
+		"PasswordResetRequired must be false when not set in IssueOptions")
+
+	// Also verify the raw payload does NOT contain the claim.
+	payload := decodeJWTPayload(t, tokenStr)
+	_, hasClaim := payload["password_reset_required"]
+	assert.False(t, hasClaim, "password_reset_required claim must be absent from token payload when false")
+}
+
+// TestIssue_WithPasswordResetRequired_ClaimWritten verifies that
+// IssueOptions.PasswordResetRequired=true writes the claim into the JWT payload.
+func TestIssue_WithPasswordResetRequired_ClaimWritten(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-bootstrap", IssueOptions{
+		Roles:                 []string{"admin"},
+		Audience:              []string{"gocell"},
+		PasswordResetRequired: true,
+	})
+	require.NoError(t, err)
+
+	// Claims struct must reflect the flag.
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired,
+		"PasswordResetRequired must be true when set in IssueOptions")
+
+	// Raw payload must contain the claim as true.
+	payload := decodeJWTPayload(t, tokenStr)
+	assert.Equal(t, true, payload["password_reset_required"],
+		"password_reset_required must appear in token payload as true")
+}
+
+// TestIssue_OmitClaimWhenFalse verifies that explicitly setting
+// PasswordResetRequired=false produces no claim in the payload (same as zero value).
+func TestIssue_OmitClaimWhenFalse(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience:              []string{"gocell"},
+		PasswordResetRequired: false, // explicit false
+	})
+	require.NoError(t, err)
+
+	payload := decodeJWTPayload(t, tokenStr)
+	_, hasClaim := payload["password_reset_required"]
+	assert.False(t, hasClaim,
+		"password_reset_required claim must be absent when explicitly set to false")
+}
+
+// TestVerifyIntent_ParsesPasswordResetRequired verifies that a token containing
+// password_reset_required=true is correctly parsed into Claims.PasswordResetRequired.
+func TestVerifyIntent_ParsesPasswordResetRequired(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "bootstrap-admin", IssueOptions{
+		Audience:              []string{"gocell"},
+		PasswordResetRequired: true,
+	})
+	require.NoError(t, err)
+
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired,
+		"Claims.PasswordResetRequired must be true after parsing a token with the claim")
+}
+
+// TestVerifyIntent_BackwardCompatNoClaim verifies that a token without the
+// password_reset_required claim (legacy / backward-compat scenario) parses
+// to Claims.PasswordResetRequired=false (zero value, no panic).
+func TestVerifyIntent_BackwardCompatNoClaim(t *testing.T) {
+	priv, pub := generateTestKeyPair(t)
+	ks, err := NewKeySet(priv, pub)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	// Build a legacy token manually without the password_reset_required claim.
+	legacyClaims := jwt.MapClaims{
+		"sub":       "user-legacy",
+		"iss":       "gocell",
+		"aud":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": string(TokenIntentAccess),
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, legacyClaims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	tokenStr, err := tok.SignedString(priv)
+	require.NoError(t, err)
+
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired,
+		"Claims.PasswordResetRequired must be false (zero value) for tokens without the claim")
+}
+
+// TestIssue_PasswordResetRequired_NotLeakedToExtra verifies that the
+// password_reset_required claim is classified as a standard claim and does not
+// appear in Claims.Extra.
+func TestIssue_PasswordResetRequired_NotLeakedToExtra(t *testing.T) {
+	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.NoError(t, err)
+	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
+		Audience:              []string{"gocell"},
+		PasswordResetRequired: true,
+	})
+	require.NoError(t, err)
+
+	claims, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
+	require.NoError(t, err)
+	_, leaked := claims.Extra["password_reset_required"]
+	assert.False(t, leaked, "password_reset_required must not leak into Claims.Extra")
 }

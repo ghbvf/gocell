@@ -5,15 +5,14 @@ package accesscore
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
+	"github.com/ghbvf/gocell/cells/access-core/internal/initialadmin"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide"
@@ -30,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // Compile-time interface checks.
@@ -88,6 +88,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(c *AccessCore) { c.txRunner = tx }
 }
 
+// ResolveBootstrapCredentialPath returns the credential file path using the
+// same resolution logic as the internal Bootstrapper: stateDir overrides
+// GOCELL_STATE_DIR, which overrides the default /run/gocell path.
+//
+// This is the canonical path helper for cmd/core-bundle startup logging so
+// that the logged path always matches the file the bootstrapper writes (P2-6).
+func ResolveBootstrapCredentialPath(stateDir string) (string, error) {
+	return initialadmin.ResolveCredentialPath(stateDir)
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -98,21 +108,68 @@ func WithInMemoryDefaults() Option {
 	}
 }
 
-// WithSeedAdminRole ensures the "admin" role exists in the role repository
-// during Init(). Idempotent: re-seeding is a no-op.
-func WithSeedAdminRole() Option {
-	return func(c *AccessCore) { c.seedAdminRole = true }
+// initialAdminConfig holds the parsed options for WithInitialAdminBootstrap.
+type initialAdminConfig struct {
+	username       string
+	credentialPath string
+	ttl            time.Duration
+	passwordSource io.Reader // nil → crypto/rand.Reader (default in GeneratePassword)
+	scheduler      initialadmin.Scheduler
+	clock          initialadmin.Clock
 }
 
-// WithSeedAdmin ensures the "admin" role exists and creates an admin user
-// with the given credentials during Init(). Idempotent: skips if the user
-// already exists. The password is stored as []byte and cleared after hashing.
-func WithSeedAdmin(username, password string) Option {
-	return func(c *AccessCore) {
-		c.seedAdminRole = true
-		c.seedAdminUser = username
-		c.seedAdminPass = []byte(password)
+// InitialAdminOption configures WithInitialAdminBootstrap.
+type InitialAdminOption func(*initialAdminConfig)
+
+// WithBootstrapUsername overrides the admin username (default: "admin").
+func WithBootstrapUsername(u string) InitialAdminOption {
+	return func(c *initialAdminConfig) { c.username = u }
+}
+
+// WithBootstrapCredentialPath overrides the credential file path.
+// Default resolution: GOCELL_STATE_DIR/initial_admin_password →
+// /run/gocell/initial_admin_password.
+func WithBootstrapCredentialPath(p string) InitialAdminOption {
+	return func(c *initialAdminConfig) { c.credentialPath = p }
+}
+
+// WithBootstrapTTL overrides the credential file TTL (default: 24h).
+func WithBootstrapTTL(d time.Duration) InitialAdminOption {
+	return func(c *initialAdminConfig) { c.ttl = d }
+}
+
+// withBootstrapPasswordSource is an unexported helper used by tests to inject
+// a deterministic password source. Production code always uses the default
+// crypto/rand.Reader via GeneratePassword.
+func withBootstrapPasswordSource(r io.Reader) InitialAdminOption {
+	return func(c *initialAdminConfig) { c.passwordSource = r }
+}
+
+// WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
+//
+// During Init, if no user holds the admin role, a random password is generated,
+// written to a credential file (mode 0600), and the returned cleanup worker
+// removes the file after the configured TTL.
+//
+// Must be paired with WithBootstrapWorkerSink so the cleanup worker is handed
+// to a lifecycle manager (e.g., bootstrap.WithWorkers). Init fails fast if the
+// sink is missing.
+//
+// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
+func WithInitialAdminBootstrap(opts ...InitialAdminOption) Option {
+	cfg := &initialAdminConfig{}
+	for _, o := range opts {
+		o(cfg)
 	}
+	return func(c *AccessCore) { c.initialAdminCfg = cfg }
+}
+
+// WithBootstrapWorkerSink injects a sink function that receives the cleanup
+// worker produced by the bootstrap sequence. The caller must hand this worker
+// to a lifecycle manager (e.g., bootstrap.WithWorkers). A non-nil sink is
+// required whenever WithInitialAdminBootstrap is used.
+func WithBootstrapWorkerSink(sink func(worker.Worker)) Option {
+	return func(c *AccessCore) { c.bootstrapWorkerSink = sink }
 }
 
 // AccessCore is the access-core Cell implementation.
@@ -128,10 +185,9 @@ type AccessCore struct {
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
 
-	// Seed admin configuration (set via WithSeedAdmin/WithSeedAdminRole).
-	seedAdminRole bool
-	seedAdminUser string
-	seedAdminPass []byte
+	// Bootstrap configuration (set via WithInitialAdminBootstrap).
+	initialAdminCfg     *initialAdminConfig
+	bootstrapWorkerSink func(worker.Worker)
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -198,63 +254,90 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 	return c.authzSvc
 }
 
-// Init constructs all 9 slices.
-func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
-		return err
+// runInitialAdminBootstrap executes the first-run admin bootstrap when
+// WithInitialAdminBootstrap has been configured. It validates that
+// WithBootstrapWorkerSink is also set, then delegates to Bootstrapper.Run.
+// A no-op (nil cfg) means the bootstrap feature is disabled.
+func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
+	if c.initialAdminCfg == nil {
+		return nil
 	}
+	if c.bootstrapWorkerSink == nil {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"WithInitialAdminBootstrap requires WithBootstrapWorkerSink; example:\n"+
+				"  var w worker.Worker\n"+
+				"  accesscore.WithInitialAdminBootstrap(),\n"+
+				"  accesscore.WithBootstrapWorkerSink(func(x worker.Worker) { w = x }),\n"+
+				"  /* later */ bootstrap.WithWorkers(w)")
+	}
+	bsDeps := initialadmin.BootstrapDeps{
+		UserRepo: c.userRepo,
+		RoleRepo: c.roleRepo,
+		Logger:   c.logger,
+		Clock:    c.initialAdminCfg.clock,
+	}
+	bsCfg := initialadmin.BootstrapConfig{
+		Username:       c.initialAdminCfg.username,
+		CredentialPath: c.initialAdminCfg.credentialPath,
+		TTL:            c.initialAdminCfg.ttl,
+		PasswordSource: c.initialAdminCfg.passwordSource,
+		Scheduler:      c.initialAdminCfg.scheduler,
+	}
+	bs, err := initialadmin.NewBootstrapper(bsDeps, bsCfg)
+	if err != nil {
+		return fmt.Errorf("access-core: bootstrap construct: %w", err)
+	}
+	cleanerWorker, err := bs.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("access-core: bootstrap admin: %w", err)
+	}
+	if cleanerWorker != nil {
+		c.bootstrapWorkerSink(cleanerWorker)
+	}
+	return nil
+}
 
-	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
-	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
+// initValidate performs fail-fast validation of required dependencies before
+// constructing slices. Extracted from Init to reduce cognitive complexity.
+func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 	if (c.outboxWriter == nil) != (c.txRunner == nil) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
 			"access-core durable mode requires both outboxWriter and txRunner")
 	}
-
-	// Durable mode: reject noop implementations.
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "access-core", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
 	}
-
-	// Demo mode: both nil → require publisher for degraded event delivery.
 	if c.outboxWriter == nil && c.txRunner == nil {
-		if c.publisher == nil {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"access-core requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
-		}
-		if c.ConsistencyLevel() >= cell.L2 {
-			c.logger.Warn("access-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-				slog.String("cell", c.ID()),
-				slog.Int("consistency_level", int(c.ConsistencyLevel())))
+		if err := c.validateDemoMode(); err != nil {
+			return err
 		}
 	}
-
-	// Fail-fast: RS256 key pair required.
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
+	return nil
+}
 
-	// Seed admin role and optional admin user.
-	if c.seedAdminRole {
-		if err := c.doSeedAdmin(ctx); err != nil {
-			return fmt.Errorf("access-core seed admin: %w", err)
-		}
+// validateDemoMode is called when both outboxWriter and txRunner are nil.
+func (c *AccessCore) validateDemoMode() error {
+	if c.publisher == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"access-core requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 	}
+	if c.ConsistencyLevel() >= cell.L2 {
+		c.logger.Warn("access-core: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+	}
+	return nil
+}
 
-	// identity-manage
-	var identityOpts []identitymanage.Option
-	if c.outboxWriter != nil {
-		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
-	}
-	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
-	c.identityHandler = identitymanage.NewHandler(identitySvc)
-	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
-
-	// session-login
+// initSlices constructs all 9 slice services and handlers.
+// Extracted from Init to reduce cognitive complexity.
+func (c *AccessCore) initSlices() {
+	// session-login must be constructed before identity-manage because
+	// ChangePassword injects loginSvc as the TokenIssuer.
 	var loginOpts []sessionlogin.Option
 	if c.outboxWriter != nil {
 		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
@@ -266,6 +349,19 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
 
+	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
+	var identityOpts []identitymanage.Option
+	if c.outboxWriter != nil {
+		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
+	}
+	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
+	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
+	c.identityHandler = identitymanage.NewHandler(identitySvc)
+	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
+
 	// session-validate (before session-refresh: provides session-aware verifier)
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
@@ -274,7 +370,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// validateSvc hard-requires token_use=access and would reject every
 	// refresh token. sessionrefresh still enforces session revocation via
 	// sessionRepo + Session.IsRevoked checks after JWT verification.
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
+	// WithUserRepository is injected so Refresh can read PasswordResetRequired
+	// from the current user state (e.g. after ChangePassword clears the flag).
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
 
@@ -301,6 +399,19 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
 	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
+	c.initRbacAssign()
+
+	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
+	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
+
+	// config-receive: subscribes to config.changed events from config-core
+	c.configReceiveSvc = configreceive.NewService(c.logger)
+	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
+}
+
+// initRbacAssign constructs the rbac-assign slice. Extracted to keep initSlices
+// within cognitive complexity bounds.
+func (c *AccessCore) initRbacAssign() {
 	var rbacOpts []rbacassign.Option
 	if c.outboxWriter != nil {
 		rbacOpts = append(rbacOpts, rbacassign.WithOutboxWriter(c.outboxWriter))
@@ -315,89 +426,22 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		rbacAssignLevel = cell.L2
 	}
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "access-core", rbacAssignLevel))
-
-	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
-	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
-
-	// config-receive: subscribes to config.changed events from config-core
-	c.configReceiveSvc = configreceive.NewService(c.logger)
-	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
-
-	return nil
 }
 
-// isUserNotFound returns true when the repository signals "user does not exist".
-// Any other error indicates an infrastructure failure and must propagate.
-func isUserNotFound(err error) bool {
-	var ecErr *errcode.Error
-	if errors.As(err, &ecErr) {
-		return ecErr.Code == errcode.ErrAuthUserNotFound
+// Init constructs all 9 slices.
+func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
+	if err := c.BaseCell.Init(ctx, deps); err != nil {
+		return err
 	}
-	return false
-}
-
-// doSeedAdmin seeds the admin role and optionally creates an admin user via
-// the standard RoleRepository/UserRepository port interfaces. Idempotent:
-// skips creation if the user already exists. The plaintext password is
-// cleared from memory immediately after bcrypt hashing completes.
-func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
-	adminRole := &domain.Role{
-		ID:   domain.RoleAdmin,
-		Name: domain.RoleAdmin,
-		Permissions: []domain.Permission{
-			{Resource: "*", Action: "*"},
-		},
+	if err := c.initValidate(deps); err != nil {
+		return err
 	}
-	if err := c.roleRepo.Create(ctx, adminRole); err != nil {
-		return fmt.Errorf("ensure admin role: %w", err)
+	// Initial admin bootstrap (scheme H): run before constructing slices so
+	// that the admin user is available for login immediately after Init returns.
+	if err := c.runInitialAdminBootstrap(ctx); err != nil {
+		return err
 	}
-	c.logger.Info("seed: admin role ensured")
-
-	if c.seedAdminUser == "" || len(c.seedAdminPass) == 0 {
-		return nil
-	}
-
-	// Check if user already exists (idempotent). Classify errors:
-	// - nil error → user exists, skip
-	// - ErrAuthUserNotFound → proceed with creation
-	// - other errors → infrastructure failure, fail-fast (do not mask)
-	_, err := c.userRepo.GetByUsername(ctx, c.seedAdminUser)
-	switch {
-	case err == nil:
-		c.logger.Info("seed: admin user already exists, skipping",
-			slog.String("username", c.seedAdminUser))
-		clear(c.seedAdminPass)
-		return nil
-	case isUserNotFound(err):
-		// Expected — user doesn't exist yet, proceed with creation.
-	default:
-		clear(c.seedAdminPass)
-		return fmt.Errorf("seed: check admin user existence: %w", err)
-	}
-
-	hash, err := bcrypt.GenerateFromPassword(c.seedAdminPass, domain.BcryptCost)
-	clear(c.seedAdminPass) // wipe plaintext immediately after hashing
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-
-	user, err := domain.NewUser(c.seedAdminUser, c.seedAdminUser+"@gocell.local", string(hash))
-	if err != nil {
-		return fmt.Errorf("create user: %w", err)
-	}
-	user.ID = "usr-admin-seed"
-
-	if err := c.userRepo.Create(ctx, user); err != nil {
-		return fmt.Errorf("persist user: %w", err)
-	}
-
-	if _, err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
-		return fmt.Errorf("assign role: %w", err)
-	}
-
-	c.logger.Info("seed: admin user created",
-		slog.String("username", c.seedAdminUser),
-		slog.String("user_id", user.ID))
+	c.initSlices()
 	return nil
 }
 

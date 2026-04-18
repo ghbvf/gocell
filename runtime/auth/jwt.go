@@ -302,7 +302,22 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 	return i, nil
 }
 
-// Issue creates a signed JWT token for the given subject and roles.
+// IssueOptions carries optional parameters for JWT issuance.
+// Roles, Audience, and SessionID retain their original semantics.
+// PasswordResetRequired is written as the "password_reset_required" claim
+// only when true; when false the claim is omitted to keep the token compact.
+//
+// This struct replaces the previous 5-parameter Issue signature (backlog T2
+// trigger: adding PasswordResetRequired would have been the 6th positional
+// argument).
+type IssueOptions struct {
+	Roles                 []string
+	Audience              []string
+	SessionID             string
+	PasswordResetRequired bool
+}
+
+// Issue creates a signed JWT token for the given subject and options.
 //
 // intent declares how the token is meant to be used (access vs. refresh).
 // The resulting JWT carries both a JOSE "typ" header (at+jwt / refresh+jwt)
@@ -310,9 +325,13 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 // attempts on two independent channels (RFC 9068 §2.1, RFC 8725 §3.11).
 //
 // The token header includes the kid of the active signing key. When
-// sessionID is non-empty, a "sid" claim binds the token to a specific
+// opts.SessionID is non-empty, a "sid" claim binds the token to a specific
 // session for revocation support.
-func (i *JWTIssuer) Issue(intent TokenIntent, subject string, roles []string, audience []string, sessionID string) (string, error) {
+//
+// When opts.PasswordResetRequired is true, the claim "password_reset_required"
+// is written into the token payload. When false (the zero value) the claim is
+// omitted entirely for backward compatibility and to minimise token size.
+func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions) (string, error) {
 	if !intent.IsValid() {
 		return "", errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
@@ -333,14 +352,17 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, roles []string, au
 		"exp":         now.Add(expiry).Unix(),
 		tokenUseClaim: string(intent),
 	}
-	if len(audience) > 0 {
-		claims["aud"] = audience
+	if len(opts.Audience) > 0 {
+		claims["aud"] = opts.Audience
 	}
-	if len(roles) > 0 {
-		claims["roles"] = roles
+	if len(opts.Roles) > 0 {
+		claims["roles"] = opts.Roles
 	}
-	if sessionID != "" {
-		claims["sid"] = sessionID
+	if opts.SessionID != "" {
+		claims["sid"] = opts.SessionID
+	}
+	if opts.PasswordResetRequired {
+		claims["password_reset_required"] = true
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -367,6 +389,14 @@ func mapClaimsToClaims(mc jwt.MapClaims) Claims {
 	c.IssuedAt = parseUnixTime(mc["iat"])
 	if tu, ok := mc[tokenUseClaim].(string); ok {
 		c.TokenUse = TokenIntent(tu)
+	}
+	if sid, ok := mc["sid"].(string); ok {
+		c.SessionID = sid
+	}
+	// password_reset_required is only written when true; absence means false
+	// (backward compatible with tokens issued before Phase 3.5).
+	if v, ok := mc["password_reset_required"].(bool); ok && v {
+		c.PasswordResetRequired = true
 	}
 	c.Extra = collectExtraClaims(mc)
 
@@ -413,7 +443,9 @@ func parseUnixTime(v any) time.Time {
 var standardClaims = map[string]bool{
 	"sub": true, "iss": true, "aud": true,
 	"exp": true, "iat": true, "nbf": true, "roles": true,
-	tokenUseClaim: true,
+	tokenUseClaim:             true,
+	"sid":                     true,
+	"password_reset_required": true,
 }
 
 func collectExtraClaims(mc jwt.MapClaims) map[string]any {

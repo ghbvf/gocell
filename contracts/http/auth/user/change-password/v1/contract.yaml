@@ -1,0 +1,17 @@
+id: http.auth.user.change-password.v1
+kind: http
+ownerCell: access-core
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: access-core
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/access/users/{id}/password
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

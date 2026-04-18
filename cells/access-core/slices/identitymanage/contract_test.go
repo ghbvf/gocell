@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -64,7 +66,15 @@ func buildMux(svc *Service) http.Handler {
 	mux.Handle("DELETE /api/v1/access/users/{id}", http.HandlerFunc(h.handleDelete))
 	mux.Handle("POST /api/v1/access/users/{id}/lock", http.HandlerFunc(h.handleLock))
 	mux.Handle("POST /api/v1/access/users/{id}/unlock", http.HandlerFunc(h.handleUnlock))
+	mux.Handle("POST /api/v1/access/users/{id}/password", http.HandlerFunc(h.handleChangePassword))
 	return mux
+}
+
+func setupContractHandlerWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+	repo := mem.NewUserRepository()
+	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(issuer))
+	return buildMux(svc), repo
 }
 
 func createUserForContractTest(t *testing.T, handler http.Handler, contract *contracttest.Contract) string {
@@ -300,3 +310,63 @@ func (c *capturingTB) Name() string                      { return "capturingTB" 
 func (c *capturingTB) Log(args ...any)                   {}
 func (c *capturingTB) Error(args ...any)                 { c.errored = true }
 func (c *capturingTB) Fatal(args ...any)                 { c.errored = true }
+
+// ---------------------------------------------------------------------------
+// ChangePassword contract tests
+// ---------------------------------------------------------------------------
+
+func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+	c := contracttest.LoadByID(t, root, "http.auth.user.change-password.v1")
+
+	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
+		AccessToken:  "new-at",
+		RefreshToken: "new-rt",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}}
+	handler, _ := setupContractHandlerWithIssuer(stubIssuer)
+
+	// Validate request schema.
+	c.ValidateRequest(t, []byte(`{"oldPassword":"oldP@ss","newPassword":"newP@ss"}`))
+	c.MustRejectRequest(t, []byte(`{"oldPassword":"oldP@ss"}`))                           // missing newPassword
+	c.MustRejectRequest(t, []byte(`{"oldPassword":"old","newPassword":"new","extra":1}`)) // additionalProperties
+
+	// Create a user to change password on.
+	userID := createUserForContractTest(t, handler, createContract)
+
+	// Seed bcrypt hash for the user — createUserForContractTest uses testPassword.
+	// Since handler already created the user via handleCreate (which bcrypt-hashes),
+	// we can directly call the change-password endpoint.
+	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
+	body := `{"oldPassword":"` + testPassword + `","newPassword":"brand-new-P@ss"}`
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+
+	// Verify response schema rejection.
+	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+}
+
+func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+
+	// requirePasswordReset is optional — should be accepted.
+	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p","requirePasswordReset":true}`))
+	// Without the optional field — also valid.
+	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p"}`))
+}
+
+func TestHttpAuthUserPatchV1_RequirePasswordResetField(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.auth.user.patch.v1")
+
+	// requirePasswordReset as a bool patch field — should be accepted.
+	c.ValidateRequest(t, []byte(`{"requirePasswordReset":true}`))
+	c.ValidateRequest(t, []byte(`{"requirePasswordReset":false}`))
+	c.ValidateRequest(t, []byte(`{"name":"Bob","requirePasswordReset":true}`))
+}

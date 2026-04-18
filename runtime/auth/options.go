@@ -10,9 +10,11 @@ import (
 type AuthOption func(*authConfig)
 
 type authConfig struct {
-	logger        *slog.Logger
-	metrics       *AuthMetrics
-	publicMatcher func(*http.Request) bool // nil = use []string publicEndpoints path
+	logger                          *slog.Logger
+	metrics                         *AuthMetrics
+	publicMatcher                   func(*http.Request) bool                 // nil = use []string publicEndpoints path
+	passwordResetExempt             func(method string, urlPath string) bool // nil = fail-closed (nothing exempt)
+	passwordResetChangeEndpointHint string                                   // empty = no hint in 403 body
 }
 
 func defaultAuthConfig() authConfig {
@@ -31,6 +33,32 @@ func WithLogger(l *slog.Logger) AuthOption {
 // WithMetrics sets the AuthMetrics for auth middleware.
 func WithMetrics(m *AuthMetrics) AuthOption {
 	return func(c *authConfig) { c.metrics = m }
+}
+
+// WithPasswordResetExemptMatcher installs a (method, path) → bool predicate
+// used by the password-reset gate. When a token carries
+// password_reset_required=true, only requests for which the matcher returns
+// true are allowed through; everything else returns 403.
+//
+// If no matcher is supplied, the gate rejects every authenticated request —
+// fail-closed. Composition roots must opt in to exempt paths (typically the
+// change-password and logout endpoints) so that runtime/auth stays free of
+// cell-specific path knowledge (F6 decoupling).
+func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOption {
+	return func(c *authConfig) { c.passwordResetExempt = fn }
+}
+
+// WithPasswordResetChangeEndpointHint sets the "METHOD /path" string emitted
+// as details.change_password_endpoint in the 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// response body — a navigational hint for clients that do not know which
+// endpoint finishes the reset flow.
+//
+// Empty value (the default) omits the hint entirely, keeping runtime/auth
+// free of any business-level path knowledge. Composition roots opt in
+// explicitly; typically they pass the same change-password path they list
+// via WithPasswordResetExemptEndpoints.
+func WithPasswordResetChangeEndpointHint(hint string) AuthOption {
+	return func(c *authConfig) { c.passwordResetChangeEndpointHint = hint }
 }
 
 // WithPublicEndpointMatcher sets a compiled method-aware predicate for the

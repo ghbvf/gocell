@@ -243,6 +243,33 @@ func WithPublicEndpoints(endpoints []string) Option {
 	}
 }
 
+// WithPasswordResetExemptEndpoints declares routes that remain reachable while
+// an authenticated token carries password_reset_required=true. Each entry must
+// be in "METHOD /path" format; path templates may use {xxx} wildcards.
+//
+// Composition roots supply these paths explicitly so runtime/auth does not
+// encode cell-specific routes — the default (no entries) is fail-closed.
+//
+// Forwarded to router.WithPasswordResetExemptEndpoints at Run() time.
+func WithPasswordResetExemptEndpoints(endpoints []string) Option {
+	return func(b *Bootstrap) {
+		b.passwordResetExemptEndpoints = endpoints
+	}
+}
+
+// WithPasswordResetChangeEndpointHint sets the client-navigation hint emitted
+// as details.change_password_endpoint in 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// responses. Empty (default) omits the hint. Composition roots typically set
+// this to the same path they list in WithPasswordResetExemptEndpoints that
+// finishes the reset flow — keeping business path literals out of runtime/auth.
+//
+// Forwarded to router.WithPasswordResetChangeEndpointHint at Run() time.
+func WithPasswordResetChangeEndpointHint(hint string) Option {
+	return func(b *Bootstrap) {
+		b.passwordResetChangeEndpointHint = hint
+	}
+}
+
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
@@ -479,33 +506,35 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath                  string
-	envPrefix                   string
-	httpAddr                    string
-	assembly                    *assembly.CoreAssembly
-	workers                     []worker.Worker
-	publisher                   outbox.Publisher
-	subscriber                  outbox.Subscriber
-	routerOpts                  []router.Option
-	authVerifier                auth.IntentTokenVerifier
-	authPublicEndpoints         []string
-	authDiscovery               bool // true when WithPublicEndpoints was called
-	shutdownTimeout             time.Duration
-	preShutdownDelay            time.Duration
-	listener                    net.Listener
-	healthCheckers              []namedChecker
-	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
-	verboseToken                string            // token for /readyz?verbose access control
-	closers                     []io.Closer       // middleware dependencies that need shutdown
-	disableObservabilityRestore bool
-	eventRouterReadyTimeout     time.Duration
-	eventRouterReadyTimeoutSet  bool
-	consumerMiddleware          []outbox.SubscriptionMiddleware
-	hookTimeout                 time.Duration // applied when assembly not pre-built
-	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver                cell.LifecycleHookObserver
-	metricsProvider             kernelmetrics.Provider
-	runOnce                     sync.Once
+	configPath                      string
+	envPrefix                       string
+	httpAddr                        string
+	assembly                        *assembly.CoreAssembly
+	workers                         []worker.Worker
+	publisher                       outbox.Publisher
+	subscriber                      outbox.Subscriber
+	routerOpts                      []router.Option
+	authVerifier                    auth.IntentTokenVerifier
+	authPublicEndpoints             []string
+	authDiscovery                   bool // true when WithPublicEndpoints was called
+	passwordResetExemptEndpoints    []string
+	passwordResetChangeEndpointHint string
+	shutdownTimeout                 time.Duration
+	preShutdownDelay                time.Duration
+	listener                        net.Listener
+	healthCheckers                  []namedChecker
+	adapterInfo                     map[string]string // static adapter metadata for /readyz verbose
+	verboseToken                    string            // token for /readyz?verbose access control
+	closers                         []io.Closer       // middleware dependencies that need shutdown
+	disableObservabilityRestore     bool
+	eventRouterReadyTimeout         time.Duration
+	eventRouterReadyTimeoutSet      bool
+	consumerMiddleware              []outbox.SubscriptionMiddleware
+	hookTimeout                     time.Duration // applied when assembly not pre-built
+	hookTimeoutSet                  bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver                    cell.LifecycleHookObserver
+	metricsProvider                 kernelmetrics.Provider
+	runOnce                         sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
@@ -987,6 +1016,12 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 	// auth bypass + tracing new-root + request_id rejection in a single option.
 	if len(b.authPublicEndpoints) > 0 {
 		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
+	}
+	if len(b.passwordResetExemptEndpoints) > 0 {
+		routerOpts = append(routerOpts, router.WithPasswordResetExemptEndpoints(b.passwordResetExemptEndpoints))
+	}
+	if b.passwordResetChangeEndpointHint != "" {
+		routerOpts = append(routerOpts, router.WithPasswordResetChangeEndpointHint(b.passwordResetChangeEndpointHint))
 	}
 	if b.authVerifier != nil {
 		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))

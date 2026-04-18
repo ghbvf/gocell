@@ -10,9 +10,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -30,15 +27,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/worker"
 )
-
-func generateDevPassword() (string, error) {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate dev password: %w", err)
-	}
-	return hex.EncodeToString(b), nil
-}
 
 // noopTxRunner executes fn directly without a real transaction (demo mode).
 type noopTxRunner struct{}
@@ -48,6 +38,29 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 }
 
 var _ persistence.TxRunner = noopTxRunner{}
+
+// ssoBFFLazyWorker defers worker resolution to Start/Stop time so that a
+// worker.Worker produced during asm.Init can be registered with
+// bootstrap.WithWorkers before bootstrap.New is called.
+// get() returns nil when admin already existed (bootstrap skipped), making
+// Start and Stop safe no-ops.
+type ssoBFFLazyWorker struct {
+	get func() worker.Worker
+}
+
+func (l *ssoBFFLazyWorker) Start(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Start(ctx)
+	}
+	return nil
+}
+
+func (l *ssoBFFLazyWorker) Stop(ctx context.Context) error {
+	if w := l.get(); w != nil {
+		return w.Stop(ctx)
+	}
+	return nil
+}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -82,17 +95,17 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
-	// Dev-only seed admin: in-memory store resets on every restart.
-	seedAdminPass, err := generateDevPassword()
-	if err != nil {
-		logger.Error("sso-bff: failed to generate seed admin password", slog.Any("error", err))
-		os.Exit(1)
-	}
+	// Lazy bootstrap worker: resolves the cleanup worker at WorkerGroup.Start() time
+	// (bootstrap Step 8), after asm.StartWithConfig has fired the sink (Step 3-4).
+	// No-op when admin already existed and sink was never called.
+	var adminBootstrapWorker worker.Worker
+	bootstrapSink := func(w worker.Worker) { adminBootstrapWorker = w }
 
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithSeedAdmin("admin", seedAdminPass),
+		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithBootstrapWorkerSink(bootstrapSink),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -158,21 +171,32 @@ func main() {
 		"POST /api/v1/access/sessions/refresh",
 	}
 
+	// lazyAdminWorker defers resolution to Start() time (after asm.StartWithConfig
+	// fires the sink). No-op when admin already existed.
+	lazyAdminWorker := &ssoBFFLazyWorker{get: func() worker.Worker { return adminBootstrapWorker }}
+
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
+		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+		bootstrap.WithWorkers(lazyAdminWorker),
 	)
 
-	logger.Info("sso-bff: seed admin ready — use these credentials to log in",
-		slog.String("username", "admin"),
-		slog.String("password", seedAdminPass),
-		slog.String("note", "dev-only, resets on restart"),
-	)
-	logger.Info("sso-bff: starting on :8081",
+	stateDir := os.Getenv("GOCELL_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/run/gocell"
+	}
+	credPath := stateDir + "/initial_admin_password"
+	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to "+credPath,
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
+		slog.String("cred_path", credPath),
 	)
 	if err := app.Run(ctx); err != nil {
 		logger.Error("sso-bff: application exited with error", slog.Any("error", err))

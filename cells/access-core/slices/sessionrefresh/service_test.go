@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -32,14 +34,38 @@ func init() {
 	}
 }
 
-func newTestService() (*Service, *mem.SessionRepository) {
+// newTestService creates a refresh service with a minimal in-memory userRepo
+// (P1-11: userRepo is a required positional parameter in NewService).
+//
+// seedUsers lists user IDs to pre-populate so GetByID succeeds. Since the
+// refresh fail-closed policy (F1) aborts refresh when userRepo.GetByID errors,
+// tests that exercise a successful refresh must seed the session's user.
+func newTestService(seedUsers ...string) (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	return NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
+	userRepo := mem.NewUserRepository()
+	for _, uid := range seedUsers {
+		u, _ := domain.NewUser(uid, uid+"@test.local", "hash")
+		u.ID = uid
+		_ = userRepo.Create(context.Background(), u)
+	}
+	return NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
+}
+
+// newTestServiceWithUserRepo creates a service and returns the userRepo for
+// tests that need to seed user fixtures and assert on the PasswordResetRequired flag.
+func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRepository) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
+	return svc, sessionRepo, userRepo
 }
 
 func issueTestToken(sub string) string {
-	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, nil, []string{auth.DefaultJWTAudience}, "")
+	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, sub, auth.IssueOptions{
+		Audience: []string{auth.DefaultJWTAudience},
+	})
 	return tok
 }
 
@@ -86,7 +112,7 @@ func TestService_Refresh(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService("usr-1", "usr-2")
 			refreshToken := tt.setup(repo)
 
 			pair, err := svc.Refresh(context.Background(), refreshToken)
@@ -103,7 +129,7 @@ func TestService_Refresh(t *testing.T) {
 }
 
 func TestService_Refresh_TokenRotation(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-rot")
 
 	// Create a session with a known refresh token.
 	rt1 := issueTestToken("usr-rot")
@@ -134,7 +160,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 }
 
 func TestService_Refresh_SigningMethodCheck(t *testing.T) {
-	svc, _ := newTestService()
+	svc, _ := newTestService("usr-1")
 
 	// Tokens signed with a different key should be rejected by the verifier.
 	otherPriv, otherPub := auth.MustGenerateTestKeyPair()
@@ -142,7 +168,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 	require.NoError(t, err)
 	otherIssuer, err := auth.NewJWTIssuer(otherKS, "gocell-access-core", time.Hour)
 	require.NoError(t, err)
-	tokenStr, _ := otherIssuer.Issue(auth.TokenIntentRefresh, "usr-1", nil, nil, "")
+	tokenStr, _ := otherIssuer.Issue(auth.TokenIntentRefresh, "usr-1", auth.IssueOptions{})
 
 	_, err = svc.Refresh(context.Background(), tokenStr)
 	assert.Error(t, err, "should reject token signed with a different key")
@@ -153,7 +179,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 // goroutines either get a version conflict (409) or trigger reuse detection.
 // Run with -race to verify memory safety.
 func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-conc")
 
 	rt := issueTestToken("usr-conc")
 	sess, err := domain.NewSession("usr-conc", "at", rt, time.Now().Add(time.Hour))
@@ -195,7 +221,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-sid")
 
 	rt := issueTestToken("usr-sid")
 	sess, err := domain.NewSession("usr-sid", "at", rt, time.Now().Add(time.Hour))
@@ -212,11 +238,11 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
-	assert.Equal(t, "sess-r1", accessClaims.Extra["sid"], "new access token must carry the session ID")
+	assert.Equal(t, "sess-r1", accessClaims.SessionID, "new access token must carry the session ID")
 
 	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
-	assert.Equal(t, "sess-r1", refreshClaims.Extra["sid"], "new refresh token must carry the session ID")
+	assert.Equal(t, "sess-r1", refreshClaims.SessionID, "new refresh token must carry the session ID")
 }
 
 // TestService_Refresh_SessionAwareVerifier proves that sessionrefresh still
@@ -230,10 +256,17 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 
 	// Wire refresh service with the intent-aware JWT verifier (production path).
-	svc := NewService(sessionRepo, roleRepo, testIssuer, testVerifier, slog.Default())
+	userRepo := mem.NewUserRepository()
+	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash")
+	seedUser.ID = "usr-sa"
+	require.NoError(t, userRepo.Create(context.Background(), seedUser))
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
-	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", nil, []string{auth.DefaultJWTAudience}, "sess-sa")
+	rt, err := testIssuer.Issue(auth.TokenIntentRefresh, "usr-sa", auth.IssueOptions{
+		Audience:  []string{auth.DefaultJWTAudience},
+		SessionID: "sess-sa",
+	})
 	require.NoError(t, err)
 
 	sess, err := domain.NewSession("usr-sa", "at", rt, time.Now().Add(time.Hour))
@@ -256,4 +289,85 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	// should reject it at the Verify() step because the session is revoked.
 	_, err = svc.Refresh(context.Background(), pair.RefreshToken)
 	assert.Error(t, err, "session-aware verifier should reject revoked session at Verify step")
+}
+
+// TestRefresh_FailClosedWhenUserUnavailable verifies the F1 fail-closed policy:
+// when userRepo.GetByID returns an error (user deleted mid-session, or transient
+// DB failure), refresh must return ErrAuthRefreshFailed rather than signing a
+// new access token that omits the password_reset_required claim. Returning a
+// default value here would let an attacker bypass the reset gate during a DB
+// blip.
+func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository() // intentionally empty — GetByID returns error
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
+
+	rt := issueTestToken("usr-missing")
+	sess, err := domain.NewSession("usr-missing", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-missing"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.Error(t, err, "fail-closed: refresh must error when user is unavailable")
+	assert.Nil(t, pair)
+}
+
+// TestRefresh_FlagPropagatesFromCurrentUser_AfterClear ensures that after a user
+// clears PasswordResetRequired (e.g. via ChangePassword), the next refresh
+// produces a new access token with password_reset_required=false.
+func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
+	svc, sessionRepo, userRepo := newTestServiceWithUserRepo()
+
+	// Seed a user with reset flag = false (already cleared).
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+	user, _ := domain.NewUser("ref-user-clear", "ref-clear@test.com", string(hash))
+	user.ID = "usr-ref-clear"
+	// PasswordResetRequired is false by default.
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	rt := issueTestToken("usr-ref-clear")
+	sess, _ := domain.NewSession("usr-ref-clear", "at", rt, time.Now().Add(time.Hour))
+	sess.ID = "sess-ref-clear"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+	assert.False(t, pair.PasswordResetRequired, "after clearing flag, refreshed token must have claim=false")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.False(t, claims.PasswordResetRequired, "access token claim must be false after flag cleared")
+}
+
+// TestRefresh_FlagStillSetWhenUserNotChanged ensures that a user who has not
+// changed their password keeps getting tokens with password_reset_required=true
+// on each refresh.
+func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
+	svc, sessionRepo, userRepo := newTestServiceWithUserRepo()
+
+	// Seed a user with reset flag = true (bootstrap user who hasn't changed password yet).
+	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
+	user, _ := domain.NewUser("ref-user-reset", "ref-reset@test.com", string(hash))
+	user.ID = "usr-ref-reset"
+	user.MarkPasswordResetRequired()
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	rt := issueTestToken("usr-ref-reset")
+	sess, _ := domain.NewSession("usr-ref-reset", "at", rt, time.Now().Add(time.Hour))
+	sess.ID = "sess-ref-reset"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.NoError(t, err)
+	assert.True(t, pair.PasswordResetRequired, "refreshed token must still have claim=true when user hasn't changed password")
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err)
+	assert.True(t, claims.PasswordResetRequired, "access token claim must be true when flag not cleared")
 }

@@ -66,6 +66,15 @@ type Claims struct {
 	// TokenIntent). Empty when absent — callers that enforce intent must
 	// treat empty as fail-closed.
 	TokenUse TokenIntent
+	// SessionID is the "sid" claim binding the token to a specific session.
+	// Empty when absent.
+	SessionID string
+	// PasswordResetRequired indicates that the subject must change their
+	// password before accessing business endpoints (except the exempt list).
+	// Only true when the JWT claim password_reset_required is explicitly true;
+	// defaults to false for backward compatibility with tokens that lack
+	// the claim (e.g., tokens issued before Phase 3.5).
+	PasswordResetRequired bool
 	// Extra holds additional claims not covered by the standard fields.
 	Extra map[string]any
 }

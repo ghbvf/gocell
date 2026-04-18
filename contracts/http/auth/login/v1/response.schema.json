@@ -8,9 +8,12 @@
       "properties": {
         "accessToken": { "type": "string" },
         "refreshToken": { "type": "string" },
-        "expiresAt": { "type": "string", "format": "date-time" }
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "sessionId": { "type": "string" },
+        "passwordResetRequired": { "type": "boolean" }
       },
-      "required": ["accessToken", "refreshToken", "expiresAt"]
+      "required": ["accessToken", "refreshToken", "expiresAt", "passwordResetRequired"],
+      "additionalProperties": false
     }
   },
   "required": ["data"]

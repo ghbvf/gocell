@@ -399,5 +399,278 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, code, errObj["code"])
-	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a change_password_endpoint hint
+	// in details (P2-10 fix). All other codes must have an empty details object.
+	if code != "ERR_AUTH_PASSWORD_RESET_REQUIRED" {
+		assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+	}
+}
+
+// assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
+// response and verifies the change_password_endpoint hint is present (P2-10).
+func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var body map[string]any
+	err := json.NewDecoder(rec.Body).Decode(&body)
+	require.NoError(t, err)
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "details must be a map")
+	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["change_password_endpoint"],
+		"403 password-reset response must include change_password_endpoint hint (P2-10)")
+}
+
+// testExemptMatcher returns the canonical (method, path) matcher used by the
+// test suite when exercising the password-reset gate. Mirrors the matcher that
+// cmd/core-bundle + examples/sso-bff compose via
+// bootstrap.WithPasswordResetExemptEndpoints.
+func testExemptMatcher(t *testing.T) func(method, urlPath string) bool {
+	t.Helper()
+	m, err := CompilePasswordResetExempts([]string{
+		"POST /api/v1/access/users/{id}/password",
+		"DELETE /api/v1/access/sessions/{id}",
+	})
+	require.NoError(t, err)
+	return m
+}
+
+// TestAuthMiddleware_PasswordResetRequired_DefaultMatcherIsFailClosed verifies
+// the F6 default: when no WithPasswordResetExemptMatcher is wired, every
+// authenticated request with password_reset_required=true returns 403. This
+// prevents runtime/auth from silently routing around cell-specific endpoints
+// via hard-coded paths.
+func TestAuthMiddleware_PasswordResetRequired_DefaultMatcherIsFailClosed(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("no route must be exempt when no matcher is wired")
+	}))
+
+	for _, mp := range [][2]string{
+		{http.MethodPost, "/api/v1/access/users/usr-1/password"},
+		{http.MethodDelete, "/api/v1/access/sessions/sess-1"},
+	} {
+		req := httptest.NewRequest(mp[0], mp[1], nil)
+		req.Header.Set("Authorization", "Bearer reset-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusForbidden, rec.Code,
+			"fail-closed: %s %s must 403 without matcher opt-in", mp[0], mp[1])
+	}
+}
+
+// --- Phase 3.5: PasswordResetRequired middleware enforcement tests ---
+
+// TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute verifies that a
+// token with PasswordResetRequired=true is blocked on non-exempt business
+// routes. The composition root wires WithPasswordResetChangeEndpointHint so
+// the 403 body carries the navigational hint; runtime/auth itself knows no
+// business paths.
+func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not reach business handler when password reset is required")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assertPasswordResetErrorWithHint(t, rec)
+}
+
+// TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate verifies
+// that POST /api/v1/access/users/{id}/password is exempt from the reset block
+// when the composition root opts in via WithPasswordResetExemptMatcher.
+func TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap-abc", PasswordResetRequired: true},
+	}
+	reached := false
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/usr-bootstrap-abc/password", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.True(t, reached, "change-password endpoint must be reachable with password-reset token")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_VariousIDs is a
+// table-driven test that verifies the path template wildcard matches various ID formats.
+func TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_VariousIDs(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr", PasswordResetRequired: true},
+	}
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		wantCode int
+	}{
+		{"uuid id", http.MethodPost, "/api/v1/access/users/550e8400-e29b-41d4-a716-446655440000/password", http.StatusOK},
+		{"numeric id", http.MethodPost, "/api/v1/access/users/12345/password", http.StatusOK},
+		{"kebab id", http.MethodPost, "/api/v1/access/users/usr-bootstrap-admin/password", http.StatusOK},
+		{"id with dots", http.MethodPost, "/api/v1/access/users/usr.admin.1/password", http.StatusOK},
+		{"path traversal with slash — no match", http.MethodPost, "/api/v1/access/users/usr/extra/password", http.StatusForbidden},
+		{"wrong method GET — no match", http.MethodGet, "/api/v1/access/users/usr-1/password", http.StatusForbidden},
+		{"no segment — no match", http.MethodPost, "/api/v1/access/users//password", http.StatusForbidden},
+	}
+
+	exempt := testExemptMatcher(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := AuthMiddleware(verifier, nil, WithPasswordResetExemptMatcher(exempt))(okHandler)
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer reset-token")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			assert.Equal(t, tc.wantCode, rec.Code, "path=%s method=%s", tc.path, tc.method)
+		})
+	}
+}
+
+// TestAuthMiddleware_PasswordResetRequired_AllowsLogout verifies that
+// DELETE /api/v1/access/sessions/{id} is exempt from the reset block when the
+// composition root opts in via WithPasswordResetExemptMatcher.
+func TestAuthMiddleware_PasswordResetRequired_AllowsLogout(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	reached := false
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-xyz", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.True(t, reached, "logout endpoint must be reachable with password-reset token")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt verifies
+// that GET /api/v1/access/users/{id}/password is NOT exempt (only POST is).
+func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("GET on change-password path must NOT be exempt")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/usr-1/password", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assertPasswordResetErrorWithHint(t, rec)
+}
+
+// TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
+// the runtime/auth default: without WithPasswordResetChangeEndpointHint, the
+// 403 response body has NO details.change_password_endpoint — runtime/auth
+// carries no business path knowledge, and the composition root opts in to
+// any hint explicitly.
+func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
+	}
+	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("should not reach handler")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
+	_, hasDetails := errObj["details"]
+	assert.False(t, hasDetails,
+		"without WithPasswordResetChangeEndpointHint, the response must carry no details map")
+}
+
+// TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token
+// (PasswordResetRequired=false) is not affected by the new enforcement logic.
+func TestAuthMiddleware_NoResetClaim_PassesThrough(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{Subject: "usr-normal", Roles: []string{"user"}},
+	}
+	reached := false
+	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, path := range []string{"/api/v1/configs", "/api/v1/data", "/api/v1/access/users/me"} {
+		t.Run(path, func(t *testing.T) {
+			reached = false
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer normal-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			assert.True(t, reached, "normal token must pass through to handler for path %s", path)
+			assert.Equal(t, http.StatusOK, rec.Code)
+		})
+	}
+}
+
+// --- matchPathTemplate unit tests ---
+
+func TestMatchPathTemplate(t *testing.T) {
+	tests := []struct {
+		template string
+		concrete string
+		want     bool
+	}{
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users/usr-abc/password", true},
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users/12345/password", true},
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users/u.1.2/password", true},
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users//password", false}, // empty segment
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users/usr/extra/password", false},
+		{"/api/v1/access/users/{id}/password", "/api/v1/access/users/usr-abc/other", false},
+		{"/api/v1/access/sessions/{id}", "/api/v1/access/sessions/sess-xyz", true},
+		{"/api/v1/access/sessions/{id}", "/api/v1/access/sessions/", false}, // empty segment
+		{"/static/path", "/static/path", true},
+		{"/static/path", "/static/other", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.template+"→"+tc.concrete, func(t *testing.T) {
+			got := matchPathTemplate(tc.template, tc.concrete)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

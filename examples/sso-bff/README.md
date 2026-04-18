@@ -19,23 +19,94 @@ The server starts on `:8081`.
 
 ## Seed User
 
-On startup, a random admin password is generated and printed to the console:
+On first startup, when no admin user exists, the bootstrap process creates
+an initial admin account and writes the credentials to a file. Read the file:
+
+```bash
+cat $TMPDIR/gocell/initial_admin_password
+```
+
+The file contains:
 
 ```
-{"level":"INFO","msg":"sso-bff: seed admin ready — use these credentials to log in","username":"admin","password":"<random>","note":"dev-only, resets on restart"}
+# GoCell initial admin credential
+# Generated at: 2026-04-18T19:00:00Z
+# Expires at:   2026-04-19T19:00:00Z
+# This file is auto-deleted by the cleanup worker.
+username=admin
+password=<random base64 password>
+expires_at=<unix timestamp>
 ```
 
-Copy the `password` value from the log and use it in the walkthrough below.
-The password resets every time the server restarts (in-memory only).
+Export `GOCELL_STATE_DIR` before starting so the file is written to a
+macOS-accessible path:
+
+```bash
+export GOCELL_STATE_DIR=$TMPDIR/gocell
+go run ./examples/sso-bff
+```
+
+See [docs/operations/first-run-setup.md](../../docs/operations/first-run-setup.md) for full
+deployment details (Docker, Kubernetes, troubleshooting).
+
+## First Login & Password Reset
+
+After reading the credential file, the admin token will carry
+`passwordResetRequired=true`. All business endpoints return 403 until the
+password is changed. Follow these steps:
+
+```bash
+# 1. Read the initial password
+INIT_PASS=$(grep '^password=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
+ADMIN_USER=$(grep '^username=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
+
+# 2. Login (passwordResetRequired=true in response)
+TOKEN_RESP=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${INIT_PASS}\"}")
+echo "$TOKEN_RESP" | jq .
+# {"data":{"accessToken":"...","passwordResetRequired":true,...}}
+
+BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
+
+# 3. Extract user ID from the JWT sub claim.
+# JWT uses base64url (RFC 4648 §5) WITHOUT padding, but `base64 -d` on
+# Linux/macOS expects padded input — restore padding before decoding,
+# otherwise base64 -d errors silently and USER_ID ends up empty.
+USER_ID=$(echo "$BOOTSTRAP_TOKEN" \
+  | cut -d. -f2 \
+  | tr '_-' '/+' \
+  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
+  | base64 -d \
+  | jq -r '.sub')
+
+# 4. Change password (returns new token with passwordResetRequired=false)
+NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
+  -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"oldPassword\":\"${INIT_PASS}\",\"newPassword\":\"MyStr0ngP@ss!\"}")
+echo "$NEW_TOKEN_RESP" | jq .
+# {"data":{"accessToken":"...","passwordResetRequired":false,...}}
+
+export ADMIN_TOKEN=$(echo "$NEW_TOKEN_RESP" | jq -r '.data.accessToken')
+```
+
+After this the `ADMIN_TOKEN` works for all business endpoints.
 
 ## API Walkthrough
 
-### 1. Login as seed admin
+Every endpoint below except `POST /api/v1/access/sessions/login` and
+`POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
+header (the public-endpoint list is declared in `examples/sso-bff/main.go`).
+`walkthrough_test.go` exercises the same sequence and is the authoritative
+behaviour record if a curl here disagrees.
+
+### 1. Login as admin (after completing First Login & Password Reset above)
 
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<password from startup log>"}' | jq
+  -d '{"username":"admin","password":"MyStr0ngP@ss!"}' | jq
 ```
 
 Save the returned `accessToken` as your admin token:
@@ -126,13 +197,15 @@ curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
 ### 10. Read a config entry
 
 ```bash
-curl -s http://localhost:8081/api/v1/config/site.title | jq
+curl -s http://localhost:8081/api/v1/config/site.title \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
 ### 11. List feature flags
 
 ```bash
-curl -s http://localhost:8081/api/v1/flags | jq
+curl -s http://localhost:8081/api/v1/flags \
+  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
 ### 12. Health checks

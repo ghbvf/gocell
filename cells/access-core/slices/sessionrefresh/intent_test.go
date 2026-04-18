@@ -19,7 +19,11 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 	svc, repo := newTestService()
 
 	// Issue an ACCESS-intent JWT (wrong for /auth/refresh) tied to a session.
-	bogusAccess, err := testIssuer.Issue(auth.TokenIntentAccess, "usr-att", []string{"user"}, []string{"gocell"}, "sess-att")
+	bogusAccess, err := testIssuer.Issue(auth.TokenIntentAccess, "usr-att", auth.IssueOptions{
+		Roles:     []string{"user"},
+		Audience:  []string{"gocell"},
+		SessionID: "sess-att",
+	})
 	require.NoError(t, err)
 
 	sess, err := domain.NewSession("usr-att", "at", bogusAccess, time.Now().Add(time.Hour))
@@ -35,7 +39,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-r1")
 
 	refresh := issueTestToken("usr-r1")
 	sess, err := domain.NewSession("usr-r1", "access-tok", refresh, time.Now().Add(time.Hour))
