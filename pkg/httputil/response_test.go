@@ -740,6 +740,44 @@ func attrValue(r slog.Record, key string) (string, bool) {
 	return result, found
 }
 
+// findWarnRecord returns the first slog.Record at Warn level captured by h,
+// or nil if none was recorded.
+func findWarnRecord(h *captureHandler) *slog.Record {
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn {
+			return &h.records[i]
+		}
+	}
+	return nil
+}
+
+// assertStringAttr asserts that the named attr is present on the record and
+// equals want.
+func assertStringAttr(t *testing.T, rec slog.Record, key, want string) {
+	t.Helper()
+	got, ok := attrValue(rec, key)
+	assert.True(t, ok, "log record must contain %q attr", key)
+	assert.Equal(t, want, got)
+}
+
+// assertAttrAbsent asserts that the named attr is NOT present on the record.
+func assertAttrAbsent(t *testing.T, rec slog.Record, key, reason string) {
+	t.Helper()
+	_, has := attrValue(rec, key)
+	assert.False(t, has, reason)
+}
+
+// assertInternalAttr asserts either the 'internal' attr matches internalMessage
+// (when non-empty) or is absent (when empty).
+func assertInternalAttr(t *testing.T, rec slog.Record, internalMessage string) {
+	t.Helper()
+	if internalMessage != "" {
+		assertStringAttr(t, rec, "internal", internalMessage)
+		return
+	}
+	assertAttrAbsent(t, rec, "internal", "log record must NOT contain 'internal' attr when InternalMessage is empty")
+}
+
 func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -775,61 +813,27 @@ func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
 			ctx = ctxkeys.WithTraceID(ctx, "trace-4xx-001")
 			ctx = ctxkeys.WithSpanID(ctx, "span-4xx-001")
 
-			var err error
+			err := errcode.New(tt.code, "test message")
 			if tt.internalMessage != "" {
 				err = errcode.Safe(tt.code, "client-facing message", tt.internalMessage)
-			} else {
-				err = errcode.New(tt.code, "test message")
 			}
 
 			rec := httptest.NewRecorder()
 			WriteDomainError(ctx, rec, err)
-
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			// Find the 4xx WARN record.
-			var warnRec *slog.Record
-			for i := range handler.records {
-				if handler.records[i].Level == slog.LevelWarn {
-					warnRec = &handler.records[i]
-					break
-				}
-			}
+			warnRec := findWarnRecord(handler)
 			require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
 
-			codeVal, ok := attrValue(*warnRec, "code")
-			assert.True(t, ok, "log record must contain 'code' attr")
-			assert.Equal(t, string(tt.code), codeVal)
-
-			statusVal, ok := attrValue(*warnRec, "status")
-			assert.True(t, ok, "log record must contain 'status' attr")
-			assert.Equal(t, slog.IntValue(tt.wantStatus).String(), statusVal)
-
-			// The client-facing 'message' must NOT appear in server logs — it may
+			assertStringAttr(t, *warnRec, "code", string(tt.code))
+			assertStringAttr(t, *warnRec, "status", slog.IntValue(tt.wantStatus).String())
+			// Client-facing 'message' must NOT appear in server logs — it may
 			// contain user identifiers interpolated by the caller into errcode.New.
-			_, hasMsg := attrValue(*warnRec, "message")
-			assert.False(t, hasMsg, "log record must NOT contain 'message' attr — use InternalMessage for diagnostics")
-
-			if tt.internalMessage != "" {
-				internalVal, hasInternal := attrValue(*warnRec, "internal")
-				assert.True(t, hasInternal, "log record must contain 'internal' attr when InternalMessage is set")
-				assert.Equal(t, tt.internalMessage, internalVal)
-			} else {
-				_, hasInternal := attrValue(*warnRec, "internal")
-				assert.False(t, hasInternal, "log record must NOT contain 'internal' attr when InternalMessage is empty")
-			}
-
-			reqIDVal, ok := attrValue(*warnRec, "request_id")
-			assert.True(t, ok, "log record must contain 'request_id' attr")
-			assert.Equal(t, "req-4xx-001", reqIDVal)
-
-			traceVal, ok := attrValue(*warnRec, "trace_id")
-			assert.True(t, ok, "log record must contain 'trace_id' attr")
-			assert.Equal(t, "trace-4xx-001", traceVal)
-
-			spanVal, ok := attrValue(*warnRec, "span_id")
-			assert.True(t, ok, "log record must contain 'span_id' attr")
-			assert.Equal(t, "span-4xx-001", spanVal)
+			assertAttrAbsent(t, *warnRec, "message", "log record must NOT contain 'message' attr — use InternalMessage for diagnostics")
+			assertInternalAttr(t, *warnRec, tt.internalMessage)
+			assertStringAttr(t, *warnRec, "request_id", "req-4xx-001")
+			assertStringAttr(t, *warnRec, "trace_id", "trace-4xx-001")
+			assertStringAttr(t, *warnRec, "span_id", "span-4xx-001")
 		})
 	}
 }
