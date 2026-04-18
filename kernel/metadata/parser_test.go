@@ -1106,7 +1106,6 @@ func TestParseContract_HTTPResponses(t *testing.T) {
 		wantKeys       []int
 		wantDesc       map[int]string
 		wantSchemaRef  map[int]string
-		wantErrMsg     string
 	}{
 		{
 			name: "no responses field",
@@ -1185,11 +1184,6 @@ endpoints:
 			}
 			p := NewParser("")
 			pm, err := p.ParseFS(fsys)
-			if tt.wantErrMsg != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrMsg)
-				return
-			}
 			require.NoError(t, err)
 			require.Len(t, pm.Contracts, 1)
 			var c *ContractMeta
