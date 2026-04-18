@@ -1,155 +1,192 @@
-# ADR-AUTH-SETUP-01: First-Run Admin Bootstrap
+# ADR: First-Run Setup 模式 — 内网专属 Listener
 
-**Status**: Accepted
-**Date**: 2026-04-18
-**Author**: AUTH-SETUP-01 工作流
-**Deciders**: GoCell 工程团队
+- 编号: ADR-AUTH-SETUP-01
+- 日期: 2026-04-18
+- 状态: Proposed
+- 相关: backlog P1-12 / PR#172 review F1 / backlog R4 INTERNAL-LISTENER-01
 
----
+## 上下文
 
-## Context
+当前 `examples/sso-bff/main.go` 在启动时：
 
-首次部署 GoCell 时，access-core cell 中没有任何 user，因此没有 admin 角色持有者。
-历史实现在 `examples/sso-bff/main.go` 用 `slog.Info("seed admin ready", slog.String("password", seedAdminPass))` 把随机生成的 admin 明文密码写入 stdout，容器日志会被 Loki/CloudWatch/Datadog 等系统长期采集，属于 PR#172 review F1 标记的安全反模式。
+1. `generateDevPassword()` 随机生成 12 字节 admin 密码；
+2. `accesscore.WithSeedAdmin("admin", seedAdminPass)` 灌入 in-memory UserRepository；
+3. `logger.Info("sso-bff: seed admin ready ...", slog.String("password", seedAdminPass))` 将明文密码写入 stdout。
 
-同时该路径没有 production-grade 出口——dev 模式 seed 一旦关闭，生产部署根本无法创建第一个 admin。
+PR#172 外部审查标记 F1 — 明文密码落日志是硬问题：容器日志会被 Loki / CloudWatch / Datadog 采集长期保存，stdout 会被 sidecar 抓到。即使只用于 dev，这条代码路径的存在本身就是安全反模式，且 prod 部署根本无从 bootstrap 一个 admin（没有 seed，没有注册页）。
 
-### 调研背景
+AUTH-SETUP-01 初案：新建 `POST /api/v1/setup/admin` 公开端点，无 admin 时有效、有 admin 后 409。这暴露一个公网无鉴权管理员创建端点，引入多处需要强假设的防抢占逻辑（token、rate limit、localhost 判定等）。
 
-Agent C 调查了 7 个主流产品（PostgreSQL/Vault/Keycloak/GitLab/etcd/Grafana/MinIO），无一例外通过 stdout/文件/env var/stdin 等带外通道完成首次 admin bootstrap。没有任何产品走 HTTP 端点完成首次 admin 创建：HTTP bootstrap 端点是鸡蛋悖论——认证根尚未建立时，端点无法可靠认证调用者。
+## 威胁模型
 
-Agent A 调查了 Kubernetes，发现 K8s v1.20 移除 `--insecure-bind-address=127.0.0.1` 是因为 CVE-2020-8558 证明容器环境下 `127.0.0.1` 边界不可信，本项目原方案 D（独立内网 listener）的前提被证伪。
+假定攻击者：
 
----
+| 能力 | 是否具备 | 说明 |
+|------|---------|------|
+| 公网可达 `/api/v1/*` | ✅ | 这是服务存在价值 |
+| K8s Pod 内部网络（ClusterIP）可达 | ❌ | 默认网络策略隔离 |
+| kubectl / SSH / bastion 接入集群 | ❌ | 运维人员专属 |
+| 读取应用容器 stdout / file 日志 | ❌ | SRE 专属（但一次泄漏长期留存） |
 
-## Decision
+**核心观察**：合法 bootstrap 的人 100% 具备"进入集群内部"能力（运维部署是他做的），攻击者**按定义**没有。两者的能力鸿沟就是我们可以利用的安全边界 — 把 setup 端点放到一个攻击者网络上够不到的 listener 上，整个"谁先抢到谁是 admin"的竞态根本不存在。
 
-采用**方案 H**：对标 GitLab `/etc/gitlab/initial_root_password` + Keycloak v26 `kc.sh bootstrap-admin` 的带外凭据通道模式。
+## 候选方案
 
-### 核心机制
+| # | 方案 | 公网暴露 | 防抢占机制 | 运维动作 | 密码是否落日志 |
+|---|------|---------|-----------|---------|--------------|
+| A | 公网端点 + `setupRequired` 状态 | ✅ | 首次写入后 409 | 前端打开 setup 页 | ❌ |
+| B | 公网端点 + `X-Setup-Token` 头（token 来自 env / stdout） | ✅ | token 校验 | 运维读 env，curl | ⚠️ token 短时出现在 deploy 日志 |
+| C | 公网端点 + localhost 绑定判定（reverse-proxy 剥离） | 取决于代理配置 | IP allowlist | SSH 进容器 curl localhost | ❌ |
+| D | **独立内网 listener（ClusterIP-only / 127.0.0.1 默认），公网 router 不挂载 setup 路由** | ❌ | 网络层即隔离 | `kubectl port-forward` + curl | ❌ |
+| E | 无 listener，offline CLI：`gocell admin bootstrap --dsn=...` | ❌ | 只能直连 DB | K8s Job / init container | ❌ |
 
-1. **启动期检测**：access-core 在 `Init()` 阶段调用 `Bootstrapper.Run()`，通过 `roleRepo.CountByRole("admin")` 检测是否存在 admin 用户。
-2. **随机密码生成**：若无 admin，调用 `initialadmin.GeneratePassword()` 用 `crypto/rand` 生成 32 字节、base64url no-pad 编码的随机密码。
-3. **双通道输出**：
-   - `slog.Warn("initial admin created", slog.String("username", "admin"), slog.String("credential_file", path))` — **绝不**把 password 作为 slog attr 写入
-   - 原子写文件（`O_EXCL + rename`，权限 `0600`，目录 `0700`），默认路径 `/run/gocell/initial_admin_password`，可通过 `GOCELL_STATE_DIR` env var 覆盖
-4. **凭据文件格式**（见 `initialadmin.WriteCredentialFile`）：
+A、B 都把端点暴露到公网，始终需要回答"如果 token / 状态检测有 bug，攻击者能抢到 admin 吗"。C 依赖运维正确配置反向代理，一次错误就失守。D 把**认证问题彻底转成网络隔离问题**，后者是已经通过 K8s NetworkPolicy / Ingress 白名单解决过的老问题。E 最彻底，但需要 CLI 依赖 access-core 的密码哈希与 repo，工程量大且 CLI/server 两条 bootstrap 路径长期并存。
 
+## 决策
+
+**采纳方案 D。**
+
+1. **新增 internal listener**：`runtime/bootstrap` 增加第二个 `http.Server`，默认绑定 `127.0.0.1:9090`，可通过 `GOCELL_INTERNAL_BIND` 覆盖（见下文"绑定地址选择"）。Router 与公网 listener 独立，不共享中间件链（尤其不套 JWT AuthMiddleware — 本 listener 默认全量信任）。
+2. **setup slice 只挂到 internal listener**：contract 放 `contracts/http/auth/setup/{status,admin}/v1/`，路径为 `/internal/v1/setup/status` 与 `POST /internal/v1/setup/admin`。`cell.go` 注册时使用新的 `cell.RegisterInternalHTTP(...)` 钩子（kernel/cell 层新增），公网 Router 对这两条路径返回 404。
+3. **无 auth middleware，有一次性语义**：setup 端点不加 Bearer gate（加了反而误导——没有 admin 就不可能有 token）。`UserRepository` 新增原子方法 `CreateIfNoAdmin(user) (created bool, err error)`，in-memory 用 mutex、PG 用 `INSERT ... WHERE NOT EXISTS (SELECT 1 FROM user_roles WHERE role_id='admin')` 或 advisory lock。第二次调用返回 409 `ERR_SETUP_ALREADY_COMPLETED`。
+4. **删除 seed path**：`accesscore.WithSeedAdmin` 连同 `generateDevPassword` 与日志全删；`examples/sso-bff/walkthrough_test.go` 改成测试开头 `POST /internal/v1/setup/admin` 初始化 admin，真实模拟部署后第一次 bootstrap 的流程。
+5. **生产部署样板**（写入 `docs/deployment/`），三种形态各一份：
+
+   **Docker（单容器或 compose）** — 容器内 bind 127.0.0.1:9090，不在 `ports:` 发布；
+   ```bash
+   docker compose exec app \
+     curl -X POST http://127.0.0.1:9090/internal/v1/setup/admin \
+          -H 'Content-Type: application/json' \
+          -d '{"username":"admin","password":"..."}'
    ```
-   # GoCell initial admin credential
-   # Generated at: <ISO8601>
-   # Expires at:   <ISO8601>
-   # This file is auto-deleted by the cleanup worker.
-   username=<username>
-   password=<password>
-   expires_at=<unix timestamp>
+
+   **Docker（想从宿主 loopback 访问）** — `GOCELL_INTERNAL_BIND=0.0.0.0:9090` + `-p 127.0.0.1:9090:9090`：
+   ```bash
+   docker run -e GOCELL_INTERNAL_BIND=0.0.0.0:9090 -p 127.0.0.1:9090:9090 ...
+   curl -X POST http://127.0.0.1:9090/internal/v1/setup/admin ...
    ```
+   `127.0.0.1:` 前缀是关键，它让宿主 iptables 只允许宿主 loopback 访问；漏掉就等于公网暴露。
 
-5. **24h TTL worker**：通过 `runtime/worker.Worker` 接口实现的 cleaner（`time.AfterFunc`），由 `WithBootstrapWorkerSink` 桥接到 `bootstrap.WithWorkers`，超时后调用 `RemoveCredentialFile`（先校验 mode 防篡改再删除）。
-6. **PasswordResetRequired 强制**：
-   - 创建 admin user 时标记 `domain.User.PasswordResetRequired = true`
-   - `sessionlogin.Service.Login` 从 user 读 flag，写入 `IssueOptions.PasswordResetRequired`
-   - JWT claim `password_reset_required: true`（false 时省略以压缩 token 体积）
-   - `AuthMiddleware.ServeHTTP` 在 `VerifyIntent` 成功后追加检测：若 `claims.PasswordResetRequired && !isPasswordResetExempt(method, path)` → 403 `ERR_AUTH_PASSWORD_RESET_REQUIRED`
-   - Exempt 端点（硬编码）：`POST /api/v1/access/users/{id}/password`（改密）、`DELETE /api/v1/access/sessions/{id}`（登出）
-7. **ChangePassword 自动脱困**：`identitymanage.Service.ChangePassword` 在 bcrypt 校验旧密码 → 更新密码 → `ClearPasswordResetRequired` 后，**同步签发新 TokenPair**（新 token 不含 reset claim），客户端拿到新 token 即可访问业务接口，避免"改密成功但所有请求仍 403"的 UX 陷阱。
+   **Kubernetes** — 容器内保持默认 127.0.0.1:9090，Service 只开 8080，运维用 port-forward：
+   ```bash
+   kubectl port-forward pod/gocell-core-0 9090:9090
+   curl -X POST http://127.0.0.1:9090/internal/v1/setup/admin ...
+   ```
+   如需跨 pod（ops 控制面），`GOCELL_INTERNAL_BIND=0.0.0.0:9090` + 专用 ClusterIP Service + NetworkPolicy 只允许 `ops` namespace 入站。
 
-### IssueOptions 重构（T2）
+## 绑定地址选择
 
-`JWTIssuer.Issue` 签名重构为：
+选 `127.0.0.1:9090` 不是挑默认值，而是借 Linux network namespace 做**零配置隔离**：socket 只能被"同一 netns 内进程"连上，不依赖任何防火墙/NetworkPolicy 规则是否被正确写入。所谓"同一 netns"在不同部署形态下实际含义不同，运维路径因此也不同：
 
-```go
-func (j *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions) (string, error)
+| 部署形态 | 同 netns 是谁 | 运维 bootstrap 路径 | 默认 127.0.0.1 够用 | 需要覆盖时的配置 |
+|---------|-------------|------------------|------------------|-------------|
+| 裸机 / systemd | 本机进程 | SSH + `curl localhost:9090` | ✅ | — |
+| `docker run`（无 `-p 9090`） | 容器内进程 | `docker exec -it app curl localhost:9090/...` | ✅ | — |
+| `docker-compose`（默认无 `ports`） | 同容器进程 | `docker compose exec app curl localhost:9090/...` | ✅ | — |
+| `docker run -p 127.0.0.1:9090:9090` | 宿主机 loopback | 宿主 `curl 127.0.0.1:9090` | ❌ docker-proxy 需连容器外部接口 | `GOCELL_INTERNAL_BIND=0.0.0.0:9090`，隔离由 docker publish 的 `127.0.0.1:` 前缀保证 |
+| `kubectl port-forward pod/x 9090:9090` | kubelet 进入 pod netns 转发 | 运维机 `curl 127.0.0.1:9090` | ✅（port-forward 本质即进 netns 连 loopback） | — |
+| K8s 跨 pod（ops sidecar / admin 另一个 pod） | 不同 netns | `curl <podip>:9090` | ❌ | `GOCELL_INTERNAL_BIND=0.0.0.0:9090` + 单独 ClusterIP Service + NetworkPolicy allowlist |
+
+**关键原则：server 的 bind 只是一半，另一半永远是 deployment 层的端口暴露策略。** 三条不变式：
+
+1. **public listener（8080）** 允许被 Ingress / LoadBalancer / docker `-p` 无前缀发布到公网；
+2. **internal listener（9090）** 永远不被公网 Ingress 挂载、永远不被 docker `-p 0.0.0.0:9090:9090` 或纯 `-p 9090:9090` 发布；
+3. 当 `GOCELL_INTERNAL_BIND` 不是 loopback 时，**必须**有一层额外网络策略（docker host-loopback 绑定、K8s NetworkPolicy、cloud SG）显式收束 — bootstrap 脚本做 fail-fast 检查并在 slog.Warn 提示"internal listener is bound to non-loopback; ensure network isolation is in place"。
+
+端口号 9090 可 collision Prometheus（其默认端口）；例子里 sso-bff 已占 8081。实际值用 env 可改，ADR 仅建议默认；`cmd/core-bundle` 选 `GOCELL_INTERNAL_BIND=127.0.0.1:9090`，sso-bff 例子选 `127.0.0.1:8091`（与其 public 8081 对齐 +10 的惯例）。
+
+## 安全论证
+
+- **无抢占窗口**：攻击者从公网到 9090 不可达，window 宽度 = 0。
+- **无凭据泄漏**：密码由运维自己选择并通过 TLS（kubectl port-forward 本身走 SPDY/加密）传入，不经过 env / 日志。
+- **无降级路径**：没有 "dev 便利模式" 自动 seed，也就不存在"忘记关"导致 prod 泄漏的风险。dev 通过 walkthrough_test 或 `make dev-seed` 脚本显式调同一端点，和 prod 100% 同路径。
+- **R4 自然前推**：本方案顺手引入"独立 internal listener"这层基础设施。原 `/internal/v1/access/roles/*`（rbacassign）当前还挂在公网 Router 上，可以作为独立 PR 迁移到新 internal listener、去掉 bearer JWT 依赖（内网信任 + 网络策略已经够），彻底兑现 R4 INTERNAL-LISTENER-01。
+
+## 契约草案
+
+`contracts/http/auth/setup/status/v1/contract.yaml`
+
+```yaml
+id: c-auth-setup-status-v1
+kind: http
+lifecycle: active
+http:
+  method: GET
+  path: /internal/v1/setup/status
+  listener: internal          # 新增字段，供 bootstrap 决定挂载到哪个 Router
+response:
+  schema:
+    type: object
+    properties:
+      data:
+        type: object
+        properties:
+          setupRequired: { type: boolean }
+        required: [setupRequired]
 ```
 
-其中 `IssueOptions` 聚合了原本的散参数：
+`contracts/http/auth/setup/admin/v1/contract.yaml`
 
-```go
-type IssueOptions struct {
-    Roles                 []string
-    Audience              []string
-    SessionID             string
-    PasswordResetRequired bool
-}
+```yaml
+id: c-auth-setup-admin-v1
+kind: http
+lifecycle: active
+http:
+  method: POST
+  path: /internal/v1/setup/admin
+  listener: internal
+request:
+  schema:
+    type: object
+    required: [username, password]
+    properties:
+      username: { type: string, minLength: 3, maxLength: 64 }
+      password: { type: string, minLength: 12 }
+response:
+  status: 201
+  schema:
+    type: object
+    properties:
+      data:
+        type: object
+        properties:
+          userId: { type: string }
+          username: { type: string }
+errors:
+  - status: 409
+    code: ERR_SETUP_ALREADY_COMPLETED
+    when: admin already exists
+  - status: 400
+    code: ERR_VALIDATION_WEAK_PASSWORD
+    when: password fails strength policy
 ```
 
-此为 backlog T2 的触发条件（Issue() 第 6 参），本 PR 顺带完成，消除参数列表持续膨胀的技术债。
+**不返回 access/refresh token**：bootstrap 和登录是两件事，setup 成功后运维走标准 `POST /api/v1/access/sessions/login` 拿到 token，确保 token 颁发路径只有一条。
 
-### 关键约束
+## 实施分阶段
 
-- `cmd/core-bundle` 删除 `buildAdminOpts` 整段，不再读取 `GOCELL_ADMIN_USER` / `GOCELL_ADMIN_PASS` env var（breaking change，接受）
-- `examples/sso-bff` 删除 `generateDevPassword` 及明文 slog.Info 路径
-- 竞态处理：多进程同时 bootstrap 时，`userRepo.Create` 返回 `ErrAuthUserDuplicate` → silent skip + recount confirm（见 `Bootstrapper.Run` 实现）
+| 阶段 | 交付 | 估时 | 依赖 |
+|------|------|------|------|
+| Phase 1 | `runtime/bootstrap` internal listener 基础设施 + `kernel/cell.RegisterInternalHTTP` + `contract.http.listener` 字段 + metadata validator | 3h | 无 |
+| Phase 2 | `setup` slice + contract + `UserRepository.CreateIfNoAdmin` in-memory 实现 + cell 接线 | 3h | Phase 1 |
+| Phase 3 | 删除 `WithSeedAdmin` / `generateDevPassword` / seed 日志；`walkthrough_test.go` 改用 setup 端点 | 1h | Phase 2 |
+| Phase 4 | K8s 部署样板文档 + NetworkPolicy 示例 | 1h | Phase 3 |
+| Phase 5（可选，独立 PR） | R4 迁移 `rbacassign /internal/v1` 到 internal listener，去除 bearer JWT | 4h | Phase 1 |
 
----
+总计 8h（不含 Phase 5），比原 6h 多 2h 用于 listener 基础设施；换来一个可复用能力且消除整条公网攻击面。
 
-## Consequences
+## 未决
 
-### 正面影响
+1. **PG 实现的 `CreateIfNoAdmin` 原子性**：X1 PG-DOMAIN-REPO 上线时用 advisory lock 还是唯一索引？倾向唯一索引 `WHERE role_id='admin'` partial index，单条 INSERT 竞态由 PG 保证。本 ADR 只定接口语义，PG 落地写进 X1 的 PR。
+2. **内网 listener 的 observability**：`/readyz` `/metrics` 是否也迁过去？建议迁（和 setup 一样内部）。但本 PR 只搬 setup，observability 作为 R4 的一部分另评审。
+3. **多副本场景**：HA 部署下每个 pod 都会监听 9090，kubectl port-forward 只会连到其中一个。`CreateIfNoAdmin` 的原子性靠 PG 层保证，port-forward 落到哪个 pod 不影响正确性。
 
-- **PR#172 review F1 彻底解决**：明文密码不再出现在任何 slog 输出，消除容器日志安全风险
-- **与对标产品行为一致**：GitLab/Keycloak/Vault 均采用相同模式，运维团队有成熟经验
-- **server-side enforcement 闭环**：攻击者即使获得泄漏的 bootstrap 密码，也只能执行改密操作（middleware 拦截其他端点），无法无限制访问系统
-- **T2 技术债还清**：IssueOptions 重构落地，后续扩展新 claim 不再需要修改函数签名
+## 对标
 
-### 负面影响 / 已知限制
+- **Kubernetes**: `kube-apiserver --secure-port=6443` 公网 + `--bind-address=127.0.0.1` 健康端点；敏感操作走 `kubectl exec`/port-forward。
+- **PostgreSQL**: 初始化只通过 `initdb` + Unix socket 本地连接，没有"公网创建超级用户"端点。
+- **etcd**: `--listen-client-urls` 公网 + `--listen-peer-urls` 内网，敏感 bootstrap 命令只接 peer listener。
+- **Vault**: `vault operator init` 必须本地 CLI 或 API 带 root token；无公网自助初始化。
+- **GitLab**: 历史上用 `gitlab-rails runner` 或 `/etc/gitlab/initial_root_password` 文件（不走 HTTP）。
 
-- **运维 bootstrap 流程新增一步**：需要读取凭据文件（`cat /run/gocell/initial_admin_password` 或 `kubectl exec`），对比历史"直接看日志"稍复杂，但与对标产品一致
-- **`GOCELL_ADMIN_USER` / `GOCELL_ADMIN_PASS` 不再生效**：现有使用这两个 env var 的部署脚本需更新
-- **macOS 开发需要手动 export `GOCELL_STATE_DIR`**（`/run/` 在 macOS 不存在）
-- **多副本 PG 竞态防护当前靠 unique constraint + ErrAuthUserDuplicate silent skip**，PG advisory lock 加固已列入 backlog T-PG-ADVISORY-LOCK-01，X1 PG-DOMAIN-REPO 上线时一并实现
-
----
-
-## Rejected Alternatives
-
-### 方案 D — 独立内网 Listener（originally proposed）
-
-**原始方案**：在启动期绑定一个仅监听 `127.0.0.1` 的独立 HTTP 端口，暴露 `POST /bootstrap/admin` 端点，认为 localhost boundary 可以隔离外部访问。
-
-**否决理由**：K8s CVE-2020-8558 和 CVE-2020-8559 证明，在容器化/Pod 共享网络命名空间环境下，`127.0.0.1` 边界**不可信**。同一 Pod 内的任意容器（包括 sidecar、init container）均可访问 loopback 地址，恶意 sidecar 可直接调用 bootstrap 端点。K8s 因此在 v1.20 移除了 `--insecure-bind-address` 功能，官方安全公告明确指出"localhost is not a security boundary in containers"。
-
-**参考**：
-- https://github.com/kubernetes/kubernetes/issues/91506
-- https://github.com/kubernetes/kubernetes/issues/92315
-
-**历史价值保留**：方案 D 促使了对"绑定地址是否构成安全边界"的深入调查，调查结论最终指向了方案 H。
-
-### 方案 F — API 级 IP 过滤中间件
-
-**描述**：在公共 HTTP server 上对 `/bootstrap/admin` 端点增加 IP 过滤中间件，只允许来自 `127.0.0.1` 或私有 IP 段的请求。
-
-**否决理由**：IP 过滤依赖 `X-Forwarded-For` / `X-Real-IP` header 的信任链配置正确性——一次代理跳数（`--proxy-count`）配置错误，或 ingress 不剥离 XFF header，即可导致攻击者伪造 IP 绕过过滤、公网暴露 bootstrap 端点。GitLab/Rails 历史上出现过多次与 XFF 信任链相关的 CVE，证明该模式在生产环境中脆弱。
-
-### HTTP 公网 Setup Endpoint（任何形式）
-
-**描述**：任何形式的"首次设置"HTTP 端点，无论是公网暴露还是依赖 IP 过滤/请求体内密钥校验。
-
-**否决理由**：鸡蛋悖论——认证根（第一个 admin）尚未建立时，端点无法可靠认证调用者。即使加入"初始化令牌"机制，该令牌本身的分发又是一个同样的问题。Agent C 对 7 个主流产品的调研结论：PostgreSQL 用 `peer` 认证本地 socket、Vault 用 `operator init` 标准输出、Keycloak v26 用 `kc.sh bootstrap-admin`、GitLab 用 `/etc/gitlab/initial_root_password` 文件、etcd 用 auth API 本地 curl、Grafana 用 `GF_SECURITY_ADMIN_PASSWORD` env var、MinIO 用 `MINIO_ROOT_PASSWORD` env var。**无一例外使用带外通道，没有任何产品走 HTTP 端点完成首次 admin 创建**。
-
----
-
-## References / 对标
-
-| 产品 | 机制 | 参考链接 |
-|------|------|---------|
-| GitLab | `/etc/gitlab/initial_root_password`，首次 reconfigure 生成，24h TTL 后自动删除 | https://docs.gitlab.com/security/reset_user_password/ |
-| Keycloak v26 | `kc.sh bootstrap-admin`，带外 CLI 命令写入 realm admin | https://www.keycloak.org/server/bootstrap-admin-recovery |
-| HashiCorp Vault | `vault operator init`，标准输出 unseal keys + root token，单次输出不存储 | https://github.com/hashicorp/vault/blob/main/command/operator_init.go |
-| K8s CVE-2020-8558 教训 | localhost 不是容器安全边界，直接否决了方案 D | https://github.com/kubernetes/kubernetes/issues/92315 |
-
----
-
-## Implementation Notes
-
-实现分 5 个 Phase 落地：
-
-| Phase | 内容 | 状态 |
-|-------|------|------|
-| 1 | `initialadmin` 工具包（generator + credfile + cleaner） | 完成 (commit 6b10bfb) |
-| 2 | TTL Cleaner worker | 完成 (commit 1a60d7e) |
-| 3 | Bootstrapper + domain.PasswordResetRequired + 删除 WithSeedAdmin | 完成 (commit ac9d9f6) |
-| 3.5 | JWT IssueOptions 重构 (T2) + AuthMiddleware password-reset enforcement | 完成 (commit 2fed6ae) |
-| 3.6 | ChangePassword + RequirePasswordReset full closure | 完成 (commit 6698b31) |
-| 4 | cmd/core-bundle + sso-bff + e2e walkthrough cutover | 完成 (commit e60293b) |
-| 5 | ADR Accepted + 运维手册 + backlog 更新 | 完成（本 commit） |
+业界共识：**bootstrap 超级用户不经过公网 HTTP**。本 ADR 与此对齐。

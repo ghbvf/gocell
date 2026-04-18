@@ -348,8 +348,9 @@ go test ./kernel/...                            # 改了 kernel 时
 
 ## 阶段 5: 输出 + 验证
 
-报告保存到 `.claude/tools/docs/`，命名: `yyyyMMddHHmm-{diagnose|fix|review-verify}-{简称}.md`。
-三种形态: A 诊断报告（未修）/ B 修复报告（已修）/ C 批量验证（审查报告）。
+- 诊断报告（未修）
+- 修复报告（已修）
+- 批量验证（审查报告）
 
 **Backlog 验证**（4.8 已执行，此处 grep 确认）：
 - FIXED finding 在 backlog 标了 `✅` + PR 编号
