@@ -353,12 +353,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 		})
 	}()
 
-	require.Eventually(t, func() bool {
-		bus.mu.RLock()
-		defer bus.mu.RUnlock()
-		gs := bus.groupSubs["race.topic"][""]
-		return gs != nil && len(gs.subs) == 1
-	}, time.Second, 10*time.Millisecond)
+	<-bus.Ready(outbox.Subscription{Topic: "race.topic"})
 
 	var stop atomic.Bool
 	var publishStarted atomic.Int32
@@ -916,7 +911,12 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond) // let subscriptions register
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		gs := bus.groupSubs["session.created"]["audit-core"]
+		return gs != nil && len(gs.subs) == 2
+	}, time.Second, 10*time.Millisecond, "both audit-core subscribers must register")
 
 	// Publish 10 messages.
 	n := 10
@@ -973,7 +973,14 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		gsAudit := bus.groupSubs["session.created"]["audit-core"]
+		gsConfig := bus.groupSubs["session.created"]["config-core"]
+		return gsAudit != nil && len(gsAudit.subs) == 1 &&
+			gsConfig != nil && len(gsConfig.subs) == 1
+	}, time.Second, 10*time.Millisecond, "both group subscribers must register")
 
 	n := 5
 	for i := range n {
@@ -1025,7 +1032,12 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 		})
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		gs := bus.groupSubs["events.v1"][""]
+		return gs != nil && len(gs.subs) == 2
+	}, time.Second, 10*time.Millisecond, "both empty-group subscribers must register")
 
 	n := 5
 	for i := range n {
@@ -1073,7 +1085,12 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 		}()
 	}
 
-	time.Sleep(20 * time.Millisecond) // let subscriptions register
+	require.Eventually(t, func() bool {
+		bus.mu.RLock()
+		defer bus.mu.RUnlock()
+		gs := bus.groupSubs["race.topic"]["race-group"]
+		return gs != nil && len(gs.subs) == numSubs
+	}, time.Second, 10*time.Millisecond, "all race-group subscribers must register")
 
 	// Concurrent publishers hammering the same topic+group.
 	// Use shared counter for unique envelope IDs across goroutines.
