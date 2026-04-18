@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -238,7 +239,7 @@ func TestWriteDomainError_ErrcodeError(t *testing.T) {
 
 func TestWriteDomainError_PlainError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec,errors.New("something went wrong"))
+	WriteDomainError(context.Background(), rec, errors.New("something went wrong"))
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
@@ -260,7 +261,7 @@ func TestWriteDomainError_WithDetails(t *testing.T) {
 	)
 
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec,ecErr)
+	WriteDomainError(context.Background(), rec, ecErr)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -669,8 +670,8 @@ type brokenWriter struct {
 	code   int
 }
 
-func newBrokenWriter() *brokenWriter { return &brokenWriter{header: http.Header{}} }
-func (w *brokenWriter) Header() http.Header { return w.header }
+func newBrokenWriter() *brokenWriter         { return &brokenWriter{header: http.Header{}} }
+func (w *brokenWriter) Header() http.Header  { return w.header }
 func (w *brokenWriter) WriteHeader(code int) { w.code = code }
 func (w *brokenWriter) Write([]byte) (int, error) {
 	return 0, errors.New("broken pipe")
@@ -709,6 +710,101 @@ func TestWriteDecodeError_EncodeFail(t *testing.T) {
 	assert.NotPanics(t, func() {
 		WriteDecodeError(context.Background(), w2, errors.New("raw error"))
 	})
+}
+
+// captureHandler is an slog.Handler that captures all log records for inspection.
+type captureHandler struct {
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(name string) slog.Handler       { return h }
+
+// attrValue searches a slog.Record for an attribute by key and returns its string value.
+func attrValue(r slog.Record, key string) (string, bool) {
+	var result string
+	var found bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			result = a.Value.String()
+			found = true
+			return false
+		}
+		return true
+	})
+	return result, found
+}
+
+func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
+	tests := []struct {
+		code       errcode.Code
+		wantStatus int
+	}{
+		{errcode.ErrValidationFailed, http.StatusBadRequest},
+		{errcode.ErrAuthUnauthorized, http.StatusUnauthorized},
+		{errcode.ErrAuthForbidden, http.StatusForbidden},
+		{errcode.ErrMetadataNotFound, http.StatusNotFound},
+		{errcode.ErrConfigDuplicate, http.StatusConflict},
+		{errcode.ErrBodyTooLarge, http.StatusRequestEntityTooLarge},
+		{errcode.ErrRateLimited, http.StatusTooManyRequests},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.code), func(t *testing.T) {
+			handler := &captureHandler{}
+			slog.SetDefault(slog.New(handler))
+			t.Cleanup(func() { slog.SetDefault(slog.Default()) })
+
+			ctx := context.Background()
+			ctx = ctxkeys.WithRequestID(ctx, "req-4xx-001")
+			ctx = ctxkeys.WithTraceID(ctx, "trace-4xx-001")
+			ctx = ctxkeys.WithSpanID(ctx, "span-4xx-001")
+
+			rec := httptest.NewRecorder()
+			WriteDomainError(ctx, rec, errcode.New(tt.code, "test message"))
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			// Find the 4xx WARN record.
+			var warnRec *slog.Record
+			for i := range handler.records {
+				if handler.records[i].Level == slog.LevelWarn {
+					warnRec = &handler.records[i]
+					break
+				}
+			}
+			require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
+
+			codeVal, ok := attrValue(*warnRec, "code")
+			assert.True(t, ok, "log record must contain 'code' attr")
+			assert.Equal(t, string(tt.code), codeVal)
+
+			statusVal, ok := attrValue(*warnRec, "status")
+			assert.True(t, ok, "log record must contain 'status' attr")
+			assert.Equal(t, slog.IntValue(tt.wantStatus).String(), statusVal)
+
+			msgVal, ok := attrValue(*warnRec, "message")
+			assert.True(t, ok, "log record must contain 'message' attr")
+			assert.Equal(t, "test message", msgVal)
+
+			reqIDVal, ok := attrValue(*warnRec, "request_id")
+			assert.True(t, ok, "log record must contain 'request_id' attr")
+			assert.Equal(t, "req-4xx-001", reqIDVal)
+
+			traceVal, ok := attrValue(*warnRec, "trace_id")
+			assert.True(t, ok, "log record must contain 'trace_id' attr")
+			assert.Equal(t, "trace-4xx-001", traceVal)
+
+			spanVal, ok := attrValue(*warnRec, "span_id")
+			assert.True(t, ok, "log record must contain 'span_id' attr")
+			assert.Equal(t, "span-4xx-001", spanVal)
+		})
+	}
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
