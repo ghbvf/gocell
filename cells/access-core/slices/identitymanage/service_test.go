@@ -329,11 +329,39 @@ func (r *revokeFailingSessionRepo) RevokeByUserID(context.Context, string) error
 	return r.err
 }
 
+// snapshotTxRunner is a TxRunner test double that mimics commit/rollback
+// semantics on a UserRepository: it snapshots the user state before fn and
+// restores on fn error so tests can assert the password write was rolled back.
+// NoopTxRunner cannot exercise this because mem repos commit immediately.
+type snapshotTxRunner struct {
+	repo   *mem.UserRepository
+	userID string
+}
+
+func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	pre, getErr := s.repo.GetByID(ctx, s.userID)
+	if getErr != nil {
+		return fn(ctx)
+	}
+	if err := fn(ctx); err != nil {
+		// Restore the snapshot — equivalent to PG ROLLBACK on the user row.
+		_ = s.repo.Update(ctx, pre)
+		return err
+	}
+	return nil
+}
+
 // TestService_ChangePassword_RevokeFailureAbortsAndNoToken verifies the F10
 // transaction boundary: if the session revoke step fails inside the tx, the
-// call must return an error and must NOT invoke the token issuer — otherwise
-// the caller could hand the client a fresh TokenPair while stolen refresh
-// tokens remain live.
+// call must (a) return an error, (b) NOT invoke the token issuer, AND (c) NOT
+// commit the password change. (a)+(b) prevent handing the client a fresh
+// TokenPair while stolen refresh tokens stay live; (c) ensures the password
+// has not been silently rotated to a value the user doesn't know.
+//
+// snapshotTxRunner mimics PG commit/rollback semantics on top of mem repos so
+// the rollback assertion is meaningful. NoopTxRunner would commit immediately
+// and leave the password mutated even after fn error — which is the exact
+// PG-mode failure mode this test exists to forbid.
 func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := &revokeFailingSessionRepo{
@@ -346,7 +374,8 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	}
 	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
 	svc := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
-		WithTokenIssuer(spyIssuer))
+		WithTokenIssuer(spyIssuer),
+		WithTxManager(&snapshotTxRunner{repo: userRepo, userID: "usr-cp-tx-fail"}))
 
 	seedUserWithHash(t, userRepo, "cp-tx-fail", "oldpass", false)
 
@@ -361,6 +390,16 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 		"error must propagate from the transactional fn, not the token issuer")
 	assert.False(t, issuerCalled,
 		"token issuer must not run after tx failure: otherwise stolen refresh tokens stay live while a fresh pair is handed out")
+
+	// (c) password rollback: the old password must still verify.
+	persisted, perr := userRepo.GetByID(context.Background(), "usr-cp-tx-fail")
+	require.NoError(t, perr)
+	assert.NoError(t,
+		bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("oldpass")),
+		"password must remain on the old hash after revoke failure (tx rollback)")
+	assert.Error(t,
+		bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("newpass")),
+		"new password must not be persisted after revoke failure")
 }
 
 // recordingTokenIssuer records whether IssueForUser was invoked.

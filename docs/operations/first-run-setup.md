@@ -152,11 +152,14 @@ echo "$TOKEN_RESP"
 
 ACCESS_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
 # login response does not include userId; decode it from the access token's
-# `sub` claim (RFC 7519). base64url → base64 via tr, then jq -r '.sub'.
+# `sub` claim (RFC 7519). JWT uses base64url (RFC 4648 §5) WITHOUT padding,
+# but base64 -d on Linux/macOS expects padded base64 — restore padding before
+# decoding, otherwise base64 -d errors silently and USER_ID becomes empty.
 USER_ID=$(echo "$ACCESS_TOKEN" \
   | cut -d. -f2 \
   | tr '_-' '/+' \
-  | base64 -d 2>/dev/null \
+  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
+  | base64 -d \
   | jq -r '.sub')
 
 # 4. 试调业务接口 — 被 middleware 拦截

@@ -210,10 +210,13 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		// Revoke all sessions for the locked user so existing tokens become invalid.
+		// F17: revoke all sessions for the locked user. Failure must abort the
+		// transaction (mirrors ChangePassword): silently logging would commit
+		// the lock flag while leaving stolen access tokens able to call
+		// business endpoints until natural expiry — which is the exact attack
+		// vector "Lock" exists to prevent.
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
-			s.logger.Error("identity-manage: failed to revoke sessions on lock",
-				slog.Any("error", err), slog.String("user_id", id))
+			return fmt.Errorf("identity-manage: lock revoke sessions: %w", err)
 		}
 		if err := s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id}); err != nil {
 			return err
