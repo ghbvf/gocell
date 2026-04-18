@@ -249,6 +249,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrZeroTestMatch:      http.StatusNotFound,
 
 	// --- 400 Bad Request ---
+	errcode.ErrEnvelopeSchema:            http.StatusBadRequest,
 	errcode.ErrCursorInvalid:             http.StatusBadRequest,
 	errcode.ErrPageSizeExceeded:          http.StatusBadRequest,
 	errcode.ErrValidationFailed:          http.StatusBadRequest,
