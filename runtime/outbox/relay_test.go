@@ -592,10 +592,10 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 // methods can be configured to always return an error.
 type failingStore struct {
 	*outboxtest.FakeStore
-	mu             sync.Mutex
-	claimErr       error
-	reclaimErr     error
-	cleanupPubErr  error
+	mu            sync.Mutex
+	claimErr      error
+	reclaimErr    error
+	cleanupPubErr error
 }
 
 func newFailingStore() *failingStore {

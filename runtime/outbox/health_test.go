@@ -1,7 +1,6 @@
 package outbox_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -20,7 +19,6 @@ import (
 type capturingSlogHandler struct {
 	mu      sync.Mutex
 	records []slog.Record
-	buf     bytes.Buffer
 }
 
 func (h *capturingSlogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
@@ -32,8 +30,8 @@ func (h *capturingSlogHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
-func (h *capturingSlogHandler) WithAttrs(_ []slog.Attr) slog.Handler  { return h }
-func (h *capturingSlogHandler) WithGroup(_ string) slog.Handler       { return h }
+func (h *capturingSlogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *capturingSlogHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func (h *capturingSlogHandler) countByLevel(level slog.Level) int {
 	h.mu.Lock()
