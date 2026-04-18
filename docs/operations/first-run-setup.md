@@ -284,3 +284,4 @@ DELETE FROM users WHERE id = '<bootstrap-user-id>';
 - **middleware 拦截**：攻击者即使获得泄漏的 bootstrap 密码，也只能执行改密操作（强制改密后旧密码失效），无法无限制访问系统
 - **slog 不含明文密码**：bootstrap 路径只打印 `username` + `credential_file` 路径，密码仅写入 0600 文件，不出现在任何日志流
 - **bcrypt cost = 12**（OWASP 2023 推荐），防止离线暴力破解
+
