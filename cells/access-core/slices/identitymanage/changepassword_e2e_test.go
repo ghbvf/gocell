@@ -94,9 +94,12 @@ func newE2EFixture() *e2eFixture {
 		userRepo, sessionRepo, roleRepo, eb, e2eIssuer, slog.Default(),
 	)
 
-	idmSvc := NewService(userRepo, sessionRepo, eb, slog.Default(),
+	idmSvc, err := NewService(userRepo, sessionRepo, eb, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 	)
+	if err != nil {
+		panic(err)
+	}
 
 	// Build a full-path mux so path values are populated correctly.
 	mux := celltest.NewTestMux()
