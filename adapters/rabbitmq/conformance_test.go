@@ -29,11 +29,12 @@ type envelopingPublisher struct {
 func (p *envelopingPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
 	entry := outboxtest.NewEntry(topic, payload)
 	wire := outboxrt.WireMessage{
-		ID:        entry.ID,
-		EventType: entry.EventType,
-		Topic:     entry.Topic,
-		Payload:   json.RawMessage(payload),
-		CreatedAt: entry.CreatedAt,
+		SchemaVersion: outboxrt.EnvelopeSchemaV1,
+		ID:            entry.ID,
+		EventType:     entry.EventType,
+		Topic:         entry.Topic,
+		Payload:       json.RawMessage(payload),
+		CreatedAt:     entry.CreatedAt,
 	}
 	body, err := json.Marshal(wire)
 	if err != nil {
