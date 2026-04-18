@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,9 +15,10 @@ func TestDistLock_AcquireAndRelease(t *testing.T) {
 	dl := newDistLockFromCmdable(mock, 30*time.Second)
 	ctx := context.Background()
 
-	lock, err := dl.Acquire(ctx, "test:lock:1", 10*time.Second)
+	lockIface, err := dl.Acquire(ctx, "test:lock:1", 10*time.Second)
 	require.NoError(t, err)
-	require.NotNil(t, lock)
+	require.NotNil(t, lockIface)
+	lock := lockIface.(*Lock)
 	assert.Equal(t, "test:lock:1", lock.key)
 	assert.NotEmpty(t, lock.value)
 
@@ -53,7 +55,7 @@ func TestDistLock_AcquireAlreadyHeld(t *testing.T) {
 	lock2, err := dl.Acquire(ctx, "test:lock:conflict", 10*time.Second)
 	require.Error(t, err)
 	assert.Nil(t, lock2)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_TIMEOUT")
+	assert.Contains(t, err.Error(), string(distlock.ErrLockTimeout))
 	assert.Contains(t, err.Error(), "lock already held")
 }
 
@@ -66,7 +68,7 @@ func TestDistLock_AcquireSetNXError(t *testing.T) {
 	lock, err := dl.Acquire(ctx, "test:lock:err", 10*time.Second)
 	require.Error(t, err)
 	assert.Nil(t, lock)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_ACQUIRED")
+	assert.Contains(t, err.Error(), string(distlock.ErrLockAcquire))
 }
 
 func TestDistLock_ReleaseIdempotent(t *testing.T) {
@@ -99,7 +101,7 @@ func TestDistLock_ReleaseEvalError(t *testing.T) {
 
 	err = lock.Release(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_LOCK_RELEASE")
+	assert.Contains(t, err.Error(), string(distlock.ErrLockRelease))
 }
 
 func TestDistLock_DefaultTTL(t *testing.T) {
@@ -133,8 +135,9 @@ func TestDistLock_ReleaseWaitsForRenewalGoroutine(t *testing.T) {
 	dl := newDistLockFromCmdable(mock, 30*time.Second)
 	ctx := context.Background()
 
-	lock, err := dl.Acquire(ctx, "test:lock:done", 10*time.Second)
+	lockIface, err := dl.Acquire(ctx, "test:lock:done", 10*time.Second)
 	require.NoError(t, err)
+	lock := lockIface.(*Lock)
 	require.NotNil(t, lock.done)
 
 	// Release should not hang — it cancels renewal and waits for done.
@@ -158,8 +161,9 @@ func TestDistLock_AcquireTimeoutCtxDoesNotKillRenewal(t *testing.T) {
 	acquireCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	lock, err := dl.Acquire(acquireCtx, "test:lock:timeout-ctx", 10*time.Second)
+	lockIface, err := dl.Acquire(acquireCtx, "test:lock:timeout-ctx", 10*time.Second)
 	require.NoError(t, err)
+	lock := lockIface.(*Lock)
 
 	// Wait for the acquire ctx to expire.
 	<-acquireCtx.Done()
@@ -175,4 +179,150 @@ func TestDistLock_AcquireTimeoutCtxDoesNotKillRenewal(t *testing.T) {
 	// Release with a fresh context.
 	err = lock.Release(context.Background())
 	assert.NoError(t, err)
+}
+
+// --- New tests for runtime/distlock interface compliance ---
+
+// TestDistLock_ImplementsDistlockLocker is a compile-time assertion that
+// *DistLock satisfies distlock.Locker and *Lock satisfies distlock.Lock.
+var (
+	_ distlock.Locker = (*DistLock)(nil)
+	_ distlock.Lock   = (*Lock)(nil)
+)
+
+func TestDistLock_ImplementsDistlockLocker(t *testing.T) {
+	// The compile-time var block above is the real assertion.
+	// This test body ensures the assertion appears in test output.
+	var _ distlock.Locker = (*DistLock)(nil)
+	var _ distlock.Lock = (*Lock)(nil)
+}
+
+// TestLock_Lost_ChannelReturnedNonNil asserts that after Acquire, Lost()
+// returns a non-nil channel that is not yet closed.
+func TestLock_Lost_ChannelReturnedNonNil(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+	ctx := context.Background()
+
+	lock, err := dl.Acquire(ctx, "test:lock:lost-nonnill", 10*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = lock.Release(context.Background()) }()
+
+	ch := lock.Lost()
+	require.NotNil(t, ch, "Lost() must return a non-nil channel")
+
+	// Channel must not be closed yet.
+	select {
+	case <-ch:
+		t.Fatal("Lost() channel should not be closed immediately after Acquire")
+	default:
+		// OK
+	}
+}
+
+// TestLock_Lost_ClosedOnRenewalFailure asserts that Lost() is closed when
+// the background renewal Eval returns an I/O error.
+func TestLock_Lost_ClosedOnRenewalFailure(t *testing.T) {
+	mock := newMockCmdable()
+	// Short TTL so the renewal ticker fires quickly.
+	ttl := 200 * time.Millisecond
+	dl := newDistLockFromCmdable(mock, ttl)
+	ctx := context.Background()
+
+	lock, err := dl.Acquire(ctx, "test:lock:renewal-fail", ttl)
+	require.NoError(t, err)
+	defer func() { _ = lock.Release(context.Background()) }()
+
+	// Inject error so the next Eval (renewal) fails.
+	mock.mu.Lock()
+	mock.evalErr = errMock
+	mock.mu.Unlock()
+
+	// Wait for Lost() to be closed (renewal fires at ttl/2 = 100ms).
+	select {
+	case <-lock.Lost():
+		// Good — renewal failure signalled via Lost().
+	case <-time.After(2 * time.Second):
+		t.Fatal("Lost() channel was not closed after renewal I/O failure")
+	}
+}
+
+// TestLock_Lost_ClosedOnOwnershipLost asserts that Lost() is closed when the
+// renew Lua script returns 0 (another holder took ownership).
+func TestLock_Lost_ClosedOnOwnershipLost(t *testing.T) {
+	mock := newMockCmdable()
+	ttl := 200 * time.Millisecond
+	dl := newDistLockFromCmdable(mock, ttl)
+	ctx := context.Background()
+
+	lock, err := dl.Acquire(ctx, "test:lock:ownership-lost", ttl)
+	require.NoError(t, err)
+	defer func() { _ = lock.Release(context.Background()) }()
+
+	// Make renewals return 0 — ownership taken by another holder.
+	zero := int64(0)
+	mock.mu.Lock()
+	mock.evalRenewResult = &zero
+	mock.mu.Unlock()
+
+	select {
+	case <-lock.Lost():
+		// Good — ownership loss signalled.
+	case <-time.After(2 * time.Second):
+		t.Fatal("Lost() channel was not closed after ownership loss (renew returned 0)")
+	}
+}
+
+// TestLock_Key_ReturnsAcquiredKey asserts Key() equals the key passed to Acquire.
+func TestLock_Key_ReturnsAcquiredKey(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+	ctx := context.Background()
+
+	const wantKey = "test:lock:key-check"
+	lock, err := dl.Acquire(ctx, wantKey, 10*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = lock.Release(context.Background()) }()
+
+	assert.Equal(t, wantKey, lock.Key())
+}
+
+// TestLock_Release_IsIdempotent confirms the second Release call is a no-op.
+// (Preserves existing TestDistLock_ReleaseIdempotent behaviour via the new interface.)
+func TestLock_Release_IsIdempotent(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+	ctx := context.Background()
+
+	lock, err := dl.Acquire(ctx, "test:lock:idem2", 10*time.Second)
+	require.NoError(t, err)
+
+	err = lock.Release(ctx)
+	assert.NoError(t, err)
+
+	// Second release must be a no-op (Lua returns 0, no error).
+	err = lock.Release(ctx)
+	assert.NoError(t, err)
+}
+
+// TestLock_Lost_ClosedAfterRelease asserts that Release also closes Lost()
+// so goroutines selecting on Lost() exit after an explicit Release.
+func TestLock_Lost_ClosedAfterRelease(t *testing.T) {
+	mock := newMockCmdable()
+	dl := newDistLockFromCmdable(mock, 30*time.Second)
+	ctx := context.Background()
+
+	lock, err := dl.Acquire(ctx, "test:lock:lost-after-release", 10*time.Second)
+	require.NoError(t, err)
+
+	err = lock.Release(context.Background())
+	require.NoError(t, err)
+
+	// After Release, Lost() must be closed.
+	select {
+	case <-lock.Lost():
+		// Good.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Lost() channel was not closed after Release")
+	}
 }

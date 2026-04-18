@@ -6,9 +6,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/distlock"
+)
+
+// Compile-time interface satisfaction checks.
+var (
+	_ distlock.Locker = (*DistLock)(nil)
+	_ distlock.Lock   = (*Lock)(nil)
 )
 
 // releaseLockScript is a Lua script that atomically releases a lock only if
@@ -45,11 +53,29 @@ end
 // correctness-critical paths, use application-level conditional writes
 // (e.g., Postgres optimistic locking with row versions).
 type Lock struct {
-	rdb    cmdable
-	key    string
-	value  string
-	cancel context.CancelFunc
-	done   chan struct{} // closed when renewLoop exits
+	rdb      cmdable
+	key      string
+	value    string
+	cancel   context.CancelFunc
+	done     chan struct{} // closed when renewLoop exits
+	lost     chan struct{} // closed when lock is lost (renewal failure or Release)
+	lostOnce sync.Once     // guards against double-close of lost
+}
+
+// Key returns the key that was passed to Acquire.
+func (l *Lock) Key() string { return l.key }
+
+// Lost returns a channel that is closed when the lock is known to have been
+// lost. This occurs on renewal I/O failure, ownership loss (renew returns 0),
+// or after Release (defensive signal for callers selecting on Lost).
+//
+// ref: github.com/hashicorp/consul/api lock.go — lostCh pattern
+// ref: github.com/temporalio/sdk-go AggregatedWorker.stopC — signal-by-close idiom
+func (l *Lock) Lost() <-chan struct{} { return l.lost }
+
+// closeLost closes the lost channel exactly once.
+func (l *Lock) closeLost() {
+	l.lostOnce.Do(func() { close(l.lost) })
 }
 
 // Release releases the distributed lock. It stops the background renewal
@@ -76,9 +102,12 @@ func (l *Lock) Release(ctx context.Context) error {
 		}
 	}
 
+	// Signal Lost so any goroutine selecting on it can unblock after Release.
+	l.closeLost()
+
 	result, err := l.rdb.Eval(ctx, releaseLockScript, []string{l.key}, l.value).Int64()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisLockRelease,
+		return errcode.Wrap(distlock.ErrLockRelease,
 			fmt.Sprintf("redis: failed to release lock (key=%s)", l.key), err)
 	}
 	if result == 0 {
@@ -116,28 +145,28 @@ func newDistLockFromCmdable(rdb cmdable, ttl time.Duration) *DistLock {
 
 // Acquire attempts to acquire a distributed lock for the given key.
 // It uses SET NX with the configured TTL. If the lock is already held,
-// ErrAdapterRedisLockTimeout is returned.
+// distlock.ErrLockTimeout is returned.
 //
 // The returned Lock starts a background renewal goroutine that extends the TTL
 // at half the lock period until Release is called or the context is cancelled.
-func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (*Lock, error) {
+func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (distlock.Lock, error) {
 	if ttl == 0 {
 		ttl = d.ttl
 	}
 
 	value, err := randomToken()
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterRedisLockAcquire,
+		return nil, errcode.Wrap(distlock.ErrLockAcquire,
 			"redis: failed to generate lock token", err)
 	}
 
 	ok, err := d.rdb.SetNX(ctx, key, value, ttl).Result()
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterRedisLockAcquire,
+		return nil, errcode.Wrap(distlock.ErrLockAcquire,
 			fmt.Sprintf("redis: failed to acquire lock (key=%s)", key), err)
 	}
 	if !ok {
-		return nil, errcode.New(ErrAdapterRedisLockTimeout,
+		return nil, errcode.New(distlock.ErrLockTimeout,
 			fmt.Sprintf("redis: lock already held (key=%s)", key))
 	}
 
@@ -153,6 +182,7 @@ func (d *DistLock) Acquire(ctx context.Context, key string, ttl time.Duration) (
 		value:  value,
 		cancel: cancel,
 		done:   done,
+		lost:   make(chan struct{}),
 	}
 
 	// Start background renewal at half the TTL interval.
@@ -186,11 +216,13 @@ func (d *DistLock) renewLoop(ctx context.Context, lock *Lock, ttl time.Duration)
 				slog.Error("redis: lock renewal failed",
 					"key", lock.key,
 					"error", err)
+				lock.closeLost()
 				return
 			}
 			if result == 0 {
 				slog.Warn("redis: lock lost during renewal",
 					"key", lock.key)
+				lock.closeLost()
 				return
 			}
 			slog.Debug("redis: lock renewed",
@@ -204,7 +236,7 @@ func (d *DistLock) renewLoop(ctx context.Context, lock *Lock, ttl time.Duration)
 func randomToken() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return "", errcode.Wrap(ErrAdapterRedisLockAcquire, "redis: random token generation failed", err)
+		return "", errcode.Wrap(distlock.ErrLockAcquire, "redis: random token generation failed", err)
 	}
 	return hex.EncodeToString(b), nil
 }

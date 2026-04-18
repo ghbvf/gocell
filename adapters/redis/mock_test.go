@@ -26,6 +26,11 @@ type mockCmdable struct {
 	delErr   error
 	setNXErr error
 	evalErr  error
+
+	// evalRenewResult, when non-nil, overrides the return value for the
+	// renew Lua script (2-arg Eval). Set to pointer-to-zero to simulate
+	// ownership loss (another holder took over).
+	evalRenewResult *int64
 }
 
 type mockEntry struct {
@@ -144,12 +149,12 @@ func (m *mockCmdable) SetNX(_ context.Context, key string, value any, expiration
 
 func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args ...any) *goredis.Cmd {
 	cmd := goredis.NewCmd(context.Background())
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.evalErr != nil {
 		cmd.SetErr(m.evalErr)
 		return cmd
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Simulate the release lock script: GET key == value → DEL → 1, else → 0.
 	// Also simulate the renew lock script: GET key == value → PEXPIRE → 1, else → 0.
@@ -162,13 +167,18 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 			if len(args) == 1 {
 				// Release: delete the key.
 				delete(m.store, key)
+				cmd.SetVal(int64(1))
 			} else {
-				// Renew: update expiry.
+				// Renew: allow override for ownership-loss simulation.
+				if m.evalRenewResult != nil {
+					cmd.SetVal(*m.evalRenewResult)
+					return cmd
+				}
 				ttlMs, _ := toInt64(args[1])
 				entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
 				m.store[key] = entry
+				cmd.SetVal(int64(1))
 			}
-			cmd.SetVal(int64(1))
 		} else {
 			cmd.SetVal(int64(0))
 		}

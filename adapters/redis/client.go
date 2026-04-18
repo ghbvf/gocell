@@ -13,13 +13,10 @@ import (
 
 // Error codes for the Redis adapter.
 const (
-	ErrAdapterRedisConnect     errcode.Code = "ERR_ADAPTER_REDIS_CONNECT"
-	ErrAdapterRedisLockAcquire errcode.Code = "ERR_ADAPTER_REDIS_LOCK_ACQUIRED"
-	ErrAdapterRedisLockRelease errcode.Code = "ERR_ADAPTER_REDIS_LOCK_RELEASE"
-	ErrAdapterRedisLockTimeout errcode.Code = "ERR_ADAPTER_REDIS_LOCK_TIMEOUT"
-	ErrAdapterRedisSet         errcode.Code = "ERR_ADAPTER_REDIS_SET"
-	ErrAdapterRedisGet         errcode.Code = "ERR_ADAPTER_REDIS_GET"
-	ErrAdapterRedisDelete      errcode.Code = "ERR_ADAPTER_REDIS_DELETE"
+	ErrAdapterRedisConnect errcode.Code = "ERR_ADAPTER_REDIS_CONNECT"
+	ErrAdapterRedisSet     errcode.Code = "ERR_ADAPTER_REDIS_SET"
+	ErrAdapterRedisGet     errcode.Code = "ERR_ADAPTER_REDIS_GET"
+	ErrAdapterRedisDelete  errcode.Code = "ERR_ADAPTER_REDIS_DELETE"
 )
 
 // Mode represents the Redis deployment topology.

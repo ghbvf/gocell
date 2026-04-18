@@ -136,7 +136,7 @@
 | X5 | **P3-TD-11 access-core domain 拆分** User/Session/Role | 4h | X1 | 历史 Batch 8 |
 | X6 | **28 SOL-B-01 Claimer lease 续租** | 4h | L4 API ✅ | Wave 2 |
 | ~~X7~~ | ~~**AL-01 outbox_relay.go 轮询调度 → `runtime/outbox/relay.go`**~~ ✅ PR#511（S30 搭车）：`adapters/postgres/outbox_relay.go` + `safe_relay_collector.go` 已删除，relay 循环住在 `runtime/outbox/relay.go` | — | — | 依赖替换分析 |
-| X8 | **AL-02 distlock.go 续期/TTL → `runtime/`** | 2h | — | 依赖替换分析 |
+| ~~X8~~ | ~~**AL-02 distlock.go 续期/TTL → `runtime/`**~~ ✅ PR-DISTLOCK-HOIST (PR#TBD): `runtime/distlock` 新增 `Locker`/`Lock` provider-neutral 接口（镜像 PR#177 `runtime/outbox.Store` 分层模式）；`adapters/redis.DistLock`/`Lock` 实现新接口；新增 `Lock.Lost() <-chan struct{}` 续租失败信号；修正 `ERR_ADAPTER_REDIS_LOCK_ACQUIRED` 拼写 typo → `ERR_DISTLOCK_ACQUIRE` | — | — | 依赖替换分析 |
 | X9 | **LINT-MODERN-01** (Cx2, P3): 全仓库 modernization baseline 清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder/websocket）。独立 PR，不混入功能 | 6h | — | PR#163 post-review |
 | X10 | **AUTH-REFRESH-OPAQUE-01** (Cx3, 🟠 条件延后，X1 PG-DOMAIN-REPO 上线后触发): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7 |
 
