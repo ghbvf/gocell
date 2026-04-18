@@ -267,6 +267,11 @@ func (v *Validator) checkREF12SchemaRefs(c *metadata.ContractMeta, contractDir s
 // checkREF12Responses validates endpoints.http.responses[N].schemaRef entries.
 // These were introduced in PR#181 alongside HTTPTransportMeta.Responses but were
 // not previously walked by the governance layer.
+//
+// Unlike schemaRefs.* (which must stay inside the contract directory), response
+// schemas may reference shared schemas via relative paths that navigate up to
+// the contracts/shared/ subtree. The bounds check therefore uses the project root
+// (v.root) rather than the contract directory.
 func (v *Validator) checkREF12Responses(c *metadata.ContractMeta, contractDir string) []ValidationResult {
 	if c.Endpoints.HTTP == nil {
 		return nil
@@ -274,19 +279,27 @@ func (v *Validator) checkREF12Responses(c *metadata.ContractMeta, contractDir st
 	var results []ValidationResult
 	for status, resp := range c.Endpoints.HTTP.Responses {
 		field := fmt.Sprintf("endpoints.http.responses[%d].schemaRef", status)
-		results = append(results, v.checkSchemaRefFile(c.ID, contractDir, field, resp.SchemaRef)...)
+		results = append(results, v.checkSchemaRefFileWithRoot(c.ID, contractDir, v.root, field, resp.SchemaRef)...)
 	}
 	return results
 }
 
 // checkSchemaRefFile checks that a single schemaRef value points to an existing
-// file within the contract directory. Empty values are silently skipped.
+// file within the contract directory (boundsRoot == contractDir).
+// Empty values are silently skipped.
 func (v *Validator) checkSchemaRefFile(contractID, contractDir, field, value string) []ValidationResult {
+	return v.checkSchemaRefFileWithRoot(contractID, contractDir, contractDir, field, value)
+}
+
+// checkSchemaRefFileWithRoot resolves value relative to contractDir and checks
+// that the result exists on disk and does not escape boundsRoot. Empty values
+// are silently skipped.
+func (v *Validator) checkSchemaRefFileWithRoot(contractID, contractDir, boundsRoot, field, value string) []ValidationResult {
 	if value == "" {
 		return nil
 	}
 	fullPath := filepath.Join(contractDir, value)
-	if !IsWithinRoot(contractDir, fullPath) {
+	if !IsWithinRoot(boundsRoot, fullPath) {
 		return []ValidationResult{v.newResult(
 			"REF-12", SeverityError, IssueInvalid,
 			contractFile(contractID),
