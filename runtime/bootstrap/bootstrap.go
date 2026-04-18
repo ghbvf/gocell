@@ -173,19 +173,19 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// WithAuthMiddleware enables authentication for HTTP business routes. The
-// verifier is applied to the router's middleware chain at Run() time via
+// WithAuthMiddleware enables authentication for HTTP business routes with an
+// explicitly injected verifier. Complementary to WithPublicEndpoints:
+// use this option when the verifier must be supplied directly (tests,
+// advanced scenarios, non-cell composition); use WithPublicEndpoints when a
+// cell in the assembly exposes an AuthProvider for automatic discovery.
+//
+// The verifier is applied to the router's middleware chain at Run() time via
 // router.WithAuthMiddleware.
 //
-// Deprecated: Use bootstrap.WithPublicEndpoints instead, which discovers the
-// auth verifier automatically and delegates trust boundary policy to
-// router.WithPublicEndpoints (auth bypass + tracing new-root + request_id
-// rejection in a single configuration point).
-//
-// publicEndpoints specifies business-route paths that bypass authentication.
-// If nil, no business routes are public (fail-closed). Callers must
-// explicitly list paths like login and token refresh that should be
-// accessible without a valid JWT.
+// publicEndpoints specifies business-route paths that bypass authentication
+// (path-only match). If nil, no business routes are public (fail-closed).
+// For method-aware bypass, combine with WithPublicEndpoints (but note the two
+// options are mutually exclusive at Run() time; see the Run error path).
 //
 // Infra endpoints (/healthz, /readyz, /metrics) are registered on the
 // router's outer mux and naturally bypass business-route middleware, so they
@@ -200,18 +200,44 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 	}
 }
 
-// WithPublicEndpoints sets paths that bypass authentication when an
+// WithPublicEndpoints declares endpoints that bypass authentication when an
 // AuthProvider cell is discovered post-Init. Unlike WithAuthMiddleware
 // (which provides the verifier explicitly), this option defers verifier
 // resolution to Run() time.
-// WithPublicEndpoints must not be combined with WithAuthMiddleware —
-// use one or the other. If both are called, the last one wins for
-// publicEndpoints and a warning is logged at startup.
+//
+// Each entry must be in "METHOD /path" format (e.g. "POST /api/v1/auth/login").
+// Entries without a method prefix panic immediately at Option-construction time
+// (fail-fast — surfaces in unit tests and dev workflows before Run()).
+// Run() still re-validates via router.NewE for defense-in-depth. Entries with
+// method GET also automatically cover HEAD requests, following stdlib ServeMux
+// and chi v5 semantics (RFC 7231 §4.3.2).
+//
+// The same entries configure all three trust boundaries simultaneously:
+//   - Auth bypass: the matching (method + path) pair skips JWT verification.
+//   - Tracing: matching requests start a new trace root instead of inheriting
+//     an upstream traceparent header.
+//   - Request-ID: matching requests reject client-supplied X-Request-Id headers.
+//
+// WithPublicEndpoints must not be combined with WithAuthMiddleware — use one
+// or the other. If both are called, Run() returns an error immediately
+// (fail-fast) and the service will not start.
+//
+// Example:
+//
+//	bootstrap.WithPublicEndpoints([]string{
+//	    "POST /api/v1/auth/login",
+//	    "POST /api/v1/auth/refresh",
+//	})
+//
+// ref: Go 1.22 net/http ServeMux pattern grammar "[METHOD] PATH"
 func WithPublicEndpoints(endpoints []string) Option {
+	// Preflight validation: fail-fast at Option-construction time so
+	// malformed entries surface in unit tests and dev workflows before Run().
+	// Run() still re-validates via router.NewE for defense-in-depth.
+	if _, err := middleware.CompilePublicEndpoints(endpoints); err != nil {
+		panic(fmt.Sprintf("bootstrap.WithPublicEndpoints: %v", err))
+	}
 	return func(b *Bootstrap) {
-		if b.authVerifier != nil {
-			slog.Warn("bootstrap: WithPublicEndpoints called after WithAuthMiddleware; publicEndpoints will be overwritten")
-		}
 		b.authPublicEndpoints = endpoints
 		b.authDiscovery = true
 	}
@@ -525,7 +551,7 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 //  10. Shutdown: stop workers -> drain HTTP -> stop assembly -> close subscriber/publisher
 //
 // If any step fails, already-started components are rolled back in reverse.
-func (b *Bootstrap) Run(ctx context.Context) error {
+func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // complexity tracked as backlog R1 BOOTSTRAP-RUN-COGNIT-01
 	// Guard against double-Run. A second call would create duplicate
 	// teardowns and race on shared resources.
 	// ref: uber-go/fx App.Run — returns immediately if already started

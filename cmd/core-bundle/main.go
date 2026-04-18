@@ -591,8 +591,8 @@ func run(ctx context.Context) error {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
 		bootstrap.WithPublicEndpoints([]string{
-			"/api/v1/access/sessions/login",
-			"/api/v1/access/sessions/refresh",
+			"POST /api/v1/access/sessions/login",
+			"POST /api/v1/access/sessions/refresh",
 		}),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),

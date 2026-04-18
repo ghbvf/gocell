@@ -10,9 +10,7 @@ package router
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
-	"path"
 
 	"github.com/go-chi/chi/v5"
 
@@ -168,15 +166,20 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 	}
 }
 
-// WithAuthMiddleware enables authentication in the default middleware chain.
+// WithAuthMiddleware enables authentication in the default middleware chain
+// with an explicitly injected verifier. Complementary to WithPublicEndpoints:
+// this option is the primary path for tests and advanced scenarios that must
+// inject a specific (e.g. mock) IntentTokenVerifier; WithPublicEndpoints is the
+// primary path for production cells that expose a discovered verifier.
+//
 // When provided, the auth middleware is placed after CircuitBreaker and before
 // BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
 // affected — they bypass business-route middleware entirely.
 //
-// publicEndpoints specifies paths that bypass authentication. If nil,
-// auth.DefaultPublicEndpoints is used. Callers should include their login and
-// token refresh endpoints.
+// publicEndpoints specifies paths that bypass authentication (path-only match).
+// For method-aware bypass, compose via router.WithPublicEndpoints which wires
+// a WithPublicEndpointMatcher AuthOption that supersedes this list.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
@@ -234,19 +237,25 @@ func WithTrustedProxies(proxies []string) Option {
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux            *chi.Mux
-	mux                 *chi.Mux
-	healthHandler       *health.Handler
-	metricsCollector    metrics.Collector
-	metricsHandler      http.Handler
-	tracer              tracing.Tracer
-	tracingOpts         []middleware.TracingOption
-	requestIDOpts       []middleware.RequestIDOption
-	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.Allower
-	circuitBreakerNil   bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier        auth.IntentTokenVerifier
+	outerMux          *chi.Mux
+	mux               *chi.Mux
+	healthHandler     *health.Handler
+	metricsCollector  metrics.Collector
+	metricsHandler    http.Handler
+	tracer            tracing.Tracer
+	tracingOpts       []middleware.TracingOption
+	requestIDOpts     []middleware.RequestIDOption
+	rateLimiter       middleware.RateLimiter
+	circuitBreaker    middleware.Allower
+	circuitBreakerNil bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
+	authVerifier      auth.IntentTokenVerifier
+	// authPublicEndpoints is the legacy path-only list accepted only by direct
+	// callers of WithAuthMiddleware. WithPublicEndpoints no longer backfills this
+	// field — the method-aware matcher (authPublicMatcher) is the sole source of
+	// truth, preventing silent reactivation of path-only bypass if the matcher
+	// is removed by future refactors.
 	authPublicEndpoints []string
+	authPublicMatcher   func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
 	authMetrics         *auth.AuthMetrics
 	publicEndpoints     []string
 	securityHeadersOpts []middleware.SecurityHeadersOption
@@ -298,7 +307,9 @@ func NewE(opts ...Option) (*Router, error) {
 		o(r)
 	}
 
-	r.applyPublicEndpoints()
+	if err := r.applyPublicEndpoints(); err != nil {
+		return nil, err
+	}
 
 	// Fail-fast: nil circuit breaker means the operator called
 	// WithCircuitBreaker(nil) which would silently skip CB installation.
@@ -306,26 +317,45 @@ func NewE(opts ...Option) (*Router, error) {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
 	}
 
-	// Fail-fast: validate and construct the proxy checker once. The validated
-	// checker is passed to RealIPFromChecker so proxies are only parsed once.
-	//
-	// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
-	var realIPMW func(http.Handler) http.Handler
+	realIPMW, err := r.buildRealIPMiddleware()
+	if err != nil {
+		return nil, err
+	}
+
+	r.buildOuterMux(realIPMW)
+	r.buildBusinessMux()
+
+	// Mount business mux on outerMux. Paths not matched by infra routes
+	// (/healthz, /readyz, /metrics) fall through to business routes.
+	r.outerMux.Mount("/", r.mux)
+
+	return r, nil
+}
+
+// buildRealIPMiddleware constructs the RealIP middleware, validating trusted
+// proxy configuration eagerly so NewE returns an error on startup rather than
+// panicking at request time.
+//
+// ref: gin-gonic/gin — SetTrustedProxies validates eagerly
+func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error) {
 	if len(r.trustedProxies) > 0 {
 		checker, err := middleware.ValidateTrustedProxies(r.trustedProxies)
 		if err != nil {
 			return nil, fmt.Errorf("router: invalid trusted proxy configuration: %w", err)
 		}
-		realIPMW = middleware.RealIPFromChecker(checker)
-	} else {
-		realIPMW = middleware.RealIP(nil)
+		return middleware.RealIPFromChecker(checker), nil
 	}
+	return middleware.RealIP(nil), nil
+}
 
-	// --- Phase 1: outerMux — shared observability + infra ---
-	// All requests pass through: RequestID → RealIP → Recorder → [Tracing]
-	// → AccessLog → [Metrics] → Recovery → SecurityHeaders.
-	// Metrics is placed before RL/CB so 429/503 short-circuit responses are
-	// counted. Recovery + SecurityHeaders apply to all paths.
+// buildOuterMux wires shared observability middleware and infra endpoints onto
+// r.outerMux. All requests pass through this chain before reaching the
+// business mux.
+//
+// Chain: RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//
+//	→ Recovery → SecurityHeaders → [infra routes] → mount(mux)
+func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	r.outerMux.Use(
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
@@ -343,10 +373,7 @@ func NewE(opts ...Option) (*Router, error) {
 		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
 	)
 
-	// Infrastructure endpoints: registered on outerMux before business mount.
-	// They get shared observability + Recovery + SecurityHeaders but NOT
-	// RateLimit or CircuitBreaker, so probes and scrapes work during overload.
-	//
+	// Infrastructure endpoints bypass RateLimit and CircuitBreaker.
 	// ref: go-zero rest/engine.go — management endpoints on separate chain
 	if r.healthHandler != nil {
 		r.outerMux.Get("/healthz", r.healthHandler.LivezHandler())
@@ -359,11 +386,14 @@ func NewE(opts ...Option) (*Router, error) {
 	if r.metricsHandler != nil {
 		r.outerMux.Handle("/metrics", r.metricsHandler)
 	}
+}
 
-	// --- Phase 2: mux — business routes with RL/CB/Auth ---
-	// Cells register routes on mux via Handle/Route/Mount/Group/With.
-	// Business chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
-	// Recovery + SecurityHeaders already applied by outerMux.
+// buildBusinessMux wires rate limiter, circuit breaker, auth, and body-limit
+// middleware onto r.mux. Cells register their routes on this mux.
+//
+// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
+// Recovery + SecurityHeaders are already applied by outerMux.
+func (r *Router) buildBusinessMux() {
 	if r.rateLimiter != nil {
 		r.mux.Use(middleware.RateLimit(r.rateLimiter))
 	}
@@ -371,48 +401,62 @@ func NewE(opts ...Option) (*Router, error) {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		var authOpts []auth.AuthOption
-		if r.authMetrics != nil {
-			authOpts = append(authOpts, auth.WithMetrics(r.authMetrics))
-		}
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, authOpts...))
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+}
 
-	// Mount business mux on outerMux. Paths not matched by infra routes
-	// (/healthz, /readyz, /metrics) fall through to business routes.
-	r.outerMux.Mount("/", r.mux)
-
-	return r, nil
+// buildAuthOpts constructs the AuthOption slice for the auth middleware.
+// Prefers the compiled method-aware matcher (set by applyPublicEndpoints) over
+// the legacy []string path so that direct WithAuthMiddleware callers remain
+// unaffected.
+func (r *Router) buildAuthOpts() []auth.AuthOption {
+	var opts []auth.AuthOption
+	if r.authMetrics != nil {
+		opts = append(opts, auth.WithMetrics(r.authMetrics))
+	}
+	// Prefer the compiled method-aware matcher (set by applyPublicEndpoints) over
+	// the legacy []string path. Direct callers of WithAuthMiddleware that do NOT
+	// call WithPublicEndpoints continue to use the []string path (no regression).
+	if r.authPublicMatcher != nil {
+		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
+	}
+	return opts
 }
 
 // applyPublicEndpoints derives trust-boundary policy from WithPublicEndpoints:
-// builds isPublic function and auto-wires tracing, request_id, and auth.
+// compiles the "METHOD /path" entries into a per-request predicate and
+// auto-wires tracing, request_id, and auth. Returns an error if any entry is
+// malformed (fail-fast; the caller NewE propagates it to Bootstrap.Run).
+//
+// Semantic note: auth / tracing / request-id share the same isPublic predicate
+// because their trust-boundary criteria are currently identical ("is this a
+// public-facing edge?"). If these three semantics diverge in the future (e.g.
+// a public endpoint that still requires auth), split into independent
+// predicates. See backlog T8 PUBLIC-ENDPOINT-STRUCT-MIGRATE-01.
 //
 // ref: go-zero rest/server.go — single-point route group auth config
 // ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func (r *Router) applyPublicEndpoints() {
+func (r *Router) applyPublicEndpoints() error {
 	if len(r.publicEndpoints) == 0 {
-		return
+		return nil
 	}
-	if len(r.tracingOpts) > 0 {
-		slog.Warn("router: WithPublicEndpoints overrides existing TracingOptions publicEndpointFn (last-write-wins)")
+
+	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)
+	if err != nil {
+		return fmt.Errorf("router: %w", err)
 	}
-	publicSet := make(map[string]bool, len(r.publicEndpoints))
-	for _, p := range r.publicEndpoints {
-		publicSet[path.Clean(p)] = true
-	}
-	isPublic := func(req *http.Request) bool {
-		return publicSet[path.Clean(req.URL.Path)]
-	}
+
 	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
 	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
-	// Standalone callers using WithPublicEndpoints without WithAuthMiddleware
-	// need authPublicEndpoints populated for the auth middleware. When bootstrap
-	// calls both, WithAuthMiddleware already sets this — the guard is a no-op.
-	if len(r.authPublicEndpoints) == 0 {
-		r.authPublicEndpoints = r.publicEndpoints
-	}
+
+	// Populate the method-aware matcher for the auth middleware.
+	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher is
+	// the sole source of truth. Passing nil to auth.AuthMiddleware is safe because
+	// F-B's panic guard ensures no space-containing legacy entries reach that path,
+	// and the matcher supersedes the []string parameter when both are present.
+	r.authPublicMatcher = isPublic
+	return nil
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.

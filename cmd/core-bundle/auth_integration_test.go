@@ -95,8 +95,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 	// Public endpoints — same as production main.go.
 	publicEndpoints := []string{
-		"/api/v1/access/sessions/login",
-		"/api/v1/access/sessions/refresh",
+		"POST /api/v1/access/sessions/login",
+		"POST /api/v1/access/sessions/refresh",
 	}
 
 	app := bootstrap.New(
