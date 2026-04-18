@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -24,8 +25,8 @@ func newContractHandler() http.Handler {
 		ID: "admin", Name: "admin",
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	})
-	_ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
-	_ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
+	_, _ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	inner := celltest.NewTestMux()
@@ -90,7 +91,7 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
-	evt := RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: ActionAssigned}
+	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionAssigned}
 	payload, err := json.Marshal(evt)
 	require.NoError(t, err)
 
@@ -109,7 +110,7 @@ func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
-	evt := RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: ActionRevoked}
+	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionRevoked}
 	payload, err := json.Marshal(evt)
 	require.NoError(t, err)
 

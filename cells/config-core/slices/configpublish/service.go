@@ -177,7 +177,7 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte) error {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
-			ID:        "evt" + "-" + uuid.NewString(),
+			ID:        outbox.NewEntryID(),
 			EventType: topic,
 			Payload:   payload,
 		}

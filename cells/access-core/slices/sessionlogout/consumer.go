@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
-	"github.com/ghbvf/gocell/cells/access-core/slices/rbacassign"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -19,6 +19,13 @@ import (
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h,
 //
 //	key = entry.ID (prefixed "evt-{uuid}" from outbox.Entry)
+//
+// Wiring: these guarantees are provided by outbox.ConsumerBase, which
+// bootstrap injects via WithConsumerMiddleware — the handler below only
+// needs to produce a LegacyHandler return value; ConsumerBase wraps it to
+// enforce claim/backoff/DLX semantics. See cmd/core-bundle/main.go for the
+// concrete wiring (in-mem Claimer in core-bundle; redis IdempotencyClaimer
+// in multi-pod deployments).
 //
 // Ack timing: after sessionRepo.RevokeByUserID returns nil
 // Disposition:
@@ -46,7 +53,7 @@ func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
 //   - sessionRepo error → plain error (transient; WrapLegacyHandler maps to Requeue).
 //   - Success → nil (WrapLegacyHandler maps to Ack).
 func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) error {
-	var payload rbacassign.RoleChangedEvent
+	var payload dto.RoleChangedEvent
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
 		return outbox.NewPermanentError(
 			fmt.Errorf("sessionlogout: decode role-changed payload: %w", err),

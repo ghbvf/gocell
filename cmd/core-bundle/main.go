@@ -25,6 +25,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -568,10 +569,25 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Wire ConsumerBase so every subscriber handler inherits two-phase Claimer
+	// idempotency, backoff retry, and DLX routing. An in-memory Claimer is used
+	// here so the in-process EventBus path has the same semantics as a future
+	// multi-pod deployment backed by adapters/redis IdempotencyClaimer.
+	//
+	// ref: runtime-api.md WithConsumerMiddleware — middleware order is
+	// observability-restore (prepended by bootstrap) then ConsumerBase.
+	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{
+		ConsumerGroup: "core-bundle",
+	})
+	if err != nil {
+		return fmt.Errorf("construct ConsumerBase: %w", err)
+	}
+
 	bootstrapOpts := append([]bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPAddr(":8080"),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
 		bootstrap.WithPublicEndpoints([]string{
 			"/api/v1/access/sessions/login",
 			"/api/v1/access/sessions/refresh",

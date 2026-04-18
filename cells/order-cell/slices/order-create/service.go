@@ -127,7 +127,7 @@ func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, err
 		return outbox.Entry{}, fmt.Errorf("order-create: marshal event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:            "evt-" + uuid.NewString(),
+		ID:            outbox.NewEntryID(),
 		AggregateID:   order.ID,
 		AggregateType: "order",
 		EventType:     TopicOrderCreated,

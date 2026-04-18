@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide"
@@ -390,7 +391,7 @@ func (c *AccessCore) doSeedAdmin(ctx context.Context) error {
 		return fmt.Errorf("persist user: %w", err)
 	}
 
-	if err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
+	if _, err := c.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
 		return fmt.Errorf("assign role: %w", err)
 	}
 
@@ -433,7 +434,7 @@ func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Both topics share the same handler and consumer group — HandleRoleChanged is topic-agnostic.
 	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
-	r.AddHandler(rbacassign.TopicRoleAssigned, roleHandler, "access-core-rbac-session-sync")
-	r.AddHandler(rbacassign.TopicRoleRevoked, roleHandler, "access-core-rbac-session-sync")
+	r.AddHandler(dto.TopicRoleAssigned, roleHandler, "access-core-rbac-session-sync")
+	r.AddHandler(dto.TopicRoleRevoked, roleHandler, "access-core-rbac-session-sync")
 	return nil
 }

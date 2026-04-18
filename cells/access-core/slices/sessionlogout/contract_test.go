@@ -98,6 +98,62 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
+// --- Role event subscribe contract tests ---
+
+// TestContract_EventRoleAssignedV1_Subscribe_PayloadValid exercises the
+// consumer's unmarshal + business path against the event.role.assigned.v1
+// payload schema. A well-formed payload must return DispositionAck via
+// WrapLegacyHandler; schema-invalid payloads (exercised via
+// MustRejectPayload) are rejected by the schema validator without ever
+// reaching the consumer.
+//
+// Paired with the publish-side test in cells/access-core/slices/rbacassign/
+// contract_test.go — together they cover both halves of the contract, which
+// is why the slice.yaml waiver for VERIFY-01 no longer applies.
+func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
+
+	repo := mem.NewSessionRepository()
+	consumer := NewConsumer(repo, slog.Default())
+	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
+
+	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"assigned"}`)
+	c.ValidatePayload(t, payload)
+	result := handler(context.Background(), outbox.Entry{
+		ID:        "evt-test-assigned",
+		EventType: "event.role.assigned.v1",
+		Payload:   payload,
+	})
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"valid assigned payload must yield Ack")
+
+	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"assigned"}`))
+}
+
+// TestContract_EventRoleRevokedV1_Subscribe_PayloadValid mirrors the assigned
+// test for the revoked topic.
+func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
+
+	repo := mem.NewSessionRepository()
+	consumer := NewConsumer(repo, slog.Default())
+	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
+
+	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"revoked"}`)
+	c.ValidatePayload(t, payload)
+	result := handler(context.Background(), outbox.Entry{
+		ID:        "evt-test-revoked",
+		EventType: "event.role.revoked.v1",
+		Payload:   payload,
+	})
+	require.Equal(t, outbox.DispositionAck, result.Disposition,
+		"valid revoked payload must yield Ack")
+
+	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"revoked"}`))
+}
+
 // --- Outbox error propagation test (S3-F1) ---
 
 func TestService_Logout_OutboxWriteError(t *testing.T) {

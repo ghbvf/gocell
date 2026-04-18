@@ -19,7 +19,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 )
 
 const (
@@ -476,7 +475,7 @@ func unmarshalInboundEntry(topic string, payload []byte) outbox.Entry {
 		}
 	}
 	return outbox.Entry{
-		ID:        "evt-" + uuid.NewString(),
+		ID:        outbox.NewEntryID(),
 		EventType: topic,
 		Payload:   payload,
 		CreatedAt: time.Now(),

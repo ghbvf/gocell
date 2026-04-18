@@ -19,7 +19,10 @@ const (
 	TopicAuditAppended = "event.audit.appended.v1"
 )
 
-// Topics lists the 6 event topics consumed by audit-append.
+// Topics lists the event topics consumed by audit-append. The handler is
+// payload-agnostic — it extracts actor_id when the payload carries user_id,
+// otherwise falls back to "system", so adding a topic here is purely additive.
+// Each topic must also list audit-core as a subscriber in its contract.yaml.
 var Topics = []string{
 	"event.user.created.v1",
 	"event.user.locked.v1",
@@ -27,6 +30,8 @@ var Topics = []string{
 	"event.session.revoked.v1",
 	"event.config.changed.v1",
 	"event.config.rollback.v1",
+	"event.role.assigned.v1",
+	"event.role.revoked.v1",
 }
 
 // Option configures an audit-append Service.
@@ -83,9 +88,13 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Extract actor_id from payload if present.
+	// Extract actor_id from payload if present. Legacy snake_case events
+	// (session.created, user.created, etc.) carry user_id; new camelCase
+	// events (role.assigned, role.revoked) carry userId — accept either so
+	// actor attribution works uniformly across event schemas.
 	var payload struct {
-		UserID string `json:"user_id"`
+		UserIDSnake string `json:"user_id"`
+		UserIDCamel string `json:"userId"`
 	}
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
 		s.logger.Warn("audit-append: failed to extract actor from payload",
@@ -94,7 +103,10 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 			slog.String("event_type", entry.EventType))
 	}
 
-	actorID := payload.UserID
+	actorID := payload.UserIDSnake
+	if actorID == "" {
+		actorID = payload.UserIDCamel
+	}
 	if actorID == "" {
 		actorID = "system"
 	}
@@ -150,7 +162,7 @@ func (s *Service) buildPersistFn(auditEntry *domain.AuditEntry, appendedPayload 
 			return nil
 		}
 		return s.outboxWriter.Write(txCtx, outbox.Entry{
-			ID:        "evt" + "-" + uuid.NewString(),
+			ID:        outbox.NewEntryID(),
 			EventType: TopicAuditAppended,
 			Payload:   appendedPayload,
 		})

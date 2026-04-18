@@ -15,15 +15,8 @@ verify:
   contract:
     - contract.http.auth.role.assign.v1.serve
     - contract.http.auth.role.revoke.v1.serve
-  waivers:
-    - contract: event.role.assigned.v1
-      owner: platform-team
-      reason: event contract test tracked under S8-FOLLOWUP; outbox atomicity verified by outbox_test.go
-      expiresAt: 2026-07-01
-    - contract: event.role.revoked.v1
-      owner: platform-team
-      reason: event contract test tracked under S8-FOLLOWUP; outbox atomicity verified by outbox_test.go
-      expiresAt: 2026-07-01
+    - contract.event.role.assigned.v1.publish
+    - contract.event.role.revoked.v1.publish
 
 allowedFiles:
   - cells/access-core/slices/rbacassign/**

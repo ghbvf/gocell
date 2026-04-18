@@ -32,7 +32,7 @@ func TestService_Authorize(t *testing.T) {
 					ID: "admin", Name: "admin",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "write"}},
 				})
-				_ = r.AssignToUser(context.Background(), "usr-1", "admin")
+				_, _ = r.AssignToUser(context.Background(), "usr-1", "admin")
 			},
 			subject: "usr-1", resource: "/api/v1/config", action: "write",
 			want: true,
@@ -44,7 +44,7 @@ func TestService_Authorize(t *testing.T) {
 					ID: "viewer", Name: "viewer",
 					Permissions: []domain.Permission{{Resource: "/api/v1/config", Action: "read"}},
 				})
-				_ = r.AssignToUser(context.Background(), "usr-2", "viewer")
+				_, _ = r.AssignToUser(context.Background(), "usr-2", "viewer")
 			},
 			subject: "usr-2", resource: "/api/v1/config", action: "write",
 			want: false,

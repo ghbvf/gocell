@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 )
 
 // Service handles RBAC role assignment and revocation.
@@ -25,6 +25,11 @@ import (
 // roleRepo.{AssignToUser,RemoveFromUserIfNotLast} then sessionRepo.RevokeByUserID
 // in-process. Suitable for in-memory repos where "transaction" semantics are
 // implicit within a single goroutine.
+//
+// Idempotent no-op handling (both modes): the role repository reports whether
+// the call actually changed state. On no-op (repeat assign or revoke-non-member),
+// no outbox entry is written and no session revoke is triggered — the operation
+// is externally invisible, preventing false role-change facts.
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
@@ -83,7 +88,7 @@ func (s *Service) runInTx(ctx context.Context, fn func(context.Context) error) e
 }
 
 // writeOutboxEntry writes a role-change outbox entry. Called inside a transaction.
-func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt RoleChangedEvent) error {
+func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dto.RoleChangedEvent) error {
 	if s.outboxWriter == nil {
 		return nil
 	}
@@ -92,7 +97,7 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt Ro
 		return fmt.Errorf("rbac-assign: marshal role-changed event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        "evt" + "-" + uuid.NewString(),
+		ID:        outbox.NewEntryID(),
 		EventType: eventType,
 		Payload:   payload,
 	}
@@ -103,27 +108,39 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt Ro
 }
 
 // persistChange wraps a role mutation + outbox write in a single transaction (durable mode)
-// or delegates to the legacy dual-write (demo mode).
+// or delegates to the legacy dual-write (demo mode). writeFn returns whether the repository
+// actually mutated state; the outbox entry (durable) or session revoke (demo) is skipped
+// on a no-op so repeat calls do not publish false role-change facts.
 func (s *Service) persistChange(
 	ctx context.Context,
-	writeFn func(ctx context.Context) error,
-	evt RoleChangedEvent,
+	writeFn func(ctx context.Context) (changed bool, err error),
+	evt dto.RoleChangedEvent,
 	topic string,
-) error {
+) (changed bool, err error) {
 	if s.isDurableMode() {
 		// Durable: atomically persist role change + outbox entry.
 		// Session revocation is handled asynchronously by the consumer.
-		return s.runInTx(ctx, func(txCtx context.Context) error {
-			if err := writeFn(txCtx); err != nil {
-				return err
+		err = s.runInTx(ctx, func(txCtx context.Context) error {
+			var innerErr error
+			changed, innerErr = writeFn(txCtx)
+			if innerErr != nil {
+				return innerErr
+			}
+			if !changed {
+				return nil
 			}
 			return s.writeOutboxEntry(txCtx, topic, evt)
 		})
+		return changed, err
 	}
 
-	// Demo mode: synchronous dual-write (legacy behaviour).
-	if err := writeFn(ctx); err != nil {
-		return err
+	// Demo mode: synchronous dual-write (legacy behaviour), gated on changed.
+	changed, err = writeFn(ctx)
+	if err != nil {
+		return changed, err
+	}
+	if !changed {
+		return false, nil
 	}
 	if err := s.sessionRepo.RevokeByUserID(ctx, evt.UserID); err != nil {
 		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed; client JWTs retain stale roles until re-login",
@@ -131,26 +148,29 @@ func (s *Service) persistChange(
 			slog.String("role_id", evt.RoleID),
 			slog.String("action", evt.Action),
 			slog.Any("error", err))
-		return fmt.Errorf("rbac-assign: %s succeeded but session revoke failed: %w", evt.Action, err)
+		return true, fmt.Errorf("rbac-assign: %s succeeded but session revoke failed: %w", evt.Action, err)
 	}
-	return nil
+	return true, nil
 }
 
-// Assign assigns a role to a user. Idempotent: re-assignment is a no-op.
+// Assign assigns a role to a user. Idempotent: re-assignment is a no-op —
+// no outbox entry is written and no session is revoked.
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	if userID == "" || roleID == "" {
 		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
 	}
 
-	evt := RoleChangedEvent{UserID: userID, RoleID: roleID, Action: ActionAssigned}
-	writeFn := func(txCtx context.Context) error {
-		if err := s.roleRepo.AssignToUser(txCtx, userID, roleID); err != nil {
-			return fmt.Errorf("rbac-assign: assign: %w", err)
+	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned}
+	writeFn := func(txCtx context.Context) (bool, error) {
+		changed, err := s.roleRepo.AssignToUser(txCtx, userID, roleID)
+		if err != nil {
+			return false, fmt.Errorf("rbac-assign: assign: %w", err)
 		}
-		return nil
+		return changed, nil
 	}
 
-	if err := s.persistChange(ctx, writeFn, evt, TopicRoleAssigned); err != nil {
+	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleAssigned)
+	if err != nil {
 		return err
 	}
 
@@ -161,27 +181,31 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	s.logger.Info("role assigned",
 		slog.String("user_id", userID),
 		slog.String("role_id", roleID),
-		slog.String("mode", mode))
+		slog.String("mode", mode),
+		slog.Bool("changed", changed))
 	return nil
 }
 
-// Revoke removes a role from a user. Idempotent: revoking a non-assigned role is a no-op.
-// Last-admin guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
+// Revoke removes a role from a user. Idempotent: revoking a non-assigned role
+// is a no-op — no outbox entry is written and no session is revoked. Last-admin
+// guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if userID == "" || roleID == "" {
 		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
 	}
 
-	evt := RoleChangedEvent{UserID: userID, RoleID: roleID, Action: ActionRevoked}
-	writeFn := func(txCtx context.Context) error {
+	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked}
+	writeFn := func(txCtx context.Context) (bool, error) {
 		// Atomic count-check + removal eliminates TOCTOU race for last-admin guard.
-		if err := s.roleRepo.RemoveFromUserIfNotLast(txCtx, userID, roleID); err != nil {
-			return fmt.Errorf("rbac-assign: revoke: %w", err)
+		changed, err := s.roleRepo.RemoveFromUserIfNotLast(txCtx, userID, roleID)
+		if err != nil {
+			return false, fmt.Errorf("rbac-assign: revoke: %w", err)
 		}
-		return nil
+		return changed, nil
 	}
 
-	if err := s.persistChange(ctx, writeFn, evt, TopicRoleRevoked); err != nil {
+	changed, err := s.persistChange(ctx, writeFn, evt, dto.TopicRoleRevoked)
+	if err != nil {
 		return err
 	}
 
@@ -192,6 +216,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	s.logger.Info("role revoked",
 		slog.String("user_id", userID),
 		slog.String("role_id", roleID),
-		slog.String("mode", mode))
+		slog.String("mode", mode),
+		slog.Bool("changed", changed))
 	return nil
 }

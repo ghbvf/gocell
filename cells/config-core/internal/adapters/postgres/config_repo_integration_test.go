@@ -222,7 +222,7 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 			Version: 1,
 		}
 		outboxEntry := outbox.Entry{
-			ID:            "evt-" + uuid.NewString(),
+			ID:            outbox.NewEntryID(),
 			AggregateID:   entry.ID,
 			AggregateType: "config_entry",
 			EventType:     "config.changed.v1",

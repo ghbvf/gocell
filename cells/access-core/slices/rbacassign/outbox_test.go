@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
+	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
@@ -81,14 +82,14 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 
 	// Exactly one outbox entry.
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicRoleAssigned, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicRoleAssigned, ow.entries[0].EventType)
 
 	// Payload unmarshal.
-	var evt RoleChangedEvent
+	var evt dto.RoleChangedEvent
 	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
-	assert.Equal(t, ActionAssigned, evt.Action)
+	assert.Equal(t, dto.ActionAssigned, evt.Action)
 
 	// Transaction invoked exactly once.
 	assert.Equal(t, 1, tx.calls)
@@ -105,20 +106,20 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	svc, roleRepo, sessionRepo := newDurableTestService(ow, tx)
 
 	// Need two admins so last-admin guard passes.
-	_ = roleRepo.AssignToUser(context.Background(), "alice", "admin")
-	_ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "alice", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
 
 	err := svc.Revoke(context.Background(), "alice", "admin")
 	require.NoError(t, err)
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicRoleRevoked, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicRoleRevoked, ow.entries[0].EventType)
 
-	var evt RoleChangedEvent
+	var evt dto.RoleChangedEvent
 	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &evt))
 	assert.Equal(t, "alice", evt.UserID)
 	assert.Equal(t, "admin", evt.RoleID)
-	assert.Equal(t, ActionRevoked, evt.Action)
+	assert.Equal(t, dto.ActionRevoked, evt.Action)
 
 	assert.Equal(t, 1, tx.calls)
 
@@ -156,9 +157,69 @@ func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 	require.NoError(t, svc.Assign(context.Background(), "u1", "admin"))
 
 	// Revoke — needs two admins to pass last-admin guard.
-	_ = roleRepo.AssignToUser(context.Background(), "u2", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "u2", "admin")
 	require.NoError(t, svc.Revoke(context.Background(), "u1", "admin"))
 
 	assert.Equal(t, 0, sessionRepo.revokeCalls,
 		"durable mode: sessionRepo.RevokeByUserID must never be called directly")
+}
+
+// TestService_Assign_Durable_RepeatIsNoop asserts that re-assigning a role the
+// user already holds publishes no second outbox entry and writes no second
+// event.role.assigned.v1 fact. Prevents a false positive in downstream
+// consumers (e.g., audit log duplicates, unnecessary session invalidation).
+func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
+	ow := &stubOutboxWriter{}
+	tx := &stubTxRunner{}
+	svc, _, sessionRepo := newDurableTestService(ow, tx)
+
+	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+	require.Len(t, ow.entries, 1, "first assign must publish exactly one event")
+
+	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+	assert.Len(t, ow.entries, 1, "repeat assign must not publish a second event")
+	assert.Equal(t, 0, sessionRepo.revokeCalls,
+		"durable mode repeat assign must not call session revoke either")
+}
+
+// TestService_Revoke_Durable_NonMemberIsNoop asserts that revoking a role the
+// user does not hold publishes no outbox entry (no event.role.revoked.v1 fact).
+// Without this guard, a bogus revoke RPC would trigger downstream audit noise
+// and unnecessary session invalidation for a user whose sessions should not
+// be affected.
+func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
+	ow := &stubOutboxWriter{}
+	tx := &stubTxRunner{}
+	svc, roleRepo, sessionRepo := newDurableTestService(ow, tx)
+
+	// Seed two other holders so the last-admin guard does not short-circuit.
+	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")
+	_, _ = roleRepo.AssignToUser(context.Background(), "carol", "admin")
+
+	require.NoError(t, svc.Revoke(context.Background(), "alice", "admin"))
+	assert.Empty(t, ow.entries, "revoke of non-member must not publish any event")
+	assert.Equal(t, 0, sessionRepo.revokeCalls,
+		"durable mode revoke of non-member must not call session revoke")
+}
+
+// TestService_Assign_Demo_RepeatIsNoop mirrors the durable no-op test for
+// demo/synchronous dual-write mode: repeat assign must NOT call sessionRepo.Revoke.
+func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	roleRepo.SeedRole(&domain.Role{
+		ID:   "admin",
+		Name: "admin",
+		Permissions: []domain.Permission{
+			{Resource: "*", Action: "*"},
+		},
+	})
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	svc := NewService(roleRepo, sessionRepo, slog.Default()) // no opts = demo mode
+
+	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+	assert.Equal(t, 1, sessionRepo.revokeCalls, "first assign must revoke sessions once")
+
+	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
+	assert.Equal(t, 1, sessionRepo.revokeCalls,
+		"demo mode repeat assign must not trigger a second session revoke")
 }

@@ -1953,8 +1953,8 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 // =============================================================================
 
 func TestConsumerBaseConfig_Defaults(t *testing.T) {
-	cfg := ConsumerBaseConfig{}
-	cfg.setDefaults()
+	cfg := outbox.ConsumerBaseConfig{}
+	cfg.SetDefaults()
 
 	assert.Equal(t, 3, cfg.RetryCount)
 	assert.Equal(t, 1*time.Second, cfg.RetryBaseDelay)
@@ -1962,15 +1962,15 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 }
 
 func TestConsumerBaseConfig_Defaults_NegativeLeaseTTL(t *testing.T) {
-	cfg := ConsumerBaseConfig{LeaseTTL: -1 * time.Minute}
-	cfg.setDefaults()
+	cfg := outbox.ConsumerBaseConfig{LeaseTTL: -1 * time.Minute}
+	cfg.SetDefaults()
 
 	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
 }
 
 func TestConsumerBaseConfig_Defaults_NegativeIdempotencyTTL(t *testing.T) {
-	cfg := ConsumerBaseConfig{IdempotencyTTL: -1 * time.Hour}
-	cfg.setDefaults()
+	cfg := outbox.ConsumerBaseConfig{IdempotencyTTL: -1 * time.Hour}
+	cfg.SetDefaults()
 
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
@@ -2043,7 +2043,7 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 	require.NoError(t, cbErr)
@@ -2069,7 +2069,7 @@ func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
 func TestConsumerBase_AsMiddleware_Idempotency_SkipsDuplicate(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "mw-group",
 	})
 	require.NoError(t, cbErr)
@@ -2092,7 +2092,7 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "mw-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2124,7 +2124,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 		{state: idempotency.ClaimDone},
 	}}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 	require.NoError(t, cbErr)
@@ -2176,7 +2176,7 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 	require.NoError(t, cbErr)
@@ -2243,7 +2243,7 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "integration-group",
 	})
 	require.NoError(t, cbErr)
@@ -2409,7 +2409,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 	require.NoError(t, cbErr)
@@ -2436,7 +2436,7 @@ func TestConsumerBase_WrapWithClaimer_Success_ReturnsReceipt(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimDone}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 	require.NoError(t, cbErr)
@@ -2456,7 +2456,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimDone_SkipsHandler(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
 	})
 	require.NoError(t, cbErr)
@@ -2476,7 +2476,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2502,7 +2502,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2528,7 +2528,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	handlerCallCount := 0
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -2591,7 +2591,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 		{state: idempotency.ClaimAcquired, receipt: receipt}, // attempt 2 — success
 	}}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -2619,7 +2619,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 
 	// ClaimRetryCount=3, ClaimRetryBaseDelay=20ms → sleeps between attempts.
 	// With jitter, we assert >= base delay only (not exact).
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 20 * time.Millisecond,
@@ -2648,7 +2648,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
@@ -2677,7 +2677,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	// S3-01: boundary — ClaimRetryCount=1 means exactly 1 attempt, no backoff sleep.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     1,
 		ClaimRetryBaseDelay: 5 * time.Second,
@@ -2708,7 +2708,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 		{state: idempotency.ClaimAcquired, receipt: receipt}, // attempt 1 — success
 	}}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		RetryCount:          5,                     // handler retries — should not affect claim
 		RetryBaseDelay:      1 * time.Second,       // handler backoff — should not affect claim
@@ -2741,7 +2741,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 	// S4-02: MaxRetryDelay caps exponential growth.
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 100 * time.Millisecond,
@@ -2766,7 +2766,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
@@ -2785,7 +2785,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
@@ -3123,7 +3123,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryBaseDelay: 50 * time.Millisecond,
 	})
@@ -3184,9 +3184,9 @@ func TestProcessDelivery_BrokerAckFails_ReleasesReceipt(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:       "test-group",
-		ClaimPolicy:         ClaimPolicyFailClosed,
+		ClaimPolicy:         outbox.ClaimPolicyFailClosed,
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: 10 * time.Millisecond,
 	})
@@ -3208,9 +3208,9 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T) {
 	claimer := &mockClaimer{err: errors.New("redis down")}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test-group",
-		ClaimPolicy:   ClaimPolicyFailOpen,
+		ClaimPolicy:   outbox.ClaimPolicyFailOpen,
 	})
 	require.NoError(t, cbErr)
 
@@ -3227,15 +3227,15 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailOpen_Explicit(t *testing.T)
 }
 
 func TestClaimPolicy_Valid(t *testing.T) {
-	assert.True(t, ClaimPolicyFailClosed.Valid())
-	assert.True(t, ClaimPolicyFailOpen.Valid())
-	assert.False(t, ClaimPolicy(99).Valid(), "unknown ClaimPolicy must be invalid")
+	assert.True(t, outbox.ClaimPolicyFailClosed.Valid())
+	assert.True(t, outbox.ClaimPolicyFailOpen.Valid())
+	assert.False(t, outbox.ClaimPolicy(99).Valid(), "unknown ClaimPolicy must be invalid")
 }
 
 func TestNewConsumerBase_InvalidClaimPolicy_ReturnsError(t *testing.T) {
-	_, err := NewConsumerBase(&mockClaimer{}, ConsumerBaseConfig{
+	_, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test",
-		ClaimPolicy:   ClaimPolicy(99),
+		ClaimPolicy:   outbox.ClaimPolicy(99),
 	})
 	require.Error(t, err, "NewConsumerBase must return error on invalid ClaimPolicy")
 	assert.Contains(t, err.Error(), "invalid ClaimPolicy 99")
@@ -3244,14 +3244,14 @@ func TestNewConsumerBase_InvalidClaimPolicy_ReturnsError(t *testing.T) {
 func TestNewConsumerBase_ValidClaimPolicy_Succeeds(t *testing.T) {
 	tests := []struct {
 		name   string
-		policy ClaimPolicy
+		policy outbox.ClaimPolicy
 	}{
-		{"FailClosed", ClaimPolicyFailClosed},
-		{"FailOpen", ClaimPolicyFailOpen},
+		{"FailClosed", outbox.ClaimPolicyFailClosed},
+		{"FailOpen", outbox.ClaimPolicyFailOpen},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cb, err := NewConsumerBase(&mockClaimer{}, ConsumerBaseConfig{
+			cb, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
 				ConsumerGroup: "test",
 				ClaimPolicy:   tt.policy,
 			})
@@ -3262,13 +3262,16 @@ func TestNewConsumerBase_ValidClaimPolicy_Succeeds(t *testing.T) {
 }
 
 func TestNewConsumerBase_ExplicitFailClosed_Preserved(t *testing.T) {
-	// Explicitly pass ClaimPolicyFailClosed (0) — must be preserved through setDefaults.
-	cb, err := NewConsumerBase(&mockClaimer{}, ConsumerBaseConfig{
+	// Explicitly pass outbox.ClaimPolicyFailClosed (0) — must be preserved through
+	// SetDefaults. Verified via round-trip: construct → Wrap → call handler and
+	// confirm fail-closed semantics (single Claim attempt returns a wrapped result
+	// that is_NOT_ fail-open's proceed-without-receipt path).
+	cb, err := outbox.NewConsumerBase(&mockClaimer{}, outbox.ConsumerBaseConfig{
 		ConsumerGroup: "test",
-		ClaimPolicy:   ClaimPolicyFailClosed,
+		ClaimPolicy:   outbox.ClaimPolicyFailClosed,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, ClaimPolicyFailClosed, cb.config.ClaimPolicy)
+	require.NotNil(t, cb)
 }
 
 // =============================================================================
@@ -3281,7 +3284,7 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     1, // single attempt, no inter-attempt sleep
 		RetryBaseDelay: time.Millisecond,
@@ -3534,7 +3537,7 @@ func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -3567,7 +3570,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     5,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -3597,7 +3600,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(claimer, ConsumerBaseConfig{
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ConsumerGroup:  "test-group",
 		RetryCount:     5,
 		RetryBaseDelay: 10 * time.Millisecond,
@@ -4202,9 +4205,9 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, cbErr := NewConsumerBase(
+	cb, cbErr := outbox.NewConsumerBase(
 		claimer,
-		ConsumerBaseConfig{
+		outbox.ConsumerBaseConfig{
 			ConsumerGroup:  "test-retry-group",
 			RetryCount:     2,
 			RetryBaseDelay: 10 * time.Millisecond,

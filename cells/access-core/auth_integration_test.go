@@ -177,8 +177,8 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 
 	// Assign bob and carol to "member" so last-holder guard doesn't block.
-	_ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
-	_ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
+	_, _ = roleRepo.AssignToUser(ctx, "usr-bob", "member")
+	_, _ = roleRepo.AssignToUser(ctx, "usr-carol", "member")
 
 	// Give bob an active session.
 	bobSession := &domain.Session{ID: "sess-bob", UserID: "usr-bob"}
