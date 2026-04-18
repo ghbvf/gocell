@@ -1096,6 +1096,122 @@ func TestParseFS_EmptyFiles(t *testing.T) {
 // metadata types (cell, contract, journey, assembly) fail with "id is empty"
 // rather than silently succeeding. This documents the boundary: empty list
 // files (actors, status-board) are OK, but empty struct files must have an ID.
+// TestParseContract_HTTPResponses verifies that the optional responses map on
+// endpoints.http is parsed into HTTPTransportMeta.Responses.
+func TestParseContract_HTTPResponses(t *testing.T) {
+	tests := []struct {
+		name           string
+		yaml           string
+		wantNilOrEmpty bool
+		wantKeys       []int
+		wantDesc       map[int]string
+		wantSchemaRef  map[int]string
+		wantErrMsg     string
+	}{
+		{
+			name: "no responses field",
+			yaml: `id: http.test.v1
+kind: http
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: cell-a
+  clients: [cell-b]
+  http:
+    method: GET
+    path: /api/v1/test
+    successStatus: 200
+    noContent: false
+`,
+			wantNilOrEmpty: true,
+		},
+		{
+			name: "single 401 entry",
+			yaml: `id: http.test.v1
+kind: http
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: cell-a
+  clients: [cell-b]
+  http:
+    method: GET
+    path: /api/v1/test
+    successStatus: 200
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../shared/errors/error-response-v1.schema.json"
+`,
+			wantKeys:      []int{401},
+			wantDesc:      map[int]string{401: "Unauthorized — missing or invalid bearer token"},
+			wantSchemaRef: map[int]string{401: "../../../shared/errors/error-response-v1.schema.json"},
+		},
+		{
+			name: "multi 401+403+409",
+			yaml: `id: http.test.v1
+kind: http
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: cell-a
+  clients: [cell-b]
+  http:
+    method: POST
+    path: /api/v1/test
+    successStatus: 201
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized"
+        schemaRef: "error.json"
+      403:
+        description: "Forbidden"
+        schemaRef: "error.json"
+      409:
+        description: "Conflict"
+        schemaRef: "error.json"
+`,
+			wantKeys:      []int{401, 403, 409},
+			wantDesc:      map[int]string{401: "Unauthorized", 403: "Forbidden", 409: "Conflict"},
+			wantSchemaRef: map[int]string{401: "error.json", 403: "error.json", 409: "error.json"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"contracts/http/test/domain/v1/contract.yaml": &fstest.MapFile{Data: []byte(tt.yaml)},
+			}
+			p := NewParser("")
+			pm, err := p.ParseFS(fsys)
+			if tt.wantErrMsg != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, pm.Contracts, 1)
+			var c *ContractMeta
+			for _, v := range pm.Contracts {
+				c = v
+			}
+			require.NotNil(t, c.Endpoints.HTTP)
+			if tt.wantNilOrEmpty {
+				assert.Empty(t, c.Endpoints.HTTP.Responses)
+				return
+			}
+			require.NotNil(t, c.Endpoints.HTTP.Responses)
+			for _, key := range tt.wantKeys {
+				resp, ok := c.Endpoints.HTTP.Responses[key]
+				assert.True(t, ok, "expected key %d in Responses", key)
+				assert.Equal(t, tt.wantDesc[key], resp.Description)
+				assert.Equal(t, tt.wantSchemaRef[key], resp.SchemaRef)
+			}
+		})
+	}
+}
+
 func TestParseFS_EmptyStructFiles(t *testing.T) {
 	tests := []struct {
 		name    string
