@@ -708,6 +708,13 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 			"POST /api/v1/access/sessions/login",
 			"POST /api/v1/access/sessions/refresh",
 		}),
+		// Password-reset exempt routes: change-password and logout are the only
+		// endpoints reachable while the token carries password_reset_required=true.
+		// Runtime/auth no longer hard-codes these (F6 decoupling).
+		bootstrap.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
 		bootstrap.WithAdapterInfo(d.adapterInfo),
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
 		bootstrap.WithMetricsProvider(d.metricsProvider),

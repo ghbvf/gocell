@@ -299,11 +299,28 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	user.PasswordHash = string(newHash)
 	user.ClearPasswordResetRequired()
 
-	if err := s.repo.Update(ctx, user); err != nil {
-		return nil, fmt.Errorf("identity-manage: change-password update: %w", err)
+	// F2 session convergence + F10 atomic boundary: wrap the password write and
+	// the session revoke in a single transaction so a RevokeByUserID failure
+	// rolls back the password change. Without this, PG could commit the new hash
+	// but leave old sessions live — a stolen refresh token would keep minting
+	// access tokens despite the password rotation. IssueForUser stays outside
+	// the tx because it creates a NEW session that must not be caught by the
+	// revoke sweep, and because signing failure should not roll back a
+	// legitimate password change.
+	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: change-password update: %w", err)
+		}
+		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
+			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
-	s.logger.Info("user password changed", slog.String("user_id", user.ID))
+	s.logger.Info("user password changed; prior sessions revoked",
+		slog.String("user_id", user.ID))
 
 	if s.tokenIssuer == nil {
 		return nil, nil //nolint:nilnil // caller must handle nil pair when no tokenIssuer is wired

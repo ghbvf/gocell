@@ -229,6 +229,10 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	r := router.New(
 		router.WithPublicEndpoints(publicEndpoints),
 		router.WithAuthMiddleware(ac.TokenVerifier(), nil),
+		router.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
 	)
 	ac.RegisterRoutes(r)
 	auc.RegisterRoutes(r)

@@ -35,15 +35,20 @@ func init() {
 }
 
 // newTestService creates a refresh service with a minimal in-memory userRepo
-// (P1-11: userRepo is now a required positional parameter in NewService).
-// Tests that do not assert on PasswordResetRequired may pass this helper
-// without setting up user fixtures; the userRepo is empty and GetByID will
-// return not-found, causing fetchPasswordResetRequired to return false (safe
-// default for tests that do not exercise the flag).
-func newTestService() (*Service, *mem.SessionRepository) {
+// (P1-11: userRepo is a required positional parameter in NewService).
+//
+// seedUsers lists user IDs to pre-populate so GetByID succeeds. Since the
+// refresh fail-closed policy (F1) aborts refresh when userRepo.GetByID errors,
+// tests that exercise a successful refresh must seed the session's user.
+func newTestService(seedUsers ...string) (*Service, *mem.SessionRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
+	for _, uid := range seedUsers {
+		u, _ := domain.NewUser(uid, uid+"@test.local", "hash")
+		u.ID = uid
+		_ = userRepo.Create(context.Background(), u)
+	}
 	return NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default()), sessionRepo
 }
 
@@ -107,7 +112,7 @@ func TestService_Refresh(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService("usr-1", "usr-2")
 			refreshToken := tt.setup(repo)
 
 			pair, err := svc.Refresh(context.Background(), refreshToken)
@@ -124,7 +129,7 @@ func TestService_Refresh(t *testing.T) {
 }
 
 func TestService_Refresh_TokenRotation(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-rot")
 
 	// Create a session with a known refresh token.
 	rt1 := issueTestToken("usr-rot")
@@ -155,7 +160,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 }
 
 func TestService_Refresh_SigningMethodCheck(t *testing.T) {
-	svc, _ := newTestService()
+	svc, _ := newTestService("usr-1")
 
 	// Tokens signed with a different key should be rejected by the verifier.
 	otherPriv, otherPub := auth.MustGenerateTestKeyPair()
@@ -174,7 +179,7 @@ func TestService_Refresh_SigningMethodCheck(t *testing.T) {
 // goroutines either get a version conflict (409) or trigger reuse detection.
 // Run with -race to verify memory safety.
 func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-conc")
 
 	rt := issueTestToken("usr-conc")
 	sess, err := domain.NewSession("usr-conc", "at", rt, time.Now().Add(time.Hour))
@@ -216,7 +221,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-sid")
 
 	rt := issueTestToken("usr-sid")
 	sess, err := domain.NewSession("usr-sid", "at", rt, time.Now().Add(time.Hour))
@@ -252,6 +257,9 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 
 	// Wire refresh service with the intent-aware JWT verifier (production path).
 	userRepo := mem.NewUserRepository()
+	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash")
+	seedUser.ID = "usr-sa"
+	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
 
 	// Issue a token with sid claim to tie to a session.
@@ -281,6 +289,29 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	// should reject it at the Verify() step because the session is revoked.
 	_, err = svc.Refresh(context.Background(), pair.RefreshToken)
 	assert.Error(t, err, "session-aware verifier should reject revoked session at Verify step")
+}
+
+// TestRefresh_FailClosedWhenUserUnavailable verifies the F1 fail-closed policy:
+// when userRepo.GetByID returns an error (user deleted mid-session, or transient
+// DB failure), refresh must return ErrAuthRefreshFailed rather than signing a
+// new access token that omits the password_reset_required claim. Returning a
+// default value here would let an attacker bypass the reset gate during a DB
+// blip.
+func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository() // intentionally empty — GetByID returns error
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
+
+	rt := issueTestToken("usr-missing")
+	sess, err := domain.NewSession("usr-missing", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-missing"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.Error(t, err, "fail-closed: refresh must error when user is unavailable")
+	assert.Nil(t, pair)
 }
 
 // TestRefresh_FlagPropagatesFromCurrentUser_AfterClear ensures that after a user

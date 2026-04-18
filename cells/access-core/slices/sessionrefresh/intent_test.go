@@ -39,7 +39,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService("usr-r1")
 
 	refresh := issueTestToken("usr-r1")
 	sess, err := domain.NewSession("usr-r1", "access-tok", refresh, time.Now().Add(time.Hour))

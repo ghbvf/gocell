@@ -125,7 +125,10 @@ func (s *Service) lookupSession(ctx context.Context, refreshToken string) (*doma
 // session, and returns the resulting TokenPair.
 func (s *Service) rotateAndIssue(ctx context.Context, session *domain.Session) (*TokenPair, error) {
 	roleNames := s.fetchRoleNames(ctx, session.UserID)
-	passwordResetRequired := s.fetchPasswordResetRequired(ctx, session.UserID)
+	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.UserID)
+	if err != nil {
+		return nil, err
+	}
 
 	expiresAt := time.Now().Add(auth.DefaultAccessTokenTTL)
 
@@ -175,16 +178,19 @@ func (s *Service) fetchRoleNames(ctx context.Context, userID string) []string {
 }
 
 // fetchPasswordResetRequired reads the current PasswordResetRequired flag from
-// the user repo. Returns false on transient error (logged at Warn).
-// userRepo must not be nil (enforced by NewService positional parameter).
-func (s *Service) fetchPasswordResetRequired(ctx context.Context, userID string) bool {
+// the user repo. Fail-closed: any error (user not found, transient DB failure)
+// returns ErrAuthRefreshFailed so the caller aborts refresh rather than
+// signing a token that omits the password_reset_required claim. Returning a
+// default value on read failure would let an attacker bypass the reset gate
+// during a DB blip. userRepo must not be nil (enforced by NewService).
+func (s *Service) fetchPasswordResetRequired(ctx context.Context, userID string) (bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		s.logger.Warn("session-refresh: failed to fetch user for reset flag",
+		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))
-		return false
+		return false, errcode.New(errcode.ErrAuthRefreshFailed, "session user unavailable")
 	}
-	return user.PasswordResetRequired
+	return user.PasswordResetRequired, nil
 }
 
 // verifyRefreshToken checks the JWT signature AND requires token_use=refresh.

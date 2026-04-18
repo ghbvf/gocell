@@ -267,6 +267,48 @@ func TestBootstrap_FileWriteFailureFailsFast(t *testing.T) {
 	require.Error(t, runErr, "file write failure must cause Run to return an error")
 }
 
+// TestBootstrap_CredFileFailureCompensatesUserAndRole verifies the F3 rollback:
+// when WriteCredentialFile fails after the user + role assignment have been
+// persisted, Run best-effort removes both so the next startup sees a clean
+// slate (no more "user exists but nobody knows the password" dead-end).
+func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
+	deps, _ := makeDeps(t)
+	userRepo := deps.UserRepo.(*mem.UserRepository)
+	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
+
+	// Pass probeWriteable (dir is writable) but force WriteCredentialFile to
+	// fail at os.OpenFile: pre-create a *non-empty* directory at the .tmp path.
+	// credfile's "stale .tmp cleanup" os.Remove will fail on a non-empty dir,
+	// and the subsequent O_EXCL|O_CREATE cannot open a directory as a file.
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "initial_admin_password")
+	tmpDir := credPath + ".tmp"
+	require.NoError(t, os.Mkdir(tmpDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "pin"), []byte("x"), 0o600))
+
+	cfg := BootstrapConfig{
+		CredentialPath: credPath,
+		TTL:            time.Hour,
+		PasswordSource: newFixedPasswordSource(),
+	}
+
+	bs, err := NewBootstrapper(deps, cfg)
+	require.NoError(t, err)
+
+	_, runErr := bs.Run(context.Background())
+	require.Error(t, runErr, "credfile failure must surface an error")
+
+	// Compensation: admin count back to zero so next startup re-runs bootstrap.
+	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count,
+		"admin role assignment must be rolled back after credfile failure")
+
+	// And the user row must also be gone.
+	_, uerr := userRepo.GetByUsername(context.Background(), "admin")
+	require.Error(t, uerr, "admin user row must be rolled back after credfile failure")
+}
+
 func TestBootstrap_NoPlaintextInAnyLog(t *testing.T) {
 	logger, handler := newBootstrapCapturingLogger()
 	deps := BootstrapDeps{

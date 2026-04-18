@@ -10,9 +10,10 @@ import (
 type AuthOption func(*authConfig)
 
 type authConfig struct {
-	logger        *slog.Logger
-	metrics       *AuthMetrics
-	publicMatcher func(*http.Request) bool // nil = use []string publicEndpoints path
+	logger              *slog.Logger
+	metrics             *AuthMetrics
+	publicMatcher       func(*http.Request) bool                 // nil = use []string publicEndpoints path
+	passwordResetExempt func(method string, urlPath string) bool // nil = fail-closed (nothing exempt)
 }
 
 func defaultAuthConfig() authConfig {
@@ -31,6 +32,19 @@ func WithLogger(l *slog.Logger) AuthOption {
 // WithMetrics sets the AuthMetrics for auth middleware.
 func WithMetrics(m *AuthMetrics) AuthOption {
 	return func(c *authConfig) { c.metrics = m }
+}
+
+// WithPasswordResetExemptMatcher installs a (method, path) → bool predicate
+// used by the password-reset gate. When a token carries
+// password_reset_required=true, only requests for which the matcher returns
+// true are allowed through; everything else returns 403.
+//
+// If no matcher is supplied, the gate rejects every authenticated request —
+// fail-closed. Composition roots must opt in to exempt paths (typically the
+// change-password and logout endpoints) so that runtime/auth stays free of
+// cell-specific path knowledge (F6 decoupling).
+func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOption {
+	return func(c *authConfig) { c.passwordResetExempt = fn }
 }
 
 // WithPublicEndpointMatcher sets a compiled method-aware predicate for the

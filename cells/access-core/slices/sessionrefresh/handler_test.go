@@ -37,7 +37,14 @@ func setup() (*Handler, string) {
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), testIssuer, testVerifier, slog.Default())
+	// F1 fail-closed requires the session's user to be resolvable; seed a user
+	// so rotateAndIssue does not abort.
+	userRepo := mem.NewUserRepository()
+	u, _ := domain.NewUser("usr-1", "usr-1@test.local", "hash")
+	u.ID = "usr-1"
+	_ = userRepo.Create(context.Background(), u)
+
+	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, testIssuer, testVerifier, slog.Default())
 	return NewHandler(svc), refreshTok
 }
 

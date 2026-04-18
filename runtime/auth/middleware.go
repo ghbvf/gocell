@@ -141,10 +141,12 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
 
 	// Password-reset enforcement: when the token carries password_reset_required=true,
-	// only the exempt endpoints (change-password, logout) are allowed. All other
-	// business routes receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the
-	// subject changes their password and obtains a new token without the claim.
-	if claims.PasswordResetRequired && !isPasswordResetExempt(r.Method, r.URL.Path) {
+	// only exempt endpoints (supplied by the composition root via
+	// WithPasswordResetExemptMatcher) are allowed. All other business routes
+	// receive 403 ERR_AUTH_PASSWORD_RESET_REQUIRED until the subject changes
+	// their password and obtains a new token without the claim. If no matcher
+	// is wired, the gate rejects every request — fail-closed default.
+	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
 		writePasswordResetRequired(r.Context(), w)
 		return
 	}
@@ -175,24 +177,15 @@ func writePasswordResetRequired(ctx context.Context, w http.ResponseWriter) {
 }
 
 // isPasswordResetExempt reports whether the given HTTP method and URL path are
-// exempt from the password-reset enforcement check. Only two endpoints are
-// exempt:
-//   - POST /api/v1/access/users/{id}/password — change password
-//   - DELETE /api/v1/access/sessions/{id}    — logout
-//
-// Path matching uses matchPathTemplate, which treats {xxx} segments as
-// single-segment wildcards (no "/" allowed within a wildcard).
-func isPasswordResetExempt(method, urlPath string) bool {
-	switch {
-	case method == http.MethodPost &&
-		matchPathTemplate("/api/v1/access/users/{id}/password", urlPath):
-		return true
-	case method == http.MethodDelete &&
-		matchPathTemplate("/api/v1/access/sessions/{id}", urlPath):
-		return true
-	default:
+// exempt from the password-reset enforcement check. The decision is delegated
+// to the injected matcher so runtime/auth does not encode cell-specific routes.
+// When no matcher is configured (fail-closed), every request is treated as
+// non-exempt. See WithPasswordResetExemptMatcher for wiring details.
+func isPasswordResetExempt(cfg authConfig, method, urlPath string) bool {
+	if cfg.passwordResetExempt == nil {
 		return false
 	}
+	return cfg.passwordResetExempt(method, urlPath)
 }
 
 // matchPathTemplate reports whether the concrete path matches the template.

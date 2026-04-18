@@ -180,6 +180,10 @@ func main() {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
 		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithPasswordResetExemptEndpoints([]string{
+			"POST /api/v1/access/users/{id}/password",
+			"DELETE /api/v1/access/sessions/{id}",
+		}),
 		bootstrap.WithWorkers(lazyAdminWorker),
 	)
 

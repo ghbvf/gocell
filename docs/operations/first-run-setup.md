@@ -151,13 +151,19 @@ echo "$TOKEN_RESP"
 # {"data":{"accessToken":"...","refreshToken":"...","passwordResetRequired":true,...}}
 
 ACCESS_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
-USER_ID=$(echo "$TOKEN_RESP" | jq -r '.data.userId')
+# login response does not include userId; decode it from the access token's
+# `sub` claim (RFC 7519). base64url → base64 via tr, then jq -r '.sub'.
+USER_ID=$(echo "$ACCESS_TOKEN" \
+  | cut -d. -f2 \
+  | tr '_-' '/+' \
+  | base64 -d 2>/dev/null \
+  | jq -r '.sub')
 
 # 4. 试调业务接口 — 被 middleware 拦截
 curl -i -X GET http://localhost:8080/api/v1/access/roles/admin \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 # HTTP/1.1 403 Forbidden
-# {"error":{"code":"ERR_AUTH_PASSWORD_RESET_REQUIRED","message":"password reset required","details":{}}}
+# {"error":{"code":"ERR_AUTH_PASSWORD_RESET_REQUIRED","message":"password reset required before accessing this endpoint","details":{"change_password_endpoint":"POST /api/v1/access/users/{id}/password"}}}
 
 # 5. 改密（同步拿到新 TokenPair，自动脱困）
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8080/api/v1/access/users/${USER_ID}/password" \

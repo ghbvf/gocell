@@ -11,8 +11,10 @@ func TestHttpAuthLoginV1Serve(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "http.auth.login.v1")
 
 	c.ValidateRequest(t, []byte(`{"username":"alice","password":"secret"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"accessToken":"tok","refreshToken":"rtok","expiresAt":"2026-01-01T00:00:00Z"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"accessToken":"tok","refreshToken":"rtok","expiresAt":"2026-01-01T00:00:00Z","sessionId":"sess-1","passwordResetRequired":false}}`))
 	c.MustRejectRequest(t, []byte(`{"username":"alice"}`))
+	// Schema enforces additionalProperties:false — unknown fields must be rejected.
+	c.MustRejectResponse(t, []byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","passwordResetRequired":false,"unexpected":"x"}}`))
 }
 
 func TestEventSessionCreatedV1Publish(t *testing.T) {

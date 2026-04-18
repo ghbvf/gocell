@@ -143,11 +143,12 @@ func resolveCredentialPath() (string, error) {
 // is writable (probeWriteable). If the probe fails, Run aborts before creating
 // any user, giving an actionable error at startup time.
 //
-// NOTE(known-limitation): if the disk fills up between user creation and
-// WriteCredentialFile, the user will exist but the credential will be
-// unavailable. Recovery: delete the user + role assignment rows in the DB
-// manually, then restart the service. A transactional solution is deferred
-// to a future PR (Cx3 scope).
+// Compensating rollback (F3): if WriteCredentialFile fails after the user and
+// role assignment have been created, Run best-effort removes the role
+// assignment and user before returning. This keeps the next startup on a clean
+// slate (adminExists==false) instead of leaving the cluster stuck on
+// "admin row exists but no one knows the password" — which previously required
+// manual SQL to recover.
 //
 // On success it returns a worker.Worker (Cleaner) that removes the credential
 // file after the configured TTL. Callers must hand the cleaner to a lifecycle
@@ -185,8 +186,38 @@ func (b *Bootstrapper) Run(ctx context.Context) (worker.Worker, error) {
 		return nil, nil
 	}
 
-	// Write credential file and return cleaner.
-	return b.writeFileAndMakeCleaner(password)
+	// Write credential file and return cleaner. On failure, compensate the
+	// user/role writes so the bootstrap can self-heal on next startup.
+	cleaner, werr := b.writeFileAndMakeCleaner(password)
+	if werr != nil {
+		b.compensateAfterCredFileFailure(ctx, user.ID)
+		return nil, werr
+	}
+	return cleaner, nil
+}
+
+// compensateAfterCredFileFailure best-effort removes the role assignment and
+// user row after WriteCredentialFile fails. Errors are logged but not
+// surfaced — the operator's immediate concern is the credfile failure, and a
+// stale row at most forces a manual recount on next startup. We log rather
+// than silent-drop so ops can spot leaked rows and clean them up explicitly.
+func (b *Bootstrapper) compensateAfterCredFileFailure(ctx context.Context, userID string) {
+	if err := b.deps.RoleRepo.RemoveFromUser(ctx, userID, domain.RoleAdmin); err != nil {
+		b.deps.Logger.Error("initial admin bootstrap: compensating role unassign failed",
+			slog.String("event", "initial_admin_bootstrap_compensate"),
+			slog.String("user_id", userID),
+			slog.Any("error", err))
+	}
+	if err := b.deps.UserRepo.Delete(ctx, userID); err != nil {
+		b.deps.Logger.Error("initial admin bootstrap: compensating user delete failed",
+			slog.String("event", "initial_admin_bootstrap_compensate"),
+			slog.String("user_id", userID),
+			slog.Any("error", err))
+		return
+	}
+	b.deps.Logger.Warn("initial admin bootstrap: compensated after credfile failure; retry on next startup",
+		slog.String("event", "initial_admin_bootstrap_compensate"),
+		slog.String("user_id", userID))
 }
 
 // probeWriteable verifies the credential file directory is writable by creating
@@ -329,10 +360,9 @@ func (b *Bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, 
 	}
 	if err := WriteCredentialFile(b.cfg.CredentialPath, payload); err != nil {
 		// IMPORTANT: do NOT include `password` in any log attribute below.
-		// TODO(known-limitation): the user has already been created in the repo.
-		// In the mem repo, there is no rollback. PG repo should wrap user creation
-		// and WriteCredentialFile in a transaction; deferred to a future PR.
-		b.deps.Logger.Error("initial admin bootstrap: credential file write failed; user was created but credential is unavailable",
+		// Caller (Bootstrapper.Run) runs compensateAfterCredFileFailure so the
+		// user + role assignment are rolled back; next startup starts clean.
+		b.deps.Logger.Error("initial admin bootstrap: credential file write failed; compensating",
 			slog.String("event", "initial_admin_bootstrap"),
 			slog.String("username", b.cfg.Username),
 			slog.String("file_path", b.cfg.CredentialPath),

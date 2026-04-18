@@ -182,6 +182,11 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	// always returns 200 (or the method-appropriate code). This avoids the
 	// isPasswordResetExemptLocal stub which mirrored allowlist logic locally and
 	// could diverge from the real implementation (F-SEC-3).
+	exemptMatcher, err := auth.CompilePasswordResetExempts([]string{
+		"POST /api/v1/access/users/{id}/password",
+		"DELETE /api/v1/access/sessions/{id}",
+	})
+	require.NoError(t, err)
 	muxWithMiddleware := func(method, path string) int {
 		stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			if method == http.MethodDelete {
@@ -190,7 +195,8 @@ func TestChangePassword_FullFlow(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}
 		})
-		mid := auth.AuthMiddleware(e2eVerifier, nil)(stub)
+		mid := auth.AuthMiddleware(e2eVerifier, nil,
+			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)
 		rec := httptest.NewRecorder()

@@ -280,6 +280,100 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "issue token")
 }
 
+// TestService_ChangePassword_RevokesPriorSessions verifies F2 session
+// convergence: after a successful password change, all pre-existing sessions
+// are revoked so a stolen refresh token cannot keep minting new access tokens.
+// The freshly issued replacement pair is not itself revoked.
+func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
+	svc := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+		WithTokenIssuer(stub))
+
+	seedUserWithHash(t, userRepo, "cp-revoke", "oldpass", false)
+
+	// Seed two active sessions for this user.
+	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
+		sess, err := domain.NewSession("usr-cp-revoke", "at", "rt-"+sid, time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		sess.ID = sid
+		require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	}
+
+	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      "usr-cp-revoke",
+		OldPassword: "oldpass",
+		NewPassword: "newpass",
+	})
+	require.NoError(t, err)
+
+	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
+		got, gerr := sessionRepo.GetByID(context.Background(), sid)
+		require.NoError(t, gerr)
+		assert.True(t, got.IsRevoked(),
+			"session %s must be revoked after ChangePassword (fail-closed on stolen refresh)", sid)
+	}
+}
+
+// revokeFailingSessionRepo wraps mem.SessionRepository and fails
+// RevokeByUserID with a fixed error — exercises the F10 transactional
+// boundary: RevokeByUserID failure must abort ChangePassword before any new
+// token is issued.
+type revokeFailingSessionRepo struct {
+	*mem.SessionRepository
+	err error
+}
+
+func (r *revokeFailingSessionRepo) RevokeByUserID(context.Context, string) error {
+	return r.err
+}
+
+// TestService_ChangePassword_RevokeFailureAbortsAndNoToken verifies the F10
+// transaction boundary: if the session revoke step fails inside the tx, the
+// call must return an error and must NOT invoke the token issuer — otherwise
+// the caller could hand the client a fresh TokenPair while stolen refresh
+// tokens remain live.
+func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &revokeFailingSessionRepo{
+		SessionRepository: mem.NewSessionRepository(),
+		err:               errors.New("transient DB error"),
+	}
+	issuerCalled := false
+	stub := &stubTokenIssuer{
+		pair: &dto.TokenPair{AccessToken: "must-not-see"},
+	}
+	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
+	svc := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+		WithTokenIssuer(spyIssuer))
+
+	seedUserWithHash(t, userRepo, "cp-tx-fail", "oldpass", false)
+
+	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+		UserID:      "usr-cp-tx-fail",
+		OldPassword: "oldpass",
+		NewPassword: "newpass",
+	})
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	assert.Contains(t, err.Error(), "revoke sessions",
+		"error must propagate from the transactional fn, not the token issuer")
+	assert.False(t, issuerCalled,
+		"token issuer must not run after tx failure: otherwise stolen refresh tokens stay live while a fresh pair is handed out")
+}
+
+// recordingTokenIssuer records whether IssueForUser was invoked.
+type recordingTokenIssuer struct {
+	inner  TokenIssuer
+	called *bool
+}
+
+func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
+	*r.called = true
+	return r.inner.IssueForUser(ctx, userID)
+}
+
 // ---------------------------------------------------------------------------
 // Create RequirePasswordReset tests
 // ---------------------------------------------------------------------------
