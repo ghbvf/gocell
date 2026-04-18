@@ -14,7 +14,7 @@ endpoints:
     responses:
       401:
         description: "Unauthorized"
-        schemaRef: "error-response-v1.schema.json"
+        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden"
-        schemaRef: "error-response-v1.schema.json"
+        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"
