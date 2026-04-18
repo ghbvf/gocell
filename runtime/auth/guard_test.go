@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,12 +63,19 @@ func TestGuard(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 			wantCode:   "ERR_AUTH_FORBIDDEN",
 		},
+		{
+			name:       "AnyRole empty roles — Guard returns false, 403 ERR_AUTH_FORBIDDEN",
+			policy:     AnyRole(),
+			wantOK:     false,
+			wantStatus: http.StatusForbidden,
+			wantCode:   "ERR_AUTH_FORBIDDEN",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			r := buildRequest(context.Background())
+			r := buildRequest(TestContext("user-1", []string{"admin"}))
 
 			got := Guard(w, r, tc.policy)
 
@@ -82,6 +90,59 @@ func TestGuard(t *testing.T) {
 				// Success path: response body must be empty (no write occurred).
 				assert.Empty(t, w.Body.String())
 			}
+		})
+	}
+}
+
+// TestGuard_NilPolicy_Panics verifies that passing a nil policy to Guard panics
+// immediately, making misuse detectable at test time rather than silently
+// skipping authorization.
+func TestGuard_NilPolicy_Panics(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := buildRequest(context.Background())
+	require.Panics(t, func() { Guard(w, r, nil) })
+}
+
+// --- TestAuthenticated ---
+
+func TestAuthenticated(t *testing.T) {
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		wantErr  bool
+		wantCode errcode.Code
+	}{
+		{
+			name:    "subject present — nil",
+			ctx:     TestContext("user-1", nil),
+			wantErr: false,
+		},
+		{
+			name:     "no subject in ctx — ErrAuthUnauthorized",
+			ctx:      context.Background(),
+			wantErr:  true,
+			wantCode: errcode.ErrAuthUnauthorized,
+		},
+		{
+			name:     "empty string subject — ErrAuthUnauthorized",
+			ctx:      ctxkeys.WithSubject(context.Background(), ""),
+			wantErr:  true,
+			wantCode: errcode.ErrAuthUnauthorized,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Authenticated()(tc.ctx)
+
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, tc.wantCode, ecErr.Code)
 		})
 	}
 }

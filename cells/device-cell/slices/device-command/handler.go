@@ -59,7 +59,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
 	// Operator endpoint: require admin or operator role (not self-access).
-	if !auth.Guard(w, r, auth.SelfOr("", "admin", "operator")) {
+	if !auth.Guard(w, r, auth.AnyRole("admin", "operator")) {
 		return
 	}
 

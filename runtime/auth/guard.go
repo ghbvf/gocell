@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -21,6 +23,8 @@ type Policy func(ctx context.Context) error
 // Guard evaluates policy against r.Context. On failure it writes the mapped
 // HTTP error via httputil.WriteDomainError and returns false — the caller
 // should return immediately. On success it returns true.
+//
+// policy must not be nil; passing nil panics.
 //
 // ref: go-chi/jwtauth jwtauth.go Authenticator — write response inside the
 // guard, caller only short-circuits.
@@ -43,8 +47,24 @@ func AnyRole(roles ...string) Policy {
 // SelfOr builds a Policy that permits the request when the subject equals
 // targetID, or when the subject holds one of the bypassRoles. Wraps
 // RequireSelfOrRole.
+//
+// targetID must not be empty; passing an empty string logs a Warn and skips
+// the self-match check (role bypass only). For role-only endpoints, prefer
+// auth.AnyRole instead.
 func SelfOr(targetID string, bypassRoles ...string) Policy {
 	return func(ctx context.Context) error {
 		return RequireSelfOrRole(ctx, targetID, bypassRoles...)
+	}
+}
+
+// Authenticated builds a Policy that requires an authenticated subject
+// (any non-empty subject in context). Use for endpoints that only need
+// to verify a user is logged in, regardless of role.
+func Authenticated() Policy {
+	return func(ctx context.Context) error {
+		if subject, ok := ctxkeys.SubjectFrom(ctx); !ok || subject == "" {
+			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		}
+		return nil
 	}
 }

@@ -54,12 +54,11 @@ func NewHandler(svc *Service) *Handler {
 // If actorId is omitted, it defaults to the authenticated subject.
 // If actorId differs from subject, admin role is required.
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
-	subject, ok := ctxkeys.SubjectFrom(r.Context())
-	if !ok {
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
-			string(errcode.ErrAuthUnauthorized), "authentication required")
+	if !auth.Guard(w, r, auth.Authenticated()) {
 		return
 	}
+	// Guard has verified subject presence; this extraction is always safe.
+	subject, _ := ctxkeys.SubjectFrom(r.Context())
 
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" {

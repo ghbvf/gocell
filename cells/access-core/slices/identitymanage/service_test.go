@@ -282,7 +282,7 @@ func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 // instead assert the wrong-old-password path leaves the hash unchanged).
 // The original nil-issuer path is gone: NewService now rejects nil tokenIssuer
 // at construction time (see TestNewService_RequiresTokenIssuer).
-func TestService_ChangePassword_IssuerRequired(t *testing.T) {
+func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 	// Confirm that a service with a working issuer returns a real pair,
 	// proving the issuer is always invoked (no nil short-circuit path remains).
 	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
