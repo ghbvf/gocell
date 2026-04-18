@@ -148,6 +148,12 @@
 - `WorkerGroup` — 并行启动 + 串行反序停止
 - `PeriodicWorker` — 定时任务 + panic 隔离
 
+### 3.13 outbox — Transactional Outbox runtime
+- `Store` — SQL-dialect-neutral 接口 (ClaimPending / MarkPublished / MarkRetry / MarkDead / ReclaimStale / CleanupPublished / CleanupDead / OldestEligibleAt)；adapters/postgres.PGOutboxStore 是当前唯一实现，FakeStore 在 `outboxtest` 提供
+- `Relay` — worker.Worker，编排 pollLoop / reclaimLoop / cleanupLoop 三 goroutine；cleanup 数据驱动（睡到 oldest+retention），无固定定时器
+- `WireMessage` + `MarshalEnvelope` / `UnmarshalEnvelope` — outbox → broker 的标准 envelope（替代 adapters/postgres + adapters/rabbitmq + runtime/eventbus 三处重复 struct，S28）
+- `outboxtest.RunStoreConformanceSuite` — Store 契约 18 子测，FakeStore 与 PGOutboxStore 必须同时通过
+
 ---
 
 ## 4. Adapters 层（6 包）
@@ -157,7 +163,7 @@
 - `TxManager` — RunInTx + savepoint 嵌套 + panic 回滚 + context-embedded tx
 - `Migrator` — pressly/goose v3 wrapper + embed.FS + up/down/status (PR#42)
 - `OutboxWriter` — 实现 outbox.Writer + fail-fast ERR_ADAPTER_NO_TX
-- `OutboxRelay` — 实现 outbox.Relay + worker.Worker + FOR UPDATE SKIP LOCKED + batch 100 + 72h cleanup
+- `PGOutboxStore` — 实现 `runtime/outbox.Store`（FOR UPDATE SKIP LOCKED claim + 数据驱动 cleanup via OldestEligibleAt）。relay 调度循环搬到 `runtime/outbox.Relay`，本适配器只承担 SQL 边界
 - `RowScanner` — pgx Row/Rows 抽象（QueryBuilder 已迁至 `pkg/query.Builder`）
 - migrations/001_create_outbox_entries.sql
 
