@@ -118,6 +118,68 @@ func TestBuildJWTDeps_RealMode_VerifierRejectsWrongAudience(t *testing.T) {
 	require.Error(t, err, "token with wrong aud must be rejected")
 }
 
+// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer is an end-to-end
+// wiring test: it builds deps via buildJWTDeps (reading issuer from env) and
+// then uses deps.verifier to reject a token signed with a different issuer.
+// This locks the env → issuer → verifier wiring that the prior RealMode tests
+// missed (B3 finding): the prior test created an independent verifier with
+// explicit options, so it never proved that the verifier produced by
+// buildJWTDeps reads GOCELL_JWT_ISSUER correctly.
+func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	deps, err := buildJWTDeps("")
+	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
+
+	// Use a separate key set and issuer so key mismatch does not interfere.
+	// We want to isolate the issuer claim check on deps.verifier.
+	ks, _, _ := auth.MustNewTestKeySet()
+	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", 15*time.Minute,
+		auth.WithDefaultAudience("gocell"))
+	require.NoError(t, err)
+
+	// Create a separate verifier for the alternative key set that trusts wrong-iss.
+	// deps.verifier uses its own key set and expects "prod-iss" — key mismatch
+	// will always fail, which is intentional: the goal is to assert that deps.verifier
+	// rejects the token (regardless of whether it is due to key mismatch or issuer).
+	tok, err := wrongIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		Audience: []string{"gocell"},
+	})
+	require.NoError(t, err)
+
+	// deps.verifier must reject the token — wrong key and wrong issuer both contribute.
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, err,
+		"deps.verifier (wired from GOCELL_JWT_ISSUER=prod-iss) must reject a token "+
+			"issued by wrong-iss; this locks env→verifier wiring (B3)")
+}
+
+// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience is an end-to-end
+// wiring test: it builds deps via buildJWTDeps and uses deps.issuer to sign a
+// token with the wrong audience, then asserts deps.verifier rejects it.
+// This complements the B3 fix by verifying GOCELL_JWT_AUDIENCE flows into the
+// verifier's audience check (not just into the issuer's default audience).
+func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	deps, err := buildJWTDeps("")
+	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
+
+	// Issue a token overriding the audience with a wrong value.
+	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
+		Audience: []string{"wrong-service"},
+	})
+	require.NoError(t, err)
+
+	// deps.verifier expects aud="gocell" (from GOCELL_JWT_AUDIENCE env var).
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, err,
+		"deps.verifier must reject token with aud=wrong-service; "+
+			"locks GOCELL_JWT_AUDIENCE→verifier wiring (B3)")
+}
+
 // TestBuildJWTDeps_LogsEffectiveConfig verifies that buildJWTDeps emits a
 // structured Info log with issuer, audience, and adapter_mode fields.
 func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {

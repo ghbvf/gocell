@@ -281,14 +281,12 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// Option (a): add /internal/v1/* to public endpoints so JWT auth does not
-	// intercept before the guard. The guard becomes the sole protection layer
-	// for /internal/v1/*, making it independently testable.
+	// /internal/v1/* endpoints are auto-delegated by WithInternalEndpointGuard:
+	// JWT AuthMiddleware skips those paths entirely and the guard becomes the sole
+	// authentication layer. No /internal/v1/* entries are needed in publicEndpoints.
 	publicEndpoints := []string{
 		"POST /api/v1/access/sessions/login",
 		"POST /api/v1/access/sessions/refresh",
-		"POST /internal/v1/access/roles/assign",
-		"POST /internal/v1/access/roles/revoke",
 	}
 
 	app := bootstrap.New(
