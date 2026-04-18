@@ -35,12 +35,12 @@ type FailureBudget struct {
 // threshold=0 disables the budget (Checker always returns nil, Tripped always false).
 // Uses slog.Default() as the logger.
 func NewFailureBudget(name string, threshold int) *FailureBudget {
-	return NewFailureBudgetWithLogger(name, threshold, slog.Default())
+	return newFailureBudgetWithLogger(name, threshold, slog.Default())
 }
 
-// NewFailureBudgetWithLogger creates a FailureBudget with an explicit logger.
-// This variant is used in tests to capture log output.
-func NewFailureBudgetWithLogger(name string, threshold int, logger *slog.Logger) *FailureBudget {
+// newFailureBudgetWithLogger creates a FailureBudget with an explicit logger.
+// Internal helper; used in tests to capture log output via a custom slog.Handler.
+func newFailureBudgetWithLogger(name string, threshold int, logger *slog.Logger) *FailureBudget {
 	if logger == nil {
 		logger = slog.Default()
 	}
