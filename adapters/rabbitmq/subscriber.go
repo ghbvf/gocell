@@ -23,6 +23,11 @@ import (
 // permissions) are returned to the caller immediately.
 var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 
+// maxEntryIDLength is the maximum allowed byte length for entry.ID.
+// Aligned with AMQP 0-9-1 shortstr limit (255 octets) to ensure the ID
+// can be safely embedded in AMQP message headers without truncation.
+const maxEntryIDLength = 255
+
 // isRecoverableAMQPError returns true if the error indicates a transient
 // connection/channel loss that can be recovered via reconnect. Permanent errors
 // (ACCESS_REFUSED, PRECONDITION_FAILED, channel_max exhausted) return false.
@@ -440,6 +445,28 @@ func (s *Subscriber) consumeLoop(
 	}
 }
 
+// nackPermanent calls ch.Nack(tag, false, false) and logs a warning if it fails.
+// Used for permanent errors (unmarshal, invalid entry.ID) that must not be requeued.
+func (s *Subscriber) nackPermanent(ch AMQPChannel, tag uint64, topic string) {
+	if err := ch.Nack(tag, false, false); err != nil {
+		slog.Error("rabbitmq: nack failed",
+			slog.String(logKeyTopic, topic),
+			slog.String("error", err.Error()))
+	}
+}
+
+// validateEntryID returns the reason string if entry.ID is invalid ("empty" or
+// "too_long"), or empty string if the ID is acceptable.
+func validateEntryID(id string) string {
+	if id == "" {
+		return "empty"
+	}
+	if len(id) > maxEntryIDLength {
+		return "too_long"
+	}
+	return ""
+}
+
 func (s *Subscriber) processDelivery(
 	ctx context.Context,
 	ch AMQPChannel,
@@ -456,11 +483,20 @@ func (s *Subscriber) processDelivery(
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
 			slog.String("error", err.Error()))
-		if nackErr := ch.Nack(delivery.DeliveryTag, false, false); nackErr != nil {
-			slog.Error("rabbitmq: nack failed",
-				slog.String(logKeyTopic, topic),
-				slog.String("error", nackErr.Error()))
-		}
+		s.nackPermanent(ch, delivery.DeliveryTag, topic)
+		return
+	}
+
+	// Guard: reject entries with invalid ID before touching metadata or invoking handler.
+	// Defense-in-depth — valid WireMessage envelopes always have a non-empty ID, but
+	// the legacy fallback path and future format changes could produce invalid IDs.
+	if reason := validateEntryID(entry.ID); reason != "" {
+		slog.Error("rabbitmq: invalid entry.ID, nacking without requeue",
+			slog.String(logKeyTopic, topic),
+			slog.Uint64("delivery_tag", delivery.DeliveryTag),
+			slog.String("reason", reason),
+			slog.Int("len", len(entry.ID)))
+		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
 
@@ -627,10 +663,11 @@ func (s *Subscriber) Close() error {
 // no envelope). This format is used by adapter-level integration tests that
 // publish raw Entry JSON directly to test pub/sub primitives, predating the
 // WireMessage contract. When UnmarshalEnvelope falls back (EventType == ""),
-// we attempt json.Unmarshal into outbox.Entry. Success requires a non-empty ID.
+// we attempt json.Unmarshal into outbox.Entry. ID validation (non-empty,
+// max length) is deferred to the entry.ID guard in processDelivery.
 //
-// Broken JSON: if neither path produces a non-empty ID, we return an error so
-// that processDelivery NACKs without requeue (permanent error).
+// Broken JSON: if neither path can parse the body, we return an error so that
+// processDelivery NACKs without requeue (permanent error).
 //
 // Discriminator: UnmarshalEnvelope called with topic="" sets EventType="" on the
 // fallback path (since EventType = topic = ""), while a real WireMessage always
@@ -647,11 +684,10 @@ func unmarshalDelivery(body []byte) (outbox.Entry, error) {
 	// Fall back to legacy outbox.Entry JSON (predates WireMessage contract,
 	// still used by adapter-level integration tests that bypass the relay).
 	var legacy outbox.Entry
-	if legacyErr := json.Unmarshal(body, &legacy); legacyErr == nil && legacy.ID != "" {
+	if legacyErr := json.Unmarshal(body, &legacy); legacyErr == nil {
 		return legacy, nil
 	}
-	// Neither a valid WireMessage envelope nor a valid legacy Entry with a non-empty
-	// ID could be extracted. Treat as a permanent unmarshal error so the delivery
-	// is NACKed without requeue.
+	// Neither a valid WireMessage envelope nor a parseable legacy Entry JSON.
+	// Treat as a permanent unmarshal error so the delivery is NACKed without requeue.
 	return outbox.Entry{}, fmt.Errorf("unmarshal delivery: body is not a WireMessage envelope or legacy Entry JSON")
 }
