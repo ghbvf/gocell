@@ -40,9 +40,9 @@ type spyCollector struct {
 	lastTime  atomic.Int64 // unix nano
 }
 
-func (s *spyCollector) RecordEvent(string)                { s.events.Add(1) }
+func (s *spyCollector) RecordEvent(string)                   { s.events.Add(1) }
 func (s *spyCollector) RecordLastEventTimestamp(t time.Time) { s.lastTime.Store(t.UnixNano()) }
-func (s *spyCollector) RecordDebounceCoalesced()            { s.coalesced.Add(1) }
+func (s *spyCollector) RecordDebounceCoalesced()             { s.coalesced.Add(1) }
 
 // ---------------------------------------------------------------------------
 // Existing tests (backward compatibility)
@@ -488,10 +488,8 @@ func TestWatcher_WithMetrics_RecordsEvents(t *testing.T) {
 	touchFile(t, file, "key: v1")
 
 	assert.Eventually(t, func() bool {
-		return spy.events.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "metrics should record events")
-
-	assert.Greater(t, spy.lastTime.Load(), int64(0), "last event timestamp should be set")
+		return spy.events.Load() >= 1 && spy.lastTime.Load() > 0
+	}, 3*time.Second, 50*time.Millisecond, "metrics should record events and timestamp")
 }
 
 func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
