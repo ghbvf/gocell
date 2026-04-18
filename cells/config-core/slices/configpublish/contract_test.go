@@ -2,6 +2,7 @@ package configpublish
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -90,30 +91,17 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"x"}}`))
 }
 
-// --- Error response contract tests ---
-
-// validErrBody constructs a minimal canonical error body matching pkg/httputil envelope.
-func validErrBody(code, msg string) []byte {
-	return []byte(`{"error":{"code":"` + code + `","message":"` + msg + `","details":{}}}`)
-}
-
-func TestHttpConfigPublishV1_ErrorResponses(t *testing.T) {
-	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
-	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
-	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
-}
-
-func TestHttpConfigRollbackV1_ErrorResponses(t *testing.T) {
-	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
-	c.ValidateErrorResponse(t, 401, validErrBody("ERR_AUTH_INVALID_TOKEN", "unauthorized"))
-	c.ValidateErrorResponse(t, 403, validErrBody("ERR_AUTH_FORBIDDEN", "forbidden"))
+// errEnvelope is a minimal struct for asserting the error code in handler responses.
+type errEnvelope struct {
+	Error struct {
+		Code string `json:"code"`
+	} `json:"error"`
 }
 
 // TestHttpConfigPublishV1_Serve_Unauthorized exercises the real handler for
 // 401 (no auth ctx) and 403 (authenticated but lacks admin role) paths, then
-// validates the response body shape against the contract's declared error schema.
+// validates the response body shape against the contract's declared error schema
+// and asserts the exact error code emitted by the real auth chain.
 func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
@@ -131,7 +119,13 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 			WithContext(context.Background())
 		mux.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusUnauthorized, rec.Code)
+		// Validate envelope shape against contract schema.
 		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		// Assert the real error code emitted by RequireAnyRole (missing subject path).
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_UNAUTHORIZED", env.Error.Code,
+			"missing subject must produce ERR_AUTH_UNAUTHORIZED, not ERR_AUTH_INVALID_TOKEN")
 	})
 
 	t.Run("403_insufficient_role", func(t *testing.T) {
@@ -141,7 +135,54 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 			WithContext(auth.TestContext("user-readonly", []string{"viewer"}))
 		mux.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusForbidden, rec.Code)
+		// Validate envelope shape against contract schema.
 		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		// Assert the real error code emitted by RequireAnyRole (insufficient role path).
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
+			"insufficient role must produce ERR_AUTH_FORBIDDEN, not ERR_AUTH_INVALID_TOKEN")
+	})
+}
+
+// TestHttpConfigRollbackV1_Serve_Unauthorized mirrors the publish unauthorized test
+// for the rollback endpoint, asserting real error codes from the RequireAnyRole chain.
+func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
+	svc, _, _ := newContractService()
+	h := NewHandler(svc)
+	mux := http.NewServeMux()
+	mux.Handle("POST /api/v1/config/{key}/rollback", http.HandlerFunc(h.HandleRollback))
+
+	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
+
+	t.Run("401_no_subject", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
+			WithContext(context.Background())
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusUnauthorized, rec.Code)
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_UNAUTHORIZED", env.Error.Code,
+			"missing subject must produce ERR_AUTH_UNAUTHORIZED")
+	})
+
+	t.Run("403_insufficient_role", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"version":1}`)).
+			WithContext(auth.TestContext("user-readonly", []string{"viewer"}))
+		req.Header.Set("Content-Type", "application/json")
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		c.ValidateErrorResponse(t, rec.Code, rec.Body.Bytes())
+		var env errEnvelope
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &env))
+		require.Equal(t, "ERR_AUTH_FORBIDDEN", env.Error.Code,
+			"insufficient role must produce ERR_AUTH_FORBIDDEN")
 	})
 }
 
