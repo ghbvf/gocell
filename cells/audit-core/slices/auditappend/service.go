@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -136,9 +137,15 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 		return persistErr
 	}
 
-	// Fallback direct publish when outbox is not in use.
+	// Fallback direct publish when outbox is not in use. Wrap in v1 wire envelope
+	// so the eventbus fail-closed schema check (P1-14) accepts the message.
 	if s.outboxWriter == nil {
-		if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, appendedPayload); pubErr != nil {
+		envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicAuditAppended, TopicAuditAppended, outbox.NewEntryID(), appendedPayload)
+		if envErr != nil {
+			s.logger.Warn("audit-append: failed to marshal appended event envelope (demo mode)",
+				slog.Any("error", envErr),
+				slog.String("topic", TopicAuditAppended))
+		} else if pubErr := s.publisher.Publish(ctx, TopicAuditAppended, envelope); pubErr != nil {
 			s.logger.Warn("audit-append: failed to publish appended event (demo mode)",
 				slog.Any("error", pubErr),
 				slog.String("topic", TopicAuditAppended))

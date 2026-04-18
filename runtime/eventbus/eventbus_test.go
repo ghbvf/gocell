@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,12 +110,14 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	assert.Equal(t, map[string]string{"request_id": "req-42"}, got.Metadata)
 }
 
-// TestPublish_InvalidEnvelope_Dropped verifies fail-closed semantics (P1-14 A2):
-// when Publish receives a payload that is not a valid v1 envelope, the message
-// is routed to dead letter and NO subscriber handler is invoked.
+// TestPublish_InvalidEnvelope_Rejected verifies the P1-14 follow-up
+// fail-closed contract: Publish returns an ErrEnvelopeSchema error AND routes
+// the payload to dead letter. NO subscriber handler is invoked. Returning the
+// error (rather than nil) makes producer-side contract violations loud so they
+// surface in tests and CI rather than leaking out as silent event loss.
 //
 // ref: Watermill poison-queue middleware — undecodable → DLX, main route cleared
-func TestPublish_InvalidEnvelope_Dropped(t *testing.T) {
+func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 	bus := New(WithBufferSize(16))
 	defer func() { _ = bus.Close() }()
 
@@ -124,7 +127,7 @@ func TestPublish_InvalidEnvelope_Dropped(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.invalid.topic"},
-			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				handlerCalled.Store(true)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			})
@@ -132,11 +135,16 @@ func TestPublish_InvalidEnvelope_Dropped(t *testing.T) {
 
 	<-bus.Ready(outbox.Subscription{Topic: "test.invalid.topic"})
 
-	// Non-v1 payload: missing schemaVersion — must be dead-lettered, not delivered.
+	// Non-v1 payload: missing schemaVersion — must return ErrEnvelopeSchema
+	// AND be recorded in dead letter, not delivered.
 	nonEnvelope := []byte(`{"action":"updated","key":"k2","value":"v2"}`)
-	require.NoError(t, bus.Publish(context.Background(), "test.invalid.topic", nonEnvelope))
+	err := bus.Publish(context.Background(), "test.invalid.topic", nonEnvelope)
+	require.Error(t, err, "Publish must return an error for non-v1 payload")
+	var ce *errcode.Error
+	require.True(t, errors.As(err, &ce), "error must be *errcode.Error")
+	require.Equal(t, errcode.ErrEnvelopeSchema, ce.Code)
 
-	// Dead letter should record the dropped message.
+	// Dead letter should also record the dropped message for diagnostics.
 	require.Eventually(t, func() bool {
 		return bus.DeadLetterLen() > 0
 	}, time.Second, 5*time.Millisecond, "invalid envelope must be routed to dead letter")

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -196,8 +197,17 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 		return nil
 	}
 	// Demo mode: publisher failure is logged but not propagated since
-	// demo mode does not guarantee L2 atomicity.
-	if err := s.publisher.Publish(ctx, TopicConfigChanged, payload); err != nil {
+	// demo mode does not guarantee L2 atomicity. Wrap in v1 wire envelope so
+	// the eventbus fail-closed schema check (P1-14) accepts the message.
+	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicConfigChanged, TopicConfigChanged, outbox.NewEntryID(), payload)
+	if envErr != nil {
+		s.logger.Warn("config-write: failed to marshal event envelope (demo mode)",
+			slog.Any("error", envErr),
+			slog.String("key", entry.Key),
+		)
+		return nil
+	}
+	if err := s.publisher.Publish(ctx, TopicConfigChanged, envelope); err != nil {
 		s.logger.Warn("config-write: failed to publish event (demo mode)",
 			slog.Any("error", err),
 			slog.String("key", entry.Key),

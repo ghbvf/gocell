@@ -7,6 +7,7 @@ import (
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -126,7 +127,12 @@ func TestUnmarshalEnvelope_FutureVersion_Rejected(t *testing.T) {
 }
 
 // TestUnmarshalEnvelope_BrokenJSON_Rejected verifies that invalid JSON bytes
-// return a wrapped error (not the schema error).
+// return an ErrEnvelopeSchema-coded error, but NOT the ErrUnknownEnvelopeVersion
+// sentinel (broken JSON is distinct from a recognisable envelope with wrong version).
+//
+// Groups parse failures and schema failures under the same observability code
+// (ERR_ENVELOPE_SCHEMA) while preserving errors.Is against the version sentinel
+// for callers that need to distinguish the two cases.
 func TestUnmarshalEnvelope_BrokenJSON_Rejected(t *testing.T) {
 	raw := []byte(`not json at all {{{`)
 
@@ -137,6 +143,15 @@ func TestUnmarshalEnvelope_BrokenJSON_Rejected(t *testing.T) {
 	// Must NOT be ErrUnknownEnvelopeVersion — it's a JSON parse error.
 	if errors.Is(err, outbox.ErrUnknownEnvelopeVersion) {
 		t.Error("broken JSON should produce a parse error, not ErrUnknownEnvelopeVersion")
+	}
+	// But MUST carry the ErrEnvelopeSchema code so observability / HTTP mapping
+	// groups it with schema-version and missing-field failures.
+	var ce *errcode.Error
+	if !errors.As(err, &ce) {
+		t.Fatalf("expected *errcode.Error, got: %T (%v)", err, err)
+	}
+	if ce.Code != errcode.ErrEnvelopeSchema {
+		t.Errorf("code: got %q, want %q", ce.Code, errcode.ErrEnvelopeSchema)
 	}
 }
 
@@ -212,6 +227,65 @@ func TestMarshalEnvelope_WireFormat(t *testing.T) {
 		if _, ok := m[key]; ok {
 			t.Errorf("unexpected PascalCase key %q found in wire JSON", key)
 		}
+	}
+}
+
+// TestMarshalDirectEnvelope_ProducesV1 verifies that direct-publish envelopes
+// carry SchemaVersion=v1 and the supplied fields, and round-trip through
+// UnmarshalEnvelope so the bus delivers the business payload unchanged.
+func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
+	topic := "event.session.created.v1"
+	id := "direct-id-1"
+	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
+
+	raw, err := outbox.MarshalDirectEnvelope(topic, topic, id, payload)
+	if err != nil {
+		t.Fatalf("MarshalDirectEnvelope: %v", err)
+	}
+
+	got, err := outbox.UnmarshalEnvelope(topic, raw)
+	if err != nil {
+		t.Fatalf("UnmarshalEnvelope: %v", err)
+	}
+
+	if got.ID != id {
+		t.Errorf("ID: got %q, want %q", got.ID, id)
+	}
+	if got.EventType != topic {
+		t.Errorf("EventType: got %q, want %q", got.EventType, topic)
+	}
+	if got.Topic != topic {
+		t.Errorf("Topic: got %q, want %q", got.Topic, topic)
+	}
+	if string(got.Payload) != string(payload) {
+		t.Errorf("Payload: got %s, want %s", got.Payload, payload)
+	}
+}
+
+// TestMarshalDirectEnvelope_RejectsEmptyRequiredFields verifies fail-fast on
+// producer-side contract violation (empty id / eventType) — distinct from
+// silently producing an envelope the bus would dead-letter.
+func TestMarshalDirectEnvelope_RejectsEmptyRequiredFields(t *testing.T) {
+	tests := []struct {
+		name, topic, eventType, id string
+	}{
+		{"empty id", "t.v1", "t.v1", ""},
+		{"empty eventType", "t.v1", "", "some-id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := outbox.MarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			var ce *errcode.Error
+			if !errors.As(err, &ce) {
+				t.Fatalf("expected *errcode.Error, got: %T", err)
+			}
+			if ce.Code != errcode.ErrEnvelopeSchema {
+				t.Errorf("code: got %q, want %q", ce.Code, errcode.ErrEnvelopeSchema)
+			}
+		})
 	}
 }
 

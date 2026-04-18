@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -67,13 +68,23 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 	}
 
 	// L4 Cell uses publisher.Publish directly (no outboxWriter per KG-07).
+	// Payload is wrapped in a v1 wire envelope so the eventbus fail-closed
+	// schema check (P1-14) accepts the message.
 	payload, err := json.Marshal(toDeviceRegisteredEvent(device))
 	if err != nil {
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil
 	}
+	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicDeviceRegistered, TopicDeviceRegistered, outbox.NewEntryID(), payload)
+	if envErr != nil {
+		s.logger.Error("device-register: marshal envelope failed",
+			slog.String("device_id", device.ID),
+			slog.Any("error", envErr),
+		)
+		return device, nil
+	}
 
-	if err := s.publisher.Publish(ctx, TopicDeviceRegistered, payload); err != nil {
+	if err := s.publisher.Publish(ctx, TopicDeviceRegistered, envelope); err != nil {
 		s.logger.Error("device-register: publish event failed",
 			slog.String("device_id", device.ID),
 			slog.Any("error", err),

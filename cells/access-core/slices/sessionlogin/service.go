@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -198,11 +199,20 @@ func (s *Service) writeOutboxEntry(ctx context.Context, payload []byte) error {
 }
 
 // maybePublishDirect publishes directly when outbox is not in use (demo mode).
+// Wraps the business payload in a v1 wire envelope so the eventbus fail-closed
+// schema check (P1-14) accepts the message and subscribers receive it.
 func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
 	if s.outboxWriter != nil {
 		return
 	}
-	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, payload); pubErr != nil {
+	envelope, envErr := outboxrt.MarshalDirectEnvelope(TopicSessionCreated, TopicSessionCreated, outbox.NewEntryID(), payload)
+	if envErr != nil {
+		s.logger.Warn("session-login: failed to marshal event envelope (demo mode)",
+			slog.Any("error", envErr),
+			slog.String("topic", TopicSessionCreated))
+		return
+	}
+	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, envelope); pubErr != nil {
 		s.logger.Warn("session-login: failed to publish event (demo mode)",
 			slog.Any("error", pubErr),
 			slog.String("topic", TopicSessionCreated))

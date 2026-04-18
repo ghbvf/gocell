@@ -104,6 +104,11 @@ func New(opts ...Option) *InMemoryEventBus {
 
 // Publish sends payload to subscribers of the given topic.
 //
+// Contract (P1-14 follow-up): payload MUST be a v1 wire envelope (produced by
+// outbox.MarshalEnvelope for relay-driven paths, or outbox.MarshalDirectEnvelope
+// for direct-publish paths such as demo-mode L2 cells and L4 cells without
+// outbox writer). Raw business payloads are rejected fail-closed.
+//
 // ConsumerGroup dispatch:
 //   - For each named consumer group: pick ONE subscriber via round-robin
 //   - For the empty-group ("") bucket: send to ALL subscribers (broadcast)
@@ -111,17 +116,19 @@ func New(opts ...Option) *InMemoryEventBus {
 // Non-blocking: if a subscriber's buffer is full, the message is dropped
 // (logged as warning).
 //
-// Envelope handling: when Publish is invoked by an outbox relay, payload is
-// a JSON-encoded wire envelope (outbox.WireEnvelope) wrapping the business
-// payload. The bus unwraps it so subscribers always see the business payload
+// The bus unwraps the envelope so subscribers always see the business payload
 // in Entry.Payload, matching the semantics of the RabbitMQ subscriber path.
-// Non-envelope payloads (direct publish from cells) are forwarded unchanged.
 //
-// Regression guard: before this unwrap, the PG mode (relay → in-memory bus)
-// silently delivered the envelope as-is; subscribers parsed the envelope
-// fields as business fields (empty Action, etc.) and ACKed unknown-action
-// events, causing complete event loss. Kept symmetric with
-// adapters/rabbitmq.unmarshalDelivery.
+// Regression guard: before this contract, demo-mode and L4 direct publishes
+// sent raw business bytes; with envelope enforcement added in P1-14 A1/A2 such
+// bytes were silently dead-lettered + nil returned, causing complete event
+// loss (symptom: sso-bff walkthrough audit-entries assertion fails because
+// audit-core never received session.created / user.created events). Returning
+// an explicit error makes producer-side contract violations loud instead of
+// silent; the dead-letter slice is retained as a diagnostic trail.
+//
+// ref: Watermill poison-queue middleware — undecodable messages → DLX,
+// main route cleared; K8s workqueue fail-closed semantics.
 func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []byte) error {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -132,18 +139,11 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 
 	entry, unmarshalErr := unmarshalInboundEntry(topic, payload)
 	if unmarshalErr != nil {
-		// Fail-closed: invalid/non-v1 envelopes are routed to dead letter and
-		// never delivered to subscribers. Return nil so the caller (relay) does
-		// not treat this as a transport error — the message has been permanently
-		// disposed of via dead letter.
-		//
-		// ref: Watermill poison-queue middleware — undecodable messages → DLX,
-		//      main route cleared; K8s workqueue fail-closed semantics
-		slog.Warn("eventbus: dropping invalid envelope, routing to dead letter",
+		slog.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
 			slog.String("topic", topic),
 			slog.String("error", unmarshalErr.Error()))
 		b.appendDeadLetter(topic, outbox.Entry{Topic: topic}, unmarshalErr)
-		return nil
+		return unmarshalErr
 	}
 
 	for group, gs := range b.groupSubs[topic] {
