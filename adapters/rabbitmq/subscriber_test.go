@@ -498,6 +498,10 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	// in case the event loop hasn't fully unwound yet.
 	goleak.VerifyNone(t,
 		goleak.IgnoreTopFunction("github.com/ghbvf/gocell/adapters/rabbitmq.(*Connection).reconnectLoop"),
+		// testcontainers Reaper goroutine survives the parent test's lifetime by
+		// design (it cleans up containers post-process); excluded so this test
+		// is stable when the suite is run with -tags=integration.
+		goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
 	)
 }
 
