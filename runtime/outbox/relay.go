@@ -178,6 +178,7 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.cancel = nil
 		r.done = nil
+		r.readyCh = nil // clear so Ready() returns nil between Stop and next Start
 		r.state.Store(int32(relayStopped))
 		close(done)
 		r.mu.Unlock()

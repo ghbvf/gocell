@@ -269,12 +269,15 @@ func TestRelay_Cleanup_DeletesPublishedAndDead(t *testing.T) {
 		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
 	}
 
-	// Sleep briefly so time.Now().Add(-1ms) is definitely after the forced past timestamps.
-	time.Sleep(5 * time.Millisecond)
-
-	err := relay.cleanup(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 0, store.count(), "both published and dead entries must be deleted")
+	// Use Eventually so the test remains deterministic: the 1ms retention period
+	// must have elapsed before cleanup can delete entries. In practice the 48h-old
+	// timestamps far predate any reasonable cutoff, so this resolves in one tick.
+	require.Eventually(t, func() bool {
+		if err := relay.cleanup(context.Background()); err != nil {
+			return false
+		}
+		return store.count() == 0
+	}, time.Second, 2*time.Millisecond, "both published and dead entries must be deleted")
 }
 
 func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {

@@ -261,8 +261,19 @@ func TestRelay_Shutdown_CleanStop(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- relay.Start(ctx) }()
 
-	// Give relay time to start.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for relay to reach running state via Ready() instead of time.Sleep.
+	require.Eventually(t, func() bool {
+		ch := relay.Ready()
+		if ch == nil {
+			return false
+		}
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond, "relay not ready")
 
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
@@ -291,8 +302,19 @@ func TestRelay_DoubleStart_Error(t *testing.T) {
 	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
 
 	go func() { _ = relay.Start(t.Context()) }()
-	// Give relay time to reach running state.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for relay to reach running state.
+	require.Eventually(t, func() bool {
+		ch := relay.Ready()
+		if ch == nil {
+			return false
+		}
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond, "relay not ready for DoubleStart test")
 
 	err := relay.Start(context.Background())
 	require.Error(t, err)
@@ -308,7 +330,19 @@ func TestRelay_CanRestartAfterStop(t *testing.T) {
 		errCh := make(chan error, 1)
 		go func() { errCh <- relay.Start(ctx) }()
 
-		time.Sleep(20 * time.Millisecond)
+		// Wait for relay to be ready before stopping.
+		require.Eventually(t, func() bool {
+			ch := relay.Ready()
+			if ch == nil {
+				return false
+			}
+			select {
+			case <-ch:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, time.Millisecond, "relay not ready in iteration %d", i)
 
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		err := relay.Stop(stopCtx)
