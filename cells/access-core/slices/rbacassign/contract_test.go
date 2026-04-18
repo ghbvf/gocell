@@ -2,6 +2,7 @@ package rbacassign
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -79,4 +80,42 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	require.Equal(t, 200, rec.Code)
 
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+}
+
+// TestContract_EventRoleAssignedV1_Publish_PayloadValid is a minimum-viability smoke test
+// that marshals RoleChangedEvent (action=assigned) and validates it against the
+// event.role.assigned.v1 payload JSON Schema.
+// Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
+func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
+
+	evt := RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: ActionAssigned}
+	payload, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	// Positive: well-formed payload must pass schema.
+	c.ValidatePayload(t, payload)
+
+	// Negative: missing userId must FAIL schema (required field absent).
+	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"assigned"}`))
+}
+
+// TestContract_EventRoleRevokedV1_Publish_PayloadValid is a minimum-viability smoke test
+// that marshals RoleChangedEvent (action=revoked) and validates it against the
+// event.role.revoked.v1 payload JSON Schema.
+// Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
+func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
+
+	evt := RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: ActionRevoked}
+	payload, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	// Positive: well-formed payload must pass schema.
+	c.ValidatePayload(t, payload)
+
+	// Negative: missing userId must FAIL schema (required field absent).
+	c.MustRejectPayload(t, []byte(`{"roleId":"admin","action":"revoked"}`))
 }

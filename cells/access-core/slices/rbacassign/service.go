@@ -130,7 +130,7 @@ func (s *Service) persistChange(
 			slog.String("user_id", evt.UserID),
 			slog.String("role_id", evt.RoleID),
 			slog.String("action", evt.Action),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return fmt.Errorf("rbac-assign: %s succeeded but session revoke failed: %w", evt.Action, err)
 	}
 	return nil

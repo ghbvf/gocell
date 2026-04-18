@@ -126,11 +126,12 @@ func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 		"durable mode: sessionRepo.RevokeByUserID must not be called by rbacassign (consumer handles it)")
 }
 
-// TestService_Durable_OutboxWriteFailureRollsBackRole asserts that when the outbox
-// writer returns an error, Assign returns an error. The actual DB rollback semantic
-// is enforced at the PG integration layer; here we assert that the error propagates
-// and that the stubTxRunner correctly surfaces the fn error to the caller.
-func TestService_Durable_OutboxWriteFailureRollsBackRole(t *testing.T) {
+// TestService_Durable_OutboxWriteFailure_PropagatesError asserts that when the outbox
+// writer returns an error, RunInTx propagates it and the service returns a wrapped error.
+// The actual DB rollback semantic is validated by PG integration tests in
+// adapters/postgres/... — the in-memory stubTxRunner here does not model tx rollback
+// of the role write. This test only covers error-propagation, not rollback.
+func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	outboxErr := errors.New("outbox write failed")
 	ow := &stubOutboxWriter{err: outboxErr}
 	tx := &stubTxRunner{}
