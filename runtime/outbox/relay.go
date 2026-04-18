@@ -120,14 +120,6 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 	// ref: runtime/http/middleware/safe_observe.go — same pattern for HTTP metrics.
 	metrics := &safeRelayCollector{inner: cfg.Metrics}
 
-	// Guard: all three failure budgets at zero means no loop health will ever be
-	// reflected in /readyz.  This is the zero-value trap: RelayConfig{} disables
-	// all budgets, unlike DefaultRelayConfig() which sets each to 5.
-	if cfg.PollFailureBudget == 0 && cfg.ReclaimFailureBudget == 0 && cfg.CleanupFailureBudget == 0 {
-		slog.Warn("outbox relay: all failure budgets disabled, /readyz will not reflect relay health",
-			slog.String("hint", "use outbox.DefaultRelayConfig() or set at least one *FailureBudget > 0"))
-	}
-
 	// Guard: ClaimTTL must exceed 2x PollInterval to prevent ReclaimStale
 	// from reclaiming entries still being processed.
 	if cfg.ClaimTTL <= cfg.PollInterval*2 {
