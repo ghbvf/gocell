@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func TestValueTransformer_EncryptDecrypt_RoundTrip(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			plaintext := []byte(tc.value)
-			aad := crypto.AADForConfig("config-core", tc.configKey)
+			aad := kcrypto.AADForConfig("config-core", tc.configKey)
 
 			ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 			require.NoError(t, err)
@@ -92,7 +93,7 @@ func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("old-secret")
-	aad := crypto.AADForConfig("config-core", "legacy_key")
+	aad := kcrypto.AADForConfig("config-core", "legacy_key")
 
 	ct, nonce, edk, err := previousHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -113,8 +114,8 @@ func TestValueTransformer_DecryptWrongAAD_FailClosed(t *testing.T) {
 	tr := newTestTransformer(t)
 
 	plaintext := []byte("value")
-	aad := crypto.AADForConfig("config-core", "my_key")
-	wrongAAD := crypto.AADForConfig("config-core", "other_key")
+	aad := kcrypto.AADForConfig("config-core", "my_key")
+	wrongAAD := kcrypto.AADForConfig("config-core", "other_key")
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -136,7 +137,7 @@ func TestValueTransformer_UnknownKeyID_FailClosed(t *testing.T) {
 	tr := newTestTransformer(t)
 
 	plaintext := []byte("value")
-	aad := crypto.AADForConfig("config-core", "my_key")
+	aad := kcrypto.AADForConfig("config-core", "my_key")
 	ct, _, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
@@ -153,7 +154,7 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 	tr := crypto.NoopTransformer{}
 
 	plaintext := []byte("public-config-value")
-	aad := crypto.AADForConfig("config-core", "public_key")
+	aad := kcrypto.AADForConfig("config-core", "public_key")
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -172,7 +173,7 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAADForConfig_Format(t *testing.T) {
-	aad := crypto.AADForConfig("config-core", "api_key")
+	aad := kcrypto.AADForConfig("config-core", "api_key")
 	assert.Equal(t, []byte("cell:config-core/key:api_key"), aad)
 }
 
