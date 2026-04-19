@@ -41,8 +41,13 @@ type mockChannel struct {
 	consumeErr        error
 
 	cancelCalled   bool
+	cancelCount    int64
 	cancelConsumer string
 	cancelErr      error
+	// cancelHangUntil, if non-nil, blocks Cancel until the channel is closed
+	// or the receiver goroutine exits. Used by StopIntake tests to simulate
+	// a broker that is slow or unresponsive to basic.cancel.
+	cancelHangUntil chan struct{}
 
 	qosCalled     bool
 	qosPrefetch   int
@@ -110,8 +115,15 @@ func (m *mockChannel) Consume(queue, consumer string, autoAck, exclusive, noLoca
 
 func (m *mockChannel) Cancel(consumer string, noWait bool) error {
 	m.mu.Lock()
+	hang := m.cancelHangUntil
+	m.mu.Unlock()
+	if hang != nil {
+		<-hang // block until closed
+	}
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cancelCalled = true
+	m.cancelCount++
 	m.cancelConsumer = consumer
 	return m.cancelErr
 }

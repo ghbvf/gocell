@@ -91,6 +91,11 @@ type SubscriberConfig struct {
 	// ShutdownTimeout is how long to wait for in-flight messages during Close().
 	// Default: 30s.
 	ShutdownTimeout time.Duration
+
+	// StopIntakePerCallTimeout bounds any single basic.cancel call during
+	// StopIntake. A hung broker cannot stall the whole shutdown chain beyond
+	// this budget per consumer. Default: 2s.
+	StopIntakePerCallTimeout time.Duration
 }
 
 func (sc *SubscriberConfig) setDefaults() {
@@ -99,6 +104,9 @@ func (sc *SubscriberConfig) setDefaults() {
 	}
 	if sc.ShutdownTimeout == 0 {
 		sc.ShutdownTimeout = 30 * time.Second
+	}
+	if sc.StopIntakePerCallTimeout == 0 {
+		sc.StopIntakePerCallTimeout = 2 * time.Second
 	}
 }
 
@@ -438,11 +446,23 @@ func (s *Subscriber) subscribeOnce(
 	delete(s.consumerTags, ch)
 	s.mu.Unlock()
 
-	// Clean up the dead channel after consumeLoop exits.
-	s.untrackChannel(ch)
-	if closeErr := ch.Close(); closeErr != nil {
-		slog.Debug("rabbitmq: error closing consumed channel",
-			slog.String("error", closeErr.Error()))
+	// A19 fix: on graceful exit (loopErr == nil from ctx.Done / closeCh / drained),
+	// do NOT close the channel here — processDelivery goroutines may still hold
+	// references and race against ch.Close causing "channel is not open" Ack/Nack
+	// errors that lead to broker redelivery and spurious message counts.
+	//
+	// Close() will invoke wg.Wait() first and then close all tracked channels in
+	// one pass, so the ch remains tracked in s.channels and gets reaped safely
+	// after every processDelivery goroutine has completed.
+	//
+	// On reconnect (loopErr != nil / errSubscriptionLost), close the dead channel
+	// immediately so the outer Subscribe loop can acquire a fresh one.
+	if loopErr != nil {
+		s.untrackChannel(ch)
+		if closeErr := ch.Close(); closeErr != nil {
+			slog.Debug("rabbitmq: error closing consumed channel on reconnect",
+				slog.String("error", closeErr.Error()))
+		}
 	}
 
 	return loopErr
@@ -830,28 +850,101 @@ func (s *Subscriber) Close() error {
 // Subscribe and processDelivery in-flight.
 //
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan + basic.cancel
-func (s *Subscriber) StopIntake(_ context.Context) error {
-	s.stopIntakeOnce.Do(func() {
-		close(s.stopIntakeCh)
-	})
+// consumerRef pairs an AMQP channel with its consumer tag so StopIntake can
+// snapshot the active set under the mutex and operate on it lock-free.
+type consumerRef struct {
+	ch  AMQPChannel
+	tag string
+}
 
-	// Cancel all active consumers so the broker stops pushing new deliveries.
-	// Already-prefetched messages remain in the deliveries channel and will be
-	// processed by drainRemaining.
+// snapshotActiveConsumers returns a copy of the current consumerTags under mu,
+// filtering out empty tags. Returns the slice without holding mu.
+func (s *Subscriber) snapshotActiveConsumers() []consumerRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	snapshot := make([]consumerRef, 0, len(s.consumerTags))
 	for ch, tag := range s.consumerTags {
 		if tag == "" {
 			continue
 		}
-		if err := ch.Cancel(tag, false); err != nil {
-			slog.Warn("rabbitmq: basic.cancel during StopIntake failed",
-				slog.String("consumer_tag", tag),
-				slog.Any("error", err))
-			// Non-fatal: closeCh / ctx.Done in Close() path will handle the remainder.
-		}
+		snapshot = append(snapshot, consumerRef{ch: ch, tag: tag})
 	}
-	return nil
+	return snapshot
+}
+
+// cancelConsumerWithBudget issues basic.cancel for a single consumer with an
+// independent per-call timeout. Respects the outer ctx. Inner Cancel goroutine
+// is bounded by the broker's own channel timeout; the buffered done channel
+// prevents send-side goroutine leaks if the outer select races past.
+func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout time.Duration) {
+	callCtx, cancelCall := context.WithTimeout(ctx, perCallTimeout)
+	defer cancelCall()
+
+	done := make(chan error, 1)
+	go func() { done <- c.ch.Cancel(c.tag, false) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			slog.Warn("rabbitmq: basic.cancel during StopIntake failed",
+				slog.String("consumer_tag", c.tag),
+				slog.Any("error", err))
+		}
+	case <-callCtx.Done():
+		slog.Warn("rabbitmq: basic.cancel during StopIntake exceeded per-call budget or outer ctx cancelled",
+			slog.String("consumer_tag", c.tag),
+			slog.Any("error", callCtx.Err()))
+	}
+}
+
+// StopIntake snapshots the active consumer tags under mu, releases the lock,
+// then issues basic.cancel concurrently. Each individual Cancel is bounded by
+// StopIntakePerCallTimeout so a single unresponsive broker cannot stall the
+// whole shutdown path. The outer ctx gates the entire operation — if the
+// caller's budget expires, StopIntake returns ctx.Err() without waiting for
+// remaining goroutines.
+//
+// Invariants:
+//   - mu is NEVER held across broker I/O (basic.cancel is a synchronous round-trip).
+//   - Each Cancel call has an independent per-call deadline.
+//   - On outer ctx cancel, returns promptly; leaked Cancel goroutines are bounded
+//     by the per-call timeout and broker channel liveness.
+//
+// ref: Uber fx app.go StopTimeout (budget must be honoured);
+// ref: Watermill router.go (stop intake → bounded drain pattern).
+func (s *Subscriber) StopIntake(ctx context.Context) error {
+	s.stopIntakeOnce.Do(func() { close(s.stopIntakeCh) })
+
+	snapshot := s.snapshotActiveConsumers()
+	if len(snapshot) == 0 {
+		return nil
+	}
+
+	perCallTimeout := s.config.StopIntakePerCallTimeout
+	if perCallTimeout <= 0 {
+		perCallTimeout = 2 * time.Second
+	}
+
+	var wg sync.WaitGroup
+	for _, c := range snapshot {
+		if ctx.Err() != nil {
+			break // outer budget expired; skip remaining dispatch
+		}
+		wg.Add(1)
+		go func(c consumerRef) {
+			defer wg.Done()
+			cancelConsumerWithBudget(ctx, c, perCallTimeout)
+		}(c)
+	}
+
+	waitDone := make(chan struct{})
+	go func() { wg.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ---------------------------------------------------------------------------

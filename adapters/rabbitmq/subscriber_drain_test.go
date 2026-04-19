@@ -351,3 +351,206 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, shortTimeout/2,
 		"Close should have waited at least half of ShutdownTimeout")
 }
+
+// TestSubscriber_StopIntake_RespectsCtx verifies that StopIntake returns
+// promptly when its context is cancelled, even if the broker's basic.cancel
+// is hanging. This is the F1 fix: StopIntake must not hold the lock across
+// broker I/O, and must honour the ctx budget.
+//
+// Setup: one channel whose Cancel blocks on cancelHangUntil (never closed).
+// Expectation: StopIntake returns context.DeadlineExceeded within ~150ms of
+// the ctx deadline, not hanging on the broker.
+func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.cancelHangUntil = make(chan struct{}) // never closed → Cancel hangs
+	t.Cleanup(func() { close(ch.cancelHangUntil) })
+
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:       "ctx-respect-queue",
+		DLXExchange:     "ctx-respect.dlx",
+		ShutdownTimeout: 5 * time.Second,
+	})
+
+	// Start Subscribe so the consumerTag is registered.
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	// Wait for Subscribe to register its consumerTag.
+	require.Eventually(t, func() bool {
+		sub.mu.Lock()
+		defer sub.mu.Unlock()
+		return len(sub.consumerTags) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+
+	// Call StopIntake with a short ctx; broker Cancel hangs indefinitely.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stopCancel()
+
+	start := time.Now()
+	err := sub.StopIntake(stopCtx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "StopIntake must return ctx.Err when broker hangs past ctx deadline")
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"StopIntake must propagate ctx.DeadlineExceeded")
+	assert.Less(t, elapsed, 500*time.Millisecond,
+		"StopIntake must return within a short margin of ctx deadline; got %s", elapsed)
+
+	// Clean up: cancel Subscribe so the goroutine exits.
+	subCancel()
+	<-subDone
+}
+
+// TestSubscriber_StopIntake_PerCallTimeout verifies that a single hanging
+// basic.cancel does not stall StopIntake beyond its per-call budget.
+// The outer ctx is generous; the per-call timeout (configured via
+// SubscriberConfig.StopIntakePerCallTimeout) bounds how long any one
+// Cancel can hold the shutdown path.
+//
+// Expectation: StopIntake returns nil (best-effort) within ~400ms when
+// per-call timeout is 300ms, even though the broker never responds.
+func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.cancelHangUntil = make(chan struct{}) // never closed → Cancel hangs
+	t.Cleanup(func() { close(ch.cancelHangUntil) })
+
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:                "per-call-timeout-queue",
+		DLXExchange:              "per-call-timeout.dlx",
+		ShutdownTimeout:          5 * time.Second,
+		StopIntakePerCallTimeout: 300 * time.Millisecond,
+	})
+
+	// Start Subscribe so the consumerTag is registered.
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		sub.mu.Lock()
+		defer sub.mu.Unlock()
+		return len(sub.consumerTags) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+
+	// Outer ctx is generous; per-call timeout should bound Cancel.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stopCancel()
+
+	start := time.Now()
+	err := sub.StopIntake(stopCtx)
+	elapsed := time.Since(start)
+
+	// best-effort: a Cancel that times out is logged as Warn; StopIntake returns nil.
+	require.NoError(t, err, "StopIntake must return nil (best-effort) when per-call timeout fires")
+	assert.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+		"StopIntake must wait at least the per-call timeout; got %s", elapsed)
+	assert.Less(t, elapsed, 1*time.Second,
+		"StopIntake must not exceed per-call timeout substantially; got %s", elapsed)
+
+	subCancel()
+	<-subDone
+}
+
+// TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO verifies the key
+// F1 invariant: Subscriber.mu is NOT held while ch.Cancel is pending.
+// Another goroutine holding lock-dependent logic (e.g. a new Subscribe call,
+// or consumeLoop's delete(consumerTags, ch)) must not be blocked by a slow
+// basic.cancel.
+func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	hangGate := make(chan struct{})
+	ch.cancelHangUntil = hangGate
+	t.Cleanup(func() {
+		select {
+		case <-hangGate: // already closed
+		default:
+			close(hangGate)
+		}
+	})
+
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:                "lock-free-queue",
+		DLXExchange:              "lock-free.dlx",
+		ShutdownTimeout:          5 * time.Second,
+		StopIntakePerCallTimeout: 2 * time.Second,
+	})
+
+	subCtx, subCancel := context.WithCancel(context.Background())
+	defer subCancel()
+	subDone := make(chan error, 1)
+	go func() {
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		sub.mu.Lock()
+		defer sub.mu.Unlock()
+		return len(sub.consumerTags) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+
+	// Fire StopIntake in a goroutine; Cancel hangs on hangGate.
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- sub.StopIntake(context.Background())
+	}()
+
+	// While StopIntake is pending (hanging on broker Cancel), the Subscriber
+	// lock must NOT be held — a lock acquisition from another goroutine must
+	// succeed within 100ms.
+	lockAcquired := make(chan struct{})
+	go func() {
+		sub.mu.Lock()
+		close(lockAcquired)
+		sub.mu.Unlock()
+	}()
+
+	select {
+	case <-lockAcquired:
+		// success — StopIntake released the lock before invoking broker I/O
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Subscriber.mu was held across broker I/O — StopIntake must snapshot then release")
+	}
+
+	// Release the hang and let StopIntake complete.
+	close(hangGate)
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("StopIntake did not complete after hang released")
+	}
+
+	subCancel()
+	<-subDone
+}
