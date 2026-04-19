@@ -12,11 +12,16 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ErrLifecycleAlreadyStarted is returned by Append when the lifecycle has
 // already started, and by Start when Start is called more than once.
-var ErrLifecycleAlreadyStarted = errors.New("bootstrap: lifecycle already started")
+//
+// Callers may use errors.Is(err, ErrLifecycleAlreadyStarted) for sentinel
+// checks; the pointer identity is stable for the lifetime of the process.
+var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lifecycle already started")
 
 const (
 	// DefaultStartTimeout is the default per-hook start deadline.

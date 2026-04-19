@@ -140,12 +140,20 @@ func writeExpiredCredFile(t *testing.T, path string) {
 }
 
 // TestIntegration_AdminExists_OrphanSwept verifies P1-16: SweepHook removes an
-// expired credential file on startup, even when EnsureAdmin returns early because
-// an admin already exists.
+// expired credential file on startup, exercising the path where EnsureAdmin
+// would return early (adminExists==true) without cleaning the orphan file.
+//
+// NOTE on test scope: This test does not pre-populate the user repository with
+// an admin record. run() uses an in-memory DB that starts empty, so EnsureAdmin
+// will create a new admin user rather than taking the adminExists==true branch.
+// The test therefore validates that SweepHook executes during bootstrap.Run's
+// lifecycle phase and removes the expired file — independent of EnsureAdmin's
+// decision path. The adminExists==true causal guarantee is covered at unit level
+// by sweep_test.go::TestSweep_AdminExistsDoesNotSkip (pure Sweep function).
 //
 // Execution order in bootstrap.Run:
 //
-//	Step 3-4: asm.StartWithConfig → EnsureAdmin (admin exists → early return, no new cred file written)
+//	Step 3-4: asm.StartWithConfig → EnsureAdmin (in-memory DB: creates admin, writes no new cred file because stateDir has orphan)
 //	Step 4.6: Lifecycle.Start → SweepHook.OnStart removes expired orphan cred file
 //	Step 7:   TCP listen (may fail in sandbox — acceptable; sweep already ran)
 func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {

@@ -85,7 +85,7 @@ func Sweep(ctx context.Context, cfg SweepConfig) error {
 			)
 			return nil
 		}
-		cfg.Logger.WarnContext(ctx, "sweep: removed expired credential file",
+		cfg.Logger.InfoContext(ctx, "sweep: removed expired credential file",
 			slog.String("event", "initial_admin_credential_swept"),
 			slog.String("file_path", credPath),
 			slog.Time("expires_at", expiresAt),

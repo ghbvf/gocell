@@ -180,8 +180,13 @@ func main() {
 		}),
 	)
 
-	credPath := stateDir + "/initial_admin_password"
-	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to "+credPath,
+	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)
+	if err != nil {
+		logger.Warn("sso-bff: invalid GOCELL_STATE_DIR for credential path resolution",
+			slog.String("error", err.Error()))
+		credPath = stateDir + "/initial_admin_password"
+	}
+	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to the path below",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
 		slog.String("cred_path", credPath),

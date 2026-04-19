@@ -109,10 +109,11 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 	_, statErr := os.Stat(credPath)
 	assert.True(t, isNotExist(statErr), "expired credential file must be removed; got: %v", statErr)
 
-	// Warn log with correct event key must be present.
+	// Info log with correct event key must be present.
+	// File removal on startup is a normal lifecycle event, not a degraded-mode signal.
 	rec, found := cap.findByEvent("initial_admin_credential_swept")
-	assert.True(t, found, "expected Warn log with event=initial_admin_credential_swept")
-	assert.Equal(t, slog.LevelWarn, rec.level, "expected Warn level log")
+	assert.True(t, found, "expected Info log with event=initial_admin_credential_swept")
+	assert.Equal(t, slog.LevelInfo, rec.level, "expected Info level log")
 }
 
 // TestSweep_FreshFile_Retained verifies that a non-expired credential file is
