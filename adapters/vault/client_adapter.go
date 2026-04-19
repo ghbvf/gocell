@@ -1,0 +1,54 @@
+package vault
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	vaultapi "github.com/hashicorp/vault/api"
+)
+
+// vaultAPIClient wraps *vaultapi.Client to satisfy the vaultClient interface.
+// This is the production wiring between vault/api and TransitKeyProvider.
+//
+// Migrated from runtime/crypto.vaultAPIClient (R1c Phase 0-c). The adapter
+// itself carries no envelope semantics — it is a thin I/O shim.
+//
+// ref: hashicorp/vault api/client.go — vaultapi.Client.Logical().WriteWithContext
+type vaultAPIClient struct {
+	client *vaultapi.Client
+}
+
+// NewVaultAPIClient wraps the provided *vaultapi.Client in the vaultClient
+// adapter used by TransitKeyProvider. Use this when constructing the provider
+// from a pre-configured *vaultapi.Client (e.g. in tests or when the caller
+// manages Vault authentication separately from NewTransitKeyProviderFromEnv).
+func NewVaultAPIClient(c *vaultapi.Client) vaultClient {
+	return &vaultAPIClient{client: c}
+}
+
+// Write sends a PUT/POST to the given Vault path with the provided data.
+func (a *vaultAPIClient) Write(ctx context.Context, path string, data map[string]any) (map[string]any, error) {
+	resp, err := a.client.Logical().WriteWithContext(ctx, path, data)
+	if err != nil {
+		return nil, fmt.Errorf("vault api: write %s: %w", path, err)
+	}
+	if resp == nil {
+		// Some write operations (e.g. rotate) return no data — treat as empty map.
+		return map[string]any{}, nil
+	}
+	return resp.Data, nil
+}
+
+// Read sends a GET to the given Vault path and returns the data map.
+func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any, error) {
+	resp, err := a.client.Logical().ReadWithContext(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("vault api: read %s: %w", path, err)
+	}
+	if resp == nil {
+		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+			"vault api: read returned nil response for path: "+path)
+	}
+	return resp.Data, nil
+}
