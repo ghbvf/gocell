@@ -1,6 +1,7 @@
 package flagwrite
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -60,6 +61,10 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
+	if err := validateRolloutPercentage(req.RolloutPercentage); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
 
 	flag, err := h.svc.Create(r.Context(), CreateInput{
 		Key:               req.Key,
@@ -102,6 +107,10 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
+	if err := validateRolloutPercentage(*req.RolloutPercentage); err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
 
 	flag, err := h.svc.Update(r.Context(), UpdateInput{
 		Key:               key,
@@ -115,6 +124,20 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toFlagWriteResponse(flag)})
+}
+
+// validateRolloutPercentage mirrors the contract schema's 0..100 bound at the
+// handler layer. Contract validators only run inside contract tests — a live
+// request that bypasses the schema (e.g. a client sending a negative or
+// >100 value) would otherwise persist an invalid rollout_percentage with no
+// DB-level CHECK constraint protecting it. Runtime guard is the authoritative
+// gate; the schema is documentation-and-contract-test defence.
+func validateRolloutPercentage(rolloutPercentage int) error {
+	if rolloutPercentage < 0 || rolloutPercentage > 100 {
+		return errcode.New(errcode.ErrFlagInvalidInput,
+			fmt.Sprintf("rolloutPercentage must be in [0, 100]; got %d", rolloutPercentage))
+	}
+	return nil
 }
 
 // validateUpdateRequest enforces the PUT full-replacement contract at the
