@@ -267,6 +267,25 @@ func WithPublicEndpoints(endpoints []string) Option {
 	}
 }
 
+// WithAuthDiscovery opts into auth verifier discovery from the assembly.
+// When invoked, Bootstrap inspects every Cell post-Init for an AuthProvider
+// implementation and wires the discovered verifier into AuthMiddleware.
+// If no provider is found (or multiple conflicting ones), Run returns an
+// error — fail-closed.
+//
+// This is the F3 successor to the dual-purpose WithPublicEndpoints opt-in:
+// public routes are now declared via auth.Declare in each Cell, so bootstrap
+// only needs an explicit signal that "this assembly expects JWT-backed auth
+// and a provider cell will expose it".
+//
+// Mutually exclusive with WithAuthMiddleware — that option injects the
+// verifier directly, bypassing discovery. Using both is rejected by phase 0.
+func WithAuthDiscovery() Option {
+	return func(b *Bootstrap) {
+		b.authDiscovery = true
+	}
+}
+
 // WithPasswordResetExemptEndpoints declares routes that remain reachable while
 // an authenticated token carries password_reset_required=true. Each entry must
 // be in "METHOD /path" format; path templates may use {xxx} wildcards.
