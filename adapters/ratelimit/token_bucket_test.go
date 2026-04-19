@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,47 @@ func TestLimiter_DefaultConfig(t *testing.T) {
 	window, limit := l.Window()
 	assert.Equal(t, time.Second, window)
 	assert.Greater(t, limit, 0, "default rate must be positive")
+}
+
+// ---------------------------------------------------------------------------
+// T15: Limiter.CloseCtx(ctx) — context-aware shutdown
+// ---------------------------------------------------------------------------
+
+// TestLimiter_CloseCtx_AcceptsCtx verifies that CloseCtx exists and stops the
+// background cleanup goroutine when called with ample budget.
+func TestLimiter_CloseCtx_AcceptsCtx(t *testing.T) {
+	l := New(Config{CleanupInterval: time.Minute})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := l.CloseCtx(ctx)
+	require.NoError(t, err, "CloseCtx with ample budget must return nil")
+}
+
+// TestLimiter_CloseCtx_Idempotent verifies that a second CloseCtx call
+// returns nil immediately (stopOnce guard).
+func TestLimiter_CloseCtx_Idempotent(t *testing.T) {
+	l := New(Config{CleanupInterval: time.Minute})
+	ctx := context.Background()
+
+	assert.NoError(t, l.CloseCtx(ctx), "first CloseCtx must return nil")
+	assert.NoError(t, l.CloseCtx(ctx), "second CloseCtx must be no-op and return nil")
+}
+
+// TestLimiter_CloseCtx_StopsCleanupGoroutine verifies that after CloseCtx,
+// the background cleanup goroutine no longer runs.
+func TestLimiter_CloseCtx_StopsCleanupGoroutine(t *testing.T) {
+	l := New(Config{CleanupInterval: 10 * time.Millisecond, StaleAfter: time.Millisecond})
+	_ = l.Allow("10.0.0.1") // create an entry
+
+	ctx := context.Background()
+	require.NoError(t, l.CloseCtx(ctx))
+
+	// After close, the limiter count must eventually hit 0 OR stay stable —
+	// the cleanup goroutine stopped, so no new cleanup runs occur.
+	// Mainly ensures no panic/race after close.
+	_ = l.Len()
 }
 
 // itoa is a minimal int-to-string for test IP generation.

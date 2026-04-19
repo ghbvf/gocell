@@ -708,3 +708,84 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	wg.Wait()
 	// If this test passes with -race, there are no data races.
 }
+
+// ---------------------------------------------------------------------------
+// T13: Watcher.CloseCtx(ctx) — context-aware shutdown budget
+// ---------------------------------------------------------------------------
+
+// TestWatcher_CloseCtx_AcceptsCtx verifies that CloseCtx exists and returns
+// nil for a healthy watcher closed with ample budget.
+func TestWatcher_CloseCtx_AcceptsCtx(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v0")
+
+	w, err := NewWatcher(file, WithDebounce(0))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = w.CloseCtx(ctx)
+	assert.NoError(t, err, "CloseCtx with ample budget must return nil")
+}
+
+// TestWatcher_CloseCtx_RespectsCtxDeadline verifies that CloseCtx returns
+// ctx.Err() when the budget is exceeded during the callback drain phase.
+func TestWatcher_CloseCtx_RespectsCtxDeadline(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v0")
+
+	// Create a watcher with a long drain timeout so Close() would block.
+	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(10*time.Second))
+	require.NoError(t, err)
+	w.Start()
+	waitReady(t, w)
+
+	// Register a callback that blocks until the test is done, simulating
+	// a long-running in-flight callback.
+	callbackBlocked := make(chan struct{})
+	callbackRelease := make(chan struct{})
+	w.OnChange(func(_ WatchEvent) {
+		close(callbackBlocked)
+		<-callbackRelease
+	})
+
+	// Trigger a file change to start the blocking callback.
+	touchFile(t, file, "key: v1")
+	select {
+	case <-callbackBlocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("callback did not start in time")
+	}
+
+	// CloseCtx with a short budget — should return promptly with ctx error.
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer shortCancel()
+
+	start := time.Now()
+	err = w.CloseCtx(shortCtx)
+	elapsed := time.Since(start)
+
+	assert.Error(t, err, "CloseCtx must return error when ctx budget exceeded")
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"CloseCtx must return within budget; got %s", elapsed)
+
+	close(callbackRelease) // unblock the callback goroutine
+}
+
+// TestWatcher_CloseCtx_Idempotent verifies that a second CloseCtx call returns
+// nil immediately.
+func TestWatcher_CloseCtx_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v0")
+
+	w, err := NewWatcher(file, WithDebounce(0))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	assert.NoError(t, w.CloseCtx(ctx), "first CloseCtx must return nil")
+	assert.NoError(t, w.CloseCtx(ctx), "second CloseCtx must be no-op and return nil")
+}
