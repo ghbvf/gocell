@@ -35,11 +35,16 @@ func newContractMux(svc *Service) *http.ServeMux {
 	return outer
 }
 
-func newContractService() *Service {
+func newContractService(t *testing.T) *Service {
+	t.Helper()
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
-	return NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
 }
 
 // --- Create contract test ---
@@ -47,7 +52,7 @@ func newContractService() *Service {
 func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.create.v1")
-	svc := newContractService()
+	svc := newContractService(t)
 	mux := newContractMux(svc)
 
 	c.ValidateRequest(t, []byte(`{"key":"my-flag","enabled":false,"rolloutPercentage":0,"description":"test"}`))
@@ -68,7 +73,7 @@ func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.update.v1")
-	svc := newContractService()
+	svc := newContractService(t)
 
 	// Seed a flag first.
 	_, err := svc.Create(testAdminCtx(), CreateInput{Key: "upd-flag", Description: "seed"})
@@ -130,7 +135,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.toggle.v1")
-	svc := newContractService()
+	svc := newContractService(t)
 
 	_, err := svc.Create(testAdminCtx(), CreateInput{Key: "tgl-flag", Description: "seed"})
 	require.NoError(t, err)
@@ -156,7 +161,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.delete.v1")
-	svc := newContractService()
+	svc := newContractService(t)
 
 	_, err := svc.Create(testAdminCtx(), CreateInput{Key: "del-flag", Description: "seed"})
 	require.NoError(t, err)
@@ -179,10 +184,11 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+	require.NoError(t, err)
 
-	_, err := svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})
+	_, err = svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})
 	require.NoError(t, err)
 
 	require.Len(t, writer.entries, 1)

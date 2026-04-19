@@ -34,17 +34,11 @@ import (
 	"syscall"
 
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	auditcore "github.com/ghbvf/gocell/cells/audit-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/worker"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -184,28 +178,6 @@ func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
 	return cursorCodecs{audit: audit, config: cfg}, nil
 }
 
-// buildAssembly constructs the core-bundle Assembly and registers the three
-// cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
-func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *accesscore.AccessCore, auditCell *auditcore.AuditCore) (*assembly.CoreAssembly, error) {
-	asm := assembly.New(assembly.Config{
-		ID:              "core-bundle",
-		DurabilityMode:  cell.DurabilityDurable,
-		HookObserver:    ps.hookObserver,
-		MetricsProvider: ps.metricProvider,
-		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
-	})
-	if err := asm.Register(configCell); err != nil {
-		return nil, fmt.Errorf("register config-core: %w", err)
-	}
-	if err := asm.Register(accessCell); err != nil {
-		return nil, fmt.Errorf("register access-core: %w", err)
-	}
-	if err := asm.Register(auditCell); err != nil {
-		return nil, fmt.Errorf("register audit-core: %w", err)
-	}
-	return asm, nil
-}
-
 // validateModeCoupling enforces that the DATA plane (cellAdapterMode) and
 // CONTROL plane (adapterMode) agree on production posture. If the cell has
 // committed to a real backend (postgres), operators MUST also set
@@ -288,37 +260,6 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	return jwtDeps{issuer: issuer, verifier: verifier, registry: reg}, nil
 }
 
-// adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
-// onto the given base access-core options and returns the extended options together
-// with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
-// WorkerGroup.
-//
-// Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
-// bootstrap.Run), before the WorkerGroup starts (Step 8). worker.Lazy() resolves
-// the worker at Start() time — after the assembly has Init'd.
-//
-// When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
-// When admin already exists: sink is not called, LazyWorker.Start/Stop are no-ops.
-//
-// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin, removing expired
-// credential files unconditionally — including when adminExists==true causes
-// EnsureAdmin to return early.
-//
-// Thread safety: Set (writer) and Start/Stop (readers) synchronise via
-// atomic.Pointer inside worker.LazyWorker (F-OPS-2).
-//
-// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func adminBootstrapWorkerOpts(base []accesscore.Option, bootstrapOpts ...accesscore.InitialAdminOption) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
-	lazy := worker.Lazy()
-	sink := func(w worker.Worker) { _ = lazy.Set(w) }
-	accessOpts = append(base,
-		accesscore.WithInitialAdminBootstrap(bootstrapOpts...),
-		accesscore.WithBootstrapWorkerSink(sink),
-	)
-	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
-	return accessOpts, lazyWorkerOpt
-}
-
 // promStack groups the Prometheus hook observer and metric provider.
 type promStack struct {
 	registry       *prom.Registry
@@ -353,7 +294,7 @@ func buildPromStack() (promStack, error) {
 // buildMetricsHandler constructs the /metrics HTTP handler. When metricsToken
 // is set the handler is wrapped with a constant-time token guard; otherwise a
 // warning is emitted and the handler is unauthenticated. The production-mode
-// "token required" fail-fast is enforced centrally by AppDeps.Validate so
+// "token required" fail-fast is enforced centrally by SharedDeps.Validate so
 // this helper only concerns itself with handler construction.
 //
 // ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
@@ -399,24 +340,6 @@ func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, 
 	return auth.ServiceTokenMiddleware(ring), nil
 }
 
-// logInitialAdminCredPath emits a startup info log so operators know where to
-// find the initial admin credential on first run. Uses
-// accesscore.ResolveBootstrapCredentialPath so the logged path always matches
-// the path actually written by the bootstrapper (P2-6: no duplicated path
-// resolution logic).
-func logInitialAdminCredPath() {
-	credPath, err := accesscore.ResolveBootstrapCredentialPath("")
-	if err != nil {
-		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
-		// so log the error here and let the user fix the config.
-		slog.Warn("core-bundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
-			slog.String("error", err.Error()))
-		return
-	}
-	slog.Info("core-bundle: starting; if first run, initial admin credentials are written to "+credPath,
-		slog.String("cred_path", credPath))
-}
-
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -430,15 +353,57 @@ func main() {
 // run is the application entry point: parse environment, assemble, and run.
 // Extracted from main() for testability.
 //
+// Flow:
+//  1. LoadSharedDepsFromEnv — load and validate all cross-cutting deps.
+//  2. BuildApp — each CellModule.Provide wires its own Cell + bootstrap opts.
+//  3. buildAssembly — register cells in the CoreAssembly.
+//  4. bootstrap.New(opts...).Run(ctx) — start lifecycle.
+//
 // ref: uber-go/fx app.go Run — thin wrapper around Start/Stop lifecycle.
 func run(ctx context.Context) error {
-	deps, err := AppDepsFromEnv(ctx)
+	shared, err := LoadSharedDepsFromEnv(ctx)
 	if err != nil {
 		return err
 	}
-	app, err := BuildBootstrap(deps)
+
+	cells, cellOpts, err := bootstrap.BuildApp(ctx, shared,
+		ConfigCoreModule{},
+		AccessCoreModule{},
+		AuditCoreModule{},
+	)
 	if err != nil {
 		return err
 	}
-	return app.Run(ctx)
+
+	asm, err := buildAssembly(shared.PromStack, cells...)
+	if err != nil {
+		return fmt.Errorf("build assembly: %w", err)
+	}
+
+	consumerBase, err := buildConsumerBase()
+	if err != nil {
+		return err
+	}
+
+	metricsHandler := shared.metricsHandler
+	if metricsHandler == nil {
+		metricsHandler, err = buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
+		if err != nil {
+			return err
+		}
+	}
+
+	adapterInfo := shared.Topology.AdapterInfo()
+	slog.Info("core-bundle: startup configuration",
+		slog.String("adapter_mode", adapterInfo["mode"]),
+		slog.String("storage", adapterInfo["storage"]),
+		slog.String("event_bus", adapterInfo["event_bus"]),
+		slog.String("outbox_storage", adapterInfo["outbox_storage"]))
+
+	logInitialAdminCredPath()
+
+	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts = append(opts, cellOpts...)
+
+	return bootstrap.New(opts...).Run(ctx)
 }

@@ -201,7 +201,9 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
 	}
-	c.initFlagWriteSlice()
+	if err := c.initFlagWriteSlice(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -307,7 +309,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 
 // initFlagWriteSlice registers the flag-write L2 slice: Create/Update/Toggle/Delete
 // with transactional outbox (flag.changed.v1 event).
-func (c *ConfigCore) initFlagWriteSlice() {
+func (c *ConfigCore) initFlagWriteSlice() error {
 	var opts []flagwrite.Option
 	if c.outboxWriter != nil {
 		opts = append(opts, flagwrite.WithOutboxWriter(c.outboxWriter))
@@ -315,9 +317,13 @@ func (c *ConfigCore) initFlagWriteSlice() {
 	if c.txRunner != nil {
 		opts = append(opts, flagwrite.WithTxManager(c.txRunner))
 	}
-	flagWriteSvc := flagwrite.NewService(c.flagRepo, c.logger, opts...)
+	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, opts...)
+	if err != nil {
+		return fmt.Errorf("config-core: init flag-write slice: %w", err)
+	}
 	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
 	c.AddSlice(cell.NewBaseSlice("flag-write", "config-core", cell.L2))
+	return nil
 }
 
 // RegisterRoutes registers HTTP routes for config-core. All admin-guarded
