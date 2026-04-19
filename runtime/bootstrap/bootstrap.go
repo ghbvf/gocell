@@ -798,8 +798,8 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// close after assembly/HTTP/workers are stopped (outermost layer), same
 	// as fx OnStop registration order.
 	//
-	// managedResourceTeardowns is already in LIFO order (last-registered
-	// resource first) from expandManagedResources.
+	// managedResourceTeardowns is in registration order; reversed by the LIFO
+	// shutdown loop at the end of Run().
 	for _, td := range b.managedResourceTeardowns {
 		td := td // capture for closure
 		s.addTeardown(func(_ context.Context) error {

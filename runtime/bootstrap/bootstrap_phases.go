@@ -86,6 +86,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.shutdownMetricsErr != nil {
 		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.shutdownMetricsErr)
 	}
+	seen := make(map[string]struct{}, len(b.healthCheckers))
 	for _, hc := range b.healthCheckers {
 		if hc.name == "" {
 			return fmt.Errorf("bootstrap: health checker name must not be empty")
@@ -93,6 +94,13 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		if hc.fn == nil {
 			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
 		}
+		// Fail-fast on duplicate checker names: duplicates silently shadow each
+		// other in the health handler, making one probe invisible. Surface
+		// before any side effects so rollback cost is zero.
+		if _, dup := seen[hc.name]; dup {
+			return fmt.Errorf("bootstrap: duplicate health checker name %q; each checker must have a unique name", hc.name)
+		}
+		seen[hc.name] = struct{}{}
 	}
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
