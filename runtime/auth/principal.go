@@ -8,13 +8,19 @@ import (
 type PrincipalKind int
 
 const (
-	PrincipalUser      PrincipalKind = iota // JWT user
-	PrincipalService                        // service token / mTLS machine
-	PrincipalAnonymous                      // public endpoint
+	// PrincipalUnknown is the zero value of PrincipalKind; it indicates an
+	// uninitialised Principal and must never appear in a fully-constructed
+	// Principal returned by an Authenticator.
+	PrincipalUnknown   PrincipalKind = iota
+	PrincipalUser                    // JWT user
+	PrincipalService                 // service token / mTLS machine
+	PrincipalAnonymous               // public endpoint
 )
 
 func (k PrincipalKind) String() string {
 	switch k {
+	case PrincipalUnknown:
+		return "unknown"
 	case PrincipalUser:
 		return "user"
 	case PrincipalService:
@@ -27,18 +33,20 @@ func (k PrincipalKind) String() string {
 }
 
 // Principal is the unified authn subject injected into request context after
-// successful authentication. Claims is treated as read-only after construction;
-// callers must not mutate the map (concurrent reads only).
-//
-// Principal supersedes the legacy Claims context value (see Claims in auth.go);
-// AuthMiddleware will inject Principal once F7 wiring lands. New handlers should
-// consume FromContext rather than reading Claims directly.
+// successful authentication. AuthMiddleware and ServiceTokenMiddleware both
+// populate Principal via WithPrincipal; handlers consume it via FromContext.
+// Principal is the authoritative authn context for all business routes (F1/F7).
 type Principal struct {
-	Kind       PrincipalKind
-	Subject    string
-	Roles      []string
-	AuthMethod string
-	Claims     map[string]string
+	Kind                  PrincipalKind
+	Subject               string
+	Roles                 []string
+	AuthMethod            string
+	PasswordResetRequired bool
+	// Claims is a read-only snapshot of supplementary JWT claims (e.g. "sid",
+	// "iss", "token_use"). Callers must treat Claims as a read-only snapshot;
+	// mutating it has no effect on authentication decisions and may corrupt
+	// shared state.
+	Claims map[string]string
 }
 
 // HasRole is nil-safe: a nil receiver always returns false.
@@ -65,6 +73,11 @@ func FromContext(ctx context.Context) (*Principal, bool) {
 	if p == nil {
 		return nil, false
 	}
+	if p.Kind == PrincipalUnknown {
+		// Zero-value Principal was stored; treat as absent to prevent
+		// uninitialised structs from leaking through as valid principals.
+		return nil, false
+	}
 	return p, true
 }
 
@@ -86,9 +99,9 @@ const (
 )
 
 // BuiltinServiceRoles returns the compile-time hard-coded role set for
-// well-known internal services. Dynamic, configurable service roles will be
-// resolved via config.Registry once F1 lands; treat this as a temporary
-// bootstrap until then.
+// well-known internal services. Dynamic, configurable service roles are
+// resolved via config.Registry (F1, PR#197); the compile-time set here covers
+// bootstrap and test scenarios where the registry is not available.
 func BuiltinServiceRoles(name string) []string {
 	switch name {
 	case ServiceNameInternal:

@@ -43,10 +43,10 @@ func TestAuthMiddleware_CallsVerifyIntentWithAccessExpectation(t *testing.T) {
 		accessClaims: Claims{Subject: "u1", Roles: []string{"user"}, TokenUse: TokenIntentAccess},
 	}
 	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := ClaimsFrom(r.Context())
+		p, ok := FromContext(r.Context())
 		assert.True(t, ok)
-		assert.Equal(t, "u1", claims.Subject)
-		assert.Equal(t, TokenIntentAccess, claims.TokenUse)
+		assert.Equal(t, "u1", p.Subject)
+		assert.Equal(t, string(TokenIntentAccess), p.Claims["token_use"])
 		w.WriteHeader(http.StatusOK)
 	}))
 

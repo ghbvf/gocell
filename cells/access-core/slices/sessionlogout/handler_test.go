@@ -13,7 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -68,6 +68,14 @@ func TestHandleLogout(t *testing.T) {
 			caller:     "",
 			wantStatus: http.StatusUnauthorized,
 		},
+		{
+			// Defense-in-depth: Principal is present in context (ok=true) but
+			// Subject is empty — handler must still reject with 401.
+			name:       "principal present but empty subject returns 401",
+			path:       "/sess-1",
+			caller:     "empty-subject-sentinel",
+			wantStatus: http.StatusUnauthorized,
+		},
 	}
 
 	for _, tc := range tests {
@@ -75,9 +83,20 @@ func TestHandleLogout(t *testing.T) {
 			h := setup()
 			w := httptest.NewRecorder()
 			sessionID := strings.TrimPrefix(tc.path, "/")
-			ctx := context.Background()
-			if tc.caller != "" {
-				ctx = ctxkeys.WithSubject(ctx, tc.caller)
+			var ctx context.Context
+			switch {
+			case tc.name == "principal present but empty subject returns 401":
+				// Inject a Principal with ok=true but Subject="" to exercise the
+				// second branch of: if !ok || p.Subject == ""
+				ctx = auth.WithPrincipal(context.Background(), &auth.Principal{
+					Kind:       auth.PrincipalUser,
+					Subject:    "",
+					AuthMethod: "test",
+				})
+			case tc.caller != "":
+				ctx = auth.TestContext(tc.caller, nil)
+			default:
+				ctx = context.Background()
 			}
 			req := httptest.NewRequest(http.MethodDelete, tc.path, nil).WithContext(ctx)
 			req.SetPathValue("id", sessionID)

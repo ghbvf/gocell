@@ -18,7 +18,6 @@ const (
 	SpanID        ctxKey = "span_id"
 	RequestID     ctxKey = "request_id"
 	RealIP        ctxKey = "real_ip"
-	Subject       ctxKey = "subject"
 )
 
 // --- CellID ---
@@ -122,18 +121,5 @@ func WithRealIP(ctx context.Context, ip string) context.Context {
 // RealIPFrom extracts the client's real IP from ctx. The boolean indicates presence.
 func RealIPFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(RealIP).(string)
-	return v, ok
-}
-
-// --- Subject ---
-
-// WithSubject returns a new context carrying the authenticated subject identifier.
-func WithSubject(ctx context.Context, sub string) context.Context {
-	return context.WithValue(ctx, Subject, sub)
-}
-
-// SubjectFrom extracts the authenticated subject from ctx. The boolean indicates presence.
-func SubjectFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(Subject).(string)
 	return v, ok
 }

@@ -627,6 +627,40 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec2.Code)
 }
 
+// --- T5: ServicePrincipal injection tests ---
+
+// TestServiceTokenMiddleware_InjectsServicePrincipal verifies that a valid
+// ServiceToken causes the middleware to inject a Principal into the request
+// context with the correct service identity fields.
+func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+
+	var gotPrincipal *Principal
+	handler := ServiceTokenMiddleware(ring, WithServiceTokenClock(func() time.Time { return now }))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, ok := FromContext(r.Context())
+			require.True(t, ok, "Principal must be present in context after valid service token")
+			gotPrincipal = p
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, gotPrincipal)
+	assert.Equal(t, PrincipalService, gotPrincipal.Kind)
+	assert.Equal(t, ServiceNameInternal, gotPrincipal.Subject)
+	assert.Contains(t, gotPrincipal.Roles, RoleInternalAdmin)
+	assert.Equal(t, "service_token", gotPrincipal.AuthMethod)
+	assert.False(t, gotPrincipal.PasswordResetRequired)
+}
+
 func TestCanonicalQuery_SortsKeys(t *testing.T) {
 	assert.Equal(t, "a=1&b=2", canonicalQuery("b=2&a=1"))
 	assert.Equal(t, "", canonicalQuery(""))
