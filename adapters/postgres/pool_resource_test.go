@@ -141,29 +141,34 @@ func TestPGResource_ImplementsManagedResource(t *testing.T) {
 }
 
 // TestPGResource_CheckerTimeout verifies that the health checker uses a
-// standalone context (not the caller's ctx) with a 5-second timeout.
-// We inject a custom pool that records the deadline of the context it receives.
+// standalone context with a ~5-second timeout. We inject a healthFunc via
+// the PGResource struct field (same mechanism as TestPGResource_CheckerUsesIndependentCtx)
+// to go through the real Checkers() path instead of testing a self-contained stub.
 func TestPGResource_CheckerTimeout(t *testing.T) {
-	// Build the checker inline with a fake pool that records context deadline.
 	var receivedDeadline time.Time
-	fakeFn := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		dl, _ := ctx.Deadline()
-		receivedDeadline = dl
-		return nil
+	res := &PGResource{
+		name: "postgres",
+		healthFunc: func(ctx context.Context) error {
+			dl, _ := ctx.Deadline()
+			receivedDeadline = dl
+			return nil
+		},
 	}
 
-	// Call the fake fn directly — simulates what the real checker does.
-	if err := fakeFn(); err != nil {
+	checkers := res.Checkers()
+	fn := checkers["postgres"]
+	if fn == nil {
+		t.Fatal("checker fn must not be nil")
+	}
+
+	if err := fn(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	now := time.Now()
 	// Deadline should be ~5s from now (allow ±2s tolerance for slow CI).
-	diff := receivedDeadline.Sub(now)
+	diff := time.Until(receivedDeadline)
 	if diff < 3*time.Second || diff > 7*time.Second {
-		t.Errorf("expected deadline ~5s from now, got %v", diff)
+		t.Errorf("expected checker deadline ~5s from now, got %v", diff)
 	}
 }
 

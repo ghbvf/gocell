@@ -24,6 +24,13 @@ import (
 // Worker implementations, and the alias is how implementations declare they
 // satisfy the kernel contract.
 //
+// Guidance for new consumers: code outside runtime/worker (e.g., adapters/,
+// cells/) SHOULD import kernel/worker directly and reference worker.Worker
+// (the kernel contract). This alias exists for historical compatibility and
+// for runtime/worker's own implementations (WorkerGroup, LazyWorker,
+// PeriodicWorker) to satisfy the kernel contract without importing the kernel
+// package from every local file.
+//
 // ref: kernel/worker/worker.go — authoritative Worker interface definition.
 type Worker = kworker.Worker
 

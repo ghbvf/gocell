@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
 
@@ -83,7 +85,8 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	addr := ln.Addr().String()
 	waitForHealthy(t, addr)
 
-	// /readyz?verbose should include the "fake-pg" checker name.
+	// /readyz?verbose should include the "fake-pg" checker name in the body,
+	// proving the checker was actually registered (not just that readyz returns 200).
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
 	if err != nil {
 		t.Fatalf("GET /readyz?verbose failed: %v", err)
@@ -91,6 +94,10 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "fake-pg") {
+		t.Errorf("expected /readyz?verbose body to contain checker name %q, got: %s", "fake-pg", string(body))
 	}
 }
 
@@ -123,8 +130,12 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
-	// Worker must have been started (bootstrap starts workers in Step 8)
-	// Note: our fakeWorker.Start returns immediately, so started means it was called.
+	// Worker must have been started (bootstrap starts workers in Step 8) and
+	// stopped (bootstrap stops workers during shutdown). Both sides of the
+	// lifecycle must be exercised as the test comment states.
+	if !fw.started {
+		t.Error("expected worker Start to be called before shutdown")
+	}
 	if !fw.stopped {
 		t.Error("expected worker Stop to be called during shutdown")
 	}
@@ -282,5 +293,67 @@ func TestWithManagedResource_NilFailFast(t *testing.T) {
 	const want = "managed resource must not be nil"
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestWithManagedResource_TypedNilFailFast verifies that a typed-nil
+// (non-nil interface wrapping a nil pointer) is detected at phase0 and
+// causes Run() to return an error — mirrors isNilBrokerHealthChecker /
+// TestWithCircuitBreaker_TypedNilPointer_Error.
+//
+// Without reflect-based detection, WithManagedResource((*fakeResource)(nil))
+// would pass the `r == nil` guard and panic at Checkers()/Worker()/Close()
+// call time during expandManagedResources() or shutdown.
+func TestWithManagedResource_TypedNilFailFast(t *testing.T) {
+	var res *fakeResource // typed nil
+	var iface kernellifecycle.ManagedResource = res
+
+	app := New(WithManagedResource(iface))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedResource receives a typed-nil interface")
+	}
+	const want = "managed resource must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
+	}
+}
+
+// TestManagedResource_CloseErrorPropagatesToPhase10 verifies that when a
+// ManagedResource.Close() returns an error, that error is propagated to the
+// Run() return value via phase10 teardown aggregation.
+//
+// Previously the closure signature was `func(ctx context.Context)` (no error
+// return), which silently swallowed Close errors after slog.Warn. This test
+// ensures the error surfaces to the Run() caller so operators see a non-clean
+// shutdown when a resource fails to close.
+func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
+	closeErr := errors.New("simulated close failure")
+	res := &fakeResource{name: "bad-res", closeErr: closeErr}
+
+	ln := newLocalListener(t)
+	app := New(
+		WithListener(ln),
+		WithManagedResource(res),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	cancel()
+	select {
+	case runErr := <-errCh:
+		if runErr == nil {
+			t.Fatal("expected Run to return an error when Close fails, got nil")
+		}
+		if !strings.Contains(runErr.Error(), "simulated close failure") {
+			t.Errorf("Run error %q must contain %q", runErr.Error(), "simulated close failure")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
 	}
 }

@@ -705,7 +705,9 @@ type Bootstrap struct {
 	// managedResourceTeardowns holds LIFO close functions derived from
 	// managedResources during expandManagedResources(). Iterated in reverse
 	// order during shutdown so the last-registered resource is closed first.
-	managedResourceTeardowns []func(ctx context.Context)
+	// Each func returns the Close error so phase10LIFOTeardown can aggregate
+	// it into the Run() return value.
+	managedResourceTeardowns []func(ctx context.Context) error
 
 	// managedResourceNil is set by WithManagedResource when a nil resource is
 	// passed. Checked in phase0 to fail-fast rather than silently skipping
@@ -832,10 +834,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
 	for _, td := range b.managedResourceTeardowns {
-		s.addTeardown(func(ctx context.Context) error {
-			td(ctx)
-			return nil
-		})
+		s.addTeardown(td) // td already returns error; phase10 aggregates via LIFO teardown chain
 	}
 
 	rollback := func(cause error) error {
