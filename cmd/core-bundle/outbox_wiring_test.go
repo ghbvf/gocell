@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
@@ -35,7 +36,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "memory"}
-	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err)
 	assert.Nil(t, res, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
@@ -49,7 +50,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}
-	res, _, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
+	res, _, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
@@ -72,7 +73,7 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
 	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (wraps pool + relay)")
