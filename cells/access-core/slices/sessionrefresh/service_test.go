@@ -1,7 +1,9 @@
 package sessionrefresh
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -371,6 +374,97 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.False(t, claims.PasswordResetRequired, "access token claim must be false after flag cleared")
+}
+
+// infraSessionRepo is a session repo stub whose GetByRefreshToken returns an
+// infra error (e.g. db timeout). Used to test P1-18: infra errors must not
+// enter the reuse detection branch.
+type infraSessionRepo struct {
+	mem.SessionRepository
+	infraErr error
+}
+
+func newInfraSessionRepo(infraErr error) *infraSessionRepo {
+	return &infraSessionRepo{
+		SessionRepository: *mem.NewSessionRepository(),
+		infraErr:          infraErr,
+	}
+}
+
+func (r *infraSessionRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, r.infraErr
+}
+
+// notFoundSessionRepo is a session repo stub whose GetByRefreshToken returns
+// a domain ErrSessionNotFound (expected reuse-detection path).
+type notFoundSessionRepo struct {
+	mem.SessionRepository
+}
+
+func (r *notFoundSessionRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+}
+
+// TestLookupSession_InfraError_DoesNotEnterReuseBranch verifies P1-18:
+// when GetByRefreshToken returns an infra error (plain error or CategoryInfra),
+// lookupSession must NOT proceed to GetByPreviousRefreshToken (reuse branch).
+// It must return an error and log at slog.Error.
+func TestLookupSession_InfraError_DoesNotEnterReuseBranch(t *testing.T) {
+	infraErrors := []struct {
+		name string
+		err  error
+	}{
+		{"plain DB timeout", fmt.Errorf("db connection timeout")},
+		{"CategoryInfra errcode", errcode.NewInfra(errcode.ErrInternal, "storage unavailable")},
+	}
+
+	for _, tc := range infraErrors {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			sessionRepo := newInfraSessionRepo(tc.err)
+			roleRepo := mem.NewRoleRepository()
+			userRepo := mem.NewUserRepository()
+			svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, logger)
+
+			rt := issueTestToken("usr-infra")
+
+			pair, err := svc.Refresh(context.Background(), rt)
+			require.Error(t, err, "infra error must cause Refresh to fail")
+			assert.Nil(t, pair)
+
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, `"level":"ERROR"`,
+				"infra lookup error must be logged at ERROR")
+			assert.NotContains(t, logOutput, "reuse",
+				"infra error must not be logged as token reuse")
+		})
+	}
+}
+
+// TestLookupSession_DomainNotFound_EntersReuseBranch verifies that a domain
+// ErrSessionNotFound still enters the reuse detection branch (preserved
+// existing behaviour).
+func TestLookupSession_DomainNotFound_EntersReuseBranch(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// notFoundSessionRepo returns domain ErrSessionNotFound on primary lookup
+	// and nil error on GetByPreviousRefreshToken (simulating no reuse found).
+	sessionRepo := &notFoundSessionRepo{
+		SessionRepository: *mem.NewSessionRepository(),
+	}
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, logger)
+
+	rt := issueTestToken("usr-notfound")
+
+	// GetByPreviousRefreshToken will also not find it → returns ErrAuthRefreshFailed
+	_, err := svc.Refresh(context.Background(), rt)
+	require.Error(t, err, "session not found must still fail refresh")
+	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
 }
 
 // TestRefresh_FlagStillSetWhenUserNotChanged ensures that a user who has not

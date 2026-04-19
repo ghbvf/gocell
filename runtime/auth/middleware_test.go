@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -295,6 +296,82 @@ func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, buf.String(), "token verification failed")
+}
+
+// TestAuthMiddleware_LogLevel_Expected4xx_Warn verifies S43: expected 4xx errors
+// (invalid token, expired token, unauthorized) must log at Warn, not Error.
+func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
+	expected4xxErrs := []struct {
+		name string
+		err  error
+	}{
+		{"ErrAuthTokenInvalid", errcode.New(errcode.ErrAuthTokenInvalid, "invalid token")},
+		{"ErrAuthTokenExpired", errcode.New(errcode.ErrAuthTokenExpired, "token expired")},
+		{"ErrAuthUnauthorized", errcode.New(errcode.ErrAuthUnauthorized, "unauthorized")},
+		{"ErrAuthInvalidToken", errcode.New(errcode.ErrAuthInvalidToken, "invalid")},
+	}
+
+	for _, tc := range expected4xxErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			verifier := &mockVerifier{err: tc.err}
+			handler := AuthMiddleware(verifier, nil, WithLogger(logger))(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Fatal("should not be called")
+				}),
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+			req.Header.Set("Authorization", "Bearer bad-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, `"level":"WARN"`,
+				"expected 4xx token error must log at WARN, not ERROR")
+			assert.NotContains(t, logOutput, `"level":"ERROR"`,
+				"expected 4xx error must not produce an ERROR log")
+		})
+	}
+}
+
+// TestAuthMiddleware_LogLevel_InfraError_Error verifies S43: infra errors
+// (verifier init failure, key load failure) must log at Error, not Warn.
+func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
+	infraErrs := []struct {
+		name string
+		err  error
+	}{
+		{"plain verifier error", fmt.Errorf("key loading failed: connection refused")},
+		{"CategoryInfra errcode", errcode.NewInfra(errcode.ErrInternal, "key set unavailable")},
+	}
+
+	for _, tc := range infraErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			verifier := &mockVerifier{err: tc.err}
+			handler := AuthMiddleware(verifier, nil, WithLogger(logger))(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Fatal("should not be called")
+				}),
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+			req.Header.Set("Authorization", "Bearer any-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, `"level":"ERROR"`,
+				"infra error must log at ERROR")
+			assert.NotContains(t, logOutput, `"level":"WARN"`,
+				"infra error must not produce a WARN log")
+		})
+	}
 }
 
 func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {

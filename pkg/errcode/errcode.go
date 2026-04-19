@@ -149,12 +149,19 @@ const (
 // InternalMessage holds diagnostic detail that must never be exposed to
 // API consumers. When present, Error() uses it (for logs/traces); HTTP
 // response writers use Message (safe for clients).
+//
+// Category classifies the error origin for log-level routing and infra/domain
+// triage. The zero value CategoryUnspecified is treated as infra (fail-closed).
+// Use NewInfra / NewDomain constructors to set the appropriate category; the
+// legacy New / Wrap / Safe constructors leave Category at its zero value to
+// preserve backward compatibility.
 type Error struct {
 	Code            Code
 	Message         string
 	InternalMessage string
 	Details         map[string]any
 	Cause           error
+	Category        Category
 }
 
 // Error returns a formatted string representation for logging/diagnostics.
@@ -226,5 +233,6 @@ func WithDetails(err *Error, details map[string]any) *Error {
 		InternalMessage: err.InternalMessage,
 		Details:         merged,
 		Cause:           err.Cause,
+		Category:        err.Category,
 	}
 }

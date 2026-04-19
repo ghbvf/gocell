@@ -138,11 +138,21 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
 	if err != nil {
 		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
-		cfg.logger.Error("token verification failed",
-			"error", err,
-			"path", r.URL.Path,
-			"remote_addr", r.RemoteAddr,
-		)
+		// S43: expected 4xx (invalid/expired token, unauthorized) → Warn;
+		// infra errors (key load failure, verifier init error) → Error.
+		if errcode.IsExpected4xx(err) {
+			cfg.logger.Warn("token verification failed",
+				"error", err,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+			)
+		} else {
+			cfg.logger.Error("token verification failed",
+				"error", err,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+			)
+		}
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 		return
 	}

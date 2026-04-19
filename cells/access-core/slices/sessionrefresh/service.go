@@ -101,12 +101,35 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 }
 
 // lookupSession retrieves the active session for the given refresh token.
-// On session-not-found it checks for token reuse and revokes the session if detected.
+//
+// Error routing (P1-18 REFRESH-INFRA-ERROR-CLASSIFY-01):
+//   - infra error (plain / CategoryInfra / CategoryUnspecified) → logged at
+//     slog.Error, returned as ErrAuthRefreshFailed; does NOT enter reuse branch.
+//   - domain ErrSessionNotFound (CategoryDomain + whitelist) → enters reuse
+//     detection branch to check for stolen-token replay.
+//   - other domain / auth errors → returned as ErrAuthRefreshFailed + Warn.
 func (s *Service) lookupSession(ctx context.Context, refreshToken string) (*domain.Session, error) {
 	session, err := s.sessionRepo.GetByRefreshToken(ctx, refreshToken)
 	if err == nil {
 		return session, nil
 	}
+
+	// Infra errors must not enter the reuse branch — they indicate a storage
+	// outage, not a missing token. Fail-closed and log at Error.
+	if errcode.IsInfraError(err) {
+		s.logger.Error("session-refresh: infra error on session lookup",
+			slog.Any("error", err))
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session lookup unavailable")
+	}
+
+	// Only domain ErrSessionNotFound enters reuse detection. Any other domain /
+	// auth errcode is mapped to ErrAuthRefreshFailed.
+	if !errcode.IsDomainNotFound(err, string(errcode.ErrSessionNotFound)) {
+		s.logger.Warn("session-refresh: unexpected error on session lookup",
+			slog.Any("error", err))
+		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
+	}
+
 	// Check for refresh token reuse: if the token was previously valid
 	// but has been rotated out, revoke the entire session to prevent
 	// stolen token replay attacks.

@@ -1,6 +1,7 @@
 package sessionvalidate
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -214,4 +216,90 @@ func TestService_Verify_NilSessionRepo_NoSid(t *testing.T) {
 	claims, err := svc.Verify(context.Background(), tok)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
+}
+
+// capturingRepo wraps a real or stub session repo and allows injecting errors
+// with specific errcode categories for logSessionLookupError tests.
+type capturingRepo struct {
+	getByIDErr error
+}
+
+func (r capturingRepo) Create(_ context.Context, _ *domain.Session) error { return nil }
+func (r capturingRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, r.getByIDErr
+}
+func (r capturingRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, nil
+}
+func (r capturingRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, nil
+}
+func (r capturingRepo) Update(_ context.Context, _ *domain.Session) error       { return nil }
+func (r capturingRepo) Delete(_ context.Context, _ string) error                { return nil }
+func (r capturingRepo) RevokeByUserID(_ context.Context, _ string) error        { return nil }
+func (r capturingRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error { return nil }
+
+// TestLogSessionLookupError_LogLevel verifies S40: IsDomainNotFound whitelist
+// determines log level — only whitelisted domain not-found codes produce Warn;
+// all other errors (infra, non-whitelisted errcode, plain) produce Error.
+func TestLogSessionLookupError_LogLevel(t *testing.T) {
+	tests := []struct {
+		name          string
+		repoErr       error
+		wantLogLevel  slog.Level
+		wantLogSubstr string
+	}{
+		{
+			name:         "plain infra error logs at Error",
+			repoErr:      fmt.Errorf("db connection timeout"),
+			wantLogLevel: slog.LevelError,
+		},
+		{
+			name:         "errcode ErrSessionNotFound (domain, whitelist) logs at Warn",
+			repoErr:      errcode.NewDomain(errcode.ErrSessionNotFound, "session not found"),
+			wantLogLevel: slog.LevelWarn,
+		},
+		{
+			name:         "non-whitelisted errcode domain logs at Error",
+			repoErr:      errcode.NewDomain(errcode.ErrOrderNotFound, "order not found"),
+			wantLogLevel: slog.LevelError,
+		},
+		{
+			name:         "errcode with CategoryInfra logs at Error",
+			repoErr:      errcode.NewInfra(errcode.ErrInternal, "db down"),
+			wantLogLevel: slog.LevelError,
+		},
+		{
+			name:         "errcode with CategoryUnspecified (zero) logs at Error (fail-closed)",
+			repoErr:      errcode.New(errcode.ErrSessionNotFound, "not found"),
+			wantLogLevel: slog.LevelError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			svc := NewService(testVerifier, capturingRepo{getByIDErr: tt.repoErr}, logger)
+
+			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
+			require.NoError(t, err)
+
+			_, _ = svc.Verify(context.Background(), tok)
+
+			logOutput := buf.String()
+			require.NotEmpty(t, logOutput, "expected at least one log line")
+
+			// Find the session-lookup log line (not the JWT verification line).
+			if tt.wantLogLevel == slog.LevelWarn {
+				assert.Contains(t, logOutput, `"level":"WARN"`,
+					"domain not-found whitelisted error must log at WARN")
+				assert.NotContains(t, logOutput, `"level":"ERROR"`,
+					"must not emit ERROR when domain not-found whitelist matches")
+			} else {
+				assert.Contains(t, logOutput, `"level":"ERROR"`,
+					"infra / non-whitelisted error must log at ERROR")
+			}
+		})
+	}
 }
