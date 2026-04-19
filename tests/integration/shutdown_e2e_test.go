@@ -23,6 +23,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -239,9 +240,21 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	closeErr := sub.Close()
 	require.NoError(t, closeErr, "Close must return nil after StopIntake drained in-flight messages")
 
-	// Cancel subscriber context (subscriber has already exited via Close; this
-	// is belt-and-suspenders cleanup).
+	// Cancel subscriber context so the Subscribe goroutine returns.
 	subCancel()
+
+	// F4: assert the Subscribe goroutine exits cleanly. A non-nil error other
+	// than context.Canceled indicates an unexpected crash — account conservation
+	// alone (processed + queue == total) would not detect this regression.
+	select {
+	case subErr := <-subErrCh:
+		if subErr != nil && !errors.Is(subErr, context.Canceled) {
+			require.NoError(t, subErr,
+				"Subscribe goroutine must exit with nil or context.Canceled; got %v", subErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Subscribe goroutine did not exit after Close + subCancel within 5s")
+	}
 
 	// Accounting: processed + messages remaining in broker queue must equal total.
 	// Allow a brief moment for the broker to acknowledge acks and update queue
