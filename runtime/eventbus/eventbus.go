@@ -280,6 +280,17 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscriptio
 	}
 }
 
+// StopIntake satisfies outbox.SubscriberIntakeStopper. InMemoryEventBus does
+// not have a broker-side intake to stop — messages flow directly via in-process
+// channels. This no-op implementation exists so that runtime/eventrouter's
+// type assertion `subscriber.(SubscriberIntakeStopper)` succeeds uniformly
+// across in-memory and broker-backed configurations.
+//
+// StopIntake is idempotent and safe to call concurrently with Subscribe/Publish.
+func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
+	return nil
+}
+
 // Close terminates all subscriber goroutines and prevents new publishes.
 // Safety: Close holds mu.Lock() for the full channel-closing loop, while
 // Publish holds mu.RLock() while sending to subscriber channels. That lock

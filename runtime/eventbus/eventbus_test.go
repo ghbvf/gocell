@@ -1134,8 +1134,70 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 		"total consumed should equal total published across all concurrent publishers")
 }
 
+// TestInMemoryEventBus_StopIntake_NoOp verifies that InMemoryEventBus implements
+// outbox.SubscriberIntakeStopper with a no-op method: the type assertion must
+// succeed, both calls must return nil, and the bus must remain fully functional
+// (publish + subscribe) after StopIntake.
+func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
+	b := New()
+	t.Cleanup(func() { _ = b.Close() })
+
+	// Type assertion must succeed.
+	stopper, ok := interface{}(b).(outbox.SubscriberIntakeStopper)
+	require.True(t, ok, "InMemoryEventBus must implement outbox.SubscriberIntakeStopper")
+
+	ctx := context.Background()
+
+	// First call must return nil.
+	err := stopper.StopIntake(ctx)
+	assert.NoError(t, err, "StopIntake (first call) must return nil")
+
+	// Second call must also return nil (idempotent).
+	err = stopper.StopIntake(ctx)
+	assert.NoError(t, err, "StopIntake (second call) must return nil — method must be idempotent")
+
+	// Bus must still work after StopIntake: publish a message and receive it.
+	topic := "test.stop-intake.v1"
+	received := make(chan outbox.Entry, 1)
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	subscribed := make(chan struct{})
+	go func() {
+		sub := outbox.Subscription{Topic: topic, ConsumerGroup: "test-group"}
+		// Signal readiness before blocking on Subscribe.
+		ready := b.Ready(sub)
+		go func() {
+			<-ready
+			close(subscribed)
+		}()
+		_ = b.Subscribe(subCtx, sub, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			received <- e
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+	}()
+
+	// Wait for subscription to register.
+	select {
+	case <-subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("subscribe goroutine did not register in time")
+	}
+
+	envelope := makeSimpleEnvelope(t, topic)
+	require.NoError(t, b.Publish(ctx, topic, envelope))
+
+	select {
+	case e := <-received:
+		assert.Equal(t, topic, e.Topic, "received entry topic must match published topic")
+	case <-time.After(2 * time.Second):
+		t.Fatal("message not received after StopIntake — bus must remain functional")
+	}
+}
+
 // Verify interface compliance at compile time.
 var (
-	_ outbox.Publisher  = (*InMemoryEventBus)(nil)
-	_ outbox.Subscriber = (*InMemoryEventBus)(nil)
+	_ outbox.Publisher               = (*InMemoryEventBus)(nil)
+	_ outbox.Subscriber              = (*InMemoryEventBus)(nil)
+	_ outbox.SubscriberIntakeStopper = (*InMemoryEventBus)(nil)
 )
