@@ -20,11 +20,6 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleCreate handles POST / — creates a new config entry.
 func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req struct {
 		Key       string `json:"key"`
 		Value     string `json:"value"`
@@ -46,11 +41,6 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdate handles PUT /{key} — updates an existing config entry.
 func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	key := r.PathValue("key")
 
 	var req struct {
@@ -72,11 +62,6 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 // HandleDelete handles DELETE /{key} — deletes a config entry.
 func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	key := r.PathValue("key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {
@@ -85,4 +70,13 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// securedMux is a minimal helper to register configwrite routes with policies
+// on any http.ServeMux-compatible handler. Used by both production wiring and
+// tests so that route setup and policy declaration stay in sync.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /", auth.Secured(h.HandleCreate, auth.AnyRole(dto.RoleAdmin)))
+	mux.Handle("PUT /{key}", auth.Secured(h.HandleUpdate, auth.AnyRole(dto.RoleAdmin)))
+	mux.Handle("DELETE /{key}", auth.Secured(h.HandleDelete, auth.AnyRole(dto.RoleAdmin)))
 }

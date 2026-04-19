@@ -48,17 +48,14 @@ type RevokeRequest struct {
 }
 
 // RegisterRoutes registers rbac-assign routes on the given mux.
+// Policy is declared at registration time via auth.Secured so that handler
+// bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	mux.Handle("POST /assign", http.HandlerFunc(h.handleAssign))
-	mux.Handle("POST /revoke", http.HandlerFunc(h.handleRevoke))
+	mux.Handle("POST /assign", auth.Secured(h.handleAssign, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /revoke", auth.Secured(h.handleRevoke, auth.AnyRole(domain.RoleAdmin)))
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req AssignRequest
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
@@ -80,11 +77,6 @@ func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req RevokeRequest
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)

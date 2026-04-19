@@ -47,16 +47,18 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// RegisterRoutes registers configpublish routes on the given mux with policies
+// declared at registration time via auth.Secured.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /{key}/publish", auth.Secured(h.HandlePublish, auth.AnyRole(dto.RoleAdmin)))
+	mux.Handle("POST /{key}/rollback", auth.Secured(h.HandleRollback, auth.AnyRole(dto.RoleAdmin)))
+}
+
 // HandlePublish handles POST /{key}/publish — publishes a config entry.
 // Admin-only: publishing changes the active config version, a high-risk
 // integrity-affecting operation. Default-deny per K8s/Kratos/go-zero
 // convention; authentication alone is not enough.
 func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	key := r.PathValue("key")
 
 	version, err := h.svc.Publish(r.Context(), key)
@@ -72,11 +74,6 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 // Admin-only: rollback re-activates a prior snapshot and is at least as
 // privileged as publish. See HandlePublish for the rationale.
 func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), dto.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	key := r.PathValue("key")
 
 	var req struct {

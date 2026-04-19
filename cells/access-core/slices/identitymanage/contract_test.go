@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -44,36 +45,53 @@ func (contractTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 
 var _ persistence.TxRunner = contractTxRunner{}
 
-func setupContractHandler() http.Handler {
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+// contractStubIssuer is a minimal TokenIssuer stub for contract tests that do
+// not exercise the ChangePassword token-issuing path.
+var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
+
+func setupContractHandler(t testing.TB) http.Handler {
+	t.Helper()
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(contractStubIssuer))
+	if err != nil {
+		t.Fatalf("setupContractHandler: %v", err)
+	}
 	return buildMux(svc)
 }
 
-func setupContractHandlerWithOutbox() (http.Handler, *contractRecordingWriter) {
+func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
+	t.Helper()
 	writer := &contractRecordingWriter{}
-	svc := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(contractTxRunner{}))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
+	if err != nil {
+		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
+	}
 	return buildMux(svc), writer
 }
 
 func buildMux(svc *Service) http.Handler {
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
-	mux.Handle("POST /api/v1/access/users", http.HandlerFunc(h.handleCreate))
-	mux.Handle("GET /api/v1/access/users/{id}", http.HandlerFunc(h.handleGet))
-	mux.Handle("PUT /api/v1/access/users/{id}", http.HandlerFunc(h.handleUpdate))
-	mux.Handle("PATCH /api/v1/access/users/{id}", http.HandlerFunc(h.handlePatch))
-	mux.Handle("DELETE /api/v1/access/users/{id}", http.HandlerFunc(h.handleDelete))
-	mux.Handle("POST /api/v1/access/users/{id}/lock", http.HandlerFunc(h.handleLock))
-	mux.Handle("POST /api/v1/access/users/{id}/unlock", http.HandlerFunc(h.handleUnlock))
-	mux.Handle("POST /api/v1/access/users/{id}/password", http.HandlerFunc(h.handleChangePassword))
+	mux.Handle("POST /api/v1/access/users", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("GET /api/v1/access/users/{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("PUT /api/v1/access/users/{id}", auth.Secured(h.handleUpdate, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("PATCH /api/v1/access/users/{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("DELETE /api/v1/access/users/{id}", auth.Secured(h.handleDelete, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /api/v1/access/users/{id}/lock", auth.Secured(h.handleLock, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /api/v1/access/users/{id}/unlock", auth.Secured(h.handleUnlock, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /api/v1/access/users/{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
 	return mux
 }
 
-func setupContractHandlerWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+	t.Helper()
 	repo := mem.NewUserRepository()
-	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
 		WithTokenIssuer(issuer))
+	if err != nil {
+		t.Fatalf("setupContractHandlerWithIssuer: %v", err)
+	}
 	return buildMux(svc), repo
 }
 
@@ -104,7 +122,7 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	c.ValidateRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
 	c.MustRejectRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"s","extra":"bad"}`))
@@ -121,7 +139,7 @@ func TestHttpAuthUserGetV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.get.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
@@ -137,7 +155,7 @@ func TestHttpAuthUserUpdateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.update.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
@@ -156,7 +174,7 @@ func TestHttpAuthUserPatchV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.patch.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
@@ -179,7 +197,7 @@ func TestHttpAuthUserDeleteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	deleteContract := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	deleteContract.ValidateRequest(t, []byte(`{}`))
 	deleteContract.MustRejectRequest(t, []byte(`{"unexpected":true}`))
@@ -197,7 +215,7 @@ func TestHttpAuthUserLockV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
@@ -214,7 +232,7 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.unlock.v1")
-	handler := setupContractHandler()
+	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	// Lock first
@@ -239,7 +257,7 @@ func TestEventUserCreatedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
-	handler, writer := setupContractHandlerWithOutbox()
+	handler, writer := setupContractHandlerWithOutbox(t)
 
 	_ = createUserForContractTest(t, handler, createContract)
 
@@ -256,7 +274,7 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	c := contracttest.LoadByID(t, root, "event.user.locked.v1")
-	handler, writer := setupContractHandlerWithOutbox()
+	handler, writer := setupContractHandlerWithOutbox(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
 	writer.entries = nil // reset after create event
@@ -320,12 +338,12 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.change-password.v1")
 
-	stubIssuer := &stubTokenIssuer{pair: &dto.TokenPair{
+	stubIssuer := &stubTokenIssuer{pair: dto.TokenPair{
 		AccessToken:  "new-at",
 		RefreshToken: "new-rt",
 		ExpiresAt:    time.Now().Add(time.Hour),
 	}}
-	handler, _ := setupContractHandlerWithIssuer(stubIssuer)
+	handler, _ := setupContractHandlerWithIssuer(t, stubIssuer)
 
 	// Validate request schema.
 	c.ValidateRequest(t, []byte(`{"oldPassword":"oldP@ss","newPassword":"newP@ss"}`))

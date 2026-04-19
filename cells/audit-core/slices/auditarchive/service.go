@@ -8,7 +8,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 // Service is a stub implementation for the audit-archive slice.
 type Service struct{}
 

@@ -100,7 +100,32 @@ func TestAuditRepository_GetRange_InvalidRange(t *testing.T) {
 
 	entries, err := repo.GetRange(context.Background(), 5, 2)
 	require.NoError(t, err)
-	assert.Nil(t, entries)
+	assert.Empty(t, entries)
+}
+
+// TestAuditRepository_GetRange_EmptyNonNil verifies that an inverted or equal
+// range returns a non-nil empty slice, not nil. This is a hygiene guard against
+// future callers that serialize the result directly (nil → JSON null).
+func TestAuditRepository_GetRange_EmptyNonNil(t *testing.T) {
+	db := &mockDB{}
+	repo := NewAuditRepository(db)
+
+	cases := []struct {
+		name string
+		from int
+		to   int
+	}{
+		{name: "from equals to", from: 3, to: 3},
+		{name: "from greater than to", from: 5, to: 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := repo.GetRange(context.Background(), tc.from, tc.to)
+			require.NoError(t, err)
+			require.NotNil(t, got, "empty result must be non-nil slice")
+			require.Empty(t, got)
+		})
+	}
 }
 
 func TestAuditRepository_Query_WithFilters(t *testing.T) {
@@ -210,5 +235,5 @@ func (r *mockRowSet) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *mockRowSet) Close() {}
+func (r *mockRowSet) Close()     {}
 func (r *mockRowSet) Err() error { return nil }

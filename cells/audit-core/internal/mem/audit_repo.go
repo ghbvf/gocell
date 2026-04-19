@@ -47,7 +47,7 @@ func (r *AuditRepository) GetRange(_ context.Context, from, to int) ([]*domain.A
 		to = len(r.entries)
 	}
 	if from >= to {
-		return nil, nil
+		return []*domain.AuditEntry{}, nil
 	}
 
 	result := make([]*domain.AuditEntry, to-from)

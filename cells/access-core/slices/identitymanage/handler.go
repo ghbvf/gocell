@@ -58,37 +58,25 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers identity-manage routes on the given mux.
+// Policy is declared at registration time via auth.Secured so that handler
+// bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	mux.Handle("POST /", http.HandlerFunc(h.handleCreate))
-	mux.Handle("GET /{id}", http.HandlerFunc(h.handleGet))
-	mux.Handle("PUT /{id}", http.HandlerFunc(h.handleUpdate))
-	mux.Handle("PATCH /{id}", http.HandlerFunc(h.handlePatch))
-	mux.Handle("DELETE /{id}", http.HandlerFunc(h.handleDelete))
-	mux.Handle("POST /{id}/lock", http.HandlerFunc(h.handleLock))
-	mux.Handle("POST /{id}/unlock", http.HandlerFunc(h.handleUnlock))
-	mux.Handle("POST /{id}/password", http.HandlerFunc(h.handleChangePassword))
+	mux.Handle("POST /", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("GET /{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("PUT /{id}", auth.Secured(h.handleUpdate, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("PATCH /{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("DELETE /{id}", auth.Secured(h.handleDelete, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /{id}/lock", auth.Secured(h.handleLock, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /{id}/unlock", auth.Secured(h.handleUnlock, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("POST /{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
 }
 
 // toTokenPairResponse converts a dto.TokenPair to the HTTP response DTO.
-func toTokenPairResponse(p *dto.TokenPair) dto.TokenPairResponse {
-	if p == nil {
-		return dto.TokenPairResponse{}
-	}
-	return dto.TokenPairResponse{
-		AccessToken:           p.AccessToken,
-		RefreshToken:          p.RefreshToken,
-		ExpiresAt:             p.ExpiresAt,
-		SessionID:             p.SessionID,
-		PasswordResetRequired: p.PasswordResetRequired,
-	}
+func toTokenPairResponse(p dto.TokenPair) dto.TokenPairResponse {
+	return dto.TokenPairResponse(p)
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req struct {
 		Username             string `json:"username"`
 		Email                string `json:"email"`
@@ -116,11 +104,6 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -131,11 +114,6 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -158,11 +136,6 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	// JSON merge patch: only fields present in the JSON body are updated.
 	// Patchable fields: name, email, status. Other fields are silently ignored.
 	// Uses DecodeJSON (not strict) because map targets accept any key by design.
@@ -219,11 +192,6 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	id := r.PathValue("id")
 
 	// Prevent admin self-deletion — removing own account would lock out the
@@ -242,11 +210,6 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	id := r.PathValue("id")
 	if err := h.svc.Lock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -256,11 +219,6 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	if err := auth.RequireAnyRole(r.Context(), domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	id := r.PathValue("id")
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -271,11 +229,6 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := auth.RequireSelfOrRole(r.Context(), id, domain.RoleAdmin); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	var req struct {
 		OldPassword string `json:"oldPassword"`
 		NewPassword string `json:"newPassword"`
@@ -292,14 +245,6 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-	// Defense-in-depth: ChangePassword returns nil pair when no tokenIssuer is
-	// wired (production always wires one; this guard catches mis-configuration
-	// so the handler does not silently emit 200 + empty token pair).
-	if pair == nil {
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "token issuer not configured")
 		return
 	}
 

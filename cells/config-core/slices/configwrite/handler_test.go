@@ -52,9 +52,7 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	svc := NewService(repo, eventbus.New(), slog.Default())
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /", h.HandleCreate)
-	mux.HandleFunc("PUT /{key}", h.HandleUpdate)
-	mux.HandleFunc("DELETE /{key}", h.HandleDelete)
+	h.RegisterRoutes(mux)
 	return mux, repo
 }
 

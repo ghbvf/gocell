@@ -66,13 +66,13 @@ var e2eVerifier = func() *auth.JWTVerifier {
 }()
 
 // e2eTokenIssuer bridges sessionlogin.Service to the identitymanage.TokenIssuer interface.
-// sessionlogin.Service.IssueForUser returns *dto.TokenPair so this bridge is a
+// sessionlogin.Service.IssueForUser returns dto.TokenPair so this bridge is a
 // transparent delegation (no conversion needed).
 type e2eTokenIssuer struct {
 	svc *sessionlogin.Service
 }
 
-func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
+func (ti *e2eTokenIssuer) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	return ti.svc.IssueForUser(ctx, userID)
 }
 
@@ -97,17 +97,21 @@ func newE2EFixture() *e2eFixture {
 		userRepo, sessionRepo, roleRepo, eb, e2eIssuer, slog.Default(),
 	)
 
-	idmSvc := NewService(userRepo, sessionRepo, eb, slog.Default(),
+	idmSvc, err := NewService(userRepo, sessionRepo, eb, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 	)
+	if err != nil {
+		panic(err)
+	}
 
 	// Build a full-path mux so path values are populated correctly.
+	// Policies are declared via auth.Secured to match production wiring.
 	mux := celltest.NewTestMux()
 	h := NewHandler(idmSvc)
-	mux.Handle("POST /api/v1/access/users", http.HandlerFunc(h.handleCreate))
-	mux.Handle("GET /api/v1/access/users/{id}", http.HandlerFunc(h.handleGet))
-	mux.Handle("PATCH /api/v1/access/users/{id}", http.HandlerFunc(h.handlePatch))
-	mux.Handle("POST /api/v1/access/users/{id}/password", http.HandlerFunc(h.handleChangePassword))
+	mux.Handle("POST /api/v1/access/users", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
+	mux.Handle("GET /api/v1/access/users/{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("PATCH /api/v1/access/users/{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
+	mux.Handle("POST /api/v1/access/users/{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
 
 	return &e2eFixture{
 		mux:         mux,

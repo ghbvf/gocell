@@ -205,6 +205,19 @@ func TestRoleRepository_ConcurrentRemoveFromUserIfNotLast(t *testing.T) {
 	assert.Equal(t, 1, count, "exactly one admin holder must survive concurrent revokes")
 }
 
+// TestRoleRepository_GetByUserID_NoRoles verifies that a user with no role
+// assignments returns a non-nil empty slice, not nil. This is a hygiene guard
+// against future callers that serialize the result directly (nil → JSON null).
+func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+
+	roles, err := repo.GetByUserID(ctx, "user-with-no-roles")
+	require.NoError(t, err)
+	require.NotNil(t, roles, "empty result must be non-nil slice")
+	require.Empty(t, roles)
+}
+
 func TestRoleRepository_Create(t *testing.T) {
 	repo := NewRoleRepository()
 	ctx := context.Background()

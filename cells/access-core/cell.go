@@ -335,7 +335,7 @@ func (c *AccessCore) validateDemoMode() error {
 
 // initSlices constructs all 9 slice services and handlers.
 // Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initSlices() {
+func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	var loginOpts []sessionlogin.Option
@@ -358,7 +358,10 @@ func (c *AccessCore) initSlices() {
 		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
 	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
+	if err != nil {
+		return err
+	}
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
 	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
 
@@ -407,6 +410,7 @@ func (c *AccessCore) initSlices() {
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
 	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
+	return nil
 }
 
 // initRbacAssign constructs the rbac-assign slice. Extracted to keep initSlices
@@ -441,7 +445,9 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.runInitialAdminBootstrap(ctx); err != nil {
 		return err
 	}
-	c.initSlices()
+	if err := c.initSlices(); err != nil {
+		return err
+	}
 	return nil
 }
 

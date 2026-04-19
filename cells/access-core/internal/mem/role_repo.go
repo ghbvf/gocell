@@ -67,7 +67,7 @@ func (r *RoleRepository) GetByUserID(_ context.Context, userID string) ([]*domai
 
 	roleIDs, ok := r.userRoles[userID]
 	if !ok {
-		return nil, nil
+		return []*domain.Role{}, nil
 	}
 
 	var result []*domain.Role

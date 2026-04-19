@@ -47,29 +47,42 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// auditQueryPolicy permits the request when:
+//   - actorId query param is empty or equals authenticated subject (self-access)
+//   - OR subject has the "admin" role
+//
+// SelfOr cannot be used here because "self" is determined by the actorId query
+// parameter, not a path parameter.
+// TODO(S43): role-name literal — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+func auditQueryPolicy(r *http.Request) error {
+	ctx := r.Context()
+	subject, ok := ctxkeys.SubjectFrom(ctx)
+	if !ok || subject == "" {
+		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	actorID := r.URL.Query().Get("actorId")
+	if actorID == "" || actorID == subject {
+		return nil
+	}
+	return auth.AnyRole("admin")(r)
+}
+
 // HandleQuery handles GET /api/v1/audit/entries.
 // Query parameters: eventType, actorId, from, to (RFC3339), limit, cursor.
 //
 // Trust boundary: non-admin users can only query their own audit entries.
 // If actorId is omitted, it defaults to the authenticated subject.
 // If actorId differs from subject, admin role is required.
+// Policy is enforced by auditQueryPolicy (see above).
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
-	subject, ok := ctxkeys.SubjectFrom(r.Context())
-	if !ok {
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
-			string(errcode.ErrAuthUnauthorized), "authentication required")
-		return
-	}
+	// auditQueryPolicy (declared at route registration) guarantees subject presence.
+	subject, _ := ctxkeys.SubjectFrom(r.Context())
 
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" {
 		actorID = subject
 	}
 	if actorID != subject {
-		if err := auth.RequireSelfOrRole(r.Context(), actorID, "admin"); err != nil {
-			httputil.WriteDomainError(r.Context(), w, err)
-			return
-		}
 		slog.Info("audit: admin querying other user",
 			slog.String("admin", subject),
 			slog.String("target_actor", actorID),

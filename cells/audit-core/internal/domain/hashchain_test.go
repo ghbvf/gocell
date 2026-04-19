@@ -72,16 +72,16 @@ func TestHashChain_Verify(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		mutate            func([]*AuditEntry) []*AuditEntry
-		wantValid         bool
-		wantInvalidIndex  int
+		name             string
+		mutate           func([]*AuditEntry) []*AuditEntry
+		wantValid        bool
+		wantInvalidIndex int
 	}{
 		{
-			name:              "intact chain is valid",
-			mutate:            func(e []*AuditEntry) []*AuditEntry { return e },
-			wantValid:         true,
-			wantInvalidIndex:  -1,
+			name:             "intact chain is valid",
+			mutate:           func(e []*AuditEntry) []*AuditEntry { return e },
+			wantValid:        true,
+			wantInvalidIndex: -1,
 		},
 		{
 			name: "tampered payload at index 2",

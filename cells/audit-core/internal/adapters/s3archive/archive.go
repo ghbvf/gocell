@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-
 // ObjectUploader abstracts the upload operation for S3-compatible storage.
 // This interface decouples the ArchiveStore from the concrete s3.Client.
 type ObjectUploader interface {

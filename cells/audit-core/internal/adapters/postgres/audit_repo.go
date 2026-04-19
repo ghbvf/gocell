@@ -86,7 +86,7 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 		from = 0
 	}
 	if to <= from {
-		return nil, nil
+		return []*domain.AuditEntry{}, nil
 	}
 
 	limit := to - from

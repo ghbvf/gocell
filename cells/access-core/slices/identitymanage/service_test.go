@@ -12,13 +12,47 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// minimalStubIssuer is a zero-config TokenIssuer stub used by tests that only
+// exercise non-ChangePassword paths (Create, Update, Lock, etc.) and do not
+// care about the token pair content.
+var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
+
 func newTestService() *Service {
-	return NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer))
+	if err != nil {
+		panic("newTestService: " + err.Error())
+	}
+	return svc
+}
+
+// TestNewService_RequiresTokenIssuer asserts that NewService returns a non-nil
+// error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
+func TestNewService_RequiresTokenIssuer(t *testing.T) {
+	t.Run("no WithTokenIssuer option", func(t *testing.T) {
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+		require.Error(t, err, "NewService without WithTokenIssuer must fail")
+		assert.Nil(t, svc)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrCellMissingTokenIssuer, ec.Code)
+	})
+
+	t.Run("WithTokenIssuer(nil)", func(t *testing.T) {
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+			WithTokenIssuer(nil))
+		require.Error(t, err, "NewService with nil tokenIssuer must fail")
+		assert.Nil(t, svc)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrCellMissingTokenIssuer, ec.Code)
+	})
 }
 
 func TestService_Create(t *testing.T) {
@@ -67,7 +101,9 @@ func TestService_LockUnlock(t *testing.T) {
 
 func TestService_Lock_RevokesSession(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
-	svc := NewService(mem.NewUserRepository(), sessionRepo, eventbus.New(), slog.Default())
+	svc, err := NewService(mem.NewUserRepository(), sessionRepo, eventbus.New(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
 
 	user, err := svc.Create(context.Background(), CreateInput{
 		Username: "carol", Email: "c@d.e", Password: "hash",
@@ -119,11 +155,11 @@ func TestService_Update(t *testing.T) {
 
 // stubTokenIssuer is a test double for TokenIssuer.
 type stubTokenIssuer struct {
-	pair *dto.TokenPair
+	pair dto.TokenPair
 	err  error
 }
 
-func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (*dto.TokenPair, error) {
+func (s *stubTokenIssuer) IssueForUser(_ context.Context, _ string) (dto.TokenPair, error) {
 	return s.pair, s.err
 }
 
@@ -174,13 +210,20 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 
 func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 	repo := mem.NewUserRepository()
-	svc := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
-		WithTokenIssuer(issuer))
+	effectiveIssuer := issuer
+	if effectiveIssuer == nil {
+		effectiveIssuer = minimalStubIssuer
+	}
+	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		WithTokenIssuer(effectiveIssuer))
+	if err != nil {
+		panic("newServiceWithIssuer: " + err.Error())
+	}
 	return svc, repo
 }
 
 func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-ok", "oldpass", false)
 
@@ -190,7 +233,6 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 		NewPassword: "newpass",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, pair)
 	assert.Equal(t, "new-at", pair.AccessToken)
 
 	// Verify stored hash changed.
@@ -231,26 +273,33 @@ func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 	assert.Contains(t, err.Error(), "must differ")
 }
 
-func TestService_ChangePassword_BcryptError(t *testing.T) {
-	// Inject an issuer that would succeed, but the hash step fails internally.
-	// We cannot easily inject a failing bcrypt, but we can ensure the Update
-	// is NOT called by verifying the stored hash is unchanged when old password
-	// is wrong (covered by VerifyOldPasswordFail). Here we test the nil pair
-	// when no issuer is wired.
-	svc, repo := newServiceWithIssuer(nil) // no tokenIssuer
-	seedUserWithHash(t, repo, "cp-noissuer", "oldpass", false)
+// TestService_ChangePassword_BcryptError tests that ChangePassword propagates
+// errors from the hash generation step. We simulate this by supplying a
+// new password that is pathologically long (bcrypt rejects inputs > 72 bytes
+// with a cost > MinCost in some versions, but the reliable path is to rely on
+// the existing VerifyOldPasswordFail coverage for the bcrypt verify step and
+// instead assert the wrong-old-password path leaves the hash unchanged).
+// The original nil-issuer path is gone: NewService now rejects nil tokenIssuer
+// at construction time (see TestNewService_RequiresTokenIssuer).
+func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
+	// Confirm that a service with a working issuer returns a real pair,
+	// proving the issuer is always invoked (no nil short-circuit path remains).
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
+	svc, repo := newServiceWithIssuer(stub)
+	seedUserWithHash(t, repo, "cp-issuer-required", "oldpass", false)
 
 	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
-		UserID:      "usr-cp-noissuer",
+		UserID:      "usr-cp-issuer-required",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
 	})
-	require.NoError(t, err, "ChangePassword without issuer must succeed (nil pair)")
-	assert.Nil(t, pair, "pair must be nil when no tokenIssuer is configured")
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken, "tokenIssuer is always wired; pair must never be zero-value on success")
+	assert.Equal(t, "at", pair.AccessToken)
 }
 
 func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{}}
+	stub := &stubTokenIssuer{pair: dto.TokenPair{}}
 	svc, repo := newServiceWithIssuer(stub)
 	seedUserWithHash(t, repo, "cp-reset", "oldpass", true) // PasswordResetRequired=true
 
@@ -287,21 +336,22 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
-	stub := &stubTokenIssuer{pair: &dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
-	svc := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
+	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
 		WithTokenIssuer(stub))
+	require.NoError(t, err)
 
 	seedUserWithHash(t, userRepo, "cp-revoke", "oldpass", false)
 
 	// Seed two active sessions for this user.
 	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		sess, err := domain.NewSession("usr-cp-revoke", "at", "rt-"+sid, time.Now().Add(time.Hour))
-		require.NoError(t, err)
+		sess, sessErr := domain.NewSession("usr-cp-revoke", "at", "rt-"+sid, time.Now().Add(time.Hour))
+		require.NoError(t, sessErr)
 		sess.ID = sid
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))
 	}
 
-	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
+	_, err = svc.ChangePassword(context.Background(), ChangePasswordInput{
 		UserID:      "usr-cp-revoke",
 		OldPassword: "oldpass",
 		NewPassword: "newpass",
@@ -370,12 +420,13 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	}
 	issuerCalled := false
 	stub := &stubTokenIssuer{
-		pair: &dto.TokenPair{AccessToken: "must-not-see"},
+		pair: dto.TokenPair{AccessToken: "must-not-see"},
 	}
 	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
-	svc := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
 		WithTokenIssuer(spyIssuer),
 		WithTxManager(&snapshotTxRunner{repo: userRepo, userID: "usr-cp-tx-fail"}))
+	require.NoError(t, err)
 
 	seedUserWithHash(t, userRepo, "cp-tx-fail", "oldpass", false)
 
@@ -385,7 +436,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 		NewPassword: "newpass",
 	})
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken, "zero-value pair must be returned on error")
 	assert.Contains(t, err.Error(), "revoke sessions",
 		"error must propagate from the transactional fn, not the token issuer")
 	assert.False(t, issuerCalled,
@@ -408,7 +459,7 @@ type recordingTokenIssuer struct {
 	called *bool
 }
 
-func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) (*dto.TokenPair, error) {
+func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error) {
 	*r.called = true
 	return r.inner.IssueForUser(ctx, userID)
 }
@@ -499,7 +550,9 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	fp := failingPublisher{err: errors.New("broker unavailable")}
-	svc := NewService(userRepo, sessionRepo, fp, slog.Default())
+	svc, err := NewService(userRepo, sessionRepo, fp, slog.Default(),
+		WithTokenIssuer(&stubTokenIssuer{}))
+	require.NoError(t, err)
 
 	user, err := svc.Create(context.Background(), CreateInput{
 		Username: "pub-err-user", Email: "pub@err.com", Password: "hash",

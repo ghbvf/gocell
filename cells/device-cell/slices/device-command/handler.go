@@ -47,6 +47,15 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
+// RegisterRoutes registers device-command routes on the given mux with policies
+// declared at registration time via auth.Secured.
+// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /{id}/commands", auth.Secured(h.HandleEnqueue, auth.AnyRole("admin", "operator")))
+	mux.Handle("GET /{id}/commands", auth.Secured(h.HandleListPending, auth.SelfOr("id", "admin")))
+	mux.Handle("POST /{id}/commands/{cmdId}/ack", auth.Secured(h.HandleAck, auth.SelfOr("id", "admin")))
+}
+
 // enqueueRequest is the JSON body for POST /api/v1/devices/{id}/commands.
 type enqueueRequest struct {
 	Payload string `json:"payload"`
@@ -55,14 +64,9 @@ type enqueueRequest struct {
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
 // This is an operator/management endpoint — only admin or operator roles
 // may enqueue commands. ListPending and Ack are device-facing (subject == deviceID).
+// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
-
-	// Operator endpoint: require admin or operator role (not self-access).
-	if err := auth.RequireSelfOrRole(r.Context(), "", "admin", "operator"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
 
 	var req enqueueRequest
 	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
@@ -84,13 +88,9 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 //
 // Trust boundary: subject must match deviceID (device authenticates as itself)
 // or hold admin role.
+// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
-
-	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
 
 	pageReq, err := httputil.ParsePageRequest(r)
 	if err != nil {
@@ -117,14 +117,9 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 // updated entity.
 //
 // Trust boundary: subject must match deviceID or hold admin role.
+// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
-
-	if err := auth.RequireSelfOrRole(r.Context(), deviceID, "admin"); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
 	cmdID := r.PathValue("cmdId")
 
 	if err := h.svc.Ack(r.Context(), deviceID, cmdID); err != nil {

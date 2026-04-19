@@ -1,8 +1,8 @@
 # GoCell 域驱动实施计划
 
 > 生成日期: 2026-04-18 17:00
-> 更新: 2026-04-19（PR#180-188 域归属记录；P1-16/17/18/19/S40-43 新增；P1-12 完成状态修正）
-> 基准: develop@b8d2944（PR#184 合并后）；PR#185-187 待合入
+> 更新: 2026-04-19（PR#180-188 域归属记录；P1-16/17/18/19/S40-47 新增；P1-12 完成状态修正；PR#187 S3/S12/S35 ✅）
+> 基准: develop@b8d2944（PR#184 合并后）；PR#185-188 + PR#187 待合入
 > 策略: 按**功能域**聚合，每域所有层（kernel/runtime/adapter/slice）改动一次性在一个 PR 串内闭合
 > 替代: `20260418-bottom-up-implementation-plan.md`（按层组织，Phase K/R/P/A/S/F）
 >
@@ -42,7 +42,7 @@
 | S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): 补真实 HTTP 路由测试：POST `{"refreshToken": wrong-aud-token}` → `/api/v1/access/sessions/refresh` 断言 401；missing-aud token 场景 | 2h | 🟡 | `cells/access-core/auth_integration_test.go` | PR#171 外部审查 F2 |
 | S31 | **JWT-ISSUER-STRICT-01** 🟡 (P2, Cx2)：`VerifyIntent` 缺 issuer 强约束，跨环境密钥复用时 staging token 可通过 prod 验证；`WithExpectedIssuer` option + real 模式非空强制 + 负向测试。建议搭车 S18 | 1h | 🟡 | `runtime/auth/jwt.go` + `cmd/core-bundle/main.go` | 2026-04-18 六席审查 |
 | S32 | **CONTROLPLANE-TOKEN-PROD-GATE-01** 🟠（real 模式部署前触发）：non-real 模式 `/internal/v1/` 依赖部署隔离；`real` 下断言 service-token/mTLS 至少一项 + CI real-mode smoke；对标 Kratos auth/selector 默认拒绝 | 1h | 🟠 | `cmd/core-bundle/main.go` + `runtime/bootstrap/bootstrap.go` | 2026-04-18 六席审查 |
-| S35 | **AUTH-MIDDLEWARE-EXEMPT-INJECTION-01** (P3, Cx3, 🟡 可延后): `isPasswordResetExempt` hardcode 业务路径，违反 runtime/cells 分层；对标 Kratos selector，用 `auth.WithSkipPasswordResetCheck(func(method, path) bool)` Option 由 cell 注入 | 3h | 🟡 | `runtime/auth/middleware.go` + `cells/access-core/cell.go` | PR#183 reviewer round 2 P1-7 |
+| S35 | **AUTH-MIDDLEWARE-EXEMPT-INJECTION-01** ✅ PR#187: 已完成 — `runtime/auth/middleware.go:189 isPasswordResetExempt` 完全由 `cfg.passwordResetExempt` matcher 注入；composition roots (`cmd/core-bundle/main.go` + `examples/sso-bff/main.go` + `outbox_e2e_integration_test.go`) 通过 `bootstrap.WithPasswordResetExemptEndpoints` 接线 | — | ✅ | — | PR#183 reviewer round 2 P1-7 |
 | S39 | **INITIALADMIN-IFACE-NAMING-01** (P3, Cx1, 🟡 可延后): `cells/access-core/internal/initialadmin/clock.go` 与 `scheduler.go` 的单方法接口不符合 Go `-er` 命名约定；改名 `Clock` / `Scheduler` → 合适的 `-er` 形式（或合并至 `runtime/clock` 复用）；搭车 S35 PR | 15min | 🟡 | `cells/access-core/internal/initialadmin/clock.go` + `scheduler.go` | SonarCloud 2026-04-18 |
 | P1-16 | **CREDENTIAL-SWEEP-STARTUP-01** (P1, Cx2): 凭据文件仅由"本次引导返回的 cleaner worker"清理，重启且 adminExists 时直接 skip，现存文件无人兜底扫尾，形成离线接管窗口。对标 GitLab 短窗策略。**修复**: 启动期独立 sweep（不依赖 adminExists）：过期即删，未过期重新注册 cleaner | 2h | P1 | `cells/access-core/internal/initialadmin/bootstrap.go` | 2026-04-18 Auth 域审查 |
 | P1-17 | **REFRESH-JTI-UNIQUENESS-01** (P1, Cx2): refresh token 轮换假设"token 必变"，但 claim 仅秒级时间戳+固定字段，同秒并发/重放可产出同值 token，reuse 检测/失效链路被绕过。对标 Dex `reuseInterval` + 原子 CAS。**修复**: Issue 调用引入 `jti: uuid` 唯一因子；不阻塞 X10 | 3h | P1 | `runtime/auth/jwt.go` + `cells/access-core/slices/sessionrefresh/service.go` | 2026-04-18 Auth 域审查 |
@@ -59,14 +59,14 @@
 | PR-AUTH-ISSUER | S31 + S32：issuer 强约束 + controlplane 生产门禁（搭车 S18 PR）| 2h | — |
 | PR-AUTH-JWT-AUDIENCE | S18：JWT audience env var + WithTokenAudience option（🟠 多环境部署前）| 3h | — |
 | PR-AUTH-JWT-TEST | S19 + S20 + S21 + S22：audience drift 集成测试 + 启动日志 + table-driven（🟡）| 5.5h | — |
-| PR-AUTH-POLISH | S35 + S36（见域 9）+ S39：middleware exempt 注入 + worker.Lazy 抽象 + initialadmin 接口命名（PR#183 reviewer round 2 清理）| 5.25h | — |
+| ~~PR-AUTH-POLISH~~ | ~~S35 + S36 + S39~~：S35 ✅ PR#187；S36 / S39 独立做 | 2.25h | — |
 | PR-AUTH-OPAQUE | X10：refresh token 不透明化（🟠 PG-REPO 后触发）| 1-2d | — |
 | PR-AUTH-SERVICE-HARDEN | P1-16 + P1-18 + S40 + S41：启动期凭据 sweep + refresh infra 错误分类 + validate errcode 白名单 + marshal 错误显式处理 | 6h | — |
 | PR-AUTH-REFRESH-JTI | P1-17：refresh token jti 唯一性（独立安全 PR，不阻塞 X10）| 3h | — |
 | PR-AUTH-ROLELIST-CURSOR | S42：role list nextCursor 补全（向后兼容）| 1h | — |
 | PR-AUTH-LOG-LEVEL | S43：鉴权失败 Error→Warn 降级（搭车 S13-follow 或单独 PR）| 1h | — |
 
-**主线工时**：P1 新增 7h（P1-16/17/18）；P2 新增 4h（S40/S41/S42/S43）；🟠 3h（S18）+ 🟡 8.75h（S19/S20/S21/S22/S31/S32/S35/S39）；条件项另算。
+**主线工时**：P1 新增 7h（P1-16/17/18）；P2 新增 4h（S40/S41/S42/S43）；🟠 3h（S18）+ 🟡 5.75h（S19/S20/S21/S22/S31/S32/S39；S35 ✅ PR#187）；条件项另算。
 
 ---
 
@@ -148,8 +148,8 @@
 
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
-| S3 | **DTO-NIL-SEMANTIC-01** (Cx2)：12+ handler 写成功响应前校验领域对象非 nil，避免空 data 成功响应 | 3h | P2 | 12+ `cells/*/slices/*/handler.go` | PR#158 six-seat review |
-| S12 | **AUTH-GUARD-INLINE-UNIFY-01** 🟡 (Cx3)：全库 11 处 `RequireAnyRole → WriteDomainError → return` 统一提取，横跨 3 cell | 2h | 🟡 | `cells/*/slices/*/handler.go` × 11 | PR#168 review P2 |
+| S3 | **DTO-NIL-SEMANTIC-01** ✅ PR#187: 根因修复 — (A) `role_repo.GetByUserID`/`audit_repo(mem+pg).Range` 空集合 `nil,nil→[]T{},nil` + 契约测试；(B) `identitymanage.NewService` tokenIssuer fail-fast + 值类型 `IssueForUser` 接口（消灭 nil 可表达性）。放弃原 plan 的 "handler 层 24 处 nil 防御检查" 症状治疗方案 | — | ✅ | `cells/*/internal/mem/*_repo.go` + `cells/access-core/slices/identitymanage/` + `cells/access-core/slices/sessionlogin/` | PR#158 six-seat review |
+| S12 | **AUTH-GUARD-INLINE-UNIFY-01** ✅ PR#187: 已完成 — 实际 21 处（原 plan 11 处低估），跨 7 handler 文件。六席审查后升级为 `auth.Secured(h, Policy)` 声明式包装 + `Policy func(*http.Request) error`（对标 go-chi/jwtauth Authenticator + grpc-middleware）；21 handler body 无 guard 调用，policy 在路由注册处声明；零 `!` footgun | — | ✅ | `runtime/auth/guard.go` + `cells/*/slices/*/handler.go` × 7 | PR#168 review P2 + PR#187 六席审查 |
 | R4 | **INTERNAL-LISTENER-01** 🟡 (Cx4)：`/internal/v1/` 独立 listener 或 service-token/mTLS 策略；4-8h 上界，规模风险。**扩展 scope**（来自 PR#185 外部审查方案 C）：彻底 route-group 分流抽象——`runtime/http/router/router.go` 引入 `RouteGroup`，每组独立 middleware chain：①`/api/v1/*` 组（默认 chain + JWT）②`/internal/v1/*` 组（默认 chain + ServiceToken）③`/healthz\|/readyz\|/metrics` 组（无认证）。Cell 注册路由时声明所属 group。对标 Kratos selector / go-zero rest/engine / K8s apiserver filter chain。影响 router 核心 + 所有 Cell 路由注册 API，500+ 行变更。**前提**：PR#185 方案 B（`WithInternalEndpointGuard` 自动豁免 JWT）已落地作为 Cx3 中间态 | 4-8h + 500 行 route-group | 🟡 | `runtime/http/router/router.go`（核心）+ `runtime/bootstrap/bootstrap.go` + 全部 Cell 路由注册 | PR#143 review F1 + PR#185 外部审查方案 C |
 
 **风险说明**：R4 若实施 blast radius 超预期，降级到 PG-REPO 大项后处理，不阻塞主线。
@@ -158,11 +158,12 @@
 
 | PR | 内容 | 工时 |
 |----|------|------|
-| PR-ROUTER-DTO-NIL | S3：DTO nil 语义 12+ handler | 3h | **PR#187**（待合） |
-| PR-ROUTER-GUARD | S12：auth guard inline 统一（`runtime/auth.Policy/Guard`）| 2h | **PR#187**（待合） |
+| ~~PR-ROUTER-DTO-NIL~~ | ~~S3 原方案~~ ✅ **PR#187** 合并至 HANDLER-HARDEN | — | **PR#187** ✅ |
+| ~~PR-ROUTER-GUARD~~ | ~~S12 原方案~~ ✅ **PR#187** 合并至 HANDLER-HARDEN | — | **PR#187** ✅ |
+| PR-ROUTER-HANDLER-HARDEN ✅ PR#187 | S3 + S12 + S35 合并：值类型 TokenPair + Secured wrapper + Policy(*http.Request) + 21 处 handler 替换 + tokenIssuer fail-fast + repo list empty-slice + Cx1 hygiene | 6h | **PR#187** ✅ |
 | PR-ROUTER-INTERNAL | R4：internal listener 独立（🟡 规模评估后排期）| 4-8h | — |
 
-**主线工时**：3h（S3 剩余）；全做约 13h。
+**主线工时**：0h（S3+S12 ✅ PR#187）；全做约 10h（含 R4 / S12 已完成）。
 
 ---
 
@@ -336,7 +337,7 @@ Wave 2（进行中）— 部分并行
 
 Wave 3（依赖 Wave 2 完成）— 约 2-3 工作日
   ├── Events 域   PR-EVENTS-TYPED (3h)
-  ├── HTTP 域     PR-ROUTER-DTO-NIL (3h)
+  ├── HTTP 域     PR-ROUTER-HANDLER-HARDEN ✅ PR#187 (S3+S12)
   └── Auth 域     PR-AUTH-JWT-AUDIENCE (S18, 3h, 🟠 条件) + PR-AUTH-ISSUER (S31+S32, 2h)
                   + PR-AUTH-JWT-TEST (S19+S22, 4h, 🟡)
 
@@ -344,11 +345,11 @@ Wave 4（🟡 可延后，机会性纳入）— 按资源排期
   ├── 可观测性/Bootstrap 域  R1 + R2 + R3 + A10 (9h)
   ├── DX/CI/工具链域         S7 + A8 + A9 + S33 (4h) + P1-4/K1 (9h) + P1-5 (4h) + X9 (6h)
   ├── Outbox 域              PR-OUTBOX-HARDEN (~7h)
-  ├── HTTP 域                PR-ROUTER-GUARD (2h) + PR-ROUTER-INTERNAL (4-8h)
+  ├── HTTP 域                PR-ROUTER-INTERNAL (4-8h)
   ├── Features 域            PR-FEAT-TOPOLOGY (4h) + PR-FEAT-APP-BUILDER (S29+S23, 8-12h) + PR-FEAT-ADMIN-RESET (S34, 4h)
   ├── DX/CI 域               PR-DX-JOURNEY (F3+F10, 10h)
   └── Observability 域       PR-OBS-CONTRACTS (S2-follow, 2h) + PR-OBS-DISTLOCK (A14+A15+A16, 6h)
-                             + PR-WORKER-LAZY (S36, 2h) + S20/S21/S35 (🟡 P3, 机会性)
+                             + PR-WORKER-LAZY (S36, 2h) + S20/S21 (🟡 P3, 机会性)
 
 Wave 5（Phase X，独立大项，发布后按需排期）
   PG-REPO 大项   DDL → ACCESS → AUDIT-DEVICE → LINK → TOPOLOGY → ENCRYPT
@@ -385,12 +386,12 @@ PG-REPO 大项（Phase X，独立）
 
 | 域 | P1 主线工时 | 🟡 可延后工时 | 🟠 条件项工时 | 总计 | 状态 |
 |----|------------|--------------|--------------|------|------|
-| 1. Auth 域 | **11h**（P1-16+P1-17+P1-18；P1-10 ✅）| 8.75h（S19/S20/S21/S22/S31/S32/S35/S39）+ 4h（S40/S41/S42/S43）| 3h（S18）+ 1-2d | ~28h | Wave 1 核心 ✅；P1-10 ✅ PR#172；S39 Sonar；P1-16/17/18/S40-43 新增 |
+| 1. Auth 域 | **11h**（P1-16+P1-17+P1-18；P1-10 ✅）| 5.75h（S19/S20/S21/S22/S31/S32/S39；S35 ✅ PR#187）+ 4h（S40/S41/S42/S43）| 3h（S18）+ 1-2d | ~28h | Wave 1 核心 ✅；P1-10 ✅ PR#172；S39 Sonar；P1-16/17/18/S40-43 新增；S35/S3/S12 ✅ PR#187 |
 | 2. Config-core 域 | 0h | 7h | 3h | ~10h | P1-2/S2/S13 ✅ PR#181 |
 | 3. PG 加固域 | 0h（A12 ✅）| 2h | 2.5h | ~5.5h | PR#173 ✅ 全部完成 |
 | 4. Outbox/RabbitMQ 域 | **5h**（P1-14+P1-15；A11/K2/A1/X7/S37/S38 ✅）| 9h | 2h（A13 RMQ wire） | **~16h** | **A11/K2/A1/X7/S37/S38 ✅** |
 | 5. RBAC 域 | 0h | — | — | ~6h | **S5/S6/S8 ✅ 全部完成** |
-| 6. HTTP/Router 域 | 3h（S3 剩余；P1-3 ✅ PR#182）| 10h | — | ~13h | P1-3 ✅ PR#182 |
+| 6. HTTP/Router 域 | 0h（S3+S12+P1-3 ✅ PR#182/#187）| 10h | — | ~13h | P1-3 ✅ PR#182；S3/S12 ✅ PR#187 |
 | 7. Events/DTO 域 | 3h | — | — | 3h | — |
 | 8. Features 域 | 15h（P1-8+P1-9+P1-12+P1-13；P1-12 +2h scope）| 14h（S23/S29/S34）| — | 29h | P1-10 ✅；P1-12 扩写（持久化门禁+互斥）|
 | 9. 可观测性/Bootstrap 域 | — | 25h（含 S36/S2-follow/S13-follow/A14/A15/A16）| — | 25h（全🟡）| — |
