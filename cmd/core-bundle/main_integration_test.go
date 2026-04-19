@@ -15,6 +15,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,7 +70,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
 	require.NotNil(t, res, "ManagedResource must be non-nil on success")
@@ -109,7 +110,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",
