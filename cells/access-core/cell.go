@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/initialadmin"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
@@ -542,11 +541,16 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 				Handler: http.HandlerFunc(c.refreshHandler.HandleRefresh),
 				Public:  true,
 			})
+			// Logout: {id} is a session id, NOT a user id, so the route-level
+			// policy cannot be SelfOr("id", admin). Session ownership is enforced
+			// inside HandleLogout by comparing the principal subject against the
+			// session's user_id. Baseline AuthMiddleware still requires a valid
+			// JWT; PasswordResetExempt keeps the route reachable while the caller
+			// still owes a password reset (standard user-self-recovery flow).
 			auth.Declare(s, auth.RouteDecl{
 				Method:              "DELETE",
 				Path:                "/{id}",
 				Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
-				Policy:              auth.SelfOr("id", domain.RoleAdmin),
 				PasswordResetExempt: true,
 			})
 		})
