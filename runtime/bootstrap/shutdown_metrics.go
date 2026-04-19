@@ -28,9 +28,15 @@ const (
 	shutdownPhaseDurationName = "gocell_bootstrap_shutdown_phase_duration_seconds"
 
 	// shutdownTotalCounterName counts completed shutdowns by outcome.
-	// Labels: outcome = success | timeout.
-	// SRE use: timeout rate = timeout/(success+timeout); alert when > 0 for
-	// sustained periods.
+	// Labels: outcome ∈ {success, timeout, teardown_error, signal_error}.
+	//   - success       : clean, user-initiated shutdown
+	//   - timeout       : shutCtx expired during readiness flip or LIFO teardown
+	//   - teardown_error: at least one teardown returned non-nil (no timeout)
+	//   - signal_error  : shutdown triggered by HTTP/worker/router failure,
+	//                     teardown itself was clean
+	// SRE use: alert on timeout / teardown_error; signal_error rate reveals
+	// how often shutdown is triggered by component failures vs. human action.
+	// ref: Kubernetes pod termination (success/failure/timeout tri-state).
 	shutdownTotalCounterName = "gocell_bootstrap_shutdown_total"
 )
 

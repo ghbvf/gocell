@@ -789,9 +789,22 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	m.recordPhaseEntry(shutdownPhaseClosed)
 	m.observePhaseDuration("total", time.Since(totalStart))
 
+	// F3: outcome reflects the final return semantics, not just ctx state.
+	// Precedence: timeout > teardown_error > signal_error > success.
+	//   - timeout       : shutCtx expired during any stage; worst case for SREs.
+	//   - teardown_error: at least one teardown returned non-nil (non-timeout).
+	//   - signal_error  : shutdown was triggered by an HTTP/worker/router error,
+	//                     teardown itself was clean.
+	//   - success       : user-initiated shutdown with clean teardown.
+	teardownErr := errors.Join(teardownErrs...)
 	outcome := "success"
-	if shutCtx.Err() != nil {
+	switch {
+	case shutCtx.Err() != nil:
 		outcome = "timeout"
+	case teardownErr != nil:
+		outcome = "teardown_error"
+	case sig.err != nil:
+		outcome = "signal_error"
 	}
 	m.countOutcome(outcome)
 
@@ -799,7 +812,6 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	// still holding runCtx eventually unblocks.
 	s.runCancel()
 
-	teardownErr := errors.Join(teardownErrs...)
 	if teardownErr != nil {
 		return teardownErr
 	}

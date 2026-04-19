@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -367,6 +368,111 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	assert.Equal(t, float64(0), outcomeVec.totalForLabel("outcome", "success"),
 		"outcome=success must not be incremented on timeout")
 }
+
+// ---------------------------------------------------------------------------
+// Test 4b: outcome counter — teardown_error / signal_error paths (F3)
+// ---------------------------------------------------------------------------
+
+// failingTeardownWorker is a worker whose Stop method returns a non-nil error
+// without timing out. It is used to exercise the teardown_error outcome branch.
+type failingTeardownWorker struct {
+	stopErr error
+}
+
+func (w *failingTeardownWorker) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (w *failingTeardownWorker) Stop(_ context.Context) error {
+	return w.stopErr
+}
+
+// TestShutdownMetrics_Outcome_TeardownError verifies that when a teardown
+// returns an error (without shutCtx expiring), the outcome counter records
+// outcome="teardown_error" rather than masking it as success.
+func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
+	p := newFakeMetricsProvider()
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: cell.DurabilityDemo})
+
+	failWorker := &failingTeardownWorker{stopErr: fmt.Errorf("simulated teardown failure")}
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(3*time.Second),
+		WithMetricsProvider(p),
+		WithWorkers(failWorker),
+	)
+
+	err := runWithCancelAndListener(t, b, ln, 5*time.Second)
+	require.Error(t, err, "Run must surface the teardown error")
+
+	outcomeVec := p.counter(shutdownTotalCounterName)
+	require.NotNil(t, outcomeVec, "outcome counter must be registered")
+
+	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "teardown_error"),
+		"outcome=teardown_error must be incremented when a teardown fails within the shutdown budget")
+	assert.Equal(t, float64(0), outcomeVec.totalForLabel("outcome", "success"),
+		"outcome=success must not be incremented when a teardown fails")
+	assert.Equal(t, float64(0), outcomeVec.totalForLabel("outcome", "timeout"),
+		"outcome=timeout must not be incremented when only a teardown failed")
+}
+
+// TestShutdownMetrics_Outcome_SignalError verifies that when a worker returns
+// an error while the app is running (triggering phase10), and teardown itself
+// completes cleanly, the outcome counter records outcome="signal_error".
+// This distinguishes "shutdown-triggered-by-failure" from "user-initiated-shutdown".
+func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
+	p := newFakeMetricsProvider()
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "signal-err", DurabilityMode: cell.DurabilityDemo})
+
+	// Worker returns an error shortly after Start — triggers phase9 signal
+	// with a non-nil err, then phase10 teardown runs cleanly.
+	errWorker := &erroringWorker{err: fmt.Errorf("simulated worker crash")}
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(3*time.Second),
+		WithMetricsProvider(p),
+		WithWorkers(errWorker),
+	)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- b.Run(context.Background()) }()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err, "Run must surface worker error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after worker error")
+	}
+
+	outcomeVec := p.counter(shutdownTotalCounterName)
+	require.NotNil(t, outcomeVec)
+
+	assert.Equal(t, float64(1), outcomeVec.totalForLabel("outcome", "signal_error"),
+		"outcome=signal_error must be incremented when worker error triggers phase10 and teardown is clean")
+	assert.Equal(t, float64(0), outcomeVec.totalForLabel("outcome", "success"),
+		"outcome=success must not be incremented when worker error triggered shutdown")
+}
+
+// erroringWorker returns an error from Start after a brief delay. Used to
+// simulate a runtime worker crash (phase9 signal.err != nil).
+type erroringWorker struct {
+	err error
+}
+
+func (w *erroringWorker) Start(_ context.Context) error {
+	// Small delay so Run reaches phase9 select; then error triggers shutdown.
+	time.Sleep(50 * time.Millisecond)
+	return w.err
+}
+
+func (w *erroringWorker) Stop(_ context.Context) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Test 5: no panic without provider (NopProvider default)
