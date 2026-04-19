@@ -373,35 +373,20 @@ func buildPromStack() (promStack, error) {
 	}, nil
 }
 
-// buildMetricsHandler constructs the /metrics HTTP handler.
-// In "real" adapter mode, metricsToken must be non-empty (fail-fast).
-// When metricsToken is set the handler is wrapped with a token guard;
-// otherwise a warning is emitted and the handler is unauthenticated.
+// buildMetricsHandler constructs the /metrics HTTP handler. When metricsToken
+// is set the handler is wrapped with a constant-time token guard; otherwise a
+// warning is emitted and the handler is unauthenticated. The production-mode
+// "token required" fail-fast is enforced centrally by AppDeps.Validate so
+// this helper only concerns itself with handler construction.
 //
 // ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
-func buildMetricsHandler(adapterMode, metricsToken string, registry *prom.Registry) (http.Handler, error) {
-	if adapterMode == "real" && metricsToken == "" {
-		return nil, fmt.Errorf("GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header")
-	}
+func buildMetricsHandler(metricsToken string, registry *prom.Registry) (http.Handler, error) {
 	h := http.Handler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	if metricsToken != "" {
 		return withMetricsTokenGuard(metricsToken, h), nil
 	}
 	slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
 	return h, nil
-}
-
-// buildVerboseOpts returns bootstrap options for /readyz?verbose.
-// In "real" adapter mode, verboseToken must be non-empty (fail-fast).
-func buildVerboseOpts(adapterMode, verboseToken string) ([]bootstrap.Option, error) {
-	if adapterMode == "real" && verboseToken == "" {
-		return nil, fmt.Errorf("GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" to prevent anonymous topology exposure via /readyz?verbose")
-	}
-	if verboseToken != "" {
-		return []bootstrap.Option{bootstrap.WithVerboseToken(verboseToken)}, nil
-	}
-	slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
-	return nil, nil
 }
 
 // internalGuardFromEnv builds a ServiceTokenMiddleware guard for /internal/v1/*

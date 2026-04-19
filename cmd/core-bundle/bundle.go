@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -32,8 +33,9 @@ type AppDeps struct {
 	// Topology is the resolved adapter-mode / storage-backend combination.
 	Topology bootstrap.Topology
 
-	// PGResource is the ManagedResource wrapping the PG pool + relay (nil in
-	// memory mode). Tests inject a fake; production uses *adapterpg.PGResource.
+	// PGResource is the ManagedResource wrapping the PG pool + relay.
+	// Required when Topology.RequireProductionControlPlane() is true; must be
+	// nil otherwise. Tests inject a fake; production uses *adapterpg.PGResource.
 	PGResource bootstrap.ManagedResource
 
 	// configCellOpts holds the config-core cell options built by AppDepsFromEnv.
@@ -44,10 +46,6 @@ type AppDeps struct {
 	// metricsHandler is the Prometheus HTTP handler built once in AppDepsFromEnv
 	// and reused by BuildBootstrap. Avoids a double call to promhttp.HandlerFor.
 	metricsHandler http.Handler
-
-	// verboseOpts are the bootstrap options for /readyz?verbose auth, built
-	// once in AppDepsFromEnv and consumed directly by BuildBootstrap.
-	verboseOpts []bootstrap.Option
 
 	// JWTDeps holds the JWT issuer and verifier.
 	JWTDeps jwtDeps
@@ -65,13 +63,16 @@ type AppDeps struct {
 	EventBus *eventbus.InMemoryEventBus
 
 	// InternalGuard is the service-token middleware protecting /internal/v1/*.
-	// nil = no guard (dev mode with empty GOCELL_SERVICE_SECRET).
+	// Required when Topology.RequireProductionControlPlane() is true; nil in
+	// dev mode (empty GOCELL_SERVICE_SECRET).
 	InternalGuard func(http.Handler) http.Handler
 
-	// MetricsToken is the token guarding /metrics (empty = open in dev mode).
+	// MetricsToken is the token guarding /metrics. Required in production
+	// topology (empty rejected by Validate); may be empty in dev mode.
 	MetricsToken string
 
-	// VerboseToken is the token guarding /readyz?verbose.
+	// VerboseToken is the token guarding /readyz?verbose. Required in production
+	// topology (empty rejected by Validate); may be empty in dev mode.
 	VerboseToken string
 
 	// InitialAdminBootstrapOpts are additional options passed to
@@ -81,6 +82,126 @@ type AppDeps struct {
 	// Cost: bcrypt.MinCost}) so phase3 is not blocked by a 5-7s bcrypt
 	// on slow CI runners — startup wiring is still fully exercised.
 	InitialAdminBootstrapOpts []accesscore.InitialAdminOption
+}
+
+// Validate is the single authoritative gate for startup invariants. It checks
+// that every field required by the selected Topology is populated before any
+// component is constructed or started. All violations are aggregated via
+// errors.Join so operators see every misconfiguration in one run.
+//
+// Two independent gates:
+//   - Control-plane gate (Topology.RequireProductionControlPlane): once the
+//     operator opts into real keys (AdapterMode=="real"), VerboseToken,
+//     MetricsToken, and InternalGuard must all be set so /readyz?verbose,
+//     /metrics, and /internal/v1/* are not anonymously reachable.
+//   - Storage gate (StorageBackend): postgres requires PGResource to be set;
+//     memory requires PGResource to be nil (non-nil is a wiring bug — memory
+//     topology does not own a pool).
+//
+// Core dependencies (JWT, Prom, Cursor, HMAC, EventBus) are always required.
+//
+// BuildBootstrap calls Validate first; AppDepsFromEnv also calls Validate so
+// env-driven misconfiguration surfaces at the parse boundary. The legacy
+// per-helper real-mode checks (e.g. loadSecret, internalGuardFromEnv) remain
+// as defence-in-depth but Validate is the authoritative gate.
+//
+// ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
+// Validate aggregates every error before Run starts so operators fix all
+// issues in one iteration.
+// ref: go-zero core/conf/config.go validate(v) — single validation gate at
+// the unmarshal boundary; downstream never re-reads or re-validates.
+func (d *AppDeps) Validate() error {
+	if d == nil {
+		return errcode.New(errcode.ErrValidationFailed, "AppDeps: nil receiver")
+	}
+	errs := d.validateCore()
+	errs = append(errs, d.validateControlPlane()...)
+	errs = append(errs, d.validateStorage()...)
+	return errors.Join(errs...)
+}
+
+// validateCore collects missing-field errors for dependencies required in
+// every topology (JWT, Prom, cursor codecs, HMAC, event bus).
+func (d *AppDeps) validateCore() []error {
+	var errs []error
+	missing := func(field string) {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"AppDeps."+field+" must be set"))
+	}
+	if d.JWTDeps.issuer == nil {
+		missing("JWTDeps.issuer")
+	}
+	if d.JWTDeps.verifier == nil {
+		missing("JWTDeps.verifier")
+	}
+	if d.PromStack.registry == nil {
+		missing("PromStack.registry")
+	}
+	if d.PromStack.hookObserver == nil {
+		missing("PromStack.hookObserver")
+	}
+	if d.PromStack.metricProvider == nil {
+		missing("PromStack.metricProvider")
+	}
+	if d.CursorCodecs.audit == nil {
+		missing("CursorCodecs.audit")
+	}
+	if d.CursorCodecs.config == nil {
+		missing("CursorCodecs.config")
+	}
+	if len(d.HMACKey) == 0 {
+		missing("HMACKey")
+	}
+	if d.EventBus == nil {
+		missing("EventBus")
+	}
+	return errs
+}
+
+// validateControlPlane collects missing-field errors for the control-plane
+// gate (tokens + guard required whenever real keys are in use). Returns nil
+// when the topology does not demand the production control plane.
+func (d *AppDeps) validateControlPlane() []error {
+	if !d.Topology.RequireProductionControlPlane() {
+		return nil
+	}
+	var errs []error
+	if d.VerboseToken == "" {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" "+
+				"to prevent anonymous topology exposure via /readyz?verbose"))
+	}
+	if d.MetricsToken == "" {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" "+
+				"to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header"))
+	}
+	if d.InternalGuard == nil {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" "+
+				"to protect /internal/v1/*"))
+	}
+	return errs
+}
+
+// validateStorage enforces the storage gate: PGResource is owned iff storage
+// is postgres. Memory storage rejects a stray PGResource (wiring bug).
+func (d *AppDeps) validateStorage() []error {
+	switch d.Topology.StorageBackend {
+	case "postgres":
+		if d.PGResource == nil {
+			return []error{errcode.New(errcode.ErrValidationFailed,
+				"AppDeps.PGResource must be set when StorageBackend=postgres "+
+					"(postgres topology owns a PG pool via PGResource)")}
+		}
+	case "memory":
+		if d.PGResource != nil {
+			return []error{errcode.New(errcode.ErrValidationFailed,
+				"AppDeps.PGResource must be nil when StorageBackend=memory "+
+					"(memory topology does not own a pool)")}
+		}
+	}
+	return nil
 }
 
 // AppDepsFromEnv reads all environment variables and builds a fully-populated
@@ -137,13 +258,12 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 	}
 
 	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
-	verboseOpts, err := buildVerboseOpts(adapterMode, verboseToken)
-	if err != nil {
-		return nil, err
+	if verboseToken == "" && !topo.RequireProductionControlPlane() {
+		slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
 	}
 
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
-	metricsHandler, err := buildMetricsHandler(adapterMode, metricsToken, ps.registry)
+	metricsHandler, err := buildMetricsHandler(metricsToken, ps.registry)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +272,7 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
-	return &AppDeps{
+	deps := &AppDeps{
 		Topology:       topo,
 		PGResource:     pgRes,
 		configCellOpts: cellOpts,
@@ -165,8 +285,16 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 		MetricsToken:   metricsToken,
 		VerboseToken:   verboseToken,
 		metricsHandler: metricsHandler,
-		verboseOpts:    verboseOpts,
-	}, nil
+	}
+
+	// Validate here so env-driven misconfiguration surfaces with the full set
+	// of errors at the parse boundary, without waiting for BuildBootstrap.
+	// BuildBootstrap also calls Validate — that is the authoritative gate for
+	// the struct-literal test-injection path.
+	if err := deps.Validate(); err != nil {
+		return nil, err
+	}
+	return deps, nil
 }
 
 // BuildBootstrap assembles the three cells and all bootstrap options from deps.
@@ -177,8 +305,19 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 // Tests call BuildBootstrap directly with a struct-literal AppDeps, ensuring
 // identical wiring and preventing assembly drift.
 //
+// The first step is deps.Validate(): every production-topology invariant must
+// hold before any cell is constructed. This is the authoritative fail-fast
+// gate — both env-driven and struct-literal call paths converge here so tests
+// cannot silently bypass control-plane requirements.
+//
 // ref: uber-go/fx fxtest.App — same module/option list, different context.
+// ref: kubernetes/kubernetes cmd/kube-apiserver Complete → Validate → Run —
+// validated options are the only input to downstream construction.
 func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+	if err := deps.Validate(); err != nil {
+		return nil, err
+	}
+
 	configCell := buildConfigCell(deps)
 
 	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
@@ -206,8 +345,7 @@ func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootst
 	// leaves metricsHandler nil, so we build it here as a fallback.
 	metricsHandler := deps.metricsHandler
 	if metricsHandler == nil {
-		metricsHandler, err = buildMetricsHandler(
-			deps.Topology.AdapterMode, deps.MetricsToken, deps.PromStack.registry)
+		metricsHandler, err = buildMetricsHandler(deps.MetricsToken, deps.PromStack.registry)
 		if err != nil {
 			return nil, err
 		}
@@ -351,7 +489,11 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		pgStore := adapterpg.NewOutboxStore(pool.DB())
 		relayWorker := outboxruntime.NewRelay(pgStore, pub, relayCfg)
 
-		pgRes := adapterpg.NewPGResource(pool, relayWorker)
+		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
+		if resErr != nil {
+			pool.Close()
+			return nil, nil, fmt.Errorf("config-core PG resource: %w", resErr)
+		}
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		return pgRes, []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
