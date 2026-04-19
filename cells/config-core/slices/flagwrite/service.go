@@ -118,35 +118,30 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 }
 
 // Update modifies an existing feature flag and emits flag.changed.v1 (action=updated).
+// The repo UPDATE uses version=version+1 RETURNING to eliminate the read-modify-write
+// TOCTOU race: two concurrent Updates both see the same DB-authoritative version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.FeatureFlag, error) {
 	if input.Key == "" {
 		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
 	}
 
-	existing, err := s.repo.GetByKey(ctx, input.Key)
-	if err != nil {
-		return nil, fmt.Errorf("flag-write: update: %w", err)
-	}
-
-	existing.Enabled = input.Enabled
-	existing.RolloutPercentage = input.RolloutPercentage
-	existing.Description = input.Description
-	existing.Version++
-	existing.UpdatedAt = time.Now()
+	var updated *domain.FeatureFlag
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, existing); err != nil {
+		var err error
+		updated, err = s.repo.Update(txCtx, input.Key, input.Enabled, input.RolloutPercentage, input.Description)
+		if err != nil {
 			return fmt.Errorf("flag-write: update: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "updated", existing)
+		return s.emitFlagChanged(txCtx, "updated", updated)
 	}); err != nil {
 		return nil, err
 	}
 
 	s.logger.Info("feature flag updated",
-		slog.String("key", existing.Key),
-		slog.Int("version", existing.Version))
-	return existing, nil
+		slog.String("key", updated.Key),
+		slog.Int("version", updated.Version))
+	return updated, nil
 }
 
 // Toggle toggles the enabled state of a feature flag and emits flag.changed.v1 (action=toggled).
@@ -176,21 +171,20 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 }
 
 // Delete removes a feature flag and emits flag.changed.v1 (action=deleted).
+// The repo DELETE uses RETURNING to obtain the deleted entity atomically, eliminating
+// the read-before-delete TOCTOU race where a concurrent Update could change the
+// flag between GetByKey and DELETE.
 func (s *Service) Delete(ctx context.Context, key string) error {
 	if key == "" {
 		return errcode.New(errcode.ErrFlagInvalidInput, "key is required")
 	}
 
-	existing, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return fmt.Errorf("flag-write: delete: %w", err)
-	}
-
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Delete(txCtx, key); err != nil {
+		deleted, err := s.repo.Delete(txCtx, key)
+		if err != nil {
 			return fmt.Errorf("flag-write: delete: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "deleted", existing)
+		return s.emitFlagChanged(txCtx, "deleted", deleted)
 	}); err != nil {
 		return err
 	}
