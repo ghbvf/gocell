@@ -73,14 +73,54 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 func buildMux(svc *Service) http.Handler {
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
-	mux.Handle("POST /api/v1/access/users", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("GET /api/v1/access/users/{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("PUT /api/v1/access/users/{id}", auth.Secured(h.handleUpdate, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("PATCH /api/v1/access/users/{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("DELETE /api/v1/access/users/{id}", auth.Secured(h.handleDelete, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /api/v1/access/users/{id}/lock", auth.Secured(h.handleLock, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /api/v1/access/users/{id}/unlock", auth.Secured(h.handleUnlock, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /api/v1/access/users/{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users",
+		Handler: http.HandlerFunc(h.handleCreate),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handleGet),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PUT",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handleUpdate),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PATCH",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handlePatch),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "DELETE",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handleDelete),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users/{id}/lock",
+		Handler: http.HandlerFunc(h.handleLock),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users/{id}/unlock",
+		Handler: http.HandlerFunc(h.handleUnlock),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users/{id}/password",
+		Handler: http.HandlerFunc(h.handleChangePassword),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
 	return mux
 }
 
