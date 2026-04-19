@@ -55,7 +55,8 @@ func isRecoverableAMQPError(err error) bool {
 
 // Compile-time interface checks.
 var (
-	_ outbox.Subscriber = (*Subscriber)(nil)
+	_ outbox.Subscriber              = (*Subscriber)(nil)
+	_ outbox.SubscriberIntakeStopper = (*Subscriber)(nil)
 	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
 	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
 )
@@ -105,6 +106,8 @@ func (sc *SubscriberConfig) setDefaults() {
 // ref: Watermill watermill-amqp subscriber.go — reconnect loop + ACK/NACK pattern
 // Adopted: per-subscription channel, QoS prefetch, graceful shutdown with WaitGroup.
 // Deviated: callback-based handler (not channel-based) to align with GoCell ConsumerBase.
+// Deviated: added StopIntake / drainRemaining to support two-phase shutdown
+// (stopIntakeCh + basic.cancel before hard closeCh signal).
 type Subscriber struct {
 	conn   *Connection
 	config SubscriberConfig
@@ -114,15 +117,27 @@ type Subscriber struct {
 	closeCh  chan struct{}
 	wg       sync.WaitGroup
 	channels []AMQPChannel
+
+	// consumerTags maps each active AMQPChannel to its consumer tag so that
+	// StopIntake can issue basic.cancel on every active consumer. Protected by mu.
+	consumerTags map[AMQPChannel]string
+
+	// stopIntakeCh is closed by StopIntake to signal consumeLoop to enter
+	// drain mode (process prefetched deliveries, accept no new ones).
+	stopIntakeCh chan struct{}
+	// stopIntakeOnce guards the single close of stopIntakeCh.
+	stopIntakeOnce sync.Once
 }
 
 // NewSubscriber creates a Subscriber with the given connection and config.
 func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 	config.setDefaults()
 	return &Subscriber{
-		conn:    conn,
-		config:  config,
-		closeCh: make(chan struct{}),
+		conn:         conn,
+		config:       config,
+		closeCh:      make(chan struct{}),
+		stopIntakeCh: make(chan struct{}),
+		consumerTags: make(map[AMQPChannel]string),
 	}
 }
 
@@ -395,6 +410,11 @@ func (s *Subscriber) subscribeOnce(
 		return setupErr("rabbitmq: start consuming", ErrAdapterAMQPConsume, err)
 	}
 
+	// Track consumer tag for StopIntake to issue basic.cancel.
+	s.mu.Lock()
+	s.consumerTags[ch] = consumerTag
+	s.mu.Unlock()
+
 	slog.Info("rabbitmq: subscriber started",
 		slog.String(logKeyTopic, topic),
 		slog.String("queue", queueName),
@@ -402,6 +422,11 @@ func (s *Subscriber) subscribeOnce(
 		slog.Int("prefetch", s.config.PrefetchCount))
 
 	loopErr := s.consumeLoop(ctx, ch, deliveries, topic, handler)
+
+	// Untrack consumer tag now that this subscription's loop has exited.
+	s.mu.Lock()
+	delete(s.consumerTags, ch)
+	s.mu.Unlock()
 
 	// Clean up the dead channel after consumeLoop exits.
 	s.untrackChannel(ch)
@@ -456,6 +481,13 @@ func (s *Subscriber) consumeLoop(
 ) error {
 	for {
 		select {
+		case <-s.stopIntakeCh:
+			// StopIntake was called: stop accepting new deliveries from the broker
+			// but drain any messages already prefetched in the deliveries channel.
+			slog.Info("rabbitmq: intake stopped, entering drain mode",
+				slog.String(logKeyTopic, topic))
+			return s.drainRemaining(ctx, ch, deliveries, topic, handler)
+
 		case <-ctx.Done():
 			slog.Info("rabbitmq: subscriber context cancelled",
 				slog.String(logKeyTopic, topic))
@@ -475,6 +507,46 @@ func (s *Subscriber) consumeLoop(
 
 			s.wg.Add(1)
 			go s.processDelivery(ctx, ch, delivery, topic, handler)
+		}
+	}
+}
+
+// drainRemaining processes deliveries already prefetched after StopIntake
+// issued basic.cancel. It exits when:
+//   - the deliveries channel is closed (broker acknowledged basic.cancel), or
+//   - ctx is cancelled (hard stop from parent), or
+//   - closeCh fires (Close() was called as the hard-shutdown boundary).
+//
+// New deliveries should not arrive after basic.cancel; any that do (race
+// window) are still processed correctly.
+//
+// ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
+func (s *Subscriber) drainRemaining(
+	ctx context.Context,
+	ch AMQPChannel,
+	deliveries <-chan amqp.Delivery,
+	topic string,
+	handler outbox.EntryHandler,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Info("rabbitmq: drain interrupted by context cancellation",
+				slog.String(logKeyTopic, topic))
+			return nil
+		case <-s.closeCh:
+			slog.Info("rabbitmq: drain interrupted by Close",
+				slog.String(logKeyTopic, topic))
+			return nil
+		case d, ok := <-deliveries:
+			if !ok {
+				// Broker acknowledged basic.cancel and closed the deliveries chan.
+				slog.Info("rabbitmq: delivery channel closed after basic.cancel, drain complete",
+					slog.String(logKeyTopic, topic))
+				return nil
+			}
+			s.wg.Add(1)
+			go s.processDelivery(ctx, ch, d, topic, handler)
 		}
 	}
 }
@@ -735,6 +807,40 @@ func (s *Subscriber) Close() error {
 		}
 	}
 
+	return nil
+}
+
+// StopIntake implements outbox.SubscriberIntakeStopper. It stops the AMQP
+// consumer from receiving new deliveries (broker-side basic.cancel) while
+// allowing in-flight processDelivery goroutines and already-prefetched messages
+// to complete naturally. Close() remains the hard-shutdown boundary
+// (closeCh signal + wg.Wait + ShutdownTimeout).
+//
+// Idempotent: safe to call multiple times. Safe to call concurrently with
+// Subscribe and processDelivery in-flight.
+//
+// ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan + basic.cancel
+func (s *Subscriber) StopIntake(_ context.Context) error {
+	s.stopIntakeOnce.Do(func() {
+		close(s.stopIntakeCh)
+	})
+
+	// Cancel all active consumers so the broker stops pushing new deliveries.
+	// Already-prefetched messages remain in the deliveries channel and will be
+	// processed by drainRemaining.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ch, tag := range s.consumerTags {
+		if tag == "" {
+			continue
+		}
+		if err := ch.Cancel(tag, false); err != nil {
+			slog.Warn("rabbitmq: basic.cancel during StopIntake failed",
+				slog.String("consumer_tag", tag),
+				slog.Any("error", err))
+			// Non-fatal: closeCh / ctx.Done in Close() path will handle the remainder.
+		}
+	}
 	return nil
 }
 

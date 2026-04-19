@@ -40,6 +40,10 @@ type mockChannel struct {
 	consumeDeliveries chan amqp.Delivery
 	consumeErr        error
 
+	cancelCalled   bool
+	cancelConsumer string
+	cancelErr      error
+
 	qosCalled     bool
 	qosPrefetch   int
 	confirmCalled bool
@@ -101,6 +105,14 @@ func (m *mockChannel) Consume(queue, consumer string, autoAck, exclusive, noLoca
 		return nil, m.consumeErr
 	}
 	return m.consumeDeliveries, nil
+}
+
+func (m *mockChannel) Cancel(consumer string, noWait bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancelCalled = true
+	m.cancelConsumer = consumer
+	return m.cancelErr
 }
 
 func (m *mockChannel) Qos(prefetchCount, prefetchSize int, global bool) error {
