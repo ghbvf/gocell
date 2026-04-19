@@ -14,6 +14,11 @@ const (
 	// Labels: phase = readiness_flip | lifo_teardown | closed.
 	// SRE use: detect stuck shutdowns by comparing phase entry counts across
 	// instances; a missing "closed" entry pinpoints where the hang occurred.
+	//
+	// Note: This is a Counter (not a Gauge). To check which phase a pod is stuck
+	// in, operators must compare the delta between successive phase counters; a
+	// phase counter that fails to increment while earlier phases have incremented
+	// indicates the pod is stuck in the previous phase.
 	shutdownPhaseCounterName = "gocell_bootstrap_shutdown_phase_entries_total"
 
 	// shutdownPhaseDurationName records per-phase wall-clock latency.

@@ -507,6 +507,10 @@ type Subscriber interface {
 // StopIntake MUST be idempotent. It SHOULD be safe to call concurrently with
 // in-flight Subscribe calls.
 //
+// Errors are best-effort: callers (e.g., eventrouter.Router.Close) log a warning
+// and proceed to context cancellation regardless. Return an error only for
+// caller-observable failures that operators would want to see in logs.
+//
 // ref: ThreeDotsLabs/watermill message/router.go (closingInProgressCh two-phase barrier)
 // ref: uber-go/fx app.go shutdown semantics (run ctx vs stop ctx separation)
 type SubscriberIntakeStopper interface {

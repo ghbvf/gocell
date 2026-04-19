@@ -811,8 +811,17 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 // waits for the preShutdownDelay, sharing the shutCtx budget.
 func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState) {
 	slog.Info("bootstrap: initiating graceful shutdown")
-	s.reloads.BeginShutdown()
-	s.hh.SetShuttingDown()
+	if s.reloads != nil {
+		// early signal: prevents new reload callbacks from entering the gate;
+		// the returned drained channel is intentionally not awaited here.
+		// Full drain (BeginShutdown + drain + ctx.Done) happens in the phase3
+		// teardown closure registered in phase3InitAssembly, which executes
+		// during phase10LIFOTeardown at the end of the shutdown sequence.
+		s.reloads.BeginShutdown()
+	}
+	if s.hh != nil {
+		s.hh.SetShuttingDown()
+	}
 
 	if b.preShutdownDelay <= 0 {
 		return
