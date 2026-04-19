@@ -8,9 +8,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Compile-time assertion: Pool implements lifecycle.ContextCloser.
+var _ lifecycle.ContextCloser = (*Pool)(nil)
 
 // Default pool configuration values.
 const (
@@ -142,10 +146,37 @@ func (p *Pool) Health(ctx context.Context) error {
 	return nil
 }
 
-// Close gracefully shuts down the connection pool.
-func (p *Pool) Close() {
-	p.inner.Close()
-	slog.Info("postgres pool closed")
+// Close gracefully shuts down the connection pool, bounded by ctx.
+//
+// pgxpool.Pool.Close() performs a synchronous drain with no context parameter.
+// Close wraps it in a goroutine so the caller's shutdown budget is honoured;
+// if ctx expires, the pool's connection resources are abandoned (process-exit
+// cleanup semantics, acceptable under orchestrator-restart SLO).
+//
+// Close is idempotent: calling it on an already-closed pool is safe.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
+func (p *Pool) Close(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.inner.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("postgres pool closed")
+		return nil
+	case <-ctx.Done():
+		slog.Warn("postgres: pool close budget exceeded",
+			slog.Any("error", ctx.Err()))
+		return ctx.Err()
+	}
 }
 
 // PoolStats holds structured connection pool statistics.

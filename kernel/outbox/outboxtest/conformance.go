@@ -748,7 +748,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
-	assertNoError(t, sub.Close())
+	assertNoError(t, sub.Close(context.Background()))
 
 	select {
 	case <-subscribeReturned:
@@ -761,18 +761,18 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 func testCloseIsIdempotent(t *testing.T, constructor PubSubConstructor) {
 	_, sub := constructor(t)
 
-	assertNoError(t, sub.Close())
+	assertNoError(t, sub.Close(context.Background()))
 
 	// Second close should not panic.
 	assertNotPanics(t, func() {
-		assertNoError(t, sub.Close())
+		assertNoError(t, sub.Close(context.Background()))
 	})
 }
 
 func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
 
-	assertNoError(t, sub.Close())
+	assertNoError(t, sub.Close(context.Background()))
 
 	// Publishing after close should not panic.
 	assertNotPanics(t, func() {

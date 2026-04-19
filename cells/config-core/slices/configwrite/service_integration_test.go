@@ -65,7 +65,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	)
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate container: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
-	defer pool.Close()
+	defer func() { _ = pool.Close(ctx) }()
 
 	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err)

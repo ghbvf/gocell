@@ -46,7 +46,7 @@ func (f *fakeManagedResource) Checkers() map[string]func() error {
 
 func (f *fakeManagedResource) Worker() worker.Worker { return f.w }
 
-func (f *fakeManagedResource) Close() error {
+func (f *fakeManagedResource) Close(_ context.Context) error {
 	f.closeCalled = true
 	return nil
 }

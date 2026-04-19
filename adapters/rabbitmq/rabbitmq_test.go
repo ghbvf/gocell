@@ -229,6 +229,11 @@ type mockConnection struct {
 	// Channel() pops from the front. Falls back to nextCh / newMockChannel.
 	channelQueue []*mockChannel
 
+	// nextChIface, when non-nil, is returned before nextCh. Use this when the
+	// test needs to inject an AMQPChannel that is not a *mockChannel (e.g.
+	// recordingChannel). Checked before channelQueue and nextCh.
+	nextChIface AMQPChannel
+
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
 	closeErr      error
@@ -243,6 +248,10 @@ func (m *mockConnection) Channel() (AMQPChannel, error) {
 	defer m.mu.Unlock()
 	if m.chanErr != nil {
 		return nil, m.chanErr
+	}
+	if m.nextChIface != nil {
+		ch := m.nextChIface
+		return ch, nil
 	}
 	if len(m.channelQueue) > 0 {
 		ch := m.channelQueue[0]
@@ -304,7 +313,7 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 
 	t.Cleanup(func() {
 		// Avoid blocking on reconnect loop.
-		if cErr := conn.Close(); cErr != nil {
+		if cErr := conn.Close(context.Background()); cErr != nil {
 			t.Logf("cleanup close error: %v", cErr)
 		}
 	})
@@ -488,14 +497,15 @@ func TestPoolStats_JSON_CamelCase(t *testing.T) {
 	assert.Contains(t, s, `"state":"connected"`) // MarshalText, not numeric
 }
 
-func TestConnection_Close_Idempotent(t *testing.T) {
+func TestConnection_CloseNoCtx_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
-	err := conn.Close()
+	ctx := context.Background()
+	err := conn.Close(ctx)
 	assert.NoError(t, err)
 
 	// Second close should be no-op.
-	err = conn.Close()
+	err = conn.Close(ctx)
 	assert.NoError(t, err)
 }
 
@@ -662,7 +672,7 @@ func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	// reconnectLoop is already running from NewConnection. Close should stop it.
-	err := conn.Close()
+	err := conn.Close(context.Background())
 	assert.NoError(t, err)
 
 	// After Close, WaitConnected with a short timeout should fail (closeCh closed).
@@ -696,7 +706,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Wait for reconnectLoop to call NotifyClose.
 	require.Eventually(t, func() bool {
@@ -761,7 +771,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -1129,7 +1139,7 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
-		if cErr := conn.Close(); cErr != nil {
+		if cErr := conn.Close(context.Background()); cErr != nil {
 			t.Logf("close error: %v", cErr)
 		}
 	}()
@@ -1255,7 +1265,7 @@ func TestSubscriber_InitializeSubscription_EmptyDLX_ReturnsError(t *testing.T) {
 func TestSubscriber_InitializeSubscription_AcquireChannelFailure(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	// Close the connection to make AcquireChannel fail.
-	_ = conn.Close()
+	_ = conn.Close(context.Background())
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
@@ -1321,7 +1331,7 @@ func TestSubscriberConfig_Defaults(t *testing.T) {
 	cfg.setDefaults()
 
 	assert.Equal(t, 10, cfg.PrefetchCount)
-	assert.Equal(t, 30*time.Second, cfg.ShutdownTimeout)
+	assert.Equal(t, 2*time.Second, cfg.StopIntakePerCallTimeout)
 }
 
 func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
@@ -1336,7 +1346,6 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		QueueName:       "test-queue",
 		PrefetchCount:   5,
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -1385,7 +1394,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	assert.Equal(t, uint64(1), ch.ackTag)
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
@@ -1399,7 +1408,6 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1428,7 +1436,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	assert.False(t, ch.nackRequeue) // Unmarshal failure should not requeue.
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 // TestUnmarshalDelivery covers the discriminator paths in unmarshalDelivery
@@ -1493,7 +1501,6 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
@@ -1524,7 +1531,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	assert.True(t, ch.nackRequeue) // Requeue disposition should requeue.
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
@@ -1538,7 +1545,6 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1556,15 +1562,15 @@ func TestSubscriber_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	assert.NoError(t, sub.Close())
-	assert.NoError(t, sub.Close()) // Second close is no-op.
+	assert.NoError(t, sub.Close(context.Background()))
+	assert.NoError(t, sub.Close(context.Background())) // Second close is no-op.
 }
 
 func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.Error(t, err)
@@ -1588,7 +1594,6 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1649,7 +1654,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 		t.Fatal("Subscribe did not return after cancel")
 	}
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
@@ -1676,7 +1681,6 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1752,38 +1756,40 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 	}
 }
 
-func TestSubscriber_TrackUntrackChannel(t *testing.T) {
+func TestSubscriber_AddRemoveRun(t *testing.T) {
 	sub := &Subscriber{
 		closeCh: make(chan struct{}),
+		runs:    make(map[*subscriptionRun]struct{}),
 	}
 
-	ch1 := newMockChannel()
-	ch2 := newMockChannel()
-	ch3 := newMockChannel()
+	r1 := newSubscriptionRun(newMockChannel(), "tag1")
+	r2 := newSubscriptionRun(newMockChannel(), "tag2")
+	r3 := newSubscriptionRun(newMockChannel(), "tag3")
 
-	sub.trackChannel(ch1)
-	sub.trackChannel(ch2)
-	sub.trackChannel(ch3)
+	sub.addRun(r1)
+	sub.addRun(r2)
+	sub.addRun(r3)
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 3)
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 3)
+	sub.runsMu.Unlock()
 
-	sub.untrackChannel(ch2)
+	sub.removeRun(r2)
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 2)
-	// ch2 should be removed, ch1 and ch3 should remain.
-	assert.Contains(t, sub.channels, AMQPChannel(ch1))
-	assert.Contains(t, sub.channels, AMQPChannel(ch3))
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 2)
+	_, hasR1 := sub.runs[r1]
+	_, hasR3 := sub.runs[r3]
+	assert.True(t, hasR1, "r1 should still be tracked")
+	assert.True(t, hasR3, "r3 should still be tracked")
+	sub.runsMu.Unlock()
 
-	// Untrack a channel that is not tracked — should be a no-op.
-	sub.untrackChannel(newMockChannel())
+	// Remove a run that is not tracked — should be a no-op.
+	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown"))
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 2)
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 2)
+	sub.runsMu.Unlock()
 }
 
 func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
@@ -1798,7 +1804,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 		ChannelPoolSize: 5,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close(context.Background()) }()
 
 	// Now make channel acquisition fail.
 	mockConn.mu.Lock()
@@ -1808,7 +1814,6 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
@@ -1817,10 +1822,10 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
 
-	// Verify no channels are tracked (it was cleaned up).
-	sub.mu.Lock()
-	assert.Empty(t, sub.channels)
-	sub.mu.Unlock()
+	// Verify no runs are tracked (channel acquisition failed before run was created).
+	sub.runsMu.Lock()
+	assert.Empty(t, sub.runs)
+	sub.runsMu.Unlock()
 }
 
 func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
@@ -1851,7 +1856,6 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	// Run Subscribe in a goroutine so the main goroutine can orchestrate the
@@ -1882,7 +1886,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	// Close subscriber. closeCh cancels the derived subCtx → WaitConnected
 	// (or any other blocking call in the loop) returns ctx.Err() → Subscribe
 	// exits cleanly.
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 
 	select {
 	case err := <-subscribeDone:
@@ -1906,7 +1910,6 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 		// QueueName deliberately left empty; ConsumerGroup is set.
 		ConsumerGroup:   "audit-core",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1935,7 +1938,6 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 		QueueName:       "my-explicit-queue",
 		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1962,7 +1964,6 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// Both QueueName and ConsumerGroup empty — backward compat.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1989,7 +1990,6 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "my-dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2019,7 +2019,6 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 		QueueName:       "test-queue",
 		DLXExchange:     "my-dlx",
 		DLXRoutingKey:   "dead-letter-key",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2041,7 +2040,6 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
-		ShutdownTimeout: 2 * time.Second,
 		// DLXExchange deliberately left empty.
 	})
 
@@ -2093,7 +2091,6 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
@@ -2133,7 +2130,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	assert.Equal(t, uint64(42), ch.nackTag)
 	ch.mu.Unlock()
 
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // =============================================================================
@@ -2400,7 +2397,7 @@ func (s *stubSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription,
 	}
 	return nil
 }
-func (s *stubSubscriber) Close() error { return nil }
+func (s *stubSubscriber) Close(_ context.Context) error { return nil }
 
 var _ outbox.Subscriber = (*stubSubscriber)(nil)
 
@@ -2899,7 +2896,6 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -2936,7 +2932,6 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -2978,7 +2973,6 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
@@ -3012,7 +3006,6 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -3073,7 +3066,6 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -3115,7 +3107,6 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3154,7 +3145,6 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3191,7 +3181,6 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 
 	// No DLXExchange configured — Subscribe should fail before any delivery processing.
 	sub := NewSubscriber(conn, SubscriberConfig{
-		ShutdownTimeout: 2 * time.Second,
 		// DLXExchange deliberately left empty.
 	})
 
@@ -3237,7 +3226,6 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
@@ -3398,7 +3386,6 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
@@ -3436,7 +3423,6 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3547,7 +3533,6 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3846,7 +3831,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Verify initial health is OK.
 	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
@@ -4212,7 +4197,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Initial state: Connected.
 	assert.Equal(t, StateConnected, conn.ConnectionStatus(), "initial state should be Connected")

@@ -50,7 +50,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 	require.NoError(t, err, "create dedicated rabbitmq connection")
 
 	cleanup := func() {
-		_ = conn.Close()
+		_ = conn.Close(context.Background())
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("rabbitmq: dedicated container terminate failed: %v", err)
 		}
@@ -80,7 +80,7 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
 	require.NoError(t, err, "create connection against shared rabbitmq broker")
-	return conn, func() { _ = conn.Close() }
+	return conn, func() { _ = conn.Close(context.Background()) }
 }
 
 // startRabbitMQBroker returns the package-wide shared broker AMQP URL
@@ -110,7 +110,7 @@ func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
 	require.NoError(t, err, "create per-subtest rabbitmq connection")
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
 }
 
@@ -174,7 +174,6 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		QueueName:       queueName,
 		PrefetchCount:   1,
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -227,7 +226,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 
 	// Clean up subscriber.
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_PublishOnly verifies that Publisher.Publish succeeds
@@ -309,7 +308,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	var callCount atomic.Int32
@@ -378,7 +376,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		"handler should be called at least RetryCount times before rejection")
 
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_ConnectionRecovery verifies that the Connection automatically
@@ -482,7 +480,6 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -554,7 +551,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
 
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // noopClaimer is a minimal idempotency.Claimer for testing that always

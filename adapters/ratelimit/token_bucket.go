@@ -1,11 +1,13 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
@@ -13,6 +15,7 @@ import (
 var (
 	_ middleware.RateLimiter         = (*Limiter)(nil)
 	_ middleware.WindowedRateLimiter = (*Limiter)(nil)
+	_ lifecycle.ContextCloser        = (*Limiter)(nil)
 )
 
 // Config holds settings for the token bucket rate limiter.
@@ -94,9 +97,20 @@ func (l *Limiter) Window() (time.Duration, int) {
 	return time.Second, int(l.rate)
 }
 
-// Close stops the background cleanup goroutine. It implements io.Closer so
-// callers can integrate it into managed shutdown sequences.
-func (l *Limiter) Close() error {
+// Close stops the background cleanup goroutine.
+//
+// Close is non-blocking: close(l.stopCh) is O(1) and the refill goroutine
+// will observe the signal at its next tick and exit. The ctx parameter is
+// accepted for lifecycle.ContextCloser compatibility but not consumed
+// because stopCh close is synchronous and cannot be short-circuited safely.
+// Distinct from InMemoryEventBus.Close (which ignores ctx for similar reasons)
+// and Subscriber.Close (which honors ctx to bound in-flight drain).
+//
+// Close is idempotent: concurrent and repeated calls are safe.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
+func (l *Limiter) Close(_ context.Context) error {
 	l.stopOnce.Do(func() { close(l.stopCh) })
 	return nil
 }

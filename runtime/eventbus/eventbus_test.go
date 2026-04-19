@@ -53,7 +53,7 @@ func makeSimpleEnvelope(t testing.TB, topic string) []byte {
 // envelope fields as business fields and silently ACKed unknown actions.
 func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var got outbox.Entry
 	var mu sync.Mutex
@@ -119,7 +119,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 // ref: Watermill poison-queue middleware — undecodable → DLX, main route cleared
 func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var handlerCalled atomic.Bool
 
@@ -161,7 +161,7 @@ func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 
 func TestPublishSubscribe(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var received []outbox.Entry
 	var mu sync.Mutex
@@ -207,7 +207,7 @@ func TestPublishSubscribe(t *testing.T) {
 
 func TestPublish_NoSubscribers(t *testing.T) {
 	bus := New()
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	err := bus.Publish(context.Background(), "no.subs", makeSimpleEnvelope(t, "no.subs"))
 	assert.NoError(t, err)
@@ -215,7 +215,7 @@ func TestPublish_NoSubscribers(t *testing.T) {
 
 func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 	testErr := errors.New("transient error")
@@ -258,7 +258,7 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 
 func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 	testErr := errors.New("permanent error")
@@ -294,7 +294,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 
 func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 
@@ -337,7 +337,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 
 func TestClose_PreventsFurtherPublish(t *testing.T) {
 	bus := New()
-	err := bus.Close()
+	err := bus.Close(context.Background())
 	require.NoError(t, err)
 
 	err = bus.Publish(context.Background(), "topic", []byte("data"))
@@ -346,8 +346,8 @@ func TestClose_PreventsFurtherPublish(t *testing.T) {
 
 func TestClose_Idempotent(t *testing.T) {
 	bus := New()
-	assert.NoError(t, bus.Close())
-	assert.NoError(t, bus.Close())
+	assert.NoError(t, bus.Close(context.Background()))
+	assert.NoError(t, bus.Close(context.Background()))
 }
 
 func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
@@ -393,7 +393,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return publishStarted.Load() == 1
 	}, time.Second, 10*time.Millisecond)
-	require.NoError(t, bus.Close())
+	require.NoError(t, bus.Close(context.Background()))
 	stop.Store(true)
 	publishers.Wait()
 	cancel()
@@ -408,7 +408,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 
 func TestSubscribe_ClosedBus(t *testing.T) {
 	bus := New()
-	_ = bus.Close()
+	_ = bus.Close(context.Background())
 
 	err := bus.Subscribe(context.Background(), outbox.Subscription{Topic: "topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -418,7 +418,7 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 
 func TestMultipleSubscribers(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var count1, count2 atomic.Int32
 
@@ -462,7 +462,7 @@ func TestMultipleSubscribers(t *testing.T) {
 
 func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 
@@ -498,7 +498,7 @@ func TestHealth(t *testing.T) {
 	bus := New()
 	assert.Equal(t, "healthy", bus.Health())
 
-	_ = bus.Close()
+	_ = bus.Close(context.Background())
 	assert.Equal(t, "closed", bus.Health())
 }
 
@@ -508,7 +508,7 @@ func TestTopicConfigChangedConstant(t *testing.T) {
 
 func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -567,7 +567,7 @@ func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
 
 func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	receipt := &mockReceipt{}
 
@@ -599,7 +599,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 
 func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	receipt := &mockReceipt{}
 
@@ -632,7 +632,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 
 func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var receipts []*mockReceipt
 	var receiptsMu sync.Mutex
@@ -679,7 +679,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 
 func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	// Track all receipts across retry attempts to verify each is released
 	// and none is committed when retries exhaust.
@@ -736,7 +736,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 
 func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 	var receipts []*mockReceipt
@@ -800,7 +800,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 
 func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 	testErr := errors.New("unknown disp error")
@@ -844,7 +844,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 
 func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	var attempts atomic.Int32
 
@@ -891,7 +891,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 // goes to exactly one subscriber, not both.
 func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -953,7 +953,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 // DIFFERENT consumer groups each receive a full copy of every message (fanout).
 func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1012,7 +1012,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 // receives every message. This preserves backward compatibility.
 func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 	bus := New(WithBufferSize(16))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1070,7 +1070,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 // -race to be effective.
 func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	bus := New(WithBufferSize(256))
-	defer func() { _ = bus.Close() }()
+	defer func() { _ = bus.Close(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1140,7 +1140,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 // (publish + subscribe) after StopIntake.
 func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	b := New()
-	t.Cleanup(func() { _ = b.Close() })
+	t.Cleanup(func() { _ = b.Close(context.Background()) })
 
 	// Type assertion must succeed.
 	stopper, ok := interface{}(b).(outbox.SubscriberIntakeStopper)
