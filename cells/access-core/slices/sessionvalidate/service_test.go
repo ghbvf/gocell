@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -290,14 +291,24 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 			logOutput := buf.String()
 			require.NotEmpty(t, logOutput, "expected at least one log line")
 
-			// Find the session-lookup log line (not the JWT verification line).
+			// P1-3: use precise JSON-line matching to avoid false positives from
+			// other log lines (e.g. JWT verification Warn). We locate the specific
+			// session-lookup log line by message substring before asserting level.
 			if tt.wantLogLevel == slog.LevelWarn {
-				assert.Contains(t, logOutput, `"level":"WARN"`,
+				entry := sloghelper.FindLogEntry(logOutput, "session not found")
+				require.NotNil(t, entry,
+					"expected a log line containing 'session not found'")
+				assert.Equal(t, "WARN", entry["level"],
 					"domain not-found whitelisted error must log at WARN")
-				assert.NotContains(t, logOutput, `"level":"ERROR"`,
-					"must not emit ERROR when domain not-found whitelist matches")
+				// Confirm no ERROR line for this specific lookup message.
+				errEntry := sloghelper.FindLogEntry(logOutput, "session repo unavailable")
+				assert.Nil(t, errEntry,
+					"must not emit ERROR 'session repo unavailable' when domain not-found whitelist matches")
 			} else {
-				assert.Contains(t, logOutput, `"level":"ERROR"`,
+				entry := sloghelper.FindLogEntry(logOutput, "session repo unavailable")
+				require.NotNil(t, entry,
+					"expected a log line containing 'session repo unavailable'")
+				assert.Equal(t, "ERROR", entry["level"],
 					"infra / non-whitelisted error must log at ERROR")
 			}
 		})
