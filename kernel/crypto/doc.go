@@ -2,12 +2,14 @@
 // KeyProvider, KeyHandle, ValueTransformer, CurrentKeyIDProvider, and the
 // AADForConfig helper.
 //
-// Implementations (LocalAES, VaultTransit) live in runtime/crypto/ and are
-// exposed via type aliases so that callers importing kernel/crypto receive the
-// same concrete types without creating a dependency on runtime/.
+// Implementations (LocalAES, VaultTransit) live in runtime/crypto/ or
+// adapters/*/. runtime/crypto re-exports these interfaces via type aliases
+// so that existing callers using "runtime/crypto" continue to compile
+// without change; kernel/crypto itself has no dependency on runtime or
+// adapters.
 //
-// This package may only depend on the standard library, preserving the
-// kernel→no-runtime layering rule.
+// kernel/crypto/ must not import runtime/ or adapters/ — it is the
+// interface-only package for the adapters→kernel-only dependency rule.
 //
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/transformer.go
 // ref: PR#200 R1a kernel/lifecycle layering pattern

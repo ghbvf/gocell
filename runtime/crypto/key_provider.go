@@ -17,10 +17,21 @@ package crypto
 
 import kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 
-// KeyProvider is a type alias for kernel/crypto.KeyProvider.
-// Abstracts a KMS backend; implementations must be safe for concurrent use.
+// KeyProvider is a type alias for the kernel KeyProvider interface. The
+// authoritative definition lives in kernel/crypto.
+//
+// This is not a migration shim — the alias exists so runtime/crypto
+// implementations (LocalAES, VaultTransit, keyProviderTransformer)
+// type-check against the kernel contract without importing kernel/crypto
+// from every local impl file.
+//
+// Guidance for new consumers: code in cells/ or cmd/ referencing only
+// interfaces SHOULD import kernel/crypto directly and reference
+// kcrypto.KeyProvider (the kernel contract).
 type KeyProvider = kcrypto.KeyProvider
 
-// KeyHandle is a type alias for kernel/crypto.KeyHandle.
-// A thin handle for a specific key version providing Encrypt/Decrypt.
+// KeyHandle is a type alias for the kernel KeyHandle interface. The
+// authoritative definition lives in kernel/crypto.
+//
+// See KeyProvider alias comment for guidance on import choices.
 type KeyHandle = kcrypto.KeyHandle

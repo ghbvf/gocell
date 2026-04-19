@@ -13,6 +13,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -93,7 +94,7 @@ type AppDeps struct {
 	// BuildBootstrap constructs a ValueTransformer from KeyProvider internally.
 	// Tests that need to inject a custom transformer should use configCellOpts
 	// (e.g. configcore.WithValueTransformer(fakeT)).
-	KeyProvider crypto.KeyProvider
+	KeyProvider kcrypto.KeyProvider
 }
 
 // Validate is the single authoritative gate for startup invariants. It checks
@@ -486,7 +487,7 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend string) (crypto.KeyProvider, error) {
+func buildKeyProvider(storageBackend string) (kcrypto.KeyProvider, error) {
 	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
 	if providerName == "" {
 		if storageBackend == "postgres" {
@@ -521,7 +522,7 @@ func buildKeyProvider(storageBackend string) (crypto.KeyProvider, error) {
 
 // keyProviderToTransformer wraps a KeyProvider in a ValueTransformer.
 // When kp is nil (no encryption configured), returns NoopTransformer.
-func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
+func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 	if kp == nil {
 		return crypto.NoopTransformer{}
 	}
@@ -545,7 +546,7 @@ func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt crypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt kcrypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
 		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())

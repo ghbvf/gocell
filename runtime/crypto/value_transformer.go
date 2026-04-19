@@ -7,13 +7,23 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 )
 
-// ValueTransformer is a type alias for kernel/crypto.ValueTransformer.
-// The caller-facing encryption interface for sensitive config values.
+// ValueTransformer is a type alias for the kernel ValueTransformer interface.
+// The authoritative definition lives in kernel/crypto.
+//
+// This is not a migration shim — the alias exists so runtime/crypto
+// implementations (keyProviderTransformer, NoopTransformer)
+// type-check against the kernel contract without importing kernel/crypto
+// from every local impl file.
+//
+// Guidance for new consumers: code in cells/ or cmd/ referencing only
+// interfaces SHOULD import kernel/crypto directly and reference
+// kcrypto.ValueTransformer (the kernel contract).
 type ValueTransformer = kcrypto.ValueTransformer
 
-// CurrentKeyIDProvider is a type alias for kernel/crypto.CurrentKeyIDProvider.
-// Optional extension interface for ValueTransformer implementations that can
-// report their current key ID.
+// CurrentKeyIDProvider is a type alias for the kernel CurrentKeyIDProvider
+// interface. The authoritative definition lives in kernel/crypto.
+//
+// See ValueTransformer alias comment for guidance on import choices.
 type CurrentKeyIDProvider = kcrypto.CurrentKeyIDProvider
 
 // keyProviderTransformer is the production ValueTransformer backed by a KeyProvider.
