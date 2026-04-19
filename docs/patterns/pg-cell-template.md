@@ -243,3 +243,118 @@ exists anywhere in the codebase.
   production `run()` — a single `BuildBootstrap` call serves all.
 - Forgetting `MetricsToken`/`VerboseToken` when testing with `AdapterMode:
   "real"` — `BuildBootstrap` will fail-fast with a clear error message.
+
+---
+
+## Chapter 4 — Durable Write Slice + RunInTx + Outbox Event Pattern
+
+This chapter documents the **flag-write slice** as the canonical template for
+adding a durable CUD write slice to any GoCell cell. The pattern ensures L2
+OutboxFact consistency: the domain write and the outbox event are always
+committed or rolled back together.
+
+### Why RunInTx + Outbox must be atomic
+
+Unleash's original design (pre-2020) wrote the flag record and then published
+the change event as two separate database calls. When the event write failed,
+the flag was already mutated with no event — consumers diverged silently.
+
+The GoCell pattern wraps **both** operations inside a single `RunInTx` call.
+If the outbox write fails the entire transaction rolls back, including the
+domain write. The outbox relay then delivers the event at-least-once after
+commit, driven by the `outbox_entries` table.
+
+ref: Unleash/unleash src/lib/db/feature-environment-store.ts  
+ref: Watermill router pattern — event publishing decoupled from HTTP handler  
+
+### Service implementation (from `cells/config-core/slices/flagwrite/service.go`)
+
+```go
+// L2 OutboxFact: repo writes + outbox writes are wrapped in a single RunInTx
+// per operation. Failure in either rolls back both.
+type Service struct {
+    repo         ports.FlagRepository
+    outboxWriter outbox.Writer
+    txRunner     persistence.TxRunner
+    logger       *slog.Logger
+}
+
+func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
+    if key == "" {
+        return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
+    }
+
+    var updated *domain.FeatureFlag
+
+    if err := s.runInTx(ctx, func(txCtx context.Context) error {
+        var err error
+        updated, err = s.repo.Toggle(txCtx, key, enabled)  // atomic UPDATE ... RETURNING
+        if err != nil {
+            return fmt.Errorf("flag-write: toggle: %w", err)
+        }
+        return s.emitFlagChanged(txCtx, "toggled", updated) // outbox write inside same tx
+    }); err != nil {
+        return nil, err
+    }
+
+    s.logger.Info("feature flag toggled",
+        slog.String("key", key),
+        slog.Bool("enabled", enabled))
+    return updated, nil
+}
+
+// FlagChangedPayload is the typed event struct (camelCase JSON per convention).
+type FlagChangedPayload struct {
+    EventID    string    `json:"eventId"`
+    Action     string    `json:"action"`
+    Key        string    `json:"key"`
+    Enabled    bool      `json:"enabled"`
+    Version    int       `json:"version"`
+    OccurredAt time.Time `json:"occurredAt"`
+}
+```
+
+### Key design decisions
+
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Toggle SQL | `UPDATE ... SET enabled=$1, version=version+1 ... RETURNING *` | Prevents concurrent partial-write data loss (Unleash lesson) |
+| Payload struct | Typed `FlagChangedPayload` | Schema enforced at compile time; JSON Schema contract validated in tests |
+| runInTx nil-check | `if s.txRunner != nil { ... } else fn(ctx)` | Demo mode (no tx) stays functional; Init() validates presence for L2 slices |
+| Event action field | `"created" \| "updated" \| "toggled" \| "deleted"` | Distinct `toggled` action separates bulk-update from enable/disable flows |
+| outboxWriter nil-check | No event emitted if nil | Integration test wiring; Init() must fail-fast before serving in durable mode |
+
+### Checklist for adding a new durable write slice
+
+1. Create `cells/<cell>/slices/<slice-name>/service.go` — implement
+   `Create/Update/Delete` each calling `s.runInTx(ctx, func(txCtx) { repo.X + outboxWriter.Write })`.
+2. Create typed `*ChangedPayload` struct with `eventId`, `action`, `occurredAt`.
+3. Create `handler.go` — decode request, call service, respond with DTO.
+4. Create `slice.yaml` in `cells/<cell>/slices/<slice-name>/` — declare `contractUsages`
+   for each HTTP contract (`role: serve`) and the event contract (`role: publish`).
+5. Create contracts under `contracts/http/...` and `contracts/event/...` with JSON Schema.
+6. Add `initXxxWriteSlice()` in `cell.go` — mirror `initFlagWriteSlice()`.
+7. Register HTTP routes in `RegisterRoutes` under the resource prefix.
+8. Write `service_test.go` (atomicity), `contract_test.go` (schema), `ctx_cancel_test.go` (rollback).
+9. Run `go run ./cmd/gocell validate` — must be 0 errors.
+
+### Disposition flow
+
+```
+Service.Create(ctx)
+  └─ runInTx(ctx, fn)
+       ├─ repo.Create(txCtx, flag)     ──→ INSERT INTO feature_flags
+       └─ outboxWriter.Write(txCtx, e) ──→ INSERT INTO outbox_entries
+             ↓ tx commits
+       relay polls outbox_entries
+             ↓ publishes to broker
+       consumer receives flag.changed.v1
+             ↓ DispositionAck
+       Receipt.Commit (idempotency key marked done)
+```
+
+### Chapters 5–7 (placeholder — PR3)
+
+- **Chapter 5**: Repository-boundary encryption + `ValueTransformer` + `KeyProvider` selection
+- **Chapter 6**: Key rotation + staleness-driven lazy re-encrypt
+- **Chapter 7**: Three-layer testing (unit / testcontainers / e2e compose)
