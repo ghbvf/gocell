@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -375,7 +376,8 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 			"vault-transit: key metadata missing 'latest_version' field")
 	}
 
-	// Vault returns JSON numbers as json.Number or float64 depending on decode path.
+	// Vault returns JSON numbers as json.Number (vault/api uses UseNumber decoder)
+	// or float64 / int via in-memory fakes; all variants must be handled.
 	switch v := versionRaw.(type) {
 	case int:
 		return v, nil
@@ -383,6 +385,13 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 		return int(v), nil
 	case float64:
 		return int(v), nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+				fmt.Sprintf("vault-transit: latest_version json.Number parse error: %v", err))
+		}
+		return int(n), nil
 	default:
 		return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
 			fmt.Sprintf("vault-transit: unexpected latest_version type %T", versionRaw))

@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +53,11 @@ func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
 	teardown = func() {
 		_ = container.Terminate(ctx)
 	}
-	return fmt.Sprintf("http://%s", vaultAddr), "root-test-token", teardown
+	// HttpHostAddress already returns the full URL including scheme.
+	if !strings.HasPrefix(vaultAddr, "http://") && !strings.HasPrefix(vaultAddr, "https://") {
+		vaultAddr = "http://" + vaultAddr
+	}
+	return vaultAddr, "root-test-token", teardown
 }
 
 // newProviderFromEnv is a test helper that sets the standard Vault env vars and
@@ -234,7 +237,10 @@ func (rp *recordingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = r.Body.Close()
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/transit/encrypt/") {
+	// Vault SDK sends transit/encrypt writes as PUT (api/logical.go WriteWithContext);
+	// accept POST as well for defence-in-depth.
+	if (r.Method == http.MethodPut || r.Method == http.MethodPost) &&
+		strings.HasPrefix(r.URL.Path, "/v1/transit/encrypt/") {
 		rp.mu.Lock()
 		rp.encryptBody = make([]byte, len(bodyBytes))
 		copy(rp.encryptBody, bodyBytes)
