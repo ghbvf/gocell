@@ -3,6 +3,8 @@ package rabbitmq
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -15,8 +17,17 @@ import (
 var _ outbox.Publisher = (*Publisher)(nil)
 
 // Publisher implements outbox.Publisher using RabbitMQ with confirm mode.
+//
+// Each Publish call acquires an ephemeral channel (open, use, close per publish),
+// consistent with the Watermill defaultChannelProvider pattern. Publisher.Close(ctx)
+// waits for all in-flight Publish calls to complete (bounded by ctx deadline).
+//
+// ref: uber-go/fx app.go StopTimeout — ctx carries shared shutdown budget
+// ref: Watermill defaultChannelProvider — ephemeral per-publish channel
 type Publisher struct {
-	conn *Connection
+	conn   *Connection
+	closed atomic.Bool
+	wg     sync.WaitGroup
 }
 
 // NewPublisher creates a Publisher backed by the given Connection.
@@ -24,19 +35,51 @@ func NewPublisher(conn *Connection) *Publisher {
 	return &Publisher{conn: conn}
 }
 
-// Close is a no-op placeholder that satisfies outbox.Publisher.
-// Full ctx-aware implementation is added in Part 4 (T9).
+// Close waits for all in-flight Publish calls to complete, bounded by ctx.
+// Returns ctx.Err() if ctx is already cancelled or if the budget expires while
+// waiting for in-flight publishes to complete.
 //
-// ref: uber-go/fx app.go StopTimeout — ctx passed to ensure budget is shared.
-func (p *Publisher) Close(_ context.Context) error {
-	return nil
+// Close is idempotent: a second call returns nil immediately.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx passes the shared shutdown budget.
+func (p *Publisher) Close(ctx context.Context) error {
+	if !p.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("rabbitmq: publisher closed gracefully")
+		return nil
+	case <-ctx.Done():
+		slog.Warn("rabbitmq: publisher close budget exceeded",
+			slog.Any("error", ctx.Err()))
+		return ctx.Err()
+	}
 }
 
 // Publish sends a message to the given topic (exchange) with publisher confirms.
 //
 // The topic is used as a fanout exchange name. The exchange is declared
 // idempotently on each publish to handle reconnect scenarios.
+//
+// Returns ErrAdapterAMQPPublish if the publisher has been closed.
 func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) error {
+	if p.closed.Load() {
+		return errcode.New(ErrAdapterAMQPPublish, "rabbitmq: publisher is closed")
+	}
+	p.wg.Add(1)
+	defer p.wg.Done()
+
 	ch, err := p.conn.AcquireChannel()
 	if err != nil {
 		// Preserve terminal error code from Connection so callers can distinguish
