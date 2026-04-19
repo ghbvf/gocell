@@ -237,29 +237,6 @@ func validateAdapterMode(mode string) error {
 	}
 }
 
-// loadRequiredEnv loads a required env var. Returns an error if the value is
-// empty; there is no fallback default. Used for env vars that are mandatory
-// in all adapter modes (e.g. GOCELL_JWT_ISSUER, GOCELL_JWT_AUDIENCE).
-func loadRequiredEnv(envKey, description string) (string, error) {
-	v := os.Getenv(envKey)
-	if v == "" {
-		return "", fmt.Errorf("%s must be set (%s)", envKey, description)
-	}
-	return v, nil
-}
-
-// loadJWTIssuer loads the JWT issuer string from GOCELL_JWT_ISSUER.
-// The env var is required in all adapter modes — there is no fallback default.
-func loadJWTIssuer(adapterMode string) (string, error) {
-	return loadRequiredEnv("GOCELL_JWT_ISSUER", fmt.Sprintf("adapter mode %q", adapterMode))
-}
-
-// loadJWTAudience loads the JWT audience string from GOCELL_JWT_AUDIENCE.
-// The env var is required in all adapter modes — there is no fallback default.
-func loadJWTAudience(adapterMode string) (string, error) {
-	return loadRequiredEnv("GOCELL_JWT_AUDIENCE", fmt.Sprintf("adapter mode %q", adapterMode))
-}
-
 // jwtDeps groups JWT signing and verification components built at startup.
 // registry is the single source of truth for all JWT configuration; issuer
 // and verifier are constructed from registry so they share the same settings.
