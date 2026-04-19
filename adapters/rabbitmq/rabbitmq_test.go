@@ -229,6 +229,11 @@ type mockConnection struct {
 	// Channel() pops from the front. Falls back to nextCh / newMockChannel.
 	channelQueue []*mockChannel
 
+	// nextChIface, when non-nil, is returned before nextCh. Use this when the
+	// test needs to inject an AMQPChannel that is not a *mockChannel (e.g.
+	// recordingChannel). Checked before channelQueue and nextCh.
+	nextChIface AMQPChannel
+
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
 	closeErr      error
@@ -243,6 +248,10 @@ func (m *mockConnection) Channel() (AMQPChannel, error) {
 	defer m.mu.Unlock()
 	if m.chanErr != nil {
 		return nil, m.chanErr
+	}
+	if m.nextChIface != nil {
+		ch := m.nextChIface
+		return ch, nil
 	}
 	if len(m.channelQueue) > 0 {
 		ch := m.channelQueue[0]
@@ -1321,7 +1330,10 @@ func TestSubscriberConfig_Defaults(t *testing.T) {
 	cfg.setDefaults()
 
 	assert.Equal(t, 10, cfg.PrefetchCount)
-	assert.Equal(t, 30*time.Second, cfg.ShutdownTimeout)
+	// ShutdownTimeout is deprecated and ignored; setDefaults no longer sets it.
+	assert.Equal(t, time.Duration(0), cfg.ShutdownTimeout,
+		"deprecated ShutdownTimeout must not be set by setDefaults")
+	assert.Equal(t, 2*time.Second, cfg.StopIntakePerCallTimeout)
 }
 
 func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
@@ -1752,38 +1764,40 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 	}
 }
 
-func TestSubscriber_TrackUntrackChannel(t *testing.T) {
+func TestSubscriber_AddRemoveRun(t *testing.T) {
 	sub := &Subscriber{
 		closeCh: make(chan struct{}),
+		runs:    make(map[*subscriptionRun]struct{}),
 	}
 
-	ch1 := newMockChannel()
-	ch2 := newMockChannel()
-	ch3 := newMockChannel()
+	r1 := newSubscriptionRun(newMockChannel(), "tag1")
+	r2 := newSubscriptionRun(newMockChannel(), "tag2")
+	r3 := newSubscriptionRun(newMockChannel(), "tag3")
 
-	sub.trackChannel(ch1)
-	sub.trackChannel(ch2)
-	sub.trackChannel(ch3)
+	sub.addRun(r1)
+	sub.addRun(r2)
+	sub.addRun(r3)
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 3)
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 3)
+	sub.runsMu.Unlock()
 
-	sub.untrackChannel(ch2)
+	sub.removeRun(r2)
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 2)
-	// ch2 should be removed, ch1 and ch3 should remain.
-	assert.Contains(t, sub.channels, AMQPChannel(ch1))
-	assert.Contains(t, sub.channels, AMQPChannel(ch3))
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 2)
+	_, hasR1 := sub.runs[r1]
+	_, hasR3 := sub.runs[r3]
+	assert.True(t, hasR1, "r1 should still be tracked")
+	assert.True(t, hasR3, "r3 should still be tracked")
+	sub.runsMu.Unlock()
 
-	// Untrack a channel that is not tracked — should be a no-op.
-	sub.untrackChannel(newMockChannel())
+	// Remove a run that is not tracked — should be a no-op.
+	sub.removeRun(newSubscriptionRun(newMockChannel(), "unknown"))
 
-	sub.mu.Lock()
-	assert.Len(t, sub.channels, 2)
-	sub.mu.Unlock()
+	sub.runsMu.Lock()
+	assert.Len(t, sub.runs, 2)
+	sub.runsMu.Unlock()
 }
 
 func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
@@ -1817,10 +1831,10 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
 
-	// Verify no channels are tracked (it was cleaned up).
-	sub.mu.Lock()
-	assert.Empty(t, sub.channels)
-	sub.mu.Unlock()
+	// Verify no runs are tracked (channel acquisition failed before run was created).
+	sub.runsMu.Lock()
+	assert.Empty(t, sub.runs)
+	sub.runsMu.Unlock()
 }
 
 func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {

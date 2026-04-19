@@ -88,8 +88,9 @@ type SubscriberConfig struct {
 	// Default: 10.
 	PrefetchCount int
 
-	// ShutdownTimeout is how long to wait for in-flight messages during Close().
-	// Default: 30s.
+	// ShutdownTimeout is deprecated and no longer used. Pass a context with
+	// the desired deadline to Close(ctx) instead.
+	// Retained for backward compatibility; will be removed in a future version.
 	ShutdownTimeout time.Duration
 
 	// StopIntakePerCallTimeout bounds any single basic.cancel call during
@@ -101,9 +102,6 @@ type SubscriberConfig struct {
 func (sc *SubscriberConfig) setDefaults() {
 	if sc.PrefetchCount <= 0 {
 		sc.PrefetchCount = 10
-	}
-	if sc.ShutdownTimeout == 0 {
-		sc.ShutdownTimeout = 30 * time.Second
 	}
 	if sc.StopIntakePerCallTimeout == 0 {
 		sc.StopIntakePerCallTimeout = 2 * time.Second
@@ -117,19 +115,24 @@ func (sc *SubscriberConfig) setDefaults() {
 // Deviated: callback-based handler (not channel-based) to align with GoCell ConsumerBase.
 // Deviated: added StopIntake / drainRemaining to support two-phase shutdown
 // (stopIntakeCh + basic.cancel before hard closeCh signal).
+// Refactored (Part 3 T8): replaced s.channels + s.consumerTags with s.runs map of
+// *subscriptionRun to fix A19 reconnect race (localWg.Wait before ch.Close).
+//
+// ref: nats-io/nats.go Subscription state encapsulation
+// ref: uber-go/fx per-component lifecycle
 type Subscriber struct {
 	conn   *Connection
 	config SubscriberConfig
 
-	mu       sync.Mutex
-	closed   atomic.Bool
-	closeCh  chan struct{}
-	wg       sync.WaitGroup
-	channels []AMQPChannel
+	closed  atomic.Bool
+	closeCh chan struct{}
+	wg      sync.WaitGroup
 
-	// consumerTags maps each active AMQPChannel to its consumer tag so that
-	// StopIntake can issue basic.cancel on every active consumer. Protected by mu.
-	consumerTags map[AMQPChannel]string
+	// runs tracks all active subscriptionRun instances (one per subscribeOnce
+	// call). Protected by runsMu. Each run encapsulates its own AMQP channel,
+	// consumer tag, and in-flight processDelivery WaitGroup (A19 fix).
+	runsMu sync.Mutex
+	runs   map[*subscriptionRun]struct{}
 
 	// stopIntakeCh is closed by StopIntake to signal consumeLoop to enter
 	// drain mode (process prefetched deliveries, accept no new ones).
@@ -146,7 +149,7 @@ func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 		config:       config,
 		closeCh:      make(chan struct{}),
 		stopIntakeCh: make(chan struct{}),
-		consumerTags: make(map[AMQPChannel]string),
+		runs:         make(map[*subscriptionRun]struct{}),
 	}
 }
 
@@ -361,6 +364,13 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 // Returns nil for a clean exit (ctx cancelled or subscriber closed).
 // Returns a non-nil error when the delivery channel is lost (triggers reconnect
 // in the outer Subscribe loop).
+//
+// A19 fix: subscriptionRun encapsulates the per-subscribeOnce AMQP channel and
+// its local WaitGroup. On reconnect (loopErr != nil), localWg.Wait() is called
+// before ch.Close() so no processDelivery goroutine races against a closed channel.
+//
+// ref: rabbitmq/amqp091-go channel.go — Cancel→drain→wg.Wait→ch.Close ordering
+// ref: nats-io/nats.go Subscription.Drain — per-subscription state encapsulation
 func (s *Subscriber) subscribeOnce(
 	ctx context.Context,
 	topic, queueName string,
@@ -371,24 +381,18 @@ func (s *Subscriber) subscribeOnce(
 		return classifyAcquireChannelError(err)
 	}
 
-	s.trackChannel(ch)
-
-	// cleanupCh closes and untracks the channel. Used on early-return error
-	// paths to prevent channel leaks.
-	cleanupCh := func() {
-		s.untrackChannel(ch)
-		if err := ch.Close(); err != nil {
+	// setupErr wraps a setup-stage error. Closes and removes the run from
+	// the tracked set. If the underlying AMQP error is recoverable, wraps as
+	// errSubscriptionLost so the outer loop can reconnect and re-run setup.
+	// Otherwise returns a permanent error.
+	cleanupChannelDirect := func() {
+		if closeErr := ch.Close(); closeErr != nil {
 			slog.Debug("rabbitmq: error closing channel during cleanup",
-				slog.String("error", err.Error()))
+				slog.String("error", closeErr.Error()))
 		}
 	}
-
-	// setupErr wraps a setup-stage error. If the underlying AMQP error is
-	// recoverable (connection/channel closed mid-setup), it wraps as
-	// errSubscriptionLost so the outer loop can reconnect and re-run the
-	// full setup. Otherwise it returns a permanent error to the caller.
 	setupErr := func(msg string, code errcode.Code, err error) error {
-		cleanupCh()
+		cleanupChannelDirect()
 		if isRecoverableAMQPError(err) {
 			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, msg, err)
 		}
@@ -421,10 +425,10 @@ func (s *Subscriber) subscribeOnce(
 		return setupErr("rabbitmq: start consuming", ErrAdapterAMQPConsume, err)
 	}
 
-	// Track consumer tag for StopIntake to issue basic.cancel.
-	s.mu.Lock()
-	s.consumerTags[ch] = consumerTag
-	s.mu.Unlock()
+	// Create and track a subscriptionRun for this invocation.
+	run := newSubscriptionRun(ch, consumerTag)
+	s.addRun(run)
+	defer s.removeRun(run)
 
 	slog.Info("rabbitmq: subscriber started",
 		slog.String(logKeyTopic, topic),
@@ -432,27 +436,27 @@ func (s *Subscriber) subscribeOnce(
 		slog.String("consumer", consumerTag),
 		slog.Int("prefetch", s.config.PrefetchCount))
 
-	loopErr := s.consumeLoop(ctx, ch, deliveries, topic, handler)
+	loopErr := s.consumeLoop(ctx, run, deliveries, topic, handler)
 
-	// Untrack consumer tag now that this subscription's loop has exited.
-	s.mu.Lock()
-	delete(s.consumerTags, ch)
-	s.mu.Unlock()
-
-	// A19 fix: on graceful exit (loopErr == nil from ctx.Done / closeCh / drained),
-	// do NOT close the channel here — processDelivery goroutines may still hold
-	// references and race against ch.Close causing "channel is not open" Ack/Nack
-	// errors that lead to broker redelivery and spurious message counts.
+	// A19 fix: wait for all in-flight processDelivery goroutines of THIS run
+	// before closing the AMQP channel. This prevents Ack/Nack calls on a
+	// closed channel (ErrClosed noise + potential redelivery).
 	//
-	// Close() will invoke wg.Wait() first and then close all tracked channels in
-	// one pass, so the ch remains tracked in s.channels and gets reaped safely
-	// after every processDelivery goroutine has completed.
+	// On reconnect (loopErr != nil): give a finite budget so the reconnect path
+	// does not block indefinitely when the parent ctx has no deadline. 30s matches
+	// the prior ShutdownTimeout default.
 	//
-	// On reconnect (loopErr != nil / errSubscriptionLost), close the dead channel
-	// immediately so the outer Subscribe loop can acquire a fresh one.
+	// On clean exit (loopErr == nil): Close() will also call waitAndClose via
+	// the runs snapshot, but run.closed.Once ensures ch.Close is called exactly once.
+	waitCtx := ctx
 	if loopErr != nil {
-		s.closeChannelOnReconnect(ch)
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancelWait context.CancelFunc
+			waitCtx, cancelWait = context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelWait()
+		}
 	}
+	_ = run.waitAndClose(waitCtx)
 
 	return loopErr
 }
@@ -470,33 +474,30 @@ func classifyAcquireChannelError(err error) error {
 	return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
 }
 
-// closeChannelOnReconnect untracks and closes a dead channel so the outer
-// Subscribe loop can acquire a fresh one.
-func (s *Subscriber) closeChannelOnReconnect(ch AMQPChannel) {
-	s.untrackChannel(ch)
-	if closeErr := ch.Close(); closeErr != nil {
-		slog.Debug("rabbitmq: error closing consumed channel on reconnect",
-			slog.String("error", closeErr.Error()))
-	}
+// addRun registers a subscriptionRun in the active runs map.
+func (s *Subscriber) addRun(r *subscriptionRun) {
+	s.runsMu.Lock()
+	s.runs[r] = struct{}{}
+	s.runsMu.Unlock()
 }
 
-// trackChannel adds a channel to the tracked list for cleanup on Close().
-func (s *Subscriber) trackChannel(ch AMQPChannel) {
-	s.mu.Lock()
-	s.channels = append(s.channels, ch)
-	s.mu.Unlock()
+// removeRun deregisters a subscriptionRun from the active runs map.
+func (s *Subscriber) removeRun(r *subscriptionRun) {
+	s.runsMu.Lock()
+	delete(s.runs, r)
+	s.runsMu.Unlock()
 }
 
-// untrackChannel removes a channel from the tracked list.
-func (s *Subscriber) untrackChannel(ch AMQPChannel) {
-	s.mu.Lock()
-	for i, tracked := range s.channels {
-		if tracked == ch {
-			s.channels = append(s.channels[:i], s.channels[i+1:]...)
-			break
-		}
+// snapshotActiveRuns returns a snapshot of all currently active subscriptionRuns
+// without holding runsMu. Safe to iterate after returning.
+func (s *Subscriber) snapshotActiveRuns() []*subscriptionRun {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	snapshot := make([]*subscriptionRun, 0, len(s.runs))
+	for r := range s.runs {
+		snapshot = append(snapshot, r)
 	}
-	s.mu.Unlock()
+	return snapshot
 }
 
 // consumeLoop drains the deliveries channel and dispatches each delivery in a
@@ -510,17 +511,18 @@ func (s *Subscriber) untrackChannel(ch AMQPChannel) {
 //     sharing across goroutines.
 //   - dispatchAck/releaseReceipt/dispatchDisposition: use only the per-delivery
 //     ch, tag, and Receipt; no Subscriber-level mutable state.
-//   - s.wg: sync.WaitGroup — concurrency-safe by design.
+//   - s.wg + run.localWg: sync.WaitGroup — concurrency-safe by design.
 //   - topic/handler: immutable after Subscribe call.
 //
 // ref: ThreeDotsLabs/watermill message/router.go h.run — per-message goroutine
 func (s *Subscriber) consumeLoop(
 	ctx context.Context,
-	ch AMQPChannel,
+	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
 	topic string,
 	handler outbox.EntryHandler,
 ) error {
+	ch := run.ch
 	for {
 		// Priority check: if StopIntake has fired, we MUST enter drainRemaining
 		// even when closeCh or ctx.Done is also ready. This preserves the
@@ -531,7 +533,7 @@ func (s *Subscriber) consumeLoop(
 		case <-s.stopIntakeCh:
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
-			return s.drainRemaining(ctx, ch, deliveries, topic, handler)
+			return s.drainRemaining(ctx, run, deliveries, topic, handler)
 		default:
 		}
 
@@ -539,7 +541,7 @@ func (s *Subscriber) consumeLoop(
 		case <-s.stopIntakeCh:
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
-			return s.drainRemaining(ctx, ch, deliveries, topic, handler)
+			return s.drainRemaining(ctx, run, deliveries, topic, handler)
 
 		case <-ctx.Done():
 			slog.Info("rabbitmq: subscriber context cancelled",
@@ -559,7 +561,11 @@ func (s *Subscriber) consumeLoop(
 			}
 
 			s.wg.Add(1)
-			go s.processDelivery(ctx, ch, delivery, topic, handler)
+			run.registerDelivery()
+			go func(d amqp.Delivery) {
+				defer run.markDeliveryDone()
+				s.processDelivery(ctx, ch, d, topic, handler)
+			}(delivery)
 		}
 	}
 }
@@ -598,11 +604,12 @@ var drainDeadline = 30 * time.Second
 //	an external stop signal fires.
 func (s *Subscriber) drainRemaining(
 	ctx context.Context,
-	ch AMQPChannel,
+	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
 	topic string,
 	handler outbox.EntryHandler,
 ) error {
+	ch := run.ch
 	timer := time.NewTimer(drainDeadline)
 	defer timer.Stop()
 
@@ -615,7 +622,11 @@ func (s *Subscriber) drainRemaining(
 				return nil
 			}
 			s.wg.Add(1)
-			go s.processDelivery(ctx, ch, d, topic, handler)
+			run.registerDelivery()
+			go func(d amqp.Delivery) {
+				defer run.markDeliveryDone()
+				s.processDelivery(ctx, ch, d, topic, handler)
+			}(d)
 		case <-ctx.Done():
 			slog.Info("rabbitmq: drain interrupted by context cancellation",
 				slog.String(logKeyTopic, topic))
@@ -831,19 +842,18 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 // Close terminates all active subscriptions and waits for in-flight messages.
 //
 // Two-phase shutdown:
-//  1. Signal all goroutines to stop via closeCh, then wait up to ShutdownTimeout
-//     for processDelivery goroutines to complete (WaitGroup).
-//  2. Only close tracked AMQP channels when ALL goroutines have exited cleanly.
-//     If the timeout expires, channels are NOT force-closed (they may still be
-//     held by in-flight processDelivery goroutines); a warning is logged instead
-//     and cleanup is deferred to process exit. This prevents a closed-channel
-//     panic inside processDelivery after the consumer is drained by subscribeOnce.
-// Close terminates all active subscriptions and waits for in-flight messages.
+//  1. Signal all goroutines to stop via closeCh (and check pre-cancelled ctx).
+//  2. Wait for all processDelivery goroutines (global s.wg) bounded by ctx.
+//     If ctx expires, log a warning and return ErrAdapterAMQPCloseTimeout.
+//  3. For any runs still in the runs map (subscribeOnce deferred removal is async),
+//     call run.waitAndClose(ctx) which is idempotent (sync.Once guards ch.Close).
 //
-// ref: uber-go/fx app.go StopTimeout — ctx carries the shared shutdown budget.
-// The full ctx-aware implementation (A19 reconnect fix + subscriptionRun struct)
-// is delivered in Part 3 (T7-T8). This bridge implementation propagates ctx
-// to satisfy the updated outbox.Subscriber interface.
+// The A19 fix guarantees that ch.Close is never called while processDelivery
+// goroutines still hold a reference: subscribeOnce calls run.waitAndClose(localCtx)
+// before returning, and Close's sweep is guarded by the same sync.Once.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx carries the shared shutdown budget
+// ref: amqp091-go channel.go — IsClosed short-circuit + ordered Cancel/drain/wg.Wait/Close
 func (s *Subscriber) Close(ctx context.Context) error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
@@ -854,7 +864,7 @@ func (s *Subscriber) Close(ctx context.Context) error {
 		return err
 	}
 
-	// Wait for in-flight messages with timeout bounded by ctx.
+	// Wait for all in-flight processDelivery goroutines (global wg).
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -865,28 +875,29 @@ func (s *Subscriber) Close(ctx context.Context) error {
 	case <-done:
 		slog.Info("rabbitmq: subscriber closed gracefully")
 	case <-ctx.Done():
-		s.mu.Lock()
-		remaining := len(s.channels)
-		s.mu.Unlock()
+		s.runsMu.Lock()
+		remaining := len(s.runs)
+		s.runsMu.Unlock()
 		slog.Warn("rabbitmq: subscriber shutdown budget exceeded",
 			slog.Any("error", ctx.Err()),
-			slog.Int("remaining_channels", remaining))
+			slog.Int("remaining_runs", remaining))
 		return errcode.New(ErrAdapterAMQPCloseTimeout,
-			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d channel(s) still in use",
+			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d run(s) still active",
 				remaining))
 	}
 
-	// All goroutines have exited — safe to close the AMQP channels.
-	s.mu.Lock()
-	channels := s.channels
-	s.channels = nil
-	s.mu.Unlock()
+	// Sweep any runs that subscribeOnce's defer has not yet removed. This is
+	// a safety net — normally subscribeOnce's defer calls removeRun after
+	// run.waitAndClose returns. run.waitAndClose is idempotent via sync.Once.
+	s.runsMu.Lock()
+	remaining := make([]*subscriptionRun, 0, len(s.runs))
+	for r := range s.runs {
+		remaining = append(remaining, r)
+	}
+	s.runsMu.Unlock()
 
-	for _, ch := range channels {
-		if err := ch.Close(); err != nil {
-			slog.Debug("rabbitmq: error closing subscriber channel",
-				slog.String("error", err.Error()))
-		}
+	for _, r := range remaining {
+		_ = r.waitAndClose(ctx)
 	}
 
 	return nil
@@ -896,32 +907,17 @@ func (s *Subscriber) Close(ctx context.Context) error {
 // consumer from receiving new deliveries (broker-side basic.cancel) while
 // allowing in-flight processDelivery goroutines and already-prefetched messages
 // to complete naturally. Close() remains the hard-shutdown boundary
-// (closeCh signal + wg.Wait + ShutdownTimeout).
+// (closeCh signal + wg.Wait bounded by ctx).
 //
 // Idempotent: safe to call multiple times. Safe to call concurrently with
 // Subscribe and processDelivery in-flight.
 //
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan + basic.cancel
 // consumerRef pairs an AMQP channel with its consumer tag so StopIntake can
-// snapshot the active set under the mutex and operate on it lock-free.
+// snapshot the active set and operate on it lock-free.
 type consumerRef struct {
 	ch  AMQPChannel
 	tag string
-}
-
-// snapshotActiveConsumers returns a copy of the current consumerTags under mu,
-// filtering out empty tags. Returns the slice without holding mu.
-func (s *Subscriber) snapshotActiveConsumers() []consumerRef {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	snapshot := make([]consumerRef, 0, len(s.consumerTags))
-	for ch, tag := range s.consumerTags {
-		if tag == "" {
-			continue
-		}
-		snapshot = append(snapshot, consumerRef{ch: ch, tag: tag})
-	}
-	return snapshot
 }
 
 // cancelConsumerWithBudget issues basic.cancel for a single consumer with an
@@ -949,15 +945,15 @@ func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout
 	}
 }
 
-// StopIntake snapshots the active consumer tags under mu, releases the lock,
-// then issues basic.cancel concurrently. Each individual Cancel is bounded by
+// StopIntake snapshots active runs, releases the lock, then issues basic.cancel
+// concurrently via run.cancelWithBudget. Each individual Cancel is bounded by
 // StopIntakePerCallTimeout so a single unresponsive broker cannot stall the
 // whole shutdown path. The outer ctx gates the entire operation — if the
 // caller's budget expires, StopIntake returns ctx.Err() without waiting for
 // remaining goroutines.
 //
 // Invariants:
-//   - mu is NEVER held across broker I/O (basic.cancel is a synchronous round-trip).
+//   - runsMu is NEVER held across broker I/O (basic.cancel is a synchronous round-trip).
 //   - Each Cancel call has an independent per-call deadline.
 //   - On outer ctx cancel, returns promptly; leaked Cancel goroutines are bounded
 //     by the per-call timeout and broker channel liveness.
@@ -967,8 +963,8 @@ func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout
 func (s *Subscriber) StopIntake(ctx context.Context) error {
 	s.stopIntakeOnce.Do(func() { close(s.stopIntakeCh) })
 
-	snapshot := s.snapshotActiveConsumers()
-	if len(snapshot) == 0 {
+	runs := s.snapshotActiveRuns()
+	if len(runs) == 0 {
 		return nil
 	}
 
@@ -978,15 +974,15 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 	}
 
 	var cancelWg sync.WaitGroup
-	for _, c := range snapshot {
+	for _, r := range runs {
 		if ctx.Err() != nil {
 			break // outer budget expired; skip remaining dispatch
 		}
 		cancelWg.Add(1)
-		go func(c consumerRef) {
+		go func(run *subscriptionRun) {
 			defer cancelWg.Done()
-			cancelConsumerWithBudget(ctx, c, perCallTimeout)
-		}(c)
+			run.cancelWithBudget(ctx, perCallTimeout)
+		}(r)
 	}
 
 	// Wait for every dispatched basic.cancel to complete (or for their own
