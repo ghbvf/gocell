@@ -82,6 +82,31 @@ func WrapDomain(code Code, message string, cause error) *Error {
 	}
 }
 
+// NewAuth creates an *Error with CategoryAuth.
+// Use this for authentication / authorisation failures (401/403) and attack
+// signals such as refresh token reuse detection (OAuth2 RFC 6749 §10.4).
+func NewAuth(code Code, message string) *Error {
+	return &Error{
+		Code:     code,
+		Message:  message,
+		Category: CategoryAuth,
+	}
+}
+
+// WrapAuth creates an *Error with CategoryAuth that wraps the supplied cause.
+// Use this when an authentication / authorisation failure or attack signal
+// (e.g. reuse detection per RFC 6749 §10.4) has an underlying cause to
+// preserve for error chain inspection (errors.Is / errors.As / Unwrap).
+// The cause is stored in Error.Cause and exposed via Error.Error() in logs.
+func WrapAuth(code Code, message string, cause error) *Error {
+	return &Error{
+		Code:     code,
+		Message:  message,
+		Category: CategoryAuth,
+		Cause:    cause,
+	}
+}
+
 // IsInfraError reports whether err represents an infrastructure failure.
 //
 // Fail-closed semantics: any error that is not definitively classified as
@@ -188,6 +213,10 @@ var expected4xxCodes = map[Code]bool{
 	ErrAuthLoginFailed:        true,
 	ErrAuthRefreshFailed:      true,
 	ErrAuthKeyInvalid:         true,
+	ErrRefreshTokenNotFound:   true,
+	ErrRefreshTokenExpired:    true,
+	ErrRefreshTokenRevoked:    true,
+	ErrRefreshTokenReused:     true,
 	// ErrAuthKeyMissing intentionally omitted: codeToStatus maps it to HTTP 500
 	// (infrastructure misconfiguration). Including it here would cause
 	// AuthMiddleware to downgrade an infra fault to Warn, masking the outage.

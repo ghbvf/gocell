@@ -216,10 +216,10 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// Down() rolls back one migration at a time. With 6 migrations applied,
-		// call Down() 6 times to fully revert. The outbox_entries table disappears
+		// Down() rolls back one migration at a time. With 7 migrations applied,
+		// call Down() 7 times to fully revert. The outbox_entries table disappears
 		// after rolling back 001 (the last iteration).
-		for i := 6; i > 1; i-- {
+		for i := 7; i > 1; i-- {
 			err := migrator.Down(ctx)
 			require.NoError(t, err, "Down() should roll back migration %d without error", i)
 
