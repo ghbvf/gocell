@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/initialadmin"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
@@ -521,11 +522,33 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 		// Identity management: /api/v1/access/users
 		sub.Route("/users", c.identityHandler.RegisterRoutes)
 
-		// Session endpoints: /api/v1/access/sessions
+		// Session endpoints: /api/v1/access/sessions.
+		// Login and refresh are public (no JWT required). Logout requires the
+		// caller to be authenticated as the session owner or an admin, and is
+		// PasswordResetExempt so a token carrying password_reset_required=true
+		// can still reach this endpoint. These declarations replace the previous
+		// cmd/core-bundle WithPublicEndpoints / WithPasswordResetExemptEndpoints
+		// entries for this cell.
 		sub.Route("/sessions", func(s cell.RouteMux) {
-			s.Handle("POST /login", http.HandlerFunc(c.loginHandler.HandleLogin))
-			s.Handle("POST /refresh", http.HandlerFunc(c.refreshHandler.HandleRefresh))
-			s.Handle("DELETE /{id}", http.HandlerFunc(c.logoutHandler.HandleLogout))
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/login",
+				Handler: http.HandlerFunc(c.loginHandler.HandleLogin),
+				Public:  true,
+			})
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/refresh",
+				Handler: http.HandlerFunc(c.refreshHandler.HandleRefresh),
+				Public:  true,
+			})
+			auth.Declare(s, auth.RouteDecl{
+				Method:              "DELETE",
+				Path:                "/{id}",
+				Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
+				Policy:              auth.SelfOr("id", domain.RoleAdmin),
+				PasswordResetExempt: true,
+			})
 		})
 
 		// RBAC queries: /api/v1/access/roles
