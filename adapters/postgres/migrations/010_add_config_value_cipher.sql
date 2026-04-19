@@ -26,3 +26,6 @@ ALTER TABLE config_versions
 -- Intentional no-op: dropping cipher columns destroys encrypted values with no recovery path.
 -- Production rollback: DBA manually renames columns per migration 010 header comments and ADR.
 -- See ADR: docs/architecture/202604191800-adr-config-value-encryption.md
+DO $$ BEGIN
+    RAISE EXCEPTION 'migration 010 down is intentional no-op: see ADR docs/architecture/202604191800-adr-config-value-encryption.md — rename cipher columns manually per migration header comment to recover';
+END $$;
