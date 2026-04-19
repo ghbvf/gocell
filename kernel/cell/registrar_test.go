@@ -372,3 +372,47 @@ func TestRouteMux_Mount(t *testing.T) {
 	mux.Mount("/api/v1/users", http.NotFoundHandler())
 	assert.Equal(t, []string{"/api/v1/users/*"}, mux.routes)
 }
+
+// ---------------------------------------------------------------------------
+// AuthRouteMeta / AuthRouteDeclarer
+// ---------------------------------------------------------------------------
+
+// collectingDeclarer is a minimal AuthRouteDeclarer stub used to verify the
+// metadata-forwarding contract without pulling runtime/auth into the tests.
+type collectingDeclarer struct {
+	metas []AuthRouteMeta
+}
+
+func (c *collectingDeclarer) DeclareAuthMeta(m AuthRouteMeta) {
+	c.metas = append(c.metas, m)
+}
+
+var _ AuthRouteDeclarer = (*collectingDeclarer)(nil)
+
+func TestAuthRouteMeta_ZeroValue(t *testing.T) {
+	var m AuthRouteMeta
+	assert.Empty(t, m.Method)
+	assert.Empty(t, m.Path)
+	assert.False(t, m.Public)
+	assert.False(t, m.PasswordResetExempt)
+	assert.False(t, m.Delegated)
+}
+
+func TestAuthRouteDeclarer_InterfaceAssertion(t *testing.T) {
+	// *http.ServeMux does NOT satisfy AuthRouteDeclarer — auth.Declare falls
+	// back to route-only registration in that case.
+	var mux RouteHandler = http.NewServeMux()
+	_, ok := mux.(AuthRouteDeclarer)
+	assert.False(t, ok, "stdlib ServeMux must not satisfy AuthRouteDeclarer")
+
+	// The collecting stub satisfies the interface.
+	var d AuthRouteDeclarer = &collectingDeclarer{}
+	d.DeclareAuthMeta(AuthRouteMeta{Method: "POST", Path: "/x", Public: true})
+	d.DeclareAuthMeta(AuthRouteMeta{Method: "GET", Path: "/y"})
+
+	got := d.(*collectingDeclarer).metas
+	assert.Len(t, got, 2)
+	assert.Equal(t, "POST", got[0].Method)
+	assert.True(t, got[0].Public)
+	assert.Equal(t, "/y", got[1].Path)
+}
