@@ -64,7 +64,7 @@ active backends via `/readyz?verbose` without reading logs.
 
 ## Chapter 2 — ManagedResource: Three-Piece Lifecycle
 
-`bootstrap.ManagedResource` is the single interface through which an external
+`lifecycle.ManagedResource` is the single interface through which an external
 resource (PG pool + relay, Redis, etc.) participates in the bootstrap lifecycle.
 
 ### The interface
@@ -80,7 +80,7 @@ type ManagedResource interface {
 
     // Close shuts down the resource. Called during LIFO teardown after the
     // assembly, HTTP server, and workers have stopped.
-    Close() error
+    Close(ctx context.Context) error
 }
 ```
 
@@ -167,7 +167,7 @@ production automatically appears in tests.
 
 ### AppDeps design decisions
 
-- **`PGResource bootstrap.ManagedResource`** (interface, not `*adapterpg.PGResource`)
+- **`PGResource lifecycle.ManagedResource`** (interface, not `*adapterpg.PGResource`)
   — allows tests to inject a `fakeManagedResource` without a real PG pool.
   Tests set `PGResource = &fakeManagedResource{name: "postgres"}`.
 

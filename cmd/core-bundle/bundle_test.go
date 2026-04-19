@@ -10,11 +10,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,11 +32,11 @@ func fastAdminBootstrapOpts() []accesscore.InitialAdminOption {
 	}
 }
 
-// fakeManagedResource implements bootstrap.ManagedResource for tests.
+// fakeManagedResource implements lifecycle.ManagedResource for tests.
 type fakeManagedResource struct {
 	name        string
 	closeCalled bool
-	w           worker.Worker
+	w           kworker.Worker
 }
 
 func (f *fakeManagedResource) Checkers() map[string]func() error {
@@ -44,14 +45,14 @@ func (f *fakeManagedResource) Checkers() map[string]func() error {
 	}
 }
 
-func (f *fakeManagedResource) Worker() worker.Worker { return f.w }
+func (f *fakeManagedResource) Worker() kworker.Worker { return f.w }
 
 func (f *fakeManagedResource) Close(_ context.Context) error {
 	f.closeCalled = true
 	return nil
 }
 
-var _ bootstrap.ManagedResource = (*fakeManagedResource)(nil)
+var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
 
 // buildTestDeps returns a minimal AppDeps for memory topology unit tests.
 // It skips cursor codecs (optional in tests) and internalGuard (dev mode).

@@ -11,16 +11,28 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
 
-// Worker represents a long-running background task.
-type Worker interface {
-	// Start begins the worker. It should block until ctx is cancelled or
-	// the worker completes. Returning a non-nil error signals abnormal exit.
-	Start(ctx context.Context) error
-	// Stop signals the worker to shut down gracefully.
-	Stop(ctx context.Context) error
-}
+// Worker is a type alias for the kernel Worker interface. The authoritative
+// definition lives in kernel/worker; this alias lets the runtime/worker
+// implementations (WorkerGroup, LazyWorker, PeriodicWorker) type-check
+// against Worker without importing kernel/worker from every call site.
+//
+// This is not a migration shim — runtime/worker is the canonical package for
+// Worker implementations, and the alias is how implementations declare they
+// satisfy the kernel contract.
+//
+// Guidance for new consumers: code outside runtime/worker (e.g., adapters/,
+// cells/) SHOULD import kernel/worker directly and reference worker.Worker
+// (the kernel contract). This alias exists for historical compatibility and
+// for runtime/worker's own implementations (WorkerGroup, LazyWorker,
+// PeriodicWorker) to satisfy the kernel contract without importing the kernel
+// package from every local file.
+//
+// ref: kernel/worker/worker.go — authoritative Worker interface definition.
+type Worker = kworker.Worker
 
 // WorkerGroup manages multiple workers, starting them concurrently and
 // stopping them when requested.

@@ -4,41 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 
-	"github.com/ghbvf/gocell/runtime/worker"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 )
-
-// ManagedResource collects the lifecycle concerns of an external resource
-// (pool, relay, RMQ connection) into a single interface. Bootstrap unpacks
-// the three aspects — health checking, background workers, and LIFO teardown —
-// so callers only implement one interface per resource instead of three
-// separate bootstrap options.
-//
-// ref: uber-go/fx internal/lifecycle/lifecycle.go@master:L124-L310 —
-// Hook OnStart/OnStop registered in declaration order, stopped in LIFO order.
-// ref: go-kratos/kratos transport/transport.go@main:L14-L17 —
-// Server interface as a resource-management contract.
-type ManagedResource interface {
-	// Checkers returns named health probe functions that contribute to /readyz.
-	// Each key is a unique checker name; each value is a func() error probe
-	// (nil return = healthy, non-nil = unhealthy). An empty map is valid.
-	Checkers() map[string]func() error
-
-	// Worker returns the optional background worker for this resource.
-	// Returning nil means no background goroutine is needed; bootstrap skips
-	// WithWorkers registration for this resource.
-	Worker() worker.Worker
-
-	// Close releases the resource, bounded by ctx. Called in LIFO order relative
-	// to registration during shutdown. ctx carries the shared phase10 shutdown
-	// budget; implementations SHOULD honour ctx.Done for drain operations.
-	// Errors are logged as slog.Warn but do not abort the shutdown of other
-	// resources (best-effort).
-	//
-	// ref: kernel/lifecycle.ContextCloser — same contract as the generic
-	// ctx-aware Closer; ManagedResource bundles health + worker alongside.
-	Close(ctx context.Context) error
-}
 
 // WithManagedResource registers an external resource with the bootstrap
 // lifecycle. At Run() time, bootstrap:
@@ -50,20 +19,37 @@ type ManagedResource interface {
 // Multiple calls to WithManagedResource are supported; Close() order is LIFO
 // (last registered is first closed), mirroring fx hook order.
 //
-// A nil r is rejected at phase0 with a fatal error so operators are not
-// silently left without the intended resource integration; mirrors the
-// WithCircuitBreaker / WithRelayHealth / WithBrokerHealth fail-fast pattern.
+// Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
+// rejected at phase0 with a fatal error, mirroring isNilBrokerHealthChecker /
+// WithCircuitBreaker / WithRelayHealth fail-fast pattern. This prevents a
+// silent wiring bug from panicking at Checkers()/Worker()/Close() call time.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
 // does no nil-substitution; bad inputs surface before any component starts.
-func WithManagedResource(r ManagedResource) Option {
+func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 	return func(b *Bootstrap) {
-		if r == nil {
+		if isNilManagedResource(r) {
 			b.managedResourceNil = true
 			return
 		}
 		b.managedResources = append(b.managedResources, r)
+	}
+}
+
+// isNilManagedResource returns true if r is either a bare nil interface or a
+// typed-nil (non-nil interface wrapping a nil pointer/map/slice/chan/func).
+// Mirrors isNilBrokerHealthChecker — see bootstrap.go for rationale.
+func isNilManagedResource(r kernellifecycle.ManagedResource) bool {
+	if r == nil {
+		return true
+	}
+	v := reflect.ValueOf(r)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -87,12 +73,14 @@ func (b *Bootstrap) expandManagedResources() {
 		// Register LIFO teardown. Capture r in a local so the closure is
 		// bound to this iteration's resource, not the loop variable.
 		res := r
-		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func(ctx context.Context) {
-			if err := res.Close(ctx); err != nil {
+		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func(ctx context.Context) error {
+			err := res.Close(ctx)
+			if err != nil {
 				slog.Warn("managed resource Close failed",
 					slog.String("resource_type", fmt.Sprintf("%T", res)),
 					slog.Any("error", err))
 			}
+			return err
 		})
 	}
 }

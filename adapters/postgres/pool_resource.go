@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // poolCloser is the narrow interface PGResource needs from the pool for
@@ -17,7 +17,7 @@ type poolCloser interface {
 }
 
 // PGResource wraps a Pool (and an optional relay worker) as a
-// bootstrap.ManagedResource. Bootstrap uses it to:
+// lifecycle.ManagedResource. Bootstrap uses it to:
 //   - Register the pool health probe in /readyz under the "postgres" name.
 //   - Start/stop the relay worker through the bootstrap WorkerGroup.
 //   - Close the pool during LIFO shutdown.
@@ -28,7 +28,7 @@ type poolCloser interface {
 // by Hook registration; GoCell converges this into a single ManagedResource.
 type PGResource struct {
 	pool          *Pool
-	relay         worker.Worker                   // optional; nil = no relay worker
+	relay         kworker.Worker                  // optional; nil = no relay worker
 	name          string                          // health checker name; default "postgres"
 	closeOverride poolCloser                      // non-nil only in tests; replaces pool for Close()
 	healthFunc    func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
@@ -44,7 +44,7 @@ type PGResource struct {
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — resource
 // registration does no nil-substitution; bad inputs surface immediately.
-func NewPGResource(pool *Pool, relay worker.Worker) (*PGResource, error) {
+func NewPGResource(pool *Pool, relay kworker.Worker) (*PGResource, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.ErrValidationFailed,
 			"NewPGResource: pool must not be nil (Checkers() and Close() dereference pool)")
@@ -80,7 +80,7 @@ func (r *PGResource) Checkers() map[string]func() error {
 }
 
 // Worker returns the relay worker (may be nil).
-func (r *PGResource) Worker() worker.Worker {
+func (r *PGResource) Worker() kworker.Worker {
 	return r.relay
 }
 
@@ -102,5 +102,5 @@ func (r *PGResource) closer() poolCloser {
 	return r.pool
 }
 
-// Compile-time assertion: PGResource must implement bootstrap.ManagedResource.
-var _ bootstrap.ManagedResource = (*PGResource)(nil)
+// Compile-time assertion: PGResource must implement lifecycle.ManagedResource.
+var _ lifecycle.ManagedResource = (*PGResource)(nil)

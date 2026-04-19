@@ -14,6 +14,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,7 +38,7 @@ type AppDeps struct {
 	// PGResource is the ManagedResource wrapping the PG pool + relay.
 	// Required when Topology.RequireProductionControlPlane() is true; must be
 	// nil otherwise. Tests inject a fake; production uses *adapterpg.PGResource.
-	PGResource bootstrap.ManagedResource
+	PGResource kernellifecycle.ManagedResource
 
 	// configCellOpts holds the config-core cell options built by AppDepsFromEnv.
 	// In tests (struct literal without configCellOpts), BuildBootstrap uses
@@ -533,7 +534,7 @@ func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
 //
 // Signature reduced from 5 return values (mode, opts, pool, relay, err) to
 // 3 (ManagedResource, opts, err). pool + relay lifecycle are now owned by
-// *adapterpg.PGResource which satisfies bootstrap.ManagedResource.
+// *adapterpg.PGResource which satisfies lifecycle.ManagedResource (kernel/lifecycle).
 //
 // Topology is consumed as a parameter rather than re-read from the environment:
 // ref: go-zero core/conf/config.go — validate once, pass through; never
@@ -544,7 +545,7 @@ func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt crypto.ValueTransformer) (bootstrap.ManagedResource, []configcore.Option, error) {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt crypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
 		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
