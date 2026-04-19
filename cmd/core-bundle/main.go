@@ -342,7 +342,7 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		// A12: fail-fast on schema version mismatch (startup time, before any traffic).
 		// ref: pressly/goose v3.27 GetDBVersion — reads max version from schema_migrations.
 		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
-			pool.Close()
+			_ = pool.Close(ctx)
 			return mode, nil, nil, nil, fmt.Errorf("config-core PG schema guard: %w", schemaErr)
 		}
 		// A4: warn on INVALID indexes (non-fatal; operator must clean up manually).
@@ -361,7 +361,7 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		relayCfg := outboxruntime.DefaultRelayConfig()
 		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
 		if rmErr != nil {
-			pool.Close()
+			_ = pool.Close(ctx)
 			return mode, nil, nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
@@ -654,10 +654,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("config-core cell adapter: %w", err)
 	}
 	// Pool lifecycle: when running with a real PG pool, we own Close() and
-	// owe readiness signals. defer Close here (before mode check) so an early
-	// validation failure still releases the pool.
+	// owe readiness signals. The pool is managed via bootstrap WithManagedCloser
+	// so teardown participates in LIFO shutdown with the shared shutCtx budget.
+	// A fallback defer handles the case where bootstrap never starts (early return).
 	if pgPool != nil {
-		defer pgPool.Close()
+		defer func() { _ = pgPool.Close(context.Background()) }()
 	}
 	if err := validateModeCoupling(cellAdapterMode, adapterMode); err != nil {
 		return err
