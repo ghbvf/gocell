@@ -95,18 +95,14 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// Public endpoints — same as production main.go.
-	publicEndpoints := []string{
-		"POST /api/v1/access/sessions/login",
-		"POST /api/v1/access/sessions/refresh",
-	}
-
+	// F3: public routes (login, refresh) are declared via auth.Declare(Public:true)
+	// inside access-core's RegisterRoutes. WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(ln),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -284,18 +280,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 	// /internal/v1/* endpoints are auto-delegated by WithInternalEndpointGuard:
 	// JWT AuthMiddleware skips those paths entirely and the guard becomes the sole
-	// authentication layer. No /internal/v1/* entries are needed in publicEndpoints.
-	publicEndpoints := []string{
-		"POST /api/v1/access/sessions/login",
-		"POST /api/v1/access/sessions/refresh",
-	}
-
+	// authentication layer. F3: public routes (login, refresh) are declared by
+	// access-core via auth.Declare(Public:true); WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(ln),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.WithPublicEndpoints(publicEndpoints),
+		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithInternalEndpointGuard("/internal/v1/", guard),
 	)
 

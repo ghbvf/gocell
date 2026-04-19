@@ -218,20 +218,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithListener(ln),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
-		bootstrap.WithPublicEndpoints([]string{
-			"POST /api/v1/access/sessions/login",
-			"POST /api/v1/access/sessions/refresh",
-		}),
-		// Must mirror cmd/core-bundle/main.go: runtime/auth is fail-closed on
-		// password-reset enforcement (round 4 F6 decoupling), so the composition
-		// root — including this e2e harness — has to declare which endpoints
-		// the bootstrap token can still reach while passwordResetRequired=true.
-		// Without this, the POST change-password call below returns 403 and the
-		// test body cannot proceed.
-		bootstrap.WithPasswordResetExemptEndpoints([]string{
-			"POST /api/v1/access/users/{id}/password",
-			"DELETE /api/v1/access/sessions/{id}",
-		}),
+		// F3: public routes (login, refresh) and PasswordResetExempt routes
+		// (change-password, logout) are declared via auth.Declare inside access-core's
+		// RegisterRoutes. WithAuthDiscovery discovers the verifier from access-core.
+		bootstrap.WithAuthDiscovery(),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.
