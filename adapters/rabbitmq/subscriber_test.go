@@ -645,12 +645,10 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 		return ch.ackCalled
 	}, 3*time.Second, 5*time.Millisecond, "delivery must be acked")
 
-	// Close deliveries to trigger reconnect.
+	// Close deliveries to trigger errSubscriptionLost in subscribeOnce.
+	// Cancel immediately after — the reconnect loop will exit after ctx is cancelled
+	// without spinning hundreds of iterations.
 	close(ch.consumeDeliveries)
-
-	// Cancel ctx shortly after; subscribeOnce should have already completed
-	// waitAndClose (handler done) and be in awaitReconnect.
-	time.Sleep(100 * time.Millisecond)
 	cancel()
 
 	select {
