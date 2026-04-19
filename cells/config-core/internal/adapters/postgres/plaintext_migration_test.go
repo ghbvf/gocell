@@ -20,9 +20,6 @@ type migrationRow struct {
 	key       string
 	value     string
 	cipher    []byte
-	keyID     string
-	edk       []byte
-	nonce     []byte
 	sensitive bool
 }
 
@@ -30,11 +27,11 @@ type migrationRow struct {
 // - Query: returns pending plaintext sensitive rows
 // - Exec: records UPDATE calls
 type fakeDB struct {
-	rows       []migrationRow // all rows
-	execCalls  []fakeExecCall
-	queryErr   error
-	execErr    error
-	execRowsN  int64 // rows returned per Exec (0 → default 1)
+	rows      []migrationRow // all rows
+	execCalls []fakeExecCall
+	queryErr  error
+	execErr   error
+	execRowsN int64 // rows returned per Exec (0 → default 1)
 }
 
 type fakeExecCall struct {
@@ -83,9 +80,9 @@ func (db *fakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
 
 // fakeRows implements Rows.
 type fakeRows struct {
-	rows  []migrationRow
-	pos   int
-	err   error
+	rows []migrationRow
+	pos  int
+	err  error
 }
 
 func (r *fakeRows) Next() bool {
@@ -110,7 +107,7 @@ func (r *fakeRows) Scan(dest ...any) error {
 	return nil
 }
 
-func (r *fakeRows) Close() {}
+func (r *fakeRows) Close()     {}
 func (r *fakeRows) Err() error { return r.err }
 
 // fakeEmptyRow implements Row — always returns ErrNoRows.

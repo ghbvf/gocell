@@ -391,16 +391,16 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 // deferred construction contract: WithPostgresDefaults stores the pool and
 // outboxWriter for use in Init(). With a nil pool, Init() skips deferred repo
 // construction (pool is nil → no real PG). The test verifies that:
-// 1. outboxWriter is set immediately by the option.
-// 2. pgPool is stored (non-nil check skipped here; nil pool is sentinel for
-//    "no PG path in this test").
-// 3. Init() still succeeds when configRepo is injected via WithConfigRepository
-//    (simulating a test that supplies a fake repo alongside WithPostgresDefaults
-//    for outboxWriter wiring only).
+//  1. outboxWriter is set immediately by the option.
+//  2. pgPool is stored (non-nil check skipped here; nil pool is sentinel for
+//     "no PG path in this test").
+//  3. Init() still succeeds when configRepo is injected via WithConfigRepository
+//     (simulating a test that supplies a fake repo alongside WithPostgresDefaults
+//     for outboxWriter wiring only).
 func TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter(t *testing.T) {
 	writer := &recordingConfigWriter{}
 	c := NewConfigCore(
-		WithPostgresDefaults(nil, writer),       // nil pool: deferred construction skipped in Init
+		WithPostgresDefaults(nil, writer),               // nil pool: deferred construction skipped in Init
 		WithConfigRepository(mem.NewConfigRepository()), // inject repo directly to satisfy Init
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithTxManager(noopTxRunner{}),

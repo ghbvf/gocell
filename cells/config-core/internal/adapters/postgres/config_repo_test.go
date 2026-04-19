@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,9 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "app.name", "GoCell", false, 1, now, now},
+			// 11 columns: id, key, value, sensitive, version, created_at, updated_at,
+			// value_cipher(nil), value_key_id(nil), value_edk(nil), value_nonce(nil)
+			values: []any{"cfg-1", "app.name", "GoCell", false, 1, now, now, nil, nil, nil, nil},
 		},
 	}
 	repo := newConfigRepositoryFromDBTX(db)
@@ -203,6 +206,7 @@ func TestConfigRepository_List(t *testing.T) {
 func TestConfigRepository_PublishVersion(t *testing.T) {
 	// PR#155 review F5: assert the sensitive flag is actually bound as the 5th
 	// positional argument so a future drop of that arg from r.db.Exec would fail.
+	// PR3: sensitive=true now uses the encrypted INSERT path (cipher columns).
 	tests := []struct {
 		name      string
 		sensitive bool
@@ -214,7 +218,14 @@ func TestConfigRepository_PublishVersion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := &mockDB{}
-			repo := newConfigRepositoryFromDBTX(db)
+			var repo *ConfigRepository
+			if tt.sensitive {
+				// sensitive=true requires a transformer.
+				tr := &mockTransformerForTest{keyID: "test-key-v1"}
+				repo = newEncryptedRepoFromDBTX(db, tr)
+			} else {
+				repo = newConfigRepositoryFromDBTX(db)
+			}
 
 			now := time.Now()
 			version := &domain.ConfigVersion{
@@ -231,19 +242,42 @@ func TestConfigRepository_PublishVersion(t *testing.T) {
 
 			require.Len(t, db.execCalls, 1)
 			assert.Contains(t, db.execCalls[0].sql, "INSERT INTO config_versions")
-			require.GreaterOrEqual(t, len(db.execCalls[0].args), 6,
-				"PublishVersion must bind 6 args: id, configId, version, value, sensitive, publishedAt")
-			assert.Equal(t, tt.sensitive, db.execCalls[0].args[4],
-				"5th positional arg must be ConfigVersion.Sensitive")
+			if tt.sensitive {
+				// Encrypted path: check cipher columns present.
+				assert.Contains(t, db.execCalls[0].sql, "value_cipher")
+			} else {
+				require.GreaterOrEqual(t, len(db.execCalls[0].args), 6,
+					"PublishVersion non-sensitive must bind 6 args")
+				assert.Equal(t, tt.sensitive, db.execCalls[0].args[4],
+					"5th positional arg must be ConfigVersion.Sensitive")
+			}
 		})
 	}
+}
+
+// mockTransformerForTest is a minimal pass-through transformer for existing tests.
+// It satisfies crypto.ValueTransformer.
+type mockTransformerForTest struct {
+	keyID string
+}
+
+var _ crypto.ValueTransformer = (*mockTransformerForTest)(nil)
+
+func (m *mockTransformerForTest) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, string, []byte, []byte, error) {
+	return plaintext, m.keyID, []byte("nonce1234567"), []byte("edk"), nil
+}
+
+func (m *mockTransformerForTest) Decrypt(_ context.Context, ciphertext []byte, _ string, _, _, _ []byte) ([]byte, error) {
+	return ciphertext, nil
 }
 
 func TestConfigRepository_GetVersion(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cv-1", "cfg-1", 1, "value", true, &now},
+			// 10 columns: id, config_id, version, value, sensitive, published_at,
+			// value_cipher(nil), value_key_id(nil), value_edk(nil), value_nonce(nil)
+			values: []any{"cv-1", "cfg-1", 1, "value", true, &now, nil, nil, nil, nil},
 		},
 	}
 	repo := newConfigRepositoryFromDBTX(db)
@@ -313,7 +347,7 @@ func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil) // nil pool — resolveWrite never reaches pool path
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, nil)
 
 	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
@@ -327,7 +361,7 @@ func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, nil)
 
 	err := repo.Update(context.Background(), &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
@@ -341,7 +375,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, nil)
 
 	err := repo.Delete(context.Background(), "k")
 	require.Error(t, err)
@@ -356,7 +390,7 @@ func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // context (F-S-1).
 func TestPublishVersion_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, nil)
 
 	err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{ConfigID: "cfg-1"})
 	require.Error(t, err)
@@ -423,7 +457,7 @@ func TestConfigRepository_List_RowsError(t *testing.T) {
 // resolveWriteDB path returning an error when no tx is in ctx.
 func TestConfigRepository_Create_WithSession_NoTx(t *testing.T) {
 	s := NewSession(nil)
-	repo := NewConfigRepository(s)
+	repo := NewConfigRepository(s, nil)
 
 	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
@@ -439,7 +473,7 @@ func TestConfigRepository_Create_WithSession_NoTx(t *testing.T) {
 // path (r.session != nil branch) is exercised.
 func TestConfigRepository_ResolveDB_SessionPath(t *testing.T) {
 	s := NewSession(nil)
-	repo := NewConfigRepository(s)
+	repo := NewConfigRepository(s, nil)
 
 	// GetByKey uses resolveDB (read path). With nil pool the pool.QueryRow
 	// will panic/nil-deref, but that path goes through poolAdapter.QueryRow
@@ -503,9 +537,21 @@ func (r *mockRow) Scan(dest ...any) error {
 		return r.scanErr
 	}
 	for i, v := range r.values {
+		if v == nil {
+			// Handle nil for nullable columns (*[]byte, **string, etc.).
+			switch d := dest[i].(type) {
+			case *[]byte:
+				*d = nil
+			case **string:
+				*d = nil
+			}
+			continue
+		}
 		switch d := dest[i].(type) {
 		case *string:
-			*d = v.(string)
+			if s, ok := v.(string); ok {
+				*d = s
+			}
 		case *int:
 			*d = v.(int)
 		case *bool:
@@ -516,6 +562,10 @@ func (r *mockRow) Scan(dest ...any) error {
 			*d = v.(time.Time)
 		case **time.Time:
 			*d = v.(*time.Time)
+		case **string:
+			if s, ok := v.(string); ok {
+				*d = &s
+			}
 		}
 	}
 	return nil
