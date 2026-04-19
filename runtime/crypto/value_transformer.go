@@ -51,6 +51,17 @@ func (t *keyProviderTransformer) Encrypt(ctx context.Context, plaintext, aad []b
 	return ct, handle.ID(), nonce, edk, nil
 }
 
+// CurrentKeyID returns the ID of the currently active key. Used by the config
+// repository to compute the staleness signal (Stale=true when stored keyID
+// differs from current).
+func (t *keyProviderTransformer) CurrentKeyID(ctx context.Context) (string, error) {
+	h, err := t.provider.Current(ctx)
+	if err != nil {
+		return "", err
+	}
+	return h.ID(), nil
+}
+
 // Decrypt decrypts ciphertext using the KeyHandle identified by keyID.
 func (t *keyProviderTransformer) Decrypt(ctx context.Context, ciphertext []byte, keyID string, nonce, edk, aad []byte) ([]byte, error) {
 	handle, err := t.provider.ByID(ctx, keyID)
