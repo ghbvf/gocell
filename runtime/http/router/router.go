@@ -259,24 +259,24 @@ func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Ha
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux                        *chi.Mux
-	mux                             *chi.Mux
-	healthHandler                   *health.Handler
-	metricsCollector                metrics.Collector
-	metricsHandler                  http.Handler
-	tracer                          tracing.Tracer
-	tracingOpts                     []middleware.TracingOption
-	requestIDOpts                   []middleware.RequestIDOption
-	rateLimiter                     middleware.RateLimiter
-	circuitBreaker                  middleware.Allower
-	circuitBreakerNil               bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier                    auth.IntentTokenVerifier
+	outerMux                   *chi.Mux
+	mux                        *chi.Mux
+	healthHandler              *health.Handler
+	metricsCollector           metrics.Collector
+	metricsHandler             http.Handler
+	tracer                     tracing.Tracer
+	tracingOpts                []middleware.TracingOption
+	requestIDOpts              []middleware.RequestIDOption
+	rateLimiter                middleware.RateLimiter
+	circuitBreaker             middleware.Allower
+	circuitBreakerNil          bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
+	authVerifier               auth.IntentTokenVerifier
 	authPublicMatcher          func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
 	authMetrics                *auth.AuthMetrics
 	passwordResetExemptMatcher func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
 	securityHeadersOpts        []middleware.SecurityHeadersOption
-	bodyLimit                       int64
-	trustedProxies                  []string
+	bodyLimit                  int64
+	trustedProxies             []string
 
 	// internalGuardPrefix and internalGuard implement the /internal/v1/* path-prefix
 	// guard: any request whose URL path starts with internalGuardPrefix is wrapped
