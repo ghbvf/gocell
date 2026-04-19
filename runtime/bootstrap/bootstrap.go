@@ -801,7 +801,6 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
 	for _, td := range b.managedResourceTeardowns {
-		td := td // capture for closure
 		s.addTeardown(func(_ context.Context) error {
 			td()
 			return nil
