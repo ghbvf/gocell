@@ -81,15 +81,20 @@
 
 ---
 
-## Phase R: runtime 层偿债（~15h，3 个 PR 并行）
+## Phase R: runtime 层偿债（~11h 剩余，PR-OUTBOX-SHUTDOWN ✅ 已完成 16h）
 
 > Phase K 稳定后开工。Phase 0.5 的 runtime/auth 改动不影响这里 —— 不同文件，不同关注点。
 
-### PR-R-BOOT-COGNIT (🟡 可延后): bootstrap 复杂度拆分（4h）
+### ✅ PR-R-BOOT-COGNIT (4h): 已随 PR-OUTBOX-SHUTDOWN 吸收完成
 
-| 任务 | 工时 | 涉及文件 | 来源 |
-|------|------|----------|------|
-| **BOOTSTRAP-RUN-COGNIT-01** (P2, Cx3): `bootstrap.go::Run()` 认知复杂度 225（pre-existing，`//nolint:gocognit` 抑制）；拆 `validateOptions()` / `buildRouter()` / `startServers()` 三段式；每段独立可测 | 4h | `runtime/bootstrap/bootstrap.go` | PR#163 agent 报告 |
+Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:gocognit` 已移除。详见 PR-OUTBOX-SHUTDOWN。
+
+### ✅ PR-OUTBOX-SHUTDOWN (16h): P1-21 + R1 吸收完成
+
+- ref: uber-go/fx app.go:L545-567 (Run/Stop ctx 分离)
+- ref: ThreeDotsLabs/watermill message/router.go (StopIntake 两段式 barrier)
+- ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (LIFO engageStopProcedure)
+- 交付: runCtx 分离 + phase10 三段式 + SubscriberIntakeStopper 接口 + shutdown metrics + testcontainers e2e + Run() 认知复杂度 225→10
 
 ### PR-R-OBS-AUTOWIRE (🟡 可延后): 默认 HTTP collector 自动接线（3h）
 
@@ -355,9 +360,9 @@ Phase 0.5   ✅ P0 正确性回归（已闭合，2026-04-18）
 Phase K     kernel 层            ~13h
   PR-K-VALIDATOR (9h) + PR-K-METAPERF (4h) + PR-K-OBS-CONTRACT (2h)
 
-Phase R     runtime 层           ~15-19h  ← +4h PR-R-AUTH-AUD-VALIDATION
+Phase R     runtime 层           ~11-15h  ← PR-OUTBOX-SHUTDOWN ✅ (-4h PR-R-BOOT-COGNIT 已完成)
   PR-R-AUTH-AUD-VALIDATION (4h, P1: aud claim RFC 8725 §3.3)
-  PR-R-BOOT-COGNIT (4h) + PR-R-OBS-AUTOWIRE (3h) + PR-R-ROUTER-METHOD (4h)
+  PR-OUTBOX-SHUTDOWN ✅ (16h, P1-21+R1) + PR-R-OBS-AUTOWIRE (3h) + PR-R-ROUTER-METHOD (4h)
   PR-R-INTERNAL-LISTENER (4-8h, 规模风险) + PR-R-AUTH-STRICT (1h, 触发)
 
 Phase P     ✅ pkg + 工具链（已闭合）
@@ -385,8 +390,8 @@ Phase X     大型独立 + 长期重构    按需排期
   AUTH-REFRESH-OPAQUE (1-2d, 🟠 PG-REPO 后触发)
   WM-35/36/7 / P3-TD-11 / AUTH-CACHE-01 / SOL-B-01
 
-当前核心路径剩余（不含 Phase X，2026-04-18 扣除 Phase 0.5 + PR-P ✅）:
-  K + R + A + S(主线) + F ≈ 74-80h（约 9-10 工作日）
+当前核心路径剩余（不含 Phase X，2026-04-19 扣除 Phase 0.5 + PR-P ✅ + PR-OUTBOX-SHUTDOWN ✅）:
+  K + R(剩余) + A + S(主线) + F ≈ 62-68h（约 8-9 工作日）
   + Phase S tech-debt(🟡) 20h 可机会性纳入
 ```
 
