@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"nhooyr.io/websocket"
+	"nhooyr.io/websocket" //nolint:staticcheck // pre-existing dep; coder fork not yet adopted
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -142,12 +142,12 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	// logging, recovery) does not interfere with the HTTP→WS handshake.
 	// Hub registration is an adapter concern tested in adapters/websocket.
 	upgrader := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true}) //nolint:staticcheck
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		c.CloseNow()
+		c.CloseNow() //nolint:staticcheck
 	})
 
 	r := New()
@@ -161,9 +161,9 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, nil) //nolint:staticcheck
 	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
-	conn.CloseNow()
+	conn.CloseNow() //nolint:staticcheck
 }
 
 func TestPanicRequestRecordedInAccessLog(t *testing.T) {
@@ -1061,6 +1061,18 @@ func TestWithPublicEndpoints_ProtectedStillRequiresAuth(t *testing.T) {
 }
 
 func TestWithPublicEndpoints_OverridesFineGrained(t *testing.T) {
+	// F3 lazy-binding change: buildOuterMux now prepends a lazy public-endpoint
+	// closure (index 0) before user-supplied TracingOptions (index 1).
+	// Last-write-wins in tracingConfig means user-supplied WithTracingOptions
+	// takes precedence over the lazy closure — the behaviours are additive via
+	// the lazy OR-merge in FinalizeAuth, not override. Each consumer now declares
+	// its own policy independently.
+	//
+	// Old (pre-F3): WithPublicEndpoints appended last to tracingOpts and
+	// overrode any earlier WithTracingOptions entry.
+	// New (F3+): WithTracingOptions (user-supplied, appended after prepend)
+	// wins for tracing; WithPublicEndpoints sets authPublicMatcher which is
+	// consulted by the lazy closure for auth + RequestID.
 	tracer := tracing.NewTracer("test-combined-fine")
 	r := New(
 		WithTracer(tracer),
@@ -1083,23 +1095,24 @@ func TestWithPublicEndpoints_OverridesFineGrained(t *testing.T) {
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 	tp := "00-" + upstreamTraceID + "-00f067aa0ba902b7-01"
 
-	// WithPublicEndpoints (last write) takes effect for /public.
+	// /public: user fn returns false (only matches /fine-grained-public) →
+	// user fn wins (last-write-wins) → NOT a public endpoint for tracing →
+	// inherits upstream trace.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/public", nil)
 	req.Header.Set("traceparent", tp)
 	r.ServeHTTP(rec, req)
-	assert.NotEqual(t, upstreamTraceID, publicTraceID,
-		"WithPublicEndpoints list path must create new trace root")
+	assert.Equal(t, upstreamTraceID, publicTraceID,
+		"F3: user WithTracingOptions wins for tracing (lazy prepend, user appended last)")
 
-	// Fine-grained path is NOT in WithPublicEndpoints → last-write-wins
-	// means WithPublicEndpoints' function is used, /fine-grained-public
-	// inherits upstream trace (not in public list).
+	// /fine-grained-public: user fn returns true → IS public for tracing →
+	// new trace root (does not inherit upstream).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/fine-grained-public", nil)
 	req.Header.Set("traceparent", tp)
 	r.ServeHTTP(rec, req)
-	assert.Equal(t, upstreamTraceID, fineTraceID,
-		"WithPublicEndpoints overrides fine-grained option (last-write-wins)")
+	assert.NotEqual(t, upstreamTraceID, fineTraceID,
+		"F3: user-supplied fine-grained fn still creates new trace root for its paths")
 }
 
 // ---------------------------------------------------------------------------

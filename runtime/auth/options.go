@@ -15,7 +15,7 @@ type authConfig struct {
 	publicMatcher                   func(*http.Request) bool                 // nil = use []string publicEndpoints path
 	delegatedMatcher                func(*http.Request) bool                 // nil = no delegated paths
 	passwordResetExempt             func(method string, urlPath string) bool // nil = fail-closed (nothing exempt)
-	passwordResetChangeEndpointHint string                                   // empty = no hint in 403 body
+	passwordResetChangeEndpointHint func() string                            // nil = no hint in 403 body
 }
 
 func defaultAuthConfig() authConfig {
@@ -58,8 +58,29 @@ func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOp
 // free of any business-level path knowledge. Composition roots opt in
 // explicitly; typically they pass the same change-password path they list
 // via WithPasswordResetExemptEndpoints.
+//
+// For late-bound hint values (e.g. derived during FinalizeAuth), prefer
+// WithPasswordResetChangeEndpointHintFn which stores a getter closure directly.
 func WithPasswordResetChangeEndpointHint(hint string) AuthOption {
-	return func(c *authConfig) { c.passwordResetChangeEndpointHint = hint }
+	return func(c *authConfig) {
+		c.passwordResetChangeEndpointHint = func() string { return hint }
+	}
+}
+
+// WithPasswordResetChangeEndpointHintFn sets a getter closure that is called
+// at request time to obtain the change_password_endpoint hint. Use this when
+// the hint value is not known at middleware install time (e.g. it is derived
+// by FinalizeAuth after RegisterRoutes completes).
+//
+// When fn is nil the option is a no-op. If both this option and
+// WithPasswordResetChangeEndpointHint are applied, last-write-wins (option
+// functions compose in order).
+func WithPasswordResetChangeEndpointHintFn(fn func() string) AuthOption {
+	return func(c *authConfig) {
+		if fn != nil {
+			c.passwordResetChangeEndpointHint = fn
+		}
+	}
 }
 
 // WithPublicEndpointMatcher sets a compiled method-aware predicate for the

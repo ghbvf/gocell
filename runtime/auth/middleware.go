@@ -169,7 +169,11 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 			"path", r.URL.Path,
 			"method", r.Method,
 		)
-		writePasswordResetRequired(w, cfg.passwordResetChangeEndpointHint)
+		hint := ""
+		if cfg.passwordResetChangeEndpointHint != nil {
+			hint = cfg.passwordResetChangeEndpointHint()
+		}
+		writePasswordResetRequired(w, hint)
 		return
 	}
 

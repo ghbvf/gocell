@@ -23,8 +23,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
-// Compile-time check: Router implements cell.RouteMux.
+// Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
+var _ kcell.AuthRouteDeclarer = (*Router)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -351,6 +352,19 @@ type Router struct {
 	// guard). When set, AuthMiddleware forwards these requests to next without any
 	// JWT check. Auto-populated by WithInternalPathPrefixGuard.
 	authDelegatedMatcher func(*http.Request) bool
+
+	// F3 two-stage auth construction fields.
+	// declaredAuthMetas accumulates cell.AuthRouteMeta entries forwarded by
+	// auth.Declare during Cell RegisterRoutes. FinalizeAuth compiles them into
+	// matchers and OR-merges with any legacy option-supplied matchers.
+	declaredAuthMetas []kcell.AuthRouteMeta
+	// authFinalized is set to true by FinalizeAuth. Any subsequent
+	// DeclareAuthMeta call panics; a second FinalizeAuth call returns an error.
+	authFinalized bool
+	// derivedHint is populated by FinalizeAuth when no static hint was set via
+	// the legacy WithPasswordResetChangeEndpointHint router option.
+	// It is set to the Path of the first declared POST + PasswordResetExempt meta.
+	derivedHint string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -455,6 +469,20 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 //	→ Recovery → SecurityHeaders → [infra routes] → mount(mux)
 func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
+	// Always pre-append lazy public predicates so Tracing and RequestID
+	// honour both the legacy WithPublicEndpoints path and any routes
+	// declared later via auth.Declare / FinalizeAuth.
+	lazyPublic := func(req *http.Request) bool {
+		if r.authPublicMatcher == nil {
+			return false
+		}
+		return r.authPublicMatcher(req)
+	}
+	// Prepend so user-supplied TracingOptions / RequestIDOptions can still
+	// override (last-write-wins semantics for those slices).
+	r.tracingOpts = append([]middleware.TracingOption{middleware.WithPublicEndpointFn(lazyPublic)}, r.tracingOpts...)
+	r.requestIDOpts = append([]middleware.RequestIDOption{middleware.WithReqIDPublicEndpointFn(lazyPublic)}, r.requestIDOpts...)
+
 	r.outerMux.Use(
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
@@ -526,28 +554,54 @@ func (r *Router) buildBusinessMux() {
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
-// Prefers the compiled method-aware matcher (set by applyPublicEndpoints) over
-// the legacy []string path so that direct WithAuthMiddleware callers remain
-// unaffected.
+// All matcher options use lazy closures that read Router fields at request
+// time so that matchers finalized by FinalizeAuth (after AuthMiddleware is
+// installed in buildBusinessMux) are honoured without reinstalling middleware.
+//
+// The public-endpoint lazy closure also falls back to the legacy path-only
+// authPublicEndpoints list (populated by WithAuthMiddleware's second argument)
+// so that callers using the legacy API continue to work after this refactor.
 func (r *Router) buildAuthOpts() []auth.AuthOption {
-	var opts []auth.AuthOption
+	// Build a compiled path-only set from authPublicEndpoints for fallback.
+	// This preserves the legacy WithAuthMiddleware(v, []string{"/path"}) API.
+	legacyPathSet := make(map[string]bool, len(r.authPublicEndpoints))
+	for _, p := range r.authPublicEndpoints {
+		legacyPathSet[strings.TrimSpace(p)] = true
+	}
+
+	opts := []auth.AuthOption{
+		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
+			// Method-aware compiled matcher (from WithPublicEndpoints or FinalizeAuth).
+			if r.authPublicMatcher != nil && r.authPublicMatcher(req) {
+				return true
+			}
+			// Legacy path-only fallback (from WithAuthMiddleware second arg).
+			if len(legacyPathSet) > 0 {
+				return legacyPathSet[strings.TrimSpace(req.URL.Path)]
+			}
+			return false
+		}),
+		auth.WithDelegatedMatcher(func(req *http.Request) bool {
+			if r.authDelegatedMatcher == nil {
+				return false
+			}
+			return r.authDelegatedMatcher(req)
+		}),
+		auth.WithPasswordResetExemptMatcher(func(method, urlPath string) bool {
+			if r.passwordResetExemptMatcher == nil {
+				return false
+			}
+			return r.passwordResetExemptMatcher(method, urlPath)
+		}),
+		auth.WithPasswordResetChangeEndpointHintFn(func() string {
+			if r.passwordResetChangeEndpointHint != "" {
+				return r.passwordResetChangeEndpointHint
+			}
+			return r.derivedHint
+		}),
+	}
 	if r.authMetrics != nil {
 		opts = append(opts, auth.WithMetrics(r.authMetrics))
-	}
-	// Prefer the compiled method-aware matcher (set by applyPublicEndpoints) over
-	// the legacy []string path. Direct callers of WithAuthMiddleware that do NOT
-	// call WithPublicEndpoints continue to use the []string path (no regression).
-	if r.authPublicMatcher != nil {
-		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
-	}
-	if r.authDelegatedMatcher != nil {
-		opts = append(opts, auth.WithDelegatedMatcher(r.authDelegatedMatcher))
-	}
-	if r.passwordResetExemptMatcher != nil {
-		opts = append(opts, auth.WithPasswordResetExemptMatcher(r.passwordResetExemptMatcher))
-	}
-	if r.passwordResetChangeEndpointHint != "" {
-		opts = append(opts, auth.WithPasswordResetChangeEndpointHint(r.passwordResetChangeEndpointHint))
 	}
 	return opts
 }
@@ -589,10 +643,10 @@ func (r *Router) applyPasswordResetExempts() error {
 	return nil
 }
 
-// applyPublicEndpoints derives trust-boundary policy from WithPublicEndpoints:
-// compiles the "METHOD /path" entries into a per-request predicate and
-// auto-wires tracing, request_id, and auth. Returns an error if any entry is
-// malformed (fail-fast; the caller NewE propagates it to Bootstrap.Run).
+// applyPublicEndpoints compiles the "METHOD /path" entries supplied via
+// WithPublicEndpoints into r.authPublicMatcher. The matcher is then read by
+// the lazy closures installed in buildOuterMux (tracing, request-id) and
+// buildAuthOpts (auth bypass).
 //
 // Semantic note: auth / tracing / request-id share the same isPublic predicate
 // because their trust-boundary criteria are currently identical ("is this a
@@ -612,14 +666,12 @@ func (r *Router) applyPublicEndpoints() error {
 		return fmt.Errorf("router: %w", err)
 	}
 
-	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
-	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
-
 	// Populate the method-aware matcher for the auth middleware.
-	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher is
-	// the sole source of truth. Passing nil to auth.AuthMiddleware is safe because
-	// F-B's panic guard ensures no space-containing legacy entries reach that path,
-	// and the matcher supersedes the []string parameter when both are present.
+	// Tracing and RequestID now read this field via lazy closures in
+	// buildOuterMux — no need to append to tracingOpts / requestIDOpts here.
+	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher
+	// is the sole source of truth. Passing nil to auth.AuthMiddleware is safe
+	// because the matcher supersedes the []string parameter when both are present.
 	r.authPublicMatcher = isPublic
 	return nil
 }
@@ -666,6 +718,179 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // Handler returns the outer http.Handler (entry point for the full chain).
 func (r *Router) Handler() http.Handler {
 	return r.outerMux
+}
+
+// DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
+// metadata forwarded by auth.Declare during Cell RegisterRoutes. FinalizeAuth
+// compiles the accumulated metas into matchers that the AuthMiddleware reads
+// via lazy closures installed in buildAuthOpts.
+//
+// Panics if called after FinalizeAuth — all declarations must precede the
+// compile step. The "FinalizeAuth must run before Listen" contract ensures
+// there is a clear happens-before boundary; no mutex is needed.
+func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+	if r.authFinalized {
+		panic(fmt.Sprintf(
+			"router: DeclareAuthMeta called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
+			m.Method, m.Path))
+	}
+	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
+}
+
+// FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
+// matchers and OR-merges them with any matchers already set by the legacy
+// WithPublicEndpoints / WithPasswordResetExemptEndpoints / WithInternalPathPrefixGuard
+// options. Bootstrap calls this after all cells have completed RegisterRoutes
+// but before Listen.
+//
+// Returns an error (not a panic) so Bootstrap can perform a clean rollback:
+//   - "router: FinalizeAuth called twice"
+//   - "router: duplicate auth declaration METHOD /path"
+//
+// It is safe to call FinalizeAuth with an empty declaredAuthMetas slice (no-op
+// beyond setting authFinalized).
+func (r *Router) FinalizeAuth() error {
+	if r.authFinalized {
+		return fmt.Errorf("router: FinalizeAuth called twice")
+	}
+	r.authFinalized = true
+
+	if len(r.declaredAuthMetas) == 0 {
+		return nil
+	}
+
+	partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
+	if err != nil {
+		return err
+	}
+
+	if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
+		return err
+	}
+	if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
+		return err
+	}
+	r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
+	r.deriveHint()
+	return nil
+}
+
+// authMetaPartition holds the categorised results of partitionAuthMetas.
+type authMetaPartition struct {
+	publicEntries    []string
+	exemptEntries    []string
+	delegatedMatcher func(*http.Request) bool
+}
+
+// partitionAuthMetas deduplicates the metas and splits them into the three
+// "METHOD /path" entry slices consumed by the compile helpers, plus a
+// delegated per-request predicate (constructed inline because the exempt
+// compiler already handles {xxx} wildcards; delegated paths are matched
+// exactly for now).
+func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) {
+	seen := make(map[string]bool, len(metas))
+	var p authMetaPartition
+
+	for _, m := range metas {
+		key := strings.ToUpper(m.Method) + "\x00" + m.Path
+		if seen[key] {
+			return authMetaPartition{}, fmt.Errorf("router: duplicate auth declaration %s %s", m.Method, m.Path)
+		}
+		seen[key] = true
+
+		entry := m.Method + " " + m.Path
+		if m.Public {
+			p.publicEntries = append(p.publicEntries, entry)
+		}
+		if m.PasswordResetExempt {
+			p.exemptEntries = append(p.exemptEntries, entry)
+		}
+		if m.Delegated {
+			p.delegatedMatcher = buildDelegatedMatcher(p.delegatedMatcher, m.Method, m.Path)
+		}
+	}
+	return p, nil
+}
+
+// buildDelegatedMatcher returns a new predicate that returns true when the
+// request matches (method, path) OR the previous predicate matches.
+func buildDelegatedMatcher(prev func(*http.Request) bool, method, path string) func(*http.Request) bool {
+	return func(req *http.Request) bool {
+		if prev != nil && prev(req) {
+			return true
+		}
+		return strings.EqualFold(req.Method, method) && req.URL.Path == path
+	}
+}
+
+// mergePublicMatcher OR-merges the compiled public entries with r.authPublicMatcher.
+func (r *Router) mergePublicMatcher(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	compiled, err := middleware.CompilePublicEndpoints(entries)
+	if err != nil {
+		return fmt.Errorf("router: FinalizeAuth public entries: %w", err)
+	}
+	r.authPublicMatcher = orMergeRequest(r.authPublicMatcher, compiled)
+	return nil
+}
+
+// mergeExemptMatcher OR-merges the compiled exempt entries with r.passwordResetExemptMatcher.
+func (r *Router) mergeExemptMatcher(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	compiled, err := auth.CompilePasswordResetExempts(entries)
+	if err != nil {
+		return fmt.Errorf("router: FinalizeAuth exempt entries: %w", err)
+	}
+	r.passwordResetExemptMatcher = orMergeMethodPath(r.passwordResetExemptMatcher, compiled)
+	return nil
+}
+
+// mergeDelegatedMatcher OR-merges the declared delegated matcher with r.authDelegatedMatcher.
+func (r *Router) mergeDelegatedMatcher(declared func(*http.Request) bool) {
+	if declared == nil {
+		return
+	}
+	r.authDelegatedMatcher = orMergeRequest(r.authDelegatedMatcher, declared)
+}
+
+// deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
+// meta's path when no static legacy hint is configured.
+func (r *Router) deriveHint() {
+	if r.passwordResetChangeEndpointHint != "" {
+		return
+	}
+	for _, m := range r.declaredAuthMetas {
+		if m.Method == "POST" && m.PasswordResetExempt {
+			r.derivedHint = m.Path
+			return
+		}
+	}
+}
+
+// orMergeRequest returns a predicate that returns true when either a or b matches.
+// When a is nil it returns b; when b is nil it returns a.
+func orMergeRequest(a, b func(*http.Request) bool) func(*http.Request) bool {
+	if a == nil {
+		return b
+	}
+	return func(req *http.Request) bool {
+		return a(req) || b(req)
+	}
+}
+
+// orMergeMethodPath returns a predicate that returns true when either a or b matches.
+// When a is nil it returns b; when b is nil it returns a.
+func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, string) bool {
+	if a == nil {
+		return b
+	}
+	return func(method, urlPath string) bool {
+		return a(method, urlPath) || b(method, urlPath)
+	}
 }
 
 // chiRouterAdapter wraps chi.Router to implement cell.RouteMux.
