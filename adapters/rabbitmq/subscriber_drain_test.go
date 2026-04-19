@@ -271,7 +271,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 
 	// Close should finish well before ShutdownTimeout.
 	start := time.Now()
-	closeErr := sub.Close()
+	closeErr := sub.Close(context.Background())
 	elapsed := time.Since(start)
 
 	assert.NoError(t, closeErr, "Close must not return ErrAdapterAMQPCloseTimeout after clean drain")
@@ -345,7 +345,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 
 	// Close without StopIntake: processDelivery is hanging → must time out.
 	start := time.Now()
-	closeErr := sub.Close()
+	closeErr := sub.Close(context.Background())
 	elapsed := time.Since(start)
 
 	// Close must have waited (at least shortTimeout / 2) before giving up.

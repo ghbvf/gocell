@@ -122,6 +122,7 @@ func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	repo := mem.NewAuditRepository()

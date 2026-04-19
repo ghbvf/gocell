@@ -118,6 +118,7 @@ func TestService_Logout(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	repo := mem.NewSessionRepository()

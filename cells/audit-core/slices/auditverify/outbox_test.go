@@ -140,6 +140,7 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 	repo := mem.NewAuditRepository()

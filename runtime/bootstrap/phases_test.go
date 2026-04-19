@@ -341,6 +341,7 @@ func (v *phaseTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.Tok
 type phaseTestPublisher struct{}
 
 func (p *phaseTestPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (p *phaseTestPublisher) Close(_ context.Context) error                       { return nil }
 
 // phaseTestSubscriber is a no-op outbox.Subscriber for phase tests.
 type phaseTestSubscriber struct{}
@@ -354,7 +355,7 @@ func (s *phaseTestSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (s *phaseTestSubscriber) Close() error { return nil }
+func (s *phaseTestSubscriber) Close(_ context.Context) error { return nil }
 
 // phaseTestSubscriberCloser tracks Close calls and exposes an outbox.Subscriber interface.
 type phaseTestSubscriberCloser struct {
@@ -373,7 +374,7 @@ func (s *phaseTestSubscriberCloser) Ready(_ outbox.Subscription) <-chan struct{}
 func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (s *phaseTestSubscriberCloser) Close() error {
+func (s *phaseTestSubscriberCloser) Close(_ context.Context) error {
 	*s.log = append(*s.log, s.name)
 	return nil
 }
@@ -394,7 +395,7 @@ func (b *phaseTestSharedBus) Ready(_ outbox.Subscription) <-chan struct{} {
 func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (b *phaseTestSharedBus) Close() error {
+func (b *phaseTestSharedBus) Close(_ context.Context) error {
 	*b.closeCount++
 	return nil
 }

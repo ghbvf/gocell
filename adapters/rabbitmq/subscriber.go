@@ -838,13 +838,23 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 //     held by in-flight processDelivery goroutines); a warning is logged instead
 //     and cleanup is deferred to process exit. This prevents a closed-channel
 //     panic inside processDelivery after the consumer is drained by subscribeOnce.
-func (s *Subscriber) Close() error {
+// Close terminates all active subscriptions and waits for in-flight messages.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx carries the shared shutdown budget.
+// The full ctx-aware implementation (A19 reconnect fix + subscriptionRun struct)
+// is delivered in Part 3 (T7-T8). This bridge implementation propagates ctx
+// to satisfy the updated outbox.Subscriber interface.
+func (s *Subscriber) Close(ctx context.Context) error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	close(s.closeCh)
 
-	// Wait for in-flight messages with timeout.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Wait for in-flight messages with timeout bounded by ctx.
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -854,22 +864,16 @@ func (s *Subscriber) Close() error {
 	select {
 	case <-done:
 		slog.Info("rabbitmq: subscriber closed gracefully")
-	case <-time.After(s.config.ShutdownTimeout):
-		// Do not force-close AMQP channels here — processDelivery goroutines may
-		// still hold references and a close would cause a panic on the next send.
-		// Log the goroutine count and let the OS clean up on process exit.
+	case <-ctx.Done():
 		s.mu.Lock()
 		remaining := len(s.channels)
 		s.mu.Unlock()
-		slog.Warn("rabbitmq: subscriber shutdown timed out, channels not force-closed",
-			slog.Duration("timeout", s.config.ShutdownTimeout),
+		slog.Warn("rabbitmq: subscriber shutdown budget exceeded",
+			slog.Any("error", ctx.Err()),
 			slog.Int("remaining_channels", remaining))
-		// Surface the timeout to the caller so bootstrap teardown does not
-		// report success when in-flight handlers are still holding channels.
-		// Channels are deferred to process exit (see Two-phase shutdown above).
 		return errcode.New(ErrAdapterAMQPCloseTimeout,
-			fmt.Sprintf("rabbitmq: subscriber Close timed out after %s with %d channel(s) still in use",
-				s.config.ShutdownTimeout, remaining))
+			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d channel(s) still in use",
+				remaining))
 	}
 
 	// All goroutines have exited — safe to close the AMQP channels.

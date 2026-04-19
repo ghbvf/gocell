@@ -43,6 +43,7 @@ var _ persistence.TxRunner = (*noopTxRunner)(nil)
 type stubPublisher struct{}
 
 func (stubPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (stubPublisher) Close(_ context.Context) error                       { return nil }
 
 var _ outbox.Publisher = stubPublisher{}
 
@@ -315,6 +316,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 var _ outbox.Publisher = failingPublisher{}
 

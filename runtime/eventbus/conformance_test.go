@@ -1,6 +1,7 @@
 package eventbus_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -20,7 +21,7 @@ func TestInMemoryEventBus_Conformance(t *testing.T) {
 		BroadcastSubscribe: true,
 	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
 		bus := eventbus.New(eventbus.WithBufferSize(256))
-		t.Cleanup(func() { _ = bus.Close() })
+		t.Cleanup(func() { _ = bus.Close(context.Background()) })
 		return bus, bus
 	})
 }

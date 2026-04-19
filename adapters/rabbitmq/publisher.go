@@ -24,6 +24,14 @@ func NewPublisher(conn *Connection) *Publisher {
 	return &Publisher{conn: conn}
 }
 
+// Close is a no-op placeholder that satisfies outbox.Publisher.
+// Full ctx-aware implementation is added in Part 4 (T9).
+//
+// ref: uber-go/fx app.go StopTimeout — ctx passed to ensure budget is shared.
+func (p *Publisher) Close(_ context.Context) error {
+	return nil
+}
+
 // Publish sends a message to the given topic (exchange) with publisher confirms.
 //
 // The topic is used as a fanout exchange name. The exchange is declared

@@ -490,7 +490,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	assert.NoError(t, <-subDone)
 
 	// Close subscriber.
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 
 	// Close the Connection explicitly so its reconnectLoop goroutine exits
 	// before goleak.VerifyNone runs.

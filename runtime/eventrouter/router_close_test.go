@@ -81,7 +81,7 @@ func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscript
 	r.cancelledAt.Store(time.Now().UnixNano())
 	return ctx.Err()
 }
-func (r *cancelTimeRecorder) Close() error { return r.inner.Close() }
+func (r *cancelTimeRecorder) Close(ctx context.Context) error { return r.inner.Close(ctx) }
 
 func (r *cancelTimeRecorder) WaitSubscribed(timeout time.Duration) bool {
 	select {
@@ -126,7 +126,9 @@ func (c *compositeStopIntakeSubscriber) Ready(sub outbox.Subscription) <-chan st
 func (c *compositeStopIntakeSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	return c.cancelRec.Subscribe(ctx, sub, handler)
 }
-func (c *compositeStopIntakeSubscriber) Close() error { return c.cancelRec.Close() }
+func (c *compositeStopIntakeSubscriber) Close(ctx context.Context) error {
+	return c.cancelRec.Close(ctx)
+}
 func (c *compositeStopIntakeSubscriber) StopIntake(ctx context.Context) error {
 	return c.stopRecorder.StopIntake(ctx)
 }
@@ -283,7 +285,7 @@ func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscriptio
 	}
 }
 
-func (s *inflightSubscriber) Close() error { return nil }
+func (s *inflightSubscriber) Close(_ context.Context) error { return nil }
 func (s *inflightSubscriber) StopIntake(_ context.Context) error {
 	// StopIntake tells the broker to stop delivering new messages.
 	// In this mock we do nothing (simulates the broker cancellation being instant).

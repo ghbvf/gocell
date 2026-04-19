@@ -1385,7 +1385,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	assert.Equal(t, uint64(1), ch.ackTag)
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
@@ -1428,7 +1428,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	assert.False(t, ch.nackRequeue) // Unmarshal failure should not requeue.
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 // TestUnmarshalDelivery covers the discriminator paths in unmarshalDelivery
@@ -1524,7 +1524,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	assert.True(t, ch.nackRequeue) // Requeue disposition should requeue.
 	ch.mu.Unlock()
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
@@ -1556,15 +1556,15 @@ func TestSubscriber_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	assert.NoError(t, sub.Close())
-	assert.NoError(t, sub.Close()) // Second close is no-op.
+	assert.NoError(t, sub.Close(context.Background()))
+	assert.NoError(t, sub.Close(context.Background())) // Second close is no-op.
 }
 
 func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"}, outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
 	assert.Error(t, err)
@@ -1649,7 +1649,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 		t.Fatal("Subscribe did not return after cancel")
 	}
 
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 }
 
 func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
@@ -1882,7 +1882,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	// Close subscriber. closeCh cancels the derived subCtx → WaitConnected
 	// (or any other blocking call in the loop) returns ctx.Err() → Subscribe
 	// exits cleanly.
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 
 	select {
 	case err := <-subscribeDone:
@@ -2133,7 +2133,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	assert.Equal(t, uint64(42), ch.nackTag)
 	ch.mu.Unlock()
 
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // =============================================================================
@@ -2400,7 +2400,7 @@ func (s *stubSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription,
 	}
 	return nil
 }
-func (s *stubSubscriber) Close() error { return nil }
+func (s *stubSubscriber) Close(_ context.Context) error { return nil }
 
 var _ outbox.Subscriber = (*stubSubscriber)(nil)
 

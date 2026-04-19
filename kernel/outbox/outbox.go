@@ -235,8 +235,15 @@ type Relay interface {
 }
 
 // Publisher sends events to the message broker.
+//
+// ref: uber-go/fx app.go Lifecycle.Append OnStop(ctx) — ContextCloser pattern
+// adopted so bootstrap teardown can share a unified shutCtx budget across all
+// managed publishers.
 type Publisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
+	// Close terminates the publisher and releases resources. The ctx parameter
+	// allows callers to share a shutdown budget (e.g., bootstrap shutCtx).
+	Close(ctx context.Context) error
 }
 
 // NoopWriter is an explicit outbox writer sink for tests and demos.
@@ -288,6 +295,9 @@ type DiscardPublisher struct {
 	Logger  *slog.Logger
 	counter atomic.Uint64
 }
+
+// Close implements Publisher. DiscardPublisher holds no resources; always nil.
+func (d *DiscardPublisher) Close(_ context.Context) error { return nil }
 
 // Publish logs a discard warning, increments the counter, and returns nil.
 // Safe to call on a nil receiver (typed nil defense).
@@ -492,7 +502,11 @@ type Subscriber interface {
 	Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error
 
 	// Close terminates all active subscriptions and releases resources.
-	Close() error
+	// The ctx parameter allows callers to share a shutdown budget.
+	//
+	// ref: uber-go/fx app.go Lifecycle.Append OnStop(ctx context.Context) error
+	// ref: ThreeDotsLabs/watermill message/pubsub.go Subscriber.Close()
+	Close(ctx context.Context) error
 }
 
 // SubscriberIntakeStopper is an optional capability for Subscriber implementations.
@@ -576,9 +590,10 @@ func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, t
 	return s.Inner.Setup(ctx, Subscription{Topic: topic, ConsumerGroup: consumerGroup})
 }
 
-// Close delegates to the inner subscriber.
-func (s *SubscriberWithMiddleware) Close() error {
-	return s.Inner.Close()
+// Close delegates to the inner subscriber, forwarding the ctx unchanged so
+// the inner implementation can honour the shutdown budget.
+func (s *SubscriberWithMiddleware) Close(ctx context.Context) error {
+	return s.Inner.Close(ctx)
 }
 
 // StopIntake forwards to Inner if it implements SubscriberIntakeStopper.

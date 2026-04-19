@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -163,16 +162,14 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	s.pub = pub
 	s.sub = sub
 
-	if cl, ok := sub.(io.Closer); ok {
-		s.addTeardown(func(_ context.Context) error {
-			return cl.Close()
-		})
+	// outbox.Subscriber.Close now accepts ctx — use it directly so the teardown
+	// passes the shared shutCtx budget through to the implementation.
+	if sub != nil {
+		s.addTeardown(sub.Close)
 	}
 	// Avoid double-close when pub and sub are the same instance.
-	if cl, ok := pub.(io.Closer); ok && any(pub) != any(sub) {
-		s.addTeardown(func(_ context.Context) error {
-			return cl.Close()
-		})
+	if pub != nil && any(pub) != any(sub) {
+		s.addTeardown(pub.Close)
 	}
 }
 

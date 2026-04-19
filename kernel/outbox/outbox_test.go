@@ -13,6 +13,111 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// ---------------------------------------------------------------------------
+// T3: Close(ctx context.Context) error interface tests (R10 SUBSCRIBER-CLOSE-CTX-01)
+// ---------------------------------------------------------------------------
+
+// TestSubscriber_Close_AcceptsCtx verifies the Subscriber interface requires
+// Close(ctx context.Context) error.
+func TestSubscriber_Close_AcceptsCtx(t *testing.T) {
+	t.Parallel()
+	var sub Subscriber = &mockSubscriberCtx{}
+	ctx := context.Background()
+	if err := sub.Close(ctx); err != nil {
+		t.Fatalf("Close(ctx) returned unexpected error: %v", err)
+	}
+}
+
+// TestPublisher_Close_AcceptsCtx verifies the Publisher interface requires
+// Close(ctx context.Context) error.
+func TestPublisher_Close_AcceptsCtx(t *testing.T) {
+	t.Parallel()
+	var pub Publisher = &mockPublisherCtx{}
+	ctx := context.Background()
+	if err := pub.Close(ctx); err != nil {
+		t.Fatalf("Close(ctx) returned unexpected error: %v", err)
+	}
+}
+
+// TestSubscriberWithMiddleware_Close_ForwardsCtx verifies that the
+// SubscriberWithMiddleware.Close(ctx) forwards the ctx to Inner.Close(ctx).
+func TestSubscriberWithMiddleware_Close_ForwardsCtx(t *testing.T) {
+	t.Parallel()
+	var capturedCtx context.Context
+	inner := &mockSubscriberCtx{
+		closeFn: func(ctx context.Context) error {
+			capturedCtx = ctx
+			return nil
+		},
+	}
+	swm := &SubscriberWithMiddleware{Inner: inner}
+	key := contextKey("test-key")
+	sentCtx := context.WithValue(context.Background(), key, "test-val")
+	if err := swm.Close(sentCtx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedCtx != sentCtx {
+		t.Fatal("Close must forward the ctx to Inner.Close")
+	}
+}
+
+// TestSubscriberWithMiddleware_Close_PropagatesCtxErr verifies that when ctx
+// is already cancelled, the inner Close receives the cancelled ctx and can
+// return early.
+func TestSubscriberWithMiddleware_Close_PropagatesCtxErr(t *testing.T) {
+	t.Parallel()
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	inner := &mockSubscriberCtx{
+		closeFn: func(ctx context.Context) error {
+			return ctx.Err()
+		},
+	}
+	swm := &SubscriberWithMiddleware{Inner: inner}
+	err := swm.Close(cancelledCtx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+// contextKey is an unexported key type for test context values.
+type contextKey string
+
+// mockSubscriberCtx is a minimal Subscriber implementation for T3 tests.
+type mockSubscriberCtx struct {
+	closeFn func(ctx context.Context) error
+}
+
+func (m *mockSubscriberCtx) Setup(_ context.Context, _ Subscription) error { return nil }
+func (m *mockSubscriberCtx) Ready(_ Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (m *mockSubscriberCtx) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
+	return nil
+}
+func (m *mockSubscriberCtx) Close(ctx context.Context) error {
+	if m.closeFn != nil {
+		return m.closeFn(ctx)
+	}
+	return nil
+}
+
+// mockPublisherCtx is a minimal Publisher implementation for T3 tests.
+type mockPublisherCtx struct {
+	closeFn func(ctx context.Context) error
+}
+
+func (m *mockPublisherCtx) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (m *mockPublisherCtx) Close(ctx context.Context) error {
+	if m.closeFn != nil {
+		return m.closeFn(ctx)
+	}
+	return nil
+}
+
 // Compile-time interface checks.
 
 type mockWriter struct{}
@@ -31,6 +136,7 @@ var _ Relay = (*mockRelay)(nil)
 type mockPublisher struct{}
 
 func (m *mockPublisher) Publish(ctx context.Context, topic string, payload []byte) error { return nil }
+func (m *mockPublisher) Close(_ context.Context) error                                   { return nil }
 
 var _ Publisher = (*mockPublisher)(nil)
 
@@ -46,7 +152,7 @@ func (m *plainSubscriber) Ready(_ Subscription) <-chan struct{} {
 func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
 	return nil
 }
-func (m *plainSubscriber) Close() error { return nil }
+func (m *plainSubscriber) Close(_ context.Context) error { return nil }
 
 func TestSubscriberInitializer_IsOptional(t *testing.T) {
 	// SubscriberInitializer is deprecated; all Subscribers now implement Setup.
@@ -110,7 +216,7 @@ func (m *mockSubscriber) Ready(_ Subscription) <-chan struct{} {
 func (m *mockSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
 	return nil
 }
-func (m *mockSubscriber) Close() error { return nil }
+func (m *mockSubscriber) Close(_ context.Context) error { return nil }
 
 var _ Subscriber = (*mockSubscriber)(nil)
 
@@ -126,7 +232,7 @@ func TestSubscriberInterface(t *testing.T) {
 	})
 
 	t.Run("Close returns nil on success", func(t *testing.T) {
-		err := sub.Close()
+		err := sub.Close(context.Background())
 		assert.NoError(t, err)
 	})
 }
@@ -171,7 +277,7 @@ func (r *recordingSubscriber) Subscribe(_ context.Context, sub Subscription, han
 	return nil
 }
 
-func (r *recordingSubscriber) Close() error {
+func (r *recordingSubscriber) Close(_ context.Context) error {
 	return r.closeErr
 }
 
@@ -284,7 +390,7 @@ func TestSubscriberWithMiddleware_Close_DelegatesToInner(t *testing.T) {
 	inner := &recordingSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	err := sub.Close()
+	err := sub.Close(context.Background())
 	assert.NoError(t, err)
 }
 
@@ -292,7 +398,7 @@ func TestSubscriberWithMiddleware_Close_PropagatesError(t *testing.T) {
 	inner := &recordingSubscriber{closeErr: assert.AnError}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	err := sub.Close()
+	err := sub.Close(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, assert.AnError, err)
 }
@@ -917,7 +1023,7 @@ func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription,
 	r.subscribedSub = sub
 	return nil
 }
-func (r *recordingSubscriberFull) Close() error { return nil }
+func (r *recordingSubscriberFull) Close(_ context.Context) error { return nil }
 
 // --- SubscriberIntakeStopper Tests ---
 

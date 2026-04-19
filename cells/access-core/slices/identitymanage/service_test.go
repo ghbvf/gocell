@@ -541,6 +541,7 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 // TestService_Create_PublishError_DoesNotFailCreate verifies that demo-mode
 // publisher failure in Service.publish is logged but does not propagate as an
