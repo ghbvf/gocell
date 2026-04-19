@@ -22,8 +22,8 @@ func (fakeProvider) Rotate(_ context.Context) (string, error)                   
 type fakeHandle struct{}
 
 func (fakeHandle) ID() string { return "fake-v1" }
-func (fakeHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, nil
+func (fakeHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
+	return nil, nil, nil, "fake-v1", nil
 }
 func (fakeHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) { return nil, nil }
 
@@ -65,9 +65,12 @@ func TestKeyHandle_InterfaceMethods(t *testing.T) {
 		t.Fatalf("ID: expected fake-v1, got %s", h.ID())
 	}
 
-	_, _, _, err := h.Encrypt(ctx, []byte("plain"), []byte("aad"))
+	_, _, _, keyID, err := h.Encrypt(ctx, []byte("plain"), []byte("aad"))
 	if err != nil {
 		t.Fatalf("Encrypt: unexpected error: %v", err)
+	}
+	if keyID == "" {
+		t.Fatal("Encrypt: keyID must not be empty")
 	}
 
 	_, err = h.Decrypt(ctx, nil, nil, nil, []byte("aad"))

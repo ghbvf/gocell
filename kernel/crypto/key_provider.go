@@ -33,8 +33,12 @@ type KeyProvider interface {
 //   - Decrypt MUST validate the aad; mismatched aad MUST return ErrDecryptFailed.
 //   - nonce and edk semantics are provider-specific. VaultTransit may return
 //     nil/empty slices because key material is managed server-side.
+//   - KeyID MUST reflect the KEK version actually used to wrap the data/DEK;
+//     for LocalAES this equals handle.ID(); for VaultTransit this is parsed
+//     from the wrapped DEK prefix "vault:vN:".
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (keyID version prefix)
+// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master (EncryptResponse.KeyID)
 type KeyHandle interface {
 	// ID returns the key version identifier (e.g. "local-aes-v1", "vault-transit:v3").
 	ID() string
@@ -46,8 +50,14 @@ type KeyHandle interface {
 	//   - nonce:      random IV used for AES-GCM (nil for backends that embed it).
 	//   - edk:        encrypted DEK for envelope encryption (nil for backends
 	//     like VaultTransit that manage keys server-side).
+	//   - keyID:      the KEK version identifier actually used at encrypt-time.
+	//     Callers MUST persist this value alongside the ciphertext so that the
+	//     correct key can be resolved during decryption.  Returning keyID from
+	//     Encrypt (rather than reading handle.ID() after the call) eliminates
+	//     the race between a Current() call and a key rotation in VaultTransit.
+	//     Mirrors k8s KMS v2 EncryptResponse.KeyID semantics.
 	//   - err:        non-nil on any encryption failure (fail-closed).
-	Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error)
+	Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error)
 
 	// Decrypt decrypts ciphertext encrypted by this key. The aad must match
 	// exactly what was provided to Encrypt; mismatched aad returns ErrDecryptFailed.
