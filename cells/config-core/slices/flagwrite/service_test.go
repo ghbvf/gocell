@@ -110,11 +110,17 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	assert.Equal(t, TopicFlagChanged, writer.entries[0].EventType)
 }
 
-// TestFlagWrite_Create_RepoFails_NoOutboxWrite verifies that if the repo write
-// fails the outbox is NOT written (tx rollback semantic modelled via failing
-// tx that always errors out regardless of fn result).
+// TestFlagWrite_Create_RepoFails_NoOutboxWrite verifies that a tx-level
+// failure propagates as an error to the caller.
+//
+// Scope note: the in-memory recordingWriter has no transaction-aware
+// rollback — it records every Write call unconditionally. This test
+// therefore exercises only the error-propagation path; the "outbox is not
+// durable when tx rolls back" invariant is covered at the L2 durability
+// boundary by the PG integration tests (flag_ctx_cancel_integration_test.go
+// and flag_restart_integration_test.go), which run against a real database
+// where Write inside a rolled-back tx is genuinely discarded.
 func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
-	// Use a real repo + a tx runner that ignores fn result and returns an error.
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
@@ -123,8 +129,6 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k"})
 	require.Error(t, err)
-	// outbox writer may have been called inside fn, but tx rollback means
-	// the in-flight entry is not durable; verify via tx returning error.
 	assert.Contains(t, err.Error(), "tx commit failed")
 }
 
