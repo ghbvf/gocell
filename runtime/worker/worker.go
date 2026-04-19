@@ -15,9 +15,14 @@ import (
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
 
-// Worker is a type alias for the kernel Worker interface. Provided so that
-// existing code referencing runtime/worker.Worker continues to compile, while
-// kernel/worker defines the authoritative contract.
+// Worker is a type alias for the kernel Worker interface. The authoritative
+// definition lives in kernel/worker; this alias lets the runtime/worker
+// implementations (WorkerGroup, LazyWorker, PeriodicWorker) type-check
+// against Worker without importing kernel/worker from every call site.
+//
+// This is not a migration shim — runtime/worker is the canonical package for
+// Worker implementations, and the alias is how implementations declare they
+// satisfy the kernel contract.
 //
 // ref: kernel/worker/worker.go — authoritative Worker interface definition.
 type Worker = kworker.Worker

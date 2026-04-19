@@ -37,4 +37,12 @@
 //
 // ref: uber-go/fx app.go StopTimeout and Lifecycle.Append OnStop(ctx)
 // ref: nats-io/nats.go Subscription.Drain (per-subscription state encapsulation)
+//
+// # ManagedResource
+//
+// ManagedResource bundles ContextCloser with health probe functions and an
+// optional background Worker into a single resource abstraction. Bootstrap
+// consumes ManagedResource via WithManagedResource to register /readyz checkers,
+// start/stop the worker, and close the resource in LIFO order during shutdown.
+// See managed_resource.go for the full contract.
 package lifecycle

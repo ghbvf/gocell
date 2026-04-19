@@ -25,6 +25,14 @@ import (
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
 // does no nil-substitution; bad inputs surface before any component starts.
+//
+// Typed-nil contract: WithManagedResource checks `r == nil` (bare interface nil)
+// but does not reflect-check wrapped typed-nil pointers such as
+// `WithManagedResource((*adapterpg.PGResource)(nil))`. This is intentional —
+// construction is the responsibility of resource-specific constructors
+// (e.g. adapterpg.NewPGResource rejects pool==nil at construction), so a
+// typed-nil wrapper reaching Run() represents a wiring bug upstream, not
+// a case Bootstrap should defend against.
 func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 	return func(b *Bootstrap) {
 		if r == nil {

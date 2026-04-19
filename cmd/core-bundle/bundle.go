@@ -534,7 +534,7 @@ func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
 //
 // Signature reduced from 5 return values (mode, opts, pool, relay, err) to
 // 3 (ManagedResource, opts, err). pool + relay lifecycle are now owned by
-// *adapterpg.PGResource which satisfies bootstrap.ManagedResource.
+// *adapterpg.PGResource which satisfies lifecycle.ManagedResource (kernel/lifecycle).
 //
 // Topology is consumed as a parameter rather than re-read from the environment:
 // ref: go-zero core/conf/config.go — validate once, pass through; never
