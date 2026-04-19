@@ -919,6 +919,48 @@ func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription,
 }
 func (r *recordingSubscriberFull) Close() error { return nil }
 
+// --- SubscriberIntakeStopper Tests ---
+
+// intakeStopperSubscriber implements Subscriber + SubscriberIntakeStopper.
+type intakeStopperSubscriber struct {
+	recordingSubscriber
+	stopIntakeCalls int
+}
+
+func (s *intakeStopperSubscriber) StopIntake(_ context.Context) error {
+	s.stopIntakeCalls++
+	return nil
+}
+
+var _ Subscriber = (*intakeStopperSubscriber)(nil)
+var _ SubscriberIntakeStopper = (*intakeStopperSubscriber)(nil)
+
+func TestSubscriberWithMiddleware_ForwardsStopIntake(t *testing.T) {
+	inner := &intakeStopperSubscriber{}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	stopper, ok := interface{}(sub).(SubscriberIntakeStopper)
+	assert.True(t, ok, "SubscriberWithMiddleware must implement SubscriberIntakeStopper when Inner does")
+
+	ctx := context.Background()
+
+	err := stopper.StopIntake(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, inner.stopIntakeCalls, "StopIntake must be forwarded to inner on first call")
+
+	err = stopper.StopIntake(ctx)
+	assert.NoError(t, err, "second call must return nil (idempotent)")
+	assert.Equal(t, 2, inner.stopIntakeCalls, "StopIntake must be forwarded to inner on second call")
+}
+
+func TestSubscriberWithMiddleware_StopIntake_InnerNotStopper(t *testing.T) {
+	inner := &plainSubscriber{}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	err := sub.StopIntake(context.Background())
+	assert.NoError(t, err, "StopIntake must return nil when inner does not implement SubscriberIntakeStopper")
+}
+
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.
 	// Must not panic — this is the key regression from value→pointer migration.

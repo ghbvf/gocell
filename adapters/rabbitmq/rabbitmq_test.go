@@ -40,6 +40,15 @@ type mockChannel struct {
 	consumeDeliveries chan amqp.Delivery
 	consumeErr        error
 
+	cancelCalled   bool
+	cancelCount    int64
+	cancelConsumer string
+	cancelErr      error
+	// cancelHangUntil, if non-nil, blocks Cancel until the channel is closed
+	// or the receiver goroutine exits. Used by StopIntake tests to simulate
+	// a broker that is slow or unresponsive to basic.cancel.
+	cancelHangUntil chan struct{}
+
 	qosCalled     bool
 	qosPrefetch   int
 	confirmCalled bool
@@ -65,6 +74,7 @@ type mockChannel struct {
 	autoCloseConfirm bool
 
 	ackCalled   bool
+	ackCount    int64
 	ackTag      uint64
 	ackErr      error
 	nackCalled  bool
@@ -101,6 +111,21 @@ func (m *mockChannel) Consume(queue, consumer string, autoAck, exclusive, noLoca
 		return nil, m.consumeErr
 	}
 	return m.consumeDeliveries, nil
+}
+
+func (m *mockChannel) Cancel(consumer string, noWait bool) error {
+	m.mu.Lock()
+	hang := m.cancelHangUntil
+	m.mu.Unlock()
+	if hang != nil {
+		<-hang // block until closed
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cancelCalled = true
+	m.cancelCount++
+	m.cancelConsumer = consumer
+	return m.cancelErr
 }
 
 func (m *mockChannel) Qos(prefetchCount, prefetchSize int, global bool) error {
@@ -171,6 +196,7 @@ func (m *mockChannel) Ack(tag uint64, multiple bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ackCalled = true
+	m.ackCount++
 	m.ackTag = tag
 	return m.ackErr
 }

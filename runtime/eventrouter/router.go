@@ -398,12 +398,53 @@ func (r *Router) markShutdown() {
 	r.shutdown = true
 }
 
-// Close cancels all subscriptions and waits for goroutines to finish.
-// The provided context controls the maximum wait time for goroutines to
-// drain; if the context expires, Close returns the context error.
+// Close shuts down the Router in three phases:
+//
+//  1. StopIntake (optional): if the subscriber implements
+//     outbox.SubscriberIntakeStopper, StopIntake(ctx) is called first.
+//     This signals the broker to stop delivering new messages (basic.cancel)
+//     while in-flight handlers continue to run. Errors from StopIntake are
+//     logged as warnings and do not abort the shutdown sequence.
+//
+//  2. Cancel: the internal runCtx subtree is cancelled, unblocking
+//     Subscribe goroutines that are waiting on context cancellation.
+//
+//  3. Drain: wg.Wait() blocks until all goroutines exit. If ctx expires
+//     before drain completes, Close returns ctx.Err().
+//
+// ref: ThreeDotsLabs/watermill message/router.go — closingInProgressCh two-phase barrier.
+// ref: uber-go/fx app.go — run ctx vs stop ctx separation.
 func (r *Router) Close(ctx context.Context) error {
 	start := time.Now()
 
+	// Phase 1: StopIntake — optional graceful degradation.
+	// Subscribers implementing SubscriberIntakeStopper stop accepting new
+	// deliveries but continue processing in-flight ones, enabling a
+	// two-phase drain: broker basic.cancel → handler drain → runCtx cancel.
+	//
+	// F1b: StopIntake runs in a dedicated goroutine and the wait is gated by
+	// ctx. A misbehaving adapter that ignores its ctx cannot stall the whole
+	// Close chain — once ctx expires we log Warn and advance to Phase 2/3
+	// regardless, honouring the caller's shutdown budget.
+	if st, ok := r.subscriber.(outbox.SubscriberIntakeStopper); ok {
+		stopDone := make(chan error, 1)
+		go func() { stopDone <- st.StopIntake(ctx) }()
+		select {
+		case err := <-stopDone:
+			if err != nil {
+				slog.Warn("eventrouter: StopIntake returned error, continuing shutdown",
+					slog.Any("error", err))
+			}
+		case <-ctx.Done():
+			slog.Warn("eventrouter: StopIntake exceeded ctx budget, advancing to cancel+wait",
+				slog.Any("error", ctx.Err()),
+				slog.Duration("elapsed", time.Since(start)))
+			// Do NOT return: we still need to cancel runCtx and reap goroutines
+			// so the caller's resources are released.
+		}
+	}
+
+	// Phase 2: cancel internal runCtx subtree to signal remaining ctx.Done paths.
 	r.mu.Lock()
 	cancel := r.cancel
 	r.mu.Unlock()
@@ -412,6 +453,7 @@ func (r *Router) Close(ctx context.Context) error {
 		cancel()
 	}
 
+	// Phase 3: wait for goroutines to drain or ctx expires.
 	done := make(chan struct{})
 	go func() {
 		r.wg.Wait()
@@ -421,6 +463,11 @@ func (r *Router) Close(ctx context.Context) error {
 	select {
 	case <-done:
 		slog.Info("eventrouter: closed", slog.Duration("elapsed", time.Since(start)))
+		// If ctx already expired (e.g. StopIntake consumed the budget), surface
+		// the timeout so callers see consistent shutdown outcomes.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return nil
 	case <-ctx.Done():
 		slog.Warn("eventrouter: close timed out, some goroutines may still be running",

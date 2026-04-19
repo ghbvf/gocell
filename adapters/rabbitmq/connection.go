@@ -221,6 +221,10 @@ type AMQPChannel interface {
 	Publish(exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error
 	PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error
 	Consume(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error)
+	// Cancel issues a basic.cancel to the broker, instructing it to stop
+	// delivering new messages to the given consumer. Already-prefetched messages
+	// remain in the deliveries channel and can be drained by the subscriber.
+	Cancel(consumer string, noWait bool) error
 	Qos(prefetchCount, prefetchSize int, global bool) error
 	Confirm(noWait bool) error
 	NotifyPublish(confirm chan amqp.Confirmation) chan amqp.Confirmation

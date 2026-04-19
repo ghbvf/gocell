@@ -495,6 +495,28 @@ type Subscriber interface {
 	Close() error
 }
 
+// SubscriberIntakeStopper is an optional capability for Subscriber implementations.
+// Subscribers that implement it can stop accepting new deliveries while still
+// processing in-flight ones, enabling a two-phase drain during shutdown
+// (stop intake → wait in-flight handlers). Router.Close calls StopIntake on
+// subscribers implementing this interface before cancelling the run context.
+//
+// Subscribers that do not implement this interface will fall back to the
+// legacy single-phase close behavior (cancel context only).
+//
+// StopIntake MUST be idempotent. It SHOULD be safe to call concurrently with
+// in-flight Subscribe calls.
+//
+// Errors are best-effort: callers (e.g., eventrouter.Router.Close) log a warning
+// and proceed to context cancellation regardless. Return an error only for
+// caller-observable failures that operators would want to see in logs.
+//
+// ref: ThreeDotsLabs/watermill message/router.go (closingInProgressCh two-phase barrier)
+// ref: uber-go/fx app.go shutdown semantics (run ctx vs stop ctx separation)
+type SubscriberIntakeStopper interface {
+	StopIntake(ctx context.Context) error
+}
+
 // ErrInitializerNotSupported is kept for backward-compatible callers that still
 // perform SubscriberInitializer detection. Deprecated: use Subscriber.Setup.
 var ErrInitializerNotSupported = errors.New("subscriber does not implement SubscriberInitializer")
@@ -557,4 +579,15 @@ func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, t
 // Close delegates to the inner subscriber.
 func (s *SubscriberWithMiddleware) Close() error {
 	return s.Inner.Close()
+}
+
+// StopIntake forwards to Inner if it implements SubscriberIntakeStopper.
+// Returns nil if Inner does not implement the optional interface (graceful
+// degradation). Safe to call multiple times (idempotent, assuming Inner is).
+func (s *SubscriberWithMiddleware) StopIntake(ctx context.Context) error {
+	stopper, ok := s.Inner.(SubscriberIntakeStopper)
+	if !ok {
+		return nil
+	}
+	return stopper.StopIntake(ctx)
 }

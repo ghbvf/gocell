@@ -1,9 +1,9 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-19（PR#306 F6 Lifecycle/LazyWorker/Sweep 合入 + 4 follow-up）
+> 更新日期: 2026-04-19（PR#306 F6 Lifecycle/LazyWorker/Sweep 合入 + 4 follow-up + PR-OUTBOX-SHUTDOWN P1-21/R1）
 > 基线: develop@fbd4244（PR#184 合并后）
-> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard / PR#175 P1-2 configpublish fail-open 删除 / PR#176 S8 RBAC-OUTBOX-MIGRATION transactional outbox / PR#177 S30+S28+X7 outbox store abstraction / PR#178 X8 distlock hoist to runtime / PR#180 A5/A6/X6 outbox harden + RMQ polish / PR#181 S2+S13 config-core polish / PR#182 P1-3 公共端点 method-aware / PR#184 Subscription first-class + lease-lost fence + Commit→Ack ordering
+> 最近合入概览: Wave 1 ✅ 全部完成 / Post-Wave 1 PR#141-165 按层偿债 + 外部审查回灌 / PR#170+171 auth aud 强验证 + S9 可观测 / PR#172 SSO-BFF config walkthrough + HMAC doc / PR#174 outbox broker health nil fail-fast + e2e wire guard / PR#175 P1-2 configpublish fail-open 删除 / PR#176 S8 RBAC-OUTBOX-MIGRATION transactional outbox / PR#177 S30+S28+X7 outbox store abstraction / PR#178 X8 distlock hoist to runtime / PR#180 A5/A6/X6 outbox harden + RMQ polish / PR#181 S2+S13 config-core polish / PR#182 P1-3 公共端点 method-aware / PR#184 Subscription first-class + lease-lost fence + Commit→Ack ordering / PR-OUTBOX-SHUTDOWN P1-21+R1 shutdown barrier + Run() refactor
 > 未合入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
 > 标记说明:
 > 🟡 可延后 = 不卡正确性或安全；latent risk / DX / 测试覆盖 / 纯 tech debt / 供应链加固 / 架构打磨 — 可机会性纳入或 v1.0 后做
@@ -31,6 +31,7 @@
 | ~~P1-16~~ | ~~**CREDENTIAL-SWEEP-STARTUP-01**~~ ✅ PR#306：启动期独立 sweep 步骤已实现（不依赖 adminExists 分支）：过期文件即删，未过期文件重新注册 cleaner 任务；`TestIntegration_AdminExists_OrphanSwept` 回归覆盖 | — | — | 2026-04-19 Auth F6 Lifecycle 基石 PR |
 | P1-17 | **REFRESH-JTI-UNIQUENESS-01** (P1, Cx2): refresh token 轮换假设"新 token 字符串必变"，但 JWTIssuer.Issue claim 仅含秒级时间戳+固定字段，同秒并发/重放可产出同值 token，导致 reuse 检测/失效链路被绕过。对标 Dex `reuseInterval` + 原子 CAS 模型。**修复**: Issue 调用引入强制唯一因子（`jti: uuid`），保证每次 refresh 必产出新标识；此修复不阻塞 X10（无需换 opaque 即可落地） | 3h | `runtime/auth/jwt.go` + `cells/access-core/slices/sessionrefresh/service.go` | 2026-04-18 Auth 域审查 |
 | P1-18 | **REFRESH-INFRA-ERROR-CLASSIFY-01** (P1, Cx2): `sessionrefresh.lookupSession` 对首查错误不分型，基础设施故障被映射为业务未命中，进入 previous-token reuse 分支；仓储故障伪装成 session not found，运行期告警信号失真，PG 接线后尤为严重。**修复**: 仅对明确 `ErrSessionNotFound` 进 reuse 分支，infra error 单独返回内部错误并记录 `slog.Error` | 2h | `cells/access-core/slices/sessionrefresh/service.go` | 2026-04-18 Auth 域审查 |
+| ~~P1-21~~ | ~~**OUTBOX-SHUTDOWN-BARRIER-01**~~ ✅ PR-OUTBOX-SHUTDOWN：① `kernel/outbox.SubscriberIntakeStopper` 可选接口（两段式 drain 契约，对标 Watermill `closingInProgressCh`）；② `eventrouter.Router.Close` 三段式：StopIntake → cancel runCtx → wait in-flight；③ `adapters/rabbitmq.Subscriber.StopIntake` + `drainRemaining`：`basic.cancel` broker consumer + drain 已 prefetch deliveries；④ `bootstrap` 内部 runCtx 从 `context.Background()` 派生（对标 Uber fx `app.go:L545-567` 双 ctx 分离），外部 ctx cancel 只触发 phase10 编排；⑤ phase10 三段式（readinessFlip + LIFOTeardown + finalize）；⑥ shutdown metrics（phase counter + duration histogram + outcome counter）；⑦ testcontainers e2e 验证消息零丢失 + broker hard close 有界返回。**搭车吸收 R1**（见下条）。 | — | — | PR-OUTBOX-SHUTDOWN |
 
 ---
 
@@ -42,7 +43,7 @@
 |---|------|------|------|------|
 | K1 | **METADATA-PROJECTLOC-IFACE-01** (Cx3, 🟡 可延后): 提取 `ProjectLocator interface { Locate(file, path string) Position }` 隐藏 yaml.v3 AST；`ProjectMeta.FileNodes` 不再泄漏 | 3h | `kernel/metadata/` + `kernel/governance/` + `cmd/gocell/` | PR#152 seat-1 |
 | K2 | **OBS-RELAY-REGISTER-ATOMIC-01** (Cx3, 🟡 可延后): `outbox.NewProviderRelayCollector` 5 个 metric 原子注册，需 `Provider.Unregister` 支持或文档化契约 | 2h | `kernel/outbox/` + `kernel/observability/metrics/` | PR#157 review S3-05 |
-| R1 | **BOOTSTRAP-RUN-COGNIT-01** (Cx3, 🟡 可延后): `bootstrap.go::Run()` 认知复杂度 225（`//nolint:gocognit` 抑制），拆 `validateOptions()` / `buildRouter()` / `startServers()` 三段式 | 4h | `runtime/bootstrap/bootstrap.go` | PR#163 agent 报告 |
+| ~~R1~~ | ~~**BOOTSTRAP-RUN-COGNIT-01**~~ ✅ PR-OUTBOX-SHUTDOWN（搭车完成）：Run() 225 → 10；拆成 10 个 phase 方法（phase0ValidateOptions..phase10OrchestrateShutdown），新建 `run_state.go` 承接跨 phase 状态，`bootstrap_phases.go` 承载 phase 实现；移除 `//nolint:gocognit`；`gocognit -over 15 ./runtime/bootstrap/` 零输出 | — | — | PR-OUTBOX-SHUTDOWN |
 | R2 | **OBS-HTTP-COLLECTOR-AUTOWIRE-01** (Cx3, 🟡 可延后): `bootstrap.WithMetricsProvider` 自动为默认 HTTP 中间件构造 `NewProviderCollector`；设计 `WithHTTPCollectorCellID` option | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/` | PR#157 review S4-01 |
 | R3 | **OB-02** (🟡 可延后): safe_observe broken logger 注入测试 | 1h | `runtime/http/middleware/safe_observe_test.go` | 历史 backlog 0-J |
 | R4 | **INTERNAL-LISTENER-01** (Cx4, 🟡 可延后): `/internal/v1/` 与公网共用 listener + Bearer JWT；独立 listener 或 service-token/mTLS 策略 | 4-8h | `runtime/bootstrap/bootstrap.go` + cell 路由注册拆分 | PR#143 review F1 |
@@ -51,6 +52,8 @@
 | R6 | **RELAY-HEALTH-IFACE-01** (P3, Cx3, 🟠 条件延后，触发：第二个 Relay 实现出现): `bootstrap.WithRelayHealth(*outbox.Relay)` 接受具体类型而非接口，未来多 Relay 实现无法复用。**修复**: 提取 `RelayHealthProvider interface { HealthCheckers() map[string]func() error }`，`WithRelayHealth` 改接口参数 | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/outbox/` | PR#188 reviewer round 2 |
 | R7 | **CONFIG-EVENT-KEY-REDACTION-01** (P2, Cx1, 🟡 可延后，🟠 条件延后：若实际配置键命名含敏感片段): `configsubscribe` / `configreceive` 的 unknown action 分支 `slog.Warn` + error message 直接嵌入 `event.Key`；若未来配置系统键名包含敏感信息（环境名、账户路径）会泄露上下文。**修复**: 按实际键命名规范评估遮蔽策略；或在 error message 中只保留 action 不带 key | 1h | `cells/config-core/slices/configsubscribe/service.go` + `cells/access-core/slices/configreceive/service.go` | PR#186 reviewer round 1 F-configsub-2 |
 | R8 | **OUTBOX-OFF-SCOPE-SLEEP-CLEANUP-01** (P3, Cx2, 🟡 可延后): PR#186/#188 清理了 outbox/eventbus/relay 相关 ~20 处启动同步 `time.Sleep`，剩余约 77 处集中在 `adapters/rabbitmq`、`runtime/config/watcher`、`runtime/websocket`、`runtime/bootstrap`、`adapters/redis/distlock`、`pkg/securecookie`、`runtime/shutdown`、`runtime/eventrouter`、`runtime/http/middleware/cookie_session`。每类各自需要对应 adapter readiness API / 事件通道支持，独立排期分批做；可与 X9 modernize 搭车部分处理 | 10h | 多包 | PR#186/#188 scope 外汇总 |
+| R10 | **SUBSCRIBER-CLOSE-CTX-01** (P1, Cx2, 🟡 可延后): `kernel/outbox.Subscriber.Close() error` 无 context 参数，`rabbitmq.Subscriber.Close()` 内部用独立 `ShutdownTimeout` 驱动 `time.After`，与 bootstrap phase10 的 `shutCtx`（总 shutdownTimeout 预算）不共享，可能造成总超时预算被叠加放大。**修复**: 接口改为 `Close(ctx context.Context) error`；rabbitmq/eventbus/SubscriberWithMiddleware/所有 mock 同步更新，废弃独立 ShutdownTimeout 配置。**依赖**: 跨 kernel 接口，需独立 PR 评审；建议与 A18 ADAPTER-INTAKE-STOPPER-PARITY-01 搭车 | 4h | `kernel/outbox/outbox.go` + `adapters/rabbitmq/subscriber.go` + `runtime/eventbus/eventbus.go` + 所有 mock | PR#191 review UNRESOLVED-2 |
+| R11 | **BOOTSTRAP-EVENTBUS-FACTORY-01** (P3, Cx3, 🟡 可延后, 远期): `runtime/bootstrap/bootstrap_phases.go:26` 直接 import `runtime/eventbus` 获取默认 Publisher/Subscriber 实现，违反"通过接口注入"原则；将来替换默认 in-memory bus 需修改 bootstrap 代码。**修复**: 引入 `DefaultPublisherFactory` / `DefaultSubscriberFactory` option 接口，bootstrap 通过工厂取默认实现；eventbus 注册自己为默认工厂。对标 Uber fx Provide pattern。**原因**: 不阻塞正确性，长期架构打磨 | 3h | `runtime/bootstrap/` + `runtime/eventbus/` | PR#191 review UNRESOLVED-3 |
 
 ### adapter
 
@@ -66,6 +69,8 @@
 | A14 | **DISTLOCK-LOST-METRIC-01** (P3, Cx2, 🟡 可延后, 🟠 出现首个 distlock 消费方后触发): `Lock.Release` 返回 `ErrLockLost` 路径（past-expiry skip / Lua result==0 / double-Release）目前仅写 slog，无独立 metric label；对标 Redsync/Consul 惯例，应发射 `distlock_release_total{outcome="success|lost|error"}` 让 Grafana 能监控"锁失主"率。前置：runtime/observability 层需要先设计 label taxonomy（与 outbox_relayed_total 同族）。独立 PR 评审更聚焦。| 2h | `runtime/distlock/` + `adapters/redis/distlock.go` + collector wiring | PR#178 round-4 dev agent 自创 |
 | A15 | **DISTLOCK-RENEW-JITTER-01** (P3, Cx2, 🟡 可延后): `adapters/redis/distlock.go::renewLoop` ticker 硬编码 `ttl/2`，多 holder 并发拿锁会同步续租 → Redis 侧 thundering-herd。对标 Redsync `driftFactor`，续租间隔应加 ±10-20% jitter。独立 PR 改 renewLoop + 加 miniredis 压测覆盖。触发条件：生产出现 Redis 并发 Eval 峰值告警。| 2h | `adapters/redis/distlock.go` + test harness | PR#178 round-4 dev agent 自创 |
 | A16 | **DISTLOCK-RENEW-RATIO-CONFIGURABLE-01** (P3, Cx2, 🟡 可延后): renewLoop 续租比例写死 `ttl/2`，caller 无法按负载调成 `ttl/3`（更保守）或 `ttl*3/4`（低开销）。需要在 `DistLock` 构造器上增 `WithRenewRatio(float64)` option 并在 `Acquire` 传给 renewLoop。API surface 演进属于独立 PR 评审范畴。触发条件：首个 caller 提出续租开销或可靠性调优诉求。| 2h | `adapters/redis/distlock.go` 构造 + renewLoop + Acquire 参数 | PR#178 round-4 dev agent 自创 |
+| A18 | **ADAPTER-INTAKE-STOPPER-PARITY-01** (P3, Cx2, 🟡 可延后, 🟠 触发：新增 Kafka/NATS adapter 时): Kafka/NATS adapter 实现 `outbox.SubscriberIntakeStopper` 契约，保持与 rabbitmq/eventbus 的 shutdown barrier 语义一致。当前仓库仅有 rabbitmq 与 in-memory eventbus；新 adapter 引入时同步实现 `StopIntake()`（Kafka：pause/resume 或 close consumer group；NATS：unsubscribe） | 2h | `adapters/<kafka|nats>/subscriber.go` | PR-OUTBOX-SHUTDOWN follow-up |
+| A19 | **RMQ-SUBSCRIBER-CH-CLOSE-RACE-01** (P1, Cx2): `adapters/rabbitmq/subscriber.go::consumeLoop` 在 `ctx.Done()` 或 `closeCh` 触发时 `return nil`，但此时已启动的 `processDelivery` goroutine 可能仍在用 AMQP channel 执行 Ack/Nack/Commit；`subscribeOnce` 在 `consumeLoop` 返回后立即 `ch.Close()`，造成 ch 已关但 goroutine 仍在用的 use-after-close 窗口。dispatchAck 虽已用 `context.WithoutCancel(ctx)` 保 Commit/Release，但 Ack/Nack 本身仍会走向 closed channel（amqp091-go 返回 error 但不 panic；日志会出现一批 "channel is closed" 错误）。**修复方案**：① (推荐) `subscribeOnce` 把 `ch.Close()` 移到 `s.wg.Wait()` 之后，等 processDelivery goroutines 完成再关 channel；② `consumeLoop` return 前 `s.wg.Wait()`，但会阻塞 reconnect 路径；③ 维持现状 + godoc 注释说明 "ch closed after consumeLoop return is intentional; processDelivery tolerates closed ch via error handling"。**优先级**：P1 但非紧急（生产影响是日志噪音 + Ack 丢失率略升，不丢消息——broker 未收到 Ack 会 redeliver）| 3h | `adapters/rabbitmq/subscriber.go` | PR#191 review UNRESOLVED-1 |
 
 ### slice / cell 收口
 
@@ -146,6 +151,7 @@
 | X5 | **P3-TD-11 access-core domain 拆分** User/Session/Role | 4h | X1 | 历史 Batch 8 |
 | X9 | **LINT-MODERN-01** (Cx2, P3): 全仓库 modernization baseline 清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder/websocket）。独立 PR，不混入功能 | 6h | — | PR#163 post-review |
 | X10 | **AUTH-REFRESH-OPAQUE-01** (Cx3, 🟠 条件延后，X1 PG-DOMAIN-REPO 上线后触发): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7 |
+| X11 | **SHUTDOWN-BUDGET-SPLIT-01** (P3, Cx2, 🟡 可延后): bootstrap shutdownTimeout 当前为"单桶"，preShutdownDelay + LIFOTeardown 共享。若运维反馈某 teardown 阶段长期吃光预算导致其他阶段饥饿，可拆分独立 budget：`WithPreShutdownBudget(d)` / `WithDrainBudget(d)` / `WithCloseBudget(d)`，shutdownTimeout 作为总上限。对标 Watermill `Router.CloseTimeout` 独立配置。触发条件：ops 观察到 preShutdownDelay + LIFOTeardown 不同阶段的 timeout 分布出现尾部拖累 | 3h | `runtime/bootstrap/` | PR-OUTBOX-SHUTDOWN follow-up |
 
 ---
 
@@ -236,12 +242,12 @@
 | 分类 | 工时 |
 |------|------|
 | P0 阻塞 | ~6.5h |
-| P1 | ~49.5h（+17h: P1-13/14/15/16/17/18/19） |
-| P2 kernel/runtime | ~13-17h（+1h: S43） |
+| P1 | ~41.5h（-8h: P1-21 ✅） |
+| P2 kernel/runtime | ~9-13h（-4h: R1 ✅） |
 | P2 adapter | ~16h |
 | P2 slice/cell | ~24h（+6h: S31/S32/S33/S40/S41/S42） |
 | P2 发布 + 文档 | ~23h + v1.0 tag |
-| **核心路径合计（不含 P3）** | **~132-136h（约 16-17 工作日）** |
+| **核心路径合计（不含 P3）** | **~120-124h（约 15-16 工作日）** |
 | P3 长期 | 3-5d + 4.5d + 若干独立项 |
 
 ---
