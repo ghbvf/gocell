@@ -56,23 +56,34 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	cancel()
-	// Allow readiness flip to fire (~a few ms).
-	time.Sleep(50 * time.Millisecond)
 
-	// Within the preShutdownDelay window: HTTP should still 200, readyz should 503.
+	// Wait for /readyz to flip to 503 (SetShuttingDown fires at the start of
+	// phase10 before preShutdownDelay). This replaces a fixed sleep so the
+	// test is robust on slow CI runners.
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode == http.StatusServiceUnavailable
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"/readyz must flip to 503 at the start of preShutdownDelay")
+
+	// Within the preShutdownDelay window: HTTP main listener must still accept
+	// connections. Strong assertion — a dropped connection is a regression
+	// (before this fix, err was silently swallowed and the assertion skipped).
 	resp, err2 := testHTTPClient.Get(fmt.Sprintf("http://%s/", addr))
-	if err2 == nil {
-		resp.Body.Close()
-		// 404 is fine (no routes registered), anything but connection refused.
-		assert.NotEqual(t, 0, resp.StatusCode, "HTTP server must still accept connections during preShutdownDelay")
-	}
-	// /readyz should already be 503 (SetShuttingDown called before delay).
+	require.NoError(t, err2, "HTTP must still accept connections during preShutdownDelay")
+	resp.Body.Close()
+	assert.NotEqual(t, 0, resp.StatusCode, "HTTP server must serve a response")
+
+	// Confirm /readyz continues to return 503 throughout the window.
 	respZ, err3 := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
-	if err3 == nil {
-		respZ.Body.Close()
-		assert.Equal(t, http.StatusServiceUnavailable, respZ.StatusCode,
-			"/readyz must return 503 during preShutdownDelay")
-	}
+	require.NoError(t, err3, "/readyz must still respond during preShutdownDelay")
+	respZ.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, respZ.StatusCode,
+		"/readyz must return 503 during preShutdownDelay")
 
 	select {
 	case runErr := <-done:
