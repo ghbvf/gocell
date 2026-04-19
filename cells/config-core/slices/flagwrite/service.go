@@ -76,8 +76,9 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 	}
 	// Defensive check: outboxWriter and txRunner must be set together.
 	if (s.outboxWriter != nil) != (s.txRunner != nil) {
-		return nil, fmt.Errorf("flagwrite.NewService: outboxWriter and txRunner must both be set or both be nil (demo mode); " +
-			"providing one without the other breaks L2 atomicity")
+		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+			"flagwrite: outboxWriter and txRunner must both be set or both be nil; "+
+				"providing one without the other breaks L2 atomicity")
 	}
 	return s, nil
 }

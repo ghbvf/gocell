@@ -308,6 +308,11 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 // In the new CellModule model, ConfigCoreModule.Provide would build the real
 // PGResource from env. This test injects a fake by passing it as an extra
 // bootstrap.Option, exercising the ManagedResource lifecycle path directly.
+//
+// Note: despite the name, this test does NOT exercise the Postgres code path —
+// StorageBackend is fixed to "memory". The test name is historical. Its sole
+// purpose is verifying the WithManagedResource lifecycle hooks
+// (Checkers / Worker / Close).
 func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 

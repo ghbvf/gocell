@@ -358,8 +358,14 @@ func main() {
 //  2. BuildApp — each CellModule.Provide wires its own Cell + bootstrap opts.
 //  3. buildAssembly — register cells in the CoreAssembly.
 //  4. bootstrap.New(opts...).Run(ctx) — start lifecycle.
+//  5. buildConsumerBase — start the event-consumer goroutine pool.
+//
+// Adding a new Cell is O(1):
+//  1. Create cmd/core-bundle/<new>_module.go implementing bootstrap.CellModule.
+//  2. Append <New>CellModule{} to the BuildApp call list below.
 //
 // ref: uber-go/fx app.go Run — thin wrapper around Start/Stop lifecycle.
+// ref: R1d PR#203 — CellModule + BuildApp replaces AppDeps God Struct.
 func run(ctx context.Context) error {
 	shared, err := LoadSharedDepsFromEnv(ctx)
 	if err != nil {
@@ -386,12 +392,6 @@ func run(ctx context.Context) error {
 	}
 
 	metricsHandler := shared.metricsHandler
-	if metricsHandler == nil {
-		metricsHandler, err = buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
-		if err != nil {
-			return err
-		}
-	}
 
 	adapterInfo := shared.Topology.AdapterInfo()
 	slog.Info("core-bundle: startup configuration",

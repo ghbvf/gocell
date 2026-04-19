@@ -93,6 +93,27 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 	return flag
 }
 
+// --- Test: XOR violation guard ---
+
+// TestNewService_XORViolation verifies that NewService rejects half-wired
+// configs: providing only outboxWriter or only txRunner breaks L2 atomicity.
+func TestNewService_XORViolation(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []Option
+	}{
+		{"only_outbox_writer", []Option{WithOutboxWriter(&recordingWriter{})}},
+		{"only_tx_runner", []Option{WithTxManager(&noopTxRunner{})}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewService(mem.NewFlagRepository(), slog.Default(), tc.opts...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must both be set")
+		})
+	}
+}
+
 // --- Test: Create atomicity ---
 
 // TestFlagWrite_Create_Atomic_RepoAndOutbox verifies that Create writes repo +

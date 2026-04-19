@@ -84,6 +84,15 @@ func TestBuildApp_NilModuleInList(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil")
 }
 
+// TestBuildApp_EmptyModuleList verifies that zero modules is a valid call:
+// BuildApp returns empty cells/opts slices and no error.
+func TestBuildApp_EmptyModuleList(t *testing.T) {
+	cells, opts, err := bootstrap.BuildApp(context.Background(), okSharedDeps{})
+	require.NoError(t, err)
+	assert.Empty(t, cells)
+	assert.Empty(t, opts)
+}
+
 // TestBuildApp_TwoModules_AggregateCells verifies that BuildApp collects cells
 // from all modules in order.
 func TestBuildApp_TwoModules_AggregateCells(t *testing.T) {
