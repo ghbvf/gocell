@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe"
 	"github.com/ghbvf/gocell/cells/config-core/slices/configwrite"
 	"github.com/ghbvf/gocell/cells/config-core/slices/featureflag"
+	"github.com/ghbvf/gocell/cells/config-core/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -95,7 +96,7 @@ func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option
 	return func(c *ConfigCore) {
 		session := cellpg.NewSession(pool)
 		c.configRepo = cellpg.NewConfigRepository(session)
-		c.flagRepo = mem.NewFlagRepository() // flags remain in-memory in PR-C1
+		c.flagRepo = cellpg.NewFlagRepository(session)
 		c.outboxWriter = outboxWriter
 	}
 }
@@ -112,11 +113,12 @@ type ConfigCore struct {
 	logger       *slog.Logger
 
 	// Slice services and handlers.
-	writeHandler   *configwrite.Handler
-	readHandler    *configread.Handler
-	publishHandler *configpublish.Handler
-	flagHandler    *featureflag.Handler
-	subscribeSvc   *configsubscribe.Service
+	writeHandler     *configwrite.Handler
+	readHandler      *configread.Handler
+	publishHandler   *configpublish.Handler
+	flagHandler      *featureflag.Handler
+	flagWriteHandler *flagwrite.Handler
+	subscribeSvc     *configsubscribe.Service
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
@@ -160,6 +162,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
 	}
+	c.initFlagWriteSlice()
 	return nil
 }
 
@@ -263,6 +266,21 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 	return nil
 }
 
+// initFlagWriteSlice registers the flag-write L2 slice: Create/Update/Toggle/Delete
+// with transactional outbox (flag.changed.v1 event).
+func (c *ConfigCore) initFlagWriteSlice() {
+	var opts []flagwrite.Option
+	if c.outboxWriter != nil {
+		opts = append(opts, flagwrite.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		opts = append(opts, flagwrite.WithTxManager(c.txRunner))
+	}
+	flagWriteSvc := flagwrite.NewService(c.flagRepo, c.logger, opts...)
+	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
+	c.AddSlice(cell.NewBaseSlice("flag-write", "config-core", cell.L2))
+}
+
 // RegisterRoutes registers HTTP routes for config-core.
 func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
@@ -280,11 +298,18 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 			cfg.Handle("POST /{key}/rollback", http.HandlerFunc(c.publishHandler.HandleRollback))
 		})
 
-		// feature-flag: /api/v1/flags
+		// feature-flag: /api/v1/flags — read + evaluate (L0)
+		// flag-write: /api/v1/flags — write + toggle + delete (L2)
 		v1.Route("/flags", func(f cell.RouteMux) {
+			// feature-flag (read) slice
 			f.Handle("GET /", http.HandlerFunc(c.flagHandler.HandleList))
 			f.Handle("GET /{key}", http.HandlerFunc(c.flagHandler.HandleGet))
 			f.Handle("POST /{key}/evaluate", http.HandlerFunc(c.flagHandler.HandleEvaluate))
+			// flag-write slice
+			f.Handle("POST /", http.HandlerFunc(c.flagWriteHandler.HandleCreate))
+			f.Handle("PUT /{key}", http.HandlerFunc(c.flagWriteHandler.HandleUpdate))
+			f.Handle("POST /{key}/toggle", http.HandlerFunc(c.flagWriteHandler.HandleToggle))
+			f.Handle("DELETE /{key}", http.HandlerFunc(c.flagWriteHandler.HandleDelete))
 		})
 	})
 }
