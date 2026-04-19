@@ -59,6 +59,11 @@ type Service struct {
 }
 
 // NewService creates a flag-write Service.
+//
+// Defensive invariant: outboxWriter and txRunner must either both be set or
+// both be nil (demo mode). Providing one without the other is a configuration
+// error and will panic at startup. Cell Init() performs the same XOR check;
+// this panic is a secondary fail-fast guard.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		repo:   repo,
@@ -66,6 +71,11 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	// Defensive check: outboxWriter and txRunner must be set together.
+	if (s.outboxWriter != nil) != (s.txRunner != nil) {
+		panic("flagwrite.NewService: outboxWriter and txRunner must both be set or both be nil (demo mode); " +
+			"providing one without the other breaks L2 atomicity")
 	}
 	return s
 }
@@ -204,6 +214,9 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 
 func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *domain.FeatureFlag) error {
 	if s.outboxWriter == nil {
+		// Demo mode: outboxWriter is nil (txRunner is also nil per NewService invariant).
+		// This path is only reachable when Service is constructed without WithOutboxWriter,
+		// which is allowed for local demo/testing without a real broker.
 		return nil
 	}
 	payload, err := json.Marshal(FlagChangedPayload{
