@@ -86,7 +86,7 @@ func newShutdownTestConn(t *testing.T, amqpURL string) *rabbitmq.Connection {
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
 	require.NoError(t, err, "create rabbitmq connection for shutdown e2e")
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
 }
 

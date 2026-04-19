@@ -104,7 +104,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
-	migrationPool.Close()
+	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
 	eb := eventbus.New()

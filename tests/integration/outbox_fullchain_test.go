@@ -57,7 +57,7 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 	require.NoError(t, err, "create postgres pool")
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if termErr := container.Terminate(ctx); termErr != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", termErr)
 		}
@@ -85,7 +85,7 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 	require.NoError(t, err, "create rabbitmq connection")
 
 	cleanup := func() {
-		_ = conn.Close()
+		_ = conn.Close(ctx)
 		if termErr := container.Terminate(ctx); termErr != nil {
 			t.Logf("WARN: failed to terminate rabbitmq container: %v", termErr)
 		}
@@ -123,7 +123,7 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	require.NoError(t, err, "create redis client")
 
 	cleanup := func() {
-		_ = client.Close()
+		_ = client.Close(ctx)
 		if termErr := container.Terminate(ctx); termErr != nil {
 			t.Logf("WARN: failed to terminate redis container: %v", termErr)
 		}
@@ -726,3 +726,5 @@ func (p *capturingPublisher) Publish(_ context.Context, topic string, payload []
 	p.messages <- publishedMessage{topic: topic, payload: payload}
 	return nil
 }
+
+func (p *capturingPublisher) Close(_ context.Context) error { return nil }

@@ -67,7 +67,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	)
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}

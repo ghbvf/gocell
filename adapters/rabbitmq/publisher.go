@@ -26,6 +26,7 @@ var _ outbox.Publisher = (*Publisher)(nil)
 // ref: Watermill defaultChannelProvider — ephemeral per-publish channel
 type Publisher struct {
 	conn   *Connection
+	mu     sync.Mutex // guards closed/wg.Add ordering to prevent Add-after-Wait race
 	closed atomic.Bool
 	wg     sync.WaitGroup
 }
@@ -43,9 +44,16 @@ func NewPublisher(conn *Connection) *Publisher {
 //
 // ref: uber-go/fx app.go StopTimeout — ctx passes the shared shutdown budget.
 func (p *Publisher) Close(ctx context.Context) error {
+	// Serialize closed flip with any concurrent Publish's wg.Add to prevent
+	// the WaitGroup Add-after-Wait race. After this critical section returns,
+	// new Publish calls observe closed==true and bail before Add.
+	p.mu.Lock()
 	if !p.closed.CompareAndSwap(false, true) {
+		p.mu.Unlock()
 		return nil
 	}
+	p.mu.Unlock()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -74,10 +82,16 @@ func (p *Publisher) Close(ctx context.Context) error {
 //
 // Returns ErrAdapterAMQPPublish if the publisher has been closed.
 func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) error {
+	// Lock-step closed check + wg.Add to guarantee we never Add after Close has
+	// flipped closed and started wg.Wait. Without this, sync.WaitGroup would
+	// race between Add and Wait under -race.
+	p.mu.Lock()
 	if p.closed.Load() {
+		p.mu.Unlock()
 		return errcode.New(ErrAdapterAMQPPublish, "rabbitmq: publisher is closed")
 	}
 	p.wg.Add(1)
+	p.mu.Unlock()
 	defer p.wg.Done()
 
 	ch, err := p.conn.AcquireChannel()

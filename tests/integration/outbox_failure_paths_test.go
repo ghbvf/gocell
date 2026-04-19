@@ -72,6 +72,8 @@ func (p *flakyPublisher) Publish(_ context.Context, topic string, payload []byte
 	return nil
 }
 
+func (p *flakyPublisher) Close(_ context.Context) error { return nil }
+
 func (p *flakyPublisher) attemptsFor(topic string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -98,6 +100,8 @@ func (p *alwaysFailPublisher) Publish(_ context.Context, _ string, _ []byte) err
 	p.mu.Unlock()
 	return assert.AnError
 }
+
+func (p *alwaysFailPublisher) Close(_ context.Context) error { return nil }
 
 func (p *alwaysFailPublisher) count() int {
 	p.mu.Lock()
@@ -132,6 +136,8 @@ func (p *stoppingPublisher) Publish(ctx context.Context, _ string, _ []byte) err
 }
 
 func (p *stoppingPublisher) release() { close(p.released) }
+
+func (p *stoppingPublisher) Close(_ context.Context) error { return nil }
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -298,6 +304,8 @@ func (p *countingPublisher) Publish(_ context.Context, topic string, payload []b
 	p.total.Add(1)
 	return nil
 }
+
+func (p *countingPublisher) Close(_ context.Context) error { return nil }
 
 func (p *countingPublisher) duplicates() []string {
 	p.mu.Lock()
