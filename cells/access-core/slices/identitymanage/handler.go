@@ -104,8 +104,8 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	})
 	// POST /{id}/password: SelfOr policy + PasswordResetExempt so that a user
 	// whose token carries password_reset_required=true can still reach this
-	// endpoint to satisfy the reset requirement. This replaces the previous
-	// cmd/core-bundle WithPasswordResetExemptEndpoints declaration.
+	// endpoint to satisfy the reset requirement. Router.FinalizeAuth aggregates
+	// this declaration alongside all other Cell declarations at Bootstrap phase 5.
 	auth.Declare(mux, auth.RouteDecl{
 		Method:              "POST",
 		Path:                "/{id}/password",

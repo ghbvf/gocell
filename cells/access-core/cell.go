@@ -522,12 +522,13 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 		sub.Route("/users", c.identityHandler.RegisterRoutes)
 
 		// Session endpoints: /api/v1/access/sessions.
+		// Public routes, password-reset-exempt routes and their implicit hint are
+		// all declared inline here. Router.FinalizeAuth aggregates every Cell's
+		// declarations at Bootstrap phase 5.
 		// Login and refresh are public (no JWT required). Logout requires the
 		// caller to be authenticated as the session owner or an admin, and is
 		// PasswordResetExempt so a token carrying password_reset_required=true
-		// can still reach this endpoint. These declarations replace the previous
-		// cmd/core-bundle WithPublicEndpoints / WithPasswordResetExemptEndpoints
-		// entries for this cell.
+		// can still reach this endpoint.
 		sub.Route("/sessions", func(s cell.RouteMux) {
 			auth.Declare(s, auth.RouteDecl{
 				Method:  "POST",

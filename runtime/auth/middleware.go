@@ -130,9 +130,12 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 // response. When changeEndpointHint is non-empty, it is emitted as
 // details.change_password_endpoint so clients can navigate to the correct
 // endpoint; when empty, the details map is omitted — runtime/auth itself
-// carries no knowledge of any specific business path. The hint originates
-// from WithPasswordResetChangeEndpointHint, which the composition root sets
-// alongside WithPasswordResetExemptEndpoints.
+// carries no knowledge of any specific business path.
+//
+// The hint is derived by Router.FinalizeAuth from the first declared
+// PasswordResetExempt=true + Method=POST AuthRouteMeta, or set directly via
+// auth.WithPasswordResetChangeEndpointHintFn. Empty string omits the
+// details.change_password_endpoint field entirely.
 func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint string) {
 	errBody := map[string]any{
 		"code":    string(errcode.ErrAuthPasswordResetRequired),
