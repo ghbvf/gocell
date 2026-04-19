@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,14 +80,34 @@ func WithInMemoryDefaults() Option {
 	}
 }
 
+// WithKeyProvider sets the KeyProvider for sensitive config value encryption.
+// The provider is used to construct a ValueTransformer that encrypts/decrypts
+// sensitive=true values at the repository boundary.
+func WithKeyProvider(p crypto.KeyProvider) Option {
+	return func(c *ConfigCore) {
+		c.keyProvider = p
+		c.valueTransformer = crypto.NewValueTransformer(p)
+	}
+}
+
+// WithValueTransformer sets the ValueTransformer directly (alternative to
+// WithKeyProvider; useful in tests that inject a pre-built transformer).
+func WithValueTransformer(t crypto.ValueTransformer) Option {
+	return func(c *ConfigCore) { c.valueTransformer = t }
+}
+
 // WithPostgresDefaults wires the config-core cell with PostgreSQL-backed
 // repositories and a transactional outbox. Use this option when
 // GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
-// migrations (004_create_config_entries_and_versions.sql) before starting.
-// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
+// migrations (001–008) before starting.
 //
 // pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
 // writes to the outbox_entries table within the same transaction.
+//
+// Encryption: when a KeyProvider or ValueTransformer has been configured via
+// WithKeyProvider/WithValueTransformer, the PG repo encrypts sensitive=true
+// values at the repository boundary. The transformer is resolved at Init() so
+// WithKeyProvider and WithPostgresDefaults may be called in any order.
 //
 // L2 consistency: repo writes + outbox writes are wrapped in a single
 // RunInTx call per service operation.
@@ -94,9 +115,8 @@ func WithInMemoryDefaults() Option {
 // ref: go-zero wire — adapter selected at assembly init time, not run time.
 func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option {
 	return func(c *ConfigCore) {
-		session := cellpg.NewSession(pool)
-		c.configRepo = cellpg.NewConfigRepository(session)
-		c.flagRepo = cellpg.NewFlagRepository(session)
+		// Store the pool for deferred repo construction in Init().
+		c.pgPool = pool
 		c.outboxWriter = outboxWriter
 	}
 }
@@ -104,13 +124,16 @@ func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option
 // ConfigCore is the config-core Cell implementation.
 type ConfigCore struct {
 	*cell.BaseCell
-	configRepo   ports.ConfigRepository
-	flagRepo     ports.FlagRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	cursorCodec  *query.CursorCodec
-	logger       *slog.Logger
+	configRepo       ports.ConfigRepository
+	flagRepo         ports.FlagRepository
+	publisher        outbox.Publisher
+	outboxWriter     outbox.Writer
+	txRunner         persistence.TxRunner
+	cursorCodec      *query.CursorCodec
+	logger           *slog.Logger
+	keyProvider      crypto.KeyProvider
+	valueTransformer crypto.ValueTransformer
+	pgPool           *pgxpool.Pool // stored by WithPostgresDefaults for deferred Init()
 
 	// Slice services and handlers.
 	writeHandler     *configwrite.Handler
@@ -140,11 +163,21 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 	return c
 }
 
-// Init constructs all 5 slices and registers them.
+// Init constructs all slices and registers them. If pgPool is set
+// (via WithPostgresDefaults), the PG repos are built here after all options
+// have been applied (so WithKeyProvider can precede or follow WithPostgresDefaults).
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
+
+	// Deferred PG repo construction — options are all applied before Init().
+	if c.pgPool != nil && c.configRepo == nil {
+		session := cellpg.NewSession(c.pgPool)
+		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer)
+		c.flagRepo = cellpg.NewFlagRepository(session)
+	}
+
 	if err := c.validateOutboxDeps(deps); err != nil {
 		return err
 	}

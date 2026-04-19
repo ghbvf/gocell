@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -42,8 +43,9 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
 // ConfigRepository implements ports.ConfigRepository using PostgreSQL.
 type ConfigRepository struct {
-	db      DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
-	session *Session // production path: resolves ambient tx via persistence.TxCtxKey
+	db          DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
+	session     *Session // production path: resolves ambient tx via persistence.TxCtxKey
+	transformer crypto.ValueTransformer
 }
 
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
@@ -51,9 +53,9 @@ type ConfigRepository struct {
 // via persistence.TxCtxKey. Session is the sole production entry point;
 // use the unexported newConfigRepositoryFromDBTX in tests.
 //
-// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
-func NewConfigRepository(s *Session) *ConfigRepository {
-	return &ConfigRepository{session: s}
+// Requires migrations 001–008 to be applied first (see adapters/postgres/migrations/).
+func NewConfigRepository(s *Session, tr crypto.ValueTransformer) *ConfigRepository {
+	return &ConfigRepository{session: s, transformer: tr}
 }
 
 // resolveDB returns the DBTX to use for read calls. When a Session is
@@ -77,12 +79,41 @@ func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 	return r.db, nil
 }
 
-// Create inserts a new config entry.
-func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry) error {
-	const query = `INSERT INTO config_entries
-		(id, key, value, sensitive, version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`
+// encryptValue encrypts value for a sensitive entry using the transformer.
+// Returns (ciphertext, keyID, nonce, edk) or error.
+func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
+	if r.transformer == nil {
+		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+			"config repo: no ValueTransformer configured for sensitive entry")
+	}
+	aad := crypto.AADForConfig("config-core", key)
+	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
+	if err != nil {
+		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt value for key %s: %w", key, err)
+	}
+	return ct, keyID, nonce, edk, nil
+}
 
+// decryptValue decrypts a cipher-column tuple for a sensitive entry.
+// Fail-closed: returns ErrConfigDecryptFailed on any error.
+func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
+	if r.transformer == nil {
+		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
+	}
+	aad := crypto.AADForConfig("config-core", key)
+	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
+	if err != nil {
+		return "", errcode.Wrap(errcode.ErrConfigDecryptFailed,
+			fmt.Sprintf("config repo: decrypt failed for key %s", key), err)
+	}
+	return string(pt), nil
+}
+
+// Create inserts a new config entry.
+// For sensitive=true: encrypts value and writes cipher columns; value column is set to "".
+// For sensitive=false: writes plaintext value; cipher columns are NULL.
+func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry) error {
 	now := time.Now()
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = now
@@ -95,36 +126,58 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(ctx, query,
-		entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
-		entry.CreatedAt, entry.UpdatedAt,
-	)
+
+	if entry.Sensitive {
+		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
+		if encErr != nil {
+			return encErr
+		}
+		const q = `INSERT INTO config_entries
+			(id, key, value, sensitive, version, created_at, updated_at,
+			 value_cipher, value_key_id, value_edk, value_nonce)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
+		_, err = db.Exec(ctx, q,
+			entry.ID, entry.Key, "", entry.Sensitive, entry.Version,
+			entry.CreatedAt, entry.UpdatedAt,
+			ct, keyID, edk, nonce,
+		)
+	} else {
+		const q = `INSERT INTO config_entries
+			(id, key, value, sensitive, version, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`
+		_, err = db.Exec(ctx, q,
+			entry.ID, entry.Key, entry.Value, entry.Sensitive, entry.Version,
+			entry.CreatedAt, entry.UpdatedAt,
+		)
+	}
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: create failed for key %s", entry.Key), err)
 	}
-
 	return nil
 }
 
-// GetByKey retrieves a config entry by key.
+// GetByKey retrieves a config entry by key with transparent decryption for
+// sensitive entries. Sets entry.Stale=true when keyID != current active key.
 func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	const query = `SELECT id, key, value, sensitive, version, created_at, updated_at
+	const q = `SELECT id, key, value, sensitive, version, created_at, updated_at,
+		value_cipher, value_key_id, value_edk, value_nonce
 		FROM config_entries WHERE key = $1`
 
-	row := r.resolveDB(ctx).QueryRow(ctx, query, key)
+	row := r.resolveDB(ctx).QueryRow(ctx, q, key)
 
-	var e domain.ConfigEntry
-	if err := row.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
-		// REPO-SCAN-CLASSIFY-01: distinguish pgx.ErrNoRows (404) from other
-		// scan errors (internal/query error). Previously all scan errors were
-		// mapped to ErrConfigRepoNotFound which hid real DB failures.
-		// ref: go-zero sqlx — sql.ErrNoRows as sentinel for not-found.
+	var (
+		e           domain.ConfigEntry
+		valueCipher []byte
+		valueKeyID  *string
+		valueEDK    []byte
+		valueNonce  []byte
+	)
+	if err := row.Scan(
+		&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt,
+		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// PR#155 followup F3: Message is the externally visible string for 4xx
-			// (writeErrcodeError pass-through). Keep it identifier-free; the key
-			// goes into InternalMessage which is logged but never written to the
-			// HTTP response. ref: pkg/errcode.Safe.
 			return nil, &errcode.Error{
 				Code:            errcode.ErrConfigRepoNotFound,
 				Message:         "config not found",
@@ -140,15 +193,53 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 		}
 	}
 
+	// Fail-closed enforcement for sensitive entries.
+	if e.Sensitive {
+		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
+			// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
+			// Block read until plaintext_migration completes to enforce
+			// fail-closed semantics — never return plaintext from unencrypted rows.
+			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+				"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
+		}
+		plain, err := r.decryptValue(ctx, key, valueCipher, *valueKeyID, valueNonce, valueEDK)
+		if err != nil {
+			return nil, err
+		}
+		e.Value = plain
+		e.KeyID = *valueKeyID
+
+		// Staleness check: if the stored keyID differs from current, mark stale.
+		if r.transformer != nil {
+			currentID := r.currentKeyID(ctx)
+			if currentID != "" && currentID != *valueKeyID {
+				e.Stale = true
+			}
+		}
+	}
+
 	return &e, nil
 }
 
-// Update updates an existing config entry.
-func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry) error {
-	const query = `UPDATE config_entries
-		SET value = $1, sensitive = $2, version = $3, updated_at = $4
-		WHERE key = $5`
+// currentKeyID returns the ID of the current key from the transformer.
+// Returns "" if the transformer does not support key introspection or fails.
+func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
+	type hasCurrent interface {
+		CurrentKeyID(ctx context.Context) (string, error)
+	}
+	if c, ok := r.transformer.(hasCurrent); ok {
+		id, err := c.CurrentKeyID(ctx)
+		if err != nil {
+			return ""
+		}
+		return id
+	}
+	return ""
+}
 
+// Update updates an existing config entry.
+// For sensitive=true: re-encrypts value and writes cipher columns.
+func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry) error {
 	if entry.UpdatedAt.IsZero() {
 		entry.UpdatedAt = time.Now()
 	}
@@ -157,9 +248,30 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 	if err != nil {
 		return err
 	}
-	affected, err := db.Exec(ctx, query,
-		entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
-	)
+
+	var affected int64
+	if entry.Sensitive {
+		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
+		if encErr != nil {
+			return encErr
+		}
+		const q = `UPDATE config_entries
+			SET value = $1, sensitive = $2, version = $3, updated_at = $4,
+			    value_cipher = $5, value_key_id = $6, value_edk = $7, value_nonce = $8
+			WHERE key = $9`
+		affected, err = db.Exec(ctx, q,
+			"", entry.Sensitive, entry.Version, entry.UpdatedAt,
+			ct, keyID, edk, nonce, entry.Key,
+		)
+	} else {
+		const q = `UPDATE config_entries
+			SET value = $1, sensitive = $2, version = $3, updated_at = $4,
+			    value_cipher = NULL, value_key_id = NULL, value_edk = NULL, value_nonce = NULL
+			WHERE key = $5`
+		affected, err = db.Exec(ctx, q,
+			entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
+		)
+	}
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: update failed for key %s", entry.Key), err)
@@ -169,19 +281,18 @@ func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry
 			"config not found",
 			fmt.Sprintf("config repo: Update miss key=%s", entry.Key))
 	}
-
 	return nil
 }
 
 // Delete removes a config entry by key.
 func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
-	const query = `DELETE FROM config_entries WHERE key = $1`
+	const q = `DELETE FROM config_entries WHERE key = $1`
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return err
 	}
-	affected, err := db.Exec(ctx, query, key)
+	affected, err := db.Exec(ctx, q, key)
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: delete failed for key %s", key), err)
@@ -191,15 +302,38 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 			"config not found",
 			fmt.Sprintf("config repo: Delete miss key=%s", key))
 	}
-
 	return nil
+}
+
+// sensitiveListSentinel is the placeholder value returned by List for sensitive entries.
+// List does not decrypt sensitive values — callers use GetByKey for plaintext access.
+const sensitiveListSentinel = "***"
+
+// applySensitiveListSentinel redacts the value field of a sensitive list entry
+// and preserves key metadata (KeyID, Stale) for informational purposes.
+func applySensitiveListSentinel(e *domain.ConfigEntry, valueKeyID *string, currentID string) {
+	e.Value = sensitiveListSentinel
+	if valueKeyID == nil {
+		return
+	}
+	e.KeyID = *valueKeyID
+	if currentID != "" && currentID != *valueKeyID {
+		e.Stale = true
+	}
 }
 
 // List retrieves config entries with keyset cursor pagination.
 // Requires composite index: CREATE INDEX idx_config_entries_key_id ON config_entries (key ASC, id ASC)
+//
+// Sensitive entries: List does NOT decrypt values. Instead, the Value field is
+// set to "***" (sentinel) and KeyID / Stale are preserved from the cipher columns.
+// Callers must use GetByKey to retrieve the decrypted plaintext for a specific entry.
+//
+// This design avoids bulk decryption on list operations and prevents accidental
+// exposure of sensitive values in list responses.
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	b := query.NewBuilder()
-	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at FROM config_entries WHERE 1=1")
+	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at, value_key_id FROM config_entries WHERE 1=1")
 
 	if err := query.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
@@ -212,11 +346,18 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	}
 	defer rows.Close()
 
+	currentID := r.currentKeyID(ctx)
 	var entries []*domain.ConfigEntry
 	for rows.Next() {
-		var e domain.ConfigEntry
-		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var (
+			e          domain.ConfigEntry
+			valueKeyID *string
+		)
+		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt, &valueKeyID); err != nil {
 			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
+		}
+		if e.Sensitive {
+			applySensitiveListSentinel(&e, valueKeyID, currentID)
 		}
 		entries = append(entries, &e)
 	}
@@ -228,45 +369,64 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 }
 
 // PublishVersion inserts a config version record.
+// For sensitive=true: encrypts value and writes cipher columns.
 func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.ConfigVersion) error {
-	const query = `INSERT INTO config_versions
-		(id, config_id, version, value, sensitive, published_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`
-
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(ctx, query,
-		version.ID, version.ConfigID, version.Version,
-		version.Value, version.Sensitive, version.PublishedAt,
-	)
+
+	if version.Sensitive {
+		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, version.ConfigID, version.Value)
+		if encErr != nil {
+			return encErr
+		}
+		const q = `INSERT INTO config_versions
+			(id, config_id, version, value, sensitive, published_at,
+			 value_cipher, value_key_id, value_edk, value_nonce)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+		_, err = db.Exec(ctx, q,
+			version.ID, version.ConfigID, version.Version,
+			"", version.Sensitive, version.PublishedAt,
+			ct, keyID, edk, nonce,
+		)
+	} else {
+		const q = `INSERT INTO config_versions
+			(id, config_id, version, value, sensitive, published_at)
+			VALUES ($1, $2, $3, $4, $5, $6)`
+		_, err = db.Exec(ctx, q,
+			version.ID, version.ConfigID, version.Version,
+			version.Value, version.Sensitive, version.PublishedAt,
+		)
+	}
 	if err != nil {
 		return errcode.Wrap(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: publish version failed for config %s v%d",
 				version.ConfigID, version.Version), err)
 	}
-
 	return nil
 }
 
-// GetVersion retrieves a specific config version.
+// GetVersion retrieves a specific config version with transparent decryption.
 func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error) {
-	const query = `SELECT id, config_id, version, value, sensitive, published_at
+	const q = `SELECT id, config_id, version, value, sensitive, published_at,
+		value_cipher, value_key_id, value_edk, value_nonce
 		FROM config_versions WHERE config_id = $1 AND version = $2`
 
-	row := r.resolveDB(ctx).QueryRow(ctx, query, configID, version)
+	row := r.resolveDB(ctx).QueryRow(ctx, q, configID, version)
 
-	var v domain.ConfigVersion
-	if err := row.Scan(&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt); err != nil {
-		// REPO-SCAN-CLASSIFY-01: distinguish pgx.ErrNoRows (404) from other
-		// scan errors (internal/query error). Previously all scan errors were
-		// mapped to ErrConfigRepoNotFound which hid real DB failures.
-		// ref: go-zero sqlx — sql.ErrNoRows as sentinel for not-found.
+	var (
+		v           domain.ConfigVersion
+		valueCipher []byte
+		valueKeyID  *string
+		valueEDK    []byte
+		valueNonce  []byte
+	)
+	if err := row.Scan(
+		&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt,
+		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// PR#155 followup F3: external Message must not leak the internal config_id
-			// or the requested version (would help an attacker enumerate). Identifiers
-			// stay in InternalMessage + Cause for logs/diagnostics only.
 			return nil, &errcode.Error{
 				Code:            errcode.ErrConfigRepoNotFound,
 				Message:         "config version not found",
@@ -280,6 +440,20 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			InternalMessage: fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version),
 			Cause:           err,
 		}
+	}
+
+	// Fail-closed enforcement for sensitive versions.
+	if v.Sensitive {
+		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
+			// Legacy plaintext version row: block read until plaintext_migration completes.
+			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
+		}
+		plain, err := r.decryptValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
+		if err != nil {
+			return nil, err
+		}
+		v.Value = plain
 	}
 
 	return &v, nil
