@@ -136,7 +136,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 	t.Helper()
 	ctx := context.Background()
 
-	cells, cellOpts, err := bootstrap.BuildApp(ctx, shared,
+	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
 		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
@@ -237,7 +237,7 @@ func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
 	deps := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
 	deps.VerboseToken = "" // violate prod invariant
 
-	_, _, err := bootstrap.BuildApp(context.Background(), deps,
+	_, _, err := BuildApp(context.Background(), deps,
 		ConfigCoreModule{},
 		AccessCoreModule{},
 		AuditCoreModule{},

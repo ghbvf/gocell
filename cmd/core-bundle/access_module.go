@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -26,17 +25,12 @@ func (AccessCoreModule) ID() string { return "access-core" }
 
 // Provide resolves all access-core-specific dependencies and returns the
 // constructed cell and the lazy admin bootstrap worker option.
-func (m AccessCoreModule) Provide(_ context.Context, sharedProv bootstrap.SharedDepsProvider) (cell.Cell, []bootstrap.Option, error) {
-	s, ok := sharedProv.(*SharedDeps)
-	if !ok {
-		return nil, nil, fmt.Errorf("access-core: expected *SharedDeps, got %T", sharedProv)
-	}
-
+func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(s.EventBus),
-		accesscore.WithJWTIssuer(s.JWTDeps.issuer),
-		accesscore.WithJWTVerifier(s.JWTDeps.verifier),
+		accesscore.WithPublisher(shared.EventBus),
+		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
+		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 	}, m.InitialAdminOpts...)
 	c := accesscore.NewAccessCore(accessOpts...)
 
@@ -47,4 +41,4 @@ func (m AccessCoreModule) Provide(_ context.Context, sharedProv bootstrap.Shared
 	return c, opts, nil
 }
 
-var _ bootstrap.CellModule = AccessCoreModule{}
+var _ CellModule = AccessCoreModule{}

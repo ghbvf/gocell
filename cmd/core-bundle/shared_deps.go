@@ -17,8 +17,8 @@ import (
 // Cell-specific dependencies (KeyProvider, PGResource, cellOpts) are managed
 // by the corresponding *_module.go file.
 //
-// SharedDeps implements bootstrap.SharedDepsProvider so it can be passed to
-// bootstrap.BuildApp directly.
+// SharedDeps is passed directly to BuildApp and each CellModule.Provide,
+// giving type-safe access to all cross-cutting fields without type-assertion.
 //
 // ref: uber-go/fx fx.Supply — shared values provided once to all modules.
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —

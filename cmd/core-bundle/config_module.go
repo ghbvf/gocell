@@ -21,26 +21,21 @@ func (ConfigCoreModule) ID() string { return "config-core" }
 
 // Provide resolves all config-core-specific dependencies and returns the
 // constructed cell and any bootstrap.Options (e.g. WithManagedResource).
-func (ConfigCoreModule) Provide(ctx context.Context, sharedProv bootstrap.SharedDepsProvider) (cell.Cell, []bootstrap.Option, error) {
-	s, ok := sharedProv.(*SharedDeps)
-	if !ok {
-		return nil, nil, fmt.Errorf("config-core: expected *SharedDeps, got %T", sharedProv)
-	}
-
-	kp, err := buildKeyProvider(s.Topology.StorageBackend)
+func (ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+	kp, err := buildKeyProvider(shared.Topology.StorageBackend)
 	if err != nil {
 		return nil, nil, fmt.Errorf("config-core key provider: %w", err)
 	}
 	vt := keyProviderToTransformer(kp)
 
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, s.Topology, s.EventBus, s.PromStack.metricProvider, vt)
+	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, shared.EventBus, shared.PromStack.metricProvider, vt)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	baseOpts := []configcore.Option{
-		configcore.WithPublisher(s.EventBus),
-		configcore.WithCursorCodec(s.CursorCodecs.config),
+		configcore.WithPublisher(shared.EventBus),
+		configcore.WithCursorCodec(shared.CursorCodecs.config),
 	}
 	if vt != nil {
 		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
@@ -54,4 +49,4 @@ func (ConfigCoreModule) Provide(ctx context.Context, sharedProv bootstrap.Shared
 	return c, opts, nil
 }
 
-var _ bootstrap.CellModule = ConfigCoreModule{}
+var _ CellModule = ConfigCoreModule{}

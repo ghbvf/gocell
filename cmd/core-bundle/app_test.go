@@ -1,9 +1,8 @@
-package bootstrap_test
+package main
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -14,55 +13,46 @@ import (
 
 // --- test doubles ---
 
-type okSharedDeps struct{}
+// okCellModule returns a cell.Cell and no error.
+type okCellModule struct{ name string }
 
-func (okSharedDeps) Validate() error { return nil }
+func (m okCellModule) ID() string { return m.name }
 
-type failSharedDeps struct{}
-
-func (failSharedDeps) Validate() error {
-	return fmt.Errorf("validation: missing required token")
-}
-
-// okModule returns a cell.Cell (via cell.BaseCell) and no error.
-type okModule struct{ name string }
-
-func (m okModule) ID() string { return m.name }
-
-func (m okModule) Provide(_ context.Context, _ bootstrap.SharedDepsProvider) (cell.Cell, []bootstrap.Option, error) {
+func (m okCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	c := cell.NewBaseCell(cell.CellMetadata{ID: m.name})
 	return c, nil, nil
 }
 
-var _ bootstrap.CellModule = okModule{}
+var _ CellModule = okCellModule{}
 
-// errModule returns an error from Provide.
-type errModule struct {
+// errCellModule returns an error from Provide.
+type errCellModule struct {
 	name string
 	err  error
 }
 
-func (m errModule) ID() string { return m.name }
+func (m errCellModule) ID() string { return m.name }
 
-func (m errModule) Provide(_ context.Context, _ bootstrap.SharedDepsProvider) (cell.Cell, []bootstrap.Option, error) {
+func (m errCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	return nil, nil, m.err
 }
 
-var _ bootstrap.CellModule = errModule{}
+var _ CellModule = errCellModule{}
 
 // --- tests ---
 
 // TestBuildApp_NilSharedDeps verifies that nil shared deps is rejected.
 func TestBuildApp_NilSharedDeps(t *testing.T) {
-	_, _, err := bootstrap.BuildApp(context.Background(), nil)
+	_, _, err := BuildApp(context.Background(), nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "non-nil shared deps")
+	assert.Contains(t, err.Error(), "non-nil")
 }
 
 // TestBuildApp_ValidationFail verifies that shared.Validate() failure is
 // propagated and includes "validation" in the error message.
 func TestBuildApp_ValidationFail(t *testing.T) {
-	_, _, err := bootstrap.BuildApp(context.Background(), failSharedDeps{})
+	// A zero-value SharedDeps fails Validate() because all required fields are nil.
+	_, _, err := BuildApp(context.Background(), &SharedDeps{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validation")
 }
@@ -70,8 +60,10 @@ func TestBuildApp_ValidationFail(t *testing.T) {
 // TestBuildApp_ModuleProvideError verifies that a module Provide error is
 // propagated and includes the module ID.
 func TestBuildApp_ModuleProvideError(t *testing.T) {
-	mod := errModule{name: "config-core", err: errors.New("db pool unavailable")}
-	_, _, err := bootstrap.BuildApp(context.Background(), okSharedDeps{}, mod)
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+	mod := errCellModule{name: "config-core", err: errors.New("db pool unavailable")}
+	_, _, err := BuildApp(context.Background(), shared, mod)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config-core")
 }
@@ -79,7 +71,9 @@ func TestBuildApp_ModuleProvideError(t *testing.T) {
 // TestBuildApp_NilModuleInList verifies that a nil entry in the module list
 // causes BuildApp to return an error.
 func TestBuildApp_NilModuleInList(t *testing.T) {
-	_, _, err := bootstrap.BuildApp(context.Background(), okSharedDeps{}, nil)
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+	_, _, err := BuildApp(context.Background(), shared, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil")
 }
@@ -87,7 +81,9 @@ func TestBuildApp_NilModuleInList(t *testing.T) {
 // TestBuildApp_EmptyModuleList verifies that zero modules is a valid call:
 // BuildApp returns empty cells/opts slices and no error.
 func TestBuildApp_EmptyModuleList(t *testing.T) {
-	cells, opts, err := bootstrap.BuildApp(context.Background(), okSharedDeps{})
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+	cells, opts, err := BuildApp(context.Background(), shared)
 	require.NoError(t, err)
 	assert.Empty(t, cells)
 	assert.Empty(t, opts)
@@ -96,9 +92,11 @@ func TestBuildApp_EmptyModuleList(t *testing.T) {
 // TestBuildApp_TwoModules_AggregateCells verifies that BuildApp collects cells
 // from all modules in order.
 func TestBuildApp_TwoModules_AggregateCells(t *testing.T) {
-	modA := okModule{name: "cell-a"}
-	modB := okModule{name: "cell-b"}
-	cells, _, err := bootstrap.BuildApp(context.Background(), okSharedDeps{}, modA, modB)
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+	modA := okCellModule{name: "cell-a"}
+	modB := okCellModule{name: "cell-b"}
+	cells, _, err := BuildApp(context.Background(), shared, modA, modB)
 	require.NoError(t, err)
 	require.Len(t, cells, 2)
 	assert.Equal(t, "cell-a", cells[0].ID())

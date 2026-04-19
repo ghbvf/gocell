@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -21,19 +20,14 @@ func (AuditCoreModule) ID() string { return "audit-core" }
 // Provide resolves all audit-core-specific dependencies and returns the
 // constructed cell. Audit-core is in-memory only, so no bootstrap.Options
 // are needed.
-func (AuditCoreModule) Provide(_ context.Context, sharedProv bootstrap.SharedDepsProvider) (cell.Cell, []bootstrap.Option, error) {
-	s, ok := sharedProv.(*SharedDeps)
-	if !ok {
-		return nil, nil, fmt.Errorf("audit-core: expected *SharedDeps, got %T", sharedProv)
-	}
-
+func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	c := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(s.EventBus),
-		auditcore.WithHMACKey(s.HMACKey),
-		auditcore.WithCursorCodec(s.CursorCodecs.audit),
+		auditcore.WithPublisher(shared.EventBus),
+		auditcore.WithHMACKey(shared.HMACKey),
+		auditcore.WithCursorCodec(shared.CursorCodecs.audit),
 	)
 	return c, nil, nil
 }
 
-var _ bootstrap.CellModule = AuditCoreModule{}
+var _ CellModule = AuditCoreModule{}
