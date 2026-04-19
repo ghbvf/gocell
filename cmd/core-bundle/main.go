@@ -47,6 +47,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -381,76 +382,55 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 	}
 }
 
-// loadRequiredEnv loads a required env var. Returns an error if the value is
-// empty; there is no fallback default. Used for env vars that are mandatory
-// in all adapter modes (e.g. GOCELL_JWT_ISSUER, GOCELL_JWT_AUDIENCE).
-func loadRequiredEnv(envKey, description string) (string, error) {
-	v := os.Getenv(envKey)
-	if v == "" {
-		return "", fmt.Errorf("%s must be set (%s)", envKey, description)
-	}
-	return v, nil
-}
-
-// loadJWTIssuer loads the JWT issuer string from GOCELL_JWT_ISSUER.
-// The env var is required in all adapter modes — there is no fallback default.
-func loadJWTIssuer(adapterMode string) (string, error) {
-	return loadRequiredEnv("GOCELL_JWT_ISSUER", fmt.Sprintf("adapter mode %q", adapterMode))
-}
-
-// loadJWTAudience loads the JWT audience string from GOCELL_JWT_AUDIENCE.
-// The env var is required in all adapter modes — there is no fallback default.
-func loadJWTAudience(adapterMode string) (string, error) {
-	return loadRequiredEnv("GOCELL_JWT_AUDIENCE", fmt.Sprintf("adapter mode %q", adapterMode))
-}
-
 // jwtDeps groups JWT signing and verification components built at startup.
+// registry is the single source of truth for all JWT configuration; issuer
+// and verifier are constructed from registry so they share the same settings.
 type jwtDeps struct {
 	issuer   *auth.JWTIssuer
 	verifier *auth.JWTVerifier
+	registry *authconfig.Registry
 }
 
-// buildJWTDeps loads the key set and constructs issuer + verifier.
+// buildJWTDeps loads the key set and constructs a Registry + issuer + verifier.
 // GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes;
 // missing values cause fail-fast before any assembly init.
 //
 // ref: kube-apiserver --service-account-issuer — required at startup.
+// ref: Hydra internal/driver/config.DefaultProvider — single Registry pattern
+// plan: docs/plans/202604191515-auth-federated-whistle.md §F1
 func buildJWTDeps(adapterMode string) (jwtDeps, error) {
-	iss, err := loadJWTIssuer(adapterMode)
-	if err != nil {
-		return jwtDeps{}, err
-	}
-	aud, err := loadJWTAudience(adapterMode)
-	if err != nil {
-		return jwtDeps{}, err
-	}
-
 	keySet, err := loadKeySet(adapterMode)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
 	}
-	issuer, err := auth.NewJWTIssuer(keySet, iss, auth.DefaultAccessTokenTTL,
-		auth.WithDefaultAudience(aud))
+
+	// Registry reads GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE, then validates
+	// them in real mode. Config errors use ErrAuthVerifierConfig so operators
+	// can distinguish startup misconfigurations from runtime key errors.
+	reg, err := authconfig.FromEnv(
+		authconfig.WithKeys(keySet),
+		authconfig.WithRealMode(true),
+	)
+	if err != nil {
+		return jwtDeps{}, fmt.Errorf("build JWT registry: %w", err)
+	}
+
+	issuer, err := authconfig.NewJWTIssuerFromRegistry(reg, auth.DefaultAccessTokenTTL)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT issuer: %w", err)
 	}
-	// WithExpectedAudiences enforces RFC 8725 §3.3 audience validation in
-	// VerifyIntent: tokens whose aud claim does not contain aud are rejected
-	// with ERR_AUTH_UNAUTHORIZED before reaching business handlers.
-	// WithExpectedIssuer enforces iss claim equality per RFC 7519 §4.1.1.
-	verifier, err := auth.NewJWTVerifier(keySet,
-		auth.WithExpectedAudiences(aud),
-		auth.WithExpectedIssuer(iss))
+
+	verifier, err := authconfig.NewJWTVerifierFromRegistry(reg)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
 	}
 
 	slog.Info("core-bundle: JWT deps built",
-		slog.String("issuer", iss),
-		slog.String("audience", aud),
+		slog.String("issuer", reg.Issuer()),
+		slog.Any("audiences", reg.Audiences()),
 		slog.String("adapter_mode", adapterMode))
 
-	return jwtDeps{issuer: issuer, verifier: verifier}, nil
+	return jwtDeps{issuer: issuer, verifier: verifier, registry: reg}, nil
 }
 
 // adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
