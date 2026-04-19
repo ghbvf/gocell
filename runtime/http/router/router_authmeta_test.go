@@ -116,7 +116,7 @@ func TestFinalizeAuth_EmptyDeclaration_NoOp(t *testing.T) {
 
 func TestFinalizeAuth_PublicMeta_BypassesAuth(t *testing.T) {
 	verifier := &authMetaVerifier{err: assert.AnError} // should not be called for public
-	r, err := NewE(WithAuthMiddleware(verifier, nil))
+	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	r.Handle("/public", okHandler)
@@ -146,7 +146,7 @@ func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 	verifier := &authMetaVerifier{
 		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
-	r, err := NewE(WithAuthMiddleware(verifier, nil))
+	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	r.Handle("/exempt", okHandler)
@@ -223,7 +223,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	verifier := &authMetaVerifier{
 		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
-	r, err := NewE(WithAuthMiddleware(verifier, nil))
+	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	r.Handle("/blocked", okHandler)
@@ -253,35 +253,35 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Coexistence: legacy WithPublicEndpoints + declared Public metas (OR-merged)
+// Multiple declared Public metas are OR-merged by FinalizeAuth
 // ---------------------------------------------------------------------------
 
-func TestFinalizeAuth_Coexistence_LegacyAndDeclared(t *testing.T) {
+func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
+	// Both declared-public-a and declared-public-b should bypass auth;
+	// /protected must still require a token.
 	verifier := &authMetaVerifier{err: assert.AnError}
-	r, err := NewE(
-		WithPublicEndpoints([]string{"GET /legacy-public"}),
-		WithAuthMiddleware(verifier, nil),
-	)
+	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/legacy-public", okHandler)
-	r.Handle("/declared-public", okHandler)
+	r.Handle("/declared-public-a", okHandler)
+	r.Handle("/declared-public-b", okHandler)
 	r.Handle("/protected", okHandler)
 
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/declared-public", Public: true})
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/declared-public-a", Public: true})
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/declared-public-b", Public: true})
 	require.NoError(t, r.FinalizeAuth())
 
-	// Legacy public route: no token → 200
+	// First declared public route: no token → 200
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/legacy-public", nil)
+	req := httptest.NewRequest(http.MethodGet, "/declared-public-a", nil)
 	r.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code, "legacy public endpoint must still bypass auth")
+	assert.Equal(t, http.StatusOK, rec.Code, "first declared public endpoint must bypass auth")
 
-	// Declared public route: no token → 200
+	// Second declared public route: no token → 200
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/declared-public", nil)
+	req = httptest.NewRequest(http.MethodGet, "/declared-public-b", nil)
 	r.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code, "declared public endpoint must bypass auth")
+	assert.Equal(t, http.StatusOK, rec.Code, "second declared public endpoint must bypass auth")
 
 	// Protected route: no token → 401
 	rec = httptest.NewRecorder()
