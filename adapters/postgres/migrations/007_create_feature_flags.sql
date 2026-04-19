@@ -17,5 +17,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_feature_flags_key_id
     ON feature_flags (key ASC, id ASC);
 
 -- +goose Down
+-- CAUTION: data-destructive; for dev/CI only. Production rollback should rename
+-- table to feature_flags_deprecated_YYYYMMDD instead.
 DROP INDEX CONCURRENTLY IF EXISTS idx_feature_flags_key_id;
 DROP TABLE IF EXISTS feature_flags;
