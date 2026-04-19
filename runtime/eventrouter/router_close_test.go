@@ -376,3 +376,113 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 	// StopIntake was still called once despite the error.
 	assert.Equal(t, 1, sr.StopIntakeCalls())
 }
+
+// hangingStopIntakeSubscriber embeds blockingSubscriber and implements
+// SubscriberIntakeStopper such that StopIntake respects (or ignores) the
+// passed ctx depending on the ignoreCtx flag.
+type hangingStopIntakeSubscriber struct {
+	blockingSubscriber
+	release   chan struct{} // test controls when StopIntake may return
+	ignoreCtx bool          // if true, ignore ctx — simulates buggy adapter
+}
+
+func (h *hangingStopIntakeSubscriber) StopIntake(ctx context.Context) error {
+	if h.ignoreCtx {
+		// Simulates a buggy adapter that ignores ctx (the pre-F1 rabbitmq bug).
+		<-h.release
+		return nil
+	}
+	select {
+	case <-h.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues verifies
+// that when StopIntake ignores its ctx (e.g. a misbehaving adapter), Router
+// still advances to Phase 2 (cancel runCtx) once the outer Close ctx expires.
+// This is the F1b protection: StopIntake must not stall the whole Close chain.
+func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.T) {
+	h := &hangingStopIntakeSubscriber{
+		release:   make(chan struct{}),
+		ignoreCtx: true, // buggy adapter: ignores ctx
+	}
+
+	r := New(h)
+	r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}, "test-cg")
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(runCtx) }()
+
+	select {
+	case <-r.Running():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Router did not become ready")
+	}
+
+	// Close with a short ctx; the buggy StopIntake ignores it, but Router.Close
+	// must still return within the ctx budget (+ small margin) by advancing
+	// to Phase 2 autonomously.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer closeCancel()
+
+	start := time.Now()
+	closeErr := r.Close(closeCtx)
+	elapsed := time.Since(start)
+
+	// Close should return ctx.DeadlineExceeded (could not wait for StopIntake).
+	require.Error(t, closeErr, "Close must return ctx error when StopIntake ignores ctx")
+	assert.ErrorIs(t, closeErr, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 600*time.Millisecond,
+		"Close must not stall significantly past ctx deadline; got %s", elapsed)
+
+	// Release the hanging StopIntake so it exits (avoid goroutine leak).
+	close(h.release)
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not exit after StopIntake released")
+	}
+}
+
+// TestRouterClose_StopIntakeErr_ProceedsToCancel verifies that when
+// StopIntake returns before ctx expires (whether with nil or an error),
+// Router advances to Phase 2 cancel + wait normally.
+func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
+	h := &hangingStopIntakeSubscriber{
+		release: make(chan struct{}),
+	}
+	close(h.release) // allow StopIntake to return immediately
+
+	r := New(h)
+	r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}, "test-cg")
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(runCtx) }()
+
+	select {
+	case <-r.Running():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Router did not become ready")
+	}
+
+	err := r.Close(context.Background())
+	require.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit after Close")
+	}
+}
