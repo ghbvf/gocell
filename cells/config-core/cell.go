@@ -85,7 +85,8 @@ func WithInMemoryDefaults() Option {
 // all migrations up to the current ExpectedVersion before starting; the
 // adapterpg schema guard (VerifyExpectedVersion) enforces this at startup.
 // Tables owned by config-core: config_entries / config_versions (004) and
-// feature_flags (008). See adapters/postgres/migrations/ for the full set.
+// feature_flags (008 table + 009 concurrent index). See
+// adapters/postgres/migrations/ for the full set.
 //
 // pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
 // writes to the outbox_entries table within the same transaction.

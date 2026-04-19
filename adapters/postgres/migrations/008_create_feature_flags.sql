@@ -1,9 +1,15 @@
--- Migration 008: feature_flags table for config-core flag-write slice.
--- Prerequisites: migrations 001-007 applied (no cross-table FK constraints;
--- this is a standalone table owned by config-core).
+-- Migration 008: feature_flags table (transactional) for config-core flag-write slice.
+-- Prerequisites: migrations 001-007 applied. This migration creates the table only;
+-- the hot-path index is created CONCURRENTLY in migration 009 so it can be applied
+-- on a live production DB without blocking writers.
 --
--- +goose no transaction
+-- ref: migrations/README.md rule 1 (CONCURRENTLY requires no-transaction annotation,
+-- so index creation must live in its own file to keep CREATE TABLE atomic).
+-- ref: adapters/postgres/migrations/005_recreate_outbox_pending_concurrent.sql —
+-- same split pattern applied for the same atomicity reason.
+--
 -- +goose Up
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS feature_flags (
     id          TEXT        NOT NULL,
     key         TEXT        NOT NULL,
@@ -14,14 +20,14 @@ CREATE TABLE IF NOT EXISTS feature_flags (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT pk_feature_flags PRIMARY KEY (id),
-    CONSTRAINT uq_feature_flags_key UNIQUE (key)
+    CONSTRAINT uq_feature_flags_key UNIQUE (key),
+    CONSTRAINT feature_flags_rollout_percentage_range CHECK (rollout_percentage BETWEEN 0 AND 100)
 );
-
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_feature_flags_key_id
-    ON feature_flags (key ASC, id ASC);
+-- +goose StatementEnd
 
 -- +goose Down
 -- CAUTION: data-destructive; for dev/CI only. Production rollback should rename
 -- table to feature_flags_deprecated_YYYYMMDD instead.
-DROP INDEX CONCURRENTLY IF EXISTS idx_feature_flags_key_id;
+-- +goose StatementBegin
 DROP TABLE IF EXISTS feature_flags;
+-- +goose StatementEnd

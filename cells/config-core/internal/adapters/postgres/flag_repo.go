@@ -34,9 +34,10 @@ type FlagRepository struct {
 // NewFlagRepository creates a FlagRepository that resolves the ambient
 // pgx.Tx from the context on each write call.
 //
-// Requires migration 008_create_feature_flags.sql to be applied. The adapterpg
-// schema guard (VerifyExpectedVersion) enforces this at startup; this comment
-// is documentation-only and deliberately does not duplicate that check.
+// Requires migrations 008 (table) and 009 (concurrent index) to be applied.
+// The adapterpg schema guard (VerifyExpectedVersion) enforces the actual
+// current expected version at startup; this comment is documentation-only
+// and deliberately does not duplicate that check.
 func NewFlagRepository(s *Session) *FlagRepository {
 	return &FlagRepository{session: s}
 }
