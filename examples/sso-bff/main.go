@@ -39,29 +39,6 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
-// ssoBFFLazyWorker defers worker resolution to Start/Stop time so that a
-// worker.Worker produced during asm.Init can be registered with
-// bootstrap.WithWorkers before bootstrap.New is called.
-// get() returns nil when admin already existed (bootstrap skipped), making
-// Start and Stop safe no-ops.
-type ssoBFFLazyWorker struct {
-	get func() worker.Worker
-}
-
-func (l *ssoBFFLazyWorker) Start(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Start(ctx)
-	}
-	return nil
-}
-
-func (l *ssoBFFLazyWorker) Stop(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Stop(ctx)
-	}
-	return nil
-}
-
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -98,11 +75,11 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
-	// Lazy bootstrap worker: resolves the cleanup worker at WorkerGroup.Start() time
+	// adminLazy resolves the cleanup worker at WorkerGroup.Start() time
 	// (bootstrap Step 8), after asm.StartWithConfig has fired the sink (Step 3-4).
 	// No-op when admin already existed and sink was never called.
-	var adminBootstrapWorker worker.Worker
-	bootstrapSink := func(w worker.Worker) { adminBootstrapWorker = w }
+	adminLazy := worker.Lazy()
+	bootstrapSink := func(w worker.Worker) { _ = adminLazy.Set(w) }
 
 	// --- access-core (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
@@ -174,10 +151,10 @@ func main() {
 		"POST /api/v1/access/sessions/refresh",
 	}
 
-	// lazyAdminWorker defers resolution to Start() time (after asm.StartWithConfig
-	// fires the sink). No-op when admin already existed.
-	lazyAdminWorker := &ssoBFFLazyWorker{get: func() worker.Worker { return adminBootstrapWorker }}
-
+	stateDir := os.Getenv("GOCELL_STATE_DIR")
+	if stateDir == "" {
+		stateDir = "/run/gocell"
+	}
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -188,13 +165,21 @@ func main() {
 			"DELETE /api/v1/access/sessions/{id}",
 		}),
 		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
-		bootstrap.WithWorkers(lazyAdminWorker),
+		bootstrap.WithWorkers(adminLazy),
+		// SweepHook runs on startup to remove expired credential files (P1-16).
+		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
+			// Lifecycle is not yet started at WithLifecycle callback time; Append
+			// returns ErrLifecycleAlreadyStarted only after Start — impossible here.
+			if err := lc.Append(accesscore.SweepHook(accesscore.SweepConfig{
+				StateDir: stateDir,
+				Logger:   logger,
+			})); err != nil {
+				logger.Error("sso-bff: failed to append SweepHook to lifecycle",
+					slog.Any("error", err))
+			}
+		}),
 	)
 
-	stateDir := os.Getenv("GOCELL_STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/run/gocell"
-	}
 	credPath := stateDir + "/initial_admin_password"
 	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to "+credPath,
 		slog.String("mode", "in-memory"),

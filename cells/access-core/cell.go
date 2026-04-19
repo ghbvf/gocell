@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -96,6 +97,22 @@ func WithTxManager(tx persistence.TxRunner) Option {
 // that the logged path always matches the file the bootstrapper writes (P2-6).
 func ResolveBootstrapCredentialPath(stateDir string) (string, error) {
 	return initialadmin.ResolveCredentialPath(stateDir)
+}
+
+// SweepConfig re-exports initialadmin.SweepConfig so composition roots can
+// configure the startup-time credential sweep without importing the internal
+// package directly.
+type SweepConfig = initialadmin.SweepConfig
+
+// SweepHook returns a bootstrap.Hook that performs a startup-time credential
+// sweep (P1-16). The hook runs unconditionally on OnStart, removing expired
+// credential files regardless of whether an admin already existed.
+//
+// SweepHook is wired at composition root via bootstrap.WithLifecycle so it
+// runs independently of EnsureAdmin, closing the gap where adminExists==true
+// caused EnsureAdmin to return early without cleaning orphan cred files.
+func SweepHook(cfg SweepConfig) bootstrap.Hook {
+	return initialadmin.SweepHook(cfg)
 }
 
 // WithInMemoryDefaults configures in-memory repositories for development
@@ -256,8 +273,9 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 
 // runInitialAdminBootstrap executes the first-run admin bootstrap when
 // WithInitialAdminBootstrap has been configured. It validates that
-// WithBootstrapWorkerSink is also set, then delegates to Bootstrapper.Run.
+// WithBootstrapWorkerSink is also set, then delegates to Bootstrapper.EnsureAdmin.
 // A no-op (nil cfg) means the bootstrap feature is disabled.
+// SweepHook is wired at composition root via bootstrap.WithLifecycle (P1-16).
 func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 	if c.initialAdminCfg == nil {
 		return nil
@@ -287,7 +305,7 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("access-core: bootstrap construct: %w", err)
 	}
-	cleanerWorker, err := bs.Run(ctx)
+	cleanerWorker, err := bs.EnsureAdmin(ctx)
 	if err != nil {
 		return fmt.Errorf("access-core: bootstrap admin: %w", err)
 	}

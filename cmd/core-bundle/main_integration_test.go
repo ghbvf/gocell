@@ -4,7 +4,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -113,4 +119,75 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	// pool must be nil — main.go closes and zeroes pool before returning error.
 	assert.Nil(t, gotPool, "pool must be nil (was closed on schema mismatch)")
 	assert.Nil(t, relay, "relay must be nil on schema mismatch (error path)")
+}
+
+// writeExpiredCredFile writes a minimal credential file with expires_at set to
+// one hour in the past. Mimics the format produced by initialadmin.formatPayload
+// without importing the internal package. The file is written with mode 0o600
+// to satisfy RemoveCredentialFile's permission check.
+func writeExpiredCredFile(t *testing.T, path string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	expiresAt := time.Now().Add(-time.Hour).UTC()
+	content := fmt.Sprintf(
+		"# GoCell initial admin credential\n"+
+			"username=admin\n"+
+			"password=hunter2\n"+
+			"expires_at=%d\n",
+		expiresAt.Unix(),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+}
+
+// TestIntegration_AdminExists_OrphanSwept verifies P1-16: SweepHook removes an
+// expired credential file on startup, even when EnsureAdmin returns early because
+// an admin already exists.
+//
+// Execution order in bootstrap.Run:
+//
+//	Step 3-4: asm.StartWithConfig → EnsureAdmin (admin exists → early return, no new cred file written)
+//	Step 4.6: Lifecycle.Start → SweepHook.OnStart removes expired orphan cred file
+//	Step 7:   TCP listen (may fail in sandbox — acceptable; sweep already ran)
+func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
+	stateDir := t.TempDir()
+	credPath := filepath.Join(stateDir, "initial_admin_password")
+
+	// Pre-condition: write an expired orphan credential file simulating a prior
+	// run where the cleanup worker never fired (e.g. adminExists==true path).
+	writeExpiredCredFile(t, credPath)
+
+	// Confirm file exists before bootstrap.
+	_, err := os.Stat(credPath)
+	require.NoError(t, err, "orphan credential file must exist before bootstrap")
+
+	// Configure env for run().
+	t.Setenv("GOCELL_STATE_DIR", stateDir)
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-sweep-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	// Use a short-lived context: long enough for assembly init + lifecycle start
+	// (Steps 3-4.6), but we accept context.Canceled, sandbox-bind, or
+	// isBindError as acceptable outcomes — Sweep runs before TCP listen (Step 7).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runErr := run(ctx)
+
+	// Only context.Canceled, deadline-exceeded, EPERM, and listen failures are
+	// acceptable (sandbox may block TCP). Any other error signals a regression.
+	if runErr != nil {
+		acceptable := errors.Is(runErr, context.Canceled) ||
+			errors.Is(runErr, context.DeadlineExceeded) ||
+			errors.Is(runErr, syscall.EPERM) ||
+			isBindError(runErr)
+		if !acceptable {
+			t.Fatalf("unexpected startup error (P1-16 regression): %v", runErr)
+		}
+	}
+
+	// Assert: the expired credential file was removed by SweepHook (Step 4.6).
+	// If the file still exists, SweepHook did not run — P1-16 gap is not closed.
+	_, statErr := os.Stat(credPath)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
+		"P1-16: expired credential file must be removed by SweepHook; got stat error: %v", statErr)
 }

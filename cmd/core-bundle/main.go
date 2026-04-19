@@ -31,7 +31,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -457,58 +456,42 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 // adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
 // onto the given base access-core options and returns the extended options together
 // with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
-// WorkerGroup.
+// WorkerGroup, and a bootstrap.Option that registers the SweepHook on the
+// bootstrap Lifecycle.
 //
 // Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
-// bootstrap.Run), before the WorkerGroup starts (Step 8). Using a lazyBootstrapWorker
-// wrapper means bootstrap.WithWorkers can be called at construction time while the
-// actual worker reference is resolved at Start() time — after the assembly has Init'd.
+// bootstrap.Run), before the WorkerGroup starts (Step 8). worker.Lazy() resolves
+// the worker at Start() time — after the assembly has Init'd.
 //
 // When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
-// When admin already exists: sink is not called, adminWorker stays nil, lazyWorker
-// Start/Stop are no-ops.
+// When admin already exists: sink is not called, LazyWorker.Start/Stop are no-ops.
+// SweepHook runs unconditionally on startup, removing expired credential files
+// even when adminExists==true (P1-16 gap closure).
 //
-// Thread safety: the sink (writer) and Start/Stop (readers) may run on
-// different goroutines in the bootstrap lifecycle. The lazyBootstrapWorker uses
-// atomic.Pointer to eliminate the race (F-OPS-2).
+// Thread safety: Set (writer) and Start/Stop (readers) synchronise via
+// atomic.Pointer inside worker.LazyWorker (F-OPS-2).
 //
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
-	lazy := &lazyBootstrapWorker{}
-	sink := func(w worker.Worker) { lazy.ptr.Store(&w) }
+func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option, sweepOpt bootstrap.Option) {
+	lazy := worker.Lazy()
+	sink := func(w worker.Worker) { _ = lazy.Set(w) }
 	accessOpts = append(base,
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithBootstrapWorkerSink(sink),
 	)
 	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
-	return accessOpts, lazyWorkerOpt
-}
-
-// lazyBootstrapWorker defers worker resolution to Start/Stop time so that a
-// worker.Worker produced during asm.Init (inside bootstrap.Run Step 3-4) can be
-// registered with bootstrap.WithWorkers before bootstrap.New is called.
-//
-// If ptr holds nil (admin already existed, sink was never called), Start and
-// Stop are safe no-ops.
-//
-// ptr uses atomic.Pointer to synchronise the sink (writer, runs during asm.Init)
-// with Start/Stop (readers, run during WorkerGroup lifecycle) without a mutex.
-type lazyBootstrapWorker struct {
-	ptr atomic.Pointer[worker.Worker]
-}
-
-func (l *lazyBootstrapWorker) Start(ctx context.Context) error {
-	if p := l.ptr.Load(); p != nil {
-		return (*p).Start(ctx)
-	}
-	return nil
-}
-
-func (l *lazyBootstrapWorker) Stop(ctx context.Context) error {
-	if p := l.ptr.Load(); p != nil {
-		return (*p).Stop(ctx)
-	}
-	return nil
+	sweepOpt = bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
+		// Lifecycle is not yet started at WithLifecycle callback time; Append
+		// returns ErrLifecycleAlreadyStarted only after Start — impossible here.
+		if err := lc.Append(accesscore.SweepHook(accesscore.SweepConfig{
+			StateDir: os.Getenv("GOCELL_STATE_DIR"),
+			Logger:   slog.Default(),
+		})); err != nil {
+			slog.Error("core-bundle: failed to append SweepHook to lifecycle",
+				slog.Any("error", err))
+		}
+	})
+	return accessOpts, lazyWorkerOpt, sweepOpt
 }
 
 // promStack groups the Prometheus hook observer and metric provider.
@@ -696,7 +679,7 @@ func run(ctx context.Context) error {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
+	accessOpts, adminWorkerOpt, sweepOpt := adminBootstrapWorkerOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwt.issuer),
@@ -772,6 +755,7 @@ func run(ctx context.Context) error {
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
 		adminWorkerOpt:  adminWorkerOpt,
+		sweepOpt:        sweepOpt,
 		internalGuard:   internalGuard,
 	})...)
 	return app.Run(ctx)
@@ -790,6 +774,9 @@ type bootstrapDeps struct {
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
 	adminWorkerOpt  bootstrap.Option
+	// sweepOpt registers the SweepHook on the bootstrap Lifecycle.
+	// Non-nil only when WithInitialAdminBootstrap is configured.
+	sweepOpt bootstrap.Option
 	// internalGuard is the service-token middleware protecting /internal/v1/*.
 	// nil means no guard is installed (dev mode with empty GOCELL_SERVICE_SECRET).
 	internalGuard func(http.Handler) http.Handler
@@ -831,12 +818,14 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 	if d.relayWorker != nil {
 		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
 	}
-	// Wire the initial-admin bootstrap cleanup worker via a lazy wrapper.
-	// The sink fires during asm.StartWithConfig (Step 3-4 inside bootstrap.Run),
-	// so the lazyBootstrapWorker resolves the worker at Start() time (Step 8),
-	// after the assembly has Init'd. No-op when admin already existed.
+	// Wire the initial-admin bootstrap cleanup worker via worker.Lazy().
+	// SweepHook is registered on the Lifecycle via sweepOpt (runs unconditionally
+	// on startup to remove expired credential files — P1-16 gap closure).
 	if d.adminWorkerOpt != nil {
 		opts = append(opts, d.adminWorkerOpt)
+	}
+	if d.sweepOpt != nil {
+		opts = append(opts, d.sweepOpt)
 	}
 	// Wire the service-token guard for /internal/v1/* when a guard was built.
 	// guard is nil in dev mode when GOCELL_SERVICE_SECRET is empty; real mode

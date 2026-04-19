@@ -177,17 +177,21 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
+	// lazyE2EAdminWorker resolves the cleaner at Start() time, after
+	// asm.StartWithConfig has fired the sink (bootstrap Step 3-4 inside Run).
+	// Constructed before access-core so the sink closure can capture it.
+	lazyE2EAdminWorker := worker.Lazy()
+
 	// Wire access-core with WithInitialAdminBootstrap (replaces WithSeedAdmin).
-	// The sink captures the cleaner worker; we pass it to bootstrap.WithWorkers
-	// via the lazy wrapper so it starts after asm.Init fires the sink.
-	var e2eAdminCleanerWorker worker.Worker
+	// The sink calls lazyE2EAdminWorker.Set so the lazy wrapper resolves before
+	// the WorkerGroup starts (Step 8). No-op when admin already existed.
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithBootstrapWorkerSink(func(w worker.Worker) { e2eAdminCleanerWorker = w }),
+		accesscore.WithBootstrapWorkerSink(func(w worker.Worker) { _ = lazyE2EAdminWorker.Set(w) }),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -200,10 +204,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, asm.Register(configCell))
 	require.NoError(t, asm.Register(accessCell))
 	require.NoError(t, asm.Register(auditCell))
-
-	// lazyE2EAdminWorker resolves the cleaner at Start() time, after
-	// asm.StartWithConfig has fired the sink (bootstrap Step 3-4 inside Run).
-	lazyE2EAdminWorker := &e2eLazyWorker{get: func() worker.Worker { return e2eAdminCleanerWorker }}
 
 	// --- Step 6: Boot the assembly with the relay worker ---
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -398,27 +398,6 @@ func changeE2EPassword(t *testing.T, baseURL, token, userID, oldPass, newPass st
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	require.NotEmpty(t, result.Data.AccessToken, "change-password response must include new accessToken")
 	return result.Data.AccessToken
-}
-
-// e2eLazyWorker defers worker resolution to Start/Stop time so that a
-// worker.Worker produced during asm.Init can be registered with
-// bootstrap.WithWorkers before bootstrap.New is called. No-op when nil.
-type e2eLazyWorker struct {
-	get func() worker.Worker
-}
-
-func (l *e2eLazyWorker) Start(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Start(ctx)
-	}
-	return nil
-}
-
-func (l *e2eLazyWorker) Stop(ctx context.Context) error {
-	if w := l.get(); w != nil {
-		return w.Stop(ctx)
-	}
-	return nil
 }
 
 // createConfig creates a config entry via POST /api/v1/config/.

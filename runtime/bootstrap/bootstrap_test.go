@@ -3831,3 +3831,72 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
+
+func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
+	var startCalled, stopCalled atomic.Bool
+
+	asm := assembly.New(assembly.Config{ID: "test-lc-ok", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("lc-cell-1")))
+
+	ln := newLocalListener(t)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	b := New(
+		WithAssembly(asm),
+		WithHTTPAddr(addr),
+		WithShutdownTimeout(2*time.Second),
+		WithLifecycle(func(lc Lifecycle) {
+			_ = lc.Append(Hook{
+				Name: "test-hook",
+				OnStart: func(_ context.Context) error {
+					startCalled.Store(true)
+					return nil
+				},
+				OnStop: func(_ context.Context) error {
+					stopCalled.Store(true)
+					return nil
+				},
+			})
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- b.Run(ctx) }()
+
+	waitForHealthy(t, addr)
+
+	require.True(t, startCalled.Load(), "OnStart should have been called before HTTP server is ready")
+
+	cancel()
+	require.NoError(t, <-errCh)
+	require.True(t, stopCalled.Load(), "OnStop should have been called during teardown")
+}
+
+func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
+	wantErr := errors.New("hook-boom")
+
+	asm := assembly.New(assembly.Config{ID: "test-lc-fail", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("lc-cell-2")))
+
+	ln := newLocalListener(t)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	b := New(
+		WithAssembly(asm),
+		WithHTTPAddr(addr),
+		WithShutdownTimeout(2*time.Second),
+		WithLifecycle(func(lc Lifecycle) {
+			_ = lc.Append(Hook{
+				Name:    "failing",
+				OnStart: func(_ context.Context) error { return wantErr },
+			})
+		}),
+	)
+
+	err := b.Run(t.Context())
+	require.Error(t, err)
+	require.ErrorIs(t, err, wantErr)
+}
