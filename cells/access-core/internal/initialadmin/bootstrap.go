@@ -135,16 +135,16 @@ func resolveCredentialPath() (string, error) {
 	return ResolveCredentialPath("")
 }
 
-// Run executes the bootstrap sequence. It is idempotent: if an admin user
-// already exists (CountByRole > 0), it returns (nil, nil) without any side
-// effects.
+// EnsureAdmin executes the bootstrap sequence. It is idempotent: if an admin
+// user already exists (CountByRole > 0), it returns (nil, nil) without any
+// side effects.
 //
-// Before creating the admin user, Run probes that the credential file directory
-// is writable (probeWriteable). If the probe fails, Run aborts before creating
-// any user, giving an actionable error at startup time.
+// Before creating the admin user, EnsureAdmin probes that the credential file
+// directory is writable (probeWriteable). If the probe fails, EnsureAdmin
+// aborts before creating any user, giving an actionable error at startup time.
 //
 // Compensating rollback (F3): if WriteCredentialFile fails after the user and
-// role assignment have been created, Run best-effort removes the role
+// role assignment have been created, EnsureAdmin best-effort removes the role
 // assignment and user before returning. This keeps the next startup on a clean
 // slate (adminExists==false) instead of leaving the cluster stuck on
 // "admin row exists but no one knows the password" — which previously required
@@ -153,7 +153,11 @@ func resolveCredentialPath() (string, error) {
 // On success it returns a worker.Worker (Cleaner) that removes the credential
 // file after the configured TTL. Callers must hand the cleaner to a lifecycle
 // manager (e.g., bootstrap.WithWorkers).
-func (b *Bootstrapper) Run(ctx context.Context) (worker.Worker, error) {
+//
+// Sweep (P1-16) is intentionally NOT called here — it is scheduled independently
+// at the composition root via SweepHook so that orphan cred files are cleaned
+// even when adminExists==true causes EnsureAdmin to return early.
+func (b *Bootstrapper) EnsureAdmin(ctx context.Context) (worker.Worker, error) {
 	// Check whether an admin already exists.
 	exists, err := b.adminExists(ctx)
 	if err != nil {
@@ -408,7 +412,7 @@ func (b *Bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, 
 	}
 	if err := WriteCredentialFile(b.cfg.CredentialPath, payload); err != nil {
 		// IMPORTANT: do NOT include `password` in any log attribute below.
-		// Caller (Bootstrapper.Run) runs compensateAfterCredFileFailure so the
+		// Caller (Bootstrapper.EnsureAdmin) runs compensateAfterCredFileFailure so the
 		// user + role assignment are rolled back; next startup starts clean.
 		b.deps.Logger.Error("initial admin bootstrap: credential file write failed; compensating",
 			slog.String("event", "initial_admin_bootstrap"),

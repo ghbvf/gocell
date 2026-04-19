@@ -141,6 +141,13 @@ const (
 	// to the expected envelope schema — unknown schemaVersion, missing required
 	// fields, or corrupt JSON. Consumers must Reject (not retry) on this error.
 	ErrEnvelopeSchema Code = "ERR_ENVELOPE_SCHEMA"
+
+	// Bootstrap lifecycle error codes.
+	// ErrBootstrapLifecycle signals that a lifecycle operation was called in an
+	// invalid state — e.g. Append or Start called after the lifecycle has already
+	// started. Distinct from ErrLifecycleInvalid (metadata validation) so
+	// operators can route runtime lifecycle faults separately.
+	ErrBootstrapLifecycle Code = "ERR_BOOTSTRAP_LIFECYCLE"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

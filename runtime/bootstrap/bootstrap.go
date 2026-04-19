@@ -578,6 +578,32 @@ func WithHookObserver(obs cell.LifecycleHookObserver) Option {
 	}
 }
 
+// WithLifecycleDefaultStartTimeout overrides the per-hook default StartTimeout.
+// Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
+// (hooks without own StartTimeout will block indefinitely).
+func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) { b.lifecycleDefaultStartTimeout = d }
+}
+
+// WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.
+// Zero value retains DefaultStopTimeout (10s). Negative disables default timeout.
+func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) { b.lifecycleDefaultStopTimeout = d }
+}
+
+// WithLifecycle registers a hook-registration callback invoked during New()
+// (after all options are applied, as part of lifecycle initialisation). Use
+// for composition-root Hook registration without needing a Bootstrap reference.
+// Multiple WithLifecycle options and direct b.Lifecycle().Append() calls
+// accumulate in the order they are applied.
+func WithLifecycle(fn func(lc Lifecycle)) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.lifecycleRegistrars = append(b.lifecycleRegistrars, fn)
+		}
+	}
+}
+
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
 	name string       // unique identifier shown in /readyz?verbose output
@@ -640,6 +666,12 @@ type Bootstrap struct {
 	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
 	// Checked at Run() to fail-fast rather than silently skipping relay health.
 	relayHealthNil bool
+
+	// lifecycle fields wired by WithLifecycle* options.
+	lifecycle                    Lifecycle
+	lifecycleDefaultStartTimeout time.Duration
+	lifecycleDefaultStopTimeout  time.Duration
+	lifecycleRegistrars          []func(Lifecycle) // accumulated by WithLifecycle
 }
 
 // New creates a Bootstrap with the given options.
@@ -653,7 +685,28 @@ func New(opts ...Option) *Bootstrap {
 	for _, o := range opts {
 		o(b)
 	}
+	// Create the Lifecycle after all options are applied so that
+	// lifecycleDefaultStartTimeout / lifecycleDefaultStopTimeout are set.
+	// Zero values are forwarded as-is; NewLifecycle falls back to the
+	// DefaultStartTimeout / DefaultStopTimeout constants internally.
+	logger := slog.Default()
+	b.lifecycle = NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: b.lifecycleDefaultStartTimeout,
+		DefaultStopTimeout:  b.lifecycleDefaultStopTimeout,
+		Logger:              logger,
+	})
+	for _, reg := range b.lifecycleRegistrars {
+		reg(b.lifecycle)
+	}
 	return b
+}
+
+// Lifecycle returns the bootstrap's Lifecycle for programmatic Hook
+// registration. Must be called after New() returns and before Run() begins;
+// not goroutine-safe concurrent with Run(). Hooks registered here are
+// appended to those from WithLifecycle options.
+func (b *Bootstrap) Lifecycle() Lifecycle {
+	return b.lifecycle
 }
 
 // MetricsProvider returns the configured provider-neutral metrics backend.
@@ -894,6 +947,16 @@ func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // comple
 			return c.Err()
 		}
 		return asm.Stop(c)
+	})
+
+	// Step 4.6: Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
+	// Registered after asm.Stop teardown so that lifecycle.Stop executes before asm.Stop
+	// in the LIFO teardown sequence, ensuring hooks can still access cell resources.
+	if err := b.lifecycle.Start(ctx); err != nil {
+		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
+	}
+	teardowns = append(teardowns, func(stopCtx context.Context) error {
+		return b.lifecycle.Stop(stopCtx)
 	})
 
 	// Step 4.5a: Discover auth verifier from cells (post-Init).

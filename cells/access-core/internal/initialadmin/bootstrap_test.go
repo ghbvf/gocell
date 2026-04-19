@@ -151,9 +151,9 @@ func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, err := bs.Run(context.Background())
+	cleaner, err := bs.EnsureAdmin(context.Background())
 	require.NoError(t, err)
-	assert.NotNil(t, cleaner, "Run must return a non-nil cleaner on first bootstrap")
+	assert.NotNil(t, cleaner, "EnsureAdmin must return a non-nil cleaner on first bootstrap")
 
 	// Credential file must exist.
 	_, statErr := os.Stat(cfg.CredentialPath)
@@ -186,7 +186,7 @@ func TestBootstrap_FirstRun_UserHasPasswordResetRequired(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, err = bs.Run(context.Background())
+	_, err = bs.EnsureAdmin(context.Background())
 	require.NoError(t, err)
 
 	user, getErr := userRepo.GetByUsername(context.Background(), "admin")
@@ -213,7 +213,7 @@ func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.Run(context.Background())
+	cleaner, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 	assert.Nil(t, cleaner, "cleaner must be nil when admin already exists")
 
@@ -242,7 +242,7 @@ func TestBootstrap_PgRaceDuplicateUserSilentSkip(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.Run(context.Background())
+	cleaner, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr, "PG race duplicate should result in silent skip, not error")
 	assert.Nil(t, cleaner, "cleaner must be nil on silent skip")
 
@@ -263,7 +263,7 @@ func TestBootstrap_FileWriteFailureFailsFast(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.Error(t, runErr, "file write failure must cause Run to return an error")
 }
 
@@ -295,7 +295,7 @@ func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.Error(t, runErr, "credfile failure must surface an error")
 
 	// Compensation: admin count back to zero so next startup re-runs bootstrap.
@@ -345,7 +345,7 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.Run(context.Background())
+	cleaner, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr, "bootstrap must recover from the orphan-user state, not wedge")
 	assert.NotNil(t, cleaner, "cleaner must be returned after successful recovery")
 
@@ -397,7 +397,7 @@ func TestBootstrap_NoPlaintextInAnyLog(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 
 	// Walk every log record and every attribute value — none must contain the
@@ -427,7 +427,7 @@ func TestBootstrap_RespectsCustomUsername(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 
 	user, getErr := userRepo.GetByUsername(context.Background(), "root")
@@ -494,7 +494,7 @@ func TestBootstrap_FileContainsCredentialFields(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 
 	contents, readErr := os.ReadFile(cfg.CredentialPath)
@@ -526,7 +526,7 @@ func TestBootstrap_DefaultCredentialPathFromEnv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, dir+"/initial_admin_password", bs.cfg.CredentialPath)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 
 	_, statErr := os.Stat(filepath.Join(dir, "initial_admin_password"))
@@ -543,7 +543,7 @@ func TestBootstrap_NoPlaintextPasswordInCfgStruct(t *testing.T) {
 	bs, err := NewBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	_, runErr := bs.Run(context.Background())
+	_, runErr := bs.EnsureAdmin(context.Background())
 	require.NoError(t, runErr)
 
 	// cfg fields: Username, CredentialPath, TTL, PasswordSource, Scheduler.

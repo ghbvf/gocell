@@ -13,8 +13,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// ErrUnsupportedPlatform is returned by Bootstrapper.Run on non-unix platforms
-// where WriteCredentialFile (unix-only, mode 0600) is unavailable.
+// ErrUnsupportedPlatform is returned by Bootstrapper.EnsureAdmin on non-unix
+// platforms where WriteCredentialFile (unix-only, mode 0600) is unavailable.
 var ErrUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
 
 // BootstrapDeps holds the injected repository and utility dependencies.
@@ -42,7 +42,7 @@ func NewBootstrapper(_ BootstrapDeps, _ BootstrapConfig) (*Bootstrapper, error) 
 	return nil, ErrUnsupportedPlatform
 }
 
-// Run always returns ErrUnsupportedPlatform on non-unix platforms.
-func (b *Bootstrapper) Run(_ context.Context) (worker.Worker, error) {
+// EnsureAdmin always returns ErrUnsupportedPlatform on non-unix platforms.
+func (b *Bootstrapper) EnsureAdmin(_ context.Context) (worker.Worker, error) {
 	return nil, ErrUnsupportedPlatform
 }

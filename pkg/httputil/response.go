@@ -331,6 +331,8 @@ var codeToStatus = map[errcode.Code]int{
 	// errcode.Code to map. 500 is the conservative choice: if one ever
 	// reaches the HTTP layer, it signals an internal setup bug.
 	errcode.ErrObservabilityConfigInvalid: http.StatusInternalServerError,
+	// Lifecycle operation called in wrong state (e.g. bootstrap phase violation).
+	errcode.ErrBootstrapLifecycle: http.StatusInternalServerError,
 
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,
