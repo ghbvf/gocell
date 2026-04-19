@@ -69,7 +69,7 @@ func TestVaultTransitKeyProvider_Integration_RoundTrip(t *testing.T) {
 	plaintext := []byte("production-api-secret")
 	aad := []byte("cell:config-core/key:api_key")
 
-	ct, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 	assert.NotEmpty(t, ct)
 	assert.Nil(t, nonce, "VaultTransit does not use nonce")
@@ -102,7 +102,7 @@ func TestVaultTransitKeyProvider_Integration_AADMismatch_FailsClosed(t *testing.
 	plaintext := []byte("secret-value")
 	aad := []byte("cell:config-core/key:row_a")
 
-	ct, _, _, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, _, _, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Decrypt with wrong AAD (cross-row replay attempt) must fail.
@@ -139,7 +139,7 @@ func TestVaultTransitKeyProvider_Integration_Rotation(t *testing.T) {
 	plaintext := []byte("pre-rotation-value")
 	aad := []byte("cell:config-core/key:old_key")
 
-	ct1, _, _, err := handle1.Encrypt(ctx, plaintext, aad)
+	ct1, _, _, _, err := handle1.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Rotate to v2.

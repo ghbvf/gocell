@@ -44,26 +44,34 @@ func (h *localAESHandle) ID() string { return h.id }
 //   - ciphertext: AES-GCM(DEK, plaintext, aad) — raw GCM output (no nonce prefix)
 //   - nonce:      random 12-byte IV for the data encryption; stored in value_nonce
 //   - edk:        nonce-prefixed AES-GCM(KEK, DEK) — self-contained blob stored in value_edk
-func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error) {
+//   - keyID:      actual KEK version used (for LocalAES always equals h.ID(), but the
+//     interface requires callers to persist the Encrypt-returned keyID to eliminate the
+//     race between Current() and a key rotation in backends like VaultTransit)
+//
+// Note: DEK uses defer clear() to zeroize on function exit; defense-in-depth over Go GC.
+//
+// ref: kubernetes/kubernetes staging/.../kmsv2/envelope.go EncryptResponse.KeyID semantics
+func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
 	// 1. Generate a fresh 32-byte DEK.
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: generate DEK: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: generate DEK: %w", err)
 	}
+	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Encrypt plaintext with DEK. Returns raw ciphertext + nonce separately.
 	ciphertext, nonce, err = aesGCMEncryptSplit(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: encrypt value: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: encrypt value: %w", err)
 	}
 
 	// 3. Encrypt DEK with KEK (no AAD). edk is a self-contained nonce-prefixed blob.
 	edk, err = aesGCMEncryptSelfContained(h.kek, dek, nil)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: wrap DEK: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: wrap DEK: %w", err)
 	}
 
-	return ciphertext, nonce, edk, nil
+	return ciphertext, nonce, edk, h.id, nil
 }
 
 // Decrypt reverses AES-GCM envelope encryption.
@@ -77,6 +85,7 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: unwrap DEK", err)
 	}
+	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Decrypt value using DEK + stored nonce.
 	plaintext, err = aesGCMDecrypt(dek, ciphertext, nonce, aad)

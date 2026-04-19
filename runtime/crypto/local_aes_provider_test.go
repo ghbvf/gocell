@@ -64,7 +64,7 @@ func TestLocalAESKeyProvider_ByID_OldKeyStillDecrypts(t *testing.T) {
 	plaintext := []byte("secret value")
 	aad := []byte("cell:config-core/key:db_password")
 
-	cipher, nonce, edk, err := current.Encrypt(ctx, plaintext, aad)
+	cipher, nonce, edk, _, err := current.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Retrieve the same key by ID and decrypt.
@@ -90,7 +90,7 @@ func TestLocalAESKeyProvider_ByID_PreviousKeyDecrypts(t *testing.T) {
 
 	plaintext := []byte("old secret")
 	aad := []byte("cell:config-core/key:legacy_key")
-	cipher, nonce, edk, err := prevHandle.Encrypt(ctx, plaintext, aad)
+	cipher, nonce, edk, _, err := prevHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Decrypt using the same previous handle.
@@ -147,7 +147,7 @@ func TestLocalAESKeyProvider_EnvelopeRoundTrip(t *testing.T) {
 			plaintext := []byte(tc.plaintext)
 			aad := []byte(tc.aad)
 
-			ct, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+			ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
 			require.NoError(t, err)
 			// AES-GCM produces at least the 16-byte tag even for empty plaintext.
 			assert.NotEmpty(t, ct)
@@ -206,7 +206,7 @@ func TestLocalAESKeyProvider_DecryptAADMismatch_FailClosed(t *testing.T) {
 	aad := []byte("cell:config-core/key:my_key")
 	wrongAAD := []byte("cell:config-core/key:other_key")
 
-	cipher, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+	cipher, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	_, err = handle.Decrypt(ctx, cipher, nonce, edk, wrongAAD)
@@ -231,9 +231,9 @@ func TestLocalAESKeyProvider_NonceUnique(t *testing.T) {
 	plaintext := []byte("same value")
 	aad := []byte("same aad")
 
-	_, nonce1, _, err := handle.Encrypt(ctx, plaintext, aad)
+	_, nonce1, _, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
-	_, nonce2, _, err := handle.Encrypt(ctx, plaintext, aad)
+	_, nonce2, _, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, nonce1, nonce2, "consecutive Encrypt calls must produce different nonces")
@@ -250,7 +250,7 @@ func TestLocalAESHandle_Decrypt_MissingNonce(t *testing.T) {
 	require.NoError(t, err)
 
 	// Encrypt to get a valid ciphertext + edk.
-	ct, _, edk, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	ct, _, edk, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Pass empty nonce — must fail.
@@ -272,7 +272,7 @@ func TestLocalAESHandle_Decrypt_MissingEDK(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, nonce, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	ct, nonce, _, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Pass empty edk — must fail.
@@ -294,7 +294,7 @@ func TestLocalAESHandle_Decrypt_TamperedEDK(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, nonce, edk, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	ct, nonce, edk, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
 	require.NoError(t, err)
 
 	// Flip the last byte of edk to simulate tampering.

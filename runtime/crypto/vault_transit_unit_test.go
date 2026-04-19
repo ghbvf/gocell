@@ -124,12 +124,13 @@ func TestVaultTransitKeyProvider_EncryptDecrypt_RoundTrip(t *testing.T) {
 	plaintext := []byte("sensitive-api-key")
 	aad := []byte("cell:config-core/key:api_key")
 
-	ct, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 	assert.NotEmpty(t, ct)
 	// VaultTransit does not use nonce/edk.
 	assert.Nil(t, nonce)
 	assert.Nil(t, edk)
+	assert.Equal(t, handle.ID(), keyID)
 
 	// Decrypt with correct AAD must succeed.
 	recovered, err := handle.Decrypt(ctx, ct, nil, nil, aad)
@@ -151,7 +152,7 @@ func TestVaultTransitKeyProvider_AADMismatch_FailsClosed(t *testing.T) {
 	plaintext := []byte("sensitive-value")
 	aad := []byte("cell:config-core/key:correct_key")
 
-	ct, _, _, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, _, _, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// Decrypt with wrong AAD (different key context) must fail.
@@ -209,7 +210,7 @@ func TestVaultTransitKeyProvider_NetworkFailure_FailClosed(t *testing.T) {
 	// Encrypt while healthy.
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
-	ct, _, _, err := handle.Encrypt(ctx, []byte("secret"), nil)
+	ct, _, _, _, err := handle.Encrypt(ctx, []byte("secret"), nil)
 	require.NoError(t, err)
 
 	// Break the client to simulate vault going down.
@@ -241,7 +242,7 @@ func TestVaultTransitHandle_Encrypt_ClientWriteError(t *testing.T) {
 	// Break client before calling Encrypt.
 	client.broken = true
 
-	_, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
+	_, _, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -260,7 +261,7 @@ func TestVaultTransitHandle_Encrypt_CiphertextTypeMismatch(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	_, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
+	_, _, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -278,7 +279,7 @@ func TestVaultTransitHandle_Decrypt_ClientWriteError(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, _, _, err := handle.Encrypt(ctx, []byte("data"), nil)
+	ct, _, _, _, err := handle.Encrypt(ctx, []byte("data"), nil)
 	require.NoError(t, err)
 
 	// Break client before Decrypt.
@@ -410,7 +411,7 @@ func TestVaultAPIClient_Write_ServerError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Encrypt will trigger vaultAPIClient.Write → server returns 500 → error.
-	_, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
+	_, _, _, _, err = handle.Encrypt(ctx, []byte("value"), nil)
 	require.Error(t, err, "vaultAPIClient.Write must propagate vault HTTP 500 error")
 }
 
@@ -490,7 +491,7 @@ func TestVaultAPIClient_Write_HappyPath(t *testing.T) {
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
 
-	ct, _, _, err := handle.Encrypt(ctx, []byte("hello"), nil)
+	ct, _, _, _, err := handle.Encrypt(ctx, []byte("hello"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("vault:v1:abc123"), ct)
 }

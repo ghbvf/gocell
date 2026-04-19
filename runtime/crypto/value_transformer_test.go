@@ -101,7 +101,7 @@ func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	plaintext := []byte("old-secret")
 	aad := testAAD("legacy_key")
 
-	ct, nonce, edk, err := previousHandle.Encrypt(ctx, plaintext, aad)
+	ct, nonce, edk, _, err := previousHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
 	// The transformer should decrypt using the historical keyID.
@@ -216,8 +216,8 @@ type errorKeyHandle struct {
 
 func (h *errorKeyHandle) ID() string { return "error-key" }
 
-func (h *errorKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, error) {
-	return nil, nil, nil, h.encryptErr
+func (h *errorKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
+	return nil, nil, nil, "", h.encryptErr
 }
 
 func (h *errorKeyHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {

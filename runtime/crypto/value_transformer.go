@@ -43,12 +43,12 @@ func (t *keyProviderTransformer) Encrypt(ctx context.Context, plaintext, aad []b
 		return nil, "", nil, nil, fmt.Errorf("value-transformer: get current key: %w", err)
 	}
 
-	ct, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("value-transformer: encrypt: %w", err)
 	}
 
-	return ct, handle.ID(), nonce, edk, nil
+	return ct, keyID, nonce, edk, nil
 }
 
 // CurrentKeyID returns the ID of the currently active key. Used by the config

@@ -57,14 +57,16 @@ type vaultTransitHandle struct {
 func (h *vaultTransitHandle) ID() string { return h.id }
 
 // Encrypt delegates to Vault Transit encrypt API.
-// Returns (vaultCiphertextBytes, nil, nil, nil) — nonce and edk are unused.
+// Returns (vaultCiphertextBytes, nil, nil, h.id, nil) — nonce and edk are unused.
 // AAD is passed to Vault Transit as the "context" field (base64-encoded), which
 // Vault uses as HMAC-binding — equivalent to AES-GCM AAD for cross-row replay prevention.
+//
+// DEPRECATED: will be removed in R1c Phase 4 — see adapters/vault/transit_provider.go
 //
 // ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field binds
 // to the key derivation path when key type supports derived keys; for non-derived keys
 // Vault HMAC-binds the context to the ciphertext, matching AES-GCM AAD semantics.
-func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error) {
+func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
 	path := fmt.Sprintf("%s/encrypt/%s", h.mountPath, h.keyName)
 	encoded := base64.StdEncoding.EncodeToString(plaintext)
 
@@ -77,17 +79,17 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte)
 
 	result, err := h.client.Write(ctx, path, payload)
 	if err != nil {
-		return nil, nil, nil, errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: encrypt failed", err)
 	}
 
 	ct, ok := result["ciphertext"].(string)
 	if !ok {
-		return nil, nil, nil, errcode.New(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: unexpected ciphertext format in response")
 	}
 
-	return []byte(ct), nil, nil, nil
+	return []byte(ct), nil, nil, h.id, nil
 }
 
 // Decrypt delegates to Vault Transit decrypt API.
