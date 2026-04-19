@@ -257,15 +257,19 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	}
 
 	// Accounting: processed + messages remaining in broker queue must equal total.
-	// Allow a brief moment for the broker to acknowledge acks and update queue
-	// stats (management API is eventually consistent for short windows).
+	// Management API is eventually consistent (~2-5s polling interval), so we
+	// poll until the sum stabilises at 100 or until the timeout.
 	var queueDepth int
+	processedFinal := processed.Load()
 	require.Eventually(t, func() bool {
 		queueDepth = getQueueDepth(t, mgmtURL, queueName)
-		return queueDepth >= 0
-	}, 5*time.Second, 200*time.Millisecond, "management API must return valid queue depth")
+		processedFinal = processed.Load()
+		t.Logf("shutdown e2e no-loss poll: processed=%d queue=%d sum=%d",
+			processedFinal, queueDepth, processedFinal+int64(queueDepth))
+		return int(processedFinal)+queueDepth >= total
+	}, 20*time.Second, 500*time.Millisecond,
+		"broker queue + processed must eventually total 100 messages")
 
-	processedFinal := processed.Load()
 	t.Logf("shutdown e2e no-loss: processed=%d queue=%d total=%d", processedFinal, queueDepth, total)
 
 	assert.EqualValues(t, total, processedFinal+int64(queueDepth),

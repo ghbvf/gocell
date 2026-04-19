@@ -89,15 +89,18 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 		t.Fatal("handlers did not start within 3s")
 	}
 
-	// Call StopIntake — should close stopIntakeCh and call ch.Cancel.
+	// Call StopIntake — should close stopIntakeCh and call ch.Cancel. With
+	// the concurrent Cancel dispatch (F1 fix), we wait for cancelCalled via
+	// Eventually so the test does not race with the dispatch goroutine.
 	err := sub.StopIntake(ctx)
 	require.NoError(t, err)
 
-	// Verify basic.cancel was issued to the broker.
-	ch.mu.Lock()
-	cancelCalled := ch.cancelCalled
-	ch.mu.Unlock()
-	assert.True(t, cancelCalled, "StopIntake must call ch.Cancel to stop broker delivery")
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.cancelCalled
+	}, 2*time.Second, 10*time.Millisecond,
+		"StopIntake must call ch.Cancel to stop broker delivery")
 
 	// Release the handlers so they can complete.
 	close(released)

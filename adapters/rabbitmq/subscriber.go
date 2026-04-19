@@ -510,10 +510,21 @@ func (s *Subscriber) consumeLoop(
 	handler outbox.EntryHandler,
 ) error {
 	for {
+		// Priority check: if StopIntake has fired, we MUST enter drainRemaining
+		// even when closeCh or ctx.Done is also ready. This preserves the
+		// "StopIntake → drain → Close" ordering invariant that callers rely on
+		// — without it, a concurrent Close() can short-circuit to the closeCh
+		// case here and silently drop prefetched deliveries.
 		select {
 		case <-s.stopIntakeCh:
-			// StopIntake was called: stop accepting new deliveries from the broker
-			// but drain any messages already prefetched in the deliveries channel.
+			slog.Info("rabbitmq: intake stopped, entering drain mode",
+				slog.String(logKeyTopic, topic))
+			return s.drainRemaining(ctx, ch, deliveries, topic, handler)
+		default:
+		}
+
+		select {
+		case <-s.stopIntakeCh:
 			slog.Info("rabbitmq: intake stopped, entering drain mode",
 				slog.String(logKeyTopic, topic))
 			return s.drainRemaining(ctx, ch, deliveries, topic, handler)
@@ -551,6 +562,28 @@ func (s *Subscriber) consumeLoop(
 // window) are still processed correctly.
 //
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
+// drainDeadline is the maximum wall-clock time drainRemaining waits for the
+// deliveries channel to close after StopIntake issued basic.cancel. A healthy
+// broker closes the chan within milliseconds of the cancel ack; this ceiling
+// exists solely to prevent an indefinite hang when the broker is unresponsive.
+var drainDeadline = 30 * time.Second
+
+// drainRemaining reads prefetched deliveries until the deliveries channel is
+// closed by the broker (the cancel ack path), the outer Subscribe ctx is
+// cancelled (hard abort), or drainDeadline elapses (broker never ack'd the
+// cancel).
+//
+// Invariant: closeCh is intentionally NOT in the select. Once StopIntake has
+// entered the drain path, honouring closeCh here would race with buffered
+// deliveries — the broker typically keeps pushing a handful of messages
+// between the cancel and its ack, and the handler-processing gap makes the
+// client-side buffer momentarily empty. We MUST let the broker drive the
+// exit by closing the chan, otherwise prefetched-but-unacked messages are
+// silently lost.
+//
+// ref: Watermill router.go — drain completes when source closes, not when
+//
+//	an external stop signal fires.
 func (s *Subscriber) drainRemaining(
 	ctx context.Context,
 	ch AMQPChannel,
@@ -558,25 +591,28 @@ func (s *Subscriber) drainRemaining(
 	topic string,
 	handler outbox.EntryHandler,
 ) error {
+	timer := time.NewTimer(drainDeadline)
+	defer timer.Stop()
+
 	for {
 		select {
-		case <-ctx.Done():
-			slog.Info("rabbitmq: drain interrupted by context cancellation",
-				slog.String(logKeyTopic, topic))
-			return nil
-		case <-s.closeCh:
-			slog.Info("rabbitmq: drain interrupted by Close",
-				slog.String(logKeyTopic, topic))
-			return nil
 		case d, ok := <-deliveries:
 			if !ok {
-				// Broker acknowledged basic.cancel and closed the deliveries chan.
 				slog.Info("rabbitmq: delivery channel closed after basic.cancel, drain complete",
 					slog.String(logKeyTopic, topic))
 				return nil
 			}
 			s.wg.Add(1)
 			go s.processDelivery(ctx, ch, d, topic, handler)
+		case <-ctx.Done():
+			slog.Info("rabbitmq: drain interrupted by context cancellation",
+				slog.String(logKeyTopic, topic))
+			return nil
+		case <-timer.C:
+			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
+				slog.String(logKeyTopic, topic),
+				slog.Duration("deadline", drainDeadline))
+			return nil
 		}
 	}
 }
@@ -925,22 +961,31 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 		perCallTimeout = 2 * time.Second
 	}
 
-	var wg sync.WaitGroup
+	var cancelWg sync.WaitGroup
 	for _, c := range snapshot {
 		if ctx.Err() != nil {
 			break // outer budget expired; skip remaining dispatch
 		}
-		wg.Add(1)
+		cancelWg.Add(1)
 		go func(c consumerRef) {
-			defer wg.Done()
+			defer cancelWg.Done()
 			cancelConsumerWithBudget(ctx, c, perCallTimeout)
 		}(c)
 	}
 
-	waitDone := make(chan struct{})
-	go func() { wg.Wait(); close(waitDone) }()
+	// Wait for every dispatched basic.cancel to complete (or for their own
+	// per-call timeouts to fire) before reporting StopIntake done. This
+	// ensures the broker has stopped pushing new deliveries when we return.
+	//
+	// Note: drain completion is NOT awaited here. consumeLoop's priority
+	// select guarantees stopIntakeCh is observed before closeCh even if
+	// both are closed by the time consumeLoop re-enters select, so
+	// drainRemaining is always entered. Inside drainRemaining, buffered
+	// deliveries are dispatched (priority) before abort signals.
+	cancelDone := make(chan struct{})
+	go func() { cancelWg.Wait(); close(cancelDone) }()
 	select {
-	case <-waitDone:
+	case <-cancelDone:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
