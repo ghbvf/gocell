@@ -1,11 +1,15 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"testing"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -323,4 +327,105 @@ func TestPlaintextMigrator_MigrateConfigVersions_SingleRow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Processed)
 	require.Len(t, db.execCalls, 1)
+}
+
+// ---------------------------------------------------------------------------
+// aadAwareTransformer — encodes AAD into the ciphertext so Decrypt can verify
+// ---------------------------------------------------------------------------
+
+// aadAwareTransformer is an in-memory transformer that embeds the AAD length
+// and bytes at the head of the ciphertext. This allows Decrypt to assert that
+// the caller supplied the identical AAD that was used during Encrypt, proving
+// that the migration wires the correct AAD (cellID + configKey).
+//
+// Ciphertext layout: [4-byte big-endian AAD length][AAD bytes][plaintext bytes]
+type aadAwareTransformer struct {
+	keyID string
+}
+
+func (t *aadAwareTransformer) Encrypt(_ context.Context, pt, aad []byte) ([]byte, string, []byte, []byte, error) {
+	var lenBuf [4]byte
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)))
+	ct := make([]byte, 0, 4+len(aad)+len(pt))
+	ct = append(ct, lenBuf[:]...)
+	ct = append(ct, aad...)
+	ct = append(ct, pt...)
+	return ct, t.keyID, nil, nil, nil
+}
+
+func (t *aadAwareTransformer) Decrypt(_ context.Context, ct []byte, _ string, _, _, aad []byte) ([]byte, error) {
+	if len(ct) < 4 {
+		return nil, errors.New("cipher too short")
+	}
+	aadLen := binary.BigEndian.Uint32(ct[:4])
+	if int(4+aadLen) > len(ct) {
+		return nil, errors.New("cipher malformed")
+	}
+	storedAAD := ct[4 : 4+aadLen]
+	if !bytes.Equal(storedAAD, aad) {
+		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "aad mismatch")
+	}
+	return ct[4+aadLen:], nil
+}
+
+// ---------------------------------------------------------------------------
+// TestPlaintextMigration_AADBinding
+// ---------------------------------------------------------------------------
+
+// TestPlaintextMigration_AADBinding verifies that the migrator passes the
+// correct AAD (cellID + configKey) to the transformer, so the ciphertext is
+// bound to the specific row identity and cannot be transplanted.
+//
+// Test flow:
+//  1. Migrate a plaintext row → ciphertext stored in db.execCalls.
+//  2. Extract the ciphertext and decrypt it with the CORRECT AAD → plaintext matches.
+//  3. Attempt to decrypt the same ciphertext with a WRONG AAD → must fail with
+//     ErrKeyProviderDecryptFailed (cross-row replay protection verified).
+func TestPlaintextMigration_AADBinding(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		configKey string
+		value     string
+	}{
+		{name: "api_key row", configKey: "api_key", value: "sk-secret"},
+		{name: "db_password row", configKey: "db_password", value: "p@ssw0rd!"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &aadAwareTransformer{keyID: "test-key-v1"}
+			db := &batchFakeDB{
+				rows: []migrationRow{
+					{id: "row-1", key: tc.configKey, value: tc.value, sensitive: true},
+				},
+			}
+			m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10})
+			require.NoError(t, err)
+
+			result, err := m.MigrateConfigEntries(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Processed)
+			require.Len(t, db.execCalls, 1)
+
+			// Extract the ciphertext written to the DB.
+			ct, ok := db.execCalls[0].args[0].([]byte)
+			require.True(t, ok, "first arg of UPDATE must be []byte ciphertext")
+
+			// Correct AAD: must decrypt successfully and match original plaintext.
+			correctAAD := configcrypto.AADForConfig(cellID, tc.configKey)
+			pt, err := tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, correctAAD)
+			require.NoError(t, err, "Decrypt with correct AAD must succeed")
+			assert.Equal(t, tc.value, string(pt), "decrypted plaintext must match original")
+
+			// Wrong AAD (different configKey): must fail — cross-row replay blocked.
+			wrongAAD := configcrypto.AADForConfig(cellID, "other_key")
+			_, err = tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, wrongAAD)
+			require.Error(t, err, "Decrypt with wrong AAD must fail")
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "error must be errcode.Error")
+			assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+		})
+	}
 }

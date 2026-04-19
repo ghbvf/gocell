@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
@@ -174,7 +174,7 @@ func TestEncrypt_GetByKey_SensitiveDecryptsValue(t *testing.T) {
 
 	// Build what the DB row looks like after encryption.
 	original := "s3cr3t"
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), kcrypto.AADForConfig("config-core", "db_password"))
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "db_password"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -224,7 +224,7 @@ func TestEncrypt_GetByKey_SensitiveStaleKey(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v2"} // current is v2
 
 	original := "stale-value"
-	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), kcrypto.AADForConfig("config-core", "old_key"))
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "old_key"))
 	require.NoError(t, err)
 
 	// Row was encrypted with v1 (old key).
@@ -323,7 +323,7 @@ func TestEncrypt_GetVersion_SensitiveDecryptsValue(t *testing.T) {
 
 	original := "published-secret"
 	// Use "cfg-1" as the AAD key — matches v.ConfigID used by GetVersion decryptValue.
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), kcrypto.AADForConfig("config-core", "cfg-1"))
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "cfg-1"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -376,13 +376,13 @@ func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	// Encrypt value for key "db_password".
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte("secret"), kcrypto.AADForConfig("config-core", "db_password"))
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte("secret"), configcrypto.AADForConfig("config-core", "db_password"))
 	require.NoError(t, err)
 
 	// Now tamper: change the fake's lastEncryptAAD to simulate it having been
 	// originally encrypted for a different key (cross-row replay scenario).
 	// We overwrite it with AAD for a different key so Decrypt will detect mismatch.
-	_, _, _, _, _ = tr.Encrypt(ctx, []byte("other"), kcrypto.AADForConfig("config-core", "other_key"))
+	_, _, _, _, _ = tr.Encrypt(ctx, []byte("other"), configcrypto.AADForConfig("config-core", "other_key"))
 	// lastEncryptAAD is now "other_key" AAD, but the DB row has "db_password" AAD.
 
 	now := time.Now()
@@ -452,7 +452,7 @@ func TestCurrentKeyID_ProviderReturnsError(t *testing.T) {
 	}
 
 	original := "some-secret"
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), kcrypto.AADForConfig("config-core", "my_key"))
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "my_key"))
 	require.NoError(t, err)
 
 	now := time.Now()
@@ -478,7 +478,7 @@ func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"} // encrypt with v1 first
 
 	original := "stale-value"
-	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), kcrypto.AADForConfig("config-core", "cfg_key"))
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "cfg_key"))
 	require.NoError(t, err)
 
 	// Now simulate key rotation: current is v2, but stored row has v1.

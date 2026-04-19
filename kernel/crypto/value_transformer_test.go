@@ -32,47 +32,6 @@ var _ kcrypto.ValueTransformer = fakeTransformer{}
 var _ kcrypto.CurrentKeyIDProvider = fakeCurrentKeyIDProvider{}
 
 // ---------------------------------------------------------------------------
-// AADForConfig format test
-// ---------------------------------------------------------------------------
-
-func TestAADForConfig_Format(t *testing.T) {
-	tests := []struct {
-		name      string
-		cellID    string
-		configKey string
-		want      string
-	}{
-		{
-			name:      "basic",
-			cellID:    "config-core",
-			configKey: "api_key",
-			want:      "cell:config-core/key:api_key",
-		},
-		{
-			name:      "empty strings",
-			cellID:    "",
-			configKey: "",
-			want:      "cell:/key:",
-		},
-		{
-			name:      "special chars",
-			cellID:    "my-cell",
-			configKey: "some/complex:key",
-			want:      "cell:my-cell/key:some/complex:key",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := string(kcrypto.AADForConfig(tc.cellID, tc.configKey))
-			if got != tc.want {
-				t.Fatalf("AADForConfig(%q, %q) = %q; want %q", tc.cellID, tc.configKey, got, tc.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // ValueTransformer interface method tests
 // ---------------------------------------------------------------------------
 
@@ -81,7 +40,7 @@ func TestValueTransformer_InterfaceMethods(t *testing.T) {
 	var tr kcrypto.ValueTransformer = fakeTransformer{}
 
 	plaintext := []byte("secret-value")
-	aad := kcrypto.AADForConfig("test-cell", "test-key")
+	aad := []byte("cell:test-cell/key:test-key") // AADForConfig moved to cells/config-core/internal/crypto
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	if err != nil {

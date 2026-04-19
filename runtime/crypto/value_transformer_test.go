@@ -5,12 +5,18 @@ import (
 	"errors"
 	"testing"
 
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testAAD constructs a test AAD in the config-core format.
+// AADForConfig was moved to cells/config-core/internal/crypto;
+// runtime/crypto tests use this local helper to avoid a cells/ import.
+func testAAD(configKey string) []byte {
+	return []byte("cell:config-core/key:" + configKey)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -45,7 +51,7 @@ func TestValueTransformer_EncryptDecrypt_RoundTrip(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			plaintext := []byte(tc.value)
-			aad := kcrypto.AADForConfig("config-core", tc.configKey)
+			aad := testAAD(tc.configKey)
 
 			ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 			require.NoError(t, err)
@@ -93,7 +99,7 @@ func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("old-secret")
-	aad := kcrypto.AADForConfig("config-core", "legacy_key")
+	aad := testAAD("legacy_key")
 
 	ct, nonce, edk, err := previousHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -114,8 +120,8 @@ func TestValueTransformer_DecryptWrongAAD_FailClosed(t *testing.T) {
 	tr := newTestTransformer(t)
 
 	plaintext := []byte("value")
-	aad := kcrypto.AADForConfig("config-core", "my_key")
-	wrongAAD := kcrypto.AADForConfig("config-core", "other_key")
+	aad := testAAD("my_key")
+	wrongAAD := testAAD("other_key")
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -137,7 +143,7 @@ func TestValueTransformer_UnknownKeyID_FailClosed(t *testing.T) {
 	tr := newTestTransformer(t)
 
 	plaintext := []byte("value")
-	aad := kcrypto.AADForConfig("config-core", "my_key")
+	aad := testAAD("my_key")
 	ct, _, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
@@ -154,7 +160,7 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 	tr := crypto.NoopTransformer{}
 
 	plaintext := []byte("public-config-value")
-	aad := kcrypto.AADForConfig("config-core", "public_key")
+	aad := testAAD("public_key")
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -169,11 +175,15 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestAADForConfig_Format
+// TestAADForConfig_Format — local helper format test
 // ---------------------------------------------------------------------------
 
-func TestAADForConfig_Format(t *testing.T) {
-	aad := kcrypto.AADForConfig("config-core", "api_key")
+// TestTestAAD_Format verifies the local testAAD helper used by this test file
+// produces the expected config-core AAD format.
+// The canonical AADForConfig implementation lives in
+// cells/config-core/internal/crypto.
+func TestTestAAD_Format(t *testing.T) {
+	aad := testAAD("api_key")
 	assert.Equal(t, []byte("cell:config-core/key:api_key"), aad)
 }
 

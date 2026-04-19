@@ -2,7 +2,6 @@ package crypto
 
 import (
 	"context"
-	"fmt"
 )
 
 // ValueTransformer is the caller-facing encryption interface for sensitive
@@ -40,17 +39,4 @@ type ValueTransformer interface {
 // comparison against per-row stored key IDs.
 type CurrentKeyIDProvider interface {
 	CurrentKeyID(ctx context.Context) (string, error)
-}
-
-// ---------------------------------------------------------------------------
-// AAD helpers
-// ---------------------------------------------------------------------------
-
-// AADForConfig computes the Additional Authenticated Data for a config entry.
-// Format: "cell:{cellID}/key:{configKey}"
-//
-// Using a composite key prevents a ciphertext encrypted for one config entry
-// from being transplanted into a different entry (cross-row replay attack).
-func AADForConfig(cellID, configKey string) []byte {
-	return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
 }

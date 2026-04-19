@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -94,7 +95,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
-	aad := kcrypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt value for key %s: %w", key, err)
@@ -109,7 +110,7 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 		return "", errcode.New(errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
-	aad := kcrypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrConfigDecryptFailed,

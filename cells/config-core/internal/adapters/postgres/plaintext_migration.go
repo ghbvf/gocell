@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -175,7 +176,7 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 // encryptBatch encrypts each row in the batch and writes it back.
 func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult) error {
 	for _, row := range batch {
-		aad := kcrypto.AADForConfig(cellID, row.key)
+		aad := configcrypto.AADForConfig(cellID, row.key)
 		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
 		if encErr != nil {
 			return fmt.Errorf("plaintext-migrator: encrypt key=%s: %w", row.key, encErr)
