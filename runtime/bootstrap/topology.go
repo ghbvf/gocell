@@ -7,6 +7,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// adapterInfoInMemory is the label reported in AdapterInfo() for components
+// that run in-process (no external backend). Extracted so the three mode /
+// storage / event_bus keys agree on one spelling and any rename updates all
+// call sites at once.
+const adapterInfoInMemory = "in-memory"
+
 // Topology captures the resolved runtime topology derived from environment
 // variables. It is the single source of truth for adapter-mode / storage-backend
 // coupling checks used by bootstrap, health probes, and test harnesses.
@@ -119,14 +125,14 @@ func (t Topology) RequireProductionControlPlane() bool {
 //
 // ref: go-micro service metadata — mode changes must be visible to observers.
 func (t Topology) AdapterInfo() map[string]string {
-	storageMode := "in-memory"
-	outboxStorage := "in-memory"
+	storageMode := adapterInfoInMemory
+	outboxStorage := adapterInfoInMemory
 	if t.StorageBackend == "postgres" {
 		storageMode = "postgres"
 		outboxStorage = "postgres"
 	}
 
-	effectiveMode := "in-memory"
+	effectiveMode := adapterInfoInMemory
 	if t.AdapterMode == "real" {
 		effectiveMode = "real-keys-" + storageMode + "-storage"
 	}
@@ -134,7 +140,7 @@ func (t Topology) AdapterInfo() map[string]string {
 	return map[string]string{
 		"mode":           effectiveMode,
 		"storage":        storageMode,
-		"event_bus":      "in-memory", // in-process eventbus; relay forwards PG outbox entries into it
+		"event_bus":      adapterInfoInMemory, // in-process eventbus; relay forwards PG outbox entries into it
 		"outbox_storage": outboxStorage,
 	}
 }
