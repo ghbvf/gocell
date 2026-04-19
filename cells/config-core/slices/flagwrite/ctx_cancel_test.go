@@ -15,8 +15,7 @@ import (
 // and returns context.Canceled, modelling the RunInTx behavior when a
 // context deadline expires or the caller explicitly cancels.
 type cancellingTxRunner struct {
-	cancelAt int // cancel after this many fn calls
-	calls    int
+	calls int
 }
 
 func (r *cancellingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
