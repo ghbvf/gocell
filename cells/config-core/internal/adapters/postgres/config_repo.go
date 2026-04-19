@@ -193,8 +193,15 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 		}
 	}
 
-	// Transparent decryption for sensitive entries that have been encrypted.
-	if e.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != "" {
+	// Fail-closed enforcement for sensitive entries.
+	if e.Sensitive {
+		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
+			// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
+			// Block read until plaintext_migration completes to enforce
+			// fail-closed semantics — never return plaintext from unencrypted rows.
+			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+				"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
+		}
 		plain, err := r.decryptValue(ctx, key, valueCipher, *valueKeyID, valueNonce, valueEDK)
 		if err != nil {
 			return nil, err
@@ -298,14 +305,35 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// sensitiveListSentinel is the placeholder value returned by List for sensitive entries.
+// List does not decrypt sensitive values — callers use GetByKey for plaintext access.
+const sensitiveListSentinel = "***"
+
+// applySensitiveListSentinel redacts the value field of a sensitive list entry
+// and preserves key metadata (KeyID, Stale) for informational purposes.
+func applySensitiveListSentinel(e *domain.ConfigEntry, valueKeyID *string, currentID string) {
+	e.Value = sensitiveListSentinel
+	if valueKeyID == nil {
+		return
+	}
+	e.KeyID = *valueKeyID
+	if currentID != "" && currentID != *valueKeyID {
+		e.Stale = true
+	}
+}
+
 // List retrieves config entries with keyset cursor pagination.
 // Requires composite index: CREATE INDEX idx_config_entries_key_id ON config_entries (key ASC, id ASC)
-// Note: List does NOT decrypt sensitive values — it returns the raw value column.
-// This avoids bulk decryption on list operations; callers should use GetByKey
-// for individual sensitive value access.
+//
+// Sensitive entries: List does NOT decrypt values. Instead, the Value field is
+// set to "***" (sentinel) and KeyID / Stale are preserved from the cipher columns.
+// Callers must use GetByKey to retrieve the decrypted plaintext for a specific entry.
+//
+// This design avoids bulk decryption on list operations and prevents accidental
+// exposure of sensitive values in list responses.
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	b := query.NewBuilder()
-	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at FROM config_entries WHERE 1=1")
+	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at, value_key_id FROM config_entries WHERE 1=1")
 
 	if err := query.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
@@ -318,11 +346,18 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	}
 	defer rows.Close()
 
+	currentID := r.currentKeyID(ctx)
 	var entries []*domain.ConfigEntry
 	for rows.Next() {
-		var e domain.ConfigEntry
-		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var (
+			e          domain.ConfigEntry
+			valueKeyID *string
+		)
+		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt, &valueKeyID); err != nil {
 			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
+		}
+		if e.Sensitive {
+			applySensitiveListSentinel(&e, valueKeyID, currentID)
 		}
 		entries = append(entries, &e)
 	}
@@ -407,8 +442,13 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		}
 	}
 
-	// Transparent decryption for sensitive versions.
-	if v.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != "" {
+	// Fail-closed enforcement for sensitive versions.
+	if v.Sensitive {
+		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
+			// Legacy plaintext version row: block read until plaintext_migration completes.
+			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
+		}
 		plain, err := r.decryptValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
 		if err != nil {
 			return nil, err
