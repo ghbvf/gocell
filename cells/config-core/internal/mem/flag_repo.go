@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
@@ -62,6 +63,35 @@ func (r *FlagRepository) Update(_ context.Context, flag *domain.FeatureFlag) err
 	clone := *flag
 	r.flags[flag.Key] = &clone
 	return nil
+}
+
+// Delete removes a feature flag by key.
+func (r *FlagRepository) Delete(_ context.Context, key string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.flags[key]; !exists {
+		return errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
+	}
+	delete(r.flags, key)
+	return nil
+}
+
+// Toggle sets the enabled state atomically. It increments version by 1 and
+// sets UpdatedAt to now(). It does not overwrite RolloutPercentage or Description.
+func (r *FlagRepository) Toggle(_ context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, exists := r.flags[key]
+	if !exists {
+		return nil, errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
+	}
+	existing.Enabled = enabled
+	existing.Version++
+	existing.UpdatedAt = time.Now()
+	clone := *existing
+	return &clone, nil
 }
 
 // List returns flags sorted and paginated according to params.
