@@ -156,5 +156,5 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 }
 
 func testAdminCtx() context.Context {
-	return context.Background()
+	return auth.TestContext(testAdminSubject, []string{dto.RoleAdmin})
 }
