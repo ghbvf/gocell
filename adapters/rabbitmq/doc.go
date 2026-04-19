@@ -35,10 +35,11 @@
 //
 // # Connection lifecycle
 //
-// Connection.CloseCtx(ctx context.Context) error signals the reconnect loop
+// Connection.Close(ctx context.Context) error signals the reconnect loop
 // (via closeCh), drains the channel pool, then closes the underlying AMQP
 // connection in a goroutine so that the caller's ctx budget is honoured even
 // if the broker connection.close frame exchange blocks.
+// Connection implements lifecycle.ContextCloser.
 //
 // ref: ThreeDotsLabs/watermill-amqp — reconnect + ACK/NACK + channel lifecycle
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget

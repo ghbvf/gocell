@@ -313,7 +313,7 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 
 	t.Cleanup(func() {
 		// Avoid blocking on reconnect loop.
-		if cErr := conn.Close(); cErr != nil {
+		if cErr := conn.Close(context.Background()); cErr != nil {
 			t.Logf("cleanup close error: %v", cErr)
 		}
 	})
@@ -497,14 +497,15 @@ func TestPoolStats_JSON_CamelCase(t *testing.T) {
 	assert.Contains(t, s, `"state":"connected"`) // MarshalText, not numeric
 }
 
-func TestConnection_Close_Idempotent(t *testing.T) {
+func TestConnection_CloseNoCtx_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
-	err := conn.Close()
+	ctx := context.Background()
+	err := conn.Close(ctx)
 	assert.NoError(t, err)
 
 	// Second close should be no-op.
-	err = conn.Close()
+	err = conn.Close(ctx)
 	assert.NoError(t, err)
 }
 
@@ -671,7 +672,7 @@ func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	// reconnectLoop is already running from NewConnection. Close should stop it.
-	err := conn.Close()
+	err := conn.Close(context.Background())
 	assert.NoError(t, err)
 
 	// After Close, WaitConnected with a short timeout should fail (closeCh closed).
@@ -705,7 +706,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Wait for reconnectLoop to call NotifyClose.
 	require.Eventually(t, func() bool {
@@ -770,7 +771,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -1138,7 +1139,7 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
-		if cErr := conn.Close(); cErr != nil {
+		if cErr := conn.Close(context.Background()); cErr != nil {
 			t.Logf("close error: %v", cErr)
 		}
 	}()
@@ -1264,7 +1265,7 @@ func TestSubscriber_InitializeSubscription_EmptyDLX_ReturnsError(t *testing.T) {
 func TestSubscriber_InitializeSubscription_AcquireChannelFailure(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	// Close the connection to make AcquireChannel fail.
-	_ = conn.Close()
+	_ = conn.Close(context.Background())
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
@@ -1803,7 +1804,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 		ChannelPoolSize: 5,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = conn.Close(context.Background()) }()
 
 	// Now make channel acquisition fail.
 	mockConn.mu.Lock()
@@ -3830,7 +3831,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Verify initial health is OK.
 	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
@@ -4196,7 +4197,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close()
+	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Initial state: Connected.
 	assert.Equal(t, StateConnected, conn.ConnectionStatus(), "initial state should be Connected")

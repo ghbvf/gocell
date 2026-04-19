@@ -50,7 +50,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 	require.NoError(t, err, "create dedicated rabbitmq connection")
 
 	cleanup := func() {
-		_ = conn.Close()
+		_ = conn.Close(context.Background())
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("rabbitmq: dedicated container terminate failed: %v", err)
 		}
@@ -80,7 +80,7 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
 	require.NoError(t, err, "create connection against shared rabbitmq broker")
-	return conn, func() { _ = conn.Close() }
+	return conn, func() { _ = conn.Close(context.Background()) }
 }
 
 // startRabbitMQBroker returns the package-wide shared broker AMQP URL
@@ -110,7 +110,7 @@ func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
 		ReconnectBaseDelay:  500 * time.Millisecond,
 	})
 	require.NoError(t, err, "create per-subtest rabbitmq connection")
-	t.Cleanup(func() { _ = conn.Close() })
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
 }
 

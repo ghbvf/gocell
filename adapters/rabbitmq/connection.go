@@ -14,6 +14,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -207,6 +208,12 @@ func (c *Config) setDefaults() {
 		c.ConfirmTimeout = 5 * time.Second
 	}
 }
+
+// Compile-time interface check: Connection must satisfy lifecycle.ContextCloser.
+//
+// ref: ThreeDotsLabs/watermill-amqp pkg/amqp/publisher.go Close signature
+// ref: uber-go/fx app.go StopTimeout — ctx propagation pattern
+var _ lifecycle.ContextCloser = (*Connection)(nil)
 
 // AMQPConnection abstracts the amqp.Connection for testing.
 type AMQPConnection interface {
@@ -652,24 +659,20 @@ func (c *Connection) ConnectionStatus() ConnectionState {
 	return s
 }
 
-// Close shuts down the connection and drains the channel pool.
-func (c *Connection) Close() error {
-	return c.CloseCtx(context.Background())
-}
-
-// CloseCtx shuts down the connection, bounded by ctx.
+// Close shuts down the connection, bounded by ctx.
 //
 // It signals closeCh (stopping the reconnect loop), drains the channel pool,
 // then closes the underlying AMQP connection in a goroutine so that ctx
 // expiry is honoured even if the broker handshake takes longer than the
 // caller's budget allows.
 //
-// CloseCtx is idempotent: a second call returns nil immediately.
+// Close is idempotent: a second call returns nil immediately.
 //
 // ref: uber-go/fx app.go StopTimeout — ctx carries the shared shutdown budget.
-// ref: ThreeDotsLabs/watermill-amqp ConnectionWrapper.Close — closeCh signal
+// ref: ThreeDotsLabs/watermill-amqp pkg/amqp/publisher.go Close — closeCh signal
 // then conn.Close() with the caller's budget.
-func (c *Connection) CloseCtx(ctx context.Context) error {
+// ref: rabbitmq/amqp091-go channel.go Close — IsClosed short-circuit pattern.
+func (c *Connection) Close(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
