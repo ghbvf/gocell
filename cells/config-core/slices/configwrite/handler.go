@@ -76,9 +76,24 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 // RegisterRoutes registers configwrite routes with admin-only policies on any
 // cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux) so
 // production wiring, contract tests, and cell-level integration tests share
-// the same auth.Secured declarations.
+// the same auth.Declare declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	mux.Handle("POST /", auth.Secured(h.HandleCreate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("PUT /{key}", auth.Secured(h.HandleUpdate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("DELETE /{key}", auth.Secured(h.HandleDelete, auth.AnyRole(dto.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/",
+		Handler: http.HandlerFunc(h.HandleCreate),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PUT",
+		Path:    "/{key}",
+		Handler: http.HandlerFunc(h.HandleUpdate),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "DELETE",
+		Path:    "/{key}",
+		Handler: http.HandlerFunc(h.HandleDelete),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
 }

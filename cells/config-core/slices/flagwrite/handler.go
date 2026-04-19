@@ -198,11 +198,31 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 // The mux argument is the narrow cell.RouteHandler interface so this single
 // declaration is used by production wiring (cells/config-core/cell.go via
 // cell.RouteMux), contract tests (*http.ServeMux), and cell-level integration
-// tests — all paths share the same auth.Secured wrappers. Any regression that
-// omits the Secured wrapper would surface the same way in every path.
+// tests — all paths share the same auth.Declare declarations. Any regression
+// that omits the auth declaration would surface the same way in every path.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	mux.Handle("POST /", auth.Secured(h.HandleCreate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("PUT /{key}", auth.Secured(h.HandleUpdate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("POST /{key}/toggle", auth.Secured(h.HandleToggle, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("DELETE /{key}", auth.Secured(h.HandleDelete, auth.AnyRole(dto.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/",
+		Handler: http.HandlerFunc(h.HandleCreate),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PUT",
+		Path:    "/{key}",
+		Handler: http.HandlerFunc(h.HandleUpdate),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{key}/toggle",
+		Handler: http.HandlerFunc(h.HandleToggle),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "DELETE",
+		Path:    "/{key}",
+		Handler: http.HandlerFunc(h.HandleDelete),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
 }

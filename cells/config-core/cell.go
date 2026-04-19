@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -320,9 +321,14 @@ func (c *ConfigCore) initFlagWriteSlice() {
 
 // RegisterRoutes registers HTTP routes for config-core. All admin-guarded
 // write handlers delegate to the slice's RegisterRoutes (which applies
-// auth.Secured + auth.AnyRole(RoleAdmin)) so the policy declaration cannot
+// auth.Declare + auth.AnyRole(RoleAdmin)) so the policy declaration cannot
 // drift between production wiring and contract/integration tests — there is
 // exactly one place where each write endpoint's policy is declared.
+//
+// Read endpoints (GET /config, GET /config/{key}, GET /flags, GET /flags/{key},
+// POST /flags/{key}/evaluate) are declared with auth.Authenticated() to gain
+// an explicit auth declaration; previously these relied on implicit authed-by-
+// default behaviour.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
 // resource, authz chain applied once at registration.
@@ -332,9 +338,19 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		// Config CRUD + publish/rollback under /api/v1/config.
 		v1.Route("/config", func(cfg cell.RouteMux) {
-			// config-read (unauthenticated GETs by design).
-			cfg.Handle("GET /", http.HandlerFunc(c.readHandler.HandleList))
-			cfg.Handle("GET /{key}", http.HandlerFunc(c.readHandler.HandleGet))
+			// config-read — authenticated via auth.Declare.
+			auth.Declare(cfg, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.readHandler.HandleList),
+				Policy:  auth.Authenticated(),
+			})
+			auth.Declare(cfg, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{key}",
+				Handler: http.HandlerFunc(c.readHandler.HandleGet),
+				Policy:  auth.Authenticated(),
+			})
 			// config-write — admin-guarded via slice RegisterRoutes.
 			c.writeHandler.RegisterRoutes(cfg)
 			// config-publish — admin-guarded via slice RegisterRoutes.
@@ -344,10 +360,25 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 		// /api/v1/flags hosts feature-flag (read + evaluate, L0) and flag-write
 		// (write + toggle + delete, L2 + admin-guarded).
 		v1.Route("/flags", func(f cell.RouteMux) {
-			// feature-flag (read) slice — unauthenticated.
-			f.Handle("GET /", http.HandlerFunc(c.flagHandler.HandleList))
-			f.Handle("GET /{key}", http.HandlerFunc(c.flagHandler.HandleGet))
-			f.Handle("POST /{key}/evaluate", http.HandlerFunc(c.flagHandler.HandleEvaluate))
+			// feature-flag (read) slice — authenticated via auth.Declare.
+			auth.Declare(f, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.flagHandler.HandleList),
+				Policy:  auth.Authenticated(),
+			})
+			auth.Declare(f, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{key}",
+				Handler: http.HandlerFunc(c.flagHandler.HandleGet),
+				Policy:  auth.Authenticated(),
+			})
+			auth.Declare(f, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/{key}/evaluate",
+				Handler: http.HandlerFunc(c.flagHandler.HandleEvaluate),
+				Policy:  auth.Authenticated(),
+			})
 			// flag-write — admin-guarded via slice RegisterRoutes.
 			c.flagWriteHandler.RegisterRoutes(f)
 		})
