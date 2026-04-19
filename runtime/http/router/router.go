@@ -271,11 +271,10 @@ type Router struct {
 	circuitBreaker                  middleware.Allower
 	circuitBreakerNil               bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
 	authVerifier                    auth.IntentTokenVerifier
-	authPublicMatcher               func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
-	authMetrics                     *auth.AuthMetrics
-	passwordResetExemptMatcher      func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
-	passwordResetChangeEndpointHint string                            // derived by FinalizeAuth from the first POST+PasswordResetExempt meta
-	securityHeadersOpts             []middleware.SecurityHeadersOption
+	authPublicMatcher          func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
+	authMetrics                *auth.AuthMetrics
+	passwordResetExemptMatcher func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
+	securityHeadersOpts        []middleware.SecurityHeadersOption
 	bodyLimit                       int64
 	trustedProxies                  []string
 
@@ -512,9 +511,6 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 			return r.passwordResetExemptMatcher(method, urlPath)
 		}),
 		auth.WithPasswordResetChangeEndpointHintFn(func() string {
-			if r.passwordResetChangeEndpointHint != "" {
-				return r.passwordResetChangeEndpointHint
-			}
 			return r.derivedHint
 		}),
 	}
@@ -747,11 +743,8 @@ func (r *Router) mergeDelegatedMatcher(declared func(*http.Request) bool) {
 }
 
 // deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
-// meta's path when no static legacy hint is configured.
+// meta's path. The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
 func (r *Router) deriveHint() {
-	if r.passwordResetChangeEndpointHint != "" {
-		return
-	}
 	for _, m := range r.declaredAuthMetas {
 		if m.Method == "POST" && m.PasswordResetExempt {
 			r.derivedHint = m.Path
