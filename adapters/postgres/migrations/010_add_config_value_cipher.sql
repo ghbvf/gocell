@@ -1,6 +1,6 @@
 -- +goose no transaction
 -- +goose Up
--- Migration 008: Add cipher columns for sensitive config value encryption.
+-- Migration 010: Add cipher columns for sensitive config value encryption.
 --
 -- The existing `value` column is retained:
 --   - sensitive=false:  value = plaintext, all cipher columns = NULL
@@ -36,6 +36,6 @@ ALTER TABLE config_versions
 -- See ADR: docs/architecture/202604191800-adr-config-value-encryption.md
 -- +goose StatementBegin
 DO $$ BEGIN
-    RAISE EXCEPTION 'config_value_cipher rollback requires manual rename — see migration 008 header and ADR docs/architecture/202604191800-adr-config-value-encryption.md';
+    RAISE EXCEPTION 'config_value_cipher rollback requires manual rename — see migration 010 header and ADR docs/architecture/202604191800-adr-config-value-encryption.md';
 END $$;
 -- +goose StatementEnd

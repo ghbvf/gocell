@@ -53,7 +53,7 @@ type ConfigRepository struct {
 // via persistence.TxCtxKey. Session is the sole production entry point;
 // use the unexported newConfigRepositoryFromDBTX in tests.
 //
-// Requires migrations 001–008 to be applied first (see adapters/postgres/migrations/).
+// Requires migrations 001–010 to be applied first (see adapters/postgres/migrations/).
 func NewConfigRepository(s *Session, tr crypto.ValueTransformer) *ConfigRepository {
 	return &ConfigRepository{session: s, transformer: tr}
 }

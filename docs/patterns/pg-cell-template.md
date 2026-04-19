@@ -652,7 +652,7 @@ require.Error(t, err, "AAD mismatch must fail-closed")
 
 Integration tests in `cells/config-core/internal/adapters/postgres/*_test.go`
 use `testcontainers-go` to spin up a real PostgreSQL instance and run
-migrations 001–008 before the test suite. These tests exercise the full
+migrations 001–010 before the test suite. These tests exercise the full
 repository path including cipher columns.
 
 ```go

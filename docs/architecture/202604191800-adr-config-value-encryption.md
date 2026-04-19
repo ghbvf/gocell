@@ -230,7 +230,7 @@ covers legacy rows where `value_cipher IS NULL AND sensitive=true`.
 
 ## Plaintext Migration Path
 
-1. **Deploy migration 008** — adds 4 new nullable columns. Existing rows are unaffected.
+1. **Deploy migration 010** — adds 4 new nullable columns. Existing rows are unaffected.
 2. **Dual-write period** — new writes from this PR use encrypted columns; legacy rows still have plaintext `value`.
 3. **Run admin migration tool** — scans `value_cipher IS NULL AND sensitive=true`, encrypts in batches, writes cipher columns, sets `value = NULL`.
 4. **Verify** — read each migrated key and confirm plaintext is returned (transparent decrypt).
