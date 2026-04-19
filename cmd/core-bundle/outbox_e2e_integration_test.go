@@ -112,7 +112,9 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", pgConnStr)
 
-	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx, eb, kernelmetrics.NopProvider{})
+	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx,
+		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		eb, kernelmetrics.NopProvider{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	require.NotNil(t, pgRes,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
