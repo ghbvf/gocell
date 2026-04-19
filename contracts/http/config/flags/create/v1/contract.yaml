@@ -9,7 +9,7 @@ endpoints:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/flags
+    path: /api/v1/flags/
     successStatus: 201
     noContent: false
 schemaRefs:

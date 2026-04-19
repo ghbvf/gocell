@@ -19,16 +19,20 @@ import (
 
 const testAdminSubject = "admin-test"
 
-// newContractMux registers flagwrite routes on a mux at the canonical API prefix.
+// newContractMux registers flagwrite routes at the canonical API prefix by
+// delegating to Handler.RegisterRoutes — the same single source of truth
+// production wiring uses (cells/config-core/cell.go). Inlining auth.Secured
+// wrappers here would re-open the policy-drift surface the P0 fix closed:
+// any change to the required role would land in RegisterRoutes and silently
+// desync from contract tests. Mirrors configwrite/contract_test.go
+// newContractMux.
 func newContractMux(svc *Service) *http.ServeMux {
 	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	// Register each route individually to avoid redirect issues with StripPrefix.
-	mux.Handle("POST /api/v1/flags", auth.Secured(h.HandleCreate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("PUT /api/v1/flags/{key}", auth.Secured(h.HandleUpdate, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("POST /api/v1/flags/{key}/toggle", auth.Secured(h.HandleToggle, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("DELETE /api/v1/flags/{key}", auth.Secured(h.HandleDelete, auth.AnyRole(dto.RoleAdmin)))
-	return mux
+	sub := http.NewServeMux()
+	h.RegisterRoutes(sub)
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/flags/", http.StripPrefix("/api/v1/flags", sub))
+	return outer
 }
 
 func newContractService() *Service {
@@ -103,6 +107,22 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	mux.ServeHTTP(rec2, req2)
 	assert.Equal(t, http.StatusBadRequest, rec2.Code,
 		"PUT with missing fields must 400; got body: %s", rec2.Body)
+
+	// Runtime range guard: rolloutPercentage outside [0, 100] must 400 even
+	// when the schema is bypassed. Covers both bounds.
+	for _, bad := range []string{
+		`{"enabled":true,"rolloutPercentage":-1,"description":"d"}`,
+		`{"enabled":true,"rolloutPercentage":101,"description":"d"}`,
+	} {
+		recBad := httptest.NewRecorder()
+		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
+		reqBad.Header.Set("Content-Type", "application/json")
+		reqBad = reqBad.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+		mux.ServeHTTP(recBad, reqBad)
+		assert.Equal(t, http.StatusBadRequest, recBad.Code,
+			"PUT with out-of-range rolloutPercentage must 400; body %q got %s",
+			bad, recBad.Body)
+	}
 }
 
 // --- Toggle contract test ---
