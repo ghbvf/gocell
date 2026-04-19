@@ -148,6 +148,19 @@ const (
 	// started. Distinct from ErrLifecycleInvalid (metadata validation) so
 	// operators can route runtime lifecycle faults separately.
 	ErrBootstrapLifecycle Code = "ERR_BOOTSTRAP_LIFECYCLE"
+
+	// Refresh token store error codes (runtime/auth/refresh).
+	// These are returned by refresh.Store implementations; callers use
+	// errors.Is against the package-level sentinels in refresh/errors.go.
+	//
+	// ErrRefreshTokenNotFound / ErrRefreshTokenExpired / ErrRefreshTokenRevoked
+	// are CategoryDomain — expected client-observable conditions.
+	// ErrRefreshTokenReused is CategoryAuth — an OAuth2 RFC 6749 §10.4
+	// attack signal that triggers cascade revocation.
+	ErrRefreshTokenNotFound Code = "ERR_REFRESH_TOKEN_NOT_FOUND"
+	ErrRefreshTokenExpired  Code = "ERR_REFRESH_TOKEN_EXPIRED"
+	ErrRefreshTokenRevoked  Code = "ERR_REFRESH_TOKEN_REVOKED"
+	ErrRefreshTokenReused   Code = "ERR_REFRESH_TOKEN_REUSED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a
