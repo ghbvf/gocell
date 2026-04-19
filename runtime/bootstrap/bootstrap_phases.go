@@ -114,6 +114,9 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.relayHealthNil {
 		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
 	}
+	if b.managedResourceNil {
+		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
+	}
 	if b.authVerifier != nil && b.authDiscovery {
 		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithPublicEndpoints " +
 			"are mutually exclusive; use WithPublicEndpoints (recommended)")

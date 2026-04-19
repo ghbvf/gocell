@@ -44,9 +44,19 @@ type ManagedResource interface {
 // Multiple calls to WithManagedResource are supported; Close() order is LIFO
 // (last registered is first closed), mirroring fx hook order.
 //
+// A nil r is rejected at phase0 with a fatal error so operators are not
+// silently left without the intended resource integration; mirrors the
+// WithCircuitBreaker / WithRelayHealth / WithBrokerHealth fail-fast pattern.
+//
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+// ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
+// does no nil-substitution; bad inputs surface before any component starts.
 func WithManagedResource(r ManagedResource) Option {
 	return func(b *Bootstrap) {
+		if r == nil {
+			b.managedResourceNil = true
+			return
+		}
 		b.managedResources = append(b.managedResources, r)
 	}
 }

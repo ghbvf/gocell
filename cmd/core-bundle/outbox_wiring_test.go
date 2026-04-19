@@ -24,45 +24,32 @@ func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { r
 
 var _ outbox.Publisher = discardPublisher{}
 
-// TestBuildConfigCoreOpts_InMemoryMode_NoRelay asserts that an unset
-// GOCELL_CELL_ADAPTER_MODE returns a nil ManagedResource (no PG pool, no relay).
-// No database connection is attempted; this test requires no external services.
+// TestBuildConfigCoreOpts_InMemoryMode_NoRelay asserts that memory topology
+// returns a nil ManagedResource (no PG pool, no relay). No database
+// connection is attempted; this test requires no external services.
 //
 // Regression guard for A11: if the relay is accidentally wired in memory mode
 // it would try to Start() without a real DB and either panic or block.
 func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
 	t.Setenv("GOCELL_PG_DSN", "") // ensure no PG connection is attempted
 
 	ctx := context.Background()
-	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "memory"}
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err)
 	assert.Nil(t, res, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
 	assert.NotEmpty(t, opts, "in-memory mode must return cell options (WithInMemoryDefaults)")
 }
 
-// TestBuildConfigCoreOpts_ExplicitMemoryMode_NoRelay is the explicit counterpart:
-// GOCELL_CELL_ADAPTER_MODE=memory must also produce a nil ManagedResource.
-func TestBuildConfigCoreOpts_ExplicitMemoryMode_NoRelay(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "memory")
-	t.Setenv("GOCELL_PG_DSN", "")
-
-	ctx := context.Background()
-	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
-
-	require.NoError(t, err)
-	assert.Nil(t, res, "explicit memory mode must return nil ManagedResource")
-	assert.NotEmpty(t, opts, "memory mode must return cell options")
-}
-
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognised
-// GOCELL_CELL_ADAPTER_MODE returns an error and a nil ManagedResource.
+// StorageBackend (bypassing Topology validation) returns an error and a nil
+// ManagedResource. In production, TopologyFromEnv already rejects such
+// values; this test locks the defence-in-depth behaviour.
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "cassandra")
-
 	ctx := context.Background()
-	res, _, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "cassandra"}
+	res, _, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
@@ -83,10 +70,9 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 		t.Skip("GOCELL_PG_DSN not set; skipping PG-mode relay wiring test")
 	}
 
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-
 	ctx := context.Background()
-	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
 	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (wraps pool + relay)")

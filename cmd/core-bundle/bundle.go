@@ -112,15 +112,14 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 
 	eb := eventbus.New()
 
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, eb, ps.metricProvider)
+	// Topology is the single source of truth for adapter/storage selection.
+	// buildConfigCoreOpts receives it as a parameter and must not re-read the
+	// environment — any second read would create a drift path between the
+	// "reported topology" and "actual wiring".
+	// ref: go-zero core/conf/config.go validate(v) — single validation gate at
+	// the unmarshal boundary, never re-read downstream.
+	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, topo, eb, ps.metricProvider)
 	if err != nil {
-		return nil, err
-	}
-
-	// validateModeCoupling is now implicit in TopologyFromEnv (postgres→real
-	// coupling). Keep an explicit check here for defence-in-depth using the
-	// already-resolved Topology fields as the single source of truth.
-	if err := validateModeCoupling(topo.StorageBackend, topo.AdapterMode); err != nil {
 		return nil, err
 	}
 
@@ -295,21 +294,24 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 }
 
 // buildConfigCoreOpts selects storage-adapter options for config-core based on
-// GOCELL_CELL_ADAPTER_MODE. Returns a ManagedResource (non-nil iff postgres mode)
-// and cell options to pass to configcore.NewConfigCore.
+// the already-resolved Topology. Returns a ManagedResource (non-nil iff
+// postgres mode) and cell options to pass to configcore.NewConfigCore.
 //
 // Signature reduced from 5 return values (mode, opts, pool, relay, err) to
 // 3 (ManagedResource, opts, err). pool + relay lifecycle are now owned by
 // *adapterpg.PGResource which satisfies bootstrap.ManagedResource.
 //
+// Topology is consumed as a parameter rather than re-read from the environment:
+// ref: go-zero core/conf/config.go — validate once, pass through; never
+// re-read config downstream of the validation boundary.
+// ref: kubernetes/kubernetes cmd/kube-apiserver/app/server.go CompletedOptions
+// — sealed type threaded through Run ensures downstream receives a validated
+// object, not raw env.
+//
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvider metrics.Provider) (bootstrap.ManagedResource, []configcore.Option, error) {
-	mode := os.Getenv("GOCELL_CELL_ADAPTER_MODE")
-	if mode == "" {
-		mode = "memory"
-	}
-	switch mode {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider) (bootstrap.ManagedResource, []configcore.Option, error) {
+	switch topo.StorageBackend {
 	case "postgres":
 		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
 		if err != nil {
@@ -342,18 +344,20 @@ func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvi
 		relayWorker := outboxruntime.NewRelay(pgStore, pub, relayCfg)
 
 		pgRes := adapterpg.NewPGResource(pool, relayWorker)
-		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
+		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		return pgRes, []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
 		}, nil
 
 	case "memory":
-		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", mode))
+		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		return nil, []configcore.Option{configcore.WithInMemoryDefaults()}, nil
 
 	default:
+		// Unreachable: TopologyFromEnv validation already rejects unknown
+		// StorageBackend values. Keep as defence-in-depth only.
 		return nil, nil, errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", mode))
+			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", topo.StorageBackend))
 	}
 }

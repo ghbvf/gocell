@@ -680,6 +680,11 @@ type Bootstrap struct {
 	// managedResources during expandManagedResources(). Iterated in reverse
 	// order during shutdown so the last-registered resource is closed first.
 	managedResourceTeardowns []func()
+
+	// managedResourceNil is set by WithManagedResource when a nil resource is
+	// passed. Checked in phase0 to fail-fast rather than silently skipping
+	// resource registration.
+	managedResourceNil bool
 }
 
 // New creates a Bootstrap with the given options.
