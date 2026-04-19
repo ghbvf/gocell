@@ -105,13 +105,33 @@ func newE2EFixture() *e2eFixture {
 	}
 
 	// Build a full-path mux so path values are populated correctly.
-	// Policies are declared via auth.Secured to match production wiring.
+	// Policies are declared via auth.Declare to match production wiring.
 	mux := celltest.NewTestMux()
 	h := NewHandler(idmSvc)
-	mux.Handle("POST /api/v1/access/users", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("GET /api/v1/access/users/{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("PATCH /api/v1/access/users/{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("POST /api/v1/access/users/{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users",
+		Handler: http.HandlerFunc(h.handleCreate),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handleGet),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PATCH",
+		Path:    "/api/v1/access/users/{id}",
+		Handler: http.HandlerFunc(h.handlePatch),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/access/users/{id}/password",
+		Handler: http.HandlerFunc(h.handleChangePassword),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
 
 	return &e2eFixture{
 		mux:         mux,
@@ -202,7 +222,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}
 		})
-		mid := auth.AuthMiddleware(e2eVerifier, nil,
+		mid := auth.AuthMiddleware(e2eVerifier,
 			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)

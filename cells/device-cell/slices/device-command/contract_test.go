@@ -16,6 +16,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// newContractCommandHandler wires h.RegisterRoutes as the single source of
+// truth for route+policy metadata. The outer mux strips "/api/v1/devices"
+// so registered relative paths (e.g. "POST /{id}/commands") match the
+// absolute contract paths (e.g. "POST /api/v1/devices/{id}/commands").
 func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *mem.CommandRepository) {
 	devRepo := mem.NewDeviceRepository()
 	cmdRepo := mem.NewCommandRepository()
@@ -25,11 +29,11 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *mem.Comm
 		panic(err)
 	}
 	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/devices/{id}/commands", http.HandlerFunc(h.HandleEnqueue))
-	mux.Handle("GET /api/v1/devices/{id}/commands", http.HandlerFunc(h.HandleListPending))
-	mux.Handle("POST /api/v1/devices/{id}/commands/{cmdId}/ack", http.HandlerFunc(h.HandleAck))
-	return mux, devRepo, cmdRepo
+	sub := http.NewServeMux()
+	h.RegisterRoutes(sub)
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/devices/", http.StripPrefix("/api/v1/devices", sub))
+	return outer, devRepo, cmdRepo
 }
 
 // --- HTTP contract tests (real handler) ---

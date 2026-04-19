@@ -57,17 +57,62 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers identity-manage routes on the given mux.
-// Policy is declared at registration time via auth.Secured so that handler
+// Policy is declared at registration time via auth.Declare so that handler
 // bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	mux.Handle("POST /", auth.Secured(h.handleCreate, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("GET /{id}", auth.Secured(h.handleGet, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("PUT /{id}", auth.Secured(h.handleUpdate, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("PATCH /{id}", auth.Secured(h.handlePatch, auth.SelfOr("id", domain.RoleAdmin)))
-	mux.Handle("DELETE /{id}", auth.Secured(h.handleDelete, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /{id}/lock", auth.Secured(h.handleLock, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /{id}/unlock", auth.Secured(h.handleUnlock, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /{id}/password", auth.Secured(h.handleChangePassword, auth.SelfOr("id", domain.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/",
+		Handler: http.HandlerFunc(h.handleCreate),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/{id}",
+		Handler: http.HandlerFunc(h.handleGet),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PUT",
+		Path:    "/{id}",
+		Handler: http.HandlerFunc(h.handleUpdate),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "PATCH",
+		Path:    "/{id}",
+		Handler: http.HandlerFunc(h.handlePatch),
+		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "DELETE",
+		Path:    "/{id}",
+		Handler: http.HandlerFunc(h.handleDelete),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{id}/lock",
+		Handler: http.HandlerFunc(h.handleLock),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{id}/unlock",
+		Handler: http.HandlerFunc(h.handleUnlock),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	// POST /{id}/password: SelfOr policy + PasswordResetExempt so that a user
+	// whose token carries password_reset_required=true can still reach this
+	// endpoint to satisfy the reset requirement. Router.FinalizeAuth aggregates
+	// this declaration alongside all other Cell declarations at Bootstrap phase 5.
+	auth.Declare(mux, auth.RouteDecl{
+		Method:              "POST",
+		Path:                "/{id}/password",
+		Handler:             http.HandlerFunc(h.handleChangePassword),
+		Policy:              auth.SelfOr("id", domain.RoleAdmin),
+		PasswordResetExempt: true,
+	})
 }
 
 // toTokenPairResponse converts a dto.TokenPair to the HTTP response DTO.

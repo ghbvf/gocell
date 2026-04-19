@@ -263,7 +263,8 @@ func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.h
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // initCellWithRouter creates an initialized AccessCore with routes registered
-// on a real chi-based router, ready for HTTP testing.
+// on a real chi-based router, ready for HTTP testing. FinalizeAuth is called
+// so the Router accepts ServeHTTP calls (required after F3 auth declaration).
 func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
@@ -276,6 +277,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 	return r
 }
 
@@ -352,13 +354,15 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-nonexistent", nil)
-	// Simulate the auth middleware having populated the caller subject in ctx;
-	// the handler now enforces ownership so it must see a caller identity.
-	req = req.WithContext(auth.TestContext("usr-router", nil))
+	// SelfOr("id", RoleAdmin) policy: subject must match the path {id} or carry
+	// the admin role. Use the session ID as subject so the policy admits the
+	// request and we can verify the handler is wired (returns 404 = not found,
+	// not a routing miss).
+	req = req.WithContext(auth.TestContext("sess-nonexistent", nil))
 	r.ServeHTTP(rec, req)
 
 	// 404 means handler was reached and session not found (correct routing).
-	// 405 or chi-level 404 (without JSON body) means routing is broken.
+	// 403/405 or chi-level 404 (without JSON body) means routing is broken.
 	assert.Equal(t, http.StatusNotFound, rec.Code,
 		"DELETE /api/v1/access/sessions/{id} should reach handler (got %d)", rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
@@ -465,6 +469,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Login via HTTP handler to simulate real flow.
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	body := fmt.Sprintf(`{"username":"e2e-user","password":%q}`, testPassword)
 	rec := httptest.NewRecorder()
@@ -535,6 +540,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	// Login via HTTP.
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	loginBody := fmt.Sprintf(`{"username":"refresh-user","password":%q}`, testPassword)
 	rec := httptest.NewRecorder()
@@ -658,4 +664,48 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, roles, 1)
 	assert.Equal(t, "admin", roles[0].Name)
+}
+
+// TestAccessCore_PasswordResetExempt_PropagatesViaRouter asserts that the
+// POST /api/v1/access/users/{id}/password route is declared with
+// PasswordResetExempt=true in the Router's auth metadata after RegisterRoutes.
+//
+// This is the "future regression guardrail" for G3: if identitymanage's
+// RegisterRoutes ever loses the PasswordResetExempt attribute (e.g. by drifting
+// from a hand-rolled test double), this test will catch it before production.
+//
+// The test uses DeclaredAuthMetas() which returns metadata accumulated during
+// RegisterRoutes, prior to FinalizeAuth compiling the matchers.
+func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(noopTxRunner{}),
+	)
+	ctx := context.Background()
+	require.NoError(t, c.Init(ctx, cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+	}))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+
+	const wantPath = "/api/v1/access/users/{id}/password"
+	const wantMethod = "POST"
+	var found bool
+	for _, m := range r.DeclaredAuthMetas() {
+		if m.Method == wantMethod && m.Path == wantPath {
+			assert.True(t, m.PasswordResetExempt,
+				"POST %s must be declared with PasswordResetExempt=true", wantPath)
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"%s %s must appear in Router.DeclaredAuthMetas(); got %v",
+		wantMethod, wantPath, r.DeclaredAuthMetas())
 }

@@ -145,26 +145,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Public endpoints — login and refresh accessible without JWT.
-	publicEndpoints := []string{
-		"POST /api/v1/access/sessions/login",
-		"POST /api/v1/access/sessions/refresh",
-	}
-
 	stateDir := os.Getenv("GOCELL_STATE_DIR")
 	if stateDir == "" {
 		stateDir = "/run/gocell"
 	}
+	// Public routes and password-reset-exempt routes are declared by the
+	// access-core Cell itself via auth.Declare. Bootstrap only needs the
+	// opt-in signal that the assembly expects an auth provider cell.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
-		bootstrap.WithPublicEndpoints(publicEndpoints),
-		bootstrap.WithPasswordResetExemptEndpoints([]string{
-			"POST /api/v1/access/users/{id}/password",
-			"DELETE /api/v1/access/sessions/{id}",
-		}),
-		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithWorkers(adminLazy),
 		// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no extra hook needed.
 	)

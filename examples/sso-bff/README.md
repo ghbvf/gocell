@@ -97,7 +97,10 @@ After this the `ADMIN_TOKEN` works for all business endpoints.
 
 Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
-header (the public-endpoint list is declared in `examples/sso-bff/main.go`).
+header. Public routes are declared per-Cell via `auth.Declare(mux, auth.RouteDecl{Public: true})`
+inside `cells/access-core/cell.go`; the composition root (`examples/sso-bff/main.go`)
+opts into verifier discovery via `bootstrap.WithAuthDiscovery()` without
+hardcoding any endpoint list.
 `walkthrough_test.go` exercises the same sequence and is the authoritative
 behaviour record if a curl here disagrees.
 

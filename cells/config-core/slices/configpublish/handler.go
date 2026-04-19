@@ -51,10 +51,20 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes registers configpublish routes with admin-only policies on
 // any cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux)
 // so production wiring, contract tests, and cell-level integration tests
-// share the same auth.Secured declarations.
+// share the same auth.Declare declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	mux.Handle("POST /{key}/publish", auth.Secured(h.HandlePublish, auth.AnyRole(dto.RoleAdmin)))
-	mux.Handle("POST /{key}/rollback", auth.Secured(h.HandleRollback, auth.AnyRole(dto.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{key}/publish",
+		Handler: http.HandlerFunc(h.HandlePublish),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{key}/rollback",
+		Handler: http.HandlerFunc(h.HandleRollback),
+		Policy:  auth.AnyRole(dto.RoleAdmin),
+	})
 }
 
 // HandlePublish handles POST /{key}/publish — publishes a config entry.

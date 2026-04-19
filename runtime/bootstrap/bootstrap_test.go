@@ -2270,7 +2270,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(verifier, nil),
+		WithAuthMiddleware(verifier),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2309,12 +2309,41 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 }
 
+// publicHTTPCell registers the login route as public via auth.Declare(Public:true),
+// following the F3 pattern where cells own their auth declarations.
+type publicHTTPCell struct {
+	*cell.BaseCell
+}
+
+func newPublicHTTPCell(id string) *publicHTTPCell {
+	return &publicHTTPCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+	}
+}
+
+func (c *publicHTTPCell) RegisterRoutes(mux cell.RouteMux) {
+	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}))
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodPost,
+		Path:   "/api/v1/access/sessions/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+		}),
+		Public: true,
+	})
+}
+
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
+	// F3: public routes are declared via auth.Declare(Public:true) inside the cell.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-auth-public", DurabilityMode: cell.DurabilityDemo})
-	hc := newHTTPCell("auth-public-cell")
+	hc := newPublicHTTPCell("auth-public-cell")
 	require.NoError(t, asm.Register(hc))
 
 	verifier := &bootstrapTestVerifier{
@@ -2325,7 +2354,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(verifier, []string{"POST /api/v1/access/sessions/login"}),
+		WithAuthMiddleware(verifier),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2662,10 +2691,17 @@ func (c *authProviderCell) RegisterRoutes(mux cell.RouteMux) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
 	}))
-	mux.Handle("POST /api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":"login-ok"}`))
-	}))
+	// F3: login is declared as a public route so auth discovery tests can verify
+	// that no-token requests bypass JWT checks on this endpoint.
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodPost,
+		Path:   "/api/v1/access/sessions/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+		}),
+		Public: true,
+	})
 }
 
 func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
@@ -2683,7 +2719,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints(nil),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2730,7 +2766,8 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
+		// F3: public routes are declared via auth.Declare(Public:true) in the cell.
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2792,7 +2829,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(explicitVerifier, nil),
+		WithAuthMiddleware(explicitVerifier),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2840,7 +2877,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2872,7 +2909,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2905,7 +2942,8 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"POST /api/v1/access/sessions/login"}),
+		// F3: public routes declared via auth.Declare(Public:true) in authProviderCell.
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3207,11 +3245,18 @@ func (c *traceCapturingCell) TokenVerifier() auth.IntentTokenVerifier {
 }
 
 func (c *traceCapturingCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle("GET /api/v1/public/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, _ := ctxkeys.TraceIDFrom(r.Context())
-		c.gotPublic <- tid
-		w.WriteHeader(http.StatusOK)
-	}))
+	// F3: public/ping is declared public so it creates new trace roots and
+	// rejects client-supplied request IDs.
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/public/ping",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tid, _ := ctxkeys.TraceIDFrom(r.Context())
+			c.gotPublic <- tid
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
 	mux.Handle("GET /api/v1/protected/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tid, _ := ctxkeys.TraceIDFrom(r.Context())
 		c.gotProtected <- tid
@@ -3240,7 +3285,8 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 		WithListener(ln),
 		WithTracer(tracer),
 		WithShutdownTimeout(2*time.Second),
-		WithPublicEndpoints([]string{"GET /api/v1/public/ping"}),
+		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3320,22 +3366,22 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 
-	t.Run("WithAuthMiddleware then WithPublicEndpoints", func(t *testing.T) {
+	t.Run("WithAuthMiddleware then WithAuthDiscovery", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
-			WithAuthMiddleware(verifier, []string{"POST /login"}),
-			WithPublicEndpoints([]string{"POST /login"}),
+			WithAuthMiddleware(verifier),
+			WithAuthDiscovery(),
 		)
 		err := b.Run(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
-	t.Run("WithPublicEndpoints then WithAuthMiddleware", func(t *testing.T) {
+	t.Run("WithAuthDiscovery then WithAuthMiddleware", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
-			WithPublicEndpoints([]string{"POST /login"}),
-			WithAuthMiddleware(verifier, []string{"POST /login"}),
+			WithAuthDiscovery(),
+			WithAuthMiddleware(verifier),
 		)
 		err := b.Run(context.Background())
 		require.Error(t, err)
@@ -3501,17 +3547,30 @@ func TestBootstrap_WithBrokerHealth_Nil_ReturnsError(t *testing.T) {
 	})
 }
 
-// TestBootstrap_MalformedPublicEndpoint_PanicsAtOption tests I-1: preflight
-// validation panics at Option-construction time for malformed entries.
-func TestBootstrap_MalformedPublicEndpoint_PanicsAtOption(t *testing.T) {
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "expected panic on malformed entry")
-		require.Contains(t, fmt.Sprint(r), "bootstrap.WithPublicEndpoints")
-	}()
-	// Legacy path-only format (missing method) should panic at Option construction.
-	_ = WithPublicEndpoints([]string{"/api/v1/auth/login"})
-	t.Fatal("expected panic not reached")
+// publicPingAuthCell is a test cell that provides TokenVerifier (for discovery)
+// and registers GET /api/v1/public/ping as a public route.
+type publicPingAuthCell struct {
+	*cell.BaseCell
+	verifier auth.IntentTokenVerifier
+}
+
+func newPublicPingAuthCell(id string, verifier auth.IntentTokenVerifier) *publicPingAuthCell {
+	return &publicPingAuthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		verifier: verifier,
+	}
+}
+
+func (c *publicPingAuthCell) TokenVerifier() auth.IntentTokenVerifier { return c.verifier }
+
+func (c *publicPingAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/public/ping",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Public:  true,
+	})
 }
 
 // TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
@@ -3524,15 +3583,15 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("should not be called for GET/HEAD public route"),
 	}
-	hc := newAuthProviderCell("access-core", verifier)
+	// F3: cell declares GET /api/v1/public/ping as public; HEAD alias is automatic.
+	hc := newPublicPingAuthCell("access-core", verifier)
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		// Only GET is declared public; HEAD alias must be covered automatically.
-		WithPublicEndpoints([]string{"GET /api/v1/public/ping"}),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3951,4 +4010,72 @@ func TestBootstrap_WithManagedCloser_NilIgnored(t *testing.T) {
 	assert.NotPanics(t, func() {
 		_ = New(WithManagedCloser(nil))
 	}, "WithManagedCloser(nil) must not panic")
+}
+
+// ---------------------------------------------------------------------------
+// F8: FinalizeAuth failure propagates rollback — duplicate auth declaration
+// ---------------------------------------------------------------------------
+
+// duplicateAuthCell declares the same (method, path) twice via auth.Declare,
+// which must cause FinalizeAuth to return a "duplicate auth declaration" error.
+type duplicateAuthCell struct {
+	*cell.BaseCell
+}
+
+func newDuplicateAuthCell(id string) *duplicateAuthCell {
+	return &duplicateAuthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (c *duplicateAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/dup",
+		Handler: handler,
+		Public:  true,
+	})
+	// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/dup",
+		Handler: handler,
+		Public:  true,
+	})
+}
+
+func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
+	// F8: a cell that declares the same (method, path) twice causes FinalizeAuth
+	// to fail. Bootstrap.Run must propagate the error and roll back (stop the
+	// assembly). No HTTP listener must be started.
+	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
+
+	b := New(
+		WithAssembly(asm),
+		// No WithListener: if phase5 errors correctly the listener is never reached.
+		// Use a short timeout so the test exits fast if something hangs.
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must return error when FinalizeAuth fails")
+	assert.Contains(t, err.Error(), "duplicate auth declaration",
+		"error must identify the duplicate declaration")
+
+	// After rollback, the assembly cells must be stopped (unhealthy).
+	h := asm.Health()
+	for id, status := range h {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback", id)
+	}
 }

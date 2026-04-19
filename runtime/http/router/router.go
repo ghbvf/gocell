@@ -10,7 +10,9 @@ package router
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -23,8 +25,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
-// Compile-time check: Router implements cell.RouteMux.
+// Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
+var _ kcell.AuthRouteDeclarer = (*Router)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -106,28 +109,6 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 	}
 }
 
-// WithPublicEndpoints declares paths that are public-facing. This is the
-// recommended single-point configuration for trust boundary policy:
-//   - Auth: these paths bypass JWT verification
-//   - Tracing: these paths create new trace roots (ignore upstream traceparent)
-//   - RequestID: these paths reject client-supplied X-Request-Id headers
-//
-// For asymmetric policies (e.g., auth bypass without trace root), use the
-// individual WithTracingOptions / WithRequestIDOptions / WithAuthMiddleware
-// options instead.
-//
-// Note: bootstrap.WithPublicEndpoints wraps this option with auth-provider
-// discovery logic. Use this router-level option for standalone router usage
-// outside bootstrap (e.g., in tests or custom server setups).
-//
-// ref: go-zero rest/server.go — single-point route group auth config
-// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func WithPublicEndpoints(paths []string) Option {
-	return func(r *Router) {
-		r.publicEndpoints = paths
-	}
-}
-
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
 // When provided, the rate limiter is placed after AccessLog (so rejected
 // requests are logged) and before Metrics (so rejections are counted).
@@ -168,29 +149,26 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 }
 
 // WithAuthMiddleware enables authentication in the default middleware chain
-// with an explicitly injected verifier. Complementary to WithPublicEndpoints:
-// this option is the primary path for tests and advanced scenarios that must
-// inject a specific (e.g. mock) IntentTokenVerifier; WithPublicEndpoints is the
-// primary path for production cells that expose a discovered verifier.
+// with an explicitly injected verifier. This is the primary path for tests
+// and advanced scenarios that must inject a specific (e.g. mock)
+// IntentTokenVerifier.
 //
 // When provided, the auth middleware is placed after CircuitBreaker and before
 // BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
 // affected — they bypass business-route middleware entirely.
 //
-// publicEndpoints specifies paths that bypass authentication (path-only match).
-// For method-aware bypass, compose via router.WithPublicEndpoints which wires
-// a WithPublicEndpointMatcher AuthOption that supersedes this list.
+// Public endpoints are declared via auth.Declare with Public:true inside Cell
+// RegisterRoutes; FinalizeAuth compiles them into the router's auth predicates.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []string) Option {
+func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	if verifier == nil {
 		panic("router: WithAuthMiddleware requires a non-nil IntentTokenVerifier")
 	}
 	return func(r *Router) {
 		r.authVerifier = verifier
-		r.authPublicEndpoints = publicEndpoints
 	}
 }
 
@@ -199,36 +177,6 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 // against the shared metrics backend.
 func WithAuthMetrics(m *auth.AuthMetrics) Option {
 	return func(r *Router) { r.authMetrics = m }
-}
-
-// WithPasswordResetExemptEndpoints declares the routes that remain reachable
-// when an authenticated token carries password_reset_required=true. Each entry
-// must be in "METHOD /path" format; path templates may use {xxx} single-segment
-// wildcards (e.g. "POST /api/v1/access/users/{id}/password").
-//
-// The list is compiled into an auth.WithPasswordResetExemptMatcher option at
-// Run() time. If this option is not used, the password-reset gate is
-// fail-closed: every authenticated request returns 403 until the user's new
-// token no longer carries the claim.
-//
-// Accepting the list here (rather than hard-coding it in runtime/auth) keeps
-// runtime/ free of cell-specific route knowledge — access-core owns the
-// identity endpoints and the composition root passes their paths in explicitly.
-func WithPasswordResetExemptEndpoints(endpoints []string) Option {
-	return func(r *Router) { r.passwordResetExemptEndpoints = endpoints }
-}
-
-// WithPasswordResetChangeEndpointHint sets the string emitted in the
-// details.change_password_endpoint field of the 403
-// ERR_AUTH_PASSWORD_RESET_REQUIRED response body. Purely a client-navigation
-// hint — empty value (default) omits the details map entirely.
-//
-// Declaring the hint here (rather than hard-coding it in runtime/auth) keeps
-// runtime/ free of business-level path literals — the composition root that
-// knows which endpoint finishes the reset flow is the only place that names
-// it.
-func WithPasswordResetChangeEndpointHint(hint string) Option {
-	return func(r *Router) { r.passwordResetChangeEndpointHint = hint }
 }
 
 // WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
@@ -311,33 +259,24 @@ func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Ha
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux          *chi.Mux
-	mux               *chi.Mux
-	healthHandler     *health.Handler
-	metricsCollector  metrics.Collector
-	metricsHandler    http.Handler
-	tracer            tracing.Tracer
-	tracingOpts       []middleware.TracingOption
-	requestIDOpts     []middleware.RequestIDOption
-	rateLimiter       middleware.RateLimiter
-	circuitBreaker    middleware.Allower
-	circuitBreakerNil bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier      auth.IntentTokenVerifier
-	// authPublicEndpoints is the legacy path-only list accepted only by direct
-	// callers of WithAuthMiddleware. WithPublicEndpoints no longer backfills this
-	// field — the method-aware matcher (authPublicMatcher) is the sole source of
-	// truth, preventing silent reactivation of path-only bypass if the matcher
-	// is removed by future refactors.
-	authPublicEndpoints             []string
-	authPublicMatcher               func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
-	authMetrics                     *auth.AuthMetrics
-	publicEndpoints                 []string
-	passwordResetExemptEndpoints    []string                          // raw "METHOD /path" entries; compiled in NewE
-	passwordResetExemptMatcher      func(method, urlPath string) bool // compiled matcher fed to AuthMiddleware
-	passwordResetChangeEndpointHint string                            // optional details.change_password_endpoint value for 403 body
-	securityHeadersOpts             []middleware.SecurityHeadersOption
-	bodyLimit                       int64
-	trustedProxies                  []string
+	outerMux                   *chi.Mux
+	mux                        *chi.Mux
+	healthHandler              *health.Handler
+	metricsCollector           metrics.Collector
+	metricsHandler             http.Handler
+	tracer                     tracing.Tracer
+	tracingOpts                []middleware.TracingOption
+	requestIDOpts              []middleware.RequestIDOption
+	rateLimiter                middleware.RateLimiter
+	circuitBreaker             middleware.Allower
+	circuitBreakerNil          bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
+	authVerifier               auth.IntentTokenVerifier
+	authPublicMatcher          func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
+	authMetrics                *auth.AuthMetrics
+	passwordResetExemptMatcher func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
+	securityHeadersOpts        []middleware.SecurityHeadersOption
+	bodyLimit                  int64
+	trustedProxies             []string
 
 	// internalGuardPrefix and internalGuard implement the /internal/v1/* path-prefix
 	// guard: any request whose URL path starts with internalGuardPrefix is wrapped
@@ -351,6 +290,19 @@ type Router struct {
 	// guard). When set, AuthMiddleware forwards these requests to next without any
 	// JWT check. Auto-populated by WithInternalPathPrefixGuard.
 	authDelegatedMatcher func(*http.Request) bool
+
+	// F3 two-stage auth construction fields.
+	// declaredAuthMetas accumulates cell.AuthRouteMeta entries forwarded by
+	// auth.Declare during Cell RegisterRoutes. FinalizeAuth compiles them into
+	// matchers and OR-merges with any legacy option-supplied matchers.
+	declaredAuthMetas []kcell.AuthRouteMeta
+	// authFinalized is set to true by FinalizeAuth. Any subsequent
+	// DeclareAuthMeta call panics; a second FinalizeAuth call returns an error.
+	authFinalized bool
+	// derivedHint is populated by FinalizeAuth from the first declared
+	// POST + PasswordResetExempt meta. Served at request time via
+	// WithPasswordResetChangeEndpointHintFn.
+	derivedHint string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -395,14 +347,6 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 	for _, o := range opts {
 		o(r)
-	}
-
-	if err := r.applyPublicEndpoints(); err != nil {
-		return nil, err
-	}
-
-	if err := r.applyPasswordResetExempts(); err != nil {
-		return nil, err
 	}
 
 	// Fail-fast: nil circuit breaker means the operator called
@@ -455,6 +399,20 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 //	→ Recovery → SecurityHeaders → [infra routes] → mount(mux)
 func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
+	// Always pre-append lazy public predicates so Tracing and RequestID
+	// honour both the legacy WithPublicEndpoints path and any routes
+	// declared later via auth.Declare / FinalizeAuth.
+	lazyPublic := func(req *http.Request) bool {
+		if r.authPublicMatcher == nil {
+			return false
+		}
+		return r.authPublicMatcher(req)
+	}
+	// Prepend so user-supplied TracingOptions / RequestIDOptions can still
+	// override (last-write-wins semantics for those slices).
+	r.tracingOpts = append([]middleware.TracingOption{middleware.WithPublicEndpointFn(lazyPublic)}, r.tracingOpts...)
+	r.requestIDOpts = append([]middleware.RequestIDOption{middleware.WithReqIDPublicEndpointFn(lazyPublic)}, r.requestIDOpts...)
+
 	r.outerMux.Use(
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
@@ -506,7 +464,7 @@ func (r *Router) buildBusinessMux() {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, r.buildAuthOpts()...))
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 	if r.internalGuard != nil {
@@ -526,28 +484,38 @@ func (r *Router) buildBusinessMux() {
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
-// Prefers the compiled method-aware matcher (set by applyPublicEndpoints) over
-// the legacy []string path so that direct WithAuthMiddleware callers remain
-// unaffected.
+// All matcher options use lazy closures that read Router fields at request
+// time so that matchers finalized by FinalizeAuth (after AuthMiddleware is
+// installed in buildBusinessMux) are honoured without reinstalling middleware.
+//
+// Public endpoints, password-reset exemptions, and delegated paths are all
+// populated by FinalizeAuth after each Cell's RegisterRoutes completes.
 func (r *Router) buildAuthOpts() []auth.AuthOption {
-	var opts []auth.AuthOption
+	opts := []auth.AuthOption{
+		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
+			if r.authPublicMatcher == nil {
+				return false
+			}
+			return r.authPublicMatcher(req)
+		}),
+		auth.WithDelegatedMatcher(func(req *http.Request) bool {
+			if r.authDelegatedMatcher == nil {
+				return false
+			}
+			return r.authDelegatedMatcher(req)
+		}),
+		auth.WithPasswordResetExemptMatcher(func(method, urlPath string) bool {
+			if r.passwordResetExemptMatcher == nil {
+				return false
+			}
+			return r.passwordResetExemptMatcher(method, urlPath)
+		}),
+		auth.WithPasswordResetChangeEndpointHintFn(func() string {
+			return r.derivedHint
+		}),
+	}
 	if r.authMetrics != nil {
 		opts = append(opts, auth.WithMetrics(r.authMetrics))
-	}
-	// Prefer the compiled method-aware matcher (set by applyPublicEndpoints) over
-	// the legacy []string path. Direct callers of WithAuthMiddleware that do NOT
-	// call WithPublicEndpoints continue to use the []string path (no regression).
-	if r.authPublicMatcher != nil {
-		opts = append(opts, auth.WithPublicEndpointMatcher(r.authPublicMatcher))
-	}
-	if r.authDelegatedMatcher != nil {
-		opts = append(opts, auth.WithDelegatedMatcher(r.authDelegatedMatcher))
-	}
-	if r.passwordResetExemptMatcher != nil {
-		opts = append(opts, auth.WithPasswordResetExemptMatcher(r.passwordResetExemptMatcher))
-	}
-	if r.passwordResetChangeEndpointHint != "" {
-		opts = append(opts, auth.WithPasswordResetChangeEndpointHint(r.passwordResetChangeEndpointHint))
 	}
 	return opts
 }
@@ -574,56 +542,6 @@ func (r *Router) validateInternalGuard() error {
 	return nil
 }
 
-// applyPasswordResetExempts compiles the "METHOD /path" entries supplied via
-// WithPasswordResetExemptEndpoints into a matcher consumed by the auth
-// middleware. Returns an error if any entry is malformed.
-func (r *Router) applyPasswordResetExempts() error {
-	if len(r.passwordResetExemptEndpoints) == 0 {
-		return nil
-	}
-	matcher, err := auth.CompilePasswordResetExempts(r.passwordResetExemptEndpoints)
-	if err != nil {
-		return fmt.Errorf("router: %w", err)
-	}
-	r.passwordResetExemptMatcher = matcher
-	return nil
-}
-
-// applyPublicEndpoints derives trust-boundary policy from WithPublicEndpoints:
-// compiles the "METHOD /path" entries into a per-request predicate and
-// auto-wires tracing, request_id, and auth. Returns an error if any entry is
-// malformed (fail-fast; the caller NewE propagates it to Bootstrap.Run).
-//
-// Semantic note: auth / tracing / request-id share the same isPublic predicate
-// because their trust-boundary criteria are currently identical ("is this a
-// public-facing edge?"). If these three semantics diverge in the future (e.g.
-// a public endpoint that still requires auth), split into independent
-// predicates. See backlog T8 PUBLIC-ENDPOINT-STRUCT-MIGRATE-01.
-//
-// ref: go-zero rest/server.go — single-point route group auth config
-// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func (r *Router) applyPublicEndpoints() error {
-	if len(r.publicEndpoints) == 0 {
-		return nil
-	}
-
-	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)
-	if err != nil {
-		return fmt.Errorf("router: %w", err)
-	}
-
-	r.tracingOpts = append(r.tracingOpts, middleware.WithPublicEndpointFn(isPublic))
-	r.requestIDOpts = append(r.requestIDOpts, middleware.WithReqIDPublicEndpointFn(isPublic))
-
-	// Populate the method-aware matcher for the auth middleware.
-	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher is
-	// the sole source of truth. Passing nil to auth.AuthMiddleware is safe because
-	// F-B's panic guard ensures no space-containing legacy entries reach that path,
-	// and the matcher supersedes the []string parameter when both are present.
-	r.authPublicMatcher = isPublic
-	return nil
-}
-
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.
 func (r *Router) Handle(pattern string, handler http.Handler) {
 	r.mux.Handle(pattern, handler)
@@ -632,15 +550,18 @@ func (r *Router) Handle(pattern string, handler http.Handler) {
 // Group creates a sub-scope with a shared prefix, implementing cell.RouteMux.
 func (r *Router) Group(fn func(kcell.RouteMux)) {
 	r.mux.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, declarer: r}
 		fn(sub)
 	})
 }
 
-// Route mounts a sub-router under the given pattern.
+// Route mounts a sub-router under the given pattern. The adapter carries
+// both the chi sub-router and a reference to the Router-rooted declarer so
+// that auth.Declare called on a nested sub-mux composes the mount prefix
+// with the declared path and forwards AuthRouteMeta to the top-level Router.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	r.mux.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
 		fn(sub)
 	})
 }
@@ -654,12 +575,20 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 // registered through it, without modifying the receiver. Safe to call
 // after routes are registered (unlike chi.Mux.Use which panics).
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{r.mux.With(mw...)}
+	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
 }
 
 // ServeHTTP delegates to the outer mux (shared observability + infra routes +
 // business routes via mount).
+//
+// Panics if auth route metadata has been declared but FinalizeAuth has not yet
+// been called. This provides a loud, early failure rather than silently
+// dropping auth declarations on the first request. Routers with no
+// declarations (plain mux, tests, custom compositions) are unaffected.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
+		panic("router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared")
+	}
 	r.outerMux.ServeHTTP(w, req)
 }
 
@@ -668,10 +597,212 @@ func (r *Router) Handler() http.Handler {
 	return r.outerMux
 }
 
-// chiRouterAdapter wraps chi.Router to implement cell.RouteMux.
-type chiRouterAdapter struct {
-	cr chi.Router
+// DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
+// metadata forwarded by auth.Declare during Cell RegisterRoutes. FinalizeAuth
+// compiles the accumulated metas into matchers that the AuthMiddleware reads
+// via lazy closures installed in buildAuthOpts.
+//
+// Panics if called after FinalizeAuth — all declarations must precede the
+// compile step. The "FinalizeAuth must run before Listen" contract ensures
+// there is a clear happens-before boundary; no mutex is needed.
+func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+	if r.authFinalized {
+		panic(fmt.Sprintf(
+			"router: DeclareAuthMeta called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
+			m.Method, m.Path))
+	}
+	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
 }
+
+// FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
+// matchers and OR-merges them with any matchers already set by
+// WithInternalPathPrefixGuard. Bootstrap calls this after all cells have
+// completed RegisterRoutes but before Listen.
+//
+// Returns an error (not a panic) so Bootstrap can perform a clean rollback:
+//   - "router: FinalizeAuth called twice"
+//   - "router: duplicate auth declaration METHOD /path"
+//
+// It is safe to call FinalizeAuth with an empty declaredAuthMetas slice (no-op
+// beyond setting authFinalized).
+func (r *Router) FinalizeAuth() error {
+	if r.authFinalized {
+		return fmt.Errorf("router: FinalizeAuth called twice")
+	}
+	r.authFinalized = true
+
+	if len(r.declaredAuthMetas) == 0 {
+		return nil
+	}
+
+	partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
+	if err != nil {
+		return err
+	}
+
+	if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
+		return err
+	}
+	if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
+		return err
+	}
+	r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
+	r.deriveHint()
+
+	// Warn when auth declarations exist but no verifier is installed: the
+	// Public/Policy/PasswordResetExempt semantics compile successfully but
+	// AuthMiddleware is absent so none of the declarations have any effect.
+	if r.authVerifier == nil && len(r.declaredAuthMetas) > 0 {
+		slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/Policy/PasswordResetExempt declarations will have no effect",
+			slog.Int("declared", len(r.declaredAuthMetas)))
+	}
+	return nil
+}
+
+// authMetaPartition holds the categorised results of partitionAuthMetas.
+type authMetaPartition struct {
+	publicEntries    []string
+	exemptEntries    []string
+	delegatedMatcher func(*http.Request) bool
+}
+
+// partitionAuthMetas deduplicates the metas and splits them into the three
+// "METHOD /path" entry slices consumed by the compile helpers, plus a
+// delegated per-request predicate (constructed inline because the exempt
+// compiler already handles {xxx} wildcards; delegated paths are matched
+// exactly for now).
+func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) {
+	seen := make(map[string]bool, len(metas))
+	var p authMetaPartition
+
+	for _, m := range metas {
+		key := strings.ToUpper(m.Method) + "\x00" + m.Path
+		if seen[key] {
+			return authMetaPartition{}, fmt.Errorf("router: duplicate auth declaration %s %s", m.Method, m.Path)
+		}
+		seen[key] = true
+
+		entry := m.Method + " " + m.Path
+		if m.Public {
+			p.publicEntries = append(p.publicEntries, entry)
+		}
+		if m.PasswordResetExempt {
+			p.exemptEntries = append(p.exemptEntries, entry)
+		}
+		if m.Delegated {
+			p.delegatedMatcher = buildDelegatedMatcher(p.delegatedMatcher, m.Method, m.Path)
+		}
+	}
+	return p, nil
+}
+
+// buildDelegatedMatcher returns a new predicate that returns true when the
+// request matches (method, path) OR the previous predicate matches.
+func buildDelegatedMatcher(prev func(*http.Request) bool, method, path string) func(*http.Request) bool {
+	return func(req *http.Request) bool {
+		if prev != nil && prev(req) {
+			return true
+		}
+		return strings.EqualFold(req.Method, method) && req.URL.Path == path
+	}
+}
+
+// mergePublicMatcher OR-merges the compiled public entries with r.authPublicMatcher.
+func (r *Router) mergePublicMatcher(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	compiled, err := middleware.CompilePublicEndpoints(entries)
+	if err != nil {
+		return fmt.Errorf("router: FinalizeAuth public entries: %w", err)
+	}
+	r.authPublicMatcher = orMergeRequest(r.authPublicMatcher, compiled)
+	return nil
+}
+
+// mergeExemptMatcher OR-merges the compiled exempt entries with r.passwordResetExemptMatcher.
+func (r *Router) mergeExemptMatcher(entries []string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	compiled, err := auth.CompilePasswordResetExempts(entries)
+	if err != nil {
+		return fmt.Errorf("router: FinalizeAuth exempt entries: %w", err)
+	}
+	r.passwordResetExemptMatcher = orMergeMethodPath(r.passwordResetExemptMatcher, compiled)
+	return nil
+}
+
+// mergeDelegatedMatcher OR-merges the declared delegated matcher with r.authDelegatedMatcher.
+func (r *Router) mergeDelegatedMatcher(declared func(*http.Request) bool) {
+	if declared == nil {
+		return
+	}
+	r.authDelegatedMatcher = orMergeRequest(r.authDelegatedMatcher, declared)
+}
+
+// deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
+// meta's METHOD+path (e.g. "POST /api/v1/access/users/{id}/password").
+// The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
+// The "METHOD /path" format matches the wire contract documented in
+// docs/operations/first-run-setup.md (change_password_endpoint field).
+func (r *Router) deriveHint() {
+	for _, m := range r.declaredAuthMetas {
+		if m.Method == "POST" && m.PasswordResetExempt {
+			r.derivedHint = m.Method + " " + m.Path
+			return
+		}
+	}
+}
+
+// DeclaredAuthMetas returns a copy of all AuthRouteMeta entries accumulated by
+// DeclareAuthMeta. Useful in tests to assert that Cell route declarations
+// propagate the correct attributes (e.g. PasswordResetExempt) without
+// exercising the full HTTP request path.
+func (r *Router) DeclaredAuthMetas() []kcell.AuthRouteMeta {
+	if len(r.declaredAuthMetas) == 0 {
+		return nil
+	}
+	out := make([]kcell.AuthRouteMeta, len(r.declaredAuthMetas))
+	copy(out, r.declaredAuthMetas)
+	return out
+}
+
+// orMergeRequest returns a predicate that returns true when either a or b matches.
+// When a is nil it returns b; when b is nil it returns a.
+func orMergeRequest(a, b func(*http.Request) bool) func(*http.Request) bool {
+	if a == nil {
+		return b
+	}
+	return func(req *http.Request) bool {
+		return a(req) || b(req)
+	}
+}
+
+// orMergeMethodPath returns a predicate that returns true when either a or b matches.
+// When a is nil it returns b; when b is nil it returns a.
+func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, string) bool {
+	if a == nil {
+		return b
+	}
+	return func(method, urlPath string) bool {
+		return a(method, urlPath) || b(method, urlPath)
+	}
+}
+
+// chiRouterAdapter wraps chi.Router to implement cell.RouteMux. prefix is the
+// mount prefix the adapter inherited from its parent Route; declarer points to
+// the Router-rooted AuthRouteDeclarer so nested auth.Declare calls propagate
+// metadata with the fully-composed path.
+type chiRouterAdapter struct {
+	cr       chi.Router
+	prefix   string
+	declarer kcell.AuthRouteDeclarer
+}
+
+// Compile-time check: chiRouterAdapter forwards AuthRouteMeta so Cells that
+// declare routes under mux.Route("/api/v1", ...) reach the top-level Router.
+var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 	a.cr.Handle(pattern, handler)
@@ -679,7 +810,11 @@ func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 	a.cr.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{
+			cr:       cr,
+			prefix:   joinPrefix(a.prefix, pattern),
+			declarer: a.declarer,
+		}
 		fn(sub)
 	})
 }
@@ -690,11 +825,36 @@ func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{a.cr.With(mw...)}
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer}
+}
+
+// DeclareAuthMeta composes the adapter's mount prefix with the declared path
+// before handing the metadata off to the Router. A prefix of "" means the
+// adapter sits directly under the Router (Group without a Route wrapper) and
+// no path rewrite is needed.
+func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+	if a.declarer == nil {
+		return
+	}
+	if a.prefix != "" {
+		m.Path = joinPrefix(a.prefix, m.Path)
+	}
+	a.declarer.DeclareAuthMeta(m)
+}
+
+// joinPrefix composes a parent mount prefix with a child pattern/path,
+// normalising the result via path.Clean so nested chains like
+// `/api/v1` + `/access` + `/sessions/{id}` collapse to `/api/v1/access/sessions/{id}`.
+// Both inputs are expected to begin with '/'; callers guard that invariant.
+func joinPrefix(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	return path.Clean(parent + child)
 }

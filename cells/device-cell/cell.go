@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Compile-time interface checks.
@@ -161,11 +162,41 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/devices", func(devices cell.RouteMux) {
-			devices.Handle("POST /", http.HandlerFunc(c.registerHandler.HandleRegister))
-			devices.Handle("GET /{id}/status", http.HandlerFunc(c.statusHandler.HandleGetStatus))
-			devices.Handle("POST /{id}/commands", http.HandlerFunc(c.commandHandler.HandleEnqueue))
-			devices.Handle("GET /{id}/commands", http.HandlerFunc(c.commandHandler.HandleListPending))
-			devices.Handle("POST /{id}/commands/{cmdId}/ack", http.HandlerFunc(c.commandHandler.HandleAck))
+			// Device self-registration is a public endpoint: devices bootstrap
+			// without a user JWT; the caller identifies itself in the request body.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.registerHandler.HandleRegister),
+				Public:  true,
+			})
+			// Device status is queried by authenticated operators/devices.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{id}/status",
+				Handler: http.HandlerFunc(c.statusHandler.HandleGetStatus),
+				Policy:  auth.Authenticated(),
+			})
+			// device-command routes: no route-level policy. Pre-F3 device-cell
+			// had no policy wrapping; restoring Policy:nil matches that state.
+			// When a deployment wants authz, wire WithAuthDiscovery() and add a
+			// Policy or rely on AuthMiddleware's baseline JWT check.
+			// Hardening device-cell authz is out of scope for the F3 migration.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/{id}/commands",
+				Handler: http.HandlerFunc(c.commandHandler.HandleEnqueue),
+			})
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{id}/commands",
+				Handler: http.HandlerFunc(c.commandHandler.HandleListPending),
+			})
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/{id}/commands/{cmdId}/ack",
+				Handler: http.HandlerFunc(c.commandHandler.HandleAck),
+			})
 		})
 	})
 }

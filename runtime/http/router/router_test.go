@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"nhooyr.io/websocket"
+	"nhooyr.io/websocket" //nolint:staticcheck // pre-existing dep; coder fork not yet adopted
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -142,12 +142,12 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	// logging, recovery) does not interfere with the HTTP→WS handshake.
 	// Hub registration is an adapter concern tested in adapters/websocket.
 	upgrader := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true}) //nolint:staticcheck
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		c.CloseNow()
+		c.CloseNow() //nolint:staticcheck
 	})
 
 	r := New()
@@ -161,9 +161,9 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, nil) //nolint:staticcheck
 	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
-	conn.CloseNow()
+	conn.CloseNow() //nolint:staticcheck
 }
 
 func TestPanicRequestRecordedInAccessLog(t *testing.T) {
@@ -762,7 +762,7 @@ func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := New(WithAuthMiddleware(verifier, nil))
+	r := New(WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called without auth token")
 	}))
@@ -783,7 +783,7 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := New(WithAuthMiddleware(verifier, nil))
+	r := New(WithAuthMiddleware(verifier))
 
 	var gotSubject string
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -803,15 +803,22 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 }
 
 func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
+	// F3: public endpoints are declared via auth.Declare(Public:true) + FinalizeAuth.
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	publicPaths := []string{"/api/v1/access/sessions/login"}
-	r := New(WithAuthMiddleware(verifier, publicPaths))
+	r := New(WithAuthMiddleware(verifier))
 
-	r.Handle("/api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	loginHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodPost,
+		Path:    "/api/v1/access/sessions/login",
+		Handler: loginHandler,
+		Public:  true,
+	})
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", nil)
@@ -834,7 +841,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called for infra"),
 	}
-	r := New(WithHealthHandler(hh), WithAuthMiddleware(verifier, nil))
+	r := New(WithHealthHandler(hh), WithAuthMiddleware(verifier))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -851,7 +858,7 @@ func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	r := New(WithRateLimiter(limiter), WithAuthMiddleware(verifier, nil))
+	r := New(WithRateLimiter(limiter), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -868,7 +875,7 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("token expired"),
 	}
-	r := New(WithAuthMiddleware(verifier, nil))
+	r := New(WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called with invalid token")
 	}))
@@ -888,7 +895,7 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 
 func TestWithAuthMiddleware_NilVerifier_Panics(t *testing.T) {
 	assert.Panics(t, func() {
-		WithAuthMiddleware(nil, nil)
+		WithAuthMiddleware(nil)
 	}, "WithAuthMiddleware must panic when verifier is nil")
 }
 
@@ -928,21 +935,22 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WithPublicEndpoints combined trust-boundary option
+// F3 auth.Declare + FinalizeAuth trust-boundary tests
 // ---------------------------------------------------------------------------
 
-func TestWithPublicEndpoints_AuthBypass(t *testing.T) {
+func TestDeclareAuth_AuthBypass(t *testing.T) {
+	// F3: public routes declared via auth.Declare(Public:true) bypass JWT check.
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := New(
-		WithPublicEndpoints([]string{"GET /api/v1/auth/login"}),
-		WithAuthMiddleware(verifier, nil),
-	)
+	r := New(WithAuthMiddleware(verifier))
 
 	var reached bool
-	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached = true
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { reached = true; w.WriteHeader(http.StatusOK) }),
+		Public:  true,
+	})
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", nil)
@@ -952,18 +960,22 @@ func TestWithPublicEndpoints_AuthBypass(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestWithPublicEndpoints_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
-	// POST /api/v1/auth/login is public; GET must be rejected.
+func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
+	// POST /api/v1/auth/login is public; GET must still require auth.
 	verifier := &routerTestVerifier{err: fmt.Errorf("should not be called")}
-	r, err := NewE(
-		WithPublicEndpoints([]string{"POST /api/v1/auth/login"}),
-		WithAuthMiddleware(verifier, nil),
-	)
-	require.NoError(t, err)
+	r := New(WithAuthMiddleware(verifier))
 
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodPost,
+		Path:    "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Public:  true,
+	})
+	// Also register the GET so the router can match it (otherwise 404).
 	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Fatal("GET must not bypass auth when only POST is public")
+		t.Fatal("GET must not bypass auth when only POST is declared public")
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/login", nil)
@@ -973,22 +985,26 @@ func TestWithPublicEndpoints_AuthBypass_MethodMismatch_Returns401(t *testing.T) 
 		"GET must be rejected when only POST /api/v1/auth/login is declared public")
 }
 
-func TestWithPublicEndpoints_TracingNewRoot(t *testing.T) {
+func TestDeclareAuth_TracingNewRoot(t *testing.T) {
+	// F3: public routes declared via auth.Declare create new trace roots.
 	tracer := tracing.NewTracer("test-combined")
-	r := New(
-		WithTracer(tracer),
-		WithPublicEndpoints([]string{"GET /public"}),
-	)
+	r := New(WithTracer(tracer))
 
 	var publicTraceID, internalTraceID string
-	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/public",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
 	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 	tp := "00-" + upstreamTraceID + "-00f067aa0ba902b7-01"
@@ -998,108 +1014,146 @@ func TestWithPublicEndpoints_TracingNewRoot(t *testing.T) {
 	req.Header.Set("traceparent", tp)
 	r.ServeHTTP(rec, req)
 	assert.NotEqual(t, upstreamTraceID, publicTraceID,
-		"WithPublicEndpoints: public endpoint must create new trace root")
+		"F3 declared public endpoint must create new trace root")
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
 	req.Header.Set("traceparent", tp)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, upstreamTraceID, internalTraceID,
-		"WithPublicEndpoints: non-public endpoint must inherit upstream trace")
+		"non-public endpoint must inherit upstream trace")
 }
 
-func TestWithPublicEndpoints_RequestIDRejectsClient(t *testing.T) {
-	r := New(
-		WithPublicEndpoints([]string{"GET /public"}),
-	)
+func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
+	// F3: public routes reject client-supplied X-Request-Id.
+	r := New()
 
 	var publicID, internalID string
-	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		publicID, _ = ctxkeys.RequestIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/public",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			publicID, _ = ctxkeys.RequestIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
 	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/public", nil)
 	req.Header.Set("X-Request-Id", "attacker-id")
 	r.ServeHTTP(rec, req)
 	assert.NotEqual(t, "attacker-id", publicID,
-		"WithPublicEndpoints: public endpoint must reject client-supplied request ID")
+		"F3 declared public endpoint must reject client-supplied request ID")
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/internal", nil)
 	req.Header.Set("X-Request-Id", "trusted-upstream-id")
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, "trusted-upstream-id", internalID,
-		"WithPublicEndpoints: non-public endpoint must accept trusted upstream ID")
+		"non-public endpoint must accept trusted upstream ID")
 }
 
-func TestWithPublicEndpoints_ProtectedStillRequiresAuth(t *testing.T) {
+func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
+	// F3: only declared public routes bypass auth; others still require a token.
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := New(
-		WithPublicEndpoints([]string{"GET /api/v1/auth/login"}),
-		WithAuthMiddleware(verifier, nil),
-	)
+	r := New(WithAuthMiddleware(verifier))
 
-	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Public:  true,
+	})
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	// Protected endpoint without token → 401.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
-		"WithPublicEndpoints: non-public endpoint must still require auth")
+		"non-public endpoint must still require auth when other routes are declared public")
 }
 
-func TestWithPublicEndpoints_OverridesFineGrained(t *testing.T) {
+func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
+	// F3 lazy-binding: WithTracingOptions (user-supplied, appended after prepend)
+	// wins for tracing (last-write-wins in tracingConfig). The lazy closure from
+	// auth.Declare / FinalizeAuth is consulted for auth + RequestID; the explicit
+	// WithTracingOptions fn controls trace root creation.
 	tracer := tracing.NewTracer("test-combined-fine")
 	r := New(
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
 		})),
-		WithPublicEndpoints([]string{"GET /public"}),
 	)
 
-	var publicTraceID, fineTraceID string
-	r.Handle("/public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/public",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
+	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
-	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	require.NoError(t, r.FinalizeAuth())
+
+	var publicTraceID, fineTraceID string
+	// Re-register with trace capture (FinalizeAuth already called; use r.Handle for non-declared routes).
+	// Instead, rebuild using a fresh router that captures trace IDs inline.
+	r2 := New(
+		WithTracer(tracer),
+		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
+			return req.URL.Path == "/fine-grained-public"
+		})),
+	)
+	auth.Declare(r2, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/public",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
+	r2.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r2.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 	tp := "00-" + upstreamTraceID + "-00f067aa0ba902b7-01"
 
-	// WithPublicEndpoints (last write) takes effect for /public.
+	// /public: user fn returns false (only matches /fine-grained-public) →
+	// user fn wins (last-write-wins) → NOT a public endpoint for tracing →
+	// inherits upstream trace.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/public", nil)
 	req.Header.Set("traceparent", tp)
-	r.ServeHTTP(rec, req)
-	assert.NotEqual(t, upstreamTraceID, publicTraceID,
-		"WithPublicEndpoints list path must create new trace root")
+	r2.ServeHTTP(rec, req)
+	assert.Equal(t, upstreamTraceID, publicTraceID,
+		"F3: user WithTracingOptions wins for tracing (lazy prepend, user appended last)")
 
-	// Fine-grained path is NOT in WithPublicEndpoints → last-write-wins
-	// means WithPublicEndpoints' function is used, /fine-grained-public
-	// inherits upstream trace (not in public list).
+	// /fine-grained-public: user fn returns true → IS public for tracing →
+	// new trace root (does not inherit upstream).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/fine-grained-public", nil)
 	req.Header.Set("traceparent", tp)
-	r.ServeHTTP(rec, req)
-	assert.Equal(t, upstreamTraceID, fineTraceID,
-		"WithPublicEndpoints overrides fine-grained option (last-write-wins)")
+	r2.ServeHTTP(rec, req)
+	assert.NotEqual(t, upstreamTraceID, fineTraceID,
+		"F3: user-supplied fine-grained fn still creates new trace root for its paths")
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,21 +1199,20 @@ func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WithPublicEndpoints edge cases (F3-TEST-01, F3-TEST-02)
+// F3 auth.Declare edge cases (F3-TEST-01, F3-TEST-02)
 // ---------------------------------------------------------------------------
 
-func TestWithPublicEndpoints_EmptySlice_IsNoop(t *testing.T) {
+func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
+	// When no routes are declared public, tracing inherits upstream trace as normal.
 	tracer := tracing.NewTracer("test-empty")
-	r := New(
-		WithTracer(tracer),
-		WithPublicEndpoints([]string{}),
-	)
+	r := New(WithTracer(tracer))
 
 	var traceID string
 	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		traceID, _ = ctxkeys.TraceIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
 	rec := httptest.NewRecorder()
@@ -1168,19 +1221,24 @@ func TestWithPublicEndpoints_EmptySlice_IsNoop(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, upstreamTraceID, traceID,
-		"empty WithPublicEndpoints must not alter tracing behavior (no-op)")
+		"no declared public routes must not alter tracing behavior")
 }
 
-func TestWithPublicEndpoints_PathNormalization(t *testing.T) {
-	r := New(
-		WithPublicEndpoints([]string{"GET /api/v1//login"}),
-	)
+func TestDeclareAuth_PathNormalization(t *testing.T) {
+	// auth.Declare normalises paths via path.Clean: "/api/v1//login" → "/api/v1/login".
+	r := New()
 
 	var gotID string
-	r.Handle("/api/v1/login", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		gotID, _ = ctxkeys.RequestIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1//login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			gotID, _ = ctxkeys.RequestIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Public: true,
+	})
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/login", nil)
@@ -1191,35 +1249,31 @@ func TestWithPublicEndpoints_PathNormalization(t *testing.T) {
 		"path.Clean must normalize /api/v1//login to /api/v1/login for matching")
 }
 
-func TestNewE_MalformedPublicEndpoint_ReturnsError(t *testing.T) {
-	// No METHOD prefix — must cause NewE to return error (fail-fast).
-	r, err := NewE(WithPublicEndpoints([]string{"/api/v1/auth/login"}))
-	require.Error(t, err, "path-only entry must cause NewE to return error")
-	assert.Nil(t, r)
-	assert.Contains(t, err.Error(), "router")
-}
-
-func TestWithPublicEndpoints_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
+func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	// POST /api/v1/auth/login is the only public endpoint.
-	// GET requests to the same path must require auth.
+	// GET requests to the same path must still require auth.
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1"},
 	}
-	r, err := NewE(
-		WithPublicEndpoints([]string{"POST /api/v1/auth/login"}),
-		WithAuthMiddleware(verifier, nil),
-	)
-	require.NoError(t, err)
+	r := New(WithAuthMiddleware(verifier))
 
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodPost,
+		Path:    "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Public:  true,
+	})
+	// Register the GET handler so it can be matched and receive auth check.
 	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
+	require.NoError(t, r.FinalizeAuth())
 
 	// POST without token → public, 200.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 	r.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code, "POST must bypass auth (public endpoint)")
+	assert.Equal(t, http.StatusOK, rec.Code, "POST must bypass auth (declared public)")
 
 	// GET without token → not public, 401.
 	rec = httptest.NewRecorder()

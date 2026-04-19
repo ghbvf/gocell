@@ -15,7 +15,7 @@ type authConfig struct {
 	publicMatcher                   func(*http.Request) bool                 // nil = use []string publicEndpoints path
 	delegatedMatcher                func(*http.Request) bool                 // nil = no delegated paths
 	passwordResetExempt             func(method string, urlPath string) bool // nil = fail-closed (nothing exempt)
-	passwordResetChangeEndpointHint string                                   // empty = no hint in 403 body
+	passwordResetChangeEndpointHint func() string                            // nil = no hint in 403 body
 }
 
 func defaultAuthConfig() authConfig {
@@ -49,25 +49,26 @@ func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOp
 	return func(c *authConfig) { c.passwordResetExempt = fn }
 }
 
-// WithPasswordResetChangeEndpointHint sets the "METHOD /path" string emitted
-// as details.change_password_endpoint in the 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response body — a navigational hint for clients that do not know which
-// endpoint finishes the reset flow.
+// WithPasswordResetChangeEndpointHintFn sets a getter closure that is called
+// at request time to obtain the change_password_endpoint hint. Use this when
+// the hint value is not known at middleware install time (e.g. it is derived
+// by FinalizeAuth after RegisterRoutes completes).
 //
-// Empty value (the default) omits the hint entirely, keeping runtime/auth
-// free of any business-level path knowledge. Composition roots opt in
-// explicitly; typically they pass the same change-password path they list
-// via WithPasswordResetExemptEndpoints.
-func WithPasswordResetChangeEndpointHint(hint string) AuthOption {
-	return func(c *authConfig) { c.passwordResetChangeEndpointHint = hint }
+// When fn is nil the option is a no-op.
+func WithPasswordResetChangeEndpointHintFn(fn func() string) AuthOption {
+	return func(c *authConfig) {
+		if fn != nil {
+			c.passwordResetChangeEndpointHint = fn
+		}
+	}
 }
 
 // WithPublicEndpointMatcher sets a compiled method-aware predicate for the
-// auth middleware bypass check. When provided, this takes precedence over the
-// publicEndpoints []string parameter passed to AuthMiddleware.
+// auth middleware bypass check.
 //
-// Use this option when wiring through router.WithPublicEndpoints so that auth
-// bypass is keyed on (method + path), not path alone.
+// Router.FinalizeAuth uses this option to install a lazy closure that reads
+// the compiled public-route matcher — aggregated from every Cell's
+// auth.Declare(mux, RouteDecl{Public: true}) call — at request time.
 //
 // ref: otelhttp WithPublicEndpointFn per-request predicate shape
 func WithPublicEndpointMatcher(fn func(*http.Request) bool) AuthOption {

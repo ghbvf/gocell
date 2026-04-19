@@ -21,7 +21,7 @@ const testAdminSubject = "admin-test"
 
 // newContractMux registers flagwrite routes at the canonical API prefix by
 // delegating to Handler.RegisterRoutes — the same single source of truth
-// production wiring uses (cells/config-core/cell.go). Inlining auth.Secured
+// production wiring uses (cells/config-core/cell.go). Inlining policy
 // wrappers here would re-open the policy-drift surface the P0 fix closed:
 // any change to the required role would land in RegisterRoutes and silently
 // desync from contract tests. Mirrors configwrite/contract_test.go

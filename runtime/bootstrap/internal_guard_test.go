@@ -237,7 +237,7 @@ func TestWithInternalEndpointGuard_BypassesJWT(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithAuthMiddleware(jwtVerifier, nil),
+		WithAuthMiddleware(jwtVerifier),
 		WithInternalEndpointGuard("/internal/v1/", guard),
 	)
 

@@ -137,7 +137,8 @@ func extractData(t *testing.T, body []byte) map[string]any {
 }
 
 // initCellWithRouter creates an initialized DeviceCell with routes registered
-// on a real chi-based router, ready for HTTP testing.
+// on a real chi-based router, ready for HTTP testing. FinalizeAuth is called
+// so the Router accepts ServeHTTP calls (required after F3 auth declaration).
 func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
@@ -150,6 +151,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 	return r
 }
 
@@ -183,9 +185,10 @@ func TestDeviceCell_RouteGetStatus(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Now get status.
+	// Now get status. Status requires an authenticated principal (Policy: auth.Authenticated()).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
+	req = req.WithContext(auth.TestContext(deviceID, nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

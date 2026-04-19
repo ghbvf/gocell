@@ -447,15 +447,11 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 		bootstrap.WithPublisher(d.deps.EventBus),
 		bootstrap.WithSubscriber(d.deps.EventBus),
 		bootstrap.WithConsumerMiddleware(d.consumerBase.AsMiddleware()),
-		bootstrap.WithPublicEndpoints([]string{
-			"POST /api/v1/access/sessions/login",
-			"POST /api/v1/access/sessions/refresh",
-		}),
-		bootstrap.WithPasswordResetExemptEndpoints([]string{
-			"POST /api/v1/access/users/{id}/password",
-			"DELETE /api/v1/access/sessions/{id}",
-		}),
-		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
+		// Public routes and password-reset-exempt routes are declared by the
+		// owning Cells via auth.Declare (see cells/access-core/cell.go and
+		// cells/access-core/slices/identitymanage/handler.go). Bootstrap only
+		// needs the opt-in signal that an auth provider cell will be wired.
+		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithAdapterInfo(d.adapterInfo),
 		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
 		bootstrap.WithMetricsProvider(d.deps.PromStack.metricProvider),

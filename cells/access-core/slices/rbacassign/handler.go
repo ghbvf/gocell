@@ -48,11 +48,21 @@ type RevokeRequest struct {
 }
 
 // RegisterRoutes registers rbac-assign routes on the given mux.
-// Policy is declared at registration time via auth.Secured so that handler
+// Policy is declared at registration time via auth.Declare so that handler
 // bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	mux.Handle("POST /assign", auth.Secured(h.handleAssign, auth.AnyRole(domain.RoleAdmin)))
-	mux.Handle("POST /revoke", auth.Secured(h.handleRevoke, auth.AnyRole(domain.RoleAdmin)))
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/assign",
+		Handler: http.HandlerFunc(h.handleAssign),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/revoke",
+		Handler: http.HandlerFunc(h.handleRevoke),
+		Policy:  auth.AnyRole(domain.RoleAdmin),
+	})
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {

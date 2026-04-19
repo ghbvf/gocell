@@ -240,9 +240,15 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
-	// securedHandler wraps HandleQuery with auditQueryPolicy so that trust
-	// boundary tests go through the policy as in production.
-	securedHandler := auth.Secured(h.HandleQuery, auditQueryPolicy)
+	// securedMux registers HandleQuery with auditQueryPolicy via auth.Declare so
+	// that trust boundary tests go through the policy as in production.
+	securedMux := http.NewServeMux()
+	auth.Declare(securedMux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/audit/entries",
+		Handler: http.HandlerFunc(h.HandleQuery),
+		Policy:  auditQueryPolicy,
+	})
 
 	// Seed entries for two actors
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -309,7 +315,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
-			securedHandler.ServeHTTP(w, req)
+			securedMux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCount >= 0 {

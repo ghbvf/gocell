@@ -224,22 +224,18 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	require.NoError(t, auc.Init(ctx, deps))
 	require.NoError(t, cc.Init(ctx, deps))
 
-	publicEndpoints := []string{
-		"POST /api/v1/access/sessions/login",
-		"POST /api/v1/access/sessions/refresh",
-	}
-
+	// F3: public routes (login, refresh) and PasswordResetExempt routes
+	// (change-password, logout) are declared via auth.Declare inside access-core's
+	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
 	r := router.New(
-		router.WithPublicEndpoints(publicEndpoints),
-		router.WithAuthMiddleware(ac.TokenVerifier(), nil),
-		router.WithPasswordResetExemptEndpoints([]string{
-			"POST /api/v1/access/users/{id}/password",
-			"DELETE /api/v1/access/sessions/{id}",
-		}),
+		router.WithAuthMiddleware(ac.TokenVerifier()),
 	)
 	ac.RegisterRoutes(r)
 	auc.RegisterRoutes(r)
 	cc.RegisterRoutes(r)
+	if err := r.FinalizeAuth(); err != nil {
+		panic(err)
+	}
 
 	// Wire audit-core event subscriptions so access-core events reach the
 	// audit handler asynchronously (mirrors bootstrap wiring in main.go).

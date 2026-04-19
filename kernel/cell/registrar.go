@@ -91,21 +91,19 @@ type HTTPRegistrar interface {
 
 // RouteHandler is the minimum route-registration surface shared by both the
 // production RouteMux and stdlib *http.ServeMux. Slices expose
-// RegisterRoutes(RouteHandler) so a single declaration — including any
-// auth.Secured policy wrappers — is the source of truth for production wiring
-// (called from Cell.RegisterRoutes), contract tests, and cell-level
-// integration tests.
+// RegisterRoutes(RouteHandler) so a single declaration — routed through
+// auth.Declare — is the source of truth for production wiring (called from
+// Cell.RegisterRoutes), contract tests, and cell-level integration tests.
 //
 // Both cell.RouteMux and *http.ServeMux satisfy this interface structurally
 // (each declares Handle(pattern string, handler http.Handler)), so slices do
 // not need to know which one they receive at call time.
 //
-// Rationale: the previous split — slice helper built for *http.ServeMux in
-// contract tests, cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux —
-// allowed production to silently skip Secured() wrappers declared in the
-// slice, producing a policy-drift surface that passed contract tests but
-// exposed unguarded routes in production. This interface collapses the two
-// paths into one.
+// Rationale: early designs let slices wrap handlers with handler-level auth
+// helpers; cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux allowed
+// production to silently skip the wrapper, producing a policy-drift surface
+// that passed contract tests but exposed unguarded routes in production.
+// auth.Declare collapses the two paths into one.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer type
 // for all write handlers; authz chain is declared at registration time.
@@ -113,6 +111,42 @@ type HTTPRegistrar interface {
 // declared once; both runtime and test paths consume the same registration.
 type RouteHandler interface {
 	Handle(pattern string, handler http.Handler)
+}
+
+// AuthRouteMeta carries the auth-related attributes a slice declares when
+// registering a route. It is pure data — no Policy or Handler references —
+// so kernel/cell stays decoupled from runtime/auth.
+//
+// Aggregators (Router, TestMux) collect instances during RegisterRoutes and
+// compile them into matchers at finalize time.
+type AuthRouteMeta struct {
+	// Method is the HTTP verb (e.g. "POST"). Required and non-empty.
+	Method string
+	// Path is the Go 1.22 ServeMux pattern path (e.g. "/api/v1/access/sessions/{id}").
+	// Must start with '/'.
+	Path string
+	// Public marks the route as JWT-exempt — the AuthMiddleware bypasses JWT
+	// verification entirely. Mutually exclusive with any server-side Policy.
+	Public bool
+	// PasswordResetExempt marks the route as allowed to pass through the
+	// password-reset gate when an authenticated token carries
+	// password_reset_required=true. Only meaningful when Public is false.
+	PasswordResetExempt bool
+	// Delegated marks the route as handing JWT verification to a downstream
+	// guard (service-token, mTLS, etc.). AuthMiddleware forwards the request
+	// without inspecting the Bearer token.
+	Delegated bool
+}
+
+// AuthRouteDeclarer is implemented by aggregators that want to receive the
+// auth metadata a slice declares alongside a route. auth.Declare performs a
+// type-assertion on the receiving mux — when implemented, it forwards the
+// metadata via DeclareAuthMeta; otherwise only the route is registered.
+//
+// This keeps kernel/cell free of runtime/auth dependencies while still
+// letting the Router and TestMux aggregate per-route auth context.
+type AuthRouteDeclarer interface {
+	DeclareAuthMeta(meta AuthRouteMeta)
 }
 
 // EventRouter declares event subscriptions. Cells call AddHandler during

@@ -124,7 +124,7 @@ func TestWithInternalPathPrefixGuard_AutoDelegatesJWT(t *testing.T) {
 	}
 
 	rtr, err := NewE(
-		WithAuthMiddleware(verifier, nil),
+		WithAuthMiddleware(verifier),
 		WithInternalPathPrefixGuard("/internal/v1/", guard),
 	)
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestWithInternalPathPrefixGuard_JWTStillEnforcedForOtherPaths(t *testing.T)
 	guard := makeCountingGuard(&guardCalled)
 
 	rtr, err := NewE(
-		WithAuthMiddleware(verifier, nil),
+		WithAuthMiddleware(verifier),
 		WithInternalPathPrefixGuard("/internal/v1/", guard),
 	)
 	require.NoError(t, err)

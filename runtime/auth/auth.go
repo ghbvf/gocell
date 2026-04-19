@@ -109,4 +109,3 @@ type VerificationKeyStore interface {
 	// Returns an error for unknown or expired kids.
 	PublicKeyByKID(kid string) (*rsa.PublicKey, error)
 }
-

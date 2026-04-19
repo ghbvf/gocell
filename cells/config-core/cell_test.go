@@ -214,6 +214,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 	return r
 }
 
@@ -268,12 +269,12 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 // TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
 // the PR review: it exercises the REAL production routing path (cell.go ->
-// slice.RegisterRoutes -> auth.Secured) and locks the 401 / 403 / 2xx
+// slice.RegisterRoutes -> auth.Declare) and locks the 401 / 403 / 2xx
 // spectrum end-to-end for each admin-guarded write endpoint.
 //
 // This test would have caught the prior drift where cell.go attached raw
-// HandlerFuncs that bypassed auth.Secured — every case below depends on the
-// admin guard actually being wired on the production path.
+// HandlerFuncs that bypassed the route-level policy — every case below depends
+// on the admin guard actually being wired on the production path.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer_test.go — integration
 // test reaches the installed handler via the real mux so authz wiring is
@@ -317,13 +318,13 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 			// --- 401: no authenticated subject on context.
 			rec := exec(t, p, context.Background())
 			assert.Equal(t, http.StatusUnauthorized, rec.Code,
-				"unauthenticated %s %s must be 401 (auth.Secured -> Authenticated); got body %s",
+				"unauthenticated %s %s must be 401 (auth.Declare -> Authenticated); got body %s",
 				p.method, p.path, rec.Body)
 
 			// --- 403: authenticated but wrong role.
 			rec = exec(t, p, auth.TestContext("user-non-admin", []string{"viewer"}))
 			assert.Equal(t, http.StatusForbidden, rec.Code,
-				"non-admin %s %s must be 403 (auth.Secured -> AnyRole(admin)); got body %s",
+				"non-admin %s %s must be 403 (auth.Declare -> AnyRole(admin)); got body %s",
 				p.method, p.path, rec.Body)
 
 			// --- 2xx: admin role. We do not pin the exact success code
@@ -354,8 +355,10 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	}
 
 	// Get config-read page with limit=1 to obtain a cursor.
+	// config-read declares auth.Authenticated() so a principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
+	req = req.WithContext(auth.TestContext("tester", nil))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -368,9 +371,11 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	require.NotEmpty(t, configPage.NextCursor)
 
 	// Use config-read cursor on feature-flag list endpoint — must be rejected.
+	// feature-flag also declares auth.Authenticated() so supply a principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
+	req = req.WithContext(auth.TestContext("tester", nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
@@ -386,6 +391,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	// Seed flags directly via repository (no HTTP create endpoint for flags).
 	for i := range 3 {
@@ -398,8 +404,10 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	}
 
 	// Get flag page with limit=1 to obtain a cursor.
+	// feature-flag declares auth.Authenticated() so a principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
+	req = req.WithContext(auth.TestContext("tester", nil))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -411,9 +419,11 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
 
 	// Use flag cursor on config-read endpoint — must be rejected.
+	// config-read also declares auth.Authenticated() so supply a principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
+	req = req.WithContext(auth.TestContext("tester", nil))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
