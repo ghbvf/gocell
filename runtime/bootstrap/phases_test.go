@@ -419,6 +419,128 @@ func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T)
 	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline (not Background)")
 }
 
+// ---------------------------------------------------------------------------
+// T19: phase2InitPubSub shutCtx propagation tests
+// ---------------------------------------------------------------------------
+
+// TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx verifies that the
+// teardown registered by phase2InitPubSub passes the shutCtx directly to
+// sub.Close — i.e. the shared shutdown budget is propagated to the subscriber.
+func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
+	var receivedCtx context.Context
+	sub := &pubSubCtxSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			return nil
+		},
+	}
+
+	b := New(WithSubscriber(sub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.Len(t, s.teardowns, 1)
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	require.NotNil(t, receivedCtx, "sub.Close must have been called")
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "sub.Close must receive ctx with deadline (shutCtx)")
+}
+
+// TestPhase2InitPubSub_PublisherCloseReceivesShutCtx verifies that when a
+// separate publisher is configured, its teardown also receives shutCtx.
+func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
+	var subReceivedCtx, pubReceivedCtx context.Context
+
+	sub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		subReceivedCtx = ctx
+		return nil
+	}}
+	pub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		pubReceivedCtx = ctx
+		return nil
+	}}
+
+	b := New(WithSubscriber(sub), WithPublisher(pub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Two teardowns: one for sub, one for pub (different instances).
+	require.Len(t, s.teardowns, 2)
+	for _, td := range s.teardowns {
+		require.NoError(t, td(shutCtx))
+	}
+
+	require.NotNil(t, subReceivedCtx, "sub.Close must have been called")
+	require.NotNil(t, pubReceivedCtx, "pub.Close must have been called")
+
+	_, subHasDeadline := subReceivedCtx.Deadline()
+	assert.True(t, subHasDeadline, "sub.Close must receive ctx with deadline")
+
+	_, pubHasDeadline := pubReceivedCtx.Deadline()
+	assert.True(t, pubHasDeadline, "pub.Close must receive ctx with deadline")
+}
+
+// TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce verifies that when pub
+// and sub are the same instance, exactly one Close call is registered.
+func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
+	var closeCount int
+	eb := &pubSubCtxSpy{closeFn: func(_ context.Context) error {
+		closeCount++
+		return nil
+	}}
+
+	b := New(WithPublisher(eb), WithSubscriber(eb))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, td := range s.teardowns {
+		require.NoError(t, td(shutCtx))
+	}
+	assert.Equal(t, 1, closeCount, "shared pub/sub bus must be closed exactly once")
+}
+
+// TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers verifies that
+// phase10LIFOTeardown passes the shutCtx to every registered teardown function,
+// including those added via addCloser from ContextCloser resources.
+func TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers(t *testing.T) {
+	const numClosers = 3
+	receivedCtxs := make([]context.Context, numClosers)
+
+	b := New()
+	_, s := newPhaseState()
+
+	for i := range numClosers {
+		idx := i
+		cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+			receivedCtxs[idx] = ctx
+			return nil
+		}}
+		s.addCloser(cc)
+	}
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errs := b.phase10LIFOTeardown(shutCtx, s)
+	assert.Empty(t, errs, "all teardowns must succeed")
+
+	for i, ctx := range receivedCtxs {
+		require.NotNil(t, ctx, "closer %d must have been called", i)
+		_, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline, "closer %d must receive ctx with deadline (shutCtx)", i)
+	}
+}
+
 // --- Helpers / stubs ---
 
 // ctxCloserSpy implements lifecycle.ContextCloser and records the ctx it receives.
@@ -527,3 +649,23 @@ func (b *phaseTestSharedBus) Close(_ context.Context) error {
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
+
+// pubSubCtxSpy implements both outbox.Publisher and outbox.Subscriber with a
+// ctx-recording Close. Used for T19 shutCtx propagation tests in phase2.
+type pubSubCtxSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+func (s *pubSubCtxSpy) Publish(_ context.Context, _ string, _ []byte) error  { return nil }
+func (s *pubSubCtxSpy) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *pubSubCtxSpy) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+	return nil
+}
+func (s *pubSubCtxSpy) Close(ctx context.Context) error {
+	return s.closeFn(ctx)
+}
