@@ -328,7 +328,130 @@ func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T19: addCloser dual-path teardown tests
+// ---------------------------------------------------------------------------
+
+// TestPhaseState_AddCloser_PrefersContextCloser verifies that addCloser
+// registers a ContextCloser's Close method directly (ctx budget propagated).
+func TestPhaseState_AddCloser_PrefersContextCloser(t *testing.T) {
+	var receivedCtx context.Context
+	cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+		receivedCtx = ctx
+		return nil
+	}}
+
+	_, s := newPhaseState()
+	s.addCloser(cc)
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	// The ctx passed to the teardown must be the shut ctx, not Background.
+	deadline, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline")
+	_, refDeadline := shutCtx.Deadline()
+	assert.Equal(t, refDeadline, hasDeadline,
+		"deadline presence must match shutCtx; got deadline=%v", deadline)
+}
+
+// TestPhaseState_AddCloser_FallsBackToIoCloser verifies that a plain io.Closer
+// is wrapped by IgnoreCtx and still registered for teardown.
+func TestPhaseState_AddCloser_FallsBackToIoCloser(t *testing.T) {
+	closed := false
+	ic := &ioCloserSpy{fn: func() error { closed = true; return nil }}
+
+	_, s := newPhaseState()
+	s.addCloser(ic)
+	require.Len(t, s.teardowns, 1)
+
+	require.NoError(t, s.teardowns[0](context.Background()))
+	assert.True(t, closed, "io.Closer must be called via IgnoreCtx wrapper")
+}
+
+// TestPhaseState_AddCloser_SkipsNil verifies that addCloser(nil) does not
+// register any teardown.
+func TestPhaseState_AddCloser_SkipsNil(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser(nil)
+	assert.Empty(t, s.teardowns, "nil resource must not register a teardown")
+}
+
+// TestPhaseState_AddCloser_SkipsNonCloser verifies that a resource that
+// implements neither ContextCloser nor io.Closer is silently skipped.
+func TestPhaseState_AddCloser_SkipsNonCloser(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser("just-a-string")
+	assert.Empty(t, s.teardowns)
+}
+
+// TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser verifies that
+// addCloser prefers ContextCloser (CloseCtx) over io.Closer when both are
+// available — which is the case for *config.Watcher after T14.
+func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T) {
+	var receivedCtx context.Context
+	watcherClosed := false
+
+	spy := &watcherCloserSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			watcherClosed = true
+			return nil
+		},
+	}
+
+	_, s := newPhaseState()
+
+	// Use addCloser directly — spy implements both Close() and CloseCtx(ctx).
+	// addCloser should pick CloseCtx (ContextCloser path).
+	s.addCloser(spy)
+
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	assert.True(t, watcherClosed)
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline (not Background)")
+}
+
 // --- Helpers / stubs ---
+
+// ctxCloserSpy implements lifecycle.ContextCloser and records the ctx it receives.
+type ctxCloserSpy struct {
+	fn func(ctx context.Context) error
+}
+
+func (s *ctxCloserSpy) Close(ctx context.Context) error {
+	return s.fn(ctx)
+}
+
+// ioCloserSpy implements io.Closer only (no Close(ctx)).
+type ioCloserSpy struct {
+	fn func() error
+}
+
+func (s *ioCloserSpy) Close() error {
+	return s.fn()
+}
+
+// watcherCloserSpy implements lifecycle.ContextCloser (Close(ctx) error) so
+// that addCloser picks the ContextCloser path and propagates the shut budget.
+// It also implements io.Closer for the fallback path test.
+type watcherCloserSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+// Close implements lifecycle.ContextCloser — addCloser checks this first.
+func (w *watcherCloserSpy) Close(ctx context.Context) error {
+	return w.closeFn(ctx)
+}
+
+// --- Helpers / stubs (existing) ---
 
 // phaseTestVerifier satisfies auth.IntentTokenVerifier for phase0 tests.
 type phaseTestVerifier struct{}

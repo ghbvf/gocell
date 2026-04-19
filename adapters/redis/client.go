@@ -229,12 +229,45 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 // Close releases the underlying Redis connection.
+//
+// Delegates to CloseCtx(context.Background()) for back-compat.
 func (c *Client) Close() error {
-	if err := c.rdb.Close(); err != nil {
-		return errcode.Wrap(ErrAdapterRedisConnect, "redis: close failed", err)
+	return c.CloseCtx(context.Background())
+}
+
+// CloseCtx releases the underlying Redis connection, bounded by ctx.
+//
+// go-redis Client.Close() is synchronous and may block on in-flight commands.
+// CloseCtx wraps it in a goroutine so the caller's shutdown budget is honoured;
+// if ctx expires, in-flight commands may be abandoned (process-exit semantics).
+//
+// ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
+func (c *Client) CloseCtx(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	slog.Info("redis: connection closed")
-	return nil
+
+	done := make(chan error, 1)
+	go func() {
+		if err := c.rdb.Close(); err != nil {
+			done <- errcode.Wrap(ErrAdapterRedisConnect, "redis: close failed", err)
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return err
+		}
+		slog.Info("redis: connection closed")
+		return nil
+	case <-ctx.Done():
+		slog.Warn("redis: close budget exceeded",
+			slog.Any("error", ctx.Err()))
+		return ctx.Err()
+	}
 }
 
 // Cmdable returns the internal cmdable for use by sibling components
