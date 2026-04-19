@@ -338,6 +338,27 @@ func TestNewJWTIssuer_NilKeySetReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
 }
 
+// TestNewJWTVerifier_TypedNilKeySet verifies that a typed-nil concrete pointer
+// passed through the VerificationKeyStore interface is rejected at
+// construction. Without reflection-based nil detection, `keys == nil` returns
+// false (interface has a non-nil type descriptor) and the typed-nil would
+// propagate to the first PublicKeyByKID call, where it panics.
+func TestNewJWTVerifier_TypedNilKeySet(t *testing.T) {
+	var ks *KeySet // typed-nil: type=*KeySet, value=nil
+	_, err := NewJWTVerifier(ks)
+	require.Error(t, err, "typed-nil KeySet must be rejected at construction, not at first method call")
+	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
+}
+
+// TestNewJWTIssuer_TypedNilKeySet verifies the same guarantee for the signing
+// provider path.
+func TestNewJWTIssuer_TypedNilKeySet(t *testing.T) {
+	var ks *KeySet
+	_, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	require.Error(t, err, "typed-nil KeySet must be rejected at construction, not at first method call")
+	assert.Contains(t, err.Error(), "ERR_AUTH_KEY_INVALID")
+}
+
 // --- Multi-key verification (US2 via JWT) ---
 
 func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {

@@ -28,8 +28,10 @@ var (
 
 func init() {
 	var err error
+	// Issuer is constructed with a default audience via WithIssuerAudiencesFromSlice
+	// (Registry path). The slice service no longer caches audience separately (S31).
 	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", auth.DefaultAccessTokenTTL,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -39,10 +41,10 @@ func init() {
 	}
 }
 
-// TestNewService_InheritsAudienceFromIssuer_Refresh verifies that the sessionrefresh
-// Service reads the default audience from issuer.DefaultAudience() and uses it when
-// minting new tokens during rotation, without relying on a hard-coded constant.
-func TestNewService_InheritsAudienceFromIssuer_Refresh(t *testing.T) {
+// TestNewService_IssuerDefaultAudienceWrittenOnRefresh verifies that the
+// sessionrefresh Service issues tokens with the audience configured in the
+// issuer (Registry path), without caching audience separately (S31).
+func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
 	svc, sessionRepo := newTestService("usr-aud-refresh")
 
 	rt := issueTestToken("usr-aud-refresh")
@@ -60,12 +62,12 @@ func TestNewService_InheritsAudienceFromIssuer_Refresh(t *testing.T) {
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Contains(t, accessClaims.Audience, "gocell",
-		"rotated access token aud must come from issuer.DefaultAudience()")
+		"rotated access token aud must come from issuer default audience (Registry)")
 
 	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
 	assert.Contains(t, refreshClaims.Audience, "gocell",
-		"rotated refresh token aud must come from issuer.DefaultAudience()")
+		"rotated refresh token aud must come from issuer default audience (Registry)")
 }
 
 // newTestService creates a refresh service with a minimal in-memory userRepo

@@ -24,17 +24,19 @@ var (
 
 func init() {
 	var err error
+	// Issuer is constructed with a default audience via WithIssuerAudiencesFromSlice
+	// (Registry path). The slice service no longer caches audience separately (S31).
 	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-access-core", auth.DefaultAccessTokenTTL,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
 }
 
-// TestNewService_InheritsAudienceFromIssuer verifies that NewService reads the
-// default audience from the issuer's DefaultAudience() and uses it when minting
-// tokens, so no external constant (like auth.DefaultJWTAudience) is required.
-func TestNewService_InheritsAudienceFromIssuer(t *testing.T) {
+// TestNewService_IssuerDefaultAudienceWrittenToTokens verifies that when the
+// issuer is constructed with a default audience (Registry path), the Service
+// writes that audience into issued tokens without caching it separately (S31).
+func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	svc, userRepo := newTestService()
 	seedUser(userRepo, "aud-user", "pass123")
 
@@ -44,17 +46,17 @@ func TestNewService_InheritsAudienceFromIssuer(t *testing.T) {
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "aud-user", Password: "pass123"})
 	require.NoError(t, err)
 
-	// The access token must carry the audience from the issuer's DefaultAudience.
+	// The access token must carry the audience from the issuer's configured default.
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Contains(t, accessClaims.Audience, "gocell",
-		"access token aud must be populated from issuer.DefaultAudience()")
+		"access token aud must be populated from issuer default audience (Registry)")
 
 	// The refresh token must also carry the audience.
 	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
 	require.NoError(t, err)
 	assert.Contains(t, refreshClaims.Audience, "gocell",
-		"refresh token aud must be populated from issuer.DefaultAudience()")
+		"refresh token aud must be populated from issuer default audience (Registry)")
 }
 
 func newTestService() (*Service, *mem.UserRepository) {

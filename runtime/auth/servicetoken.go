@@ -161,6 +161,9 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 //
 // Verification tries each secret in the key ring in order (current, then
 // previous). Tokens older than 5 minutes (exclusive boundary) are rejected.
+//
+// Principal construction is fully delegated to NewServiceTokenAuthenticator
+// so that the service identity shape is defined in a single place.
 func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	cfg := serviceTokenConfig{now: time.Now, logger: slog.Default()}
 	for _, o := range opts {
@@ -176,16 +179,26 @@ func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(
 			})
 		}
 	}
+
+	// Construct a single Authenticator instance for the lifetime of this
+	// middleware. All validation and Principal construction is delegated here,
+	// eliminating the previously duplicated logic in handleServiceToken.
+	auth := NewServiceTokenAuthenticator(ring, opts...)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleServiceToken(cfg, ring, next, w, r)
+			handleServiceToken(cfg, auth, next, w, r)
 		})
 	}
 }
 
 // handleServiceToken contains all request-handling logic extracted from
 // ServiceTokenMiddleware to reduce cognitive complexity.
-func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Handler, w http.ResponseWriter, r *http.Request) {
+// Validation and Principal construction are fully delegated to the provided
+// Authenticator (NewServiceTokenAuthenticator); this function maps the returned
+// error to granular metrics labels and HTTP responses, preserving all existing
+// metric reason labels and HTTP status codes.
+func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	token := extractServiceToken(r)
 	if token == "" {
 		cfg.metrics.recordServiceVerify("failure", "missing")
@@ -193,87 +206,78 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 		return
 	}
 
-	parts := strings.SplitN(token, ":", 3)
-	if len(parts) == 2 {
-		// 2-part legacy format ({timestamp}:{hex_hmac}) — no nonce, always rejected.
-		// Recorded separately so ops can observe residual legacy token traffic.
-		cfg.metrics.recordServiceVerify("failure", "legacy_format")
+	// Log legacy 2-part format before validation so ops can observe the traffic.
+	if parts := strings.SplitN(token, ":", 3); len(parts) == 2 {
 		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
 			slog.String("path", r.URL.Path),
 			slog.String("format", "2-part"),
 		)
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
-		return
-	}
-	if len(parts) != 3 {
-		cfg.metrics.recordServiceVerify("failure", "invalid_format")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
-		return
 	}
 
-	tsStr := parts[0]
-	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	p, ok, err := auth.Authenticate(r)
 	if err != nil {
-		cfg.metrics.recordServiceVerify("failure", "invalid_format")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token timestamp")
+		writeServiceTokenError(cfg, err, w, r)
 		return
 	}
-
-	now := cfg.now()
-	tokenTime := time.Unix(ts, 0)
-	age := now.Sub(tokenTime)
-	if age < 0 {
-		age = -age
-	}
-	if age >= ServiceTokenMaxAge {
-		cfg.metrics.recordServiceVerify("failure", "expired")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token expired")
-		return
-	}
-
-	nonce, sigHex := parts[1], parts[2]
-	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce)
-
-	providedMAC, err := hex.DecodeString(sigHex)
-	if err != nil {
-		cfg.metrics.recordServiceVerify("failure", "invalid_format")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", msgInvalidServiceTokenFormat)
-		return
-	}
-
-	if !verifyServiceTokenMAC(ring, message, providedMAC) {
-		cfg.metrics.recordServiceVerify("failure", "invalid_mac")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
-		return
-	}
-
-	if blocked := checkNonceReplay(cfg, nonce, w, r); blocked {
+	if !ok {
+		// Absent: no ServiceToken header (already handled by extractServiceToken
+		// above, so this branch is a safety net for unexpected absent outcomes).
+		cfg.metrics.recordServiceVerify("failure", "missing")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
 		return
 	}
 
 	cfg.metrics.recordServiceVerify("success", "ok")
-	next.ServeHTTP(w, r)
+	ctx := WithPrincipal(r.Context(), p)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
-// checkNonceReplay handles nonce-based replay detection. Returns true if the
-// request was blocked (response already written).
-func checkNonceReplay(cfg serviceTokenConfig, nonce string, w http.ResponseWriter, r *http.Request) bool {
-	if cfg.nonceStore == nil {
-		return false
-	}
-	err := cfg.nonceStore.CheckAndMark(r.Context(), nonce)
-	if err == nil {
-		return false
-	}
+// writeServiceTokenError maps a verifyServiceTokenPayload error to granular
+// metrics labels and the appropriate HTTP response. It preserves the
+// middleware's split between 401 (auth failures, replay) and 500 (nonce store
+// infrastructure failures) by inspecting the wrapped Cause.
+func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWriter, r *http.Request) {
+	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
 		cfg.metrics.recordServiceVerify("failure", "replay")
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token replay detected")
-	} else {
-		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
-		cfg.logger.Error("nonce store check failed", slog.Any("error", err))
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+		return
 	}
-	return true
+
+	// If the error has a Cause (wrapped by WrapAuth for nonce check failures)
+	// that is NOT ErrNonceReused, it is a nonce store infrastructure failure.
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Cause != nil {
+		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
+		cfg.logger.Error("nonce store check failed", slog.Any("error", ec.Cause))
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+		return
+	}
+
+	// Classify remaining auth errors by their message for metric granularity.
+	reason := classifyServiceTokenVerifyError(err)
+	cfg.metrics.recordServiceVerify("failure", reason)
+	httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
+}
+
+// classifyServiceTokenVerifyError maps a verifyServiceTokenPayload error to a
+// metric reason label. This mirrors the legacy per-branch labels from the
+// original handleServiceToken implementation.
+func classifyServiceTokenVerifyError(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "legacy 2-part"):
+		return "legacy_format"
+	case strings.Contains(msg, "expired"):
+		return "expired"
+	case strings.Contains(msg, "invalid service token MAC"):
+		return "invalid_mac"
+	default:
+		return "invalid_format"
+	}
 }
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message

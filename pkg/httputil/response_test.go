@@ -83,7 +83,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		// Cell-local auth failure codes -> 401
 		{errcode.ErrAuthLoginFailed, http.StatusUnauthorized},
 		{errcode.ErrAuthRefreshFailed, http.StatusUnauthorized},
-		{errcode.ErrAuthRefreshTokenReuse, http.StatusUnauthorized},
+		{errcode.ErrAuthRefreshTokenReuse, http.StatusUnauthorized}, //nolint:staticcheck // retained for sessionrefresh.service; removed in F2 migration PR
 		{errcode.ErrAuthInvalidToken, http.StatusUnauthorized},
 
 		// Cell-local locked -> 403

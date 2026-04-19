@@ -1,187 +1,186 @@
-// Tests for env-var-driven JWT dependency loading (C5).
+// Tests for env-var-driven JWT dependency loading (C5 / F1 Registry).
 //
 // GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all adapter modes
-// (there is no fallback default value).
+// (there is no fallback default value). After F1, loading is done via
+// authconfig.FromEnv; these tests exercise buildJWTDeps end-to-end.
 package main
 
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- loadJWTIssuer ---
+// setTestJWTKeyEnv installs a PEM-encoded RSA key pair into GOCELL_JWT_PRIVATE_KEY /
+// GOCELL_JWT_PUBLIC_KEY so that a subsequent loadKeySet("") call reads the same
+// key material the caller can reload via auth.LoadKeySetFromEnv. This eliminates
+// the hidden key-mismatch dimension that would otherwise mask wiring regressions
+// in issuer/audience validation tests (B3 wiring lock integrity).
+//
+// Returns nothing: state is restored by t.Setenv at the end of the test.
+func setTestJWTKeyEnv(t *testing.T) {
+	t.Helper()
+	priv, pub := auth.MustGenerateTestKeyPair()
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+	})
+	pubDER, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err, "marshal test public key")
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+}
 
-// TestLoadJWTIssuer_MissingEnvVar_Error verifies that an unset GOCELL_JWT_ISSUER
-// returns an error containing the env var name.
-func TestLoadJWTIssuer_MissingEnvVar_Error(t *testing.T) {
+// --- buildJWTDeps: env-var validation ---
+
+// TestBuildJWTDeps_MissingIssuer_Error verifies that an unset GOCELL_JWT_ISSUER
+// causes buildJWTDeps to fail fast.
+func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, err := loadJWTIssuer("")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	_, err := buildJWTDeps("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
 		"error must name the missing env var")
 }
 
-// TestLoadJWTIssuer_SetEnvVar_Used verifies that a set GOCELL_JWT_ISSUER is returned.
-func TestLoadJWTIssuer_SetEnvVar_Used(t *testing.T) {
+// TestBuildJWTDeps_MissingAudience_Error verifies that an unset GOCELL_JWT_AUDIENCE
+// causes buildJWTDeps to fail fast.
+func TestBuildJWTDeps_MissingAudience_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-prod")
-	val, err := loadJWTIssuer("")
-	require.NoError(t, err)
-	assert.Equal(t, "gocell-prod", val)
-}
-
-// TestLoadJWTIssuer_RealMode_AlsoRequired ensures real mode is equally strict.
-func TestLoadJWTIssuer_RealMode_AlsoRequired(t *testing.T) {
-	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, err := loadJWTIssuer("real")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER")
-}
-
-// --- loadJWTAudience ---
-
-// TestLoadJWTAudience_MissingEnvVar_Error verifies that an unset GOCELL_JWT_AUDIENCE
-// returns an error containing the env var name.
-func TestLoadJWTAudience_MissingEnvVar_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	_, err := loadJWTAudience("")
+	_, err := buildJWTDeps("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
 		"error must name the missing env var")
 }
 
-// TestLoadJWTAudience_SetEnvVar_Used verifies that a set GOCELL_JWT_AUDIENCE is returned.
-func TestLoadJWTAudience_SetEnvVar_Used(t *testing.T) {
-	t.Setenv("GOCELL_JWT_AUDIENCE", "my-service")
-	val, err := loadJWTAudience("")
-	require.NoError(t, err)
-	assert.Equal(t, "my-service", val)
-}
+// --- buildJWTDeps wiring integration ---
+//
+// These tests lock env → Registry → issuer/verifier wiring (B3) by isolating
+// each failure dimension. The key material is injected via env so deps and the
+// test-side issuer share the SAME keyset — a signature failure would otherwise
+// short-circuit before iss/aud claim checks, turning the test into a false
+// positive that passes even when issuer/audience wiring is broken.
 
-// --- buildJWTDeps integration ---
-
-// TestBuildJWTDeps_RealMode_VerifierRejectsWrongIssuer builds JWT deps and
-// verifies that a token carrying a different iss claim is rejected.
-// Uses the same key set to isolate the issuer check from key mismatch.
-func TestBuildJWTDeps_RealMode_VerifierRejectsWrongIssuer(t *testing.T) {
-	t.Setenv("GOCELL_JWT_ISSUER", "correct-issuer")
-	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-
-	_, err := buildJWTDeps("")
-	require.NoError(t, err)
-
-	// Issue a token using a separate key set with iss="wrong-issuer", then verify
-	// using a verifier that expects iss="correct-issuer". The key mismatch is
-	// intentional isolation: we test only the issuer claim enforcement.
-	ks, _, _ := auth.MustNewTestKeySet()
-	wrongIssuerIssuer, err := auth.NewJWTIssuer(ks, "wrong-issuer", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
-	require.NoError(t, err)
-	wrongVerifier, err := auth.NewJWTVerifier(ks,
-		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("correct-issuer"))
-	require.NoError(t, err)
-
-	tok, err := wrongIssuerIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
-		Audience: []string{"gocell"},
-	})
-	require.NoError(t, err)
-
-	// Verify using a verifier that expects "correct-issuer" but token has "wrong-issuer".
-	_, err = wrongVerifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.Error(t, err, "token with wrong iss must be rejected")
-	assert.Contains(t, err.Error(), "issuer", "error must mention issuer mismatch")
-}
-
-// TestBuildJWTDeps_RealMode_VerifierRejectsWrongAudience builds JWT deps and
-// verifies that a token signed with a different audience is rejected.
-func TestBuildJWTDeps_RealMode_VerifierRejectsWrongAudience(t *testing.T) {
-	t.Setenv("GOCELL_JWT_ISSUER", "correct-issuer")
-	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-
-	deps, err := buildJWTDeps("")
-	require.NoError(t, err)
-
-	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
-		Audience: []string{"wrong-service"},
-	})
-	require.NoError(t, err)
-
-	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.Error(t, err, "token with wrong aud must be rejected")
-}
-
-// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer is an end-to-end
-// wiring test: it builds deps via buildJWTDeps (reading issuer from env) and
-// then uses deps.verifier to reject a token signed with a different issuer.
-// This locks the env → issuer → verifier wiring that the prior RealMode tests
-// missed (B3 finding): the prior test created an independent verifier with
-// explicit options, so it never proved that the verifier produced by
-// buildJWTDeps reads GOCELL_JWT_ISSUER correctly.
+// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer locks the
+// GOCELL_JWT_ISSUER → Registry → verifier.expectedIssuer wiring. The token is
+// signed with deps' own keyset (via env) but carries iss="wrong-iss"; signature
+// verification passes, then the issuer check rejects. We assert the specific
+// errcode (ErrAuthInvalidTokenIntent) and message ("issuer") so a regression
+// into a signature-level failure — which would also produce a non-nil error —
+// is caught.
 func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
+	setTestJWTKeyEnv(t)
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	deps, err := buildJWTDeps("")
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
-	// Use a separate key set and issuer so key mismatch does not interfere.
-	// We want to isolate the issuer claim check on deps.verifier.
-	ks, _, _ := auth.MustNewTestKeySet()
+	// Reload the exact same key material from env — deps already loaded it, so
+	// tokens signed with this ks are signature-valid against deps.verifier.
+	ks, err := auth.LoadKeySetFromEnv()
+	require.NoError(t, err, "reload keyset from env to mirror deps wiring")
+
 	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
-	// Create a separate verifier for the alternative key set that trusts wrong-iss.
-	// deps.verifier uses its own key set and expects "prod-iss" — key mismatch
-	// will always fail, which is intentional: the goal is to assert that deps.verifier
-	// rejects the token (regardless of whether it is due to key mismatch or issuer).
-	tok, err := wrongIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
-		Audience: []string{"gocell"},
-	})
+	tok, err := wrongIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
 	require.NoError(t, err)
 
-	// deps.verifier must reject the token — wrong key and wrong issuer both contribute.
 	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.Error(t, err,
-		"deps.verifier (wired from GOCELL_JWT_ISSUER=prod-iss) must reject a token "+
-			"issued by wrong-iss; this locks env→verifier wiring (B3)")
+		"deps.verifier (wired from GOCELL_JWT_ISSUER=prod-iss) must reject token with iss=wrong-iss")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr),
+		"rejection must be an *errcode.Error (got %T); otherwise upstream wiring may be bypassing Registry", err)
+	assert.Equal(t, errcode.ErrAuthInvalidTokenIntent, ecErr.Code,
+		"wrong-iss must surface ErrAuthInvalidTokenIntent; a different code means either "+
+			"signature verification failed first (key-mismatch pseudo-positive) or the iss check did not run")
+	// The safe client-facing Message distinguishes iss vs aud branches even
+	// though both share a single error code (enumeration-defense collapses
+	// them at the HTTP layer; see runtime/auth/jwt.go::checkIssuer).
+	assert.Contains(t, strings.ToLower(ecErr.Message), "issuer",
+		"Message must mention 'issuer' so a regression swapping the iss/aud branches is caught")
 }
 
-// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience is an end-to-end
-// wiring test: it builds deps via buildJWTDeps and uses deps.issuer to sign a
-// token with the wrong audience, then asserts deps.verifier rejects it.
-// This complements the B3 fix by verifying GOCELL_JWT_AUDIENCE flows into the
-// verifier's audience check (not just into the issuer's default audience).
+// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience locks the
+// GOCELL_JWT_AUDIENCE → Registry → verifier.expectedAudiences wiring.
+// deps.issuer is used to sign (same key) but with an overridden wrong audience.
 func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
+	setTestJWTKeyEnv(t)
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	deps, err := buildJWTDeps("")
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
-	// Issue a token overriding the audience with a wrong value.
 	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
 		Audience: []string{"wrong-service"},
 	})
 	require.NoError(t, err)
 
-	// deps.verifier expects aud="gocell" (from GOCELL_JWT_AUDIENCE env var).
 	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
-	require.Error(t, err,
-		"deps.verifier must reject token with aud=wrong-service; "+
-			"locks GOCELL_JWT_AUDIENCE→verifier wiring (B3)")
+	require.Error(t, err, "deps.verifier must reject token with aud=wrong-service")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "rejection must be an *errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthInvalidTokenIntent, ecErr.Code,
+		"wrong-aud must surface ErrAuthInvalidTokenIntent")
+	assert.Contains(t, strings.ToLower(ecErr.Message), "audience",
+		"Message must mention 'audience' so a regression swapping iss/aud branches is caught")
+}
+
+// TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey isolates the signature
+// verification dimension: a token signed by a key NOT known to deps.verifier
+// must be rejected with ErrAuthUnauthorized (distinct code from iss/aud
+// mismatches). This complements the WrongIssuer/WrongAudience tests, ensuring
+// all three failure modes remain independently distinguishable.
+func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
+	setTestJWTKeyEnv(t)
+	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	deps, err := buildJWTDeps("")
+	require.NoError(t, err)
+
+	// Build a completely independent keyset — deps.verifier has no public key
+	// matching this kid, so verification must fail at the signature step.
+	strangerKS, _, _ := auth.MustNewTestKeySet()
+	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", 15*time.Minute,
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	require.NoError(t, err)
+
+	tok, err := stranger.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{})
+	require.NoError(t, err)
+
+	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
+	require.Error(t, err, "deps.verifier must reject token signed by unknown key")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "rejection must be an *errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code,
+		"unknown signing key must surface ErrAuthUnauthorized (signature failure), not ErrAuthInvalidTokenIntent")
 }
 
 // TestBuildJWTDeps_LogsEffectiveConfig verifies that buildJWTDeps emits a
-// structured Info log with issuer, audience, and adapter_mode fields.
+// structured Info log with issuer, audiences, and adapter_mode fields.
 func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "log-test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "log-test-aud")
@@ -210,8 +209,9 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 		}
 		found = true
 		assert.Equal(t, "log-test-issuer", record["issuer"], "log must contain issuer field")
-		assert.Equal(t, "log-test-aud", record["audience"], "log must contain audience field")
 		assert.Equal(t, "testmode", record["adapter_mode"], "log must contain adapter_mode field")
+		// audiences is now a []string (slog.Any) rather than a plain string
+		assert.NotNil(t, record["audiences"], "log must contain audiences field")
 	}
 	assert.True(t, found, "structured log 'core-bundle: JWT deps built' must be emitted by buildJWTDeps")
 }

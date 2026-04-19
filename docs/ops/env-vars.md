@@ -8,8 +8,8 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_JWT_ISSUER` | JWT `iss` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). There is no default value; missing this variable causes fail-fast at startup. |
-| `GOCELL_JWT_AUDIENCE` | JWT `aud` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C5). Must match the value expected by all session-login/refresh token consumers. There is no default value; missing this variable causes fail-fast at startup. |
+| `GOCELL_JWT_ISSUER` | JWT `iss` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Required regardless of `GOCELL_CELL_ADAPTER_MODE` or `GOCELL_ADAPTER_MODE`; there is no dev fallback. Missing this variable causes fail-fast at startup. |
+| `GOCELL_JWT_AUDIENCE` | JWT `aud` claim written by JWTIssuer and verified by JWTVerifier on every authenticated request | — | **All modes** | Required regardless of `GOCELL_CELL_ADAPTER_MODE` or `GOCELL_ADAPTER_MODE`; there is no dev fallback. Must match the value expected by all session-login/refresh token consumers. Missing this variable causes fail-fast at startup. Note: `GOCELL_JWT_AUDIENCES` (comma-separated multi-value) is not yet implemented; when introduced, migration path and priority over `GOCELL_JWT_AUDIENCE` will be defined. |
 
 ## RSA Key Set (for JWT signing and verification)
 

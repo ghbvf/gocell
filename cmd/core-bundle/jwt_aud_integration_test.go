@@ -48,8 +48,8 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 
 	t.Run("rejects_explicitly_empty_audience", func(t *testing.T) {
 		// Issue a token with an explicit wrong audience to test rejection.
-		// (nil audience now falls back to the configured default "gocell" via
-		// WithDefaultAudience, so we must supply an explicit wrong value instead.)
+		// (nil audience falls back to the Registry-configured default "gocell",
+		// so we must supply an explicit wrong value instead.)
 		tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Audience: []string{"not-gocell"},
 		})
@@ -71,13 +71,14 @@ func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 	deps, err := buildJWTDeps("")
 	require.NoError(t, err)
 
-	// issuer.DefaultAudience() returns the audience configured via GOCELL_JWT_AUDIENCE.
-	// Simulate what sessionlogin.Service.issueAccessToken does: rely on issuer.DefaultAudience().
+	// The audience configured via GOCELL_JWT_AUDIENCE is set as the issuer's default
+	// (via Registry). Simulate what sessionlogin.Service.issueAccessToken does: rely on
+	// the issuer's Registry-configured default audience.
 	tok, err := deps.issuer.Issue(
 		auth.TokenIntentAccess, "user-1", auth.IssueOptions{
 			Roles:     []string{"admin"},
 			SessionID: "sess-1",
-			// Audience left nil — issuer writes deps.issuer.DefaultAudience() automatically.
+			// Audience left nil — issuer uses Registry-configured default automatically.
 		},
 	)
 	require.NoError(t, err)

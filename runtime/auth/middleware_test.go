@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
@@ -46,13 +45,9 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 		claims: Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := ClaimsFrom(r.Context())
+		p, ok := FromContext(r.Context())
 		assert.True(t, ok)
-		assert.Equal(t, "user-1", claims.Subject)
-
-		sub, ok := ctxkeys.SubjectFrom(r.Context())
-		assert.True(t, ok)
-		assert.Equal(t, "user-1", sub)
+		assert.Equal(t, "user-1", p.Subject)
 
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -215,7 +210,7 @@ func TestRequireRole_HasRole(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithClaims(req.Context(), Claims{Subject: "u1", Roles: []string{"admin", "user"}})
+	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"admin", "user"}})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -229,7 +224,7 @@ func TestRequireRole_MissingRole(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithClaims(req.Context(), Claims{Subject: "u1", Roles: []string{"user"}})
+	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"user"}})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -238,7 +233,7 @@ func TestRequireRole_MissingRole(t *testing.T) {
 	assertErrorCode(t, rec, "ERR_AUTH_FORBIDDEN")
 }
 
-func TestRequireRole_NoClaims(t *testing.T) {
+func TestRequireRole_NoPrincipal(t *testing.T) {
 	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
@@ -257,7 +252,7 @@ func TestRequireRole_AuthorizerFallback(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
-	ctx := WithClaims(req.Context(), Claims{Subject: "u1", Roles: []string{"viewer"}})
+	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"viewer"}})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -272,7 +267,7 @@ func TestRequireRole_AuthorizerError(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := WithClaims(req.Context(), Claims{Subject: "u1", Roles: []string{"user"}})
+	ctx := WithPrincipal(req.Context(), &Principal{Kind: PrincipalUser, Subject: "u1", Roles: []string{"user"}})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -864,6 +859,118 @@ func TestAuthMiddleware_NilDelegatedMatcher_NoEffect(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"without WithDelegatedMatcher, even /internal/v1/* paths must require JWT")
+}
+
+// --- T4: Principal injection tests ---
+
+// TestAuthMiddleware_InjectsPrincipal verifies that a valid JWT causes the
+// middleware to inject a Principal into the request context with the correct
+// fields populated from the JWT claims.
+func TestAuthMiddleware_InjectsPrincipal(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{
+			Subject:               "user-42",
+			Roles:                 []string{"admin", "editor"},
+			SessionID:             "sess-abc",
+			Issuer:                "gocell-issuer",
+			TokenUse:              TokenIntentAccess,
+			PasswordResetRequired: false,
+		},
+	}
+	var gotPrincipal *Principal
+	handler := AuthMiddleware(verifier, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := FromContext(r.Context())
+		require.True(t, ok, "Principal must be present in context after successful auth")
+		gotPrincipal = p
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, gotPrincipal)
+	assert.Equal(t, PrincipalUser, gotPrincipal.Kind)
+	assert.Equal(t, "user-42", gotPrincipal.Subject)
+	assert.ElementsMatch(t, []string{"admin", "editor"}, gotPrincipal.Roles)
+	assert.Equal(t, "jwt", gotPrincipal.AuthMethod)
+	assert.False(t, gotPrincipal.PasswordResetRequired)
+	assert.Equal(t, "sess-abc", gotPrincipal.Claims["sid"])
+	assert.Equal(t, "gocell-issuer", gotPrincipal.Claims["iss"])
+	assert.Equal(t, string(TokenIntentAccess), gotPrincipal.Claims["token_use"])
+}
+
+// TestAuthMiddleware_InjectsPrincipal_PasswordResetRequired verifies that
+// PasswordResetRequired=true is propagated to the injected Principal.
+func TestAuthMiddleware_InjectsPrincipal_PasswordResetRequired(t *testing.T) {
+	verifier := &mockVerifier{
+		claims: Claims{
+			Subject:               "usr-bootstrap",
+			PasswordResetRequired: true,
+		},
+	}
+	handler := AuthMiddleware(verifier, nil,
+		WithPasswordResetExemptMatcher(func(method, path string) bool {
+			return method == http.MethodPost && path == "/api/v1/access/users/usr-bootstrap/password"
+		}),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := FromContext(r.Context())
+		require.True(t, ok)
+		assert.True(t, p.PasswordResetRequired)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/usr-bootstrap/password", nil)
+	req.Header.Set("Authorization", "Bearer reset-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestAuthMiddleware_NoPrincipalOnUnauth verifies that on a public endpoint
+// (skipped by the middleware), no Principal is injected into context.
+// Public endpoints do not authenticate — callers on public endpoints get
+// (nil, false) from FromContext, consistent with Kratos selector style.
+func TestAuthMiddleware_NoPrincipalOnUnauth(t *testing.T) {
+	verifier := &mockVerifier{err: fmt.Errorf("must not be called")}
+	handler := AuthMiddleware(verifier, []string{"/public/path"})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, ok := FromContext(r.Context())
+			assert.False(t, ok, "public endpoint must not have Principal in context")
+			assert.Nil(t, p)
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/public/path", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestRequireRole_ReadsPrincipalFromContext verifies that RequireRole resolves
+// roles exclusively from the Principal (T6: Claims fallback removed).
+func TestRequireRole_ReadsPrincipalFromContext(t *testing.T) {
+	handler := RequireRole(nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Inject Principal only — no Claims needed after T6.
+	ctx := WithPrincipal(req.Context(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "u1",
+		Roles:   []string{"admin", "user"},
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 // --- matchPathTemplate unit tests ---

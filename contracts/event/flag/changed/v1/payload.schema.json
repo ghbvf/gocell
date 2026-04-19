@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.flag.changed.v1.payload",
+  "type": "object",
+  "required": ["eventId", "action", "key", "enabled", "version", "occurredAt"],
+  "properties": {
+    "eventId":    { "type": "string", "description": "UUID for idempotency" },
+    "action":     { "type": "string", "enum": ["created", "updated", "toggled", "deleted"] },
+    "key":        { "type": "string" },
+    "enabled":    { "type": "boolean" },
+    "version":    { "type": "integer", "minimum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

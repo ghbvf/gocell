@@ -15,7 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,7 +72,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// Simulate the auth middleware having populated the caller's subject in ctx.
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(ctxkeys.WithSubject(context.Background(), "usr-1"))
+		WithContext(auth.TestContext("usr-1", nil))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }

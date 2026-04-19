@@ -45,11 +45,11 @@ import (
 var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
 
 // e2eIssuer is used by the login service.
-// WithDefaultAudience("gocell") must match the e2eVerifier's WithExpectedAudiences("gocell")
-// so that VerifyIntent passes audience validation.
+// WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
+// WithExpectedAudiences("gocell") so that VerifyIntent passes audience validation.
 var e2eIssuer = func() *auth.JWTIssuer {
 	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-access-core", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
 	}

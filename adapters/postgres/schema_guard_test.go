@@ -41,9 +41,9 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	fsys := MigrationsFS()
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
-	// Currently 6 migrations (001-006).
-	assert.Equal(t, int64(6), v,
-		"expected version should be exactly 6 (current migration count)")
+	// Currently 9 migrations (001-009).
+	assert.Equal(t, int64(9), v,
+		"expected version should be exactly 9 (current migration count)")
 }
 
 func TestExpectedVersion_SyntheticFS(t *testing.T) {

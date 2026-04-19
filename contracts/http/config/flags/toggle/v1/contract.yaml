@@ -1,0 +1,17 @@
+id: http.config.flags.toggle.v1
+kind: http
+ownerCell: config-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: config-core
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/flags/{key}/toggle
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

@@ -55,10 +55,10 @@ func NewBaseCell(meta CellMetadata) *BaseCell {
 	return &BaseCell{meta: meta}
 }
 
-func (b *BaseCell) ID() string             { return b.meta.ID }
-func (b *BaseCell) Type() CellType         { return b.meta.Type }
+func (b *BaseCell) ID() string              { return b.meta.ID }
+func (b *BaseCell) Type() CellType          { return b.meta.Type }
 func (b *BaseCell) ConsistencyLevel() Level { return b.meta.ConsistencyLevel }
-func (b *BaseCell) Metadata() CellMetadata { return b.meta }
+func (b *BaseCell) Metadata() CellMetadata  { return b.meta }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {
@@ -216,7 +216,7 @@ func NewBaseSlice(id, cellID string, level Level) *BaseSlice {
 	}
 }
 
-func (s *BaseSlice) ID() string             { return s.id }
+func (s *BaseSlice) ID() string              { return s.id }
 func (s *BaseSlice) BelongsToCell() string   { return s.cellID }
 func (s *BaseSlice) ConsistencyLevel() Level { return s.level }
 
@@ -282,11 +282,11 @@ func NewBaseContract(id string, kind ContractKind, owner string, level Level) *B
 	}
 }
 
-func (c *BaseContract) ID() string               { return c.id }
-func (c *BaseContract) Kind() ContractKind        { return c.kind }
-func (c *BaseContract) OwnerCell() string          { return c.owner }
-func (c *BaseContract) ConsistencyLevel() Level   { return c.level }
-func (c *BaseContract) Lifecycle() Lifecycle       { return c.lc }
+func (c *BaseContract) ID() string              { return c.id }
+func (c *BaseContract) Kind() ContractKind      { return c.kind }
+func (c *BaseContract) OwnerCell() string       { return c.owner }
+func (c *BaseContract) ConsistencyLevel() Level { return c.level }
+func (c *BaseContract) Lifecycle() Lifecycle    { return c.lc }
 
 // SetLifecycle updates the governance lifecycle state of the contract.
 func (c *BaseContract) SetLifecycle(lc Lifecycle) { c.lc = lc }

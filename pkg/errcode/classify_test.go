@@ -331,3 +331,83 @@ func TestIsExpected4xx_ErrAuthKeyMissing_IsNotExpected4xx(t *testing.T) {
 	assert.False(t, IsExpected4xx(err),
 		"ErrAuthKeyMissing (500/infra) must NOT be in expected4xxCodes whitelist")
 }
+
+// TestNewAuth verifies that NewAuth creates an *Error with CategoryAuth, the
+// supplied code and message, and a nil cause.
+func TestNewAuth(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    Code
+		message string
+	}{
+		{
+			name:    "basic auth error",
+			code:    "ERR_FOO",
+			message: "msg",
+		},
+		{
+			name:    "reuse detection signal",
+			code:    ErrAuthRefreshTokenReuse,
+			message: "refresh token reuse detected",
+		},
+		{
+			name:    "unauthorized",
+			code:    ErrAuthUnauthorized,
+			message: "unauthorized access",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewAuth(tt.code, tt.message)
+			assert.Equal(t, tt.code, err.Code)
+			assert.Equal(t, tt.message, err.Message)
+			assert.Equal(t, CategoryAuth, err.Category)
+			assert.Nil(t, err.Cause, "NewAuth must have nil cause")
+			// CategoryAuth is not infra (fail-closed check).
+			assert.False(t, IsInfraError(err), "CategoryAuth must not be classified as infra")
+		})
+	}
+}
+
+// TestWrapAuth verifies that WrapAuth creates an *Error with CategoryAuth that
+// wraps the supplied cause and exposes it via errors.Is / errors.Unwrap.
+func TestWrapAuth(t *testing.T) {
+	baseErr := errors.New("underlying auth failure")
+
+	tests := []struct {
+		name    string
+		code    Code
+		message string
+		cause   error
+	}{
+		{
+			name:    "wraps base error",
+			code:    "ERR_FOO",
+			message: "msg",
+			cause:   baseErr,
+		},
+		{
+			name:    "reuse detection with cause",
+			code:    ErrAuthRefreshTokenReuse,
+			message: "token reuse: RFC 6749 §10.4",
+			cause:   errors.New("duplicate jti"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := WrapAuth(tt.code, tt.message, tt.cause)
+			assert.Equal(t, tt.code, wrapped.Code)
+			assert.Equal(t, tt.message, wrapped.Message)
+			assert.Equal(t, CategoryAuth, wrapped.Category)
+			assert.Equal(t, tt.cause, wrapped.Cause, "Cause field must be preserved")
+			assert.True(t, errors.Is(wrapped, tt.cause),
+				"errors.Is must traverse Cause via Unwrap")
+			assert.Equal(t, tt.cause, errors.Unwrap(wrapped),
+				"errors.Unwrap must return the direct cause")
+			// CategoryAuth is not infra.
+			assert.False(t, IsInfraError(wrapped), "CategoryAuth must not be classified as infra")
+		})
+	}
+}

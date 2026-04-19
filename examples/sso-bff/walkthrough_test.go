@@ -164,7 +164,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	require.NoError(t, err)
 
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-test", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
 	jwtVerifier, err := auth.NewJWTVerifier(keySet,

@@ -787,9 +787,9 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 
 	var gotSubject string
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		claims, ok := auth.ClaimsFrom(req.Context())
-		assert.True(t, ok, "claims must be in context")
-		gotSubject = claims.Subject
+		p, ok := auth.FromContext(req.Context())
+		assert.True(t, ok, "principal must be in context")
+		gotSubject = p.Subject
 		w.WriteHeader(http.StatusOK)
 	}))
 

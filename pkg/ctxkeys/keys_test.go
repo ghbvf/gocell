@@ -152,24 +152,6 @@ func TestRealIPRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSubjectRoundTrip(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{name: "user id", value: "user-42"},
-		{name: "empty string", value: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := WithSubject(context.Background(), tt.value)
-			got, ok := SubjectFrom(ctx)
-			assert.True(t, ok)
-			assert.Equal(t, tt.value, got)
-		})
-	}
-}
-
 func TestFromMissingKey(t *testing.T) {
 	ctx := context.Background()
 
@@ -185,7 +167,6 @@ func TestFromMissingKey(t *testing.T) {
 		{name: "SpanID missing", fn: SpanIDFrom},
 		{name: "RequestID missing", fn: RequestIDFrom},
 		{name: "RealIP missing", fn: RealIPFrom},
-		{name: "Subject missing", fn: SubjectFrom},
 	}
 
 	for _, tt := range tests {
@@ -207,7 +188,6 @@ func TestMultipleKeysInSameContext(t *testing.T) {
 	ctx = WithSpanID(ctx, "span-xyz")
 	ctx = WithRequestID(ctx, "req-001")
 	ctx = WithRealIP(ctx, "10.0.0.1")
-	ctx = WithSubject(ctx, "admin")
 
 	cellID, ok := CellIDFrom(ctx)
 	assert.True(t, ok)
@@ -240,8 +220,4 @@ func TestMultipleKeysInSameContext(t *testing.T) {
 	realIP, ok := RealIPFrom(ctx)
 	assert.True(t, ok)
 	assert.Equal(t, "10.0.0.1", realIP)
-
-	subject, ok := SubjectFrom(ctx)
-	assert.True(t, ok)
-	assert.Equal(t, "admin", subject)
 }

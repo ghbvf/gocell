@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.create.v1.request",
+  "type": "object",
+  "required": ["key"],
+  "properties": {
+    "key": { "type": "string", "minLength": 1 },
+    "enabled": { "type": "boolean" },
+    "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "description": { "type": "string" }
+  },
+  "additionalProperties": false
+}

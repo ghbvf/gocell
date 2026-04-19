@@ -277,9 +277,13 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthTokenExpired:       http.StatusUnauthorized,
 	errcode.ErrAuthLoginFailed:        http.StatusUnauthorized,
 	errcode.ErrAuthRefreshFailed:      http.StatusUnauthorized,
-	errcode.ErrAuthRefreshTokenReuse:  http.StatusUnauthorized,
+	errcode.ErrAuthRefreshTokenReuse:  http.StatusUnauthorized, //nolint:staticcheck // retained for sessionrefresh.service; removed in F2 migration PR
 	errcode.ErrAuthInvalidToken:       http.StatusUnauthorized,
 	errcode.ErrAuthInvalidTokenIntent: http.StatusUnauthorized,
+	errcode.ErrRefreshTokenNotFound:   http.StatusUnauthorized,
+	errcode.ErrRefreshTokenExpired:    http.StatusUnauthorized,
+	errcode.ErrRefreshTokenRevoked:    http.StatusUnauthorized,
+	errcode.ErrRefreshTokenReused:     http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
 	errcode.ErrAuthForbidden:             http.StatusForbidden,
@@ -322,6 +326,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrArchiveMarshal:         http.StatusInternalServerError,
 	errcode.ErrAuditRepoQuery:         http.StatusInternalServerError,
 	errcode.ErrConfigRepoQuery:        http.StatusInternalServerError,
+	errcode.ErrFlagRepoQuery:          http.StatusInternalServerError,
 	errcode.ErrAuthKeyMissing:         http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStarted:       http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStopped:       http.StatusInternalServerError,

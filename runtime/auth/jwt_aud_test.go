@@ -243,13 +243,14 @@ func decodeTokenAudience(t *testing.T, tokenStr string) []string {
 	return parseAudience(mc["aud"])
 }
 
-// TestJWTIssuer_WithDefaultAudience_UsedWhenOptsEmpty verifies that when the
-// issuer is constructed with WithDefaultAudience and Issue is called with an
-// empty IssueOptions.Audience, the default audience is written into the token.
-func TestJWTIssuer_WithDefaultAudience_UsedWhenOptsEmpty(t *testing.T) {
+// TestJWTIssuer_WithIssuerAudiencesFromSlice_UsedWhenOptsEmpty verifies that
+// when the issuer is constructed with WithIssuerAudiencesFromSlice (Registry
+// path) and Issue is called with an empty IssueOptions.Audience, the default
+// audience is written into the token.
+func TestJWTIssuer_WithIssuerAudiencesFromSlice_UsedWhenOptsEmpty(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-		WithDefaultAudience("gocell"),
+		WithIssuerAudiencesFromSlice([]string{"gocell"}),
 	)
 	require.NoError(t, err)
 
@@ -261,12 +262,12 @@ func TestJWTIssuer_WithDefaultAudience_UsedWhenOptsEmpty(t *testing.T) {
 		"default audience must be written when IssueOptions.Audience is nil")
 }
 
-// TestJWTIssuer_WithDefaultAudience_OverriddenByIssueOpts verifies that when
-// IssueOptions.Audience is non-nil, it takes precedence over the default audience.
-func TestJWTIssuer_WithDefaultAudience_OverriddenByIssueOpts(t *testing.T) {
+// TestJWTIssuer_WithIssuerAudiencesFromSlice_OverriddenByIssueOpts verifies that
+// IssueOptions.Audience takes precedence over the default audience from Registry.
+func TestJWTIssuer_WithIssuerAudiencesFromSlice_OverriddenByIssueOpts(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-		WithDefaultAudience("gocell"),
+		WithIssuerAudiencesFromSlice([]string{"gocell"}),
 	)
 	require.NoError(t, err)
 
@@ -275,41 +276,22 @@ func TestJWTIssuer_WithDefaultAudience_OverriddenByIssueOpts(t *testing.T) {
 
 	aud := decodeTokenAudience(t, tok)
 	assert.Equal(t, []string{"other"}, aud,
-		"IssueOptions.Audience must override the default audience")
+		"IssueOptions.Audience must override the default audience from Registry")
 }
 
-// TestJWTIssuer_DefaultAudience_ReturnsConfiguredValue verifies the DefaultAudience
-// accessor: returns a copy of the configured slice; nil when not configured;
-// mutating the returned slice does not affect future calls (copy semantics).
-func TestJWTIssuer_DefaultAudience_ReturnsConfiguredValue(t *testing.T) {
+// TestJWTIssuer_WithIssuerAudiencesFromSlice_MultipleAudiences verifies that
+// multiple audiences from Registry are all written when IssueOptions.Audience is nil.
+func TestJWTIssuer_WithIssuerAudiencesFromSlice_MultipleAudiences(t *testing.T) {
 	ks := mustTestKeySet(t)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+		WithIssuerAudiencesFromSlice([]string{"gocell", "api-gateway"}),
+	)
+	require.NoError(t, err)
 
-	t.Run("returns configured value", func(t *testing.T) {
-		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-			WithDefaultAudience("gocell", "api-gateway"),
-		)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"gocell", "api-gateway"}, issuer.DefaultAudience())
-	})
+	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
+	require.NoError(t, err)
 
-	t.Run("returns nil when not configured", func(t *testing.T) {
-		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
-		require.NoError(t, err)
-		assert.Nil(t, issuer.DefaultAudience(),
-			"DefaultAudience must return nil when WithDefaultAudience was not called")
-	})
-
-	t.Run("mutating returned slice does not affect next call", func(t *testing.T) {
-		issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-			WithDefaultAudience("gocell"),
-		)
-		require.NoError(t, err)
-
-		got := issuer.DefaultAudience()
-		got[0] = "mutated"
-
-		// Second call must return original value, proving copy semantics.
-		assert.Equal(t, []string{"gocell"}, issuer.DefaultAudience(),
-			"DefaultAudience must return an independent copy each call")
-	})
+	aud := decodeTokenAudience(t, tok)
+	assert.Equal(t, []string{"gocell", "api-gateway"}, aud,
+		"all configured audiences must appear in issued token")
 }

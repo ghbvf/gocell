@@ -3,7 +3,6 @@ package auth
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -45,13 +44,22 @@ func Secured(h http.HandlerFunc, policy Policy) http.HandlerFunc {
 	}
 }
 
-// Authenticated returns a Policy that requires an authenticated subject
-// (any non-empty subject in context). Use for endpoints that only need
-// to verify a user is logged in, regardless of role.
+// Authenticated returns a Policy that requires an authenticated Principal in
+// context. Use for endpoints that only need to verify a user is logged in,
+// regardless of role. Returns ErrAuthUnauthorized when no Principal is present
+// or when the Principal is a PrincipalUser with an empty Subject (defence-in-depth
+// against malformed JWT tokens that slip past the primary authenticator).
 func Authenticated() Policy {
 	return func(r *http.Request) error {
-		if subject, ok := ctxkeys.SubjectFrom(r.Context()); !ok || subject == "" {
+		p, ok := FromContext(r.Context())
+		if !ok {
 			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		}
+		// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty
+		// Subject. PrincipalService is always ServiceNameInternal (non-empty);
+		// PrincipalAnonymous Subject is intentionally empty by design.
+		if p.Kind == PrincipalUser && p.Subject == "" {
+			return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
 		}
 		return nil
 	}

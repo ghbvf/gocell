@@ -59,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-dev", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		logger.Error("failed to create JWT issuer", slog.Any("error", err))
 		os.Exit(1)

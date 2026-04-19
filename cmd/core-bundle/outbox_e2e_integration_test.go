@@ -112,14 +112,16 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", pgConnStr)
 
-	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err :=
-		buildConfigCoreOpts(ctx, eb, kernelmetrics.NopProvider{})
+	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx,
+		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		eb, kernelmetrics.NopProvider{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
-	require.Equal(t, "postgres", cellAdapterMode, "cell adapter mode must be postgres")
+	require.NotNil(t, pgRes,
+		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
+	relayWorker := pgRes.Worker()
 	require.NotNil(t, relayWorker,
-		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil relay worker in PG mode")
-	require.NotNil(t, pgPool, "PG pool must be returned in postgres mode")
-	t.Cleanup(func() { _ = pgPool.Close(context.Background()) })
+		"A11 regression guard: ManagedResource MUST carry a non-nil relay worker in PG mode")
+	t.Cleanup(func() { _ = pgRes.Close() })
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
@@ -157,7 +159,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute, auth.WithDefaultAudience("gocell"))
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
