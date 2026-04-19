@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -404,6 +405,15 @@ func (s *Subscriber) subscribeOnce(
 	}
 
 	consumerTag := fmt.Sprintf("cg-%s-%s", queueName, topic)
+	// AMQP shortstr limit is 255 bytes. Truncate long tags to 250 bytes and
+	// append a 4-byte CRC32 hex suffix to preserve uniqueness.
+	const maxConsumerTagLen = 250
+	if len(consumerTag) > maxConsumerTagLen {
+		hash := fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(consumerTag)))
+		consumerTag = consumerTag[:maxConsumerTagLen-9] + "-" + hash
+		slog.Warn("rabbitmq: consumerTag truncated to fit AMQP shortstr limit",
+			slog.String("consumer", consumerTag))
+	}
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {

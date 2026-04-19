@@ -69,6 +69,7 @@ type mockChannel struct {
 	autoCloseConfirm bool
 
 	ackCalled   bool
+	ackCount    int64
 	ackTag      uint64
 	ackErr      error
 	nackCalled  bool
@@ -183,6 +184,7 @@ func (m *mockChannel) Ack(tag uint64, multiple bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ackCalled = true
+	m.ackCount++
 	m.ackTag = tag
 	return m.ackErr
 }
