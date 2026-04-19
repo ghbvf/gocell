@@ -213,6 +213,10 @@ var expected4xxCodes = map[Code]bool{
 	ErrAuthLoginFailed:        true,
 	ErrAuthRefreshFailed:      true,
 	ErrAuthKeyInvalid:         true,
+	ErrRefreshTokenNotFound:   true,
+	ErrRefreshTokenExpired:    true,
+	ErrRefreshTokenRevoked:    true,
+	ErrRefreshTokenReused:     true,
 	// ErrAuthKeyMissing intentionally omitted: codeToStatus maps it to HTTP 500
 	// (infrastructure misconfiguration). Including it here would cause
 	// AuthMiddleware to downgrade an infra fault to Warn, masking the outage.

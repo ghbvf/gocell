@@ -75,11 +75,14 @@ const (
 	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
-	ErrAuthRefreshTokenReuse    Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
-	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
-	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
-	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
-	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
+	// Deprecated: use ErrRefreshTokenReused (CategoryAuth) via runtime/auth/refresh.ErrTokenReused.
+	// This code is retained only for sessionrefresh.service's current implementation;
+	// the F2 refresh store PR will migrate callers and remove this constant.
+	ErrAuthRefreshTokenReuse Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
+	ErrAuthInvalidToken      Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthRBACInvalidInput  Code = "ERR_AUTH_RBAC_INVALID_INPUT"
+	ErrAuthKeyMissing        Code = "ERR_AUTH_KEY_MISSING"
+	ErrAuthSelfDelete        Code = "ERR_AUTH_SELF_DELETE"
 	// ErrAuthPasswordResetRequired signals that the authenticated subject must
 	// change their password before accessing business endpoints. The middleware
 	// enforces this when the JWT claim password_reset_required is true.

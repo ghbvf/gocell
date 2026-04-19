@@ -37,6 +37,10 @@ CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires
     ON refresh_tokens (expires_at) WHERE revoked_at IS NULL;
 
 -- +goose Down
+-- WARNING: Irreversible in production — DROP TABLE destroys all active refresh sessions.
+-- Running this migration down forces logout for ALL users (tokens are non-recoverable
+-- once the table is dropped). Coordinate with user communication / maintenance window
+-- before executing in any environment that has real traffic.
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_session;
 DROP INDEX IF EXISTS idx_refresh_tokens_obsolete_active;

@@ -91,6 +91,12 @@ type store struct {
 //   - unit tests of services that depend on refresh.Store
 //   - the storetest contract suite oracle
 func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) refresh.Store {
+	if clock == nil {
+		panic("memstore.New: clock must not be nil; use storetest.NewFakeClock or a real clock wrapper")
+	}
+	if policy.MaxAge <= 0 {
+		panic("memstore.New: policy.MaxAge must be positive (zero value of Policy is invalid)")
+	}
 	if randReader == nil {
 		randReader = rand.Reader
 	}
@@ -244,6 +250,11 @@ func (s *store) rotateObsolete(rec *tokenRecord, presentedObsolete string, now t
 	// ref: dexidp/dex server/refreshhandlers.go AllowedToReuse (reuseInterval
 	//      enforced at the DB CAS level; zero-delta never occurs in practice).
 	elapsed := now.Sub(rec.lastUsed)
+	// NOTE for PG store implementers: the SQL CAS (plan C5) does NOT include this
+	// `elapsed > 0` lower bound. It is a memstore-only workaround for concurrent
+	// tests with a deterministic FakeClock where two goroutines observe identical
+	// Now() returns. PG implementations must use `elapsed <= ReuseInterval` only,
+	// per plan §F2 C5.
 	if elapsed > 0 && elapsed <= s.policy.ReuseInterval {
 		// Idempotent grace retry: return current token copy, no new rotate.
 		return rec.toToken(), nil

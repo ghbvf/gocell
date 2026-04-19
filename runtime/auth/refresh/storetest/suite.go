@@ -218,7 +218,7 @@ func runT5ReuseDetection(t *testing.T, factory Factory) {
 	issued := mustIssue(t, store, "sess-5", "user-5")
 	obsoleteID := issued.ID
 
-	mustRotate(t, store, issued.ID)
+	rotated := mustRotate(t, store, issued.ID)
 
 	clock.Advance(10 * time.Second) // > 2s — beyond ReuseInterval
 
@@ -231,6 +231,12 @@ func runT5ReuseDetection(t *testing.T, factory Factory) {
 	_, err = store.Rotate(ctx, obsoleteID)
 	if err == nil {
 		t.Error("Rotate after cascade revoke: expected an error, got nil")
+	}
+
+	// Verify cascade revoke also invalidates the current-generation token
+	// (plan §F2 C1: reuse detection triggers Revoke(sessionID) atomically).
+	if _, err := store.Rotate(ctx, rotated.ID); !errors.Is(err, refresh.ErrTokenRevoked) {
+		t.Errorf("Rotate current after cascade revoke: want ErrTokenRevoked, got %v", err)
 	}
 }
 
