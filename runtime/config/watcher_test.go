@@ -55,7 +55,7 @@ func TestWatcher_OnChange(t *testing.T) {
 
 	w, err := NewWatcher(file)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	var lastEvent WatchEvent
@@ -85,11 +85,11 @@ func TestWatcher_Close(t *testing.T) {
 	require.NoError(t, err)
 
 	w.Start()
-	err = w.Close()
+	err = w.Close(context.Background())
 	assert.NoError(t, err)
 
 	// Double close should not panic.
-	err = w.Close()
+	err = w.Close(context.Background())
 	assert.NoError(t, err)
 }
 
@@ -105,7 +105,7 @@ func TestWatcher_AtomicReplace_RenameCreate(t *testing.T) {
 
 	w, err := NewWatcher(file)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -127,7 +127,7 @@ func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
 
 	w, err := NewWatcher(file)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -150,7 +150,7 @@ func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
 
 	w, err := NewWatcher(file)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -177,7 +177,7 @@ func TestWatcher_StartWithContext(t *testing.T) {
 	cancel()
 
 	assert.Eventually(t, func() bool {
-		_ = w.Close()
+		_ = w.Close(context.Background())
 		return true
 	}, 2*time.Second, 50*time.Millisecond)
 }
@@ -196,7 +196,7 @@ func TestWatcher_HealthLifecycle(t *testing.T) {
 	waitReady(t, w)
 
 	require.NoError(t, w.Health(), "watcher must be healthy after the loop starts")
-	require.NoError(t, w.Close())
+	require.NoError(t, w.Close(context.Background()))
 	require.Error(t, w.Health(), "watcher must be unhealthy after Close")
 }
 
@@ -212,12 +212,12 @@ func TestNewWatcher_WithOptions_BackwardCompatible(t *testing.T) {
 	// No options — must still work.
 	w1, err := NewWatcher(file)
 	require.NoError(t, err)
-	require.NoError(t, w1.Close())
+	require.NoError(t, w1.Close(context.Background()))
 
 	// With options — must compile and work.
 	w2, err := NewWatcher(file, WithDebounce(0), WithMaxDebounce(0))
 	require.NoError(t, err)
-	require.NoError(t, w2.Close())
+	require.NoError(t, w2.Close(context.Background()))
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 
 	w, err := NewWatcher(file, WithDebounce(200*time.Millisecond), WithMaxDebounce(2*time.Second))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -265,7 +265,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 		WithMaxDebounce(400*time.Millisecond),
 	)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -306,7 +306,7 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 
 	w, err := NewWatcher(file, WithDebounce(0))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -339,7 +339,7 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 
 	w, err := NewWatcher(link, WithDebounce(50*time.Millisecond))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	var gotPivot atomic.Int32
@@ -382,7 +382,7 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 
 	w, err := NewWatcher(configLink, WithDebounce(50*time.Millisecond))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
@@ -409,7 +409,7 @@ func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
 
 	w, err := NewWatcher(file, WithDebounce(50*time.Millisecond))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	var called atomic.Int32
 	var gotPivot atomic.Int32
@@ -442,7 +442,7 @@ func TestWatcher_WithKeyFilter_StoresPrefixes(t *testing.T) {
 
 	w, err := NewWatcher(file, WithKeyFilter("server.", "db."))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	filters := w.KeyFilters()
 	assert.Equal(t, []string{"db.", "server."}, filters, "KeyFilters should return sorted prefixes")
@@ -455,7 +455,7 @@ func TestWatcher_WithKeyFilter_EmptyDefault(t *testing.T) {
 
 	w, err := NewWatcher(file)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	assert.Nil(t, w.KeyFilters(), "default should have no key filters")
 }
@@ -479,7 +479,7 @@ func TestWatcher_WithMetrics_RecordsEvents(t *testing.T) {
 	spy := &spyCollector{}
 	w, err := NewWatcher(file, WithDebounce(0), WithMetrics(spy))
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	w.OnChange(func(_ WatchEvent) {})
 	w.Start()
@@ -504,7 +504,7 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 		WithMetrics(spy),
 	)
 	require.NoError(t, err)
-	defer func() { _ = w.Close() }()
+	defer func() { _ = w.Close(context.Background()) }()
 
 	w.OnChange(func(_ WatchEvent) {})
 	w.Start()
@@ -557,7 +557,7 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 
 	// Close should wait for the in-flight callback.
 	begin := time.Now()
-	require.NoError(t, w.Close())
+	require.NoError(t, w.Close(context.Background()))
 	elapsed := time.Since(begin)
 
 	assert.GreaterOrEqual(t, elapsed, 300*time.Millisecond, "Close should wait for in-flight callback")
@@ -569,7 +569,11 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(200*time.Millisecond))
+	// WithDrainTimeout is no longer used by Close(ctx) directly. The caller
+	// controls the budget via the ctx deadline. This test passes a 200ms budget
+	// to the Close call, which should return promptly even though the callback
+	// sleeps for 10 seconds.
+	w, err := NewWatcher(file, WithDebounce(0))
 	require.NoError(t, err)
 
 	started := make(chan struct{})
@@ -588,11 +592,15 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 		t.Fatal("callback did not start")
 	}
 
+	// Caller supplies 200ms budget — Close must return before the 10s callback finishes.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer drainCancel()
+
 	begin := time.Now()
-	_ = w.Close()
+	_ = w.Close(drainCtx)
 	elapsed := time.Since(begin)
 
-	assert.Less(t, elapsed, 1*time.Second, "drain timeout should prevent hanging")
+	assert.Less(t, elapsed, 1*time.Second, "caller-supplied budget should prevent hanging")
 }
 
 func TestWatcher_Close_NoInFlight_Immediate(t *testing.T) {
@@ -606,7 +614,7 @@ func TestWatcher_Close_NoInFlight_Immediate(t *testing.T) {
 	waitReady(t, w)
 
 	begin := time.Now()
-	require.NoError(t, w.Close())
+	require.NoError(t, w.Close(context.Background()))
 	elapsed := time.Since(begin)
 
 	assert.Less(t, elapsed, 500*time.Millisecond, "close without in-flight should be immediate")
@@ -649,7 +657,7 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 	assert.Greater(t, spy.events.Load(), int32(0))
 
 	// Clean close.
-	require.NoError(t, w.Close())
+	require.NoError(t, w.Close(context.Background()))
 }
 
 // TestWatcher_Close_DuringDebounceTimer verifies that Close() during an active
@@ -674,7 +682,7 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	// This exercises the race window between close(done), timer.Stop(),
 	// and the timer goroutine potentially firing.
 	time.Sleep(10 * time.Millisecond) // tiny delay to let event reach the loop
-	require.NoError(t, w.Close(), "Close during active debounce timer must not error")
+	require.NoError(t, w.Close(context.Background()), "Close(ctx) during active debounce timer must not error")
 }
 
 func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
@@ -703,19 +711,19 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 
 	// Close after a short delay.
 	time.Sleep(50 * time.Millisecond)
-	_ = w.Close()
+	_ = w.Close(context.Background())
 
 	wg.Wait()
 	// If this test passes with -race, there are no data races.
 }
 
 // ---------------------------------------------------------------------------
-// T13: Watcher.CloseCtx(ctx) — context-aware shutdown budget
+// T13: Watcher.Close(ctx) — context-aware shutdown budget
 // ---------------------------------------------------------------------------
 
-// TestWatcher_CloseCtx_AcceptsCtx verifies that CloseCtx exists and returns
+// TestWatcher_Close_AcceptsCtx verifies that Close(ctx) returns
 // nil for a healthy watcher closed with ample budget.
-func TestWatcher_CloseCtx_AcceptsCtx(t *testing.T) {
+func TestWatcher_Close_AcceptsCtx(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
@@ -726,18 +734,18 @@ func TestWatcher_CloseCtx_AcceptsCtx(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err = w.CloseCtx(ctx)
-	assert.NoError(t, err, "CloseCtx with ample budget must return nil")
+	err = w.Close(ctx)
+	assert.NoError(t, err, "Close(ctx) with ample budget must return nil")
 }
 
-// TestWatcher_CloseCtx_RespectsCtxDeadline verifies that CloseCtx returns
+// TestWatcher_Close_RespectsCtxDeadline verifies that Close(ctx) returns
 // ctx.Err() when the budget is exceeded during the callback drain phase.
-func TestWatcher_CloseCtx_RespectsCtxDeadline(t *testing.T) {
+func TestWatcher_Close_RespectsCtxDeadline(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	// Create a watcher with a long drain timeout so Close() would block.
+	// Create a watcher with a long drain timeout (irrelevant — ctx wins).
 	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(10*time.Second))
 	require.NoError(t, err)
 	w.Start()
@@ -760,24 +768,24 @@ func TestWatcher_CloseCtx_RespectsCtxDeadline(t *testing.T) {
 		t.Fatal("callback did not start in time")
 	}
 
-	// CloseCtx with a short budget — should return promptly with ctx error.
+	// Close with a short budget — should return promptly with ctx error.
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer shortCancel()
 
 	start := time.Now()
-	err = w.CloseCtx(shortCtx)
+	err = w.Close(shortCtx)
 	elapsed := time.Since(start)
 
-	assert.Error(t, err, "CloseCtx must return error when ctx budget exceeded")
+	assert.Error(t, err, "Close(ctx) must return error when ctx budget exceeded")
 	assert.Less(t, elapsed, 200*time.Millisecond,
-		"CloseCtx must return within budget; got %s", elapsed)
+		"Close(ctx) must return within budget; got %s", elapsed)
 
 	close(callbackRelease) // unblock the callback goroutine
 }
 
-// TestWatcher_CloseCtx_Idempotent verifies that a second CloseCtx call returns
-// nil immediately.
-func TestWatcher_CloseCtx_Idempotent(t *testing.T) {
+// TestWatcher_Close_Idempotent verifies that a second Close(ctx) call returns
+// nil immediately (closeOnce guard).
+func TestWatcher_Close_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
@@ -786,6 +794,6 @@ func TestWatcher_CloseCtx_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	assert.NoError(t, w.CloseCtx(ctx), "first CloseCtx must return nil")
-	assert.NoError(t, w.CloseCtx(ctx), "second CloseCtx must be no-op and return nil")
+	assert.NoError(t, w.Close(ctx), "first Close(ctx) must return nil")
+	assert.NoError(t, w.Close(ctx), "second Close(ctx) must be no-op and return nil")
 }
