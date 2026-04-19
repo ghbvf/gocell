@@ -68,7 +68,7 @@ type fakeVaultClient struct {
 // compile-time assertion: fakeVaultClient satisfies the private vaultClient interface.
 var _ vaultClient = (*fakeVaultClient)(nil)
 
-// Write handles transit/encrypt/{key} and transit/keys/{key}/rotate.
+// Write handles transit/encrypt/{key}, transit/decrypt/{key}, and transit/keys/{key}/rotate.
 func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[string]any) (map[string]any, error) {
 	if f.writeErr != nil {
 		return nil, f.writeErr
@@ -83,6 +83,19 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 		f.rotateCalls.Add(1)
 		f.latestVersion++
 		return map[string]any{}, nil
+
+	case strings.Contains(path, "/decrypt/"):
+		// Vault Transit decrypt is a POST (Write), not GET.
+		f.decryptCalls.Add(1)
+		cipherStr, ok := data["ciphertext"].(string)
+		if !ok {
+			return nil, fmt.Errorf("fake vault: decrypt: missing or non-string ciphertext field")
+		}
+		dek, err := f.unwrapDEK(cipherStr)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"plaintext": base64.StdEncoding.EncodeToString(dek)}, nil
 
 	default:
 		// Assume transit/encrypt/{key}
@@ -114,31 +127,15 @@ func (f *fakeVaultClient) Read(ctx context.Context, path string) (map[string]any
 
 	f.lastReadPath = path
 
-	switch {
-	case strings.HasSuffix(path, "/decrypt/"+extractKeyName(path)) ||
-		strings.Contains(path, "/decrypt/"):
-		// Handled in Write — should not reach Read for decrypt.
-		return nil, fmt.Errorf("fake vault: unexpected Read on decrypt path %q", path)
-	default:
-		// transit/decrypt/{key} is a POST (Write) in Vault.
-		// transit/keys/{key} is a GET (Read).
-		if strings.Contains(path, "/decrypt/") {
-			f.decryptCalls.Add(1)
-			cipherStr, ok := f.lastWriteData["ciphertext"].(string)
-			if !ok {
-				return nil, fmt.Errorf("fake vault: decrypt: missing ciphertext field")
-			}
-			dek, err := f.unwrapDEK(cipherStr)
-			if err != nil {
-				return nil, err
-			}
-			return map[string]any{"plaintext": base64.StdEncoding.EncodeToString(dek)}, nil
-		}
-		// Default: key metadata read.
-		return map[string]any{
-			"latest_version": f.latestVersion,
-		}, nil
+	// transit/keys/{key} is a GET (Read) for key metadata.
+	// transit/decrypt/{key} is a POST (Write) — should never arrive here.
+	if strings.Contains(path, "/decrypt/") {
+		return nil, fmt.Errorf("fake vault: unexpected Read on decrypt path %q (decrypt must use Write)", path)
 	}
+
+	return map[string]any{
+		"latest_version": f.latestVersion,
+	}, nil
 }
 
 // writeDEKDecrypt is called as a Write (POST) in real Vault; fakeVaultClient
@@ -164,15 +161,6 @@ func xorBytes(src, key []byte) []byte {
 		out[i] = src[i] ^ key[i]
 	}
 	return out
-}
-
-// extractKeyName returns the last path segment (key name) from a Vault path.
-func extractKeyName(path string) string {
-	parts := strings.Split(path, "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
 }
 
 // fakeWriteFunc allows per-test Write override without subclassing.
