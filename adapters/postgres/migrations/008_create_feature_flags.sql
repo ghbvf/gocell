@@ -1,3 +1,7 @@
+-- Migration 008: feature_flags table for config-core flag-write slice.
+-- Prerequisites: migrations 001-007 applied (no cross-table FK constraints;
+-- this is a standalone table owned by config-core).
+--
 -- +goose no transaction
 -- +goose Up
 CREATE TABLE IF NOT EXISTS feature_flags (
