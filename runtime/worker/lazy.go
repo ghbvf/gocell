@@ -9,7 +9,7 @@ import (
 // after it's already wired into a WorkerGroup. Used when a Worker is produced
 // during Bootstrap.Run after WithWorkers already captured this placeholder.
 //
-// ref: cmd/core-bundle/main.go::lazyBootstrapWorker — the hoisted source-of-truth.
+// ref: docs/plans/202604191515-auth-federated-whistle.md — S37 WORKER-LAZY-HOIST
 //
 // Thread safety: Set (writer) and Start/Stop (readers) synchronise via atomic.Pointer.
 // Semantics: nil delegate → Start/Stop are no-op success (preserves lazyBootstrapWorker

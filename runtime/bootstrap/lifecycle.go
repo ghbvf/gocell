@@ -150,6 +150,8 @@ func (lc *lifecycle) Start(ctx context.Context) error { //nolint:cyclop // state
 // All OnStop functions are called regardless of individual errors (best-effort).
 // Returns errors.Join of all OnStop errors.
 // Stop is idempotent: calling it when already stopped or stopping returns nil.
+// Stop is also safe to call after a partial Start failure (the internal
+// incomplete-start state); it completes the rollback of already-started hooks.
 func (lc *lifecycle) Stop(ctx context.Context) error {
 	lc.mu.Lock()
 	switch lc.state {

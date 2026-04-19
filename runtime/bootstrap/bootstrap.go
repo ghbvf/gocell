@@ -594,7 +594,8 @@ func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
 // WithLifecycle registers a hook-registration callback invoked during New()
 // (after all options are applied, as part of lifecycle initialisation). Use
 // for composition-root Hook registration without needing a Bootstrap reference.
-// Multiple WithLifecycle options accumulate in registration order.
+// Multiple WithLifecycle options and direct b.Lifecycle().Append() calls
+// accumulate in the order they are applied.
 func WithLifecycle(fn func(lc Lifecycle)) Option {
 	return func(b *Bootstrap) {
 		if fn != nil {
@@ -701,7 +702,9 @@ func New(opts ...Option) *Bootstrap {
 }
 
 // Lifecycle returns the bootstrap's Lifecycle for programmatic Hook
-// registration. Must be called after New() returns and before Run() begins.
+// registration. Must be called after New() returns and before Run() begins;
+// not goroutine-safe concurrent with Run(). Hooks registered here are
+// appended to those from WithLifecycle options.
 func (b *Bootstrap) Lifecycle() Lifecycle {
 	return b.lifecycle
 }

@@ -5,6 +5,7 @@ package initialadmin
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"os"
 	"time"
@@ -66,9 +67,18 @@ func Sweep(ctx context.Context, cfg SweepConfig) error {
 			return nil
 		}
 		// Unreadable file or parse error: log and continue startup (don't delete).
+		// Attach failure_kind so operators can distinguish permission errors from
+		// other IO errors without changing the returned errcode.
+		var failureKind string
+		if errors.Is(err, fs.ErrPermission) {
+			failureKind = "permission"
+		} else {
+			failureKind = "io"
+		}
 		cfg.Logger.ErrorContext(ctx, "sweep: cannot read credential file; retaining",
 			slog.String("event", "initial_admin_credential_sweep_error"),
 			slog.String("file_path", credPath),
+			slog.String("failure_kind", failureKind),
 			slog.Any("error", errcode.WrapInfra(errcode.ErrInternal, "sweep: read cred file", err)),
 		)
 		return nil

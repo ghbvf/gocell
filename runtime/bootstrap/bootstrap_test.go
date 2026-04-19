@@ -3840,11 +3840,10 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
-	ln.Close()
 
 	b := New(
 		WithAssembly(asm),
-		WithHTTPAddr(addr),
+		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3881,12 +3880,10 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 	require.NoError(t, asm.Register(newTestCell("lc-cell-2")))
 
 	ln := newLocalListener(t)
-	addr := ln.Addr().String()
-	ln.Close()
 
 	b := New(
 		WithAssembly(asm),
-		WithHTTPAddr(addr),
+		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
