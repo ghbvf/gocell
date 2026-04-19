@@ -122,23 +122,6 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	assert.Nil(t, relay, "relay must be nil on schema mismatch (error path)")
 }
 
-// writeFreshCredFile writes a minimal credential file with expires_at set to
-// ttl in the future. Mimics the format produced by initialadmin.formatPayload
-// without importing the internal package. The file is written with mode 0o600.
-func writeFreshCredFile(t *testing.T, path string, ttl time.Duration) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	expiresAt := time.Now().Add(ttl).UTC()
-	content := fmt.Sprintf(
-		"# GoCell initial admin credential\n"+
-			"username=admin\n"+
-			"password=orphan-secret\n"+
-			"expires_at=%d\n",
-		expiresAt.Unix(),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-}
-
 // writeExpiredCredFile writes a minimal credential file with expires_at set to
 // one hour in the past. Mimics the format produced by initialadmin.formatPayload
 // without importing the internal package. The file is written with mode 0o600
@@ -168,6 +151,13 @@ func writeExpiredCredFile(t *testing.T, path string) {
 // (before EnsureAdmin) and removes the expired file — independently of EnsureAdmin's
 // decision path. The adminExists==true causal guarantee is covered at unit level
 // by sweep_test.go::TestSweep_AdminExistsDoesNotSkip (pure Sweep function).
+//
+// Note: The companion TestIntegration_AdminExists_FreshOrphan was removed:
+// in-memory repositories reset per BuildApp call, making adminExists==true
+// impossible to stage at the integration level. The fresh-orphan causal
+// chain (Sweep returns Cleaner → sink) is strictly covered by the unit
+// test in cell_initialadmin_test.go::TestInit_BootstrapAdminExists_
+// FreshOrphanFile_SweepCleanerRegistered.
 //
 // Execution order in bootstrap.Run:
 //
@@ -233,66 +223,4 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 			break
 		}
 	}
-}
-
-// TestIntegration_AdminExists_FreshOrphan verifies P1-16 runtime-window fix:
-// when a fresh (not-yet-expired) orphan credential file is present at startup,
-// Sweep retains the file and the bootstrap sequence proceeds without error.
-//
-// NOTE on adminExists==true coverage: run() uses an in-memory DB that resets
-// on each BuildApp call, so EnsureAdmin will create a new admin (adminExists==false
-// path). The adminExists==true + sweepCleaner path is covered at unit level in
-// cells/access-core/cell_initialadmin_test.go::TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered.
-// This integration test validates that startup does NOT fail when a fresh orphan
-// file exists and that the file is retained for runtime cleanup.
-//
-// Execution order:
-//
-//	Step 3-4: Cell.Init → runInitialAdminBootstrap:
-//	          1. Sweep finds fresh file → retains it, returns sweepCleaner
-//	          2. EnsureAdmin sees empty DB → creates admin, writes NEW cred file
-//	             (overwrites orphan via WriteCredentialFile atomic rename)
-//	          3. adminWorker wins over sweepCleaner (adminWorker != nil)
-//	Step 7:   TCP listen (may fail in sandbox — acceptable)
-func TestIntegration_AdminExists_FreshOrphan(t *testing.T) {
-	stateDir := t.TempDir()
-	credPath := filepath.Join(stateDir, "initial_admin_password")
-
-	// Pre-condition: write a fresh orphan credential file (expires_at = now + 30m).
-	// Simulates a prior run where the cleanup worker was never started.
-	writeFreshCredFile(t, credPath, 30*time.Minute)
-
-	// Confirm file exists and is in the future before bootstrap.
-	_, err := os.Stat(credPath)
-	require.NoError(t, err, "fresh orphan credential file must exist before bootstrap")
-
-	// Configure env for run().
-	t.Setenv("GOCELL_STATE_DIR", stateDir)
-	t.Setenv("GOCELL_JWT_ISSUER", "gocell-fresh-orphan-test")
-	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	runErr := run(ctx)
-
-	// Only context.Canceled, deadline-exceeded, EPERM, and listen failures are
-	// acceptable (sandbox may block TCP). The critical invariant is that a fresh
-	// orphan file does NOT cause "credential file already exists" or any other
-	// bootstrap error before TCP listen.
-	if runErr != nil {
-		acceptable := errors.Is(runErr, context.Canceled) ||
-			errors.Is(runErr, context.DeadlineExceeded) ||
-			errors.Is(runErr, syscall.EPERM) ||
-			isBindError(runErr)
-		if !acceptable {
-			t.Fatalf("P1-16 regression: startup failed with fresh orphan file present: %v", runErr)
-		}
-	}
-
-	// The credential file should exist (either the original orphan retained by
-	// Sweep, or overwritten by EnsureAdmin with a fresh one). Either way startup
-	// must not have failed due to the orphan's presence.
-	_, statErr := os.Stat(credPath)
-	assert.NoError(t, statErr, "P1-16: credential file must exist after bootstrap (retained or overwritten)")
 }
