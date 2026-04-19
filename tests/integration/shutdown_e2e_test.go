@@ -343,8 +343,12 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	// Publish a handful of messages.
 	require.NoError(t, publishMessages(context.Background(), pub, topic, 5), "publish messages before hard close")
 
-	// Wait briefly to allow at least some messages to be in-flight or consumed.
-	time.Sleep(100 * time.Millisecond)
+	// Wait until at least one message has been consumed before hard-stopping
+	// the broker, to ensure we have in-flight state to exercise.
+	require.Eventually(t, func() bool {
+		return consumed.Load() > 0
+	}, 5*time.Second, 50*time.Millisecond,
+		"at least one message should be consumed before broker stop")
 
 	// Hard-stop the broker container. This forcibly severs all AMQP connections
 	// without a clean AMQP close handshake, simulating a broker crash or OOM
