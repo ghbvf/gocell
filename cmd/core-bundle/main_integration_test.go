@@ -48,8 +48,8 @@ func setupPostgresForMain(t *testing.T) (string, func()) {
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMatched verifies that buildConfigCoreOpts
-// returns (mode=="postgres", non-nil opts, non-nil pool, nil error) when a real
-// PostgreSQL container is available and all migrations have been applied.
+// returns (non-nil ManagedResource, non-nil opts, nil error) when a real PostgreSQL
+// container is available and all migrations have been applied.
 func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -69,21 +69,20 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	mode, opts, gotPool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
-	assert.Equal(t, "postgres", mode, "mode must be 'postgres'")
+	require.NotNil(t, res, "ManagedResource must be non-nil on success")
 	assert.NotNil(t, opts, "opts must be non-nil")
-	require.NotNil(t, gotPool, "pool must be non-nil on success")
-	require.NotNil(t, relay, "relay worker must be non-nil on success (A11 wire guard)")
+	require.NotNil(t, res.Worker(), "relay worker must be non-nil on success (A11 wire guard)")
 
-	// Cleanup returned pool.
-	gotPool.Close()
+	// Close pool via ManagedResource so pool.Close() is called correctly.
+	require.NoError(t, res.Close())
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that buildConfigCoreOpts
-// returns an error (with schema guard message) and a nil pool (pool.Close() was
-// called inside) when the DB schema version does not match the binary.
+// returns an error (with schema guard message) and a nil ManagedResource when the
+// DB schema version does not match the binary.
 func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	dsn, cleanup := setupPostgresForMain(t)
 	defer cleanup()
@@ -110,16 +109,14 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	mode, opts, gotPool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
+	res, opts, err := buildConfigCoreOpts(ctx, discardPublisher{}, kernelmetrics.NopProvider{})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",
 		"error must mention schema guard")
-	assert.Equal(t, "postgres", mode, "mode is still returned on error")
 	assert.Nil(t, opts, "opts must be nil on schema mismatch")
-	// pool must be nil — main.go closes and zeroes pool before returning error.
-	assert.Nil(t, gotPool, "pool must be nil (was closed on schema mismatch)")
-	assert.Nil(t, relay, "relay must be nil on schema mismatch (error path)")
+	// ManagedResource must be nil — pool was closed inside buildConfigCoreOpts before returning error.
+	assert.Nil(t, res, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
 }
 
 // writeExpiredCredFile writes a minimal credential file with expires_at set to
