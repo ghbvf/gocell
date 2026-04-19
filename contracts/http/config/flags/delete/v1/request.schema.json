@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.delete.v1.request",
+  "description": "DELETE endpoint — no request body. Flag key is passed via path parameter.",
+  "type": "object",
+  "additionalProperties": false
+}
