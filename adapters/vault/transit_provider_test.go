@@ -466,7 +466,6 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	}
 
 	for _, tc := range transientCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeVaultClient{latestVersion: 1, writeErr: tc.vaultErr}
 			p := newTestProvider(fake)
@@ -505,7 +504,6 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	}
 
 	for _, tc := range permanentCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeVaultClient{latestVersion: 1, writeErr: tc.vaultErr}
 			p := newTestProvider(fake)
@@ -708,7 +706,6 @@ func TestIsTransientVaultError_ResponseError(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			respErr := &vaultapi.ResponseError{StatusCode: tc.statusCode}
 			got := isTransientVaultError(respErr)
@@ -770,7 +767,6 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := isTransientVaultError(tc.err)
 			if got != tc.wantTrans {
@@ -825,7 +821,6 @@ func TestParseVaultKeyID(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseVaultKeyID(tc.ciphertext)
 			if tc.wantErr {
@@ -859,11 +854,9 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// 8 goroutines concurrently encrypting.
-	for i := 0; i < encryptWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 20; j++ {
+	for range encryptWorkers {
+		wg.Go(func() {
+			for range 20 {
 				h, err := p.Current(ctx)
 				if err != nil {
 					return
@@ -875,17 +868,15 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 				// Encrypt may fail transiently during rotation — that is fine.
 				vh.Encrypt(ctx, []byte("payload"), []byte("aad")) //nolint:errcheck
 			}
-		}()
+		})
 	}
 
 	// 1 goroutine doing periodic rotations.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < rotations; i++ {
+	wg.Go(func() {
+		for range rotations {
 			p.Rotate(ctx) //nolint:errcheck
 		}
-	}()
+	})
 
 	wg.Wait()
 	// No race detector report = pass. The test itself needs -race to be meaningful.
