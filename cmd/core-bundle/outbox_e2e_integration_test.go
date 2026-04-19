@@ -119,7 +119,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NotNil(t, relayWorker,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil relay worker in PG mode")
 	require.NotNil(t, pgPool, "PG pool must be returned in postgres mode")
-	t.Cleanup(pgPool.Close)
+	t.Cleanup(func() { _ = pgPool.Close(context.Background()) })
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped

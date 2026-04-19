@@ -42,7 +42,7 @@ func setupPostgres(t *testing.T) (*Pool, func()) {
 	require.NoError(t, err, "failed to create pool")
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate container: %v", err)
 		}
@@ -80,8 +80,8 @@ func TestIntegration_Pool(t *testing.T) {
 		// Health() after Close() because pgxpool does not guarantee an error —
 		// just verify Close() itself doesn't panic.
 		assert.NotPanics(t, func() {
-			pool.Close()
-		}, "Close() should not panic")
+			_ = pool.Close(context.Background())
+		}, "Close(ctx) should not panic")
 	})
 }
 

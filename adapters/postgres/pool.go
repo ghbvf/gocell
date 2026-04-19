@@ -8,9 +8,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Compile-time assertion: Pool implements lifecycle.ContextCloser.
+var _ lifecycle.ContextCloser = (*Pool)(nil)
 
 // Default pool configuration values.
 const (
@@ -142,24 +146,18 @@ func (p *Pool) Health(ctx context.Context) error {
 	return nil
 }
 
-// Close gracefully shuts down the connection pool.
-//
-// Delegates to CloseCtx(context.Background()) for back-compat.
-func (p *Pool) Close() {
-	_ = p.CloseCtx(context.Background())
-}
-
-// CloseCtx gracefully shuts down the connection pool, bounded by ctx.
+// Close gracefully shuts down the connection pool, bounded by ctx.
 //
 // pgxpool.Pool.Close() performs a synchronous drain with no context parameter.
-// CloseCtx wraps it in a goroutine so the caller's shutdown budget is honoured;
+// Close wraps it in a goroutine so the caller's shutdown budget is honoured;
 // if ctx expires, the pool's connection resources are abandoned (process-exit
 // cleanup semantics, acceptable under orchestrator-restart SLO).
 //
-// CloseCtx is idempotent: calling it on an already-closed pool is safe.
+// Close is idempotent: calling it on an already-closed pool is safe.
 //
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
-func (p *Pool) CloseCtx(ctx context.Context) error {
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
+func (p *Pool) Close(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
