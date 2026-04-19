@@ -77,6 +77,7 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 
 	r = router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	body := strings.NewReader(`{"username":"alice","password":"` + testPassword + `"}`)
 	rec := httptest.NewRecorder()

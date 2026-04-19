@@ -6,13 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -70,58 +71,55 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	return buildMux(svc), writer
 }
 
+// prefixMux wraps a celltest.TestMux and prepends a path prefix to every
+// Handle call. auth.Declare on a Handler.RegisterRoutes call uses Handle
+// with relative paths (e.g. "POST /", "GET /{id}"); prefixMux translates
+// those to fully-qualified paths so contract tests can drive requests at
+// the canonical API path without duplicating the route table.
+//
+// DeclareAuthMeta is overridden to compose the prefix so that the root
+// TestMux records correct absolute paths (e.g. "/api/v1/access/users/{id}/password"
+// with PasswordResetExempt=true) — preventing silent drift between production
+// metadata and what the contract test observes.
+type prefixMux struct {
+	prefix string
+	*celltest.TestMux
+}
+
+func newPrefixMux(prefix string) *prefixMux {
+	return &prefixMux{prefix: prefix, TestMux: celltest.NewTestMux()}
+}
+
+// Handle overrides TestMux.Handle to prepend the configured prefix.
+// Pattern: "POST /" → "POST /api/v1/access/users"
+//
+//	"GET /{id}" → "GET /api/v1/access/users/{id}"
+func (m *prefixMux) Handle(pattern string, handler http.Handler) {
+	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
+		method := pattern[:idx]
+		p := path.Join(m.prefix, pattern[idx+1:])
+		m.TestMux.Handle(method+" "+p, handler)
+	} else {
+		m.TestMux.Handle(m.prefix+pattern, handler)
+	}
+}
+
+// DeclareAuthMeta overrides TestMux.DeclareAuthMeta to compose the prefix
+// with the declared path before forwarding to the root TestMux.
+func (m *prefixMux) DeclareAuthMeta(meta kcell.AuthRouteMeta) {
+	meta.Path = path.Join(m.prefix, meta.Path)
+	m.TestMux.DeclareAuthMeta(meta)
+}
+
+// buildMux uses h.RegisterRoutes as the single source of truth for route
+// and auth-metadata declarations. This prevents drift between production
+// metadata (e.g. PasswordResetExempt on the password endpoint) and the
+// contract test mux.
 func buildMux(svc *Service) http.Handler {
-	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/api/v1/access/users",
-		Handler: http.HandlerFunc(h.handleCreate),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/api/v1/access/users/{id}",
-		Handler: http.HandlerFunc(h.handleGet),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PUT",
-		Path:    "/api/v1/access/users/{id}",
-		Handler: http.HandlerFunc(h.handleUpdate),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PATCH",
-		Path:    "/api/v1/access/users/{id}",
-		Handler: http.HandlerFunc(h.handlePatch),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "DELETE",
-		Path:    "/api/v1/access/users/{id}",
-		Handler: http.HandlerFunc(h.handleDelete),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/api/v1/access/users/{id}/lock",
-		Handler: http.HandlerFunc(h.handleLock),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/api/v1/access/users/{id}/unlock",
-		Handler: http.HandlerFunc(h.handleUnlock),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/api/v1/access/users/{id}/password",
-		Handler: http.HandlerFunc(h.handleChangePassword),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
-	})
-	return mux
+	m := newPrefixMux("/api/v1/access/users")
+	h.RegisterRoutes(m)
+	return m.TestMux
 }
 
 func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
