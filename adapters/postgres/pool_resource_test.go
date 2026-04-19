@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -78,15 +77,25 @@ func TestPGResource_WorkerNonNil(t *testing.T) {
 	}
 }
 
-// TestPGResource_CloseReturnsNil verifies Close() always returns nil.
-// A nil inner pool would panic on real Close, but we only test the return value
-// contract. The real Close path is covered by integration tests.
+// stubCloser is a minimal poolCloser stub that records whether Close was called.
+type stubCloser struct {
+	called int
+}
+
+func (s *stubCloser) Close() { s.called++ }
+
+// TestPGResource_CloseReturnsNil verifies Close() calls the underlying closer
+// exactly once and always returns nil.
 func TestPGResource_CloseReturnsNil(t *testing.T) {
-	// Build a pool wrapper where we won't actually call pgxpool.Pool.Close.
-	res := &PGResource{pool: newStubPool(), name: "postgres"}
-	// We skip calling res.Close() since the inner pgxpool.Pool is nil and would
-	// panic. Instead verify the return type via the interface assignment below.
-	_ = res // silence unused warning
+	sc := &stubCloser{}
+	res := &PGResource{name: "postgres", closeOverride: sc}
+
+	if err := res.Close(); err != nil {
+		t.Errorf("Close() returned non-nil error: %v", err)
+	}
+	if sc.called != 1 {
+		t.Errorf("expected Close to call closer once, got %d calls", sc.called)
+	}
 }
 
 // TestPGResource_ImplementsManagedResource is a compile-time check surfaced as a
@@ -122,25 +131,41 @@ func TestPGResource_CheckerTimeout(t *testing.T) {
 	}
 }
 
-// TestPGResource_CheckerUsesIndependentCtx verifies that the checker's context
-// is derived from Background, not from a potentially-cancelled outer context.
+// TestPGResource_CheckerUsesIndependentCtx verifies that the health checker
+// derives its context from context.Background(), not from a caller-provided
+// context. Even when the caller's context is already cancelled, the checker
+// must receive a live context with a ~5s deadline.
 func TestPGResource_CheckerUsesIndependentCtx(t *testing.T) {
-	// The checker must still succeed even when called with a cancelled context
-	// because it derives its own context from Background.
+	var receivedCtx context.Context
 	res := &PGResource{
 		name: "test-pg",
+		healthFunc: func(ctx context.Context) error {
+			receivedCtx = ctx
+			return nil
+		},
 	}
+
 	checkers := res.Checkers()
 	fn := checkers["test-pg"]
-
-	// We can't actually call fn (pool is nil), but we verify the checker is
-	// not nil and is independent — the struct-level test above covers nil safety.
 	if fn == nil {
-		t.Error("checker fn must not be nil")
+		t.Fatal("checker fn must not be nil")
 	}
 
-	// Verify that if we provide a cancelled outer context, it has no influence
-	// by testing that the checker was constructed to use context.Background().
-	// (Structural proof: the implementation always calls context.WithTimeout(context.Background(), ...))
-	_ = errors.New("structural proof only")
+	// Even though we call fn with no outer context here, the checker must have
+	// built an independent context from context.Background(). Verify the
+	// received context has a deadline roughly 5s in the future.
+	if err := fn(); err != nil {
+		t.Fatalf("checker returned unexpected error: %v", err)
+	}
+	if receivedCtx == nil {
+		t.Fatal("healthFunc was not called")
+	}
+	dl, ok := receivedCtx.Deadline()
+	if !ok {
+		t.Fatal("checker context must have a deadline (context.WithTimeout)")
+	}
+	diff := time.Until(dl)
+	if diff < 3*time.Second || diff > 7*time.Second {
+		t.Errorf("expected checker deadline ~5s from now, got %v", diff)
+	}
 }
