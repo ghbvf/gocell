@@ -106,7 +106,6 @@ type LocalAESKeyProvider struct {
 	mu      sync.RWMutex
 	keyring map[string]*localAESHandle
 	current string // ID of the active key
-	rotSeq  int    // rotation counter used to generate unique post-Rotate IDs
 }
 
 // NewLocalAESKeyProviderFromEnv constructs a LocalAESKeyProvider from the
@@ -179,26 +178,23 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 	return h, nil
 }
 
-// Rotate generates a new random 32-byte KEK, adds it to the keyring, and
-// makes it current. The previous current key is retained in the keyring for
-// backward-compatible decryption.
+// Rotate is not supported for LocalAESKeyProvider in production use.
 //
-// Note: for production rotation, prefer VaultTransitKeyProvider.Rotate() which
-// delegates key generation to Vault.
+// LocalAES key rotation is not persistent: a new in-memory key is lost on
+// restart, causing all previously encrypted values to become unreadable.
+// This method returns ErrNotImplemented so that callers receive an explicit
+// error rather than silently losing data.
+//
+// Production rotation strategy (S14a):
+//   - Use VaultTransitKeyProvider.Rotate() which delegates key generation to Vault.
+//   - Vault persists key versions server-side; historical ciphertext remains
+//     decryptable via the ciphertext version prefix.
+//
+// Testing rotation scenarios: use VaultTransitKeyProvider with a fake vaultClient
+// (see vault_transit_unit_test.go).
 func (p *LocalAESKeyProvider) Rotate(_ context.Context) (string, error) {
-	newKey := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, newKey); err != nil {
-		return "", fmt.Errorf("local-aes: generate new key: %w", err)
-	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.rotSeq++
-	newID := fmt.Sprintf("local-aes-rotated-v%d", p.rotSeq)
-	p.keyring[newID] = &localAESHandle{id: newID, kek: newKey}
-	p.current = newID
-	return newID, nil
+	return "", errcode.New(errcode.ErrNotImplemented,
+		"LocalAES rotation is not persistent; use VaultTransitKeyProvider for production key rotation (S14a)")
 }
 
 // ---------------------------------------------------------------------------

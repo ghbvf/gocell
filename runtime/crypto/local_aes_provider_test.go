@@ -100,56 +100,24 @@ func TestLocalAESKeyProvider_ByID_PreviousKeyDecrypts(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestLocalAESKeyProvider_Rotate_AdvancesKeyID
+// TestLocalAESKeyProvider_Rotate_ReturnsErrNotImplemented
 // ---------------------------------------------------------------------------
 
-func TestLocalAESKeyProvider_Rotate_AdvancesKeyID(t *testing.T) {
+// TestLocalAESKeyProvider_Rotate_ReturnsErrNotImplemented verifies that
+// LocalAES.Rotate returns ErrNotImplemented.
+// LocalAES rotation is intentionally disabled because in-memory keys are lost
+// on restart — production rotation must use VaultTransitKeyProvider (F4/S14a).
+func TestLocalAESKeyProvider_Rotate_ReturnsErrNotImplemented(t *testing.T) {
 	ctx := context.Background()
 	p := newTestLocalAES(t)
 
-	before, err := p.Current(ctx)
-	require.NoError(t, err)
-	oldID := before.ID()
+	_, err := p.Rotate(ctx)
+	require.Error(t, err)
 
-	newID, err := p.Rotate(ctx)
-	require.NoError(t, err)
-	assert.NotEmpty(t, newID)
-	assert.NotEqual(t, oldID, newID)
-
-	after, err := p.Current(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, newID, after.ID())
-}
-
-// ---------------------------------------------------------------------------
-// TestLocalAESKeyProvider_Rotate_OldKeyStillDecrypts
-// ---------------------------------------------------------------------------
-
-func TestLocalAESKeyProvider_Rotate_OldKeyStillDecrypts(t *testing.T) {
-	ctx := context.Background()
-	p := newTestLocalAES(t)
-
-	// Encrypt before rotation.
-	before, err := p.Current(ctx)
-	require.NoError(t, err)
-	oldID := before.ID()
-
-	plaintext := []byte("value before rotation")
-	aad := []byte("cell:config-core/key:api_key")
-	cipher, nonce, edk, err := before.Encrypt(ctx, plaintext, aad)
-	require.NoError(t, err)
-
-	// Rotate.
-	_, err = p.Rotate(ctx)
-	require.NoError(t, err)
-
-	// Old key should still resolve.
-	oldHandle, err := p.ByID(ctx, oldID)
-	require.NoError(t, err)
-
-	recovered, err := oldHandle.Decrypt(ctx, cipher, nonce, edk, aad)
-	require.NoError(t, err)
-	assert.Equal(t, plaintext, recovered)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be errcode.Error")
+	assert.Equal(t, errcode.ErrNotImplemented, ec.Code)
+	assert.Contains(t, err.Error(), "VaultTransitKeyProvider")
 }
 
 // ---------------------------------------------------------------------------
