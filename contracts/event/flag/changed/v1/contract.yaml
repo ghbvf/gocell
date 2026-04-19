@@ -5,8 +5,8 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: config-core
-  subscribers:
-    - audit-core
+  subscribers: []
+  # TODO: add audit-core once the consumer is implemented in audit-core slice
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json
