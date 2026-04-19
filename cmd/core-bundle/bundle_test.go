@@ -54,9 +54,9 @@ func (f *fakeManagedResource) Close(_ context.Context) error {
 
 var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
 
-// buildTestDeps returns a minimal AppDeps for memory topology unit tests.
+// buildTestSharedDeps returns a minimal SharedDeps for memory topology tests.
 // It skips cursor codecs (optional in tests) and internalGuard (dev mode).
-func buildTestDeps(t *testing.T) *AppDeps {
+func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
@@ -78,22 +78,24 @@ func buildTestDeps(t *testing.T) *AppDeps {
 	codecs, err := loadAllCursorCodecs("")
 	require.NoError(t, err)
 
-	return &AppDeps{
-		Topology:                  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		PGResource:                nil,
-		JWTDeps:                   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:                 ps,
-		CursorCodecs:              codecs,
-		HMACKey:                   []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:                  eb,
-		InitialAdminBootstrapOpts: fastAdminBootstrapOpts(),
+	return &SharedDeps{
+		Topology:     bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:    ps,
+		CursorCodecs: codecs,
+		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
+		EventBus:     eb,
 	}
 }
 
-// newValidatedAppDeps returns an AppDeps that passes Validate() for the given
-// topology. Test cases can then mutate individual fields to assert that a
+// newValidatedSharedDeps returns a SharedDeps that passes Validate() for the
+// given topology. Test cases can mutate individual fields to assert that a
 // single missing field surfaces the expected error.
-func newValidatedAppDeps(t *testing.T, topo bootstrap.Topology) *AppDeps {
+//
+// Note: PGResource is no longer part of SharedDeps; it is built inside
+// ConfigCoreModule.Provide. The "prod baseline" topology is tested here
+// without PGResource — the prod storage gate is now in ConfigCoreModule.
+func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
@@ -110,7 +112,7 @@ func newValidatedAppDeps(t *testing.T, topo bootstrap.Topology) *AppDeps {
 	codecs, err := loadAllCursorCodecs("")
 	require.NoError(t, err)
 
-	deps := &AppDeps{
+	deps := &SharedDeps{
 		Topology:     topo,
 		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:    ps,
@@ -119,7 +121,6 @@ func newValidatedAppDeps(t *testing.T, topo bootstrap.Topology) *AppDeps {
 		EventBus:     eventbus.New(),
 	}
 	if topo.RequireProductionControlPlane() {
-		deps.PGResource = &fakeManagedResource{name: "postgres"}
 		deps.MetricsToken = "test-metrics"
 		deps.VerboseToken = "test-verbose"
 		deps.InternalGuard = func(h http.Handler) http.Handler { return h }
@@ -127,45 +128,80 @@ func newValidatedAppDeps(t *testing.T, topo bootstrap.Topology) *AppDeps {
 	return deps
 }
 
-// TestAppDeps_Validate covers every invariant enforced by AppDeps.Validate.
+// buildBootstrapFromShared is the test-path assembly helper, equivalent to the
+// production run() flow but accepts extra bootstrap.Options (e.g. WithListener).
+// Uses memory topology (modules' Provide path) and AccessCoreModule with a
+// fast-bcrypt option.
+func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+	t.Helper()
+	ctx := context.Background()
+
+	cells, cellOpts, err := BuildApp(ctx, shared,
+		ConfigCoreModule{},
+		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AuditCoreModule{},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	asm, err := buildAssembly(shared.PromStack, cells...)
+	if err != nil {
+		return nil, err
+	}
+
+	consumerBase, err := buildConsumerBase()
+	if err != nil {
+		return nil, err
+	}
+
+	metricsHandler, err := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
+	if err != nil {
+		return nil, err
+	}
+
+	adapterInfo := shared.Topology.AdapterInfo()
+	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts = append(opts, cellOpts...)
+	opts = append(opts, extra...)
+	return bootstrap.New(opts...), nil
+}
+
+// TestSharedDeps_Validate covers every invariant enforced by SharedDeps.Validate.
 // Each case takes a baseline that passes Validate and mutates one field to
 // verify Validate surfaces that specific failure with errcode.ErrValidationFailed.
-// This is the contract BuildBootstrap depends on.
-func TestAppDeps_Validate(t *testing.T) {
+func TestSharedDeps_Validate(t *testing.T) {
 	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
 
 	cases := []struct {
 		name       string
 		topo       bootstrap.Topology
-		mutate     func(*AppDeps)
+		mutate     func(*SharedDeps)
 		wantErr    bool
 		wantSubstr string // required substring in one of the joined errors
 	}{
-		{name: "prod baseline is valid", topo: prodTopo, mutate: func(*AppDeps) {}, wantErr: false},
-		{name: "dev baseline is valid", topo: devTopo, mutate: func(*AppDeps) {}, wantErr: false},
+		{name: "prod baseline is valid", topo: prodTopo, mutate: func(*SharedDeps) {}, wantErr: false},
+		{name: "dev baseline is valid", topo: devTopo, mutate: func(*SharedDeps) {}, wantErr: false},
 
-		{name: "missing JWT issuer", topo: devTopo, mutate: func(d *AppDeps) { d.JWTDeps.issuer = nil }, wantErr: true, wantSubstr: "JWTDeps.issuer"},
-		{name: "missing JWT verifier", topo: devTopo, mutate: func(d *AppDeps) { d.JWTDeps.verifier = nil }, wantErr: true, wantSubstr: "JWTDeps.verifier"},
-		{name: "missing prom registry", topo: devTopo, mutate: func(d *AppDeps) { d.PromStack.registry = nil }, wantErr: true, wantSubstr: "PromStack.registry"},
-		{name: "missing prom hook observer", topo: devTopo, mutate: func(d *AppDeps) { d.PromStack.hookObserver = nil }, wantErr: true, wantSubstr: "PromStack.hookObserver"},
-		{name: "missing prom metric provider", topo: devTopo, mutate: func(d *AppDeps) { d.PromStack.metricProvider = nil }, wantErr: true, wantSubstr: "PromStack.metricProvider"},
-		{name: "missing cursor codec audit", topo: devTopo, mutate: func(d *AppDeps) { d.CursorCodecs.audit = nil }, wantErr: true, wantSubstr: "CursorCodecs.audit"},
-		{name: "missing cursor codec config", topo: devTopo, mutate: func(d *AppDeps) { d.CursorCodecs.config = nil }, wantErr: true, wantSubstr: "CursorCodecs.config"},
-		{name: "missing HMAC key", topo: devTopo, mutate: func(d *AppDeps) { d.HMACKey = nil }, wantErr: true, wantSubstr: "HMACKey"},
-		{name: "missing event bus", topo: devTopo, mutate: func(d *AppDeps) { d.EventBus = nil }, wantErr: true, wantSubstr: "EventBus"},
+		{name: "missing JWT issuer", topo: devTopo, mutate: func(d *SharedDeps) { d.JWTDeps.issuer = nil }, wantErr: true, wantSubstr: "JWTDeps.issuer"},
+		{name: "missing JWT verifier", topo: devTopo, mutate: func(d *SharedDeps) { d.JWTDeps.verifier = nil }, wantErr: true, wantSubstr: "JWTDeps.verifier"},
+		{name: "missing prom registry", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.registry = nil }, wantErr: true, wantSubstr: "PromStack.registry"},
+		{name: "missing prom hook observer", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.hookObserver = nil }, wantErr: true, wantSubstr: "PromStack.hookObserver"},
+		{name: "missing prom metric provider", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.metricProvider = nil }, wantErr: true, wantSubstr: "PromStack.metricProvider"},
+		{name: "missing cursor codec audit", topo: devTopo, mutate: func(d *SharedDeps) { d.CursorCodecs.audit = nil }, wantErr: true, wantSubstr: "CursorCodecs.audit"},
+		{name: "missing cursor codec config", topo: devTopo, mutate: func(d *SharedDeps) { d.CursorCodecs.config = nil }, wantErr: true, wantSubstr: "CursorCodecs.config"},
+		{name: "missing HMAC key", topo: devTopo, mutate: func(d *SharedDeps) { d.HMACKey = nil }, wantErr: true, wantSubstr: "HMACKey"},
+		{name: "missing event bus", topo: devTopo, mutate: func(d *SharedDeps) { d.EventBus = nil }, wantErr: true, wantSubstr: "EventBus"},
 
-		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *AppDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
-		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *AppDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
-		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *AppDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
-		{name: "prod missing PGResource", topo: prodTopo, mutate: func(d *AppDeps) { d.PGResource = nil }, wantErr: true, wantSubstr: "PGResource"},
-
-		{name: "dev with stray PGResource", topo: devTopo, mutate: func(d *AppDeps) { d.PGResource = &fakeManagedResource{name: "stray"} }, wantErr: true, wantSubstr: "PGResource must be nil"},
+		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
+		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *SharedDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
+		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *SharedDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps := newValidatedAppDeps(t, tc.topo)
+			deps := newValidatedSharedDeps(t, tc.topo)
 			tc.mutate(deps)
 
 			err := deps.Validate()
@@ -186,26 +222,27 @@ func TestAppDeps_Validate(t *testing.T) {
 	}
 }
 
-// TestAppDeps_Validate_NilReceiver covers the defensive nil-receiver case so
-// a mistakenly nil deps argument fails explicitly rather than nil-deref'ing.
-func TestAppDeps_Validate_NilReceiver(t *testing.T) {
-	var deps *AppDeps
+// TestSharedDeps_Validate_NilReceiver covers the defensive nil-receiver case.
+func TestSharedDeps_Validate_NilReceiver(t *testing.T) {
+	var deps *SharedDeps
 	err := deps.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil receiver")
 }
 
-// TestBuildBootstrap_RejectsInvalidDeps guards the contract that BuildBootstrap
-// applies Validate before constructing any cell. A deps value that violates
-// Validate must surface an error without side effects.
-func TestBuildBootstrap_RejectsInvalidDeps(t *testing.T) {
+// TestBuildApp_RejectsInvalidSharedDeps guards that BuildApp propagates
+// SharedDeps.Validate() failure before constructing any cell.
+func TestBuildApp_RejectsInvalidSharedDeps(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-	deps := newValidatedAppDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
+	deps := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
 	deps.VerboseToken = "" // violate prod invariant
 
-	app, err := BuildBootstrap(deps)
+	_, _, err := BuildApp(context.Background(), deps,
+		ConfigCoreModule{},
+		AccessCoreModule{},
+		AuditCoreModule{},
+	)
 	require.Error(t, err)
-	assert.Nil(t, app)
 	assert.Contains(t, err.Error(), "GOCELL_READYZ_VERBOSE_TOKEN")
 }
 
@@ -226,12 +263,12 @@ func allJoinedErrors(err error) []error {
 // TestBuildBootstrap_MemoryTopology verifies that a memory topology produces a
 // working bootstrap without a PG health checker.
 func TestBuildBootstrap_MemoryTopology(t *testing.T) {
-	deps := buildTestDeps(t)
+	shared := buildTestSharedDeps(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := BuildBootstrap(deps, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -264,49 +301,33 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	}
 }
 
-// TestBuildBootstrap_PostgresTopology verifies that a postgres topology attaches
-// the PG health checker and relay worker from a fake ManagedResource.
-func TestBuildBootstrap_PostgresTopology(t *testing.T) {
+// TestBuildBootstrap_PostgresTopology_FakePGResource verifies that a postgres
+// topology with a fake ManagedResource wired via WithManagedResource option
+// attaches the PG health checker and calls Close on shutdown.
+//
+// In the new CellModule model, ConfigCoreModule.Provide would build the real
+// PGResource from env. This test injects a fake by passing it as an extra
+// bootstrap.Option, exercising the ManagedResource lifecycle path directly.
+//
+// Note: despite the name, this test does NOT exercise the Postgres code path —
+// StorageBackend is fixed to "memory". The test name is historical. Its sole
+// purpose is verifying the WithManagedResource lifecycle hooks
+// (Checkers / Worker / Close).
+func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
-	fakePG := &fakeManagedResource{name: "postgres"}
-	eb := eventbus.New()
+	shared := buildTestSharedDeps(t)
+	shared.Topology = bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
 
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
-	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", 15*time.Minute, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
-	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
-	require.NoError(t, err)
-
-	ps, err := buildPromStack()
-	require.NoError(t, err)
-	codecs, err := loadAllCursorCodecs("")
-	require.NoError(t, err)
-
-	deps := &AppDeps{
-		// postgres topology but with a fake PGResource (no real PG needed for wiring test).
-		// Production topology requires MetricsToken/VerboseToken/InternalGuard per AppDeps.Validate().
-		Topology:     bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGResource:   fakePG,
-		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:    ps,
-		CursorCodecs: codecs,
-		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:     eb,
-		MetricsToken: "test-metrics-token",
-		VerboseToken: "test-verbose-token",
-		InternalGuard: func(h http.Handler) http.Handler {
-			return h // identity guard for the wiring test
-		},
-		InitialAdminBootstrapOpts: fastAdminBootstrapOpts(),
-	}
+	fakePG := &fakeManagedResource{name: "fake-postgres"}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := BuildBootstrap(deps, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared,
+		bootstrap.WithListener(ln),
+		bootstrap.WithManagedResource(fakePG),
+	)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -321,7 +342,7 @@ func TestBuildBootstrap_PostgresTopology(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "postgres topology bootstrap must become healthy")
+	}, 5*time.Second, 50*time.Millisecond, "bootstrap with fake PG must become healthy")
 
 	cancel()
 	select {
@@ -332,19 +353,19 @@ func TestBuildBootstrap_PostgresTopology(t *testing.T) {
 	}
 
 	// Fake PG resource must be closed during shutdown.
-	assert.True(t, fakePG.closeCalled, "PGResource.Close() must be called during shutdown")
+	assert.True(t, fakePG.closeCalled, "fakeManagedResource.Close() must be called during shutdown")
 }
 
-// TestBuildBootstrap_AssemblyHasAllCells verifies that BuildBootstrap registers
-// config-core, access-core, and audit-core. We check this via health + /readyz
+// TestBuildBootstrap_AssemblyHasAllCells verifies that BuildApp registers
+// config-core, access-core, and audit-core. We check via health + /readyz
 // which would fail if any cell fails to init.
 func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
-	deps := buildTestDeps(t)
+	shared := buildTestSharedDeps(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := BuildBootstrap(deps, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

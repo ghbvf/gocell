@@ -64,12 +64,16 @@ var _ outbox.Publisher = stubPublisher{}
 
 // --- helpers ---
 
-func newDurableTestService() (*Service, *mem.FlagRepository, *recordingWriter) {
+func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *recordingWriter) {
+	t.Helper()
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer),
 		WithTxManager(&noopTxRunner{}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return svc, repo, writer
 }
 
@@ -89,6 +93,27 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 	return flag
 }
 
+// --- Test: XOR violation guard ---
+
+// TestNewService_XORViolation verifies that NewService rejects half-wired
+// configs: providing only outboxWriter or only txRunner breaks L2 atomicity.
+func TestNewService_XORViolation(t *testing.T) {
+	cases := []struct {
+		name string
+		opts []Option
+	}{
+		{"only_outbox_writer", []Option{WithOutboxWriter(&recordingWriter{})}},
+		{"only_tx_runner", []Option{WithTxManager(&noopTxRunner{})}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewService(mem.NewFlagRepository(), slog.Default(), tc.opts...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must both be set")
+		})
+	}
+}
+
 // --- Test: Create atomicity ---
 
 // TestFlagWrite_Create_Atomic_RepoAndOutbox verifies that Create writes repo +
@@ -97,8 +122,9 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	tx := &noopTxRunner{}
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(tx))
+	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
 		Key:         "my-flag",
@@ -125,10 +151,11 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(tx))
+	require.NoError(t, err)
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k"})
+	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tx commit failed")
 }
@@ -138,7 +165,7 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 // TestFlagWrite_Toggle_EmitsFlagChangedEvent verifies Toggle writes
 // outbox with action=toggled payload.
 func TestFlagWrite_Toggle_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService()
+	svc, repo, writer := newDurableTestService(t)
 	seedFlag(t, repo, "feature-x")
 
 	flag, err := svc.Toggle(context.Background(), "feature-x", true)
@@ -160,7 +187,7 @@ func TestFlagWrite_Toggle_EmitsFlagChangedEvent(t *testing.T) {
 // TestFlagWrite_Update_EmitsFlagChangedEvent verifies Update outbox payload
 // has action=updated.
 func TestFlagWrite_Update_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService()
+	svc, repo, writer := newDurableTestService(t)
 	seedFlag(t, repo, "feat-update")
 
 	flag, err := svc.Update(context.Background(), UpdateInput{
@@ -184,7 +211,7 @@ func TestFlagWrite_Update_EmitsFlagChangedEvent(t *testing.T) {
 // TestFlagWrite_Delete_EmitsFlagChangedEvent verifies Delete outbox payload
 // has action=deleted.
 func TestFlagWrite_Delete_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService()
+	svc, repo, writer := newDurableTestService(t)
 	seedFlag(t, repo, "feat-delete")
 
 	err := svc.Delete(context.Background(), "feat-delete")
@@ -202,10 +229,11 @@ func TestFlagWrite_Delete_EmitsFlagChangedEvent(t *testing.T) {
 func TestFlagWrite_OutboxWriteError_PropagatesFromCreate(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+	require.NoError(t, err)
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k"})
+	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox")
 }

@@ -61,10 +61,12 @@ type Service struct {
 // NewService creates a flag-write Service.
 //
 // Defensive invariant: outboxWriter and txRunner must either both be set or
-// both be nil (demo mode). Providing one without the other is a configuration
-// error and will panic at startup. Cell Init() performs the same XOR check;
-// this panic is a secondary fail-fast guard.
-func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) *Service {
+// both be nil (demo mode). Providing one without the other is a wiring error
+// that breaks L2 atomicity and is returned as an error so callers can fail-fast
+// at construction time rather than at the first CUD operation.
+//
+// ref: go-micro — constructor validates coupling invariants before returning.
+func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:   repo,
 		logger: logger,
@@ -74,10 +76,11 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 	}
 	// Defensive check: outboxWriter and txRunner must be set together.
 	if (s.outboxWriter != nil) != (s.txRunner != nil) {
-		panic("flagwrite.NewService: outboxWriter and txRunner must both be set or both be nil (demo mode); " +
-			"providing one without the other breaks L2 atomicity")
+		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+			"flagwrite: outboxWriter and txRunner must both be set or both be nil; "+
+				"providing one without the other breaks L2 atomicity")
 	}
-	return s
+	return s, nil
 }
 
 // CreateInput holds parameters for creating a feature flag.
