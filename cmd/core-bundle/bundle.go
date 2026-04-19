@@ -476,15 +476,24 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 // buildKeyProvider constructs the KeyProvider from GOCELL_KEY_PROVIDER env var.
 // Supported values: "local-aes", "vault-transit".
 // In memory mode (empty env var) nil is returned (no encryption; NoopTransformer via keyProviderToTransformer).
-// In postgres mode (empty env var) a warning is logged and nil is returned —
-// operators should set GOCELL_KEY_PROVIDER=local-aes for production.
+// In postgres mode (empty env var) the function fails-fast: sensitive-value
+// encryption is a production security invariant; silently wiring NoopTransformer
+// would defeat the stated threat model (see docs/architecture/202604191800-adr-config-value-encryption.md).
+// Operators must explicitly opt in via GOCELL_KEY_PROVIDER=local-aes (dev/CI only) or
+// vault-transit (production).
+//
+// ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
+// EncryptionConfig in an active storage path is a startup error, not a warning.
+// ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
 func buildKeyProvider(storageBackend string) (crypto.KeyProvider, error) {
 	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
 	if providerName == "" {
 		if storageBackend == "postgres" {
-			slog.Warn("config-core: GOCELL_KEY_PROVIDER not set; sensitive values will be stored unencrypted",
-				slog.String("storage_backend", storageBackend),
-				slog.String("recommendation", "set GOCELL_KEY_PROVIDER=local-aes for production"))
+			return nil, errcode.New(errcode.ErrConfigKeyMissing,
+				"config-core: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
+					"(known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). "+
+					"Silent NoopTransformer fallback is disabled because it would persist "+
+					"sensitive values unencrypted.")
 		}
 		return nil, nil
 	}

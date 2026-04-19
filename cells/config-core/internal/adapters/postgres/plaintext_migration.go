@@ -39,8 +39,12 @@ type migTableQueries struct {
 func tableQueries(table string) (migTableQueries, error) {
 	switch table {
 	case "config_entries":
+		// ORDER BY id makes batch pagination deterministic: PostgreSQL page
+		// ordering is undefined without an explicit sort, which can cause
+		// the same unencrypted row to appear in two successive batches, or
+		// be skipped entirely, under concurrent writes.
 		return migTableQueries{
-			selectQ: `SELECT id, key, value FROM config_entries WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`,
+			selectQ: `SELECT id, key, value FROM config_entries WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
 			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`,
 		}, nil
 	case "config_versions":
@@ -171,7 +175,7 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 // encryptBatch encrypts each row in the batch and writes it back.
 func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult) error {
 	for _, row := range batch {
-		aad := crypto.AADForConfig("config-core", row.key)
+		aad := crypto.AADForConfig(cellID, row.key)
 		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
 		if encErr != nil {
 			return fmt.Errorf("plaintext-migrator: encrypt key=%s: %w", row.key, encErr)
@@ -182,7 +186,7 @@ func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table str
 		result.Processed++
 		slog.Info("plaintext-migrator: encrypted row",
 			slog.String("table", table),
-			slog.String("key", row.key),
+			slog.String("config_key", row.key),
 			slog.String("key_id", keyID))
 	}
 	return nil

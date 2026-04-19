@@ -519,13 +519,11 @@ On each read, the repository compares the stored `value_key_id` against the
 current key ID:
 
 ```go
-// hasCurrent is the optional interface for staleness detection.
-type hasCurrent interface {
-    CurrentKeyID(ctx context.Context) (string, error)
-}
-
+// crypto.CurrentKeyIDProvider is the optional extension interface for
+// transformers that can report the current key ID (see runtime/crypto/
+// value_transformer.go). Discovered via type assertion.
 func (r *ConfigRepository) currentKeyID(ctx context.Context) (string, bool) {
-    if hc, ok := r.transformer.(hasCurrent); ok {
+    if hc, ok := r.transformer.(crypto.CurrentKeyIDProvider); ok {
         id, err := hc.CurrentKeyID(ctx)
         if err != nil || id == "" {
             return "", false
@@ -540,9 +538,10 @@ func (r *ConfigRepository) currentKeyID(ctx context.Context) (string, bool) {
 and handler layers may expose `stale` in responses so operators know which
 entries need re-encryption.
 
-The `hasCurrent` interface is optional — `ValueTransformer` does not require
-it. Only `keyProviderTransformer` implements it. `NoopTransformer` and custom
-test transformers that do not implement it will simply never mark entries stale.
+The `crypto.CurrentKeyIDProvider` interface is optional — `ValueTransformer`
+does not require it. Only `keyProviderTransformer` implements it.
+`NoopTransformer` and custom test transformers that do not implement it
+will simply never mark entries stale.
 
 ### Re-encryption patterns
 

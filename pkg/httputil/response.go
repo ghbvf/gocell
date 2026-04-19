@@ -342,7 +342,9 @@ var codeToStatus = map[errcode.Code]int{
 	// ciphertext or key IDs to the client; surface as 500 so the sanitised
 	// "internal server error" body is returned.
 	errcode.ErrKeyProviderKeyNotFound:   http.StatusInternalServerError,
+	errcode.ErrKeyProviderEncryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
+	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
 	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
 	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
 

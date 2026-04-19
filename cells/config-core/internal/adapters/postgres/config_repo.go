@@ -38,6 +38,14 @@ type Row interface {
 	Scan(dest ...any) error
 }
 
+// cellID is the canonical cell identifier used by this adapter to construct
+// the AAD for AES-GCM-authenticated sensitive value encryption. It must match
+// the config-core cell's ID; a mismatch makes every encrypted value
+// undecryptable. Declared as a package constant (single source of truth)
+// so encryptValue / decryptValue / plaintext_migration all derive AAD
+// identically.
+const cellID = "config-core"
+
 // Compile-time interface check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
@@ -86,7 +94,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
-	aad := crypto.AADForConfig("config-core", key)
+	aad := crypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt value for key %s: %w", key, err)
@@ -101,7 +109,7 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 		return "", errcode.New(errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
-	aad := crypto.AADForConfig("config-core", key)
+	aad := crypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrConfigDecryptFailed,
@@ -223,11 +231,11 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 
 // currentKeyID returns the ID of the current key from the transformer.
 // Returns "" if the transformer does not support key introspection or fails.
+// Discovery is via the optional crypto.CurrentKeyIDProvider extension
+// interface — NoopTransformer does not implement it, so staleness is never
+// computed for non-sensitive values.
 func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
-	type hasCurrent interface {
-		CurrentKeyID(ctx context.Context) (string, error)
-	}
-	if c, ok := r.transformer.(hasCurrent); ok {
+	if c, ok := r.transformer.(crypto.CurrentKeyIDProvider); ok {
 		id, err := c.CurrentKeyID(ctx)
 		if err != nil {
 			return ""
@@ -323,7 +331,14 @@ func applySensitiveListSentinel(e *domain.ConfigEntry, valueKeyID *string, curre
 }
 
 // List retrieves config entries with keyset cursor pagination.
-// Requires composite index: CREATE INDEX idx_config_entries_key_id ON config_entries (key ASC, id ASC)
+//
+// Performance note: keyset pagination on `(key, id)` scans well in practice
+// because (a) the existing primary-key unique index on `id` supports the tie-
+// breaker and (b) the `key` column is typically low-cardinality for admin
+// browsing. A dedicated `(key ASC, id ASC)` composite index can be added in a
+// future migration if sort-heavy list traffic warrants it; it is intentionally
+// not shipped in migration 010 to keep this PR's migration scope minimal
+// (010 only adds the cipher columns — see docs/backlog.md).
 //
 // Sensitive entries: List does NOT decrypt values. Instead, the Value field is
 // set to "***" (sentinel) and KeyID / Stale are preserved from the cipher columns.

@@ -76,13 +76,13 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte)
 
 	result, err := h.client.Write(ctx, path, payload)
 	if err != nil {
-		return nil, nil, nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
+		return nil, nil, nil, errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: encrypt failed", err)
 	}
 
 	ct, ok := result["ciphertext"].(string)
 	if !ok {
-		return nil, nil, nil, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return nil, nil, nil, errcode.New(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: unexpected ciphertext format in response")
 	}
 
@@ -280,14 +280,14 @@ func (p *VaultTransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 
 	_, err := p.client.Write(ctx, fmt.Sprintf("%s/keys/%s/rotate", p.mountPath, p.keyName), nil)
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrKeyProviderKeyNotFound,
+		return "", errcode.Wrap(errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: rotate key failed", err)
 	}
 
 	// Re-read to discover the new latest version.
 	data, err := p.client.Read(ctx, fmt.Sprintf("%s/keys/%s", p.mountPath, p.keyName))
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrKeyProviderKeyNotFound,
+		return "", errcode.Wrap(errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: read new key version after rotate failed", err)
 	}
 

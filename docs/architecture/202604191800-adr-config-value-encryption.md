@@ -232,11 +232,72 @@ covers legacy rows where `value_cipher IS NULL AND sensitive=true`.
 
 1. **Deploy migration 010** — adds 4 new nullable columns. Existing rows are unaffected.
 2. **Dual-write period** — new writes from this PR use encrypted columns; legacy rows still have plaintext `value`.
-3. **Run admin migration tool** — scans `value_cipher IS NULL AND sensitive=true`, encrypts in batches, writes cipher columns, sets `value = NULL`.
+3. **Run admin migration tool** — scans `value_cipher IS NULL AND sensitive=true`, encrypts in batches (deterministic `ORDER BY id`), writes cipher columns, sets `value = NULL`.
 4. **Verify** — read each migrated key and confirm plaintext is returned (transparent decrypt).
 5. **Rotate** (optional) — trigger `provider.Rotate()` to generate a new key version; subsequent reads detect staleness and re-encrypt lazily.
 
 The tool is idempotent: re-running it skips rows already migrated (`value_cipher IS NOT NULL`).
+
+---
+
+## Rollback & Recovery Runbook
+
+The migration is intentionally **not reversible in-place**: the `Down` section
+of migration 010 raises a PostgreSQL exception instead of dropping the cipher
+columns, because a `DROP COLUMN value_cipher` would destroy encrypted
+sensitive values with no recovery path.
+
+### If the migration's forward application fails mid-deploy
+
+* Transactional safety: `ADD COLUMN IF NOT EXISTS` is idempotent. Simply
+  re-run `migrator.Up(ctx)` after fixing the trigger (disk space, transient
+  DDL lock) — no data loss.
+* Confirm schema state: `SELECT column_name FROM information_schema.columns
+  WHERE table_name = 'config_entries' AND column_name IN ('value_cipher',
+  'value_key_id', 'value_edk', 'value_nonce')` — all four must appear.
+
+### If you must undo migration 010 in a dev/CI environment
+
+The embedded `RAISE EXCEPTION` blocks the goose `Down` path by design.
+To reset a dev environment (for iterative testing only; never in production):
+
+```sql
+-- Run outside a transaction (goose no_transaction) to match migration 010.
+ALTER TABLE config_entries
+    RENAME COLUMN value_cipher TO value_cipher_deprecated_20260419;
+ALTER TABLE config_entries
+    RENAME COLUMN value_key_id TO value_key_id_deprecated_20260419;
+ALTER TABLE config_entries
+    RENAME COLUMN value_edk    TO value_edk_deprecated_20260419;
+ALTER TABLE config_entries
+    RENAME COLUMN value_nonce  TO value_nonce_deprecated_20260419;
+-- Repeat for config_versions.
+-- Then manually `DELETE FROM schema_migrations WHERE version = 10`.
+```
+
+Renaming (rather than dropping) preserves encrypted payload for post-mortem
+while removing the column from the active schema — matching the "no silent
+data loss" invariant.
+
+### If a production deploy needs to be rolled forward instead of back
+
+* Stop the `plaintext_migration` admin tool (it is resumable: `ORDER BY id`
+  + `value_cipher IS NULL` filter makes successive runs deterministic).
+* Re-deploy the previous binary (pre-010 code path). Pre-010 writes read the
+  plaintext `value` column and ignore the new cipher columns — no data is
+  lost, only newly-encrypted values become unreadable until the new binary
+  is re-deployed.
+* Fix the forward problem and re-deploy the new binary. The admin migration
+  tool resumes where it stopped.
+
+### Data-loss risk matrix
+
+| Scenario | Data-loss risk | Action |
+|---|---|---|
+| Forward apply fails mid-migration | None (DDL idempotent) | Re-run `Up` |
+| Need to undo in dev/CI | None (rename preserves) | Use rename SQL above |
+| Roll back binary only | None | Re-deploy old binary; new-encrypted rows temporarily unreadable |
+| Drop cipher columns in production | **TOTAL LOSS** of encrypted values | **Disallowed** — RAISE EXCEPTION enforces |
 
 ---
 
@@ -249,12 +310,52 @@ remains decryptable after rotation because Vault routes decryption to the correc
 the ciphertext prefix.
 
 ### LocalAESKeyProvider (dev/CI only)
+
 `LocalAESKeyProvider.Rotate()` returns `ErrNotImplemented`. LocalAES key rotation is not
 persistent — a new in-memory key is lost on restart, making all values encrypted with the
 rotated key permanently unreadable. For rotation scenarios, use VaultTransitKeyProvider.
 
 This design prevents accidental production rotation via LocalAES while keeping the dev
 path simple (restart = fresh key).
+
+#### LocalAES key-ID / version semantics
+
+LocalAES uses a **two-version keyring** with fixed labels:
+
+| Label | Env var | Role |
+|---|---|---|
+| `local-aes-v1` | `GOCELL_MASTER_KEY` (required) | Current (writes encrypt with this) |
+| `local-aes-v0` | `GOCELL_MASTER_KEY_PREVIOUS` (optional) | Historical (reads only) |
+
+The labels are intentionally **not** versioned beyond `v0/v1` — they are
+opaque identifiers that bind a ciphertext row to the KEK material it was
+encrypted under. Key material change lifecycle:
+
+1. **Steady state**: writes use `v1`; reads accept `v1` only.
+2. **Rotation prep**: operator copies current `GOCELL_MASTER_KEY` to
+   `GOCELL_MASTER_KEY_PREVIOUS` and sets a fresh 32-byte key in
+   `GOCELL_MASTER_KEY`, then restarts. Reads now accept both `v0` and `v1`.
+3. **Historic decrypt window**: rows carrying `value_key_id = "local-aes-v0"`
+   decrypt against the previous KEK; rows carrying `"local-aes-v1"` decrypt
+   against the current. The `Stale=true` signal is emitted for any row still
+   on `v0` so callers can trigger lazy re-encryption.
+4. **Cleanup**: once all rows report `Stale=false` (i.e. have been rewritten
+   on `v1`), the operator removes `GOCELL_MASTER_KEY_PREVIOUS` on the next
+   restart. Any row still on `v0` at that point becomes permanently unreadable
+   — the same failure mode as losing a production KEK.
+
+**Limits vs production KMS**:
+- No server-side key persistence. Losing the env var loses the key.
+- No third version. An accidental two-step rotation (v1 → v2 → v3) within
+  a single deploy window is not supported; rotate, wait for all rows to
+  migrate, then rotate again.
+- No rewrap API: the `Rotate()` method is `ErrNotImplemented` by design.
+  Rotation is driven by operator env-var surgery + restart, not a runtime call.
+
+**Why this is acceptable for dev/CI**: The threat model in dev/CI is
+"prove the cell wiring, not production key custody". Production must use
+VaultTransit (backlog S14a tracks full production wiring and AWS/GCP KMS
+adapters).
 
 ---
 

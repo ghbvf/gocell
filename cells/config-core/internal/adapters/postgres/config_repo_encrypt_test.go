@@ -42,8 +42,9 @@ type fakeValueTransformer struct {
 	lastEncryptAAD []byte // records AAD from the most recent Encrypt call
 }
 
-// CurrentKeyID implements the hasCurrent interface used by ConfigRepository
-// to compute the staleness signal.
+// CurrentKeyID implements crypto.CurrentKeyIDProvider — the optional
+// extension interface used by ConfigRepository to compute the staleness
+// signal.
 func (f *fakeValueTransformer) CurrentKeyID(_ context.Context) (string, error) {
 	return f.currentKeyID, nil
 }
