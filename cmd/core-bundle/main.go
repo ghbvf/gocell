@@ -328,11 +328,11 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 // atomic.Pointer inside worker.LazyWorker (F-OPS-2).
 //
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
+func adminBootstrapWorkerOpts(base []accesscore.Option, bootstrapOpts ...accesscore.InitialAdminOption) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
 	lazy := worker.Lazy()
 	sink := func(w worker.Worker) { _ = lazy.Set(w) }
 	accessOpts = append(base,
-		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithInitialAdminBootstrap(bootstrapOpts...),
 		accesscore.WithBootstrapWorkerSink(sink),
 	)
 	lazyWorkerOpt = bootstrap.WithWorkers(lazy)

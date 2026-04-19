@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
+	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -14,6 +17,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fastAdminBootstrapOpts returns access-core InitialAdmin options that
+// replace the production bcrypt cost=12 hasher with bcrypt.MinCost=4 so
+// the synchronous bcrypt call in access-core.Init does not block phase3
+// for 5-7s on slow CI runners. The rest of the InitialAdmin path
+// (Sweep → EnsureAdmin → WriteCredentialFile → Cleaner worker registration)
+// still runs, preserving bundle_test coverage of the full wiring.
+func fastAdminBootstrapOpts() []accesscore.InitialAdminOption {
+	return []accesscore.InitialAdminOption{
+		accesscore.WithBootstrapPasswordHasher(accesscore.BcryptHasher{Cost: bcrypt.MinCost}),
+	}
+}
 
 // fakeManagedResource implements bootstrap.ManagedResource for tests.
 type fakeManagedResource struct {
@@ -62,13 +77,14 @@ func buildTestDeps(t *testing.T) *AppDeps {
 	require.NoError(t, err)
 
 	return &AppDeps{
-		Topology:     bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		PGResource:   nil,
-		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:    ps,
-		CursorCodecs: codecs,
-		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:     eb,
+		Topology:                  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		PGResource:                nil,
+		JWTDeps:                   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:                 ps,
+		CursorCodecs:              codecs,
+		HMACKey:                   []byte("test-hmac-key-32-bytes-long!!!!!"),
+		EventBus:                  eb,
+		InitialAdminBootstrapOpts: fastAdminBootstrapOpts(),
 	}
 }
 
@@ -137,15 +153,16 @@ func TestBuildBootstrap_PostgresTopology(t *testing.T) {
 	deps := &AppDeps{
 		// postgres topology but with a fake PGResource (no real PG needed for wiring test).
 		// MetricsToken and VerboseToken are required in real adapter mode.
-		Topology:     bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		PGResource:   fakePG,
-		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:    ps,
-		CursorCodecs: codecs,
-		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:     eb,
-		MetricsToken: "test-metrics-token",
-		VerboseToken: "test-verbose-token",
+		Topology:                  bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		PGResource:                fakePG,
+		JWTDeps:                   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:                 ps,
+		CursorCodecs:              codecs,
+		HMACKey:                   []byte("test-hmac-key-32-bytes-long!!!!!"),
+		EventBus:                  eb,
+		MetricsToken:              "test-metrics-token",
+		VerboseToken:              "test-verbose-token",
+		InitialAdminBootstrapOpts: fastAdminBootstrapOpts(),
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
