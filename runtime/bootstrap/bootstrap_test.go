@@ -4011,3 +4011,71 @@ func TestBootstrap_WithManagedCloser_NilIgnored(t *testing.T) {
 		_ = New(WithManagedCloser(nil))
 	}, "WithManagedCloser(nil) must not panic")
 }
+
+// ---------------------------------------------------------------------------
+// F8: FinalizeAuth failure propagates rollback — duplicate auth declaration
+// ---------------------------------------------------------------------------
+
+// duplicateAuthCell declares the same (method, path) twice via auth.Declare,
+// which must cause FinalizeAuth to return a "duplicate auth declaration" error.
+type duplicateAuthCell struct {
+	*cell.BaseCell
+}
+
+func newDuplicateAuthCell(id string) *duplicateAuthCell {
+	return &duplicateAuthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (c *duplicateAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/dup",
+		Handler: handler,
+		Public:  true,
+	})
+	// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/dup",
+		Handler: handler,
+		Public:  true,
+	})
+}
+
+func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
+	// F8: a cell that declares the same (method, path) twice causes FinalizeAuth
+	// to fail. Bootstrap.Run must propagate the error and roll back (stop the
+	// assembly). No HTTP listener must be started.
+	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
+
+	b := New(
+		WithAssembly(asm),
+		// No WithListener: if phase5 errors correctly the listener is never reached.
+		// Use a short timeout so the test exits fast if something hangs.
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must return error when FinalizeAuth fails")
+	assert.Contains(t, err.Error(), "duplicate auth declaration",
+		"error must identify the duplicate declaration")
+
+	// After rollback, the assembly cells must be stopped (unhealthy).
+	h := asm.Health()
+	for id, status := range h {
+		assert.Equal(t, "unhealthy", status.Status,
+			"cell %s must be unhealthy after rollback", id)
+	}
+}
