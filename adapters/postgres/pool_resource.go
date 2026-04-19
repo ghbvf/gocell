@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -33,14 +34,26 @@ type PGResource struct {
 	healthFunc    func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
 }
 
-// NewPGResource creates a PGResource. relay may be nil when no relay worker is
-// needed (e.g. in-memory outbox mode). name defaults to "postgres" when empty.
-func NewPGResource(pool *Pool, relay worker.Worker) *PGResource {
+// NewPGResource creates a PGResource. pool must be non-nil; passing nil
+// returns ErrValidationFailed because Checkers() and Close() dereference
+// pool at runtime — a silent nil would produce a panic during /readyz
+// probe or shutdown, both of which are the worst times to discover it.
+//
+// relay may be nil when no relay worker is needed (e.g. in-memory outbox
+// mode). name is always "postgres".
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go Append — resource
+// registration does no nil-substitution; bad inputs surface immediately.
+func NewPGResource(pool *Pool, relay worker.Worker) (*PGResource, error) {
+	if pool == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"NewPGResource: pool must not be nil (Checkers() and Close() dereference pool)")
+	}
 	return &PGResource{
 		pool:  pool,
 		relay: relay,
 		name:  "postgres",
-	}
+	}, nil
 }
 
 // Checkers returns a single health probe named after r.name that pings the PG

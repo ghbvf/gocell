@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -25,7 +27,10 @@ func newStubPool() *Pool {
 // TestNewPGResource_Fields verifies construction and default name.
 func TestNewPGResource_Fields(t *testing.T) {
 	pool := newStubPool()
-	res := NewPGResource(pool, nil)
+	res, err := NewPGResource(pool, nil)
+	if err != nil {
+		t.Fatalf("NewPGResource returned error: %v", err)
+	}
 
 	if res.pool != pool {
 		t.Error("pool field not set correctly")
@@ -38,11 +43,42 @@ func TestNewPGResource_Fields(t *testing.T) {
 	}
 }
 
+// TestNewPGResource_RejectsNilPool guards the construction contract: a nil
+// pool would nil-deref at Checkers() or Close() time (the worst moments to
+// discover it). The constructor must surface this at wiring time instead.
+func TestNewPGResource_RejectsNilPool(t *testing.T) {
+	res, err := NewPGResource(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil pool, got nil")
+	}
+	if res != nil {
+		t.Error("expected nil resource on error")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T %v", err, err)
+	}
+	if ec.Code != errcode.ErrValidationFailed {
+		t.Errorf("expected code %s, got %s", errcode.ErrValidationFailed, ec.Code)
+	}
+}
+
+// mustNewPGResource builds a PGResource for tests; fatals on error so test
+// bodies stay focused on the assertion under test.
+func mustNewPGResource(t *testing.T, pool *Pool, relay worker.Worker) *PGResource {
+	t.Helper()
+	res, err := NewPGResource(pool, relay)
+	if err != nil {
+		t.Fatalf("NewPGResource: %v", err)
+	}
+	return res
+}
+
 // TestPGResource_CheckersReturnsNamed verifies the checker map has the correct
 // key. The actual health call requires a real PG pool, so we only check the map
 // structure here.
 func TestPGResource_CheckersReturnsNamed(t *testing.T) {
-	res := NewPGResource(newStubPool(), nil)
+	res := mustNewPGResource(t, newStubPool(), nil)
 	checkers := res.Checkers()
 	if len(checkers) != 1 {
 		t.Fatalf("expected 1 checker, got %d", len(checkers))
@@ -58,7 +94,7 @@ func TestPGResource_CheckersReturnsNamed(t *testing.T) {
 
 // TestPGResource_WorkerNil verifies nil relay propagates.
 func TestPGResource_WorkerNil(t *testing.T) {
-	res := NewPGResource(newStubPool(), nil)
+	res := mustNewPGResource(t, newStubPool(), nil)
 	if res.Worker() != nil {
 		t.Error("expected nil worker")
 	}
@@ -67,7 +103,7 @@ func TestPGResource_WorkerNil(t *testing.T) {
 // TestPGResource_WorkerNonNil verifies a supplied relay is returned.
 func TestPGResource_WorkerNonNil(t *testing.T) {
 	sw := &stubWorker{}
-	res := NewPGResource(newStubPool(), sw)
+	res := mustNewPGResource(t, newStubPool(), sw)
 	if res.Worker() == nil {
 		t.Error("expected non-nil worker")
 	}
