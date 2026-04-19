@@ -99,8 +99,8 @@ type HTTPRegistrar interface {
 // (each declares Handle(pattern string, handler http.Handler)), so slices do
 // not need to know which one they receive at call time.
 //
-// Rationale: previously slices could wrap handlers with auth.Secured
-// in-place; cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux allowed
+// Rationale: early designs let slices wrap handlers with handler-level auth
+// helpers; cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux allowed
 // production to silently skip the wrapper, producing a policy-drift surface
 // that passed contract tests but exposed unguarded routes in production.
 // auth.Declare collapses the two paths into one.

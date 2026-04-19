@@ -26,9 +26,9 @@ func newContractService() (*Service, *mem.ConfigRepository, *recordingWriter) {
 }
 
 // newContractMux registers configwrite routes on a mux at the canonical API
-// prefix using auth.Secured (via RegisterRoutes + http.StripPrefix). This
-// mirrors the production wiring so that contract tests exercise the full
-// auth-guard path, not just the happy-path handler.
+// prefix via RegisterRoutes + http.StripPrefix. RegisterRoutes calls
+// auth.Declare to install the admin policy, so the contract test exercises
+// the same guard the production mux uses — not just the happy-path handler.
 func newContractMux(svc *Service) *http.ServeMux {
 	h := NewHandler(svc)
 	sub := http.NewServeMux()

@@ -84,11 +84,11 @@ func WithPasswordResetChangeEndpointHintFn(fn func() string) AuthOption {
 }
 
 // WithPublicEndpointMatcher sets a compiled method-aware predicate for the
-// auth middleware bypass check. When provided, this takes precedence over the
-// publicEndpoints []string parameter passed to AuthMiddleware.
+// auth middleware bypass check.
 //
-// Use this option when wiring through router.WithPublicEndpoints so that auth
-// bypass is keyed on (method + path), not path alone.
+// Router.FinalizeAuth uses this option to install a lazy closure that reads
+// the compiled public-route matcher — aggregated from every Cell's
+// auth.Declare(mux, RouteDecl{Public: true}) call — at request time.
 //
 // ref: otelhttp WithPublicEndpointFn per-request predicate shape
 func WithPublicEndpointMatcher(fn func(*http.Request) bool) AuthOption {

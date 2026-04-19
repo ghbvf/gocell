@@ -44,9 +44,9 @@ func matchKey(method, cleanPath string) string {
 // a per-request predicate that returns true when the request's (method, path)
 // pair is in the public set.
 //
-// Intended for router internals (applyPublicEndpoints) and bootstrap-layer
-// preflight validation (WithPublicEndpoints). Cell code should not call this
-// directly — use bootstrap.WithPublicEndpoints as the composition-root API.
+// Intended for Router.FinalizeAuth internals. Cells should not call this
+// directly — declare public routes via auth.Declare with Public: true, and
+// Router.FinalizeAuth compiles the aggregated entries at bootstrap time.
 //
 // Returns a non-nil error aggregating all malformed or duplicate entries via
 // errors.Join — the caller should treat any error as a startup failure.
