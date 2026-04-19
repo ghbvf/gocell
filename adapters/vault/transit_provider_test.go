@@ -23,9 +23,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+
+	vaultapi "github.com/hashicorp/vault/api"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -41,7 +45,13 @@ import (
 //     so the pair is invertible without real AES
 //   - Error injection per-call-type (writeErr / readErr)
 //   - Call-count tracking for Encrypt / Decrypt / Rotate
+//
+// mu protects latestVersion, lastWritePath, lastWriteData, lastReadPath so that
+// the concurrent race test (FID-010) does not trigger the race detector on the
+// fake itself — only real production races should be flagged.
 type fakeVaultClient struct {
+	mu sync.Mutex
+
 	// Key metadata
 	latestVersion int
 
@@ -65,11 +75,14 @@ type fakeVaultClient struct {
 	rotateCalls  atomic.Int64
 }
 
-// compile-time assertion: fakeVaultClient satisfies the private vaultClient interface.
-var _ vaultClient = (*fakeVaultClient)(nil)
+// compile-time assertion: fakeVaultClient satisfies the exported VaultClient interface.
+var _ VaultClient = (*fakeVaultClient)(nil)
 
 // Write handles transit/encrypt/{key}, transit/decrypt/{key}, and transit/keys/{key}/rotate.
 func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[string]any) (map[string]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if f.writeErr != nil {
 		return nil, f.writeErr
 	}
@@ -121,6 +134,9 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 
 // Read handles transit/keys/{key} — returns key metadata with latest_version.
 func (f *fakeVaultClient) Read(ctx context.Context, path string) (map[string]any, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
@@ -665,4 +681,212 @@ func TestTransitKeyProvider_Rotate_CallsRotateAndRereads(t *testing.T) {
 		t.Errorf("rotate Write path = %q, want %q",
 			fake.lastWritePath, "transit/keys/gocell-config/rotate")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// FID-001 + FID-003: TestIsTransientVaultError_ResponseError
+// Tests that real *vaultapi.ResponseError objects are correctly classified.
+// ---------------------------------------------------------------------------
+
+func TestIsTransientVaultError_ResponseError(t *testing.T) {
+	cases := []struct {
+		name       string
+		statusCode int
+		wantTrans  bool
+	}{
+		{"503 Service Unavailable → transient", 503, true},
+		{"429 Too Many Requests → transient", 429, true},
+		{"408 Request Timeout → transient", 408, true},
+		{"502 Bad Gateway → transient", 502, true},
+		{"504 Gateway Timeout → transient", 504, true},
+		// 500 is transient: Vault returns 500 during sealed / leader-election
+		// windows where retrying after back-off may succeed.
+		{"500 Internal Server Error → transient (vault sealed/leader-election)", 500, true},
+		{"400 Bad Request → permanent", 400, false},
+		{"403 Forbidden → permanent", 403, false},
+		{"404 Not Found → permanent", 404, false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			respErr := &vaultapi.ResponseError{StatusCode: tc.statusCode}
+			got := isTransientVaultError(respErr)
+			if got != tc.wantTrans {
+				t.Errorf("isTransientVaultError(&ResponseError{%d}) = %v, want %v",
+					tc.statusCode, got, tc.wantTrans)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FID-001 + FID-003: TestIsTransientVaultError_ContextError
+// Tests that pure network/context errors are classified as transient.
+// ---------------------------------------------------------------------------
+
+func TestIsTransientVaultError_ContextError(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantTrans bool
+	}{
+		{
+			name:      "context.DeadlineExceeded → transient",
+			err:       context.DeadlineExceeded,
+			wantTrans: true,
+		},
+		{
+			name:      "context.Canceled → transient",
+			err:       context.Canceled,
+			wantTrans: true,
+		},
+		{
+			name: "net.OpError → transient",
+			err: &net.OpError{
+				Op:  "dial",
+				Net: "tcp",
+				Err: fmt.Errorf("connection refused"),
+			},
+			wantTrans: true,
+		},
+		{
+			name: "errcode.ErrKeyProviderEncryptFailed → permanent",
+			err: errcode.New(errcode.ErrKeyProviderEncryptFailed,
+				"permanent encrypt error"),
+			wantTrans: false,
+		},
+		{
+			name: "errcode.ErrKeyProviderDecryptFailed → permanent",
+			err: errcode.New(errcode.ErrKeyProviderDecryptFailed,
+				"permanent decrypt error"),
+			wantTrans: false,
+		},
+		{
+			name:      "errcode.ErrKeyProviderTransient → transient",
+			err:       errcode.New(errcode.ErrKeyProviderTransient, "rate limited"),
+			wantTrans: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := isTransientVaultError(tc.err)
+			if got != tc.wantTrans {
+				t.Errorf("isTransientVaultError(%v) = %v, want %v",
+					tc.err, got, tc.wantTrans)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FID-009: TestParseVaultKeyID — boundary case coverage for parseVaultKeyID
+// ---------------------------------------------------------------------------
+
+func TestParseVaultKeyID(t *testing.T) {
+	cases := []struct {
+		name       string
+		ciphertext string
+		wantKeyID  string
+		wantErr    bool
+	}{
+		{
+			name:       "valid v3 → vault-transit:v3",
+			ciphertext: "vault:v3:SGVsbG9Xb3JsZA==",
+			wantKeyID:  "vault-transit:v3",
+		},
+		{
+			name:       "valid v1 → vault-transit:v1",
+			ciphertext: "vault:v1:AAAA",
+			wantKeyID:  "vault-transit:v1",
+		},
+		{
+			name:       "empty string → error",
+			ciphertext: "",
+			wantErr:    true,
+		},
+		{
+			name:       "only two segments → error",
+			ciphertext: "vault:v1",
+			wantErr:    true,
+		},
+		{
+			name:       "bad prefix → error",
+			ciphertext: "badprefix:v1:data",
+			wantErr:    true,
+		},
+		{
+			name:       "version without v prefix → error",
+			ciphertext: "vault:notv:data",
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseVaultKeyID(tc.ciphertext)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseVaultKeyID(%q) expected error, got nil (keyID=%q)", tc.ciphertext, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseVaultKeyID(%q) unexpected error: %v", tc.ciphertext, err)
+			}
+			if got != tc.wantKeyID {
+				t.Errorf("parseVaultKeyID(%q) = %q, want %q", tc.ciphertext, got, tc.wantKeyID)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FID-010: TestTransitKeyProvider_ConcurrentEncryptRotate — race detector test
+// ---------------------------------------------------------------------------
+
+func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := newTestProvider(fake)
+
+	ctx := context.Background()
+	const encryptWorkers = 8
+	const rotations = 5
+
+	var wg sync.WaitGroup
+
+	// 8 goroutines concurrently encrypting.
+	for i := 0; i < encryptWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				h, err := p.Current(ctx)
+				if err != nil {
+					return
+				}
+				vh, ok := h.(*vaultTransitHandle)
+				if !ok {
+					return
+				}
+				// Encrypt may fail transiently during rotation — that is fine.
+				vh.Encrypt(ctx, []byte("payload"), []byte("aad")) //nolint:errcheck
+			}
+		}()
+	}
+
+	// 1 goroutine doing periodic rotations.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rotations; i++ {
+			p.Rotate(ctx) //nolint:errcheck
+		}
+	}()
+
+	wg.Wait()
+	// No race detector report = pass. The test itself needs -race to be meaningful.
 }
