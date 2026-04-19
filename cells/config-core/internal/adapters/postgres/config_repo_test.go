@@ -178,8 +178,9 @@ func TestConfigRepository_List(t *testing.T) {
 	db := &mockDB{
 		queryRows: &mockRowSet{
 			entries: []mockRowValues{
-				{values: []any{"cfg-1", "a.key", "val1", false, 1, now, now}},
-				{values: []any{"cfg-2", "b.key", "val2", false, 1, now, now}},
+				// 8 columns: id, key, value, sensitive, version, created_at, updated_at, value_key_id
+				{values: []any{"cfg-1", "a.key", "val1", false, 1, now, now, nil}},
+				{values: []any{"cfg-2", "b.key", "val2", false, 1, now, now, nil}},
 			},
 		},
 	}
@@ -201,6 +202,37 @@ func TestConfigRepository_List(t *testing.T) {
 	// Verify keyset pagination LIMIT.
 	require.Len(t, db.queryCalls, 1)
 	assert.Contains(t, db.queryCalls[0].sql, "LIMIT")
+}
+
+// TestConfigRepository_List_SensitiveRowReturnsSentinel verifies that sensitive
+// entries in List have their Value replaced with "***" (sentinel) and KeyID preserved.
+func TestConfigRepository_List_SensitiveRowReturnsSentinel(t *testing.T) {
+	now := time.Now()
+	keyID := "local-aes-v1"
+	db := &mockDB{
+		queryRows: &mockRowSet{
+			entries: []mockRowValues{
+				// 8 columns: id, key, value, sensitive, version, created_at, updated_at, value_key_id
+				{values: []any{"cfg-1", "secret.key", "", true, 1, now, now, &keyID}},
+				{values: []any{"cfg-2", "public.key", "open", false, 1, now, now, nil}},
+			},
+		},
+	}
+	repo := newConfigRepositoryFromDBTX(db)
+
+	entries, err := repo.List(context.Background(), query.ListParams{
+		Limit: 50,
+		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	// Sensitive entry must return sentinel value.
+	assert.Equal(t, "***", entries[0].Value, "sensitive entry must return *** sentinel")
+	assert.Equal(t, keyID, entries[0].KeyID, "KeyID must be preserved in list")
+
+	// Non-sensitive entry must return plaintext.
+	assert.Equal(t, "open", entries[1].Value)
 }
 
 func TestConfigRepository_PublishVersion(t *testing.T) {
@@ -277,7 +309,8 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 		queryRowResult: &mockRow{
 			// 10 columns: id, config_id, version, value, sensitive, published_at,
 			// value_cipher(nil), value_key_id(nil), value_edk(nil), value_nonce(nil)
-			values: []any{"cv-1", "cfg-1", 1, "value", true, &now, nil, nil, nil, nil},
+			// sensitive=false: no decryption needed, verifies basic scan/field mapping.
+			values: []any{"cv-1", "cfg-1", 1, "value", false, &now, nil, nil, nil, nil},
 		},
 	}
 	repo := newConfigRepositoryFromDBTX(db)
@@ -288,7 +321,27 @@ func TestConfigRepository_GetVersion(t *testing.T) {
 	assert.Equal(t, "cfg-1", version.ConfigID)
 	assert.Equal(t, 1, version.Version)
 	assert.Equal(t, "value", version.Value)
-	assert.True(t, version.Sensitive)
+	assert.False(t, version.Sensitive)
+}
+
+// TestConfigRepository_GetVersion_Sensitive_LegacyPlaintext_FailsClosed verifies
+// that reading a sensitive version with no cipher columns returns ErrConfigDecryptFailed.
+func TestConfigRepository_GetVersion_Sensitive_LegacyPlaintext_FailsClosed(t *testing.T) {
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			// sensitive=true but value_cipher is nil → legacy row
+			values: []any{"cv-1", "cfg-1", 1, "legacy-plaintext", true, &now, nil, nil, nil, nil},
+		},
+	}
+	repo := newConfigRepositoryFromDBTX(db)
+
+	_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigDecryptFailed, ec.Code)
 }
 
 // TestGetVersion_NotFound_ReturnsErrConfigRepoNotFound verifies that pgx.ErrNoRows
@@ -594,6 +647,16 @@ func (r *mockRowSet) Scan(dest ...any) error {
 	row := r.entries[r.idx]
 	r.idx++
 	for i, v := range row.values {
+		if v == nil {
+			// Handle nil for nullable columns (*[]byte, **string, etc.).
+			switch d := dest[i].(type) {
+			case *[]byte:
+				*d = nil
+			case **string:
+				*d = nil
+			}
+			continue
+		}
 		switch d := dest[i].(type) {
 		case *string:
 			*d = v.(string)
@@ -607,6 +670,12 @@ func (r *mockRowSet) Scan(dest ...any) error {
 			*d = v.(time.Time)
 		case **time.Time:
 			*d = v.(*time.Time)
+		case **string:
+			if s, ok := v.(*string); ok {
+				*d = s
+			} else if s2, ok := v.(string); ok {
+				*d = &s2
+			}
 		}
 	}
 	return nil
