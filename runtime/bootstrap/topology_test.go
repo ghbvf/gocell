@@ -106,3 +106,21 @@ func TestTopologyFromEnv_AdapterInfo(t *testing.T) {
 		t.Error("AdapterInfo() must contain 'storage' key")
 	}
 }
+
+func TestTopologyAdapterInfo_PostgresMode(t *testing.T) {
+	topo := Topology{
+		StorageBackend: "postgres",
+		AdapterMode:    "real",
+	}
+
+	info := topo.AdapterInfo()
+	if info == nil {
+		t.Fatal("AdapterInfo() must not return nil")
+	}
+	if got := info["storage"]; got != "postgres" {
+		t.Errorf("expected storage=postgres, got %q", got)
+	}
+	if got := info["outbox_storage"]; got != "postgres" {
+		t.Errorf("expected outbox_storage=postgres, got %q", got)
+	}
+}
