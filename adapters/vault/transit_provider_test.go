@@ -1,12 +1,10 @@
 package vault
 
-// TDD RED — Phase 1-a envelope contract tests.
+// Envelope contract tests for adapters/vault.TransitKeyProvider and
+// vaultTransitHandle. White-box (same package) so fakeVaultClient can satisfy
+// the unexported VaultClient interface without extra indirection.
 //
-// All tests in this file MUST FAIL until Phase 2-a implements
-// vaultTransitHandle.Encrypt / Decrypt / TransitKeyProvider.Current / ByID / Rotate.
-// The bodies in transit_provider.go currently panic("not implemented: R1c Phase 2-a").
-//
-// Test coverage contract (Phase 2-a will make these green):
+// Contract coverage:
 //   TC-1  Encrypt calls local AES-GCM and wraps DEK via Vault
 //   TC-2  Decrypt round-trip (Encrypt → Decrypt → original plaintext)
 //   TC-3  AAD mismatch fails closed (ErrKeyProviderDecryptFailed)
@@ -15,6 +13,9 @@ package vault
 //   TC-6  Current reads latest_version from Vault key metadata
 //   TC-7  ByID validates prefix; wrong prefix → ErrKeyProviderKeyNotFound
 //   TC-8  Rotate calls rotate endpoint and re-reads new version
+//   Plus: ResponseError status-code classification, context/net error
+//   classification, parseVaultKeyID boundary cases, and concurrent encrypt/
+//   rotate race coverage.
 //
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/
 //      envelope/kmsv2/envelope_test.go@master
@@ -199,70 +200,43 @@ func newTestProvider(fake *fakeVaultClient) *TransitKeyProvider {
 	return NewTransitKeyProvider(fake, "transit", "gocell-config")
 }
 
-// mustCurrent calls Current() on the provider and returns the *vaultTransitHandle.
-// If Current() panics (Phase 2-a not yet implemented) or returns an error, the
-// test is immediately failed via t.Fatal — this converts a panic into a clean
-// FAIL so the test runner can continue to the next test case.
-func mustCurrent(t *testing.T, p *TransitKeyProvider) (handle *vaultTransitHandle) {
+// mustCurrent resolves the current handle and type-asserts to the concrete
+// *vaultTransitHandle so subsequent assertions can inspect private fields.
+func mustCurrent(t *testing.T, p *TransitKeyProvider) *vaultTransitHandle {
 	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Current() panicked (not implemented): %v", r)
-		}
-	}()
 	h, err := p.Current(context.Background())
 	if err != nil {
 		t.Fatalf("Current() unexpected error: %v", err)
 	}
-	var ok bool
-	handle, ok = h.(*vaultTransitHandle)
+	handle, ok := h.(*vaultTransitHandle)
 	if !ok {
 		t.Fatalf("Current() returned non-*vaultTransitHandle: %T", h)
 	}
 	return handle
 }
 
-// callEncrypt wraps h.Encrypt to convert a panic into t.Fatal (Phase 2-a RED state).
+// callEncrypt is a typed facade over h.Encrypt that returns the five-tuple
+// directly — keeps the assertion surface in tests concise.
 func callEncrypt(t *testing.T, h *vaultTransitHandle, ctx context.Context, plaintext, aad []byte) (ct, nonce, edk []byte, keyID string, err error) {
 	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Encrypt() panicked (not implemented): %v", r)
-		}
-	}()
 	return h.Encrypt(ctx, plaintext, aad)
 }
 
-// callDecrypt wraps h.Decrypt to convert a panic into t.Fatal (Phase 2-a RED state).
+// callDecrypt is a typed facade over h.Decrypt.
 func callDecrypt(t *testing.T, h *vaultTransitHandle, ctx context.Context, ct, nonce, edk, aad []byte) (plaintext []byte, err error) {
 	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Decrypt() panicked (not implemented): %v", r)
-		}
-	}()
 	return h.Decrypt(ctx, ct, nonce, edk, aad)
 }
 
-// callRotate wraps p.Rotate to convert a panic into t.Fatal (Phase 2-a RED state).
+// callRotate is a typed facade over p.Rotate.
 func callRotate(t *testing.T, p *TransitKeyProvider, ctx context.Context) (newID string, err error) {
 	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Rotate() panicked (not implemented): %v", r)
-		}
-	}()
 	return p.Rotate(ctx)
 }
 
-// callByID wraps p.ByID to convert a panic into t.Fatal (Phase 2-a RED state).
+// callByID is a typed facade over p.ByID.
 func callByID(t *testing.T, p *TransitKeyProvider, ctx context.Context, id string) (h interface{ ID() string }, err error) {
 	t.Helper()
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("ByID() panicked (not implemented): %v", r)
-		}
-	}()
 	return p.ByID(ctx, id)
 }
 
@@ -271,8 +245,6 @@ func callByID(t *testing.T, p *TransitKeyProvider, ctx context.Context, id strin
 // ---------------------------------------------------------------------------
 
 func TestVaultTransitHandle_Encrypt_CallsLocalAESAndWrapsDEK(t *testing.T) {
-	// Phase 2-a will make this test green.
-	// Currently panics: "not implemented: R1c Phase 2-a"
 	fake := &fakeVaultClient{latestVersion: 3}
 	p := newTestProvider(fake)
 	h := mustCurrent(t, p)

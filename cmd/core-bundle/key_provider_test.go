@@ -80,6 +80,29 @@ func TestBuildKeyProvider_LocalAES_MissingKey_Fails(t *testing.T) {
 	assert.Contains(t, err.Error(), "local-aes")
 }
 
+// TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast verifies the
+// vault-transit wiring path in buildKeyProvider: the provider construction
+// must surface a startup error when VAULT_ADDR points at an unreachable
+// endpoint, rather than silently degrading to NoopTransformer.
+//
+// Success-case wiring is covered by adapters/vault integration tests (real
+// Vault container); this unit test only locks the cmd/core-bundle wiring
+// so buildKeyProvider’s vault-transit branch does not regress silently.
+func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_KEY_PROVIDER", "vault-transit")
+	// Deliberately unreachable address — readLatestVersion must surface the
+	// connection failure as a startup error (transient, but still fatal at
+	// startup since the fail-fast check runs in NewTransitKeyProviderFromEnv).
+	t.Setenv("VAULT_ADDR", "http://127.0.0.1:1")
+	t.Setenv("VAULT_TOKEN", "test-token")
+
+	kp, err := buildKeyProvider("postgres")
+	require.Error(t, err, "vault-transit with unreachable VAULT_ADDR must fail startup")
+	assert.Nil(t, kp)
+	assert.Contains(t, err.Error(), "vault-transit",
+		"error must identify provider so operators can route the alert")
+}
+
 // TestKeyProviderToTransformer_NilReturnsNoop verifies that a nil provider
 // falls through to NoopTransformer (used for memory-mode tests that do not
 // encrypt).

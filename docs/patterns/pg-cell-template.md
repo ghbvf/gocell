@@ -462,7 +462,7 @@ if e.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != ""
 
 ```
 GOCELL_KEY_PROVIDER=local-aes      → LocalAESKeyProvider (dev/CI)
-GOCELL_KEY_PROVIDER=vault-transit  → VaultTransitKeyProvider (production)
+GOCELL_KEY_PROVIDER=vault-transit  → adapters/vault.TransitKeyProvider (production, envelope mode)
 (unset)                            → NoopTransformer (dev mode, plaintext)
 ```
 
@@ -582,19 +582,28 @@ deterministic, fast. Production should use VaultTransit.
 
 ### VaultTransit key management
 
-VaultTransit delegates all key material management to Vault:
+VaultTransit delegates KEK management to Vault and uses envelope encryption:
+the client generates a 32-byte DEK per row, performs AES-GCM locally (binding
+AAD in `cipher.AEAD.Seal`), and asks Vault to wrap only the DEK.
 
 ```
-GOCELL_VAULT_ADDR    e.g. https://vault.example.com
-GOCELL_VAULT_TOKEN   service token with transit/{name}/encrypt+decrypt+rotate
-GOCELL_VAULT_KEY     Vault key name (default: "gocell-config")
+VAULT_ADDR                   e.g. https://vault.example.com (standard Vault SDK env)
+VAULT_TOKEN                  service token with transit/{name}/encrypt+decrypt+rotate
+GOCELL_VAULT_TRANSIT_MOUNT   transit engine mount path (default: "transit")
+GOCELL_VAULT_TRANSIT_KEY     Vault key name (default: "gocell-config")
 ```
 
-Vault manages DEK + KEK rotation internally. `ByID` validates the
-`vault-transit:{version}` prefix and reconstructs the Vault key name.
-`nonce` and `edk` columns are NULL for VaultTransit rows.
+Under envelope encryption all four cipher columns are populated:
+- `value_cipher` — AES-GCM ciphertext of the business plaintext (DEK-wrapped).
+- `value_nonce`  — 12-byte random IV for the local AES-GCM operation.
+- `value_edk`    — Vault-returned `vault:vN:...` string that wraps the DEK.
+- `value_key_id` — `vault-transit:vN` parsed from the Vault ciphertext prefix
+  at encrypt-time (对标 k8s KMS v2 EncryptResponse.KeyID).
 
-Integration with the production Vault SDK is tracked in backlog S14a.
+`ByID` validates the `vault-transit:{version}` prefix; Vault routes decryption
+to the correct historical key version via the `vault:vN:` ciphertext prefix.
+Production hardening (LifetimeWatcher token renewal, AppRole/K8s auth,
+namespace multi-tenant) is tracked in backlog VAULT-* items and S14a.
 
 ---
 

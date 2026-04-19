@@ -378,8 +378,10 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 	keyPath := p.mountPath + "/keys/" + p.keyName
 	data, err := p.client.Read(ctx, keyPath)
 	if err != nil {
-		return 0, errcode.Wrap(errcode.ErrKeyProviderKeyNotFound,
-			"vault-transit: read key metadata", err)
+		// Differentiate permanent (404/403 → key missing or no permission) from
+		// transient (5xx / network) via classifyVaultReadError — prevents startup
+		// diagnostics from collapsing every failure into "key not found".
+		return 0, classifyVaultReadError(err)
 	}
 
 	versionRaw, ok := data["latest_version"]
@@ -414,30 +416,40 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 // Error classification helpers
 // ---------------------------------------------------------------------------
 
-// classifyVaultEncryptError classifies a Vault client error for the encrypt path.
-// Vault HTTP 5xx / 429 / 408 / network errors → ErrKeyProviderTransient.
-// Vault HTTP 4xx / format errors → ErrKeyProviderEncryptFailed (permanent).
+// classifyVaultError routes a Vault client error to transient (retriable) or
+// permanent (caller-specified) classification. Vault HTTP 5xx/429/408 and
+// network/context errors map to ErrKeyProviderTransient; everything else maps
+// to permanentCode (supplied by the caller so the semantics match the call
+// site — encrypt/decrypt/read/rotate all surface distinct permanent codes).
 //
-// ref: aws/aws-encryption-sdk-python exceptions.py (GenerateKeyError transient split)
-func classifyVaultEncryptError(err error) error {
+// ref: aws/aws-encryption-sdk-python exceptions.py (transient/permanent split)
+// ref: hashicorp/vault api/logical.go — *vaultapi.ResponseError status codes
+func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg string) error {
 	if isTransientVaultError(err) {
 		return errcode.Wrap(errcode.ErrKeyProviderTransient,
-			"vault-transit: transient encrypt error", err)
+			"vault-transit: transient "+permanentMsg, err)
 	}
-	return errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
-		"vault-transit: encrypt failed", err)
+	return errcode.Wrap(permanentCode,
+		"vault-transit: "+permanentMsg, err)
 }
 
-// classifyVaultDecryptError classifies a Vault client error for the decrypt path.
-// Vault HTTP 5xx / 429 / 408 / network errors → ErrKeyProviderTransient.
-// Vault HTTP 4xx / format errors → ErrKeyProviderDecryptFailed (permanent).
+// classifyVaultEncryptError classifies an encrypt path error.
+func classifyVaultEncryptError(err error) error {
+	return classifyVaultError(err, errcode.ErrKeyProviderEncryptFailed, "encrypt failed")
+}
+
+// classifyVaultDecryptError classifies a decrypt path error.
 func classifyVaultDecryptError(err error) error {
-	if isTransientVaultError(err) {
-		return errcode.Wrap(errcode.ErrKeyProviderTransient,
-			"vault-transit: transient decrypt error", err)
-	}
-	return errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
-		"vault-transit: decrypt failed", err)
+	return classifyVaultError(err, errcode.ErrKeyProviderDecryptFailed, "decrypt failed")
+}
+
+// classifyVaultReadError classifies a metadata read path error
+// (transit/keys/{name}). Permanent 4xx — especially 404 (missing key) and 403
+// (permission denied) — surface as ErrKeyProviderKeyNotFound; transient 5xx or
+// network failures surface as ErrKeyProviderTransient so startup retry logic
+// and EventBus DispositionRequeue routing can distinguish the two.
+func classifyVaultReadError(err error) error {
+	return classifyVaultError(err, errcode.ErrKeyProviderKeyNotFound, "read key metadata")
 }
 
 // isTransientVaultError reports whether err indicates a transient Vault failure.
