@@ -401,3 +401,100 @@ func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, errcode.ErrConfigDecryptFailed, ec.Code)
 }
+
+// ---------------------------------------------------------------------------
+// Additional coverage for config_repo.go uncovered branches
+// ---------------------------------------------------------------------------
+
+// TestGetByKey_Sensitive_EmptyValueCipher_LegacyPlaintext verifies that a
+// sensitive=true row with value_cipher=nil (empty) and a non-nil key_id returns
+// ErrConfigDecryptFailed (legacy plaintext path).
+func TestGetByKey_Sensitive_EmptyValueCipher_LegacyPlaintext(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	now := time.Now()
+	// value_cipher is nil, value_key_id is nil → legacy plaintext path.
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "secret_key", "plaintext-not-encrypted", true, 1, now, now,
+				nil, nil, nil, nil},
+		},
+	}
+	repo := newEncryptedRepoFromDBTX(db, tr)
+
+	_, err := repo.GetByKey(ctx, "secret_key")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrConfigDecryptFailed, ec.Code)
+	assert.Contains(t, err.Error(), "legacy plaintext")
+}
+
+// failingCurrentKeyIDTransformer implements ValueTransformer AND CurrentKeyIDProvider
+// but CurrentKeyID returns an error — verifies that currentKeyID() returns "" without panic.
+type failingCurrentKeyIDTransformer struct {
+	fakeValueTransformer
+}
+
+func (f *failingCurrentKeyIDTransformer) CurrentKeyID(_ context.Context) (string, error) {
+	return "", errors.New("key provider unavailable")
+}
+
+// TestCurrentKeyID_ProviderReturnsError verifies that when CurrentKeyID returns
+// an error, currentKeyID() returns "" and GetByKey does not panic or set Stale.
+func TestCurrentKeyID_ProviderReturnsError(t *testing.T) {
+	ctx := context.Background()
+	tr := &failingCurrentKeyIDTransformer{
+		fakeValueTransformer: fakeValueTransformer{currentKeyID: "local-aes-v1"},
+	}
+
+	original := "some-secret"
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), crypto.AADForConfig("config-core", "my_key"))
+	require.NoError(t, err)
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "my_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce},
+		},
+	}
+	repo := newEncryptedRepoFromDBTX(db, tr)
+
+	entry, err := repo.GetByKey(ctx, "my_key")
+	require.NoError(t, err, "CurrentKeyID error must not propagate")
+	assert.Equal(t, original, entry.Value)
+	assert.False(t, entry.Stale, "Stale must be false when currentKeyID returns error (treated as empty)")
+}
+
+// TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID verifies that
+// when the stored keyID differs from the current active keyID, entry.Stale is true.
+func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T) {
+	ctx := context.Background()
+	// Current active key is v2, but the row was encrypted with v1.
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"} // encrypt with v1 first
+
+	original := "stale-value"
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), crypto.AADForConfig("config-core", "cfg_key"))
+	require.NoError(t, err)
+
+	// Now simulate key rotation: current is v2, but stored row has v1.
+	tr.currentKeyID = "local-aes-v2"
+	storedKeyID := "local-aes-v1"
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "cfg_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce},
+		},
+	}
+	repo := newEncryptedRepoFromDBTX(db, tr)
+
+	entry, err := repo.GetByKey(ctx, "cfg_key")
+	require.NoError(t, err)
+	assert.True(t, entry.Stale, "entry must be marked stale when storedKeyID != currentKeyID")
+	assert.Equal(t, storedKeyID, entry.KeyID)
+}

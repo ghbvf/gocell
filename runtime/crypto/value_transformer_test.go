@@ -175,3 +175,94 @@ func TestAADForConfig_Format(t *testing.T) {
 	aad := crypto.AADForConfig("config-core", "api_key")
 	assert.Equal(t, []byte("cell:config-core/key:api_key"), aad)
 }
+
+// ---------------------------------------------------------------------------
+// ValueTransformer error paths (value_transformer.go uncovered branches)
+// ---------------------------------------------------------------------------
+
+// errorKeyProvider is a KeyProvider that always returns the configured error.
+type errorKeyProvider struct {
+	currentErr error
+	byIDErr    error
+}
+
+func (p *errorKeyProvider) Current(_ context.Context) (crypto.KeyHandle, error) {
+	return nil, p.currentErr
+}
+
+func (p *errorKeyProvider) ByID(_ context.Context, _ string) (crypto.KeyHandle, error) {
+	return nil, p.byIDErr
+}
+
+func (p *errorKeyProvider) Rotate(_ context.Context) (string, error) {
+	return "", nil
+}
+
+// errorKeyHandle is a KeyHandle whose Encrypt always returns the configured error.
+type errorKeyHandle struct {
+	encryptErr error
+}
+
+func (h *errorKeyHandle) ID() string { return "error-key" }
+
+func (h *errorKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, error) {
+	return nil, nil, nil, h.encryptErr
+}
+
+func (h *errorKeyHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {
+	return nil, nil
+}
+
+// singleHandleProvider returns the given handle for Current().
+type singleHandleProvider struct {
+	handle crypto.KeyHandle
+}
+
+func (p *singleHandleProvider) Current(_ context.Context) (crypto.KeyHandle, error) {
+	return p.handle, nil
+}
+
+func (p *singleHandleProvider) ByID(_ context.Context, _ string) (crypto.KeyHandle, error) {
+	return nil, nil
+}
+
+func (p *singleHandleProvider) Rotate(_ context.Context) (string, error) {
+	return "", nil
+}
+
+// TestValueTransformer_Encrypt_CurrentKeyError verifies that when
+// provider.Current returns an error, Encrypt surfaces it.
+func TestValueTransformer_Encrypt_CurrentKeyError(t *testing.T) {
+	ctx := context.Background()
+	p := &errorKeyProvider{currentErr: errors.New("current key unavailable")}
+	tr := crypto.NewValueTransformer(p)
+
+	_, _, _, _, err := tr.Encrypt(ctx, []byte("value"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get current key")
+}
+
+// TestValueTransformer_Encrypt_HandleEncryptError verifies that when
+// handle.Encrypt returns an error, Encrypt surfaces it.
+func TestValueTransformer_Encrypt_HandleEncryptError(t *testing.T) {
+	ctx := context.Background()
+	encErr := &errcode.Error{Code: errcode.ErrKeyProviderEncryptFailed, Message: "cipher error"}
+	p := &singleHandleProvider{handle: &errorKeyHandle{encryptErr: encErr}}
+	tr := crypto.NewValueTransformer(p)
+
+	_, _, _, _, err := tr.Encrypt(ctx, []byte("value"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "encrypt")
+}
+
+// TestValueTransformer_Decrypt_ByIDError verifies that when provider.ByID returns
+// an error, Decrypt surfaces it.
+func TestValueTransformer_Decrypt_ByIDError(t *testing.T) {
+	ctx := context.Background()
+	p := &errorKeyProvider{byIDErr: errors.New("key not found")}
+	tr := crypto.NewValueTransformer(p)
+
+	_, err := tr.Decrypt(ctx, []byte("ct"), "missing-key", nil, nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve key")
+}

@@ -3,6 +3,7 @@ package crypto
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -305,6 +306,10 @@ func (p *VaultTransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 
 // latestVersionFromKeyData extracts the latest_version int from a Vault
 // transit/keys/{name} response map.
+//
+// vault/api uses json.Decoder with UseNumber(), so numeric fields arrive as
+// json.Number rather than float64. All numeric type variants are handled so
+// that both the fake (in-memory) client and the real vaultapi.Client work.
 func latestVersionFromKeyData(data map[string]any) (int, error) {
 	raw, ok := data["latest_version"]
 	if !ok {
@@ -318,6 +323,13 @@ func latestVersionFromKeyData(data map[string]any) (int, error) {
 		return v, nil
 	case int64:
 		return int(v), nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+				fmt.Sprintf("vault-transit: latest_version json.Number parse error: %v", err))
+		}
+		return int(n), nil
 	default:
 		return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
 			fmt.Sprintf("vault-transit: unexpected latest_version type %T", raw))

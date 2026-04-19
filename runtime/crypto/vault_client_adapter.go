@@ -16,6 +16,14 @@ type vaultAPIClient struct {
 	client *vaultapi.Client
 }
 
+// NewVaultAPIClient wraps the provided *vaultapi.Client in the vaultClient adapter
+// used by VaultTransitKeyProvider. Call this when constructing the provider from a
+// pre-configured *vaultapi.Client (e.g. in tests or when the caller manages auth
+// separately from NewVaultTransitKeyProviderFromEnv).
+func NewVaultAPIClient(c *vaultapi.Client) vaultClient {
+	return &vaultAPIClient{client: c}
+}
+
 // Write sends a PUT/POST to the given Vault path with the provided data.
 func (a *vaultAPIClient) Write(ctx context.Context, path string, data map[string]any) (map[string]any, error) {
 	resp, err := a.client.Logical().WriteWithContext(ctx, path, data)

@@ -238,3 +238,114 @@ func TestLocalAESKeyProvider_NonceUnique(t *testing.T) {
 
 	assert.NotEqual(t, nonce1, nonce2, "consecutive Encrypt calls must produce different nonces")
 }
+
+// ---------------------------------------------------------------------------
+// TestLocalAESHandle_Decrypt_MissingNonce — nonce empty → ErrKeyProviderDecryptFailed
+// ---------------------------------------------------------------------------
+
+func TestLocalAESHandle_Decrypt_MissingNonce(t *testing.T) {
+	ctx := context.Background()
+	p := newTestLocalAES(t)
+	handle, err := p.Current(ctx)
+	require.NoError(t, err)
+
+	// Encrypt to get a valid ciphertext + edk.
+	ct, _, edk, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	require.NoError(t, err)
+
+	// Pass empty nonce — must fail.
+	_, err = handle.Decrypt(ctx, ct, nil, edk, []byte("aad"))
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// TestLocalAESHandle_Decrypt_MissingEDK — edk empty → ErrKeyProviderDecryptFailed
+// ---------------------------------------------------------------------------
+
+func TestLocalAESHandle_Decrypt_MissingEDK(t *testing.T) {
+	ctx := context.Background()
+	p := newTestLocalAES(t)
+	handle, err := p.Current(ctx)
+	require.NoError(t, err)
+
+	ct, nonce, _, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	require.NoError(t, err)
+
+	// Pass empty edk — must fail.
+	_, err = handle.Decrypt(ctx, ct, nonce, nil, []byte("aad"))
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// TestLocalAESHandle_Decrypt_TamperedEDK — tampered edk → ErrKeyProviderDecryptFailed
+// ---------------------------------------------------------------------------
+
+func TestLocalAESHandle_Decrypt_TamperedEDK(t *testing.T) {
+	ctx := context.Background()
+	p := newTestLocalAES(t)
+	handle, err := p.Current(ctx)
+	require.NoError(t, err)
+
+	ct, nonce, edk, err := handle.Encrypt(ctx, []byte("value"), []byte("aad"))
+	require.NoError(t, err)
+
+	// Flip the last byte of edk to simulate tampering.
+	tampered := make([]byte, len(edk))
+	copy(tampered, edk)
+	tampered[len(tampered)-1] ^= 0xFF
+
+	_, err = handle.Decrypt(ctx, ct, nonce, tampered, []byte("aad"))
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// TestNewLocalAESKeyProviderFromKeys_InvalidPrevKey — invalid prevKey → error
+// ---------------------------------------------------------------------------
+
+func TestNewLocalAESKeyProviderFromKeys_InvalidPrevKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		prevKey string
+	}{
+		{"hex too short", "deadbeef"},
+		{"not hex or base64", "zzz-not-valid-encoding-at-all-@@@@"},
+		{"base64 wrong length", "c2hvcnQ="}, // "short" base64 — not 32 bytes
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := crypto.NewLocalAESKeyProviderFromKeys(validMasterKey, tc.prevKey)
+			require.Error(t, err, "invalid prevKey must return error")
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestAESGCMEncryptSplit_InvalidKeyLength — invalid key length → error via Encrypt
+// ---------------------------------------------------------------------------
+
+// TestLocalAESHandle_Encrypt_InvalidKEK exercises the aesGCMEncryptSplit branch
+// that returns an error when the key is not a valid AES key length (16/24/32 bytes).
+// We do this by constructing a provider with a non-standard key via internal
+// manipulation — use NewLocalAESKeyProviderFromKeys with a key that, after
+// decoding, is 32 bytes (valid), then we rely on the DEK generation path which
+// always uses 32-byte DEK internally. Instead, test the invalid-key path by
+// ensuring a 15-byte hex key is rejected at construction time.
+func TestNewLocalAESKeyProviderFromKeys_KeyWrongDecodedLength(t *testing.T) {
+	// 30 hex chars = 15 bytes after decoding → invalid (not 32 bytes).
+	shortHex := "010203040506070809101112131415"
+	_, err := crypto.NewLocalAESKeyProviderFromKeys(shortHex, "")
+	require.Error(t, err, "15-byte key must be rejected")
+}
