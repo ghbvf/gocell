@@ -23,5 +23,4 @@ verify:
   waivers: []
 
 allowedFiles:
-  - cells/config-core/slices/flag-write/**
   - cells/config-core/slices/flagwrite/**
