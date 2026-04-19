@@ -447,7 +447,11 @@ func (s *Subscriber) subscribeOnce(
 	if loopErr != nil {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 			var cancelWait context.CancelFunc
-			waitCtx, cancelWait = context.WithTimeout(context.Background(), 30*time.Second)
+			// Use context.WithoutCancel so the wait inherits ctx values (trace,
+			// correlation IDs) but is not cancelled if ctx is cancelled.
+			// This ensures a finite drain budget on reconnect even when the
+			// parent ctx carries no deadline.
+			waitCtx, cancelWait = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancelWait()
 		}
 	}
@@ -558,6 +562,7 @@ func (s *Subscriber) consumeLoop(
 			s.wg.Add(1)
 			run.registerDelivery()
 			go func(d amqp.Delivery) {
+				defer s.wg.Done()
 				defer run.markDeliveryDone()
 				s.processDelivery(ctx, ch, d, topic, handler)
 			}(delivery)
@@ -619,6 +624,7 @@ func (s *Subscriber) drainRemaining(
 			s.wg.Add(1)
 			run.registerDelivery()
 			go func(d amqp.Delivery) {
+				defer s.wg.Done()
 				defer run.markDeliveryDone()
 				s.processDelivery(ctx, ch, d, topic, handler)
 			}(d)
@@ -659,8 +665,6 @@ func (s *Subscriber) processDelivery(
 	topic string,
 	handler outbox.EntryHandler,
 ) {
-	defer s.wg.Done()
-
 	entry, err := unmarshalDelivery(delivery.Body)
 	if err != nil {
 		// Unmarshal failure is a permanent error — NACK without requeue.
