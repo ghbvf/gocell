@@ -742,14 +742,30 @@ func (r *Router) mergeDelegatedMatcher(declared func(*http.Request) bool) {
 }
 
 // deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
-// meta's path. The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
+// meta's METHOD+path (e.g. "POST /api/v1/access/users/{id}/password").
+// The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
+// The "METHOD /path" format matches the wire contract documented in
+// docs/operations/first-run-setup.md (change_password_endpoint field).
 func (r *Router) deriveHint() {
 	for _, m := range r.declaredAuthMetas {
 		if m.Method == "POST" && m.PasswordResetExempt {
-			r.derivedHint = m.Path
+			r.derivedHint = m.Method + " " + m.Path
 			return
 		}
 	}
+}
+
+// DeclaredAuthMetas returns a copy of all AuthRouteMeta entries accumulated by
+// DeclareAuthMeta. Useful in tests to assert that Cell route declarations
+// propagate the correct attributes (e.g. PasswordResetExempt) without
+// exercising the full HTTP request path.
+func (r *Router) DeclaredAuthMetas() []kcell.AuthRouteMeta {
+	if len(r.declaredAuthMetas) == 0 {
+		return nil
+	}
+	out := make([]kcell.AuthRouteMeta, len(r.declaredAuthMetas))
+	copy(out, r.declaredAuthMetas)
+	return out
 }
 
 // orMergeRequest returns a predicate that returns true when either a or b matches.

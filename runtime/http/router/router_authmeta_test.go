@@ -251,7 +251,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must be present when hint is derived")
-	assert.Equal(t, "/change-password", details["change_password_endpoint"])
+	assert.Equal(t, "POST /change-password", details["change_password_endpoint"])
 }
 
 // ---------------------------------------------------------------------------
