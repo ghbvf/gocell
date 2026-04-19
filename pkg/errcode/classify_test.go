@@ -99,65 +99,67 @@ func TestIsInfraError(t *testing.T) {
 }
 
 // TestIsDomainNotFound covers the whitelist-based domain-not-found classifier.
+// P2-1: IsDomainNotFound now accepts ...Code instead of ...string, so callers
+// pass Code constants directly without string(...) conversion.
 func TestIsDomainNotFound(t *testing.T) {
 	tests := []struct {
 		name  string
 		err   error
-		codes []string
+		codes []Code
 		want  bool
 	}{
 		{
 			name:  "nil error",
 			err:   nil,
-			codes: []string{string(ErrSessionNotFound)},
+			codes: []Code{ErrSessionNotFound},
 			want:  false,
 		},
 		{
 			name:  "domain not-found code in whitelist",
 			err:   NewDomain(ErrSessionNotFound, "session not found"),
-			codes: []string{string(ErrSessionNotFound)},
+			codes: []Code{ErrSessionNotFound},
 			want:  true,
 		},
 		{
 			name:  "domain not-found code not in whitelist",
 			err:   NewDomain(ErrSessionNotFound, "session not found"),
-			codes: []string{string(ErrOrderNotFound)},
+			codes: []Code{ErrOrderNotFound},
 			want:  false,
 		},
 		{
 			name:  "infra error is not domain not-found",
 			err:   NewInfra(ErrInternal, "db down"),
-			codes: []string{string(ErrInternal)},
+			codes: []Code{ErrInternal},
 			want:  false,
 		},
 		{
 			name:  "plain error is not domain not-found",
 			err:   errors.New("connection refused"),
-			codes: []string{},
+			codes: []Code{},
 			want:  false,
 		},
 		{
 			name:  "errcode with CategoryUnspecified is not domain not-found",
 			err:   New(ErrSessionNotFound, "not found"),
-			codes: []string{string(ErrSessionNotFound)},
+			codes: []Code{ErrSessionNotFound},
 			want:  false,
 		},
 		{
 			name:  "multiple whitelist codes — first matches",
 			err:   NewDomain(ErrSessionNotFound, "not found"),
-			codes: []string{string(ErrSessionNotFound), string(ErrOrderNotFound)},
+			codes: []Code{ErrSessionNotFound, ErrOrderNotFound},
 			want:  true,
 		},
 		{
 			name:  "multiple whitelist codes — second matches",
 			err:   NewDomain(ErrOrderNotFound, "order not found"),
-			codes: []string{string(ErrSessionNotFound), string(ErrOrderNotFound)},
+			codes: []Code{ErrSessionNotFound, ErrOrderNotFound},
 			want:  true,
 		},
 		{
 			name:  "empty code whitelist never matches",
 			err:   NewDomain(ErrSessionNotFound, "not found"),
-			codes: []string{},
+			codes: []Code{},
 			want:  false,
 		},
 	}
@@ -279,4 +281,53 @@ func TestNew_BackwardCompatibility(t *testing.T) {
 	// Unspecified is fail-closed → treated as infra.
 	assert.True(t, IsInfraError(err),
 		"CategoryUnspecified is fail-closed and must be treated as infra")
+}
+
+// TestWrapInfra verifies that WrapInfra sets CategoryInfra and preserves the cause.
+// P2-2: WrapInfra / WrapDomain are convenience constructors for cause-preserving
+// classified errors, complementing NewInfra / NewDomain for the no-cause case.
+func TestWrapInfra(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := WrapInfra(ErrInternal, "db unavailable", cause)
+
+	assert.Equal(t, CategoryInfra, err.Category)
+	assert.Equal(t, ErrInternal, err.Code)
+	assert.Equal(t, "db unavailable", err.Message)
+	assert.Equal(t, cause, err.Cause, "cause must be preserved")
+	assert.True(t, IsInfraError(err), "WrapInfra result must be classified as infra")
+	// Unwrap chain: errors.Is must reach the cause.
+	assert.True(t, errors.Is(err, cause), "errors.Is must traverse Cause via Unwrap")
+}
+
+// TestWrapDomain verifies that WrapDomain sets CategoryDomain and preserves the cause.
+func TestWrapDomain(t *testing.T) {
+	cause := errors.New("underlying repo error")
+	err := WrapDomain(ErrSessionNotFound, "session not found", cause)
+
+	assert.Equal(t, CategoryDomain, err.Category)
+	assert.Equal(t, ErrSessionNotFound, err.Code)
+	assert.Equal(t, "session not found", err.Message)
+	assert.Equal(t, cause, err.Cause, "cause must be preserved")
+	assert.False(t, IsInfraError(err), "WrapDomain result must not be classified as infra")
+	assert.True(t, IsDomainNotFound(err, ErrSessionNotFound),
+		"WrapDomain result must be classified as domain not-found when code matches")
+	// Unwrap chain: errors.Is must reach the cause.
+	assert.True(t, errors.Is(err, cause), "errors.Is must traverse Cause via Unwrap")
+}
+
+// TestIsExpected4xx_ErrMetadataNotFound verifies P2-5: ErrMetadataNotFound maps
+// to HTTP 404 in codeToStatus and belongs in the expected4xxCodes whitelist.
+func TestIsExpected4xx_ErrMetadataNotFound(t *testing.T) {
+	err := New(ErrMetadataNotFound, "metadata not found")
+	assert.True(t, IsExpected4xx(err),
+		"ErrMetadataNotFound (404) must be in expected4xxCodes whitelist")
+}
+
+// TestIsExpected4xx_ErrAuthKeyMissing_IsNotExpected4xx verifies P1-1:
+// ErrAuthKeyMissing maps to HTTP 500 in codeToStatus (infra misconfiguration)
+// and must NOT appear in the expected4xxCodes whitelist.
+func TestIsExpected4xx_ErrAuthKeyMissing_IsNotExpected4xx(t *testing.T) {
+	err := New(ErrAuthKeyMissing, "no signing key configured")
+	assert.False(t, IsExpected4xx(err),
+		"ErrAuthKeyMissing (500/infra) must NOT be in expected4xxCodes whitelist")
 }

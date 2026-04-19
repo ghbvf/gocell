@@ -116,7 +116,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 // logged at Warn. Any infra error, unclassified error, or non-whitelisted
 // errcode is logged at Error — fail-closed, ref S40.
 func (s *Service) logSessionLookupError(sid, subject string, err error) {
-	if errcode.IsDomainNotFound(err, string(errcode.ErrSessionNotFound)) {
+	if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
 		s.logger.Warn("session-validate: session not found",
 			slog.String("sid", sid),
 			slog.String("subject", subject))
