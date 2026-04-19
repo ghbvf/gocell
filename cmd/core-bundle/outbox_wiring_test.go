@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
@@ -23,133 +24,106 @@ func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { r
 
 var _ outbox.Publisher = discardPublisher{}
 
-// TestBuildConfigCoreOpts_InMemoryMode_NoRelay asserts that an unset
-// GOCELL_CELL_ADAPTER_MODE returns a nil relay worker. No database connection
-// is attempted; this test requires no external services.
+// TestBuildConfigCoreOpts_InMemoryMode_NoRelay asserts that memory topology
+// returns a nil ManagedResource (no PG pool, no relay). No database
+// connection is attempted; this test requires no external services.
 //
 // Regression guard for A11: if the relay is accidentally wired in memory mode
 // it would try to Start() without a real DB and either panic or block.
 func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
 	t.Setenv("GOCELL_PG_DSN", "") // ensure no PG connection is attempted
 
 	ctx := context.Background()
-	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "memory"}
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err)
-	assert.Equal(t, "memory", mode, "unset GOCELL_CELL_ADAPTER_MODE must resolve to memory")
-	assert.Nil(t, pool, "in-memory mode must not open a PG pool")
-	assert.Nil(t, relay, "in-memory mode must not create a relay worker")
-}
-
-// TestBuildConfigCoreOpts_ExplicitMemoryMode_NoRelay is the explicit counterpart:
-// GOCELL_CELL_ADAPTER_MODE=memory must also produce no relay.
-func TestBuildConfigCoreOpts_ExplicitMemoryMode_NoRelay(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "memory")
-	t.Setenv("GOCELL_PG_DSN", "")
-
-	ctx := context.Background()
-	mode, _, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
-
-	require.NoError(t, err)
-	assert.Equal(t, "memory", mode)
-	assert.Nil(t, pool)
-	assert.Nil(t, relay)
+	assert.Nil(t, res, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
+	assert.NotEmpty(t, opts, "in-memory mode must return cell options (WithInMemoryDefaults)")
 }
 
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognised
-// GOCELL_CELL_ADAPTER_MODE returns an error and no relay worker.
+// StorageBackend (bypassing Topology validation) returns an error and a nil
+// ManagedResource. In production, TopologyFromEnv already rejects such
+// values; this test locks the defence-in-depth behaviour.
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "cassandra")
-
 	ctx := context.Background()
-	_, _, _, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "cassandra"}
+	res, _, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
-	assert.Nil(t, relay, "error path must not leak a relay worker")
+	assert.Nil(t, res, "error path must not leak a ManagedResource")
 }
 
-// TestBuildConfigCoreOpts_PGMode_RelayNonNil asserts that postgres mode
-// produces a non-nil relay worker that satisfies worker.Worker. This test
-// requires a running PostgreSQL instance (GOCELL_PG_DSN must be set); it
-// skips gracefully if the DSN is absent so it does not block unit test suites.
+// TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
+// produces a non-nil ManagedResource with a relay worker. This test requires a
+// running PostgreSQL instance (GOCELL_PG_DSN must be set); it skips gracefully if
+// the DSN is absent so it does not block unit test suites.
 //
-// The assertion that relayWorker != nil is the critical regression check for
-// A11: before the fix, buildConfigCoreOpts never returned a relay, so the
-// bootstrap could not register it.
-func TestBuildConfigCoreOpts_PGMode_RelayNonNil(t *testing.T) {
+// The assertion that res != nil is the critical regression check for A11: before
+// the fix, buildConfigCoreOpts never returned a relay, so the bootstrap could not
+// register it.
+func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	pgDSN, ok := os.LookupEnv("GOCELL_PG_DSN")
 	if !ok || pgDSN == "" {
 		t.Skip("GOCELL_PG_DSN not set; skipping PG-mode relay wiring test")
 	}
 
-	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-
 	ctx := context.Background()
-	mode, opts, pool, relay, err := buildConfigCoreOpts(ctx, discardPublisher{}, metrics.NopProvider{})
+	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
-	assert.Equal(t, "postgres", mode)
-	assert.NotNil(t, pool, "postgres mode must open a PG pool")
+	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (wraps pool + relay)")
 	assert.NotEmpty(t, opts, "postgres mode must return cell options")
-	require.NotNil(t, relay, "postgres mode must return a relay worker (A11 fix)")
 
-	// relay is typed as worker.Worker — the assignment itself is the compile-time
-	// interface check. No explicit assertion needed.
-	require.NotNil(t, relay)
+	// ManagedResource must have a non-nil relay worker (A11 fix).
+	assert.NotNil(t, res.Worker(), "postgres ManagedResource must carry a relay worker")
 
-	pool.Close()
+	// Close the pool via ManagedResource.Close so pool.Close() is called.
+	require.NoError(t, res.Close())
 }
 
-// TestPgHealthCheckerOpts_NilPool_ReturnsNil guards that callers can
-// unconditionally append the result to a bootstrap options slice without a
-// nil guard — critical for the memory-mode code path that does not open a PG
-// pool.
-func TestPgHealthCheckerOpts_NilPool_ReturnsNil(t *testing.T) {
-	opts := pgHealthCheckerOpts(nil)
-	assert.Nil(t, opts, "nil pool must produce nil opts slice so append is a no-op")
-}
-
-// TestBuildAdapterInfo_TableDriven locks the adapter_info map shape that
-// appears in /readyz?verbose and adapter_info metrics. The outbox_storage
-// field is the key operator signal distinguishing "in-process events only"
-// from "PG outbox → relay → RMQ".
-func TestBuildAdapterInfo_TableDriven(t *testing.T) {
+// TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that
+// appears in /readyz?verbose and adapter_info metrics. This replaces the old
+// TestBuildAdapterInfo_TableDriven which tested the now-deleted buildAdapterInfo
+// function. The same semantics are now provided by Topology.AdapterInfo().
+func TestTopologyAdapterInfo_TableDriven(t *testing.T) {
 	tests := []struct {
-		name            string
-		effectiveMode   string
-		cellAdapterMode string
-		wantStorage     string
-		wantOutbox      string
+		name           string
+		adapterMode    string
+		storageBackend string
+		wantMode       string
+		wantStorage    string
+		wantOutbox     string
 	}{
 		{
-			name:            "dev memory",
-			effectiveMode:   "in-memory",
-			cellAdapterMode: "memory",
-			wantStorage:     "in-memory",
-			wantOutbox:      "in-memory",
+			name:           "dev memory",
+			adapterMode:    "",
+			storageBackend: "memory",
+			wantMode:       "in-memory",
+			wantStorage:    "in-memory",
+			wantOutbox:     "in-memory",
 		},
 		{
-			name:            "real-keys-in-memory",
-			effectiveMode:   "real-keys-in-memory-storage",
-			cellAdapterMode: "memory",
-			wantStorage:     "in-memory",
-			wantOutbox:      "in-memory",
-		},
-		{
-			name:            "postgres mode flips storage + outbox_storage",
-			effectiveMode:   "real-keys-in-memory-storage",
-			cellAdapterMode: "postgres",
-			wantStorage:     "postgres",
-			wantOutbox:      "postgres",
+			name:           "postgres real",
+			adapterMode:    "real",
+			storageBackend: "postgres",
+			wantMode:       "real-keys-postgres-storage",
+			wantStorage:    "postgres",
+			wantOutbox:     "postgres",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := buildAdapterInfo(tt.effectiveMode, tt.cellAdapterMode)
-			assert.Equal(t, tt.effectiveMode, info["mode"])
+			topo := bootstrap.Topology{
+				AdapterMode:    tt.adapterMode,
+				StorageBackend: tt.storageBackend,
+			}
+			info := topo.AdapterInfo()
+			assert.Equal(t, tt.wantMode, info["mode"])
 			assert.Equal(t, tt.wantStorage, info["storage"])
 			assert.Equal(t, tt.wantOutbox, info["outbox_storage"])
 			// event_bus stays in-memory — the relay forwards PG outbox entries
