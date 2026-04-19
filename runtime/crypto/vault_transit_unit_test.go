@@ -17,15 +17,23 @@ import (
 // ---------------------------------------------------------------------------
 
 // fakeVaultClient simulates a minimal Vault Transit server in memory.
+// It enforces AAD (Vault "context" field) binding: ciphertext is stored with its context,
+// and Decrypt rejects if the provided context does not match.
 type fakeVaultClient struct {
 	version int
 	broken  bool // simulate network failure
-	// stored as map[ciphertext string]plaintext bytes
-	store map[string][]byte
+	// stored as map[ciphertext string]encryptedEntry
+	store map[string]fakeVaultEntry
+}
+
+// fakeVaultEntry stores the plaintext and the context (AAD) used during encryption.
+type fakeVaultEntry struct {
+	plaintext []byte
+	context   string // base64-encoded AAD; empty string means no AAD was provided
 }
 
 func newFakeVaultClient() *fakeVaultClient {
-	return &fakeVaultClient{version: 1, store: make(map[string][]byte)}
+	return &fakeVaultClient{version: 1, store: make(map[string]fakeVaultEntry)}
 }
 
 func (c *fakeVaultClient) Write(ctx context.Context, path string, data map[string]any) (map[string]any, error) {
@@ -36,18 +44,24 @@ func (c *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 	case isEncryptPath(path):
 		encoded, _ := data["plaintext"].(string)
 		raw, _ := base64.StdEncoding.DecodeString(encoded)
+		ctx64, _ := data["context"].(string)
 		ct := fakeCiphertext(raw, c.version)
-		c.store[ct] = raw
+		c.store[ct] = fakeVaultEntry{plaintext: raw, context: ctx64}
 		return map[string]any{"ciphertext": ct}, nil
 
 	case isDecryptPath(path):
 		ct, _ := data["ciphertext"].(string)
-		pt, ok := c.store[ct]
+		entry, ok := c.store[ct]
 		if !ok {
 			return nil, errors.New("vault: ciphertext not found")
 		}
+		// AAD (context) binding check — mirrors Vault Transit server-side enforcement.
+		providedCtx, _ := data["context"].(string)
+		if entry.context != providedCtx {
+			return nil, errors.New("vault: context mismatch — AAD binding verification failed")
+		}
 		return map[string]any{
-			"plaintext": base64.StdEncoding.EncodeToString(pt),
+			"plaintext": base64.StdEncoding.EncodeToString(entry.plaintext),
 		}, nil
 
 	case isRotatePath(path):
@@ -114,9 +128,37 @@ func TestVaultTransitKeyProvider_EncryptDecrypt_RoundTrip(t *testing.T) {
 	assert.Nil(t, nonce)
 	assert.Nil(t, edk)
 
-	recovered, err := handle.Decrypt(ctx, ct, nil, nil, nil)
+	// Decrypt with correct AAD must succeed.
+	recovered, err := handle.Decrypt(ctx, ct, nil, nil, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
+}
+
+// TestVaultTransitKeyProvider_AADMismatch_FailsClosed verifies that decrypting with a
+// different AAD (context) than was used during encryption returns an error.
+// This enforces cross-row replay prevention — equivalent to AES-GCM AAD binding.
+func TestVaultTransitKeyProvider_AADMismatch_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	client := newFakeVaultClient()
+	p := crypto.NewVaultTransitKeyProvider(client, "transit", "gocell-config")
+
+	handle, err := p.Current(ctx)
+	require.NoError(t, err)
+
+	plaintext := []byte("sensitive-value")
+	aad := []byte("cell:config-core/key:correct_key")
+
+	ct, _, _, err := handle.Encrypt(ctx, plaintext, aad)
+	require.NoError(t, err)
+
+	// Decrypt with wrong AAD (different key context) must fail.
+	wrongAAD := []byte("cell:config-core/key:wrong_key")
+	_, err = handle.Decrypt(ctx, ct, nil, nil, wrongAAD)
+	require.Error(t, err, "decrypt with mismatched AAD must fail-closed")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
 }
 
 func TestVaultTransitKeyProvider_Rotate_AdvancesVersion(t *testing.T) {

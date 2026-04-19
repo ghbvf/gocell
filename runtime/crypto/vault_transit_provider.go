@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	vaultapi "github.com/hashicorp/vault/api"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -55,14 +57,24 @@ func (h *vaultTransitHandle) ID() string { return h.id }
 
 // Encrypt delegates to Vault Transit encrypt API.
 // Returns (vaultCiphertextBytes, nil, nil, nil) — nonce and edk are unused.
-// AAD is intentionally ignored: Vault Transit handles context binding server-side.
-func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, _ []byte) (ciphertext, nonce, edk []byte, err error) {
+// AAD is passed to Vault Transit as the "context" field (base64-encoded), which
+// Vault uses as HMAC-binding — equivalent to AES-GCM AAD for cross-row replay prevention.
+//
+// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field binds
+// to the key derivation path when key type supports derived keys; for non-derived keys
+// Vault HMAC-binds the context to the ciphertext, matching AES-GCM AAD semantics.
+func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error) {
 	path := fmt.Sprintf("%s/encrypt/%s", h.mountPath, h.keyName)
 	encoded := base64.StdEncoding.EncodeToString(plaintext)
 
-	result, err := h.client.Write(ctx, path, map[string]any{
+	payload := map[string]any{
 		"plaintext": encoded,
-	})
+	}
+	if len(aad) > 0 {
+		payload["context"] = base64.StdEncoding.EncodeToString(aad)
+	}
+
+	result, err := h.client.Write(ctx, path, payload)
 	if err != nil {
 		return nil, nil, nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: encrypt failed", err)
@@ -79,13 +91,20 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, _ []byte) (
 
 // Decrypt delegates to Vault Transit decrypt API.
 // The full vault ciphertext (value_cipher) is passed as ciphertext.
-// nonce, edk, and aad are ignored — Vault manages these server-side.
-func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, _, _, _ []byte) (plaintext []byte, err error) {
+// nonce and edk are unused (nil) for VaultTransit — Vault embeds key version in
+// the ciphertext prefix. aad is passed as the "context" field (base64-encoded)
+// so Vault can verify the AAD binding matches what was used during Encrypt.
+func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, _, _, aad []byte) (plaintext []byte, err error) {
 	path := fmt.Sprintf("%s/decrypt/%s", h.mountPath, h.keyName)
 
-	result, err := h.client.Write(ctx, path, map[string]any{
+	payload := map[string]any{
 		"ciphertext": string(ciphertext),
-	})
+	}
+	if len(aad) > 0 {
+		payload["context"] = base64.StdEncoding.EncodeToString(aad)
+	}
+
+	result, err := h.client.Write(ctx, path, payload)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: decrypt failed", err)
@@ -146,19 +165,63 @@ func NewVaultTransitKeyProvider(client vaultClient, mountPath, keyName string) *
 }
 
 // NewVaultTransitKeyProviderFromEnv constructs a VaultTransitKeyProvider from
-// environment variables.
+// environment variables using the real HashiCorp vault/api client.
 //
-// TODO(S14a): Replace the placeholder with real vault.Client construction
-// once github.com/hashicorp/vault/api is added to go.mod.
+// Required environment variables:
+//   - VAULT_ADDR:                  Vault server address (e.g. "https://vault.example.com")
+//   - VAULT_TOKEN:                 Vault token for authentication
+//
+// Optional environment variables:
+//   - GOCELL_VAULT_TRANSIT_MOUNT: transit engine mount path (default: "transit")
+//   - GOCELL_VAULT_TRANSIT_KEY:   transit key name (default: "gocell-config")
+//
+// The constructor verifies the key exists in Vault at startup (fail-fast).
+// For AppRole or other auth methods, set VAULT_TOKEN to the appropriate token
+// prior to calling this function (vault login → token).
+//
+// ref: hashicorp/vault api/client.go — NewClient + AddHeader for namespaces
 func NewVaultTransitKeyProviderFromEnv() (*VaultTransitKeyProvider, error) {
 	addr := os.Getenv("VAULT_ADDR")
 	if addr == "" {
 		return nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"vault-transit: VAULT_ADDR is required")
 	}
-	// TODO(S14a): construct vault.Client and wrap in a real vaultClientAdapter.
-	return nil, errcode.New(errcode.ErrNotImplemented,
-		"vault-transit: real client construction requires github.com/hashicorp/vault/api (backlog S14a)")
+	token := os.Getenv("VAULT_TOKEN")
+	if token == "" {
+		return nil, errcode.New(errcode.ErrConfigKeyMissing,
+			"vault-transit: VAULT_TOKEN is required")
+	}
+
+	cfg := vaultapi.DefaultConfig()
+	cfg.Address = addr
+
+	client, err := vaultapi.NewClient(cfg)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrConfigKeyMissing,
+			"vault-transit: failed to create vault client", err)
+	}
+	client.SetToken(token)
+
+	mountPath := os.Getenv("GOCELL_VAULT_TRANSIT_MOUNT")
+	if mountPath == "" {
+		mountPath = "transit"
+	}
+	keyName := os.Getenv("GOCELL_VAULT_TRANSIT_KEY")
+	if keyName == "" {
+		keyName = "gocell-config"
+	}
+
+	adapter := &vaultAPIClient{client: client}
+	p := NewVaultTransitKeyProvider(adapter, mountPath, keyName)
+
+	// Fail-fast: verify the key exists before returning.
+	ctx := context.Background()
+	if _, err := p.client.Read(ctx, fmt.Sprintf("%s/keys/%s", mountPath, keyName)); err != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderKeyNotFound,
+			fmt.Sprintf("vault-transit: key %q not found in mount %q; ensure the key exists before starting", keyName, mountPath), err)
+	}
+
+	return p, nil
 }
 
 // Current returns a VaultTransitHandle for the latest key version by reading
