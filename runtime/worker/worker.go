@@ -11,16 +11,16 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
 
-// Worker represents a long-running background task.
-type Worker interface {
-	// Start begins the worker. It should block until ctx is cancelled or
-	// the worker completes. Returning a non-nil error signals abnormal exit.
-	Start(ctx context.Context) error
-	// Stop signals the worker to shut down gracefully.
-	Stop(ctx context.Context) error
-}
+// Worker is a type alias for the kernel Worker interface. Provided so that
+// existing code referencing runtime/worker.Worker continues to compile, while
+// kernel/worker defines the authoritative contract.
+//
+// ref: kernel/worker/worker.go — authoritative Worker interface definition.
+type Worker = kworker.Worker
 
 // WorkerGroup manages multiple workers, starting them concurrently and
 // stopping them when requested.

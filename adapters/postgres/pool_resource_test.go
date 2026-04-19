@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// stubWorker is a minimal worker.Worker stub for unit tests.
+// stubWorker is a minimal kernel worker stub for unit tests.
 type stubWorker struct{}
 
 func (s *stubWorker) Start(_ context.Context) error { return nil }
@@ -65,7 +65,7 @@ func TestNewPGResource_RejectsNilPool(t *testing.T) {
 
 // mustNewPGResource builds a PGResource for tests; fatals on error so test
 // bodies stay focused on the assertion under test.
-func mustNewPGResource(t *testing.T, pool *Pool, relay worker.Worker) *PGResource {
+func mustNewPGResource(t *testing.T, pool *Pool, relay kworker.Worker) *PGResource {
 	t.Helper()
 	res, err := NewPGResource(pool, relay)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestPGResource_WorkerNonNil(t *testing.T) {
 		t.Error("expected non-nil worker")
 	}
 	// Should be the same instance.
-	if res.Worker() != worker.Worker(sw) {
+	if res.Worker() != kworker.Worker(sw) {
 		t.Error("returned worker is not the supplied stub")
 	}
 }
@@ -137,7 +137,7 @@ func TestPGResource_CloseReturnsNil(t *testing.T) {
 // TestPGResource_ImplementsManagedResource is a compile-time check surfaced as a
 // test to make the assertion visible in test output.
 func TestPGResource_ImplementsManagedResource(t *testing.T) {
-	var _ bootstrap.ManagedResource = (*PGResource)(nil)
+	var _ lifecycle.ManagedResource = (*PGResource)(nil)
 }
 
 // TestPGResource_CheckerTimeout verifies that the health checker uses a

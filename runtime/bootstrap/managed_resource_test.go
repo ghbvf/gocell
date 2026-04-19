@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/worker"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
 
 // fakeResource is a test implementation of ManagedResource.
 type fakeResource struct {
 	name     string
 	checkErr error
-	worker   worker.Worker
+	worker   kworker.Worker
 	closeErr error
 	closed   bool
 }
@@ -27,14 +27,14 @@ func (f *fakeResource) Checkers() map[string]func() error {
 	}
 }
 
-func (f *fakeResource) Worker() worker.Worker { return f.worker }
+func (f *fakeResource) Worker() kworker.Worker { return f.worker }
 
 func (f *fakeResource) Close(_ context.Context) error {
 	f.closed = true
 	return f.closeErr
 }
 
-// fakeWorker is a minimal worker.Worker for testing.
+// fakeWorker is a minimal kworker.Worker for testing.
 type fakeWorker struct {
 	started bool
 	stopped bool
@@ -192,7 +192,7 @@ func (r *trackingResource) Checkers() map[string]func() error {
 	}
 }
 
-func (r *trackingResource) Worker() worker.Worker { return nil }
+func (r *trackingResource) Worker() kworker.Worker { return nil }
 
 func (r *trackingResource) Close(_ context.Context) error {
 	*r.closeOrder = append(*r.closeOrder, r.name)

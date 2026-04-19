@@ -700,7 +700,7 @@ type Bootstrap struct {
 	// managedResources holds resources registered via WithManagedResource.
 	// Each resource is expanded into health checkers, workers, and LIFO teardowns
 	// by expandManagedResources() at the beginning of Run().
-	managedResources []ManagedResource
+	managedResources []kernellifecycle.ManagedResource
 
 	// managedResourceTeardowns holds LIFO close functions derived from
 	// managedResources during expandManagedResources(). Iterated in reverse
