@@ -32,25 +32,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	auditcore "github.com/ghbvf/gocell/cells/audit-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/idempotency"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/http/router"
-	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -213,58 +205,6 @@ func buildAssembly(ps promStack, configCell *configcore.ConfigCore, accessCell *
 	return asm, nil
 }
 
-// pgHealthCheckerOpts returns a single bootstrap.WithHealthChecker option
-// bound to pool.Health when pool is non-nil. Returns nil when pool is nil so
-// the caller can unconditionally append without a guard block.
-//
-// Each probe call uses a fresh context.Background()-derived timeout so that
-// a SIGTERM cancelling the outer ctx does not cause probes to fail immediately.
-// K8s cannot distinguish "PG is down" from "process is shutting down" if the
-// outer ctx is passed directly — the probe must remain callable until the
-// process terminates.
-//
-// ref: Kubernetes readyz — external dependencies contribute named checks.
-// ref: Uber fx lifecycle — resources must be explicitly hooked; the framework
-// does not auto-manage lifetime.
-func pgHealthCheckerOpts(pool *adapterpg.Pool) []bootstrap.Option {
-	if pool == nil {
-		return nil
-	}
-	return []bootstrap.Option{
-		bootstrap.WithHealthChecker("postgres", func() error {
-			probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			return pool.Health(probeCtx)
-		}),
-	}
-}
-
-// buildAdapterInfo builds the adapter-info map that's exposed via
-// bootstrap.WithAdapterInfo. It reflects the RESOLVED runtime topology
-// (not static strings) so /readyz?verbose and adapter_info metrics match
-// what actually serves traffic.
-//
-// The event_bus field reflects the actual in-process event bus (always
-// in-memory at present — the relay forwards PG outbox entries INTO the
-// in-memory bus, it does not replace it). outbox_storage distinguishes the
-// outbox persistence backend so operators can tell whether the relay is active.
-//
-// ref: go-micro service metadata — mode changes must be visible to observers.
-func buildAdapterInfo(effectiveMode, cellAdapterMode string) map[string]string {
-	storageMode := "in-memory"
-	outboxStorage := "in-memory"
-	if cellAdapterMode == "postgres" {
-		storageMode = "postgres"
-		outboxStorage = "postgres"
-	}
-	return map[string]string{
-		"mode":           effectiveMode,
-		"storage":        storageMode,
-		"event_bus":      "in-memory", // in-process eventbus; relay forwards PG outbox entries into it
-		"outbox_storage": outboxStorage,
-	}
-}
-
 // validateModeCoupling enforces that the DATA plane (cellAdapterMode) and
 // CONTROL plane (adapterMode) agree on production posture. If the cell has
 // committed to a real backend (postgres), operators MUST also set
@@ -293,91 +233,6 @@ func validateAdapterMode(mode string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown GOCELL_ADAPTER_MODE %q; known values: \"\" (unset = dev) or \"real\"", mode)
-	}
-}
-
-// buildConfigCoreOpts selects storage-adapter options for config-core based on
-// GOCELL_CELL_ADAPTER_MODE. Returns the selected mode, the cell options, the
-// underlying *adapterpg.Pool (non-nil iff mode=="postgres"), and a relay
-// worker (non-nil iff mode=="postgres") so the caller can plumb lifecycle
-// (Close, Health, relay start/stop) into bootstrap.
-//
-// metricsProvider is used to wire K2 relay metrics into the relay worker when
-// running in postgres mode. Pass metrics.NopProvider{} in tests that do not
-// exercise the relay path (or have no metrics backend configured).
-//
-// "postgres" = real PG (requires GOCELL_PG_DSN; run migrations first).
-// "memory" or unset = in-memory repos (dev/test only).
-//
-// The relay worker (outboxruntime.Relay) satisfies runtime/worker.Worker via
-// a compile-time assertion in runtime/outbox. It must be registered via
-// bootstrap.WithWorkers so the bootstrap lifecycle starts it in Step 8 and
-// stops it LIFO on shutdown — see docs/references/202604181900-outbox-wire-
-// framework-comparison.md for the Kratos/fx rationale.
-//
-// Pilot scope: single global switch applies to all cells. Before adding a 2nd
-// cell's PG wiring, split to per-cell `GOCELL_<CELL>_ADAPTER_MODE`
-// (backlog: GOCELL-PER-CELL-ADAPTER-01).
-//
-// ref: Kratos wire — adapter selected at assembly init time, not run time.
-// ref: Uber fx lifecycle — external resources must hook OnStart/OnStop;
-//
-//	the framework does not auto-manage pool lifetime. We return pool to run()
-//	so that Close() and Health() both get wired into bootstrap explicitly.
-func buildConfigCoreOpts(ctx context.Context, pub outbox.Publisher, metricsProvider metrics.Provider) (mode string, opts []configcore.Option, pool *adapterpg.Pool, relay worker.Worker, err error) {
-	mode = os.Getenv("GOCELL_CELL_ADAPTER_MODE")
-	if mode == "" {
-		mode = "memory"
-	}
-	switch mode {
-	case "postgres":
-		pool, err = adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
-		if err != nil {
-			return mode, nil, nil, nil, fmt.Errorf("config-core PG pool: %w", err)
-		}
-		// Any failure after NewPool must close the pool locally — the caller
-		// only defers Close on successful return. K2's post-acquire failure
-		// boundary (metrics registration) would otherwise leak DB connections.
-		//
-		// A12: fail-fast on schema version mismatch (startup time, before any traffic).
-		// ref: pressly/goose v3.27 GetDBVersion — reads max version from schema_migrations.
-		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
-			pool.Close()
-			return mode, nil, nil, nil, fmt.Errorf("config-core PG schema guard: %w", schemaErr)
-		}
-		// A4: warn on INVALID indexes (non-fatal; operator must clean up manually).
-		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
-			slog.Warn("config-core: could not detect invalid indexes",
-				slog.Any("error", detectErr))
-		} else if len(invalid) > 0 {
-			slog.Warn("config-core: invalid indexes detected; manual cleanup required",
-				slog.Any("indexes", invalid))
-		}
-		outboxWriter := adapterpg.NewOutboxWriter()
-		txMgr := adapterpg.NewTxManager(pool)
-		// Wire K2 relay metrics into production relay (OBS-RELAY-REGISTER-ATOMIC-01).
-		// Falls back to NoopRelayCollector only when provider registration fails,
-		// which surfaces as an error rather than silently losing metrics.
-		relayCfg := outboxruntime.DefaultRelayConfig()
-		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
-		if rmErr != nil {
-			pool.Close()
-			return mode, nil, nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
-		}
-		relayCfg.Metrics = relayMetrics
-		pgStore := adapterpg.NewOutboxStore(pool.DB())
-		relayWorker := outboxruntime.NewRelay(pgStore, pub, relayCfg)
-		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", mode))
-		return mode, []configcore.Option{
-			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
-			configcore.WithTxManager(txMgr),
-		}, pool, relayWorker, nil
-	case "memory":
-		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", mode))
-		return mode, []configcore.Option{configcore.WithInMemoryDefaults()}, nil, nil, nil
-	default:
-		return mode, nil, nil, nil, errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", mode))
 	}
 }
 
@@ -607,213 +462,18 @@ func main() {
 	}
 }
 
-// run contains all assembly and bootstrap logic, extracted from main() for testability.
-func run(ctx context.Context) error {
-	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
-	if err := validateAdapterMode(adapterMode); err != nil {
-		return fmt.Errorf("adapter mode: %w", err)
-	}
-
-	hmacKey, err := loadSecret("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", adapterMode)
-	if err != nil {
-		return fmt.Errorf("HMAC key: %w", err)
-	}
-	if err := rejectDemoKey(adapterMode, "GOCELL_HMAC_KEY", hmacKey); err != nil {
-		return err
-	}
-
-	jwt, err := buildJWTDeps(adapterMode)
-	if err != nil {
-		return err
-	}
-
-	eb := eventbus.New()
-
-	effectiveMode := "in-memory"
-	if adapterMode == "real" {
-		effectiveMode = "real-keys-in-memory-storage"
-	}
-	slog.Info("adapter mode",
-		slog.String("requested", adapterMode),
-		slog.String("effective", effectiveMode))
-
-	codecs, err := loadAllCursorCodecs(adapterMode)
-	if err != nil {
-		return err
-	}
-
-	// Build Prometheus stack before config-core opts so the metrics provider
-	// can be passed into buildConfigCoreOpts for K2 relay metrics wiring.
-	ps, err := buildPromStack()
-	if err != nil {
-		return err
-	}
-
-	cellAdapterMode, cellAdapterOpts, pgPool, relayWorker, err := buildConfigCoreOpts(ctx, eb, ps.metricProvider)
-	if err != nil {
-		return fmt.Errorf("config-core cell adapter: %w", err)
-	}
-	// Pool lifecycle: when running with a real PG pool, we own Close() and
-	// owe readiness signals. defer Close here (before mode check) so an early
-	// validation failure still releases the pool.
-	if pgPool != nil {
-		defer pgPool.Close()
-	}
-	if err := validateModeCoupling(cellAdapterMode, adapterMode); err != nil {
-		return err
-	}
-
-	configOpts := append([]configcore.Option{
-		configcore.WithPublisher(eb),
-		configcore.WithCursorCodec(codecs.config),
-	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(configOpts...)
-
-	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
-		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(eb),
-		accesscore.WithJWTIssuer(jwt.issuer),
-		accesscore.WithJWTVerifier(jwt.verifier),
-	})
-	accessCell := accesscore.NewAccessCore(accessOpts...)
-
-	auditCell := auditcore.NewAuditCore(
-		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(eb),
-		auditcore.WithHMACKey(hmacKey),
-		auditcore.WithCursorCodec(codecs.audit),
-	)
-
-	asm, err := buildAssembly(ps, configCell, accessCell, auditCell)
-	if err != nil {
-		return err
-	}
-
-	adapterInfo := buildAdapterInfo(effectiveMode, cellAdapterMode)
-	slog.Info("core-bundle: startup configuration",
-		slog.String("adapter_mode", adapterInfo["mode"]),
-		slog.String("storage", adapterInfo["storage"]),
-		slog.String("event_bus", adapterInfo["event_bus"]),
-		slog.String("outbox_storage", adapterInfo["outbox_storage"]))
-
-	// /readyz?verbose token — required in real mode, optional in dev.
-	// Check this before /metrics so operator error messages name the first
-	// missing secret (consistent with the original sequential validation order).
-	verboseOpts, err := buildVerboseOpts(adapterMode, os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"))
-	if err != nil {
-		return err
-	}
-
-	metricsHandler, err := buildMetricsHandler(adapterMode, os.Getenv("GOCELL_METRICS_TOKEN"), ps.registry)
-	if err != nil {
-		return err
-	}
-
-	// Build the /internal/v1/* service-token guard. In real mode, the guard is
-	// required (missing secret aborts startup). In dev mode, empty secret skips
-	// the guard entirely (nil guard means WithInternalEndpointGuard is not added).
-	internalGuard, err := internalGuardFromEnv(adapterMode)
-	if err != nil {
-		return err
-	}
-
-	// Wire ConsumerBase so every subscriber handler inherits two-phase Claimer
-	// idempotency, backoff retry, and DLX routing. An in-memory Claimer is used
-	// here so the in-process EventBus path has the same semantics as a future
-	// multi-pod deployment backed by adapters/redis IdempotencyClaimer.
-	//
-	// ref: runtime-api.md WithConsumerMiddleware — middleware order is
-	// observability-restore (prepended by bootstrap) then ConsumerBase.
-	// ConsumerGroup is no longer set here; each subscription's ConsumerGroup is
-	// provided by the Cell via EventRouter.AddHandler and flows through
-	// Subscription.ConsumerGroup into the idempotency key namespace.
-	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{})
-	if err != nil {
-		return fmt.Errorf("construct ConsumerBase: %w", err)
-	}
-
-	logInitialAdminCredPath()
-
-	app := bootstrap.New(assembleBootstrapOpts(bootstrapDeps{
-		assembly:        asm,
-		eventBus:        eb,
-		consumerBase:    consumerBase,
-		adapterInfo:     adapterInfo,
-		metricsHandler:  metricsHandler,
-		metricsProvider: ps.metricProvider,
-		verboseOpts:     verboseOpts,
-		pgPool:          pgPool,
-		relayWorker:     relayWorker,
-		adminWorkerOpt:  adminWorkerOpt,
-		internalGuard:   internalGuard,
-	})...)
-	return app.Run(ctx)
-}
-
-// bootstrapDeps groups the inputs to assembleBootstrapOpts so the call site in
-// run() stays under the cognitive-complexity ceiling.
-type bootstrapDeps struct {
-	assembly        *assembly.CoreAssembly
-	eventBus        *eventbus.InMemoryEventBus
-	consumerBase    *outbox.ConsumerBase
-	adapterInfo     map[string]string
-	metricsHandler  http.Handler
-	metricsProvider *adapterprom.MetricProvider
-	verboseOpts     []bootstrap.Option
-	pgPool          *adapterpg.Pool
-	relayWorker     worker.Worker
-	adminWorkerOpt  bootstrap.Option
-	// internalGuard is the service-token middleware protecting /internal/v1/*.
-	// nil means no guard is installed (dev mode with empty GOCELL_SERVICE_SECRET).
-	internalGuard func(http.Handler) http.Handler
-}
-
-// assembleBootstrapOpts builds the ordered bootstrap.Option slice. Extracted
-// from run() to keep run cognitive complexity ≤ 15. Conditional appends
-// (verboseOpts, pgHealthChecker, relayWorker) live here so run() stays linear.
+// run is the application entry point: parse environment, assemble, and run.
+// Extracted from main() for testability.
 //
-// ref: Uber fx OnStart non-blocking + goroutine + OnStop blocking pattern.
-// GoCell WorkerGroup already implements this contract; OutboxRelay satisfies
-// worker.Worker — wiring is conditional on PG mode (A11).
-func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
-	opts := append([]bootstrap.Option{
-		bootstrap.WithAssembly(d.assembly),
-		bootstrap.WithHTTPAddr(":8080"),
-		bootstrap.WithPublisher(d.eventBus), bootstrap.WithSubscriber(d.eventBus),
-		bootstrap.WithConsumerMiddleware(d.consumerBase.AsMiddleware()),
-		bootstrap.WithPublicEndpoints([]string{
-			"POST /api/v1/access/sessions/login",
-			"POST /api/v1/access/sessions/refresh",
-		}),
-		// Password-reset exempt routes: change-password and logout are the only
-		// endpoints reachable while the token carries password_reset_required=true.
-		// Runtime/auth no longer hard-codes these (F6 decoupling).
-		bootstrap.WithPasswordResetExemptEndpoints([]string{
-			"POST /api/v1/access/users/{id}/password",
-			"DELETE /api/v1/access/sessions/{id}",
-		}),
-		// Client-navigation hint for the 403 response body; runtime/auth no
-		// longer carries any business path literal, so the composition root
-		// names the endpoint that finishes the reset flow.
-		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
-		bootstrap.WithAdapterInfo(d.adapterInfo),
-		bootstrap.WithRouterOptions(router.WithMetricsHandler(d.metricsHandler)),
-		bootstrap.WithMetricsProvider(d.metricsProvider),
-	}, d.verboseOpts...)
-	opts = append(opts, pgHealthCheckerOpts(d.pgPool)...)
-	if d.relayWorker != nil {
-		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
+// ref: uber-go/fx app.go Run — thin wrapper around Start/Stop lifecycle.
+func run(ctx context.Context) error {
+	deps, err := AppDepsFromEnv(ctx)
+	if err != nil {
+		return err
 	}
-	// Wire the initial-admin bootstrap cleanup worker via worker.Lazy().
-	// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no Lifecycle hook needed.
-	if d.adminWorkerOpt != nil {
-		opts = append(opts, d.adminWorkerOpt)
+	app, err := BuildBootstrap(deps)
+	if err != nil {
+		return err
 	}
-	// Wire the service-token guard for /internal/v1/* when a guard was built.
-	// guard is nil in dev mode when GOCELL_SERVICE_SECRET is empty; real mode
-	// fail-fasts in internalGuardFromEnv before reaching here.
-	if d.internalGuard != nil {
-		opts = append(opts, bootstrap.WithInternalEndpointGuard("/internal/v1/", d.internalGuard))
-	}
-	return opts
+	return app.Run(ctx)
 }
