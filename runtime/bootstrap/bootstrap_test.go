@@ -3897,3 +3897,58 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, wantErr)
 }
+
+// ---------------------------------------------------------------------------
+// F7: WithManagedCloser — LIFO teardown registration
+// ---------------------------------------------------------------------------
+
+// mockContextCloser is a test double that records Close calls and optionally
+// returns an error.
+type mockContextCloser struct {
+	closed   atomic.Bool
+	closeErr error
+}
+
+func (m *mockContextCloser) Close(_ context.Context) error {
+	m.closed.Store(true)
+	return m.closeErr
+}
+
+// TestBootstrap_WithManagedCloser_RegistersAsTeardown verifies that a resource
+// registered via WithManagedCloser has its Close(ctx) called during shutdown.
+//
+// ref: uber-go/fx Lifecycle.Append OnStop(ctx) — managed teardown registration.
+func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-managed-closer", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("managed-cell")))
+
+	ln := newLocalListener(t)
+
+	resource := &mockContextCloser{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(ln),
+		WithShutdownTimeout(2*time.Second),
+		WithManagedCloser(resource),
+	)
+	go func() { errCh <- b.Run(ctx) }()
+
+	waitForHealthy(t, ln.Addr().String())
+	cancel()
+	require.NoError(t, <-errCh)
+
+	assert.True(t, resource.closed.Load(), "WithManagedCloser resource must be closed during teardown")
+}
+
+// TestBootstrap_WithManagedCloser_NilIgnored verifies that a nil ContextCloser
+// is silently ignored without panic.
+func TestBootstrap_WithManagedCloser_NilIgnored(t *testing.T) {
+	// Passing a nil ContextCloser must not panic at option-construction time.
+	assert.NotPanics(t, func() {
+		_ = New(WithManagedCloser(nil))
+	}, "WithManagedCloser(nil) must not panic")
+}

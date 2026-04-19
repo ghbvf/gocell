@@ -98,6 +98,11 @@ func (s *phaseState) addCloser(res any) {
 		return
 	}
 	if ic, ok := res.(io.Closer); ok {
+		// F20: io.Closer fallback — the shared shutCtx budget is NOT propagated
+		// to this resource. All GoCell adapters implement ContextCloser; this
+		// path is only reached by external or legacy resources.
+		slog.Warn("bootstrap: resource registered as io.Closer only; shutdown budget will NOT apply",
+			slog.String("type", fmt.Sprintf("%T", res)))
 		s.addTeardown(kernellifecycle.IgnoreCtx(ic).Close)
 	}
 	// else: resource has no Close method — silently skip.

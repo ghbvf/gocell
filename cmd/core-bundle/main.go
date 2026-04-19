@@ -802,6 +802,12 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 		bootstrap.WithMetricsProvider(d.metricsProvider),
 	}, d.verboseOpts...)
 	opts = append(opts, pgHealthCheckerOpts(d.pgPool)...)
+	if d.pgPool != nil {
+		// F7: register pgPool with bootstrap LIFO teardown instead of a bare defer,
+		// so it receives the shared shutCtx budget and closes after HTTP/workers.
+		// ref: uber-go/fx Lifecycle.Append OnStop(ctx) — managed teardown registration.
+		opts = append(opts, bootstrap.WithManagedCloser(d.pgPool))
+	}
 	if d.relayWorker != nil {
 		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
 	}

@@ -12,7 +12,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -119,8 +119,10 @@ func WithTracer(t tracing.Tracer) Option {
 
 // WithRateLimiter enables per-IP rate limiting for HTTP requests. The limiter
 // is forwarded to the router's middleware chain via router.WithRateLimiter.
-// If the limiter implements io.Closer (e.g. adapters/ratelimit.Limiter),
-// Bootstrap registers it for teardown on shutdown and startup rollback.
+// If the limiter implements lifecycle.ContextCloser or io.Closer
+// (e.g. adapters/ratelimit.Limiter), Bootstrap registers it for teardown on
+// shutdown and startup rollback. ContextCloser is preferred so the shared
+// shutCtx budget flows through to the resource.
 //
 // Note: the rate limiter uses the client IP from RealIP middleware as the
 // bucket key. Ensure WithTrustedProxies is correctly configured; an overly
@@ -128,25 +130,27 @@ func WithTracer(t tracing.Tracer) Option {
 // rate limiting.
 //
 // ref: go-zero — rate limiting configuration at app level
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
-		if cl, ok := rl.(io.Closer); ok {
-			b.closers = append(b.closers, cl)
-		}
+		b.closers = append(b.closers, rl)
 	}
 }
 
 // WithCircuitBreaker enables circuit breaker protection for HTTP requests.
 // The breaker is forwarded to the router's middleware chain via
-// router.WithCircuitBreaker. If the breaker implements io.Closer,
-// Bootstrap registers it for teardown on shutdown and startup rollback.
+// router.WithCircuitBreaker. If the breaker implements lifecycle.ContextCloser
+// or io.Closer, Bootstrap registers it for teardown on shutdown and startup
+// rollback. ContextCloser is preferred so the shared shutCtx budget flows
+// through to the resource.
 //
 // A nil cb is rejected at Run() time with a fatal error so operators are not
 // silently left without circuit-breaker protection.
 //
 // ref: go-zero — resilience middleware configuration at app level
 // ref: kubernetes/kubernetes apiserver — option fail-fast at startup
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
 		if cb == nil || middleware.IsTypedNilAllower(cb) {
@@ -154,9 +158,31 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 			return
 		}
 		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
-		if cl, ok := cb.(io.Closer); ok {
-			b.closers = append(b.closers, cl)
+		b.closers = append(b.closers, cb)
+	}
+}
+
+// WithManagedCloser registers an adapter or resource that implements
+// lifecycle.ContextCloser for LIFO teardown during graceful shutdown.
+// The shared shutCtx budget propagates directly to c.Close(ctx), so the
+// resource participates in the same shutdown deadline as all other components.
+//
+// Use this instead of a bare defer c.Close() so that:
+//
+//   - The resource is closed in LIFO order after HTTP and worker shutdown.
+//   - The shared shutdownTimeout ctx is honoured (not an arbitrary timeout).
+//   - Startup rollback also triggers the teardown on phase failures.
+//
+// A nil c is silently ignored (consistent with addCloser semantics).
+//
+// ref: uber-go/fx Lifecycle.Append OnStop(ctx) — managed teardown registration.
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go engageStopProcedure LIFO.
+func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
+	return func(b *Bootstrap) {
+		if c == nil {
+			return
 		}
+		b.closers = append(b.closers, c)
 	}
 }
 
@@ -627,7 +653,7 @@ type Bootstrap struct {
 	healthCheckers                  []namedChecker
 	adapterInfo                     map[string]string // static adapter metadata for /readyz verbose
 	verboseToken                    string            // token for /readyz?verbose access control
-	closers                         []io.Closer       // middleware dependencies that need shutdown
+	closers                         []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
 	disableObservabilityRestore     bool
 	eventRouterReadyTimeout         time.Duration
 	eventRouterReadyTimeoutSet      bool
