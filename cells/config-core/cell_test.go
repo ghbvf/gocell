@@ -214,6 +214,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 	return r
 }
 
@@ -390,6 +391,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	// Seed flags directly via repository (no HTTP create endpoint for flags).
 	for i := range 3 {
