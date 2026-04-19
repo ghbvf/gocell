@@ -3,12 +3,29 @@ package auth
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// isNilInterfaceValue reports whether an interface value is nil or a typed-nil
+// (e.g., a nil *KeySet passed as SigningKeyProvider). Plain `v == nil` returns
+// false for typed-nil because the interface carries a non-nil type descriptor;
+// reflection is the only reliable check without assuming a concrete type.
+func isNilInterfaceValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
+}
 
 // DefaultAccessTokenTTL is the default time-to-live for access tokens issued
 // by JWTIssuer. Can be overridden by cmd/* via NewJWTIssuer or WithRefreshTTL.
@@ -131,8 +148,12 @@ func WithVerifierClock(fn func() time.Time) JWTVerifierOption {
 
 // NewJWTVerifier creates a JWTVerifier that validates tokens by looking up the
 // signing key from the VerificationKeyStore using the token's kid header.
+//
+// Rejects both plain-nil and typed-nil keys (e.g. var ks *KeySet = nil passed
+// through an interface variable): a typed-nil would panic on the first method
+// call downstream, so we fail fast at construction.
 func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTVerifier, error) {
-	if keys == nil {
+	if isNilInterfaceValue(keys) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
 	v := &JWTVerifier{keys: keys}
@@ -346,8 +367,10 @@ func WithIssuerAudiencesFromSlice(auds []string) JWTIssuerOption {
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
+//
+// Rejects both plain-nil and typed-nil keys (see NewJWTVerifier).
 func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opts ...JWTIssuerOption) (*JWTIssuer, error) {
-	if keys == nil {
+	if isNilInterfaceValue(keys) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	i := &JWTIssuer{

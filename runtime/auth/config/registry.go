@@ -2,12 +2,30 @@ package config
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// isNilInterfaceValue reports whether an interface value is nil or a typed-nil
+// (e.g., var ks *KeySet = nil passed through auth.SigningKeyProvider). Plain
+// `v == nil` returns false for typed-nil because the interface carries a
+// non-nil type descriptor. Mirrors auth.isNilInterfaceValue — kept local to
+// avoid widening the auth package's public API.
+func isNilInterfaceValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	}
+	return false
+}
 
 // Registry is the single source of truth for JWT configuration.
 // All JWT consumers (JWTIssuer, JWTVerifier, middleware) obtain their
@@ -135,20 +153,31 @@ func WithRealMode(v bool) EnvOption {
 }
 
 // WithKeys sets the key provider and key store for the registry built by FromEnv.
+// Typed-nil inputs are rejected (not stored); the subsequent factory call will
+// fail with a clear "SigningKeyProvider is nil" error rather than panicking at
+// first method dispatch.
 func WithKeys(prov auth.SigningKeyProvider) EnvOption {
 	return func(c *envConfig) {
+		if isNilInterfaceValue(prov) {
+			return
+		}
 		c.keyProv = prov
-		if ks, ok := prov.(auth.VerificationKeyStore); ok {
+		if ks, ok := prov.(auth.VerificationKeyStore); ok && !isNilInterfaceValue(ks) {
 			c.keyStore = ks
 		}
 	}
 }
 
 // WithKeySeparate sets key provider and key store independently.
+// Typed-nil inputs are filtered out per WithKeys' rationale.
 func WithKeySeparate(prov auth.SigningKeyProvider, store auth.VerificationKeyStore) EnvOption {
 	return func(c *envConfig) {
-		c.keyProv = prov
-		c.keyStore = store
+		if !isNilInterfaceValue(prov) {
+			c.keyProv = prov
+		}
+		if !isNilInterfaceValue(store) {
+			c.keyStore = store
+		}
 	}
 }
 
@@ -211,7 +240,7 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 	if reg == nil {
 		return nil, errcode.New(errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
-	if reg.keyProv == nil {
+	if isNilInterfaceValue(reg.keyProv) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
 	}
 
@@ -233,7 +262,7 @@ func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (
 	if reg == nil {
 		return nil, errcode.New(errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
-	if reg.keyStore == nil {
+	if isNilInterfaceValue(reg.keyStore) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "JWT registry: VerificationKeyStore is nil")
 	}
 	auds := reg.Audiences()

@@ -408,6 +408,152 @@ func TestWithKeys_SigningOnly_VerifierReturnsError(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
 }
 
+// ----- typed-nil defensive tests -----
+
+// TestNewJWTIssuerFromRegistry_TypedNilKeyProv verifies that a typed-nil
+// SigningKeyProvider (e.g., var ks *auth.KeySet = nil stored into Config.KeyProv)
+// is rejected at factory invocation, not at first token issuance where it
+// would panic on nil method receiver.
+func TestNewJWTIssuerFromRegistry_TypedNilKeyProv(t *testing.T) {
+	var ks *auth.KeySet // typed-nil
+	reg, err := config.New(config.Config{
+		Issuer:    "gocell",
+		Audiences: []string{"gocell"},
+		KeyProv:   ks, // interface holds (type=*KeySet, value=nil)
+		RealMode:  false,
+	})
+	require.NoError(t, err, "Registry construction must accept typed-nil (validation deferred to factory)")
+
+	_, err = config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	require.Error(t, err, "typed-nil KeyProv must be rejected by the factory")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code,
+		"typed-nil must surface ErrAuthKeyInvalid (same as plain-nil) — not slip through and panic later")
+}
+
+// TestNewJWTVerifierFromRegistry_TypedNilKeyStore verifies the same guarantee
+// for the verifier path.
+func TestNewJWTVerifierFromRegistry_TypedNilKeyStore(t *testing.T) {
+	var ks *auth.KeySet
+	reg, err := config.New(config.Config{
+		Issuer:    "gocell",
+		Audiences: []string{"gocell"},
+		KeyStore:  ks,
+		RealMode:  false,
+	})
+	require.NoError(t, err)
+
+	_, err = config.NewJWTVerifierFromRegistry(reg)
+	require.Error(t, err, "typed-nil KeyStore must be rejected by the factory")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
+}
+
+// TestWithKeys_TypedNilProvider verifies that WithKeys silently drops typed-nil
+// inputs so subsequent factory calls surface a clean ErrAuthKeyInvalid rather
+// than a misleading "provider set, store not set" state.
+func TestWithKeys_TypedNilProvider(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	var prov auth.SigningKeyProvider = (*auth.KeySet)(nil)
+	reg, err := config.FromEnv(config.WithKeys(prov))
+	require.NoError(t, err)
+	assert.Nil(t, reg.SigningKeyProvider(),
+		"typed-nil provider must NOT be stored (would panic downstream)")
+	assert.Nil(t, reg.VerificationKeyStore(),
+		"typed-nil provider must not populate the verification store either")
+}
+
+// ----- Registry error-code type-assertion upgrades (F1-review-002) -----
+//
+// Confirms that constructor errors from the Registry path are *errcode.Error
+// values with the specific code consumers can branch on; plain require.Error
+// would pass even on bare fmt.Errorf regressions.
+
+// TestFromEnv_MissingIssuer_RealMode_ErrorCode asserts the specific code
+// beyond merely "error".
+func TestFromEnv_MissingIssuer_RealMode_ErrorCode(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	_, err := config.FromEnv(config.WithRealMode(true))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+func TestFromEnv_MissingAudience_RealMode_ErrorCode(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "https://auth.example")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "")
+
+	_, err := config.FromEnv(config.WithRealMode(true))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+// TestNewJWTIssuerFromRegistry_NilRegistry_ErrorCode replaces the bare
+// require.Error in TestNewJWTIssuerFromRegistry_NilRegistry with a specific
+// code check (the original test is kept for smoke).
+func TestNewJWTIssuerFromRegistry_NilRegistry_ErrorCode(t *testing.T) {
+	_, err := config.NewJWTIssuerFromRegistry(nil, 15*time.Minute)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code,
+		"nil Registry is a config error, not a key-material error")
+}
+
+func TestNewJWTVerifierFromRegistry_NilRegistry_ErrorCode(t *testing.T) {
+	_, err := config.NewJWTVerifierFromRegistry(nil)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+// TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode tightens
+// TestNewJWTVerifierFromRegistry_EmptyAudiences.
+func TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode(t *testing.T) {
+	ks, _, _ := auth.MustNewTestKeySet()
+	reg, err := config.New(config.Config{
+		Issuer:    "gocell",
+		Audiences: nil,
+		KeyStore:  ks,
+		RealMode:  false,
+	})
+	require.NoError(t, err)
+
+	_, err = config.NewJWTVerifierFromRegistry(reg)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+// TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode tightens the nil-KeyProv case.
+func TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode(t *testing.T) {
+	reg, err := config.New(config.Config{
+		Issuer:    "gocell",
+		Audiences: []string{"gocell"},
+		KeyProv:   nil,
+		RealMode:  false,
+	})
+	require.NoError(t, err)
+
+	_, err = config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code,
+		"missing key material must surface as ErrAuthKeyInvalid, distinct from config-shape errors")
+}
+
 // TestNewJWTIssuerVerifierFromRegistry_EndToEnd verifies the full round-trip:
 // issue a token via Registry-constructed issuer, verify with Registry-constructed verifier.
 func TestNewJWTIssuerVerifierFromRegistry_EndToEnd(t *testing.T) {
