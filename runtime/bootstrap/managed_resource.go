@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/runtime/worker"
@@ -72,7 +73,9 @@ func (b *Bootstrap) expandManagedResources() {
 		res := r
 		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func() {
 			if err := res.Close(); err != nil {
-				slog.Warn("managed resource Close failed", slog.Any("error", err))
+				slog.Warn("managed resource Close failed",
+					slog.String("resource_type", fmt.Sprintf("%T", res)),
+					slog.Any("error", err))
 			}
 		})
 	}
