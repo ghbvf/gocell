@@ -26,6 +26,13 @@ func (k PrincipalKind) String() string {
 	}
 }
 
+// Principal is the unified authn subject injected into request context after
+// successful authentication. Claims is treated as read-only after construction;
+// callers must not mutate the map (concurrent reads only).
+//
+// Principal supersedes the legacy Claims context value (see Claims in auth.go);
+// AuthMiddleware will inject Principal once F7 wiring lands. New handlers should
+// consume FromContext rather than reading Claims directly.
 type Principal struct {
 	Kind       PrincipalKind
 	Subject    string
@@ -69,10 +76,23 @@ func MustFromContext(ctx context.Context) *Principal {
 	return p
 }
 
-func DefaultServiceRoles(name string) []string {
+const (
+	// ServiceNameInternal is the well-known name of the internal service principal
+	// used by /internal/v1/* delegated auth (F4 RouteGroup will reference this).
+	ServiceNameInternal = "gocell-internal"
+
+	// RoleInternalAdmin grants admin access on internal control-plane endpoints.
+	RoleInternalAdmin = "role:internal-admin"
+)
+
+// BuiltinServiceRoles returns the compile-time hard-coded role set for
+// well-known internal services. Dynamic, configurable service roles will be
+// resolved via config.Registry once F1 lands; treat this as a temporary
+// bootstrap until then.
+func BuiltinServiceRoles(name string) []string {
 	switch name {
-	case "gocell-internal":
-		return []string{"role:internal-admin"}
+	case ServiceNameInternal:
+		return []string{RoleInternalAdmin}
 	default:
 		return nil
 	}

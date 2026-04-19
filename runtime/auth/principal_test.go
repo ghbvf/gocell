@@ -104,26 +104,26 @@ func TestMustFromContext_Panics(t *testing.T) {
 	MustFromContext(context.Background())
 }
 
-func TestDefaultServiceRoles(t *testing.T) {
+func TestBuiltinServiceRoles(t *testing.T) {
 	tests := []struct {
 		name    string
 		service string
 		want    []string
 	}{
-		{"known service", "gocell-internal", []string{"role:internal-admin"}},
+		{"known service", ServiceNameInternal, []string{RoleInternalAdmin}},
 		{"unknown service", "some-other-service", nil},
 		{"empty string", "", nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DefaultServiceRoles(tc.service)
+			got := BuiltinServiceRoles(tc.service)
 			if len(got) != len(tc.want) {
-				t.Errorf("DefaultServiceRoles(%q) = %v, want %v", tc.service, got, tc.want)
+				t.Errorf("BuiltinServiceRoles(%q) = %v, want %v", tc.service, got, tc.want)
 				return
 			}
 			for i := range got {
 				if got[i] != tc.want[i] {
-					t.Errorf("DefaultServiceRoles(%q)[%d] = %q, want %q", tc.service, i, got[i], tc.want[i])
+					t.Errorf("BuiltinServiceRoles(%q)[%d] = %q, want %q", tc.service, i, got[i], tc.want[i])
 				}
 			}
 		})
