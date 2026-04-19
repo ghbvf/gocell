@@ -456,8 +456,7 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 // adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
 // onto the given base access-core options and returns the extended options together
 // with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
-// WorkerGroup, and a bootstrap.Option that registers the SweepHook on the
-// bootstrap Lifecycle.
+// WorkerGroup.
 //
 // Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
 // bootstrap.Run), before the WorkerGroup starts (Step 8). worker.Lazy() resolves
@@ -465,14 +464,16 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 //
 // When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
 // When admin already exists: sink is not called, LazyWorker.Start/Stop are no-ops.
-// SweepHook runs unconditionally on startup, removing expired credential files
-// even when adminExists==true (P1-16 gap closure).
+//
+// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin, removing expired
+// credential files unconditionally — including when adminExists==true causes
+// EnsureAdmin to return early.
 //
 // Thread safety: Set (writer) and Start/Stop (readers) synchronise via
 // atomic.Pointer inside worker.LazyWorker (F-OPS-2).
 //
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option, sweepOpt bootstrap.Option) {
+func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
 	lazy := worker.Lazy()
 	sink := func(w worker.Worker) { _ = lazy.Set(w) }
 	accessOpts = append(base,
@@ -480,18 +481,7 @@ func adminBootstrapWorkerOpts(base []accesscore.Option) (accessOpts []accesscore
 		accesscore.WithBootstrapWorkerSink(sink),
 	)
 	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
-	sweepOpt = bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
-		// Lifecycle is not yet started at WithLifecycle callback time; Append
-		// returns ErrLifecycleAlreadyStarted only after Start — impossible here.
-		if err := lc.Append(accesscore.SweepHook(accesscore.SweepConfig{
-			StateDir: os.Getenv("GOCELL_STATE_DIR"),
-			Logger:   slog.Default(),
-		})); err != nil {
-			slog.Error("core-bundle: failed to append SweepHook to lifecycle",
-				slog.Any("error", err))
-		}
-	})
-	return accessOpts, lazyWorkerOpt, sweepOpt
+	return accessOpts, lazyWorkerOpt
 }
 
 // promStack groups the Prometheus hook observer and metric provider.
@@ -679,7 +669,7 @@ func run(ctx context.Context) error {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	accessOpts, adminWorkerOpt, sweepOpt := adminBootstrapWorkerOpts([]accesscore.Option{
+	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwt.issuer),
@@ -755,7 +745,6 @@ func run(ctx context.Context) error {
 		pgPool:          pgPool,
 		relayWorker:     relayWorker,
 		adminWorkerOpt:  adminWorkerOpt,
-		sweepOpt:        sweepOpt,
 		internalGuard:   internalGuard,
 	})...)
 	return app.Run(ctx)
@@ -774,9 +763,6 @@ type bootstrapDeps struct {
 	pgPool          *adapterpg.Pool
 	relayWorker     worker.Worker
 	adminWorkerOpt  bootstrap.Option
-	// sweepOpt registers the SweepHook on the bootstrap Lifecycle.
-	// Non-nil only when WithInitialAdminBootstrap is configured.
-	sweepOpt bootstrap.Option
 	// internalGuard is the service-token middleware protecting /internal/v1/*.
 	// nil means no guard is installed (dev mode with empty GOCELL_SERVICE_SECRET).
 	internalGuard func(http.Handler) http.Handler
@@ -819,13 +805,9 @@ func assembleBootstrapOpts(d bootstrapDeps) []bootstrap.Option {
 		opts = append(opts, bootstrap.WithWorkers(d.relayWorker))
 	}
 	// Wire the initial-admin bootstrap cleanup worker via worker.Lazy().
-	// SweepHook is registered on the Lifecycle via sweepOpt (runs unconditionally
-	// on startup to remove expired credential files — P1-16 gap closure).
+	// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no Lifecycle hook needed.
 	if d.adminWorkerOpt != nil {
 		opts = append(opts, d.adminWorkerOpt)
-	}
-	if d.sweepOpt != nil {
-		opts = append(opts, d.sweepOpt)
 	}
 	// Wire the service-token guard for /internal/v1/* when a guard was built.
 	// guard is nil in dev mode when GOCELL_SERVICE_SECRET is empty; real mode

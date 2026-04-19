@@ -3,9 +3,10 @@
 package initialadmin
 
 import (
+	"context"
 	"log/slog"
 
-	bootstraprt "github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // SweepConfig parameterises startup-time credential sweep.
@@ -15,16 +16,14 @@ type SweepConfig struct {
 	StateDir string
 	// Clock supplies "now" for expiry comparison. nil → RealClock{}.
 	Clock Clock
-	// Logger is required.
+	// Scheduler is used when constructing the returned Cleaner worker. nil → RealScheduler{}.
+	Scheduler Scheduler
+	// Logger is optional; nil falls back to slog.Default().
 	Logger *slog.Logger
 }
 
-// SweepHook returns a no-op bootstrap.Hook on non-unix platforms.
+// Sweep is a no-op on non-unix platforms.
 // Credential file operations are only supported on unix.
-func SweepHook(_ SweepConfig) bootstraprt.Hook {
-	return bootstraprt.Hook{
-		Name:    "initialadmin.sweep",
-		OnStart: nil,
-		OnStop:  nil,
-	}
+func Sweep(_ context.Context, _ SweepConfig) (worker.Worker, error) {
+	return nil, nil
 }

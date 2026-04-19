@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/dto"
@@ -29,7 +30,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -97,22 +97,6 @@ func WithTxManager(tx persistence.TxRunner) Option {
 // that the logged path always matches the file the bootstrapper writes (P2-6).
 func ResolveBootstrapCredentialPath(stateDir string) (string, error) {
 	return initialadmin.ResolveCredentialPath(stateDir)
-}
-
-// SweepConfig re-exports initialadmin.SweepConfig so composition roots can
-// configure the startup-time credential sweep without importing the internal
-// package directly.
-type SweepConfig = initialadmin.SweepConfig
-
-// SweepHook returns a bootstrap.Hook that performs a startup-time credential
-// sweep (P1-16). The hook runs unconditionally on OnStart, removing expired
-// credential files regardless of whether an admin already existed.
-//
-// SweepHook is wired at composition root via bootstrap.WithLifecycle so it
-// runs independently of EnsureAdmin, closing the gap where adminExists==true
-// caused EnsureAdmin to return early without cleaning orphan cred files.
-func SweepHook(cfg SweepConfig) bootstrap.Hook {
-	return initialadmin.SweepHook(cfg)
 }
 
 // WithInMemoryDefaults configures in-memory repositories for development
@@ -273,9 +257,13 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 
 // runInitialAdminBootstrap executes the first-run admin bootstrap when
 // WithInitialAdminBootstrap has been configured. It validates that
-// WithBootstrapWorkerSink is also set, then delegates to Bootstrapper.EnsureAdmin.
+// WithBootstrapWorkerSink is also set, runs Sweep to remove any expired
+// orphan credential files (P1-16), then delegates to Bootstrapper.EnsureAdmin.
 // A no-op (nil cfg) means the bootstrap feature is disabled.
-// SweepHook is wired at composition root via bootstrap.WithLifecycle (P1-16).
+//
+// Sweep runs unconditionally before EnsureAdmin so that an expired cred file
+// from a previous run never blocks EnsureAdmin's WriteCredentialFile, even when
+// adminExists==true causes EnsureAdmin to skip creation (pure sweep still runs).
 func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 	if c.initialAdminCfg == nil {
 		return nil
@@ -288,6 +276,31 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 				"  accesscore.WithBootstrapWorkerSink(func(x worker.Worker) { w = x }),\n"+
 				"  /* later */ bootstrap.WithWorkers(w)")
 	}
+
+	// Sweep expired orphan credential files before EnsureAdmin attempts to write
+	// a new one. This closes the P1-16 gap where adminExists==true caused
+	// EnsureAdmin to return early without cleaning orphan cred files, and also
+	// prevents WriteCredentialFile from failing with ErrCredFileExists when an
+	// expired file already occupies the path.
+	//
+	// When a fresh (not-yet-expired) orphan file is found, Sweep returns a
+	// Cleaner worker that will remove the file after its remaining TTL. This
+	// closes the runtime window where a fresh orphan file would otherwise persist
+	// until the next process restart (P1-16 full fix).
+	var sweepStateDir string
+	if c.initialAdminCfg.credentialPath != "" {
+		sweepStateDir = filepath.Dir(c.initialAdminCfg.credentialPath)
+	}
+	sweepCleaner, err := initialadmin.Sweep(ctx, initialadmin.SweepConfig{
+		StateDir:  sweepStateDir,
+		Clock:     c.initialAdminCfg.clock,
+		Scheduler: c.initialAdminCfg.scheduler,
+		Logger:    c.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("access-core: bootstrap sweep: %w", err)
+	}
+
 	bsDeps := initialadmin.BootstrapDeps{
 		UserRepo: c.userRepo,
 		RoleRepo: c.roleRepo,
@@ -305,12 +318,28 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("access-core: bootstrap construct: %w", err)
 	}
-	cleanerWorker, err := bs.EnsureAdmin(ctx)
+	adminWorker, err := bs.EnsureAdmin(ctx)
 	if err != nil {
 		return fmt.Errorf("access-core: bootstrap admin: %w", err)
 	}
-	if cleanerWorker != nil {
-		c.bootstrapWorkerSink(cleanerWorker)
+
+	// Priority: adminWorker (new admin created) > sweepCleaner (fresh orphan).
+	// The two are mutually exclusive in the normal case:
+	//   - adminWorker != nil  ↔  EnsureAdmin wrote a new cred file (admin was absent)
+	//   - sweepCleaner != nil ↔  Sweep found a fresh orphan file (admin likely exists)
+	// If both are non-nil (pathological interrupted-bootstrap state), prefer
+	// adminWorker because the new cred file is authoritative.
+	var resultWorker worker.Worker
+	switch {
+	case adminWorker != nil:
+		resultWorker = adminWorker
+	case sweepCleaner != nil:
+		resultWorker = sweepCleaner
+	default:
+		resultWorker = nil // admin exists + no orphan file → nothing to clean
+	}
+	if resultWorker != nil {
+		c.bootstrapWorkerSink(resultWorker)
 	}
 	return nil
 }

@@ -166,18 +166,7 @@ func main() {
 		}),
 		bootstrap.WithPasswordResetChangeEndpointHint("POST /api/v1/access/users/{id}/password"),
 		bootstrap.WithWorkers(adminLazy),
-		// SweepHook runs on startup to remove expired credential files (P1-16).
-		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
-			// Lifecycle is not yet started at WithLifecycle callback time; Append
-			// returns ErrLifecycleAlreadyStarted only after Start — impossible here.
-			if err := lc.Append(accesscore.SweepHook(accesscore.SweepConfig{
-				StateDir: stateDir,
-				Logger:   logger,
-			})); err != nil {
-				logger.Error("sso-bff: failed to append SweepHook to lifecycle",
-					slog.Any("error", err))
-			}
-		}),
+		// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no extra hook needed.
 	)
 
 	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)
