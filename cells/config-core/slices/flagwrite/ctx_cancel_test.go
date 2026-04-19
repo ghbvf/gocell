@@ -30,7 +30,7 @@ func (r *cancellingTxRunner) RunInTx(ctx context.Context, fn func(context.Contex
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
 	// Do not call fn: the transaction is rolled back, no side-effects applied.
-	_ = fn // suppress unused-variable linter hint
+	_ = fn                 // suppress unused-variable linter hint
 	return cancelCtx.Err() // context.Canceled
 }
 
