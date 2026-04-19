@@ -115,33 +115,42 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 	return &f, nil
 }
 
-// Update updates rollout_percentage, description, and version for an existing flag.
-func (r *FlagRepository) Update(ctx context.Context, flag *domain.FeatureFlag) error {
+// Update atomically sets enabled, rollout_percentage, description, and
+// increments version by 1 via UPDATE...SET version=version+1 RETURNING.
+// Returns the updated flag. Returns ErrFlagRepoNotFound if key does not exist.
+func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error) {
 	const sql = `UPDATE feature_flags
-		SET enabled = $1, rollout_percentage = $2, description = $3, version = $4, updated_at = $5
-		WHERE key = $6`
-
-	if flag.UpdatedAt.IsZero() {
-		flag.UpdatedAt = time.Now()
-	}
+		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
+		WHERE key=$4
+		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	affected, err := db.Exec(ctx, sql,
-		flag.Enabled, flag.RolloutPercentage, flag.Description, flag.Version, flag.UpdatedAt, flag.Key,
-	)
-	if err != nil {
-		return errcode.Wrap(errcode.ErrFlagRepoQuery,
-			fmt.Sprintf("flag repo: update failed for key %s", flag.Key), err)
+	row := db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key)
+
+	var f domain.FeatureFlag
+	if err := row.Scan(
+		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
+		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, &errcode.Error{
+				Code:            errcode.ErrFlagRepoNotFound,
+				Message:         "flag not found",
+				InternalMessage: fmt.Sprintf("flag repo: Update miss key=%s", key),
+				Cause:           err,
+			}
+		}
+		return nil, &errcode.Error{
+			Code:            errcode.ErrFlagRepoQuery,
+			Message:         "flag repo query failed",
+			InternalMessage: fmt.Sprintf("flag repo: Update scan error key=%s", key),
+			Cause:           err,
+		}
 	}
-	if affected == 0 {
-		return errcode.Safe(errcode.ErrFlagRepoNotFound,
-			"flag not found",
-			fmt.Sprintf("flag repo: Update miss key=%s", flag.Key))
-	}
-	return nil
+	return &f, nil
 }
 
 // List retrieves feature flags with keyset cursor pagination.
@@ -178,25 +187,39 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	return flags, nil
 }
 
-// Delete removes a feature flag by key. Returns ErrFlagRepoNotFound if missing.
-func (r *FlagRepository) Delete(ctx context.Context, key string) error {
-	const sql = `DELETE FROM feature_flags WHERE key = $1`
+// Delete removes a feature flag by key and returns the deleted entity via
+// DELETE...RETURNING. Returns ErrFlagRepoNotFound if the key does not exist.
+func (r *FlagRepository) Delete(ctx context.Context, key string) (*domain.FeatureFlag, error) {
+	const sql = `DELETE FROM feature_flags WHERE key=$1
+		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	affected, err := db.Exec(ctx, sql, key)
-	if err != nil {
-		return errcode.Wrap(errcode.ErrFlagRepoQuery,
-			fmt.Sprintf("flag repo: delete failed for key %s", key), err)
+	row := db.QueryRow(ctx, sql, key)
+
+	var f domain.FeatureFlag
+	if err := row.Scan(
+		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
+		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, &errcode.Error{
+				Code:            errcode.ErrFlagRepoNotFound,
+				Message:         "flag not found",
+				InternalMessage: fmt.Sprintf("flag repo: Delete miss key=%s", key),
+				Cause:           err,
+			}
+		}
+		return nil, &errcode.Error{
+			Code:            errcode.ErrFlagRepoQuery,
+			Message:         "flag repo query failed",
+			InternalMessage: fmt.Sprintf("flag repo: Delete scan error key=%s", key),
+			Cause:           err,
+		}
 	}
-	if affected == 0 {
-		return errcode.Safe(errcode.ErrFlagRepoNotFound,
-			"flag not found",
-			fmt.Sprintf("flag repo: Delete miss key=%s", key))
-	}
-	return nil
+	return &f, nil
 }
 
 // Toggle atomically sets the enabled state and increments version by 1.

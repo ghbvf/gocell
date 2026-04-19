@@ -65,31 +65,40 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 	})
 
 	t.Run("Update", func(t *testing.T) {
-		db := &mockDB{execAffected: 1}
-		repo := newFlagRepositoryFromDBTX(db)
-
-		flag := &domain.FeatureFlag{
-			Key:               "dark-mode",
-			Enabled:           true,
-			RolloutPercentage: 50,
-			Description:       "updated desc",
-			Version:           2,
-			UpdatedAt:         now,
+		// Update now uses QueryRow (RETURNING clause).
+		db := &capturingDB{
+			queryRowResult: &mockRow{
+				values: []any{"flg-1", "dark-mode", true, 50, "updated desc", 2, now, now},
+			},
 		}
-		err := repo.Update(context.Background(), flag)
+		repo := &FlagRepository{db: db}
+
+		got, err := repo.Update(context.Background(), "dark-mode", true, 50, "updated desc")
 		require.NoError(t, err)
-		require.Len(t, db.execCalls, 1)
-		assert.Contains(t, db.execCalls[0].sql, "UPDATE feature_flags")
+		require.NotNil(t, got)
+		assert.Contains(t, db.queryRowSQL, "UPDATE feature_flags")
+		assert.Contains(t, db.queryRowSQL, "version=version+1")
+		assert.Contains(t, db.queryRowSQL, "RETURNING")
+		assert.Equal(t, "dark-mode", got.Key)
+		assert.True(t, got.Enabled)
+		assert.Equal(t, 2, got.Version)
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		db := &mockDB{execAffected: 1}
-		repo := newFlagRepositoryFromDBTX(db)
+		// Delete now uses QueryRow (RETURNING clause).
+		db := &capturingDB{
+			queryRowResult: &mockRow{
+				values: []any{"flg-1", "dark-mode", false, 0, "desc", 1, now, now},
+			},
+		}
+		repo := &FlagRepository{db: db}
 
-		err := repo.Delete(context.Background(), "dark-mode")
+		got, err := repo.Delete(context.Background(), "dark-mode")
 		require.NoError(t, err)
-		require.Len(t, db.execCalls, 1)
-		assert.Contains(t, db.execCalls[0].sql, "DELETE FROM feature_flags")
+		require.NotNil(t, got)
+		assert.Contains(t, db.queryRowSQL, "DELETE FROM feature_flags")
+		assert.Contains(t, db.queryRowSQL, "RETURNING")
+		assert.Equal(t, "dark-mode", got.Key)
 	})
 }
 
@@ -254,17 +263,6 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		assert.Equal(t, errcode.ErrFlagRepoQuery, ec.Code)
 	})
 
-	t.Run("Delete_NotFound", func(t *testing.T) {
-		db := &mockDB{execAffected: 0}
-		repo := newFlagRepositoryFromDBTX(db)
-
-		err := repo.Delete(context.Background(), "missing")
-		require.Error(t, err)
-		var ec *errcode.Error
-		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
-	})
-
 	t.Run("Toggle_NotFound", func(t *testing.T) {
 		db := &mockDB{
 			queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
@@ -279,10 +277,25 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 	})
 
 	t.Run("Update_NotFound", func(t *testing.T) {
-		db := &mockDB{execAffected: 0}
+		db := &mockDB{
+			queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+		}
 		repo := newFlagRepositoryFromDBTX(db)
 
-		err := repo.Update(context.Background(), &domain.FeatureFlag{Key: "missing"})
+		_, err := repo.Update(context.Background(), "missing", false, 0, "")
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
+	})
+
+	t.Run("Delete_NotFound", func(t *testing.T) {
+		db := &mockDB{
+			queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+		}
+		repo := newFlagRepositoryFromDBTX(db)
+
+		_, err := repo.Delete(context.Background(), "missing")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -306,7 +319,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Update", func(t *testing.T) {
 		repo := NewFlagRepository(session)
-		err := repo.Update(context.Background(), &domain.FeatureFlag{Key: "k"})
+		_, err := repo.Update(context.Background(), "k", false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
@@ -315,7 +328,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 
 	t.Run("Delete", func(t *testing.T) {
 		repo := NewFlagRepository(session)
-		err := repo.Delete(context.Background(), "k")
+		_, err := repo.Delete(context.Background(), "k")
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)

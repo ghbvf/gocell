@@ -53,28 +53,39 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 	return &clone, nil
 }
 
-func (r *FlagRepository) Update(_ context.Context, flag *domain.FeatureFlag) error {
+// Update atomically sets enabled, rollout_percentage, description, and
+// increments version by 1. Returns the updated flag.
+// Returns ErrFlagNotFound if the key does not exist.
+func (r *FlagRepository) Update(_ context.Context, key string, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.flags[flag.Key]; !exists {
-		return errcode.New(errcode.ErrFlagNotFound, "flag not found: "+flag.Key)
+	existing, exists := r.flags[key]
+	if !exists {
+		return nil, errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
 	}
-	clone := *flag
-	r.flags[flag.Key] = &clone
-	return nil
+	existing.Enabled = enabled
+	existing.RolloutPercentage = rolloutPercentage
+	existing.Description = description
+	existing.Version++
+	existing.UpdatedAt = time.Now()
+	clone := *existing
+	return &clone, nil
 }
 
-// Delete removes a feature flag by key.
-func (r *FlagRepository) Delete(_ context.Context, key string) error {
+// Delete removes a feature flag by key and returns the deleted entity.
+// Returns ErrFlagNotFound if the key does not exist.
+func (r *FlagRepository) Delete(_ context.Context, key string) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.flags[key]; !exists {
-		return errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
+	existing, exists := r.flags[key]
+	if !exists {
+		return nil, errcode.New(errcode.ErrFlagNotFound, "flag not found: "+key)
 	}
+	clone := *existing
 	delete(r.flags, key)
-	return nil
+	return &clone, nil
 }
 
 // Toggle sets the enabled state atomically. It increments version by 1 and
