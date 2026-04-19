@@ -1,0 +1,27 @@
+id: flag-write
+belongsToCell: config-core
+contractUsages:
+  - contract: http.config.flags.create.v1
+    role: serve
+  - contract: http.config.flags.update.v1
+    role: serve
+  - contract: http.config.flags.toggle.v1
+    role: serve
+  - contract: http.config.flags.delete.v1
+    role: serve
+  - contract: event.flag.changed.v1
+    role: publish
+verify:
+  unit:
+    - unit.flag-write.service
+  contract:
+    - contract.http.config.flags.create.v1.serve
+    - contract.http.config.flags.update.v1.serve
+    - contract.http.config.flags.toggle.v1.serve
+    - contract.http.config.flags.delete.v1.serve
+    - contract.event.flag.changed.v1.publish
+  waivers: []
+
+allowedFiles:
+  - cells/config-core/slices/flag-write/**
+  - cells/config-core/slices/flagwrite/**
