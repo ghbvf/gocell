@@ -100,7 +100,7 @@ func TestBuildConfigCoreOpts_PGMode_RelayNonNil(t *testing.T) {
 	// interface check. No explicit assertion needed.
 	require.NotNil(t, relay)
 
-	pool.Close()
+	_ = pool.Close(context.Background())
 }
 
 // TestPgHealthCheckerOpts_NilPool_ReturnsNil guards that callers can

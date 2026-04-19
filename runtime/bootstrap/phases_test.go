@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 	assert.Len(t, s.teardowns, 1)
 
 	// Execute the teardown and verify closer was called.
-	require.NoError(t, s.teardowns[0](context.Background()))
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
 	assert.True(t, closed)
 }
 
@@ -132,7 +133,7 @@ func TestPhase2_InitPubSub_RegistersTeardownForCloser(t *testing.T) {
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	require.Len(t, s.teardowns, 1)
-	require.NoError(t, s.teardowns[0](context.Background()))
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
 	assert.Equal(t, []string{"sub"}, closeCalled)
 }
 
@@ -146,7 +147,7 @@ func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
 
 	// Execute all teardowns.
 	for _, td := range s.teardowns {
-		require.NoError(t, td(context.Background()))
+		require.NoError(t, td.fn(context.Background()))
 	}
 	assert.Equal(t, 1, closeCalled, "shared pub/sub must only be closed once")
 }
@@ -347,7 +348,7 @@ func TestPhaseState_AddCloser_PrefersContextCloser(t *testing.T) {
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	require.NoError(t, s.teardowns[0](shutCtx))
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
 
 	// The ctx passed to the teardown must be the shut ctx, not Background.
 	deadline, hasDeadline := receivedCtx.Deadline()
@@ -367,7 +368,7 @@ func TestPhaseState_AddCloser_FallsBackToIoCloser(t *testing.T) {
 	s.addCloser(ic)
 	require.Len(t, s.teardowns, 1)
 
-	require.NoError(t, s.teardowns[0](context.Background()))
+	require.NoError(t, s.teardowns[0].fn(context.Background()))
 	assert.True(t, closed, "io.Closer must be called via IgnoreCtx wrapper")
 }
 
@@ -412,7 +413,7 @@ func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T)
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	require.NoError(t, s.teardowns[0](shutCtx))
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
 
 	assert.True(t, watcherClosed)
 	_, hasDeadline := receivedCtx.Deadline()
@@ -443,7 +444,7 @@ func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
 	defer cancel()
 
 	require.Len(t, s.teardowns, 1)
-	require.NoError(t, s.teardowns[0](shutCtx))
+	require.NoError(t, s.teardowns[0].fn(shutCtx))
 
 	require.NotNil(t, receivedCtx, "sub.Close must have been called")
 	_, hasDeadline := receivedCtx.Deadline()
@@ -474,7 +475,7 @@ func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
 	// Two teardowns: one for sub, one for pub (different instances).
 	require.Len(t, s.teardowns, 2)
 	for _, td := range s.teardowns {
-		require.NoError(t, td(shutCtx))
+		require.NoError(t, td.fn(shutCtx))
 	}
 
 	require.NotNil(t, subReceivedCtx, "sub.Close must have been called")
@@ -504,7 +505,7 @@ func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
 	defer cancel()
 
 	for _, td := range s.teardowns {
-		require.NoError(t, td(shutCtx))
+		require.NoError(t, td.fn(shutCtx))
 	}
 	assert.Equal(t, 1, closeCount, "shared pub/sub bus must be closed exactly once")
 }
@@ -668,4 +669,77 @@ func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ out
 }
 func (s *pubSubCtxSpy) Close(ctx context.Context) error {
 	return s.closeFn(ctx)
+}
+
+// ---------------------------------------------------------------------------
+// F21: phaseError label tests
+// ---------------------------------------------------------------------------
+
+// TestBootstrapTeardown_ErrorsContainPhaseLabel verifies that phase10LIFOTeardown
+// wraps non-nil teardown errors in phaseError so that the component name is
+// carried with the error for post-mortem diagnosis.
+//
+// ref: sigs.k8s.io/controller-runtime engageStopProcedure — per-step error labelling.
+func TestBootstrapTeardown_ErrorsContainPhaseLabel(t *testing.T) {
+	b := New()
+	_, s := newPhaseState()
+
+	sentinel := errors.New("disk full")
+
+	// Register one named teardown that fails and one that succeeds.
+	s.addNamedTeardown("my-db", func(_ context.Context) error { return sentinel })
+	s.addTeardown(func(_ context.Context) error { return nil })
+
+	shutCtx := context.Background()
+	errs := b.phase10LIFOTeardown(shutCtx, s)
+
+	require.Len(t, errs, 1, "expected exactly one teardown error")
+
+	// The error must be wrapped in phaseError.
+	var pe *phaseError
+	require.True(t, errors.As(errs[0], &pe), "error must be a *phaseError; got %T: %v", errs[0], errs[0])
+	assert.Equal(t, "teardown_my-db", pe.Phase)
+
+	// Unwrap must yield the original sentinel so errors.Is still works.
+	assert.ErrorIs(t, errs[0], sentinel)
+}
+
+// TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled verifies that teardowns
+// registered without a name (via addTeardown) still surface their errors, but
+// without a phaseError wrapper.
+func TestBootstrapTeardown_AnonymousTeardownErrorNotLabelled(t *testing.T) {
+	b := New()
+	_, s := newPhaseState()
+
+	sentinel := errors.New("connection reset")
+	s.addTeardown(func(_ context.Context) error { return sentinel })
+
+	errs := b.phase10LIFOTeardown(context.Background(), s)
+
+	require.Len(t, errs, 1)
+
+	// Anonymous teardown: error is NOT wrapped in phaseError.
+	var pe *phaseError
+	assert.False(t, errors.As(errs[0], &pe), "anonymous teardown must not wrap in phaseError")
+	assert.ErrorIs(t, errs[0], sentinel)
+}
+
+// TestBootstrapTeardown_LIFOOrder verifies teardowns execute in reverse
+// registration order (LIFO).
+func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
+	b := New()
+	_, s := newPhaseState()
+
+	var order []int
+	for i := 0; i < 3; i++ {
+		idx := i
+		s.addNamedTeardown(fmt.Sprintf("step%d", idx), func(_ context.Context) error {
+			order = append(order, idx)
+			return nil
+		})
+	}
+
+	b.phase10LIFOTeardown(context.Background(), s)
+
+	assert.Equal(t, []int{2, 1, 0}, order, "teardowns must run in LIFO order")
 }

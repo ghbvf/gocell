@@ -2,8 +2,27 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
+
+// phaseError wraps a teardown error with the name of the component/phase that
+// produced it. This makes post-mortem diagnosis unambiguous when multiple
+// teardown steps can fail and the error is logged or inspected via errors.As.
+//
+// Used by LIFO teardown and startup rollback to attach the teardown step name
+// to each non-nil error, mirroring the eventrouter.phaseError pattern.
+//
+// ref: uber-go/fx app.go StopTimeout — per-hook error surfacing.
+type phaseError struct {
+	Phase string
+	Err   error
+}
+
+func (e *phaseError) Error() string {
+	return fmt.Sprintf("teardown[%s]: %s", e.Phase, e.Err.Error())
+}
+func (e *phaseError) Unwrap() error { return e.Err }
 
 // shutdownReason indicates what triggered the phase9 shutdown signal.
 // Used by phase10 to decide whether to surface error details.
@@ -24,6 +43,14 @@ const (
 type shutdownSignal struct {
 	reason shutdownReason
 	err    error // non-nil for reasonHTTPError / reasonWorkerError / reasonRouterError
+}
+
+// namedTeardown pairs a teardown function with a diagnostic label.
+// The label appears in phaseError when the teardown returns a non-nil error,
+// making post-mortem diagnosis unambiguous without trawling logs.
+type namedTeardown struct {
+	name string
+	fn   func(context.Context) error
 }
 
 // runState holds mutable runtime state accumulated during Run().
@@ -47,7 +74,7 @@ type runState struct {
 	// teardowns accumulates cleanup functions in registration order;
 	// phase10LIFOTeardown executes them in reverse (LIFO).
 	// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (engageStopProcedure LIFO teardown).
-	teardowns []func(context.Context) error
+	teardowns []namedTeardown
 
 	// channels wired during phase6/7/8; awaited in phase9.
 	// nil channels are never selected (Go select semantics).
@@ -66,10 +93,17 @@ func newRunState() (context.Context, *runState) {
 	}
 }
 
-// addTeardown appends a teardown function that will be called LIFO during
-// phase10 or rollback.
+// addTeardown appends a teardown function with an optional diagnostic label.
+// The label is used in phaseError when the teardown returns a non-nil error.
+// If name is empty, the teardown still runs but errors won't carry phase context.
 func (s *runState) addTeardown(fn func(context.Context) error) {
-	s.teardowns = append(s.teardowns, fn)
+	s.teardowns = append(s.teardowns, namedTeardown{name: "", fn: fn})
+}
+
+// addNamedTeardown appends a teardown function with a diagnostic label.
+// Used by addCloser so that error messages identify the resource type.
+func (s *runState) addNamedTeardown(name string, fn func(context.Context) error) {
+	s.teardowns = append(s.teardowns, namedTeardown{name: name, fn: fn})
 }
 
 // rollback runs teardowns in LIFO order on startup failure (all in one budget),
@@ -79,7 +113,11 @@ func (s *runState) addTeardown(fn func(context.Context) error) {
 func (s *runState) rollback(shutCtx context.Context, cause error) error {
 	slog.Error("bootstrap: startup failed, rolling back", slog.Any("error", cause))
 	for i := len(s.teardowns) - 1; i >= 0; i-- {
-		if err := s.teardowns[i](shutCtx); err != nil {
+		td := s.teardowns[i]
+		if err := td.fn(shutCtx); err != nil {
+			if td.name != "" {
+				err = &phaseError{Phase: "teardown_" + td.name, Err: err}
+			}
 			slog.Warn("bootstrap: rollback step failed", slog.Any("error", err))
 		}
 	}

@@ -93,8 +93,9 @@ func (s *phaseState) addCloser(res any) {
 	if res == nil {
 		return
 	}
+	name := fmt.Sprintf("%T", res)
 	if cc, ok := res.(kernellifecycle.ContextCloser); ok {
-		s.addTeardown(cc.Close)
+		s.addNamedTeardown(name, cc.Close)
 		return
 	}
 	if ic, ok := res.(io.Closer); ok {
@@ -102,8 +103,8 @@ func (s *phaseState) addCloser(res any) {
 		// to this resource. All GoCell adapters implement ContextCloser; this
 		// path is only reached by external or legacy resources.
 		slog.Warn("bootstrap: resource registered as io.Closer only; shutdown budget will NOT apply",
-			slog.String("type", fmt.Sprintf("%T", res)))
-		s.addTeardown(kernellifecycle.IgnoreCtx(ic).Close)
+			slog.String("type", name))
+		s.addNamedTeardown(name, kernellifecycle.IgnoreCtx(ic).Close)
 	}
 	// else: resource has no Close method — silently skip.
 }
@@ -878,11 +879,21 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 
 // phase10LIFOTeardown runs all teardown functions in reverse registration order.
 // Errors are collected but do not abort remaining teardowns (best-effort cleanup).
+// Each non-nil error is wrapped in a phaseError with the component name so that
+// post-mortem diagnosis can pinpoint the failing resource without trawling logs.
+//
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go engageStopProcedure — LIFO.
 func (b *Bootstrap) phase10LIFOTeardown(shutCtx context.Context, s *phaseState) []error {
 	var errs []error
 	for i := len(s.teardowns) - 1; i >= 0; i-- {
-		if err := s.teardowns[i](shutCtx); err != nil {
-			slog.Error("bootstrap: shutdown step failed", slog.Any("error", err))
+		td := s.teardowns[i]
+		if err := td.fn(shutCtx); err != nil {
+			if td.name != "" {
+				err = &phaseError{Phase: "teardown_" + td.name, Err: err}
+			}
+			slog.Error("bootstrap: shutdown step failed",
+				slog.String("phase", td.name),
+				slog.Any("error", err))
 			errs = append(errs, err)
 		}
 	}
