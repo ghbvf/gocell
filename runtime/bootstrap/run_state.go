@@ -30,13 +30,18 @@ type shutdownSignal struct {
 // Split from bootstrap.go to keep the main Run() method focused on
 // phase orchestration rather than state management.
 //
-// runCtx is derived from context.Background() (NOT from the external ctx)
-// so that external ctx cancellation triggers orderly phase10 shutdown
+// The owned run context is NOT stored on the struct (Go idiom: don't embed
+// context.Context in a struct). It is created by newRunState and returned
+// alongside, then threaded explicitly into phase6StartEventRouter and
+// phase8StartWorkers. Cancellation is still reachable via runCancel, which
+// phase10 / rollback invoke.
+//
+// The run context is derived from context.Background() (NOT from the external
+// ctx) so that external ctx cancellation triggers orderly phase10 shutdown
 // rather than propagating directly to worker/eventRouter goroutines.
 //
 // ref: uber-go/fx app.go:L545-567 (run vs stop ctx separation).
 type runState struct {
-	runCtx    context.Context
 	runCancel context.CancelFunc
 
 	// teardowns accumulates cleanup functions in registration order;
@@ -51,13 +56,12 @@ type runState struct {
 	routerErrCh chan error
 }
 
-// newRunState creates a runState with a runCtx derived from context.Background().
-// The caller must call runCancel (or rely on defer state.runCancel() in Run) to
-// release resources.
-func newRunState() *runState {
+// newRunState creates a runState and its owned run context. The caller must
+// call runCancel (or rely on defer state.runCancel() in Run) to release
+// resources.
+func newRunState() (context.Context, *runState) {
 	rc, cancel := context.WithCancel(context.Background())
-	return &runState{
-		runCtx:    rc,
+	return rc, &runState{
 		runCancel: cancel,
 	}
 }

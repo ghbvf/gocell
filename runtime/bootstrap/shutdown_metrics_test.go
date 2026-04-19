@@ -536,7 +536,7 @@ func TestShutdownMetrics_ConcurrentObserve(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer func() {
-				if r := recover(); r != nil {
+				if recover() != nil {
 					panicked.Store(true)
 				}
 			}()

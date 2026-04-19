@@ -47,6 +47,11 @@ const (
 	shutdownPhaseClosed        = "closed"
 )
 
+// registerErrFmt is the error-wrap format shared by every metric registration
+// failure in newShutdownMetrics — keeping a single literal simplifies log
+// parsing and avoids drift between the three call sites.
+const registerErrFmt = "bootstrap: register %s: %w"
+
 // defaultShutdownBuckets are histogram upper bounds in seconds for per-phase
 // shutdown duration. Range covers 10ms (fast path) to 60s (termination grace
 // period). ref: kernel/outbox DefaultRelayPollBuckets — same bucketing philosophy.
@@ -110,7 +115,7 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 		LabelNames: []string{"phase"},
 	})
 	if err != nil {
-		return rollback(fmt.Errorf("bootstrap: register %s: %w", shutdownPhaseCounterName, err))
+		return rollback(fmt.Errorf(registerErrFmt, shutdownPhaseCounterName, err))
 	}
 	registered = append(registered, phaseEntries)
 
@@ -121,7 +126,7 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 		Buckets:    defaultShutdownBuckets,
 	})
 	if err != nil {
-		return rollback(fmt.Errorf("bootstrap: register %s: %w", shutdownPhaseDurationName, err))
+		return rollback(fmt.Errorf(registerErrFmt, shutdownPhaseDurationName, err))
 	}
 	registered = append(registered, phaseDuration)
 
@@ -131,7 +136,7 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 		LabelNames: []string{"outcome"},
 	})
 	if err != nil {
-		return rollback(fmt.Errorf("bootstrap: register %s: %w", shutdownTotalCounterName, err))
+		return rollback(fmt.Errorf(registerErrFmt, shutdownTotalCounterName, err))
 	}
 
 	return &shutdownMetrics{

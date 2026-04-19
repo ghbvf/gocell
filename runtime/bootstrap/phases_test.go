@@ -83,7 +83,7 @@ func TestPhase0_ValidatesInternalGuard(t *testing.T) {
 
 func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	require.NoError(t, b.phase1LoadConfig(s))
 	assert.NotNil(t, s.cfg)
 	assert.Nil(t, s.cfgWatcher)
@@ -96,7 +96,7 @@ func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 		closed = true
 		return nil
 	}))
-	s := newPhaseState()
+	_, s := newPhaseState()
 	require.NoError(t, b.phase1LoadConfig(s))
 	assert.Len(t, s.teardowns, 1)
 
@@ -109,7 +109,7 @@ func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 
 func TestPhase2_InitPubSub_DefaultsToInMemoryBus(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	assert.NotNil(t, s.pub)
 	assert.NotNil(t, s.sub)
@@ -119,7 +119,7 @@ func TestPhase2_InitPubSub_ExplicitPublisherAndSubscriber(t *testing.T) {
 	pub := &phaseTestPublisher{}
 	sub := &phaseTestSubscriber{}
 	b := New(WithPublisher(pub), WithSubscriber(sub))
-	s := newPhaseState()
+	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	assert.Same(t, pub, s.pub.(*phaseTestPublisher))
 	assert.Same(t, sub, s.sub.(*phaseTestSubscriber))
@@ -129,7 +129,7 @@ func TestPhase2_InitPubSub_RegistersTeardownForCloser(t *testing.T) {
 	var closeCalled []string
 	sub := &phaseTestSubscriberCloser{name: "sub", log: &closeCalled}
 	b := New(WithSubscriber(sub))
-	s := newPhaseState()
+	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 	require.Len(t, s.teardowns, 1)
 	require.NoError(t, s.teardowns[0](context.Background()))
@@ -141,7 +141,7 @@ func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
 	var closeCalled int
 	eb := &phaseTestSharedBus{closeCount: &closeCalled}
 	b := New(WithPublisher(eb), WithSubscriber(eb))
-	s := newPhaseState()
+	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
 	// Execute all teardowns.
@@ -155,7 +155,7 @@ func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
 
 func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
 	assert.NotNil(t, s.asm)
@@ -165,7 +165,7 @@ func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T)
 func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: cell.DurabilityDemo})
 	b := New(WithAssembly(asm))
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
 	assert.Same(t, asm, s.asm)
@@ -173,7 +173,7 @@ func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
 
 func TestPhase3_InitAssembly_RegistersAssemblyTeardown(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
 	// Two teardowns: Shutdown + assembly drain+Stop.
@@ -184,16 +184,16 @@ func TestPhase3_InitAssembly_RegistersAssemblyTeardown(t *testing.T) {
 
 func TestPhase8_StartWorkers_NoWorkers_EmptyWorkerErrCh(t *testing.T) {
 	b := New() // no workers
-	s := newPhaseState()
-	b.phase8StartWorkers(s)
+	runCtx, s := newPhaseState()
+	b.phase8StartWorkers(runCtx, s)
 	assert.Nil(t, s.workerErrCh, "workerErrCh must be nil when no workers are registered")
 }
 
 func TestPhase8_StartWorkers_WorkersRegistered_WorkerErrChCreated(t *testing.T) {
 	w := &countWorker{}
 	b := New(WithWorkers(w))
-	s := newPhaseState()
-	b.phase8StartWorkers(s)
+	runCtx, s := newPhaseState()
+	b.phase8StartWorkers(runCtx, s)
 	assert.NotNil(t, s.workerErrCh)
 	// runCtx cancel causes worker to exit.
 	s.runCancel()
@@ -208,7 +208,7 @@ func TestPhase8_StartWorkers_WorkersRegistered_WorkerErrChCreated(t *testing.T) 
 
 func TestRunState_Rollback_ExecutesTeardownsLIFO(t *testing.T) {
 	var order []int
-	s := newRunState()
+	_, s := newRunState()
 	s.addTeardown(func(_ context.Context) error { order = append(order, 1); return nil })
 	s.addTeardown(func(_ context.Context) error { order = append(order, 2); return nil })
 	s.addTeardown(func(_ context.Context) error { order = append(order, 3); return nil })
@@ -220,10 +220,10 @@ func TestRunState_Rollback_ExecutesTeardownsLIFO(t *testing.T) {
 }
 
 func TestRunState_Rollback_CancelsRunCtx(t *testing.T) {
-	s := newRunState()
+	runCtx, s := newRunState()
 	_ = s.rollback(context.Background(), errors.New("x"))
 	select {
-	case <-s.runCtx.Done():
+	case <-runCtx.Done():
 		// expected
 	default:
 		t.Fatal("runCtx must be cancelled after rollback")
@@ -231,7 +231,7 @@ func TestRunState_Rollback_CancelsRunCtx(t *testing.T) {
 }
 
 func TestRunState_Rollback_ContinuesThroughTeardownErrors(t *testing.T) {
-	s := newRunState()
+	_, s := newRunState()
 	var executed []int
 	s.addTeardown(func(_ context.Context) error { executed = append(executed, 1); return nil })
 	s.addTeardown(func(_ context.Context) error {
@@ -261,7 +261,7 @@ func TestShutdownReason_Values(t *testing.T) {
 
 func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
 	require.NoError(t, b.phase5BuildHTTPRouter(s))
@@ -280,7 +280,7 @@ func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
 
 func TestPhase10LIFOTeardown_ExecutesInReverseOrder(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	var order []int
 	s.addTeardown(func(_ context.Context) error { order = append(order, 1); return nil })
 	s.addTeardown(func(_ context.Context) error { order = append(order, 2); return nil })
@@ -292,7 +292,7 @@ func TestPhase10LIFOTeardown_ExecutesInReverseOrder(t *testing.T) {
 
 func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
 	b := New()
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.addTeardown(func(_ context.Context) error { return errors.New("td1") })
 	s.addTeardown(func(_ context.Context) error { return errors.New("td2") })
 
@@ -309,10 +309,10 @@ func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
 	_, extCancel := context.WithCancel(context.Background())
 	defer extCancel()
 
-	s := newPhaseState()
+	runCtx, _ := newPhaseState()
 	// Verify runCtx is alive before external cancel.
 	select {
-	case <-s.runCtx.Done():
+	case <-runCtx.Done():
 		t.Fatal("runCtx must be alive at start")
 	default:
 	}
@@ -321,7 +321,7 @@ func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
 
 	// runCtx must still be alive after external cancel.
 	select {
-	case <-s.runCtx.Done():
+	case <-runCtx.Done():
 		t.Fatal("runCtx must NOT be cancelled when external ctx is cancelled")
 	default:
 		// expected: runCtx is independent

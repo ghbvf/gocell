@@ -773,7 +773,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		return err
 	}
 
-	s := newPhaseState()
+	runCtx, s := newPhaseState()
 	// Safety net: always release runCtx resources on exit (phase10 also calls
 	// runCancel after teardowns, but defer guarantees release on panic paths).
 	defer s.runCancel()
@@ -811,13 +811,13 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase5BuildHTTPRouter(s); err != nil {
 		return rollback(err)
 	}
-	if err := b.phase6StartEventRouter(s); err != nil {
+	if err := b.phase6StartEventRouter(runCtx, s); err != nil {
 		return rollback(err)
 	}
 	if err := b.phase7StartHTTPServer(s); err != nil {
 		return rollback(err)
 	}
-	b.phase8StartWorkers(s)
+	b.phase8StartWorkers(runCtx, s)
 
 	sig := b.phase9AwaitShutdownSignal(ctx, s)
 	return b.phase10OrchestrateShutdown(s, sig)

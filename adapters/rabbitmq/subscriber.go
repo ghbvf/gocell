@@ -368,14 +368,7 @@ func (s *Subscriber) subscribeOnce(
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
-		// Terminal state — propagate immediately, do not wrap as subscribe error.
-		if isTerminalConnectionError(err) {
-			return err
-		}
-		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
-		}
-		return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
+		return classifyAcquireChannelError(err)
 	}
 
 	s.trackChannel(ch)
@@ -458,14 +451,33 @@ func (s *Subscriber) subscribeOnce(
 	// On reconnect (loopErr != nil / errSubscriptionLost), close the dead channel
 	// immediately so the outer Subscribe loop can acquire a fresh one.
 	if loopErr != nil {
-		s.untrackChannel(ch)
-		if closeErr := ch.Close(); closeErr != nil {
-			slog.Debug("rabbitmq: error closing consumed channel on reconnect",
-				slog.String("error", closeErr.Error()))
-		}
+		s.closeChannelOnReconnect(ch)
 	}
 
 	return loopErr
+}
+
+// classifyAcquireChannelError maps AcquireChannel failures into the right
+// error surface for the outer Subscribe loop: terminal → propagate;
+// recoverable → errSubscriptionLost (triggers reconnect); other → wrap.
+func classifyAcquireChannelError(err error) error {
+	if isTerminalConnectionError(err) {
+		return err
+	}
+	if isRecoverableAMQPError(err) {
+		return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
+	}
+	return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
+}
+
+// closeChannelOnReconnect untracks and closes a dead channel so the outer
+// Subscribe loop can acquire a fresh one.
+func (s *Subscriber) closeChannelOnReconnect(ch AMQPChannel) {
+	s.untrackChannel(ch)
+	if closeErr := ch.Close(); closeErr != nil {
+		slog.Debug("rabbitmq: error closing consumed channel on reconnect",
+			slog.String("error", closeErr.Error()))
+	}
 }
 
 // trackChannel adds a channel to the tracked list for cleanup on Close().

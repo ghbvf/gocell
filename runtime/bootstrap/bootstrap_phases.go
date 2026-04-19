@@ -57,10 +57,13 @@ type phaseState struct {
 	registeredCheckers map[string]struct{}
 }
 
-// newPhaseState creates a phaseState wrapping a fresh runState.
-func newPhaseState() *phaseState {
-	return &phaseState{
-		runState:           newRunState(),
+// newPhaseState creates a phaseState wrapping a fresh runState and returns
+// the owned run context alongside. Callers that only need the state (e.g.
+// teardown-only tests) may discard the context via blank identifier.
+func newPhaseState() (context.Context, *phaseState) {
+	runCtx, rs := newRunState()
+	return runCtx, &phaseState{
+		runState:           rs,
 		registeredCheckers: make(map[string]struct{}),
 	}
 }
@@ -585,7 +588,7 @@ func (b *Bootstrap) buildAuthRouterOptions(s *phaseState) ([]router.Option, erro
 // External ctx cancellation triggers phase9 → phase10 which calls evtRouter.Close;
 // that closes runCtx internally, causing Run to return.
 // ref: uber-go/fx app.go:L545-567 (run vs stop ctx separation).
-func (b *Bootstrap) phase6StartEventRouter(s *phaseState) error {
+func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState) error {
 	sub := s.sub
 	if sub == nil {
 		return b.checkNoEventRegistrars(s.asm)
@@ -630,7 +633,7 @@ func (b *Bootstrap) phase6StartEventRouter(s *phaseState) error {
 	// evtRouter.Run uses runCtx — not the external ctx.
 	// ref: uber-go/fx run vs stop ctx separation.
 	go func() {
-		routerErrCh <- evtRouter.Run(s.runCtx)
+		routerErrCh <- evtRouter.Run(runCtx)
 	}()
 
 	select {
@@ -695,13 +698,14 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 	return nil
 }
 
-// phase8StartWorkers starts the WorkerGroup using state.runCtx (independent of
-// external ctx). The workerCancel is only called inside the teardown closure so
-// that worker.Stop is the trigger for cancellation during phase10.
+// phase8StartWorkers starts the WorkerGroup using the caller-supplied runCtx
+// (independent of external ctx). The workerCancel is only called inside the
+// teardown closure so that worker.Stop is the trigger for cancellation during
+// phase10.
 //
-// Key invariant: workerCtx derives from state.runCtx, NOT from the external ctx.
+// Key invariant: workerCtx derives from runCtx, NOT from the external ctx.
 // ref: uber-go/fx run vs stop ctx separation.
-func (b *Bootstrap) phase8StartWorkers(s *phaseState) {
+func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	wg := worker.NewWorkerGroup()
 	for _, w := range b.workers {
 		wg.Add(w)
@@ -709,7 +713,7 @@ func (b *Bootstrap) phase8StartWorkers(s *phaseState) {
 
 	// workerCtx derives from runCtx so external ctx cancel does NOT immediately
 	// stop workers. Workers stop only when phase10 calls their teardown.
-	workerCtx, workerCancel := context.WithCancel(s.runCtx)
+	workerCtx, workerCancel := context.WithCancel(runCtx)
 
 	if len(b.workers) == 0 {
 		workerCancel() // no workers; release immediately

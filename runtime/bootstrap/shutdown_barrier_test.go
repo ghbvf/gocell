@@ -108,7 +108,7 @@ func TestShutdown_LIFOTeardownOrder(t *testing.T) {
 		}
 	}
 
-	s := newPhaseState()
+	_, s := newPhaseState()
 	s.addTeardown(record("first"))
 	s.addTeardown(record("second"))
 	s.addTeardown(record("third"))
