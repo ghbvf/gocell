@@ -292,7 +292,7 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
 		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},
 		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``},
-		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"targetVersion":1}`},
+		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`},
 		{"flag-write:create", http.MethodPost, "/api/v1/flags/", `{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`},
 		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`},
 		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`},
