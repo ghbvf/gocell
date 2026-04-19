@@ -398,12 +398,38 @@ func (r *Router) markShutdown() {
 	r.shutdown = true
 }
 
-// Close cancels all subscriptions and waits for goroutines to finish.
-// The provided context controls the maximum wait time for goroutines to
-// drain; if the context expires, Close returns the context error.
+// Close shuts down the Router in three phases:
+//
+//  1. StopIntake (optional): if the subscriber implements
+//     outbox.SubscriberIntakeStopper, StopIntake(ctx) is called first.
+//     This signals the broker to stop delivering new messages (basic.cancel)
+//     while in-flight handlers continue to run. Errors from StopIntake are
+//     logged as warnings and do not abort the shutdown sequence.
+//
+//  2. Cancel: the internal runCtx subtree is cancelled, unblocking
+//     Subscribe goroutines that are waiting on context cancellation.
+//
+//  3. Drain: wg.Wait() blocks until all goroutines exit. If ctx expires
+//     before drain completes, Close returns ctx.Err().
+//
+// ref: ThreeDotsLabs/watermill message/router.go — closingInProgressCh two-phase barrier.
+// ref: uber-go/fx app.go — run ctx vs stop ctx separation.
 func (r *Router) Close(ctx context.Context) error {
 	start := time.Now()
 
+	// Phase 1: StopIntake — optional graceful degradation.
+	// Subscribers implementing SubscriberIntakeStopper stop accepting new
+	// deliveries but continue processing in-flight ones, enabling a
+	// two-phase drain: broker basic.cancel → handler drain → runCtx cancel.
+	if st, ok := r.subscriber.(outbox.SubscriberIntakeStopper); ok {
+		if err := st.StopIntake(ctx); err != nil {
+			slog.Warn("eventrouter: StopIntake returned error, continuing shutdown",
+				slog.Any("error", err))
+			// error does not abort shutdown; best-effort
+		}
+	}
+
+	// Phase 2: cancel internal runCtx subtree to signal remaining ctx.Done paths.
 	r.mu.Lock()
 	cancel := r.cancel
 	r.mu.Unlock()
@@ -412,6 +438,7 @@ func (r *Router) Close(ctx context.Context) error {
 		cancel()
 	}
 
+	// Phase 3: wait for goroutines to drain or ctx expires.
 	done := make(chan struct{})
 	go func() {
 		r.wg.Wait()
