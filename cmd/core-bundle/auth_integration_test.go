@@ -52,7 +52,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute, auth.WithDefaultAudience("gocell"))
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
@@ -233,7 +234,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
 	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)

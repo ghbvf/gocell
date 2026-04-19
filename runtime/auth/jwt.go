@@ -327,28 +327,22 @@ func WithRefreshTTL(d time.Duration) JWTIssuerOption {
 	}
 }
 
-// WithDefaultAudience sets the audience written into tokens when IssueOptions.Audience
-// is nil. The first argument is required; additional audiences may be provided as
-// variadic arguments. When IssueOptions.Audience is non-nil it takes precedence over
-// the default (override semantics).
+// WithIssuerAudiencesFromSlice sets the audience written into tokens when
+// IssueOptions.Audience is nil (fallback / default audience). The slice is
+// copied defensively. Empty or nil slices are silently ignored.
 //
-// Upper layers (sessionlogin/sessionrefresh) may read the configured default via
-// DefaultAudience() to share a single source of truth for the expected audience.
-func WithDefaultAudience(first string, rest ...string) JWTIssuerOption {
-	auds := append([]string{first}, rest...)
-	return func(i *JWTIssuer) { i.defaultAudience = auds }
-}
-
-// DefaultAudience returns a copy of the default audience slice configured via
-// WithDefaultAudience. Returns nil when no default audience is configured.
-// The returned slice is an independent copy — mutating it does not affect the issuer.
-func (i *JWTIssuer) DefaultAudience() []string {
-	if i == nil || len(i.defaultAudience) == 0 {
-		return nil
+// This is the canonical way to configure default audiences when constructing
+// a JWTIssuer from a config.Registry. The config package uses this option
+// internally; production code should prefer config.NewJWTIssuerFromRegistry
+// instead of calling this directly.
+func WithIssuerAudiencesFromSlice(auds []string) JWTIssuerOption {
+	cp := make([]string, len(auds))
+	copy(cp, auds)
+	return func(i *JWTIssuer) {
+		if len(cp) > 0 {
+			i.defaultAudience = cp
+		}
 	}
-	out := make([]string, len(i.defaultAudience))
-	copy(out, i.defaultAudience)
-	return out
 }
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.

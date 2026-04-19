@@ -40,7 +40,6 @@ type Service struct {
 	userRepo    ports.UserRepository
 	roleRepo    ports.RoleRepository
 	issuer      *auth.JWTIssuer
-	audience    []string
 	verifier    auth.IntentTokenVerifier
 	logger      *slog.Logger
 }
@@ -53,8 +52,8 @@ type Service struct {
 // production. Pass mem.NewUserRepository() in tests that do not exercise the
 // flag.
 //
-// The audience for issued tokens is read from issuer.DefaultAudience() at
-// construction time so there is no hard-coded audience constant in this slice.
+// The audience for issued tokens is carried inside issuer (set from Registry at
+// construction time). This slice does not cache audience separately (S31).
 func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
@@ -69,7 +68,6 @@ func NewService(
 		roleRepo:    roleRepo,
 		userRepo:    userRepo,
 		issuer:      issuer,
-		audience:    issuer.DefaultAudience(),
 		verifier:    verifier,
 		logger:      logger,
 	}
@@ -250,12 +248,10 @@ func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) e
 
 // issueAccessToken signs a short-lived JWT with intent=access carrying roles and
 // the passwordResetRequired flag so middleware can enforce server-side reset.
-// The audience is sourced from s.audience (populated from issuer.DefaultAudience()
-// at construction) — no hard-coded audience constant.
+// Audience is nil — falls back to issuer's configured default from Registry (S31).
 func (s *Service) issueAccessToken(subject string, roles []string, sessionID string, passwordResetRequired bool) (string, error) {
 	return s.issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
 		Roles:                 roles,
-		Audience:              s.audience,
 		SessionID:             sessionID,
 		PasswordResetRequired: passwordResetRequired,
 	})
@@ -263,11 +259,9 @@ func (s *Service) issueAccessToken(subject string, roles []string, sessionID str
 
 // issueRefreshToken signs a JWT with intent=refresh. Refresh tokens carry no
 // roles: /auth/refresh refetches roles from the session's user on rotation.
-// The audience is sourced from s.audience (populated from issuer.DefaultAudience()
-// at construction) — no hard-coded audience constant.
+// Audience is nil — falls back to issuer's configured default from Registry (S31).
 func (s *Service) issueRefreshToken(subject, sessionID string) (string, error) {
 	return s.issuer.Issue(auth.TokenIntentRefresh, subject, auth.IssueOptions{
-		Audience:  s.audience,
 		SessionID: sessionID,
 	})
 }

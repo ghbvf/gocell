@@ -1,7 +1,8 @@
-// Tests for env-var-driven JWT dependency loading (C5).
+// Tests for env-var-driven JWT dependency loading (C5 / F1 Registry).
 //
 // GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all adapter modes
-// (there is no fallback default value).
+// (there is no fallback default value). After F1, loading is done via
+// authconfig.FromEnv; these tests exercise buildJWTDeps end-to-end.
 package main
 
 import (
@@ -17,59 +18,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- loadJWTIssuer ---
+// --- buildJWTDeps: env-var validation ---
 
-// TestLoadJWTIssuer_MissingEnvVar_Error verifies that an unset GOCELL_JWT_ISSUER
-// returns an error containing the env var name.
-func TestLoadJWTIssuer_MissingEnvVar_Error(t *testing.T) {
+// TestBuildJWTDeps_MissingIssuer_Error verifies that an unset GOCELL_JWT_ISSUER
+// causes buildJWTDeps to fail fast.
+func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, err := loadJWTIssuer("")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	_, err := buildJWTDeps("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
 		"error must name the missing env var")
 }
 
-// TestLoadJWTIssuer_SetEnvVar_Used verifies that a set GOCELL_JWT_ISSUER is returned.
-func TestLoadJWTIssuer_SetEnvVar_Used(t *testing.T) {
+// TestBuildJWTDeps_MissingAudience_Error verifies that an unset GOCELL_JWT_AUDIENCE
+// causes buildJWTDeps to fail fast.
+func TestBuildJWTDeps_MissingAudience_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-prod")
-	val, err := loadJWTIssuer("")
-	require.NoError(t, err)
-	assert.Equal(t, "gocell-prod", val)
-}
-
-// TestLoadJWTIssuer_RealMode_AlsoRequired ensures real mode is equally strict.
-func TestLoadJWTIssuer_RealMode_AlsoRequired(t *testing.T) {
-	t.Setenv("GOCELL_JWT_ISSUER", "")
-	_, err := loadJWTIssuer("real")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER")
-}
-
-// --- loadJWTAudience ---
-
-// TestLoadJWTAudience_MissingEnvVar_Error verifies that an unset GOCELL_JWT_AUDIENCE
-// returns an error containing the env var name.
-func TestLoadJWTAudience_MissingEnvVar_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	_, err := loadJWTAudience("")
+	_, err := buildJWTDeps("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
 		"error must name the missing env var")
-}
-
-// TestLoadJWTAudience_SetEnvVar_Used verifies that a set GOCELL_JWT_AUDIENCE is returned.
-func TestLoadJWTAudience_SetEnvVar_Used(t *testing.T) {
-	t.Setenv("GOCELL_JWT_AUDIENCE", "my-service")
-	val, err := loadJWTAudience("")
-	require.NoError(t, err)
-	assert.Equal(t, "my-service", val)
 }
 
 // --- buildJWTDeps integration ---
 
 // TestBuildJWTDeps_RealMode_VerifierRejectsWrongIssuer builds JWT deps and
 // verifies that a token carrying a different iss claim is rejected.
-// Uses the same key set to isolate the issuer check from key mismatch.
 func TestBuildJWTDeps_RealMode_VerifierRejectsWrongIssuer(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "correct-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -78,11 +54,10 @@ func TestBuildJWTDeps_RealMode_VerifierRejectsWrongIssuer(t *testing.T) {
 	require.NoError(t, err)
 
 	// Issue a token using a separate key set with iss="wrong-issuer", then verify
-	// using a verifier that expects iss="correct-issuer". The key mismatch is
-	// intentional isolation: we test only the issuer claim enforcement.
+	// using a verifier that expects iss="correct-issuer".
 	ks, _, _ := auth.MustNewTestKeySet()
 	wrongIssuerIssuer, err := auth.NewJWTIssuer(ks, "wrong-issuer", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	wrongVerifier, err := auth.NewJWTVerifier(ks,
 		auth.WithExpectedAudiences("gocell"),
@@ -121,10 +96,7 @@ func TestBuildJWTDeps_RealMode_VerifierRejectsWrongAudience(t *testing.T) {
 // TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer is an end-to-end
 // wiring test: it builds deps via buildJWTDeps (reading issuer from env) and
 // then uses deps.verifier to reject a token signed with a different issuer.
-// This locks the env → issuer → verifier wiring that the prior RealMode tests
-// missed (B3 finding): the prior test created an independent verifier with
-// explicit options, so it never proved that the verifier produced by
-// buildJWTDeps reads GOCELL_JWT_ISSUER correctly.
+// Locks env → Registry → issuer → verifier wiring (B3).
 func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -133,16 +105,11 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
 	// Use a separate key set and issuer so key mismatch does not interfere.
-	// We want to isolate the issuer claim check on deps.verifier.
 	ks, _, _ := auth.MustNewTestKeySet()
 	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", 15*time.Minute,
-		auth.WithDefaultAudience("gocell"))
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
-	// Create a separate verifier for the alternative key set that trusts wrong-iss.
-	// deps.verifier uses its own key set and expects "prod-iss" — key mismatch
-	// will always fail, which is intentional: the goal is to assert that deps.verifier
-	// rejects the token (regardless of whether it is due to key mismatch or issuer).
 	tok, err := wrongIssuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
 		Audience: []string{"gocell"},
 	})
@@ -152,14 +119,11 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.Error(t, err,
 		"deps.verifier (wired from GOCELL_JWT_ISSUER=prod-iss) must reject a token "+
-			"issued by wrong-iss; this locks env→verifier wiring (B3)")
+			"issued by wrong-iss; locks env→Registry→verifier wiring (B3)")
 }
 
 // TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience is an end-to-end
-// wiring test: it builds deps via buildJWTDeps and uses deps.issuer to sign a
-// token with the wrong audience, then asserts deps.verifier rejects it.
-// This complements the B3 fix by verifying GOCELL_JWT_AUDIENCE flows into the
-// verifier's audience check (not just into the issuer's default audience).
+// wiring test: builds deps and verifies GOCELL_JWT_AUDIENCE flows into verifier.
 func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
@@ -177,11 +141,11 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
 	_, err = deps.verifier.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.Error(t, err,
 		"deps.verifier must reject token with aud=wrong-service; "+
-			"locks GOCELL_JWT_AUDIENCE→verifier wiring (B3)")
+			"locks GOCELL_JWT_AUDIENCE→Registry→verifier wiring (B3)")
 }
 
 // TestBuildJWTDeps_LogsEffectiveConfig verifies that buildJWTDeps emits a
-// structured Info log with issuer, audience, and adapter_mode fields.
+// structured Info log with issuer, audiences, and adapter_mode fields.
 func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "log-test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "log-test-aud")
@@ -210,8 +174,9 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 		}
 		found = true
 		assert.Equal(t, "log-test-issuer", record["issuer"], "log must contain issuer field")
-		assert.Equal(t, "log-test-aud", record["audience"], "log must contain audience field")
 		assert.Equal(t, "testmode", record["adapter_mode"], "log must contain adapter_mode field")
+		// audiences is now a []string (slog.Any) rather than a plain string
+		assert.NotNil(t, record["audiences"], "log must contain audiences field")
 	}
 	assert.True(t, found, "structured log 'core-bundle: JWT deps built' must be emitted by buildJWTDeps")
 }
