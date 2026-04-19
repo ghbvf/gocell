@@ -70,25 +70,36 @@ func TestValueTransformer_EncryptDecrypt_RoundTrip(t *testing.T) {
 // TestValueTransformer_DecryptByHistoricalKeyID
 // ---------------------------------------------------------------------------
 
+// TestValueTransformer_DecryptByHistoricalKeyID verifies that a value encrypted
+// with the previous key (local-aes-v0) can still be decrypted by a provider
+// that has validMasterKeyPrevious loaded as the "previous" key.
+//
+// Note: LocalAES.Rotate() is intentionally disabled (returns ErrNotImplemented).
+// "Historical key" support is achieved by constructing a provider with both a
+// current key and a previous key (GOCELL_MASTER_KEY + GOCELL_MASTER_KEY_PREVIOUS).
+// The provider with both keys can decrypt values encrypted with either.
 func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	ctx := context.Background()
-	p, err := crypto.NewLocalAESKeyProviderFromKeys(validMasterKey, "")
+
+	// Provider with both current and previous key loaded.
+	// validMasterKey → "local-aes-v1" (current)
+	// validMasterKeyPrevious → "local-aes-v0" (previous)
+	p, err := crypto.NewLocalAESKeyProviderFromKeys(validMasterKey, validMasterKeyPrevious)
 	require.NoError(t, err)
-	tr := crypto.NewValueTransformer(p)
+
+	// Obtain the previous key handle directly to encrypt with the old key.
+	previousHandle, err := p.ByID(ctx, crypto.LocalAESPreviousKeyID)
+	require.NoError(t, err)
 
 	plaintext := []byte("old-secret")
 	aad := crypto.AADForConfig("config-core", "legacy_key")
 
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
-	require.NoError(t, err)
-	oldKeyID := keyID
-
-	// Rotate — current key advances.
-	_, err = p.Rotate(ctx)
+	ct, nonce, edk, err := previousHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
-	// Decrypt with the historical keyID must still succeed.
-	recovered, err := tr.Decrypt(ctx, ct, oldKeyID, nonce, edk, aad)
+	// The transformer should decrypt using the historical keyID.
+	tr := crypto.NewValueTransformer(p)
+	recovered, err := tr.Decrypt(ctx, ct, crypto.LocalAESPreviousKeyID, nonce, edk, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered)
 }
