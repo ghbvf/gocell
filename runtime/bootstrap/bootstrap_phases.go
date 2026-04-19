@@ -496,6 +496,14 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 		}
 	}
 
+	// After RegisterRoutes has accumulated every Cell's auth declarations via
+	// auth.Declare, finalize the router so AuthMiddleware predicates (public,
+	// password-reset-exempt, delegated) reflect the aggregated metadata. Must
+	// run before phase7 starts the HTTP listener.
+	if err := rtr.FinalizeAuth(); err != nil {
+		return fmt.Errorf("bootstrap: router finalize auth: %w", err)
+	}
+
 	s.rtr = rtr
 	return nil
 }
