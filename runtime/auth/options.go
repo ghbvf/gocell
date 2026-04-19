@@ -49,32 +49,12 @@ func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOp
 	return func(c *authConfig) { c.passwordResetExempt = fn }
 }
 
-// WithPasswordResetChangeEndpointHint sets the "METHOD /path" string emitted
-// as details.change_password_endpoint in the 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response body — a navigational hint for clients that do not know which
-// endpoint finishes the reset flow.
-//
-// Empty value (the default) omits the hint entirely, keeping runtime/auth
-// free of any business-level path knowledge. Composition roots opt in
-// explicitly; typically they pass the same change-password path they list
-// via WithPasswordResetExemptEndpoints.
-//
-// For late-bound hint values (e.g. derived during FinalizeAuth), prefer
-// WithPasswordResetChangeEndpointHintFn which stores a getter closure directly.
-func WithPasswordResetChangeEndpointHint(hint string) AuthOption {
-	return func(c *authConfig) {
-		c.passwordResetChangeEndpointHint = func() string { return hint }
-	}
-}
-
 // WithPasswordResetChangeEndpointHintFn sets a getter closure that is called
 // at request time to obtain the change_password_endpoint hint. Use this when
 // the hint value is not known at middleware install time (e.g. it is derived
 // by FinalizeAuth after RegisterRoutes completes).
 //
-// When fn is nil the option is a no-op. If both this option and
-// WithPasswordResetChangeEndpointHint are applied, last-write-wins (option
-// functions compose in order).
+// When fn is nil the option is a no-op.
 func WithPasswordResetChangeEndpointHintFn(fn func() string) AuthOption {
 	return func(c *authConfig) {
 		if fn != nil {

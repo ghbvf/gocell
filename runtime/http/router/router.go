@@ -299,9 +299,9 @@ type Router struct {
 	// authFinalized is set to true by FinalizeAuth. Any subsequent
 	// DeclareAuthMeta call panics; a second FinalizeAuth call returns an error.
 	authFinalized bool
-	// derivedHint is populated by FinalizeAuth when no static hint was set via
-	// the legacy WithPasswordResetChangeEndpointHint router option.
-	// It is set to the Path of the first declared POST + PasswordResetExempt meta.
+	// derivedHint is populated by FinalizeAuth from the first declared
+	// POST + PasswordResetExempt meta. Served at request time via
+	// WithPasswordResetChangeEndpointHintFn.
 	derivedHint string
 }
 
@@ -615,10 +615,9 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 }
 
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
-// matchers and OR-merges them with any matchers already set by the legacy
-// WithPublicEndpoints / WithPasswordResetExemptEndpoints / WithInternalPathPrefixGuard
-// options. Bootstrap calls this after all cells have completed RegisterRoutes
-// but before Listen.
+// matchers and OR-merges them with any matchers already set by
+// WithInternalPathPrefixGuard. Bootstrap calls this after all cells have
+// completed RegisterRoutes but before Listen.
 //
 // Returns an error (not a panic) so Bootstrap can perform a clean rollback:
 //   - "router: FinalizeAuth called twice"
