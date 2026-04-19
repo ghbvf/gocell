@@ -334,6 +334,13 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrObservabilityConfigInvalid: http.StatusInternalServerError,
 	// Lifecycle operation called in wrong state (e.g. bootstrap phase violation).
 	errcode.ErrBootstrapLifecycle: http.StatusInternalServerError,
+	// KeyProvider / encryption failures — infrastructure-level, never leak
+	// ciphertext or key IDs to the client; surface as 500 so the sanitised
+	// "internal server error" body is returned.
+	errcode.ErrKeyProviderKeyNotFound:   http.StatusInternalServerError,
+	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
+	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
+	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
 
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,
