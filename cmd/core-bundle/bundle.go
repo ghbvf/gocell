@@ -41,6 +41,14 @@ type AppDeps struct {
 	// in-memory defaults for config-core.
 	configCellOpts []configcore.Option
 
+	// metricsHandler is the Prometheus HTTP handler built once in AppDepsFromEnv
+	// and reused by BuildBootstrap. Avoids a double call to promhttp.HandlerFor.
+	metricsHandler http.Handler
+
+	// verboseOpts are the bootstrap options for /readyz?verbose auth, built
+	// once in AppDepsFromEnv and consumed directly by BuildBootstrap.
+	verboseOpts []bootstrap.Option
+
 	// JWTDeps holds the JWT issuer and verifier.
 	JWTDeps jwtDeps
 
@@ -110,13 +118,9 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 	}
 
 	// validateModeCoupling is now implicit in TopologyFromEnv (postgres→real
-	// coupling). Keep an explicit check here for defence-in-depth since
-	// buildConfigCoreOpts reads GOCELL_CELL_ADAPTER_MODE independently.
-	cellMode := os.Getenv("GOCELL_CELL_ADAPTER_MODE")
-	if cellMode == "" {
-		cellMode = "memory"
-	}
-	if err := validateModeCoupling(cellMode, adapterMode); err != nil {
+	// coupling). Keep an explicit check here for defence-in-depth using the
+	// already-resolved Topology fields as the single source of truth.
+	if err := validateModeCoupling(topo.StorageBackend, topo.AdapterMode); err != nil {
 		return nil, err
 	}
 
@@ -126,12 +130,14 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 	}
 
 	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
-	if _, err = buildVerboseOpts(adapterMode, verboseToken); err != nil {
+	verboseOpts, err := buildVerboseOpts(adapterMode, verboseToken)
+	if err != nil {
 		return nil, err
 	}
 
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
-	if _, err = buildMetricsHandler(adapterMode, metricsToken, ps.registry); err != nil {
+	metricsHandler, err := buildMetricsHandler(adapterMode, metricsToken, ps.registry)
+	if err != nil {
 		return nil, err
 	}
 
@@ -151,6 +157,8 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 		InternalGuard:  internalGuard,
 		MetricsToken:   metricsToken,
 		VerboseToken:   verboseToken,
+		metricsHandler: metricsHandler,
+		verboseOpts:    verboseOpts,
 	}, nil
 }
 
@@ -186,10 +194,16 @@ func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootst
 		return nil, err
 	}
 
-	metricsHandler, err := buildMetricsHandler(
-		deps.Topology.AdapterMode, deps.MetricsToken, deps.PromStack.registry)
-	if err != nil {
-		return nil, err
+	// Use the pre-built metricsHandler from AppDepsFromEnv when available (avoids
+	// a second promhttp.HandlerFor call). The test path (struct literal AppDeps)
+	// leaves metricsHandler nil, so we build it here as a fallback.
+	metricsHandler := deps.metricsHandler
+	if metricsHandler == nil {
+		metricsHandler, err = buildMetricsHandler(
+			deps.Topology.AdapterMode, deps.MetricsToken, deps.PromStack.registry)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{})
@@ -221,6 +235,7 @@ func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootst
 // buildConfigCell constructs the config-core cell from AppDeps.
 // When configCellOpts is populated (via AppDepsFromEnv), those options are used.
 // In tests (struct literal without configCellOpts), in-memory defaults apply.
+// When deps.configCellOpts is nil, falls back to in-memory defaults; this is the test-injection contract.
 func buildConfigCell(deps *AppDeps) *configcore.ConfigCore {
 	base := []configcore.Option{
 		configcore.WithPublisher(deps.EventBus),
