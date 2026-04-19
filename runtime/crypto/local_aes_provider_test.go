@@ -117,7 +117,7 @@ func TestLocalAESKeyProvider_Rotate_ReturnsErrNotImplemented(t *testing.T) {
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "error must be errcode.Error")
 	assert.Equal(t, errcode.ErrNotImplemented, ec.Code)
-	assert.Contains(t, err.Error(), "VaultTransitKeyProvider")
+	assert.Contains(t, err.Error(), "adapters/vault.TransitKeyProvider")
 }
 
 // ---------------------------------------------------------------------------

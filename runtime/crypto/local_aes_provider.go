@@ -195,15 +195,15 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 // error rather than silently losing data.
 //
 // Production rotation strategy (S14a):
-//   - Use VaultTransitKeyProvider.Rotate() which delegates key generation to Vault.
+//   - Use adapters/vault.TransitKeyProvider.Rotate() which delegates key generation to Vault.
 //   - Vault persists key versions server-side; historical ciphertext remains
 //     decryptable via the ciphertext version prefix.
 //
-// Testing rotation scenarios: use VaultTransitKeyProvider with a fake vaultClient
-// (see vault_transit_unit_test.go).
+// Testing rotation scenarios: use adapters/vault.TransitKeyProvider with a fake VaultClient
+// (see adapters/vault/transit_provider_test.go).
 func (p *LocalAESKeyProvider) Rotate(_ context.Context) (string, error) {
 	return "", errcode.New(errcode.ErrNotImplemented,
-		"LocalAES rotation is not persistent; use VaultTransitKeyProvider for production key rotation (S14a)")
+		"LocalAES rotation is not persistent; use adapters/vault.TransitKeyProvider for production key rotation (S14a)")
 }
 
 // ---------------------------------------------------------------------------
