@@ -2,10 +2,8 @@ package auth
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
@@ -13,54 +11,33 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-// DefaultPublicEndpoints is intentionally empty. Public route policy must be
-// declared at the composition root (main.go / bootstrap call site), not in
-// runtime/auth. Callers pass explicit publicEndpoints to WithAuthMiddleware.
+// AuthMiddleware extracts a Bearer token from the Authorization header,
+// verifies it using the provided IntentTokenVerifier (always enforcing
+// token_use=access for business endpoints), and stores the resulting Claims
+// in the request context. On failure, it returns a 401 JSON response.
 //
-// Infra endpoints (/healthz, /readyz, /metrics) bypass auth via the router's
-// outerMux architecture and do not need to be listed here.
+// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
+// access-vs-refresh distinction is a hard safety invariant — any verifier
+// plugged into business routes must be able to enforce it at the type level,
+// so we refuse to compile call sites that pass an intent-unaware verifier.
+//
+// Public-endpoint bypass and delegated-auth configuration is provided through
+// AuthOption values (WithPublicEndpointMatcher, WithDelegatedMatcher). The
+// Router installs these via lazy closures during FinalizeAuth so that route
+// declarations from all Cells are aggregated before the predicates are compiled.
 //
 // ref: go-kratos/kratos — public bypass via selector at composition layer
 // ref: go-zero — JWT opt-in per route group, no hidden runtime defaults
-var DefaultPublicEndpoints = []string{}
-
-// AuthMiddleware extracts a Bearer token from the Authorization header,
-// verifies it using the provided IntentTokenVerifier (always enforcing
-// token_use=access for business endpoints), and stores the resulting Claims
-// in the request context. On failure, it returns a 401 JSON response.
-//
-// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
-// access-vs-refresh distinction is a hard safety invariant — any verifier
-// plugged into business routes must be able to enforce it at the type level,
-// so we refuse to compile call sites that pass an intent-unaware verifier.
-//
-// publicEndpoints specifies paths that bypass authentication. If nil,
-// DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
-// matching, consistent with other security middleware in this package.
-// AuthMiddleware extracts a Bearer token from the Authorization header,
-// verifies it using the provided IntentTokenVerifier (always enforcing
-// token_use=access for business endpoints), and stores the resulting Claims
-// in the request context. On failure, it returns a 401 JSON response.
-//
-// The parameter is IntentTokenVerifier (not TokenVerifier) by design: the
-// access-vs-refresh distinction is a hard safety invariant — any verifier
-// plugged into business routes must be able to enforce it at the type level,
-// so we refuse to compile call sites that pass an intent-unaware verifier.
-//
-// publicEndpoints specifies paths that bypass authentication. If nil,
-// DefaultPublicEndpoints is used. Paths are normalized via path.Clean before
-// matching, consistent with other security middleware in this package.
-//
-// Pass WithPublicEndpointMatcher(fn) to use a method-aware compiled predicate
-// instead of the []string path-only list. When the matcher is provided, the
-// publicEndpoints parameter is ignored for bypass decisions.
-func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts ...AuthOption) func(http.Handler) http.Handler {
+func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.Handler) http.Handler {
 	cfg := defaultAuthConfig()
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	isPublic := buildPublicMatcher(publicEndpoints, cfg)
+	isPublic := cfg.publicMatcher
+	if isPublic == nil {
+		isPublic = func(*http.Request) bool { return false }
+	}
 	// delegated = authentication is deferred to downstream middleware
 	// (service-token guard, mTLS, ...) for that route.
 	isDelegated := cfg.delegatedMatcher // nil = no delegated paths
@@ -77,41 +54,6 @@ func AuthMiddleware(verifier IntentTokenVerifier, publicEndpoints []string, opts
 			}
 			handleAuthRequest(w, r, next, verifier, cfg)
 		})
-	}
-}
-
-// buildPublicMatcher returns the public-endpoint bypass predicate. Prefers the
-// compiled method-aware matcher (set via WithPublicEndpointMatcher, e.g. from
-// router.WithPublicEndpoints) over the legacy path-only []string.
-func buildPublicMatcher(publicEndpoints []string, cfg authConfig) func(*http.Request) bool {
-	if cfg.publicMatcher != nil {
-		return cfg.publicMatcher
-	}
-
-	publicPaths := publicEndpoints
-	if publicPaths == nil {
-		publicPaths = DefaultPublicEndpoints
-	}
-
-	// Defense-in-depth: detect callers that accidentally pass "METHOD /path"
-	// format to the legacy []string path (path.Clean on the whole string never
-	// matches). Panic to fail-fast — caller should use router.WithPublicEndpoints
-	// instead (which compiles into publicMatcher).
-	for _, p := range publicPaths {
-		if strings.ContainsRune(p, ' ') {
-			panic(fmt.Sprintf(
-				"auth.AuthMiddleware: legacy publicEndpoints entry %q looks like METHOD /path format; "+
-					"pass it through router.WithPublicEndpoints (which sets WithPublicEndpointMatcher) instead",
-				p))
-		}
-	}
-
-	publicSet := make(map[string]bool, len(publicPaths))
-	for _, p := range publicPaths {
-		publicSet[path.Clean(p)] = true
-	}
-	return func(r *http.Request) bool {
-		return publicSet[path.Clean(r.URL.Path)]
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // Policy evaluates an HTTP request for authorization. A nil return permits
@@ -19,30 +18,6 @@ import (
 // ref: grpc-ecosystem/go-grpc-middleware WithServerUnaryInterceptor — interceptor
 // pattern where auth is declared at registration time, not inside handler body.
 type Policy func(r *http.Request) error
-
-// Secured wraps an http.HandlerFunc with a Policy. The returned handler
-// evaluates the policy first; on failure it writes the mapped domain error
-// and returns without invoking the wrapped handler.
-//
-// policy must not be nil; passing nil panics immediately at wrap time to make
-// misuse detectable during startup/test rather than silently skipping authz.
-//
-// ref: go-chi/jwtauth jwtauth.go Authenticator — write response inside the
-// guard, caller only short-circuits.
-// ref: grpc-ecosystem/go-grpc-middleware — interceptor declared at route
-// registration, not inline in handler body.
-func Secured(h http.HandlerFunc, policy Policy) http.HandlerFunc {
-	if policy == nil {
-		panic("auth.Secured: policy must not be nil")
-	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := policy(r); err != nil {
-			httputil.WriteDomainError(r.Context(), w, err)
-			return
-		}
-		h(w, r)
-	}
-}
 
 // Authenticated returns a Policy that requires an authenticated Principal in
 // context. Use for endpoints that only need to verify a user is logged in,

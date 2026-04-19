@@ -28,9 +28,12 @@ func assertErrorBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any 
 	return errObj
 }
 
-// --- TestSecured ---
+// --- TestRequirePolicy (replacing the legacy auth.Secured helper removed in F3) ---
 
-func TestSecured(t *testing.T) {
+// TestRequirePolicy_LegacySecuredBehavior verifies that RequirePolicy preserves
+// the short-circuit and error-mapping behaviour that callers previously relied on
+// from the legacy auth.Secured helper (removed in F3).
+func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -75,7 +78,7 @@ func TestSecured(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := buildRequest(TestContext("user-1", []string{"admin"}))
 
-			h := Secured(inner, tc.policy)
+			h := RequirePolicy(tc.policy)(inner)
 			h.ServeHTTP(w, r)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -89,12 +92,12 @@ func TestSecured(t *testing.T) {
 	}
 }
 
-// TestSecured_NilPolicy_Panics verifies that passing a nil policy to Secured
-// panics immediately at wrap time, making misuse detectable at startup/test
-// rather than silently skipping authorization at request time.
-func TestSecured_NilPolicy_Panics(t *testing.T) {
+// TestRequirePolicy_NilPolicy_Panics verifies that passing a nil policy to
+// RequirePolicy panics immediately at wrap time, making misuse detectable at
+// startup/test rather than silently skipping authorization at request time.
+func TestRequirePolicy_NilPolicy_Panics(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})
-	require.Panics(t, func() { Secured(inner, nil) })
+	require.Panics(t, func() { RequirePolicy(nil)(inner) })
 }
 
 // --- TestAuthenticated ---
