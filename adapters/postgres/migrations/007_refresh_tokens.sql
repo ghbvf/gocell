@@ -32,9 +32,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_obsolete_active
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session
     ON refresh_tokens (session_id);
 
--- Background GC sweep (Store.GC) for expired-but-not-yet-purged rows.
+-- GC sweep (Store.GC) — single time axis over both active and revoked rows.
+-- Non-partial so the planner uses it for `DELETE WHERE expires_at < $1`
+-- regardless of revocation status. Plan §F2 GC contract alignment.
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires
-    ON refresh_tokens (expires_at) WHERE revoked_at IS NULL;
+    ON refresh_tokens (expires_at);
 
 -- +goose Down
 -- WARNING: Irreversible in production — DROP TABLE destroys all active refresh sessions.

@@ -83,7 +83,7 @@ func mustRotate(t *testing.T, store refresh.Store, tokenID string) *refresh.Toke
 }
 
 // RunContractSuite runs the full C1-C7 contract test suite against factory.
-// Each of the 12 test cases (T1-T12) is a t.Run sub-test; they can be run
+// Each of the 13 test cases (T1-T13) is a t.Run sub-test; they can be run
 // individually with -run TestXxx/T1_Issue_Basic etc.
 func RunContractSuite(t *testing.T, factory Factory) {
 	t.Helper()
@@ -99,6 +99,7 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T10_Rotate_Concurrent_CAS", func(t *testing.T) { runT10ConcurrentCAS(t, factory) })
 	t.Run("T11_Clock_ExpiresAt_Calc", func(t *testing.T) { t.Parallel(); runT11ExpiresAtCalc(t, factory) })
 	t.Run("T12_Errcode_Categories", func(t *testing.T) { t.Parallel(); runT12ErrcodeCategories(t) })
+	t.Run("T13_GC_RemovesExpiredTokens", func(t *testing.T) { t.Parallel(); runT13GCRemovesExpired(t, factory) })
 }
 
 // runT1IssueBasic: Issue succeeds → ID len 43, ObsoleteToken empty, CreatedAt == LastUsed.
@@ -306,14 +307,28 @@ func runT9RevokeCascade(t *testing.T, factory Factory) {
 	}
 }
 
-// runT10ConcurrentCAS: 100 goroutines Rotate same token → exactly 1 succeeds.
-// T10 is not parallel at the t.Run level because it spawns goroutines itself.
+// runT10ConcurrentCAS: 100 goroutines Rotate the same token.
+//
+// Under grace-semantics (Dex/Fosite): the first goroutine rotates the token,
+// the other 99 present the (now-obsolete) original token within the grace
+// window and receive the same current token idempotently. No goroutine
+// observes an error. The store internally performs exactly one rotation.
+//
+// Assertion model:
+//  1. All 100 goroutines return err == nil.
+//  2. All 100 goroutines return tokens with the same ID (the post-rotation
+//     current token); this token ID differs from the pre-rotation one.
+//  3. Exactly one goroutine observes a non-empty ObsoleteToken equal to the
+//     original (the one that actually performed the rotation).
+//
+// This model verifies CAS correctness more precisely than "exactly 1 success"
+// by asserting grace-idempotency alongside single-rotation.
 func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 	t.Helper()
 	store, _ := factory(t, defaultPolicy)
 
 	issued := mustIssue(t, store, "sess-10", "user-10")
-	tokenID := issued.ID
+	originalID := issued.ID
 
 	const goroutines = 100
 	type result struct {
@@ -327,28 +342,42 @@ func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			tok, e := store.Rotate(context.Background(), tokenID)
+			tok, e := store.Rotate(context.Background(), originalID)
 			results <- result{tok, e}
 		}()
 	}
 	wg.Wait()
 	close(results)
 
-	successCount := 0
+	var (
+		returnedIDs     = make(map[string]int) // distinct returned token IDs
+		actualRotations int                    // count of tokens whose ObsoleteToken == originalID
+	)
 	for r := range results {
-		if r.err == nil {
-			successCount++
+		if r.err != nil {
+			t.Errorf("Rotate concurrent: unexpected error: %v", r.err)
 			continue
 		}
-		if errors.Is(r.err, refresh.ErrTokenReused) ||
-			errors.Is(r.err, refresh.ErrTokenNotFound) ||
-			errors.Is(r.err, refresh.ErrTokenRevoked) {
+		if r.tok == nil {
+			t.Error("Rotate concurrent: nil token returned")
 			continue
 		}
-		t.Errorf("Rotate concurrent: unexpected error: %v", r.err)
+		returnedIDs[r.tok.ID]++
+		if r.tok.ObsoleteToken == originalID {
+			actualRotations++
+		}
 	}
-	if successCount != 1 {
-		t.Errorf("Rotate concurrent CAS: exactly 1 goroutine must succeed, got %d", successCount)
+
+	if len(returnedIDs) != 1 {
+		t.Errorf("Rotate concurrent: all goroutines must return the same token ID, got %d distinct IDs: %v", len(returnedIDs), returnedIDs)
+	}
+	for id := range returnedIDs {
+		if id == originalID {
+			t.Errorf("Rotate concurrent: returned token ID should differ from original (rotation did not happen)")
+		}
+	}
+	if actualRotations != 1 {
+		t.Errorf("Rotate concurrent CAS: exactly 1 actual rotation must happen (obsolete == original), got %d", actualRotations)
 	}
 }
 
@@ -370,6 +399,44 @@ func runT11ExpiresAtCalc(t *testing.T, factory Factory) {
 	wantExpiry := now.Add(policy.MaxAge)
 	if !tok.ExpiresAt.Equal(wantExpiry) {
 		t.Errorf("ExpiresAt: want %v, got %v", wantExpiry, tok.ExpiresAt)
+	}
+}
+
+// runT13GCRemovesExpired: GC(now) removes tokens whose ExpiresAt < now,
+// including both active and revoked rows. Post-GC, the tokens are no
+// longer addressable via Rotate.
+//
+// Covers plan §F2 GC contract (single-time-axis cleanup).
+func runT13GCRemovesExpired(t *testing.T, factory Factory) {
+	t.Helper()
+	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 1 * time.Hour}
+	store, clock := factory(t, policy)
+
+	// Issue two chains: one will remain active, one will be revoked.
+	activeTok := mustIssue(t, store, "sess-13a", "user-13a")
+	revokedTok := mustIssue(t, store, "sess-13b", "user-13b")
+	if err := store.Revoke(context.Background(), "sess-13b"); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	// Advance past MaxAge so both are expired.
+	clock.Advance(2 * time.Hour)
+	now := clock.Now()
+
+	removed, err := store.GC(context.Background(), now)
+	if err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("GC: want 2 rows removed (active + revoked), got %d", removed)
+	}
+
+	// Both tokens must be un-addressable.
+	if _, err := store.Rotate(context.Background(), activeTok.ID); !errors.Is(err, refresh.ErrTokenNotFound) {
+		t.Errorf("Rotate after GC (active): want ErrTokenNotFound, got %v", err)
+	}
+	if _, err := store.Rotate(context.Background(), revokedTok.ID); !errors.Is(err, refresh.ErrTokenNotFound) {
+		t.Errorf("Rotate after GC (revoked): want ErrTokenNotFound, got %v", err)
 	}
 }
 

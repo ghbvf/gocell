@@ -46,9 +46,17 @@ type Store interface {
 	// Consistency: L1 LocalTx — bulk UPDATE within a single statement.
 	Revoke(ctx context.Context, sessionID string) error
 
-	// GC removes tokens whose ExpiresAt < olderThan or whose revoked_at is
-	// older than the caller-supplied retention window. Returns the count
-	// removed. Callers are expected to invoke GC from a background worker.
+	// GC removes all tokens whose ExpiresAt < olderThan (both active and
+	// previously-revoked rows). Returns the count removed. Callers are
+	// expected to invoke GC from a background worker.
+	//
+	// Design: GC drives cleanup from a single time axis (ExpiresAt) rather
+	// than a dual revoked_at/expired_at bifurcation. Revoked tokens retain
+	// their original ExpiresAt so they are purged at the same cadence as
+	// naturally-expired tokens — simpler contract, simpler index design.
+	//
+	// ref: dexidp/dex + ory/fosite both use a single expiration timestamp
+	// to drive refresh token cleanup.
 	//
 	// Consistency: L0 LocalOnly — best-effort cleanup, no transactional
 	// guarantee required.

@@ -211,6 +211,17 @@ func (s *store) rotateActive(rec *tokenRecord, now time.Time) (*refresh.Token, e
 	delete(s.byID, oldID)
 	s.byID[newID] = rec
 
+	// Single-generation obsolete invariant: PG's refresh_tokens table holds one
+	// obsolete_token value per row (see migration 007). When a record advances
+	// another generation (oldID becomes the new obsolete and the previous
+	// obsoleteToken is dropped), drop the byObsolete entry that pointed to the
+	// previous generation so memstore stays aligned with the PG model.
+	//
+	// ref: plan §F2 C1 — record holds at most one obsolete_token at any time.
+	if rec.obsoleteToken != "" {
+		delete(s.byObsolete, rec.obsoleteToken)
+	}
+
 	// Update record in-place (CAS under mu — only one goroutine reaches here).
 	rec.obsoleteToken = oldID
 	rec.id = newID
@@ -236,28 +247,31 @@ func (s *store) rotateObsolete(rec *tokenRecord, presentedObsolete string, now t
 	}
 
 	// Grace window: if the current token was used (i.e. rotated) recently, the
-	// client's retry is likely a network-retransmit, not an attack.
+	// client's retry is likely a network-retransmit or a concurrent request
+	// racing with another goroutine on the same stale token — not an attack.
 	//
-	// AllowedToReuse: 0 < (now - lastUsed) <= reuseInterval
+	// AllowedToReuse: (now - lastUsed) <= reuseInterval
 	//
-	// The lower bound (> 0) is intentional: if now == lastUsed the token was
-	// rotated by another goroutine in the same clock tick. That is a concurrent
-	// race (two clients sharing the same token), not a client network-retry.
-	// Returning ErrTokenNotFound here preserves CAS exclusion semantics for T10.
-	// In production the clock always moves forward, so this zero-delta case only
-	// arises when a deterministic FakeClock is used (tests).
+	// Zero-delta (now == lastUsed) is explicitly treated as a grace retry, not
+	// a race-to-attack: under a deterministic FakeClock two goroutines may read
+	// the same Now(); under PG, NOW() has second-level resolution and concurrent
+	// requests can observe identical last_used timestamps. Both are legitimate
+	// concurrent scenarios per OAuth2 RFC 6749 §6 guidance on refresh token
+	// rotation and match Dex/Fosite behaviour.
 	//
-	// ref: dexidp/dex server/refreshhandlers.go AllowedToReuse (reuseInterval
-	//      enforced at the DB CAS level; zero-delta never occurs in practice).
+	// ref: dexidp/dex server/refreshhandlers.go AllowedToReuse uses strict `<`
+	//      with no lower bound on elapsed.
+	// ref: ory/fosite refresh_token_strategy treats same-window duplicates as
+	//      concurrent retries, not reuse attacks.
 	elapsed := now.Sub(rec.lastUsed)
-	// NOTE for PG store implementers: the SQL CAS (plan C5) does NOT include this
-	// `elapsed > 0` lower bound. It is a memstore-only workaround for concurrent
-	// tests with a deterministic FakeClock where two goroutines observe identical
-	// Now() returns. PG implementations must use `elapsed <= ReuseInterval` only,
-	// per plan §F2 C5.
-	if elapsed > 0 && elapsed <= s.policy.ReuseInterval {
-		// Idempotent grace retry: return current token copy, no new rotate.
-		return rec.toToken(), nil
+	if elapsed <= s.policy.ReuseInterval {
+		// Idempotent grace retry: return the current active token. ObsoleteToken
+		// is not set in the response — only the goroutine that performed the
+		// actual rotation receives ObsoleteToken in its return value. Grace-retry
+		// callers need only the current token ID to continue their session.
+		tok := rec.toToken()
+		tok.ObsoleteToken = ""
+		return tok, nil
 	}
 
 	// Reuse detection: obsolete token presented outside the grace window — attack signal.
