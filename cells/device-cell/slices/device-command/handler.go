@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -48,12 +49,27 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers device-command routes on the given mux with policies
-// declared at registration time via auth.Secured.
+// declared at registration time via auth.Declare.
 // TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /{id}/commands", auth.Secured(h.HandleEnqueue, auth.AnyRole("admin", "operator")))
-	mux.Handle("GET /{id}/commands", auth.Secured(h.HandleListPending, auth.SelfOr("id", "admin")))
-	mux.Handle("POST /{id}/commands/{cmdId}/ack", auth.Secured(h.HandleAck, auth.SelfOr("id", "admin")))
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{id}/commands",
+		Handler: http.HandlerFunc(h.HandleEnqueue),
+		Policy:  auth.AnyRole("admin", "operator"),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/{id}/commands",
+		Handler: http.HandlerFunc(h.HandleListPending),
+		Policy:  auth.SelfOr("id", "admin"),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/{id}/commands/{cmdId}/ack",
+		Handler: http.HandlerFunc(h.HandleAck),
+		Policy:  auth.SelfOr("id", "admin"),
+	})
 }
 
 // enqueueRequest is the JSON body for POST /api/v1/devices/{id}/commands.

@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Compile-time interface checks.
@@ -163,9 +164,28 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 		v1.Route("/devices", func(devices cell.RouteMux) {
 			devices.Handle("POST /", http.HandlerFunc(c.registerHandler.HandleRegister))
 			devices.Handle("GET /{id}/status", http.HandlerFunc(c.statusHandler.HandleGetStatus))
-			devices.Handle("POST /{id}/commands", http.HandlerFunc(c.commandHandler.HandleEnqueue))
-			devices.Handle("GET /{id}/commands", http.HandlerFunc(c.commandHandler.HandleListPending))
-			devices.Handle("POST /{id}/commands/{cmdId}/ack", http.HandlerFunc(c.commandHandler.HandleAck))
+			// device-command routes declared via auth.Declare so policies are
+			// explicit at registration time.
+			// TODO(S43): role-name literals — migrate to permission-based authz
+			// when PERMISSION-BASED-AUTHZ-01 lands.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/{id}/commands",
+				Handler: http.HandlerFunc(c.commandHandler.HandleEnqueue),
+				Policy:  auth.AnyRole("admin", "operator"),
+			})
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{id}/commands",
+				Handler: http.HandlerFunc(c.commandHandler.HandleListPending),
+				Policy:  auth.SelfOr("id", "admin"),
+			})
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/{id}/commands/{cmdId}/ack",
+				Handler: http.HandlerFunc(c.commandHandler.HandleAck),
+				Policy:  auth.SelfOr("id", "admin"),
+			})
 		})
 	})
 }
