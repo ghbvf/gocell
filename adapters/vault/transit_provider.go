@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,14 +23,16 @@ import (
 // ciphertext prefix "vault:vN:".
 const vaultKeyIDPrefix = "vault-transit:"
 
-// vaultClient is the minimal subset of the Vault SDK client that
-// TransitKeyProvider requires. Using an interface allows unit tests to inject
-// a fake without importing github.com/hashicorp/vault/api.
+// VaultClient is the minimal subset of the Vault SDK client that
+// TransitKeyProvider requires. Using an exported interface allows external
+// packages (e.g. S14a rotation service, integration test helpers) to inject
+// a fake or mock without importing github.com/hashicorp/vault/api directly.
 //
-// Migrated from runtime/crypto.vaultClient (R1c Phase 0-c).
+// Migrated from runtime/crypto.vaultClient (R1c Phase 0-c); exported in R1c
+// reviewer FID-005 to unblock S14a key-rotation path.
 //
 // ref: hashicorp/vault builtin/logical/transit/path_rewrap.go@main
-type vaultClient interface {
+type VaultClient interface {
 	// Write sends a PUT/POST to the given Vault path with the provided data
 	// and returns the raw secret map or an error.
 	Write(ctx context.Context, path string, data map[string]any) (map[string]any, error)
@@ -66,7 +69,7 @@ type vaultTransitHandle struct {
 	id        string
 	mountPath string
 	keyName   string
-	client    vaultClient
+	client    VaultClient
 }
 
 // ID returns the key version identifier (e.g. "vault-transit:v3").
@@ -227,14 +230,16 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master
 type TransitKeyProvider struct {
 	mu        sync.RWMutex
-	client    vaultClient
+	client    VaultClient
 	mountPath string
 	keyName   string
 }
 
-// NewTransitKeyProvider creates a TransitKeyProvider with the given vaultClient.
-// This is the testable constructor — inject a fake client in tests.
-func NewTransitKeyProvider(client vaultClient, mountPath, keyName string) *TransitKeyProvider {
+// NewTransitKeyProvider creates a TransitKeyProvider with the given VaultClient.
+// This is the testable constructor — inject a fake VaultClient in tests.
+// The VaultClient interface is exported so external packages can provide
+// custom implementations without importing github.com/hashicorp/vault/api.
+func NewTransitKeyProvider(client VaultClient, mountPath, keyName string) *TransitKeyProvider {
 	if mountPath == "" {
 		mountPath = "transit"
 	}
@@ -267,10 +272,13 @@ func NewTransitKeyProviderFromEnv() (*TransitKeyProvider, error) {
 		cfg.Address = addr
 	}
 
+	// Fail-fast: construction failure is a configuration error, not an encrypt error.
+	// ErrConfigKeyMissing is the canonical infra/config error code for missing or
+	// malformed Vault credentials at startup.
 	raw, err := vaultapi.NewClient(cfg)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
-			"vault-transit: create vault api client", err)
+		return nil, errcode.Wrap(errcode.ErrConfigKeyMissing,
+			"vault-transit: create vault api client (check VAULT_ADDR / VAULT_TOKEN)", err)
 	}
 	if token := os.Getenv("VAULT_TOKEN"); token != "" {
 		raw.SetToken(token)
@@ -339,6 +347,10 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 // Rotate generates a new key version via Vault Transit rotate API.
 // Calls POST transit/keys/{keyName}/rotate, re-reads latest_version, and
 // returns the new "vault-transit:vN" ID.
+//
+// Note: Rotate holds the write lock for the duration of two Vault round-trips
+// (POST .../rotate + GET .../keys/{name}); call during low-traffic windows to
+// avoid blocking concurrent Current/ByID reads.
 //
 // ref: hashicorp/vault builtin/logical/transit/path_keys.go@main
 func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
@@ -439,6 +451,7 @@ func classifyVaultDecryptError(err error) error {
 //
 // This ordering ensures injected permanent errcode errors (e.g. in unit tests)
 // are not accidentally re-classified as transient by the network-fallback case.
+// errors.As is used throughout to support errors.Join / multi-Unwrap chains.
 func isTransientVaultError(err error) bool {
 	// 1. Explicit transient code in chain → transient.
 	if errcode.IsTransient(err) {
@@ -447,54 +460,18 @@ func isTransientVaultError(err error) bool {
 
 	// 2. Any other errcode.Error in chain → permanent (caller already classified it).
 	var ec *errcode.Error
-	if asErrcodeError(err, &ec) {
+	if errors.As(err, &ec) {
 		return false
 	}
 
 	// 3. Vault SDK ResponseError with HTTP status code.
 	var respErr *vaultapi.ResponseError
-	if isResponseError(err, &respErr) {
+	if errors.As(err, &respErr) {
 		return isTransientHTTPStatus(respErr.StatusCode)
 	}
 
 	// 4. Pure network/context error (no errcode, no ResponseError) → transient.
 	return true
-}
-
-// asErrcodeError walks the Unwrap chain looking for a *errcode.Error.
-// Returns true and fills out ec if found.
-func asErrcodeError(err error, ec **errcode.Error) bool {
-	for err != nil {
-		if e, ok := err.(*errcode.Error); ok {
-			*ec = e
-			return true
-		}
-		if u, ok := err.(interface{ Unwrap() error }); ok {
-			err = u.Unwrap()
-		} else {
-			break
-		}
-	}
-	return false
-}
-
-// isResponseError performs a type assertion to extract a *vaultapi.ResponseError
-// from err. Returns true if successful and fills out into resp.
-//
-// Uses errors.As semantics — walks the Unwrap chain.
-func isResponseError(err error, resp **vaultapi.ResponseError) bool {
-	for err != nil {
-		if re, ok := err.(*vaultapi.ResponseError); ok {
-			*resp = re
-			return true
-		}
-		if u, ok := err.(interface{ Unwrap() error }); ok {
-			err = u.Unwrap()
-		} else {
-			break
-		}
-	}
-	return false
 }
 
 // isTransientHTTPStatus reports whether an HTTP status code indicates a

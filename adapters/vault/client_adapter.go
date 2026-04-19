@@ -19,11 +19,11 @@ type vaultAPIClient struct {
 	client *vaultapi.Client
 }
 
-// NewVaultAPIClient wraps the provided *vaultapi.Client in the vaultClient
+// NewVaultAPIClient wraps the provided *vaultapi.Client in the VaultClient
 // adapter used by TransitKeyProvider. Use this when constructing the provider
 // from a pre-configured *vaultapi.Client (e.g. in tests or when the caller
 // manages Vault authentication separately from NewTransitKeyProviderFromEnv).
-func NewVaultAPIClient(c *vaultapi.Client) vaultClient {
+func NewVaultAPIClient(c *vaultapi.Client) VaultClient {
 	return &vaultAPIClient{client: c}
 }
 
