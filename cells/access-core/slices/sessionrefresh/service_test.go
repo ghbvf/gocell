@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -435,9 +436,16 @@ func TestLookupSession_InfraError_DoesNotEnterReuseBranch(t *testing.T) {
 			assert.Nil(t, pair)
 
 			logOutput := buf.String()
-			assert.Contains(t, logOutput, `"level":"ERROR"`,
+			// P1-4: use precise JSON-line matching to avoid false positives from
+			// other log lines during the request lifecycle.
+			entry := sloghelper.FindLogEntry(logOutput, "infra error on session lookup")
+			require.NotNil(t, entry,
+				"expected a log line containing 'infra error on session lookup'")
+			assert.Equal(t, "ERROR", entry["level"],
 				"infra lookup error must be logged at ERROR")
-			assert.NotContains(t, logOutput, "reuse",
+			// Confirm the reuse-detection path was not entered.
+			reuseEntry := sloghelper.FindLogEntry(logOutput, "refresh token reuse detected")
+			assert.Nil(t, reuseEntry,
 				"infra error must not be logged as token reuse")
 		})
 	}
@@ -494,4 +502,59 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.True(t, claims.PasswordResetRequired, "access token claim must be true when flag not cleared")
+}
+
+// notFoundThenInfraSessionRepo is a session repo stub used in P1-2 tests.
+// GetByRefreshToken returns domain ErrSessionNotFound (triggers reuse branch),
+// GetByPreviousRefreshToken returns an infra error.
+type notFoundThenInfraSessionRepo struct {
+	mem.SessionRepository
+	reuseErr error
+}
+
+func (r *notFoundThenInfraSessionRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+}
+
+func (r *notFoundThenInfraSessionRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, r.reuseErr
+}
+
+// TestLookupSession_ReuseErr_InfraError_LogsAtError verifies P1-2:
+// when GetByRefreshToken returns domain not-found (enters reuse branch) and
+// GetByPreviousRefreshToken returns an infra error, lookupSession must log at
+// slog.Error so ops dashboards surface the storage outage.
+func TestLookupSession_ReuseErr_InfraError_LogsAtError(t *testing.T) {
+	infraReuseErrs := []struct {
+		name string
+		err  error
+	}{
+		{"plain DB timeout on reuse lookup", fmt.Errorf("db connection timeout")},
+		{"CategoryInfra on reuse lookup", errcode.NewInfra(errcode.ErrInternal, "storage unavailable")},
+	}
+
+	for _, tc := range infraReuseErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			sessionRepo := &notFoundThenInfraSessionRepo{
+				SessionRepository: *mem.NewSessionRepository(),
+				reuseErr:          tc.err,
+			}
+			roleRepo := mem.NewRoleRepository()
+			userRepo := mem.NewUserRepository()
+			svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, logger)
+
+			rt := issueTestToken("usr-reuseinfra")
+
+			pair, err := svc.Refresh(context.Background(), rt)
+			require.Error(t, err, "infra error on reuse lookup must cause Refresh to fail")
+			assert.Nil(t, pair)
+
+			logOutput := buf.String()
+			assert.Contains(t, logOutput, `"level":"ERROR"`,
+				"infra error on reuse lookup must be logged at ERROR")
+		})
+	}
 }

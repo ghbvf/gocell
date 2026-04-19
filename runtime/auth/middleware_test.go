@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -329,16 +330,22 @@ func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, rec.Code)
 			logOutput := buf.String()
-			assert.Contains(t, logOutput, `"level":"WARN"`,
+			// P2-4: precise JSON-line matching — locate the token verification log
+			// line specifically, ignoring any unrelated ERROR lines that may exist.
+			entry := sloghelper.FindLogEntry(logOutput, "token verification failed")
+			require.NotNil(t, entry,
+				"expected a log line containing 'token verification failed'")
+			assert.Equal(t, "WARN", entry["level"],
 				"expected 4xx token error must log at WARN, not ERROR")
-			assert.NotContains(t, logOutput, `"level":"ERROR"`,
-				"expected 4xx error must not produce an ERROR log")
 		})
 	}
 }
 
 // TestAuthMiddleware_LogLevel_InfraError_Error verifies S43: infra errors
 // (verifier init failure, key load failure) must log at Error, not Warn.
+//
+// P1-1: ErrAuthKeyMissing maps to HTTP 500 in codeToStatus (infra), so it must
+// NOT appear in expected4xxCodes. This test confirms it logs at Error level.
 func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 	infraErrs := []struct {
 		name string
@@ -346,6 +353,8 @@ func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 	}{
 		{"plain verifier error", fmt.Errorf("key loading failed: connection refused")},
 		{"CategoryInfra errcode", errcode.NewInfra(errcode.ErrInternal, "key set unavailable")},
+		// P1-1: ErrAuthKeyMissing is HTTP 500 (infra misconfiguration); must log Error.
+		{"ErrAuthKeyMissing is infra 500", errcode.New(errcode.ErrAuthKeyMissing, "no signing key configured")},
 	}
 
 	for _, tc := range infraErrs {
@@ -366,10 +375,12 @@ func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 
 			assert.Equal(t, http.StatusUnauthorized, rec.Code)
 			logOutput := buf.String()
-			assert.Contains(t, logOutput, `"level":"ERROR"`,
+			// P2-4: precise JSON-line matching on the token verification log line.
+			entry := sloghelper.FindLogEntry(logOutput, "token verification failed")
+			require.NotNil(t, entry,
+				"expected a log line containing 'token verification failed'")
+			assert.Equal(t, "ERROR", entry["level"],
 				"infra error must log at ERROR")
-			assert.NotContains(t, logOutput, `"level":"WARN"`,
-				"infra error must not produce a WARN log")
 		})
 	}
 }

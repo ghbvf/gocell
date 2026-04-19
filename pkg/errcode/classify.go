@@ -57,6 +57,31 @@ func NewDomain(code Code, message string) *Error {
 	}
 }
 
+// WrapInfra creates an *Error with CategoryInfra that wraps the supplied cause.
+// Use this when an infrastructure failure has an underlying cause that should be
+// preserved for error chain inspection (errors.Is / errors.As / Unwrap).
+// The cause is stored in Error.Cause and exposed via Error.Error() in logs.
+func WrapInfra(code Code, message string, cause error) *Error {
+	return &Error{
+		Code:     code,
+		Message:  message,
+		Category: CategoryInfra,
+		Cause:    cause,
+	}
+}
+
+// WrapDomain creates an *Error with CategoryDomain that wraps the supplied cause.
+// Use this when a domain-layer condition has an underlying cause to preserve.
+// The cause is stored in Error.Cause and exposed via Error.Error() in logs.
+func WrapDomain(code Code, message string, cause error) *Error {
+	return &Error{
+		Code:     code,
+		Message:  message,
+		Category: CategoryDomain,
+		Cause:    cause,
+	}
+}
+
 // IsInfraError reports whether err represents an infrastructure failure.
 //
 // Fail-closed semantics: any error that is not definitively classified as
@@ -68,6 +93,13 @@ func NewDomain(code Code, message string) *Error {
 //   - driver.ErrBadConn / sql.ErrConnDone
 //   - *Error with Category == CategoryInfra or CategoryUnspecified
 //   - any unrecognised plain error (fail-closed)
+//
+// Stdlib sentinel coverage is intentionally narrow (context.* / sql.Err* /
+// driver.ErrBadConn). Adapters that return wrapped plain errors are covered
+// by the fail-closed fallback: CategoryUnspecified → treated as infra.
+// New adapters that return wrapped custom error types should construct them
+// with NewInfra (or WrapInfra) so the category is explicit rather than
+// relying on the fallback; no change to classify.go is required.
 func IsInfraError(err error) bool {
 	if err == nil {
 		return false
@@ -105,7 +137,9 @@ func IsInfraError(err error) bool {
 //
 // This two-gated check prevents infra errors from ever matching, regardless
 // of which code they carry — the dual-channel invariant from k8s IsNotFound.
-func IsDomainNotFound(err error, codes ...string) bool {
+//
+// Callers pass Code constants directly; no string(...) conversion is needed.
+func IsDomainNotFound(err error, codes ...Code) bool {
 	if err == nil {
 		return false
 	}
@@ -116,9 +150,8 @@ func IsDomainNotFound(err error, codes ...string) bool {
 	if ec.Category != CategoryDomain {
 		return false
 	}
-	target := string(ec.Code)
 	for _, c := range codes {
-		if c == target {
+		if ec.Code == c {
 			return true
 		}
 	}
@@ -155,7 +188,10 @@ var expected4xxCodes = map[Code]bool{
 	ErrAuthLoginFailed:        true,
 	ErrAuthRefreshFailed:      true,
 	ErrAuthKeyInvalid:         true,
-	ErrAuthKeyMissing:         true,
+	// ErrAuthKeyMissing intentionally omitted: codeToStatus maps it to HTTP 500
+	// (infrastructure misconfiguration). Including it here would cause
+	// AuthMiddleware to downgrade an infra fault to Warn, masking the outage.
+	// ErrAuthVerifierConfig is likewise 500 and must not appear here.
 
 	// 403 — forbidden
 	ErrAuthForbidden:             true,
