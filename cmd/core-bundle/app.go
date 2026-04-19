@@ -49,9 +49,10 @@ func BuildApp(
 		if err != nil {
 			return nil, nil, fmt.Errorf("BuildApp: module %q Provide: %w", m.ID(), err)
 		}
-		if c != nil {
-			cells = append(cells, c)
+		if c == nil {
+			return nil, nil, fmt.Errorf("BuildApp: module %q returned nil Cell (use explicit Optional semantics if cell is optional)", m.ID())
 		}
+		cells = append(cells, c)
 		opts = append(opts, mOpts...)
 	}
 

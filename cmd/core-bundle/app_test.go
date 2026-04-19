@@ -89,6 +89,33 @@ func TestBuildApp_EmptyModuleList(t *testing.T) {
 	assert.Empty(t, opts)
 }
 
+// nilCellModule is a CellModule whose Provide always returns (nil, nil, nil).
+// It is used to test that BuildApp rejects nil Cell returns as a fail-fast error.
+type nilCellModule struct{}
+
+func (m nilCellModule) ID() string { return "nil-cell-module" }
+
+func (m nilCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+	return nil, nil, nil
+}
+
+var _ CellModule = nilCellModule{}
+
+// TestBuildApp_RejectsNilCell verifies that BuildApp returns an error when a
+// module's Provide returns a nil Cell. ref: uber-fx, kubernetes, kratos —
+// required assembly components must fail-fast, not be silently skipped.
+func TestBuildApp_RejectsNilCell(t *testing.T) {
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+
+	cells, opts, err := BuildApp(context.Background(), shared, nilCellModule{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "returned nil Cell")
+	require.Contains(t, err.Error(), "nil-cell-module")
+	require.Nil(t, cells)
+	require.Nil(t, opts)
+}
+
 // TestBuildApp_TwoModules_AggregateCells verifies that BuildApp collects cells
 // from all modules in order.
 func TestBuildApp_TwoModules_AggregateCells(t *testing.T) {
