@@ -44,8 +44,15 @@ func tableQueries(table string) (migTableQueries, error) {
 			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`,
 		}, nil
 	case "config_versions":
+		// config_versions does not have a `key` column; the human-readable key is
+		// stored in config_entries. We JOIN to get it for AAD construction.
 		return migTableQueries{
-			selectQ: `SELECT id, key, value FROM config_versions WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`,
+			selectQ: `SELECT cv.id, ce.key, cv.value
+				FROM config_versions cv
+				JOIN config_entries ce ON ce.id = cv.config_id
+				WHERE cv.sensitive = true AND cv.value_cipher IS NULL
+				ORDER BY cv.id
+				LIMIT $1`,
 			updateQ: `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`,
 		}, nil
 	default:
