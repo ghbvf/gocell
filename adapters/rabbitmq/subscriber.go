@@ -423,7 +423,9 @@ func (s *Subscriber) subscribeOnce(
 	// Create and track a subscriptionRun for this invocation.
 	run := newSubscriptionRun(ch, consumerTag)
 	s.addRun(run)
-	defer s.removeRun(run)
+	// NOTE: removeRun is called explicitly below — only after waitAndClose succeeds.
+	// If waitAndClose times out, the run is intentionally kept in s.runs so that
+	// Subscriber.Close() can sweep it (F17 fix). Do NOT use defer here.
 
 	slog.Info("rabbitmq: subscriber started",
 		slog.String(logKeyTopic, topic),
@@ -437,26 +439,33 @@ func (s *Subscriber) subscribeOnce(
 	// before closing the AMQP channel. This prevents Ack/Nack calls on a
 	// closed channel (ErrClosed noise + potential redelivery).
 	//
-	// On reconnect (loopErr != nil): give a finite budget so the reconnect path
-	// does not block indefinitely when the parent ctx has no deadline. 30s matches
-	// the prior ShutdownTimeout default.
+	// waitCtx derivation (F3 fix — corrects prior WithoutCancel direction):
+	//   - Parent ctx has a deadline → inherit it directly; no extra timeout needed.
+	//   - Parent ctx has no deadline AND we are reconnecting (loopErr != nil) →
+	//     add a 30 s ceiling derived from ctx (not Background/WithoutCancel) so
+	//     a parent cancel still propagates promptly — single budget, no escape.
+	//   - Clean exit (loopErr == nil) → use ctx as-is.
 	//
-	// On clean exit (loopErr == nil): Close() will also call waitAndClose via
-	// the runs snapshot, but run.closed.Once ensures ch.Close is called exactly once.
+	// ref: Uber fx app.go StopTimeout — ctx carries the shared shutdown budget
+	// ref: Kratos app.go — ctx passed down through all lifecycle phases
 	waitCtx := ctx
-	if loopErr != nil {
-		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-			var cancelWait context.CancelFunc
-			// Use context.WithoutCancel so the wait inherits ctx values (trace,
-			// correlation IDs) but is not cancelled if ctx is cancelled.
-			// This ensures a finite drain budget on reconnect even when the
-			// parent ctx carries no deadline.
-			waitCtx, cancelWait = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer cancelWait()
-		}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && loopErr != nil {
+		var cancelWait context.CancelFunc
+		waitCtx, cancelWait = context.WithTimeout(ctx, 30*time.Second)
+		defer cancelWait()
 	}
-	_ = run.waitAndClose(waitCtx)
 
+	// F17 fix: only call removeRun when waitAndClose succeeds. On timeout the
+	// run stays in s.runs so Subscriber.Close() sweep can finish the job.
+	// run.waitAndClose is idempotent via sync.Once — the Close sweep calling it
+	// again is safe and will not double-close the channel.
+	if waitErr := run.waitAndClose(waitCtx); waitErr != nil {
+		slog.Warn("rabbitmq: subscribeOnce waitAndClose did not complete; run kept in tracking for Close sweep",
+			slog.String("consumer_tag", run.consumerTag),
+			slog.Any("error", waitErr))
+		return loopErr
+	}
+	s.removeRun(run)
 	return loopErr
 }
 
@@ -580,10 +589,12 @@ func (s *Subscriber) consumeLoop(
 // window) are still processed correctly.
 //
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
-// drainDeadline is the maximum wall-clock time drainRemaining waits for the
-// deliveries channel to close after StopIntake issued basic.cancel. A healthy
-// broker closes the chan within milliseconds of the cancel ack; this ceiling
-// exists solely to prevent an indefinite hang when the broker is unresponsive.
+// drainDeadline is a package-level variable (not const) to allow test injection.
+//
+// It is the maximum wall-clock time drainRemaining waits for the deliveries
+// channel to close after StopIntake issued basic.cancel. A healthy broker
+// closes the chan within milliseconds of the cancel ack; this ceiling exists
+// solely to prevent an indefinite hang when the broker is unresponsive.
 var drainDeadline = 30 * time.Second
 
 // drainRemaining reads prefetched deliveries until the deliveries channel is
