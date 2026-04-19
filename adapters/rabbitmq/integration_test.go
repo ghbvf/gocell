@@ -174,7 +174,6 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		QueueName:       queueName,
 		PrefetchCount:   1,
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -309,7 +308,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	var callCount atomic.Int32
@@ -482,7 +480,6 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)

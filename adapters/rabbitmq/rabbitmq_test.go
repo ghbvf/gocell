@@ -1330,9 +1330,6 @@ func TestSubscriberConfig_Defaults(t *testing.T) {
 	cfg.setDefaults()
 
 	assert.Equal(t, 10, cfg.PrefetchCount)
-	// ShutdownTimeout is deprecated and ignored; setDefaults no longer sets it.
-	assert.Equal(t, time.Duration(0), cfg.ShutdownTimeout,
-		"deprecated ShutdownTimeout must not be set by setDefaults")
 	assert.Equal(t, 2*time.Second, cfg.StopIntakePerCallTimeout)
 }
 
@@ -1348,7 +1345,6 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		QueueName:       "test-queue",
 		PrefetchCount:   5,
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -1411,7 +1407,6 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1505,7 +1500,6 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
@@ -1550,7 +1544,6 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1600,7 +1593,6 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1688,7 +1680,6 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1822,7 +1813,6 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
@@ -1865,7 +1855,6 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	sub := NewSubscriber(c, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 1 * time.Second,
 	})
 
 	// Run Subscribe in a goroutine so the main goroutine can orchestrate the
@@ -1920,7 +1909,6 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 		// QueueName deliberately left empty; ConsumerGroup is set.
 		ConsumerGroup:   "audit-core",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1949,7 +1937,6 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 		QueueName:       "my-explicit-queue",
 		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1976,7 +1963,6 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// Both QueueName and ConsumerGroup empty — backward compat.
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2003,7 +1989,6 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "my-dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2033,7 +2018,6 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 		QueueName:       "test-queue",
 		DLXExchange:     "my-dlx",
 		DLXRoutingKey:   "dead-letter-key",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2055,7 +2039,6 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
-		ShutdownTimeout: 2 * time.Second,
 		// DLXExchange deliberately left empty.
 	})
 
@@ -2107,7 +2090,6 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
@@ -2913,7 +2895,6 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -2950,7 +2931,6 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -2992,7 +2972,6 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
@@ -3026,7 +3005,6 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -3087,7 +3065,6 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{
@@ -3129,7 +3106,6 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3168,7 +3144,6 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3205,7 +3180,6 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 
 	// No DLXExchange configured — Subscribe should fail before any delivery processing.
 	sub := NewSubscriber(conn, SubscriberConfig{
-		ShutdownTimeout: 2 * time.Second,
 		// DLXExchange deliberately left empty.
 	})
 
@@ -3251,7 +3225,6 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
@@ -3412,7 +3385,6 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
@@ -3450,7 +3422,6 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}
@@ -3561,7 +3532,6 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{}

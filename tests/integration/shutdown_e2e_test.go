@@ -192,10 +192,9 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 
 	pub := rabbitmq.NewPublisher(pubConn)
 	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
-		QueueName:       queueName,
-		PrefetchCount:   10,
-		DLXExchange:     dlxExchange,
-		ShutdownTimeout: shutdownTimeout,
+		QueueName:     queueName,
+		PrefetchCount: 10,
+		DLXExchange:   dlxExchange,
 	})
 
 	// Handler counts processed messages. Simulate work with a delay.
@@ -237,7 +236,9 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	// Phase 2: Close — wait for all in-flight processDelivery goroutines to
 	// finish. Must return nil (no ErrAdapterAMQPCloseTimeout) because
 	// StopIntake drained the backlog before Close() was called.
-	closeErr := sub.Close()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer closeCancel()
+	closeErr := sub.Close(closeCtx)
 	require.NoError(t, closeErr, "Close must return nil after StopIntake drained in-flight messages")
 
 	// Cancel subscriber context so the Subscribe goroutine returns.
@@ -331,10 +332,9 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 
 	pub := rabbitmq.NewPublisher(pubConn)
 	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
-		QueueName:       queueName,
-		PrefetchCount:   5,
-		DLXExchange:     dlxExchange,
-		ShutdownTimeout: shutdownTimeout,
+		QueueName:     queueName,
+		PrefetchCount: 5,
+		DLXExchange:   dlxExchange,
 	})
 
 	// Simple handler — just counts deliveries.
@@ -381,10 +381,12 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	// Now call Close() and assert it returns within totalBudget.
 	// The subscriber may be in the reconnect wait loop (WaitConnected); Close()
 	// must unblock that wait via closeCh and then return after wg.Wait or
-	// ShutdownTimeout, whichever comes first.
+	// the ctx deadline, whichever comes first.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer closeCancel()
 	closeDone := make(chan error, 1)
 	go func() {
-		closeDone <- sub.Close()
+		closeDone <- sub.Close(closeCtx)
 	}()
 
 	select {

@@ -88,11 +88,6 @@ type SubscriberConfig struct {
 	// Default: 10.
 	PrefetchCount int
 
-	// ShutdownTimeout is deprecated and no longer used. Pass a context with
-	// the desired deadline to Close(ctx) instead.
-	// Retained for backward compatibility; will be removed in a future version.
-	ShutdownTimeout time.Duration
-
 	// StopIntakePerCallTimeout bounds any single basic.cancel call during
 	// StopIntake. A hung broker cannot stall the whole shutdown chain beyond
 	// this budget per consumer. Default: 2s.
