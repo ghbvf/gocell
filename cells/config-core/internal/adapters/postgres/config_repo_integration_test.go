@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,7 +50,7 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, crypto.NoopTransformer{})
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
@@ -263,5 +264,111 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
 			"rolled-back config entry must not be visible")
+	})
+}
+
+// setupConfigPGEncrypted spins up a PG container identical to setupConfigPG
+// but wires the ConfigRepository with a real LocalAESKeyProvider (envelope
+// AES-GCM with AAD binding) so sensitive-value tests exercise the full
+// encrypt → BYTEA persist → decrypt path end-to-end rather than the mock
+// unit-test shortcut.
+func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func()) {
+	t.Helper()
+	testutil.RequireDocker(t)
+
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "failed to start postgres container")
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+
+	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Real LocalAES master key (32-byte hex, deterministic for reproducibility).
+	kp, err := crypto.NewLocalAESKeyProviderFromKeys(
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "")
+	require.NoError(t, err)
+	transformer := crypto.NewValueTransformer(kp)
+
+	session := NewSession(pool.DB())
+	repo := NewConfigRepository(session, transformer)
+	txMgr := adapterpg.NewTxManager(pool)
+
+	cleanup := func() {
+		pool.Close()
+		if err := container.Terminate(ctx); err != nil {
+			t.Logf("WARN: failed to terminate postgres container: %v", err)
+		}
+	}
+
+	return repo, txMgr, cleanup
+}
+
+// TestConfigRepo_Integration_Encryption_RoundTrip verifies the full
+// encrypt → BYTEA persist → decrypt path against real PostgreSQL using
+// LocalAESKeyProvider (envelope encryption, AES-GCM with AAD binding).
+// This complements the unit-test mocks in config_repo_encrypt_test.go by
+// exercising BYTEA column ordering, NULL handling, and base64 key decoding
+// end-to-end in the same way production code runs.
+func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
+	repo, txMgr, cleanup := setupConfigPGEncrypted(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	t.Run("create_sensitive_then_read_returns_plaintext", func(t *testing.T) {
+		entry := &domain.ConfigEntry{
+			ID:        uuid.NewString(),
+			Key:       "integration.encrypted.db_password",
+			Value:     "s3cret-production-value",
+			Sensitive: true,
+			Version:   1,
+		}
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Create(txCtx, entry)
+		}))
+
+		got, err := repo.GetByKey(ctx, entry.Key)
+		require.NoError(t, err, "sensitive entry must decrypt cleanly on read")
+		assert.Equal(t, "s3cret-production-value", got.Value,
+			"round-trip: plaintext must survive encrypt → BYTEA → decrypt")
+		assert.True(t, got.Sensitive)
+		assert.NotEmpty(t, got.KeyID, "stored row must carry key_id for staleness detection")
+		assert.False(t, got.Stale, "current-key write must not appear stale")
+	})
+
+	t.Run("update_sensitive_re_encrypts_and_reads_back", func(t *testing.T) {
+		entry := &domain.ConfigEntry{
+			ID:        uuid.NewString(),
+			Key:       "integration.encrypted.api_token",
+			Value:     "initial-token",
+			Sensitive: true,
+			Version:   1,
+		}
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Create(txCtx, entry)
+		}))
+
+		entry.Value = "rotated-token"
+		entry.Version = 2
+		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
+			return repo.Update(txCtx, entry)
+		}))
+
+		got, err := repo.GetByKey(ctx, entry.Key)
+		require.NoError(t, err)
+		assert.Equal(t, "rotated-token", got.Value)
+		assert.Equal(t, 2, got.Version)
 	})
 }

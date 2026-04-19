@@ -11,6 +11,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,7 +58,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session)
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 

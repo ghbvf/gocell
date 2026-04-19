@@ -663,6 +663,39 @@ func TestMapCodeToStatus_Exported(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus("ERR_UNKNOWN"))
 }
 
+// TestMapCodeToStatus_EncryptionCodes asserts that every KeyProvider / config
+// encryption error code maps to 500 Internal Server Error. All four codes
+// represent infrastructure-level crypto failures; exposing them as anything
+// other than 500 would risk leaking key state to clients or fooling callers
+// into treating them as retriable client errors.
+//
+// The exhaustive guard test (TestCodeToStatus_Exhaustive) enforces presence
+// in the map; this test enforces the specific HTTP status semantics so that
+// accidental reassignment (e.g. mapping ErrKeyProviderDecryptFailed to 400)
+// is caught in CI.
+func TestMapCodeToStatus_EncryptionCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     errcode.Code
+		expected int
+	}{
+		{"KeyProviderKeyNotFound", errcode.ErrKeyProviderKeyNotFound, http.StatusInternalServerError},
+		{"KeyProviderEncryptFailed", errcode.ErrKeyProviderEncryptFailed, http.StatusInternalServerError},
+		{"KeyProviderDecryptFailed", errcode.ErrKeyProviderDecryptFailed, http.StatusInternalServerError},
+		{"KeyProviderRotateFailed", errcode.ErrKeyProviderRotateFailed, http.StatusInternalServerError},
+		{"ConfigDecryptFailed", errcode.ErrConfigDecryptFailed, http.StatusInternalServerError},
+		{"ConfigKeyMissing", errcode.ErrConfigKeyMissing, http.StatusInternalServerError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, MapCodeToStatus(tc.code),
+				"encryption errcode %q must map to 500 — crypto failures must be sanitised to generic 5xx, never leak to 4xx", tc.code)
+			assert.False(t, IsClientError(tc.code),
+				"encryption errcode %q must NOT classify as client (4xx) error", tc.code)
+		})
+	}
+}
+
 // brokenWriter is an http.ResponseWriter whose Write always fails,
 // used to exercise json.Encode error branches.
 type brokenWriter struct {

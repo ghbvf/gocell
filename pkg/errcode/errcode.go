@@ -165,6 +165,34 @@ const (
 	ErrRefreshTokenExpired  Code = "ERR_REFRESH_TOKEN_EXPIRED"
 	ErrRefreshTokenRevoked  Code = "ERR_REFRESH_TOKEN_REVOKED"
 	ErrRefreshTokenReused   Code = "ERR_REFRESH_TOKEN_REUSED"
+
+	// KeyProvider error codes.
+	// ErrKeyProviderKeyNotFound signals that the requested key ID is not
+	// present in the provider's keyring — e.g. a historical key that has been
+	// purged. Callers must not fall back to plaintext; surface as a config error.
+	ErrKeyProviderKeyNotFound Code = "ERR_KEY_PROVIDER_KEY_NOT_FOUND"
+	// ErrKeyProviderEncryptFailed signals a KMS encrypt-side operation failure
+	// (Vault Transit encrypt API error, malformed response, etc.). Distinct from
+	// ErrKeyProviderDecryptFailed so callers and log aggregators can route
+	// encrypt-side failures (usually transient / retriable) separately from
+	// decrypt-side failures (usually permanent / data integrity signal).
+	ErrKeyProviderEncryptFailed Code = "ERR_KEY_PROVIDER_ENCRYPT_FAILED"
+	// ErrKeyProviderDecryptFailed signals an AES-GCM authentication failure,
+	// wrong key, or malformed ciphertext. Fail-closed: callers must surface
+	// this as an error and never return raw ciphertext or empty string.
+	ErrKeyProviderDecryptFailed Code = "ERR_KEY_PROVIDER_DECRYPT_FAILED"
+	// ErrKeyProviderRotateFailed signals a key-rotation operation failure
+	// (Vault rotate API returned an error, new key version could not be read
+	// back, malformed response). Distinct from ErrKeyProviderKeyNotFound so
+	// rotation-path retries and alerting do not confuse "key absent" with
+	// "rotation API unreachable".
+	ErrKeyProviderRotateFailed Code = "ERR_KEY_PROVIDER_ROTATE_FAILED"
+	// ErrConfigDecryptFailed signals that a sensitive config value could not be
+	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
+	ErrConfigDecryptFailed Code = "ERR_CONFIG_DECRYPT_FAILED"
+	// ErrConfigKeyMissing signals that a required encryption key (GOCELL_MASTER_KEY
+	// or vault token) is absent at startup. Triggers fail-fast in postgres mode.
+	ErrConfigKeyMissing Code = "ERR_CONFIG_KEY_MISSING"
 )
 
 // Error is a structured error that carries a machine-readable Code, a
