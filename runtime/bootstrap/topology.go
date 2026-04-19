@@ -60,6 +60,10 @@ func TopologyFromEnv() (Topology, error) {
 //     persistence demands production key loading, token-guarded /metrics,
 //     and token-guarded /readyz?verbose.
 //
+// All errors are returned via errcode.New(ErrValidationFailed, ...) so callers
+// can classify startup failures uniformly (Classify → 4xx / IsInfraError →
+// false). The bare fmt.Errorf path has been removed to prevent classifier drift.
+//
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/server.go —
 // Complete → Validate → Run; illegal flag values aggregate into a single
 // startup error before any component starts.
@@ -87,18 +91,26 @@ func (t Topology) validate() error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", t.StorageBackend)
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", t.StorageBackend))
 	}
 }
 
-// RequireProductionControlPlane returns true when the storage backend demands
-// production-grade key loading and control-plane token guards. Currently
-// returns true only for the postgres backend.
+// RequireProductionControlPlane returns true when the runtime has opted into
+// real (production) keys and therefore requires production-grade control-plane
+// guards: token-authenticated /metrics, token-authenticated /readyz?verbose,
+// HMAC-guarded /internal/v1/*, and strict (fail-fast) secret loading.
 //
-// Use this to gate /metrics auth, /readyz?verbose auth, and secret loading
-// strictness in the composition root.
+// The gate is AdapterMode=="real". Postgres storage implies AdapterMode=="real"
+// via the coupling rule enforced in validate(), so postgres topologies also
+// return true; memory+real is likewise covered — whenever an operator has
+// asked for real keys, the control plane must be protected.
+//
+// PGResource wiring is a separate concern (see StorageBackend) — the storage
+// backend determines whether a PG pool is owned, while this predicate
+// determines whether anonymous control-plane access is rejected.
 func (t Topology) RequireProductionControlPlane() bool {
-	return t.StorageBackend == "postgres"
+	return t.AdapterMode == "real"
 }
 
 // AdapterInfo returns a map of topology metadata for the /readyz?verbose

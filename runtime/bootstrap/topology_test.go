@@ -1,7 +1,10 @@
 package bootstrap
 
 import (
+	"errors"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestTopologyFromEnv_PostgresRequiresReal(t *testing.T) {
@@ -89,9 +92,9 @@ func TestTopologyFromEnv_RequireProductionControlPlane(t *testing.T) {
 		adapterMode string
 		wantRequire bool
 	}{
-		{"postgres requires production", "postgres", "real", true},
-		{"memory does not require production (empty mode)", "memory", "", false},
-		{"memory does not require production (real mode)", "memory", "real", false},
+		{"postgres+real requires production", "postgres", "real", true},
+		{"memory+real requires production (real keys still need guards)", "memory", "real", true},
+		{"memory+dev does not require production", "memory", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,6 +128,40 @@ func TestTopologyFromEnv_AdapterInfo(t *testing.T) {
 	}
 	if _, ok := info["storage"]; !ok {
 		t.Error("AdapterInfo() must contain 'storage' key")
+	}
+}
+
+// TestTopologyValidate_AllErrorsAreErrcode guards the classifier-drift invariant:
+// every validate() error path must return an errcode.Error so callers (startup
+// runner, /readyz, operators) see a uniform ERR_VALIDATION_FAILED classification
+// instead of a mix of errcode and bare fmt.Errorf.
+func TestTopologyValidate_AllErrorsAreErrcode(t *testing.T) {
+	cases := []struct {
+		name    string
+		cellEnv string
+		mode    string
+	}{
+		{"unknown adapter mode", "memory", "bogus"},
+		{"postgres without real", "postgres", ""},
+		{"unknown storage backend", "bogusbackend", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOCELL_CELL_ADAPTER_MODE", tc.cellEnv)
+			t.Setenv("GOCELL_ADAPTER_MODE", tc.mode)
+
+			_, err := TopologyFromEnv()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			var ec *errcode.Error
+			if !errors.As(err, &ec) {
+				t.Fatalf("error is not *errcode.Error: %T %v", err, err)
+			}
+			if ec.Code != errcode.ErrValidationFailed {
+				t.Errorf("expected code %s, got %s", errcode.ErrValidationFailed, ec.Code)
+			}
+		})
 	}
 }
 
