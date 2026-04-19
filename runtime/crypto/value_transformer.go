@@ -3,44 +3,28 @@ package crypto
 import (
 	"context"
 	"fmt"
+
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 )
 
-// ValueTransformer is the caller-facing encryption interface for sensitive
-// config values. It is a thin wrapper over KeyProvider that:
-//   - Uses the current key for Encrypt.
-//   - Uses ByID(keyID) for Decrypt so historical keys remain accessible.
-//   - Accepts pre-computed AAD so callers can bind ciphertext to the row's
-//     identity (preventing ciphertext transplant attacks).
+// ValueTransformer is a type alias for the kernel ValueTransformer interface.
+// The authoritative definition lives in kernel/crypto.
 //
-// Optional extension interface: implementations MAY also satisfy
-// CurrentKeyIDProvider to expose the current key ID; this is used by the
-// config repository to compute the Stale staleness signal for rotation-driven
-// lazy re-encryption. NoopTransformer deliberately does not implement it
-// (nothing to be stale against).
+// This is not a migration shim — the alias exists so runtime/crypto
+// implementations (keyProviderTransformer, NoopTransformer)
+// type-check against the kernel contract without importing kernel/crypto
+// from every local impl file.
 //
-// ref: kubernetes/kubernetes staging/.../storage/value/transformer.go@master
-type ValueTransformer interface {
-	// Encrypt encrypts plaintext under the current key.
-	// Returns (ciphertext, keyID, nonce, edk, error).
-	// keyID identifies the key version; store alongside the ciphertext so that
-	// Decrypt can resolve the correct historical key on read.
-	Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext []byte, keyID string, nonce, edk []byte, err error)
+// Guidance for new consumers: code in cells/ or cmd/ referencing only
+// interfaces SHOULD import kernel/crypto directly and reference
+// kcrypto.ValueTransformer (the kernel contract).
+type ValueTransformer = kcrypto.ValueTransformer
 
-	// Decrypt decrypts ciphertext using the key identified by keyID.
-	// Fail-closed: returns an error on any decryption failure; never returns
-	// the raw ciphertext or an empty slice as a fallback.
-	Decrypt(ctx context.Context, ciphertext []byte, keyID string, nonce, edk, aad []byte) (plaintext []byte, err error)
-}
-
-// CurrentKeyIDProvider is the optional extension interface for ValueTransformer
-// implementations that can report their current key ID. Discovered at runtime
-// via type assertion (`if c, ok := tr.(CurrentKeyIDProvider); ok { ... }`).
-// A nil error with an empty string is reserved for "no key" (e.g. Noop); a
-// non-empty string represents the active key version label used for staleness
-// comparison against per-row stored key IDs.
-type CurrentKeyIDProvider interface {
-	CurrentKeyID(ctx context.Context) (string, error)
-}
+// CurrentKeyIDProvider is a type alias for the kernel CurrentKeyIDProvider
+// interface. The authoritative definition lives in kernel/crypto.
+//
+// See ValueTransformer alias comment for guidance on import choices.
+type CurrentKeyIDProvider = kcrypto.CurrentKeyIDProvider
 
 // keyProviderTransformer is the production ValueTransformer backed by a KeyProvider.
 type keyProviderTransformer struct {
@@ -110,17 +94,4 @@ func (NoopTransformer) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, 
 // Decrypt returns ciphertext as-is.
 func (NoopTransformer) Decrypt(_ context.Context, ciphertext []byte, _ string, _, _, _ []byte) ([]byte, error) {
 	return ciphertext, nil
-}
-
-// ---------------------------------------------------------------------------
-// AAD helpers
-// ---------------------------------------------------------------------------
-
-// AADForConfig computes the Additional Authenticated Data for a config entry.
-// Format: "cell:{cellID}/key:{configKey}"
-//
-// Using a composite key prevents a ciphertext encrypted for one config entry
-// from being transplanted into a different entry (cross-row replay attack).
-func AADForConfig(cellID, configKey string) []byte {
-	return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
 }

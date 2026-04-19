@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/config-core/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -83,7 +84,7 @@ func WithInMemoryDefaults() Option {
 // WithKeyProvider sets the KeyProvider for sensitive config value encryption.
 // The provider is used to construct a ValueTransformer that encrypts/decrypts
 // sensitive=true values at the repository boundary.
-func WithKeyProvider(p crypto.KeyProvider) Option {
+func WithKeyProvider(p kcrypto.KeyProvider) Option {
 	return func(c *ConfigCore) {
 		c.keyProvider = p
 		c.valueTransformer = crypto.NewValueTransformer(p)
@@ -92,7 +93,7 @@ func WithKeyProvider(p crypto.KeyProvider) Option {
 
 // WithValueTransformer sets the ValueTransformer directly (alternative to
 // WithKeyProvider; useful in tests that inject a pre-built transformer).
-func WithValueTransformer(t crypto.ValueTransformer) Option {
+func WithValueTransformer(t kcrypto.ValueTransformer) Option {
 	return func(c *ConfigCore) { c.valueTransformer = t }
 }
 
@@ -135,8 +136,8 @@ type ConfigCore struct {
 	txRunner         persistence.TxRunner
 	cursorCodec      *query.CursorCodec
 	logger           *slog.Logger
-	keyProvider      crypto.KeyProvider
-	valueTransformer crypto.ValueTransformer
+	keyProvider      kcrypto.KeyProvider
+	valueTransformer kcrypto.ValueTransformer
 	pgPool           *pgxpool.Pool // stored by WithPostgresDefaults for deferred Init()
 
 	// Slice services and handlers.

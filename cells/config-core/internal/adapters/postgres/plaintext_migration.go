@@ -6,8 +6,9 @@ import (
 	"log/slog"
 	"time"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
 // PlaintextMigrationConfig controls the batch-encrypt migration behaviour.
@@ -80,7 +81,7 @@ type pendingRow struct {
 // that it can be run as a one-off admin tool independently of normal traffic.
 type plaintextMigrator struct {
 	db          DBTX
-	transformer crypto.ValueTransformer
+	transformer kcrypto.ValueTransformer
 	cfg         PlaintextMigrationConfig
 }
 
@@ -88,7 +89,7 @@ type plaintextMigrator struct {
 // transformer. db must already be in a live transaction (the caller is
 // responsible for Tx management so the migrator can participate in the
 // caller's transaction boundary or run outside one as needed).
-func newPlaintextMigrator(db DBTX, transformer crypto.ValueTransformer, cfg PlaintextMigrationConfig) (*plaintextMigrator, error) {
+func newPlaintextMigrator(db DBTX, transformer kcrypto.ValueTransformer, cfg PlaintextMigrationConfig) (*plaintextMigrator, error) {
 	if transformer == nil {
 		return nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"plaintext-migrator: transformer must not be nil")
@@ -175,7 +176,7 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 // encryptBatch encrypts each row in the batch and writes it back.
 func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult) error {
 	for _, row := range batch {
-		aad := crypto.AADForConfig(cellID, row.key)
+		aad := configcrypto.AADForConfig(cellID, row.key)
 		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
 		if encErr != nil {
 			return fmt.Errorf("plaintext-migrator: encrypt key=%s: %w", row.key, encErr)

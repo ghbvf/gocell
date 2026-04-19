@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"time"
 
+	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -53,7 +54,7 @@ var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 type ConfigRepository struct {
 	db          DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
 	session     *Session // production path: resolves ambient tx via persistence.TxCtxKey
-	transformer crypto.ValueTransformer
+	transformer kcrypto.ValueTransformer
 }
 
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
@@ -62,7 +63,7 @@ type ConfigRepository struct {
 // use the unexported newConfigRepositoryFromDBTX in tests.
 //
 // Requires migrations 001–010 to be applied first (see adapters/postgres/migrations/).
-func NewConfigRepository(s *Session, tr crypto.ValueTransformer) *ConfigRepository {
+func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer) *ConfigRepository {
 	return &ConfigRepository{session: s, transformer: tr}
 }
 
@@ -94,7 +95,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
-	aad := crypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt value for key %s: %w", key, err)
@@ -109,7 +110,7 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 		return "", errcode.New(errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
-	aad := crypto.AADForConfig(cellID, key)
+	aad := configcrypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrConfigDecryptFailed,
@@ -231,11 +232,11 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 
 // currentKeyID returns the ID of the current key from the transformer.
 // Returns "" if the transformer does not support key introspection or fails.
-// Discovery is via the optional crypto.CurrentKeyIDProvider extension
+// Discovery is via the optional kcrypto.CurrentKeyIDProvider extension
 // interface — NoopTransformer does not implement it, so staleness is never
 // computed for non-sensitive values.
 func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
-	if c, ok := r.transformer.(crypto.CurrentKeyIDProvider); ok {
+	if c, ok := r.transformer.(kcrypto.CurrentKeyIDProvider); ok {
 		id, err := c.CurrentKeyID(ctx)
 		if err != nil {
 			return ""
