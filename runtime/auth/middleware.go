@@ -126,9 +126,9 @@ func buildPublicMatcher(publicEndpoints []string, cfg authConfig) func(*http.Req
 // via the "reason" label on the auth_token_verify_total metric (ops-only
 // signal) and in structured logs; it is never forwarded to the HTTP response.
 func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler, verifier IntentTokenVerifier, cfg authConfig) {
-	token := extractBearerToken(r)
+	token, reason := extractBearerTokenWithReason(r)
 	if token == "" {
-		cfg.metrics.recordTokenVerifyCounter("failure", "missing")
+		cfg.metrics.recordTokenVerifyCounter("failure", reason)
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
 		return
 	}
@@ -164,6 +164,11 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// their password and obtains a new token without the claim. If no matcher
 	// is wired, the gate rejects every request — fail-closed default.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
+		cfg.logger.Info("auth: password reset required gate blocked request",
+			"subject", claims.Subject,
+			"path", r.URL.Path,
+			"method", r.Method,
+		)
 		writePasswordResetRequired(w, cfg.passwordResetChangeEndpointHint)
 		return
 	}
@@ -313,14 +318,27 @@ func checkAuthorizer(authorizer Authorizer, r *http.Request, subject string, rol
 	return false, nil
 }
 
-func extractBearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
+// extractBearerTokenWithReason returns the raw Bearer token value and a
+// human-readable reason string for observability. When the token is absent the
+// reason is one of:
+//
+//   - "missing"      — no Authorization header at all
+//   - "wrong_scheme" — Authorization header present but non-Bearer scheme
+//
+// When a token is found, reason is "".
+func extractBearerTokenWithReason(r *http.Request) (token, reason string) {
+	raw := r.Header.Get("Authorization")
+	if raw == "" {
+		return "", "missing"
 	}
-	parts := strings.SplitN(auth, " ", 2)
+	parts := strings.SplitN(raw, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return ""
+		return "", "wrong_scheme"
 	}
-	return strings.TrimSpace(parts[1])
+	return strings.TrimSpace(parts[1]), ""
+}
+
+func extractBearerToken(r *http.Request) string {
+	token, _ := extractBearerTokenWithReason(r)
+	return token
 }

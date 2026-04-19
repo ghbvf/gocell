@@ -118,9 +118,10 @@ func TestAuthenticated(t *testing.T) {
 			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
-			name:    "principal present with empty subject — authenticated (subject validation is caller's responsibility)",
-			ctx:     WithPrincipal(context.Background(), &Principal{Subject: "", Kind: PrincipalUser}),
-			wantErr: false,
+			name:     "principal present with empty subject — ErrAuthUnauthorized (subject invariant enforced at authz entry)",
+			ctx:      WithPrincipal(context.Background(), &Principal{Subject: "", Kind: PrincipalUser}),
+			wantErr:  true,
+			wantCode: errcode.ErrAuthUnauthorized,
 		},
 	}
 

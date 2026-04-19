@@ -3,10 +3,13 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // stubAuthenticator is a test double for the Authenticator interface.
@@ -483,5 +486,150 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 		if fresh[0] != original {
 			t.Error("Principal.Roles must be a defensive copy")
 		}
+	}
+}
+
+// TestJWTAuthenticator_EmptySubject_Error verifies that a JWT token with an
+// empty "sub" claim is rejected at the Authenticator layer (G1.A primary defence).
+// An empty subject indicates a malformed JWT — downstream code must never
+// receive a PrincipalUser with Subject="".
+func TestJWTAuthenticator_EmptySubject_Error(t *testing.T) {
+	// Verifier succeeds but returns claims with empty Subject.
+	v := &stubVerifier{claims: Claims{
+		Subject:   "",
+		Roles:     []string{"admin"},
+		SessionID: "sess-1",
+		Issuer:    "gocell-issuer",
+		TokenUse:  TokenIntentAccess,
+	}}
+	a := NewJWTAuthenticator(v)
+
+	p, ok, err := a.Authenticate(newGetRequest(t, "Bearer token-with-empty-sub"))
+	if err == nil {
+		t.Fatal("expected error for JWT with empty subject, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok=false for JWT with empty subject")
+	}
+	if p != nil {
+		t.Fatalf("expected nil principal for JWT with empty subject, got %v", p)
+	}
+	// Must be an auth unauthorized error.
+	var ecErr *errcode.Error
+	if !errors.As(err, &ecErr) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ecErr.Code != errcode.ErrAuthUnauthorized {
+		t.Errorf("expected ErrAuthUnauthorized, got %v", ecErr.Code)
+	}
+}
+
+// --- F3: Union cross-bleed test ---
+
+// TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed verifies that when
+// Union(JWT, ServiceToken) receives "Authorization: ServiceToken <payload>",
+// the JWT authenticator returns absent (nil, false, nil) — because it sees a
+// non-Bearer scheme — and the ServiceToken authenticator validates the
+// credential and returns a valid Principal. No cross-bleed between the two.
+func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+
+	// trackingVerifier records whether VerifyIntent was called.
+	// The JWT authenticator short-circuits before calling VerifyIntent when
+	// extractBearerToken returns "" (non-Bearer scheme), so it must NOT be called.
+	verifierCalled := false
+	trackingVerifier := &trackingIntentVerifier{onVerify: func() { verifierCalled = true }}
+
+	jwtAuth := NewJWTAuthenticator(trackingVerifier)
+	svcAuth := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	union := NewUnionAuthenticator(jwtAuth, svcAuth)
+
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := union.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true: ServiceToken authenticator should have matched")
+	}
+	if p == nil {
+		t.Fatal("expected non-nil principal")
+	}
+	if p.Kind != PrincipalService {
+		t.Errorf("expected Kind=PrincipalService, got %v", p.Kind)
+	}
+	if verifierCalled {
+		t.Error("JWT VerifyIntent must not be called for a ServiceToken header (non-Bearer scheme returns absent before verification)")
+	}
+}
+
+// trackingIntentVerifier is a test double that calls onVerify when VerifyIntent
+// is invoked, then returns zero Claims and nil error.
+type trackingIntentVerifier struct {
+	onVerify func()
+}
+
+func (v *trackingIntentVerifier) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
+	if v.onVerify != nil {
+		v.onVerify()
+	}
+	return Claims{}, nil
+}
+
+// --- F4: ServiceToken Authenticator — legacy 2-part + future timestamp ---
+
+// TestServiceTokenAuthenticator_LegacyTwoPart_Error verifies that a 2-part
+// legacy format token is rejected at the Authenticator level (not just via
+// ServiceTokenMiddleware), returning an error that classifies as a 4xx.
+func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+
+	// Build a 2-part token: {timestamp}:{hex_hmac} (no nonce).
+	tsStr := fmt.Sprintf("%d", now.Unix())
+	legacyToken := tsStr + ":deadbeef00112233"
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+legacyToken)
+
+	p, ok, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected error for legacy 2-part token, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok=false for legacy 2-part token")
+	}
+	if p != nil {
+		t.Fatalf("expected nil principal, got %v", p)
+	}
+}
+
+// TestServiceTokenAuthenticator_FutureTimestamp_Error verifies that a token
+// with a timestamp in the future (age > ServiceTokenMaxAge) is rejected.
+func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	// "now" as seen by the authenticator.
+	now := time.Now()
+	// Token is signed 10 minutes in the future relative to the authenticator's clock.
+	futureTime := now.Add(10 * time.Minute)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
+
+	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected error for future timestamp token, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok=false for future timestamp token")
+	}
+	if p != nil {
+		t.Fatalf("expected nil principal, got %v", p)
 	}
 }

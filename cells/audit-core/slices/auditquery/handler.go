@@ -75,7 +75,13 @@ func auditQueryPolicy(r *http.Request) error {
 // Policy is enforced by auditQueryPolicy (see above).
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// auditQueryPolicy (declared at route registration) guarantees subject presence.
-	p, _ := auth.FromContext(r.Context())
+	// Guard defensively: if policy is misconfigured and auth middleware didn't run,
+	// fail closed rather than panic on nil dereference.
+	p, ok := auth.FromContext(r.Context())
+	if !ok {
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, string(errcode.ErrAuthUnauthorized), "authentication required")
+		return
+	}
 	subject := p.Subject
 
 	actorID := r.URL.Query().Get("actorId")

@@ -18,12 +18,19 @@ import (
 // pattern; deviated: combined self+role check instead of separate authz middleware.
 //
 // Errors:
-//   - ErrAuthUnauthorized: no Principal in context (auth middleware did not run)
+//   - ErrAuthUnauthorized: no Principal in context, or PrincipalUser with empty Subject
 //   - ErrAuthForbidden: subject does not match targetID and lacks bypass roles
 func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty Subject;
+	// an empty Subject indicates the primary authenticator allowed a malformed token
+	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
+	// PrincipalAnonymous Subject is intentionally empty by design.
+	if p.Kind == PrincipalUser && p.Subject == "" {
+		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
 
 	if targetID == "" {
@@ -64,12 +71,19 @@ func principalHasAnyRole(p *Principal, roles []string) bool {
 // Calling with zero roles always returns ErrAuthForbidden (no role can match).
 //
 // Errors:
-//   - ErrAuthUnauthorized: no Principal in context (auth middleware did not run)
+//   - ErrAuthUnauthorized: no Principal in context, or PrincipalUser with empty Subject
 //   - ErrAuthForbidden: subject does not hold any of the required roles
 func RequireAnyRole(ctx context.Context, roles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty Subject;
+	// an empty Subject indicates the primary authenticator allowed a malformed token
+	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
+	// PrincipalAnonymous Subject is intentionally empty by design.
+	if p.Kind == PrincipalUser && p.Subject == "" {
+		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
 
 	if principalHasAnyRole(p, roles) {
@@ -81,11 +95,15 @@ func RequireAnyRole(ctx context.Context, roles ...string) error {
 
 // TestContext creates a context carrying the given subject and roles for use
 // in handler tests across cells/. Follows the net/http/httptest naming pattern.
+//
+// This helper is NOT deprecated; it is the recommended way to inject a
+// Principal in handler tests.
 func TestContext(subject string, roles []string) context.Context {
 	p := &Principal{
-		Kind:    PrincipalUser,
-		Subject: subject,
-		Roles:   append([]string(nil), roles...),
+		Kind:       PrincipalUser,
+		Subject:    subject,
+		Roles:      append([]string(nil), roles...),
+		AuthMethod: "test",
 	}
 	return WithPrincipal(context.Background(), p)
 }

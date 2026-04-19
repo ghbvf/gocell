@@ -11,11 +11,12 @@ package auth
 
 import (
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Authenticator inspects an HTTP request and resolves the caller's identity.
@@ -84,6 +85,12 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 			// Credential present but invalid — short-circuit.
 			return nil, false, err
 		}
+		// G1.A: Reject tokens with an empty subject. An empty "sub" claim
+		// indicates a JWT signing bug or OIDC misconfiguration; accepting it
+		// would allow a bearer with roles to pass RequireAnyRole unchecked.
+		if claims.Subject == "" {
+			return nil, false, errcode.NewAuth(errcode.ErrAuthUnauthorized, "token subject missing")
+		}
 		return jwtClaimsToPrincipal(claims), true, nil
 	})
 }
@@ -119,6 +126,9 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //
 // Options reuse ServiceTokenOption so callers share the same clock/nonce/metrics
 // injection points as ServiceTokenMiddleware.
+//
+// NonceStore is nil by default; omitting it disables replay detection.
+// Production deployments MUST supply WithNonceStore.
 func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption) Authenticator {
 	cfg := serviceTokenConfig{now: time.Now}
 	for _, o := range opts {
@@ -155,21 +165,24 @@ func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption)
 //   - HMAC valid for any key in ring
 //   - nonce not replayed (if cfg.nonceStore is set)
 //
-// Errors use fmt.Errorf to avoid circular import of errcode; the HTTP layer
-// maps these to ERR_AUTH_UNAUTHORIZED. This helper is intentionally package-private.
+// Nonce replay errors preserve the original NonceStore error as the Cause so
+// callers can inspect it with errors.Is (e.g. to distinguish ErrNonceReused
+// from a store failure and map to the correct HTTP status code).
+//
+// This helper is intentionally package-private.
 func verifyServiceTokenPayload(ring *HMACKeyRing, payload string, cfg serviceTokenConfig, r *http.Request) error {
 	parts := strings.SplitN(payload, ":", 3)
 	if len(parts) == 2 {
-		return fmt.Errorf("auth: legacy 2-part service token format rejected")
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected")
 	}
 	if len(parts) != 3 {
-		return fmt.Errorf("auth: %s", msgInvalidServiceTokenFormat)
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 
 	tsStr := parts[0]
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
-		return fmt.Errorf("auth: invalid service token timestamp")
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token timestamp")
 	}
 
 	nowFn := cfg.now
@@ -183,7 +196,7 @@ func verifyServiceTokenPayload(ring *HMACKeyRing, payload string, cfg serviceTok
 		age = -age
 	}
 	if age >= ServiceTokenMaxAge {
-		return fmt.Errorf("auth: service token expired")
+		return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired")
 	}
 
 	nonce, sigHex := parts[1], parts[2]
@@ -191,15 +204,17 @@ func verifyServiceTokenPayload(ring *HMACKeyRing, payload string, cfg serviceTok
 
 	providedMAC, err := hex.DecodeString(sigHex)
 	if err != nil {
-		return fmt.Errorf("auth: %s", msgInvalidServiceTokenFormat)
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 	if !verifyServiceTokenMAC(ring, message, providedMAC) {
-		return fmt.Errorf("auth: invalid service token MAC")
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC")
 	}
 
 	if cfg.nonceStore != nil {
 		if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
-			return fmt.Errorf("auth: service token replay detected: %w", err)
+			// Preserve the original NonceStore error as Cause so callers can
+			// distinguish ErrNonceReused (replay → 401) from store failures (→ 500).
+			return errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
 		}
 	}
 	return nil

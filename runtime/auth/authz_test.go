@@ -133,11 +133,11 @@ func TestRequireAnyRole(t *testing.T) {
 			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
-			name:     "empty string subject still has principal — forbidden if no role",
+			name:     "empty string subject — ErrAuthUnauthorized (subject invariant enforced at authz entry)",
 			ctx:      withPrincipalCtx("", nil),
 			roles:    []string{"admin"},
 			wantErr:  true,
-			wantCode: errcode.ErrAuthForbidden,
+			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
 			name:     "empty required roles denied",
@@ -247,6 +247,39 @@ func TestRequireSelfOrRole_RoleMatch_Ok(t *testing.T) {
 	})
 	err := RequireSelfOrRole(ctx, "user-42", "admin")
 	assert.NoError(t, err)
+}
+
+// TestRequireAnyRole_EmptyUserSubject_Unauthorized verifies that a PrincipalUser
+// with an empty Subject is rejected with ErrAuthUnauthorized by RequireAnyRole
+// (G1.B authz-entry defence). This guards against JWTs with missing "sub" claims
+// bypassing the primary authenticator check and reaching authz with empty subject.
+func TestRequireAnyRole_EmptyUserSubject_Unauthorized(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "",
+		Roles:   []string{"admin"},
+	})
+	err := RequireAnyRole(ctx, "admin")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
+}
+
+// TestRequireSelfOrRole_EmptyUserSubject_Unauthorized verifies that a PrincipalUser
+// with an empty Subject is rejected with ErrAuthUnauthorized by RequireSelfOrRole
+// (G1.B authz-entry defence).
+func TestRequireSelfOrRole_EmptyUserSubject_Unauthorized(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "",
+		Roles:   []string{"admin"},
+	})
+	err := RequireSelfOrRole(ctx, "user-42", "admin")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
 }
 
 // withPrincipalCtx builds a context carrying a PrincipalUser with the given
