@@ -2327,8 +2327,8 @@ func (c *publicHTTPCell) RegisterRoutes(mux cell.RouteMux) {
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
 	}))
 	auth.Declare(mux, auth.RouteDecl{
-		Method:  http.MethodPost,
-		Path:    "/api/v1/access/sessions/login",
+		Method: http.MethodPost,
+		Path:   "/api/v1/access/sessions/login",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
