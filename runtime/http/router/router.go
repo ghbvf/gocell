@@ -108,28 +108,6 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 	}
 }
 
-// WithPublicEndpoints declares paths that are public-facing. This is the
-// recommended single-point configuration for trust boundary policy:
-//   - Auth: these paths bypass JWT verification
-//   - Tracing: these paths create new trace roots (ignore upstream traceparent)
-//   - RequestID: these paths reject client-supplied X-Request-Id headers
-//
-// For asymmetric policies (e.g., auth bypass without trace root), use the
-// individual WithTracingOptions / WithRequestIDOptions / WithAuthMiddleware
-// options instead.
-//
-// Note: bootstrap.WithPublicEndpoints wraps this option with auth-provider
-// discovery logic. Use this router-level option for standalone router usage
-// outside bootstrap (e.g., in tests or custom server setups).
-//
-// ref: go-zero rest/server.go — single-point route group auth config
-// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func WithPublicEndpoints(paths []string) Option {
-	return func(r *Router) {
-		r.publicEndpoints = paths
-	}
-}
-
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
 // When provided, the rate limiter is placed after AccessLog (so rejected
 // requests are logged) and before Metrics (so rejections are counted).
@@ -170,29 +148,26 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 }
 
 // WithAuthMiddleware enables authentication in the default middleware chain
-// with an explicitly injected verifier. Complementary to WithPublicEndpoints:
-// this option is the primary path for tests and advanced scenarios that must
-// inject a specific (e.g. mock) IntentTokenVerifier; WithPublicEndpoints is the
-// primary path for production cells that expose a discovered verifier.
+// with an explicitly injected verifier. This is the primary path for tests
+// and advanced scenarios that must inject a specific (e.g. mock)
+// IntentTokenVerifier.
 //
 // When provided, the auth middleware is placed after CircuitBreaker and before
 // BodyLimit, so DoS protection (RL/CB) runs before expensive JWT verification.
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
 // affected — they bypass business-route middleware entirely.
 //
-// publicEndpoints specifies paths that bypass authentication (path-only match).
-// For method-aware bypass, compose via router.WithPublicEndpoints which wires
-// a WithPublicEndpointMatcher AuthOption that supersedes this list.
+// Public endpoints are declared via auth.Declare with Public:true inside Cell
+// RegisterRoutes; FinalizeAuth compiles them into the router's auth predicates.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []string) Option {
+func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	if verifier == nil {
 		panic("router: WithAuthMiddleware requires a non-nil IntentTokenVerifier")
 	}
 	return func(r *Router) {
 		r.authVerifier = verifier
-		r.authPublicEndpoints = publicEndpoints
 	}
 }
 
@@ -201,36 +176,6 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []str
 // against the shared metrics backend.
 func WithAuthMetrics(m *auth.AuthMetrics) Option {
 	return func(r *Router) { r.authMetrics = m }
-}
-
-// WithPasswordResetExemptEndpoints declares the routes that remain reachable
-// when an authenticated token carries password_reset_required=true. Each entry
-// must be in "METHOD /path" format; path templates may use {xxx} single-segment
-// wildcards (e.g. "POST /api/v1/access/users/{id}/password").
-//
-// The list is compiled into an auth.WithPasswordResetExemptMatcher option at
-// Run() time. If this option is not used, the password-reset gate is
-// fail-closed: every authenticated request returns 403 until the user's new
-// token no longer carries the claim.
-//
-// Accepting the list here (rather than hard-coding it in runtime/auth) keeps
-// runtime/ free of cell-specific route knowledge — access-core owns the
-// identity endpoints and the composition root passes their paths in explicitly.
-func WithPasswordResetExemptEndpoints(endpoints []string) Option {
-	return func(r *Router) { r.passwordResetExemptEndpoints = endpoints }
-}
-
-// WithPasswordResetChangeEndpointHint sets the string emitted in the
-// details.change_password_endpoint field of the 403
-// ERR_AUTH_PASSWORD_RESET_REQUIRED response body. Purely a client-navigation
-// hint — empty value (default) omits the details map entirely.
-//
-// Declaring the hint here (rather than hard-coding it in runtime/auth) keeps
-// runtime/ free of business-level path literals — the composition root that
-// knows which endpoint finishes the reset flow is the only place that names
-// it.
-func WithPasswordResetChangeEndpointHint(hint string) Option {
-	return func(r *Router) { r.passwordResetChangeEndpointHint = hint }
 }
 
 // WithSecurityHeadersOptions passes additional SecurityHeadersOption values to
@@ -313,30 +258,22 @@ func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Ha
 // infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
 // routes get the full protection chain.
 type Router struct {
-	outerMux          *chi.Mux
-	mux               *chi.Mux
-	healthHandler     *health.Handler
-	metricsCollector  metrics.Collector
-	metricsHandler    http.Handler
-	tracer            tracing.Tracer
-	tracingOpts       []middleware.TracingOption
-	requestIDOpts     []middleware.RequestIDOption
-	rateLimiter       middleware.RateLimiter
-	circuitBreaker    middleware.Allower
-	circuitBreakerNil bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
-	authVerifier      auth.IntentTokenVerifier
-	// authPublicEndpoints is the legacy path-only list accepted only by direct
-	// callers of WithAuthMiddleware. WithPublicEndpoints no longer backfills this
-	// field — the method-aware matcher (authPublicMatcher) is the sole source of
-	// truth, preventing silent reactivation of path-only bypass if the matcher
-	// is removed by future refactors.
-	authPublicEndpoints             []string
-	authPublicMatcher               func(*http.Request) bool // compiled from publicEndpoints via WithPublicEndpointMatcher
+	outerMux                        *chi.Mux
+	mux                             *chi.Mux
+	healthHandler                   *health.Handler
+	metricsCollector                metrics.Collector
+	metricsHandler                  http.Handler
+	tracer                          tracing.Tracer
+	tracingOpts                     []middleware.TracingOption
+	requestIDOpts                   []middleware.RequestIDOption
+	rateLimiter                     middleware.RateLimiter
+	circuitBreaker                  middleware.Allower
+	circuitBreakerNil               bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
+	authVerifier                    auth.IntentTokenVerifier
+	authPublicMatcher               func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
 	authMetrics                     *auth.AuthMetrics
-	publicEndpoints                 []string
-	passwordResetExemptEndpoints    []string                          // raw "METHOD /path" entries; compiled in NewE
-	passwordResetExemptMatcher      func(method, urlPath string) bool // compiled matcher fed to AuthMiddleware
-	passwordResetChangeEndpointHint string                            // optional details.change_password_endpoint value for 403 body
+	passwordResetExemptMatcher      func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
+	passwordResetChangeEndpointHint string                            // derived by FinalizeAuth from the first POST+PasswordResetExempt meta
 	securityHeadersOpts             []middleware.SecurityHeadersOption
 	bodyLimit                       int64
 	trustedProxies                  []string
@@ -410,14 +347,6 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 	for _, o := range opts {
 		o(r)
-	}
-
-	if err := r.applyPublicEndpoints(); err != nil {
-		return nil, err
-	}
-
-	if err := r.applyPasswordResetExempts(); err != nil {
-		return nil, err
 	}
 
 	// Fail-fast: nil circuit breaker means the operator called
@@ -535,7 +464,7 @@ func (r *Router) buildBusinessMux() {
 		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.authPublicEndpoints, r.buildAuthOpts()...))
+		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 	if r.internalGuard != nil {
@@ -559,28 +488,15 @@ func (r *Router) buildBusinessMux() {
 // time so that matchers finalized by FinalizeAuth (after AuthMiddleware is
 // installed in buildBusinessMux) are honoured without reinstalling middleware.
 //
-// The public-endpoint lazy closure also falls back to the legacy path-only
-// authPublicEndpoints list (populated by WithAuthMiddleware's second argument)
-// so that callers using the legacy API continue to work after this refactor.
+// Public endpoints, password-reset exemptions, and delegated paths are all
+// populated by FinalizeAuth after each Cell's RegisterRoutes completes.
 func (r *Router) buildAuthOpts() []auth.AuthOption {
-	// Build a compiled path-only set from authPublicEndpoints for fallback.
-	// This preserves the legacy WithAuthMiddleware(v, []string{"/path"}) API.
-	legacyPathSet := make(map[string]bool, len(r.authPublicEndpoints))
-	for _, p := range r.authPublicEndpoints {
-		legacyPathSet[strings.TrimSpace(p)] = true
-	}
-
 	opts := []auth.AuthOption{
 		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
-			// Method-aware compiled matcher (from WithPublicEndpoints or FinalizeAuth).
-			if r.authPublicMatcher != nil && r.authPublicMatcher(req) {
-				return true
+			if r.authPublicMatcher == nil {
+				return false
 			}
-			// Legacy path-only fallback (from WithAuthMiddleware second arg).
-			if len(legacyPathSet) > 0 {
-				return legacyPathSet[strings.TrimSpace(req.URL.Path)]
-			}
-			return false
+			return r.authPublicMatcher(req)
 		}),
 		auth.WithDelegatedMatcher(func(req *http.Request) bool {
 			if r.authDelegatedMatcher == nil {
@@ -626,54 +542,6 @@ func (r *Router) validateInternalGuard() error {
 	if r.internalGuard == nil {
 		return fmt.Errorf("router: internal guard must not be nil when prefix %q is set", r.internalGuardPrefix)
 	}
-	return nil
-}
-
-// applyPasswordResetExempts compiles the "METHOD /path" entries supplied via
-// WithPasswordResetExemptEndpoints into a matcher consumed by the auth
-// middleware. Returns an error if any entry is malformed.
-func (r *Router) applyPasswordResetExempts() error {
-	if len(r.passwordResetExemptEndpoints) == 0 {
-		return nil
-	}
-	matcher, err := auth.CompilePasswordResetExempts(r.passwordResetExemptEndpoints)
-	if err != nil {
-		return fmt.Errorf("router: %w", err)
-	}
-	r.passwordResetExemptMatcher = matcher
-	return nil
-}
-
-// applyPublicEndpoints compiles the "METHOD /path" entries supplied via
-// WithPublicEndpoints into r.authPublicMatcher. The matcher is then read by
-// the lazy closures installed in buildOuterMux (tracing, request-id) and
-// buildAuthOpts (auth bypass).
-//
-// Semantic note: auth / tracing / request-id share the same isPublic predicate
-// because their trust-boundary criteria are currently identical ("is this a
-// public-facing edge?"). If these three semantics diverge in the future (e.g.
-// a public endpoint that still requires auth), split into independent
-// predicates. See backlog T8 PUBLIC-ENDPOINT-STRUCT-MIGRATE-01.
-//
-// ref: go-zero rest/server.go — single-point route group auth config
-// ref: otelhttp config.go — WithPublicEndpointFn per-request detection
-func (r *Router) applyPublicEndpoints() error {
-	if len(r.publicEndpoints) == 0 {
-		return nil
-	}
-
-	isPublic, err := middleware.CompilePublicEndpoints(r.publicEndpoints)
-	if err != nil {
-		return fmt.Errorf("router: %w", err)
-	}
-
-	// Populate the method-aware matcher for the auth middleware.
-	// Tracing and RequestID now read this field via lazy closures in
-	// buildOuterMux — no need to append to tracingOpts / requestIDOpts here.
-	// authPublicEndpoints is NOT backfilled from publicEndpoints — the matcher
-	// is the sole source of truth. Passing nil to auth.AuthMiddleware is safe
-	// because the matcher supersedes the []string parameter when both are present.
-	r.authPublicMatcher = isPublic
 	return nil
 }
 

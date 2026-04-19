@@ -198,72 +198,25 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 }
 
 // WithAuthMiddleware enables authentication for HTTP business routes with an
-// explicitly injected verifier. Complementary to WithPublicEndpoints:
-// use this option when the verifier must be supplied directly (tests,
-// advanced scenarios, non-cell composition); use WithPublicEndpoints when a
-// cell in the assembly exposes an AuthProvider for automatic discovery.
+// explicitly injected verifier. Use this option when the verifier must be
+// supplied directly (tests, advanced scenarios, non-cell composition); use
+// WithAuthDiscovery when a cell in the assembly exposes an AuthProvider for
+// automatic discovery.
 //
 // The verifier is applied to the router's middleware chain at Run() time via
-// router.WithAuthMiddleware.
-//
-// publicEndpoints specifies business-route paths that bypass authentication
-// (path-only match). If nil, no business routes are public (fail-closed).
-// For method-aware bypass, combine with WithPublicEndpoints (but note the two
-// options are mutually exclusive at Run() time; see the Run error path).
+// router.WithAuthMiddleware. Public endpoints are declared via auth.Declare
+// with Public:true inside each Cell's RegisterRoutes; Bootstrap's FinalizeAuth
+// compiles them into the router's auth predicates.
 //
 // Infra endpoints (/healthz, /readyz, /metrics) are registered on the
 // router's outer mux and naturally bypass business-route middleware, so they
-// do not need to be listed in publicEndpoints.
+// do not need to be declared public.
 //
 // ref: go-kratos/kratos — auth middleware at service level
 // ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.IntentTokenVerifier, publicEndpoints []string) Option {
+func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 	return func(b *Bootstrap) {
 		b.authVerifier = verifier
-		b.authPublicEndpoints = publicEndpoints
-	}
-}
-
-// WithPublicEndpoints declares endpoints that bypass authentication when an
-// AuthProvider cell is discovered post-Init. Unlike WithAuthMiddleware
-// (which provides the verifier explicitly), this option defers verifier
-// resolution to Run() time.
-//
-// Each entry must be in "METHOD /path" format (e.g. "POST /api/v1/auth/login").
-// Entries without a method prefix panic immediately at Option-construction time
-// (fail-fast — surfaces in unit tests and dev workflows before Run()).
-// Run() still re-validates via router.NewE for defense-in-depth. Entries with
-// method GET also automatically cover HEAD requests, following stdlib ServeMux
-// and chi v5 semantics (RFC 7231 §4.3.2).
-//
-// The same entries configure all three trust boundaries simultaneously:
-//   - Auth bypass: the matching (method + path) pair skips JWT verification.
-//   - Tracing: matching requests start a new trace root instead of inheriting
-//     an upstream traceparent header.
-//   - Request-ID: matching requests reject client-supplied X-Request-Id headers.
-//
-// WithPublicEndpoints must not be combined with WithAuthMiddleware — use one
-// or the other. If both are called, Run() returns an error immediately
-// (fail-fast) and the service will not start.
-//
-// Example:
-//
-//	bootstrap.WithPublicEndpoints([]string{
-//	    "POST /api/v1/auth/login",
-//	    "POST /api/v1/auth/refresh",
-//	})
-//
-// ref: Go 1.22 net/http ServeMux pattern grammar "[METHOD] PATH"
-func WithPublicEndpoints(endpoints []string) Option {
-	// Preflight validation: fail-fast at Option-construction time so
-	// malformed entries surface in unit tests and dev workflows before Run().
-	// Run() still re-validates via router.NewE for defense-in-depth.
-	if _, err := middleware.CompilePublicEndpoints(endpoints); err != nil {
-		panic(fmt.Sprintf("bootstrap.WithPublicEndpoints: %v", err))
-	}
-	return func(b *Bootstrap) {
-		b.authPublicEndpoints = endpoints
-		b.authDiscovery = true
 	}
 }
 
@@ -283,33 +236,6 @@ func WithPublicEndpoints(endpoints []string) Option {
 func WithAuthDiscovery() Option {
 	return func(b *Bootstrap) {
 		b.authDiscovery = true
-	}
-}
-
-// WithPasswordResetExemptEndpoints declares routes that remain reachable while
-// an authenticated token carries password_reset_required=true. Each entry must
-// be in "METHOD /path" format; path templates may use {xxx} wildcards.
-//
-// Composition roots supply these paths explicitly so runtime/auth does not
-// encode cell-specific routes — the default (no entries) is fail-closed.
-//
-// Forwarded to router.WithPasswordResetExemptEndpoints at Run() time.
-func WithPasswordResetExemptEndpoints(endpoints []string) Option {
-	return func(b *Bootstrap) {
-		b.passwordResetExemptEndpoints = endpoints
-	}
-}
-
-// WithPasswordResetChangeEndpointHint sets the client-navigation hint emitted
-// as details.change_password_endpoint in 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// responses. Empty (default) omits the hint. Composition roots typically set
-// this to the same path they list in WithPasswordResetExemptEndpoints that
-// finishes the reset flow — keeping business path literals out of runtime/auth.
-//
-// Forwarded to router.WithPasswordResetChangeEndpointHint at Run() time.
-func WithPasswordResetChangeEndpointHint(hint string) Option {
-	return func(b *Bootstrap) {
-		b.passwordResetChangeEndpointHint = hint
 	}
 }
 
@@ -653,37 +579,34 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath                      string
-	envPrefix                       string
-	httpAddr                        string
-	assembly                        *assembly.CoreAssembly
-	workers                         []worker.Worker
-	publisher                       outbox.Publisher
-	subscriber                      outbox.Subscriber
-	routerOpts                      []router.Option
-	authVerifier                    auth.IntentTokenVerifier
-	authPublicEndpoints             []string
-	authDiscovery                   bool // true when WithPublicEndpoints was called
-	passwordResetExemptEndpoints    []string
-	passwordResetChangeEndpointHint string
-	shutdownTimeout                 time.Duration
-	preShutdownDelay                time.Duration
-	listener                        net.Listener
-	healthCheckers                  []namedChecker
-	adapterInfo                     map[string]string // static adapter metadata for /readyz verbose
-	verboseToken                    string            // token for /readyz?verbose access control
-	closers                         []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
-	disableObservabilityRestore     bool
-	eventRouterReadyTimeout         time.Duration
-	eventRouterReadyTimeoutSet      bool
-	consumerMiddleware              []outbox.SubscriptionMiddleware
-	hookTimeout                     time.Duration // applied when assembly not pre-built
-	hookTimeoutSet                  bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver                    cell.LifecycleHookObserver
-	metricsProvider                 kernelmetrics.Provider
-	shutdownMet                     *shutdownMetrics // nil only when provider is nil
-	shutdownMetricsErr              error            // non-nil when metric registration failed in New
-	runOnce                         sync.Once
+	configPath                  string
+	envPrefix                   string
+	httpAddr                    string
+	assembly                    *assembly.CoreAssembly
+	workers                     []worker.Worker
+	publisher                   outbox.Publisher
+	subscriber                  outbox.Subscriber
+	routerOpts                  []router.Option
+	authVerifier                auth.IntentTokenVerifier
+	authDiscovery               bool // true when WithAuthDiscovery was called
+	shutdownTimeout             time.Duration
+	preShutdownDelay            time.Duration
+	listener                    net.Listener
+	healthCheckers              []namedChecker
+	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
+	verboseToken                string            // token for /readyz?verbose access control
+	closers                     []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
+	disableObservabilityRestore bool
+	eventRouterReadyTimeout     time.Duration
+	eventRouterReadyTimeoutSet  bool
+	consumerMiddleware          []outbox.SubscriptionMiddleware
+	hookTimeout                 time.Duration // applied when assembly not pre-built
+	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver                cell.LifecycleHookObserver
+	metricsProvider             kernelmetrics.Provider
+	shutdownMet                 *shutdownMetrics // nil only when provider is nil
+	shutdownMetricsErr          error            // non-nil when metric registration failed in New
+	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures

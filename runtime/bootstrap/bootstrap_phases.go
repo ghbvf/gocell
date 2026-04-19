@@ -148,8 +148,8 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
 	if b.authVerifier != nil && b.authDiscovery {
-		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithPublicEndpoints " +
-			"are mutually exclusive; use WithPublicEndpoints (recommended)")
+		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithAuthDiscovery " +
+			"are mutually exclusive; use WithAuthDiscovery (recommended)")
 	}
 	return nil
 }
@@ -299,7 +299,7 @@ func (b *Bootstrap) discoverAuthVerifier(s *phaseState) error {
 		}
 	}
 	if b.authVerifier == nil {
-		return fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered")
+		return fmt.Errorf("bootstrap: WithAuthDiscovery requires an auth provider cell, but none was discovered")
 	}
 	slog.Info("bootstrap: auth verifier discovered from cell",
 		slog.String("cell", discoveredFrom))
@@ -582,17 +582,8 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 
 // buildRouter assembles all router options and calls router.NewE.
 func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Router, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+6)
+	opts := make([]router.Option, 0, len(b.routerOpts)+4)
 	opts = append(opts, b.routerOpts...)
-	if len(b.authPublicEndpoints) > 0 {
-		opts = append(opts, router.WithPublicEndpoints(b.authPublicEndpoints))
-	}
-	if len(b.passwordResetExemptEndpoints) > 0 {
-		opts = append(opts, router.WithPasswordResetExemptEndpoints(b.passwordResetExemptEndpoints))
-	}
-	if b.passwordResetChangeEndpointHint != "" {
-		opts = append(opts, router.WithPasswordResetChangeEndpointHint(b.passwordResetChangeEndpointHint))
-	}
 	if b.authVerifier != nil {
 		authOpts, err := b.buildAuthRouterOptions(s)
 		if err != nil {
@@ -614,7 +605,7 @@ func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Rout
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics options.
 func (b *Bootstrap) buildAuthRouterOptions(s *phaseState) ([]router.Option, error) {
 	opts := []router.Option{
-		router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints),
+		router.WithAuthMiddleware(b.authVerifier),
 	}
 	if b.metricsProvider == nil {
 		return opts, nil
