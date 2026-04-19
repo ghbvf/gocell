@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -28,10 +29,15 @@ type ManagedResource interface {
 	// WithWorkers registration for this resource.
 	Worker() worker.Worker
 
-	// Close releases the resource. Called in LIFO order relative to registration
-	// during shutdown. Errors are logged as slog.Warn but do not abort the
-	// shutdown of other resources (best-effort).
-	Close() error
+	// Close releases the resource, bounded by ctx. Called in LIFO order relative
+	// to registration during shutdown. ctx carries the shared phase10 shutdown
+	// budget; implementations SHOULD honour ctx.Done for drain operations.
+	// Errors are logged as slog.Warn but do not abort the shutdown of other
+	// resources (best-effort).
+	//
+	// ref: kernel/lifecycle.ContextCloser — same contract as the generic
+	// ctx-aware Closer; ManagedResource bundles health + worker alongside.
+	Close(ctx context.Context) error
 }
 
 // WithManagedResource registers an external resource with the bootstrap
@@ -81,8 +87,8 @@ func (b *Bootstrap) expandManagedResources() {
 		// Register LIFO teardown. Capture r in a local so the closure is
 		// bound to this iteration's resource, not the loop variable.
 		res := r
-		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func() {
-			if err := res.Close(); err != nil {
+		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func(ctx context.Context) {
+			if err := res.Close(ctx); err != nil {
 				slog.Warn("managed resource Close failed",
 					slog.String("resource_type", fmt.Sprintf("%T", res)),
 					slog.Any("error", err))

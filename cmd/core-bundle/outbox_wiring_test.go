@@ -21,6 +21,7 @@ import (
 type discardPublisher struct{}
 
 func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (discardPublisher) Close(_ context.Context) error                       { return nil }
 
 var _ outbox.Publisher = discardPublisher{}
 
@@ -81,8 +82,8 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	// ManagedResource must have a non-nil relay worker (A11 fix).
 	assert.NotNil(t, res.Worker(), "postgres ManagedResource must carry a relay worker")
 
-	// Close the pool via ManagedResource.Close so pool.Close() is called.
-	require.NoError(t, res.Close())
+	// Close the pool via ManagedResource.Close(ctx) so pool.Close(ctx) is called.
+	require.NoError(t, res.Close(context.Background()))
 }
 
 // TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that
@@ -176,7 +177,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	const topic = "test.fanout.cross-cg.v1"
 
 	eb := eventbus.New()
-	t.Cleanup(func() { _ = eb.Close() })
+	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

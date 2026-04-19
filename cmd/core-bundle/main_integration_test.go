@@ -64,7 +64,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
-	pool.Close()
+	_ = pool.Close(ctx)
 
 	// Set env so buildConfigCoreOpts picks the postgres path.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
@@ -77,8 +77,8 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	assert.NotNil(t, opts, "opts must be non-nil")
 	require.NotNil(t, res.Worker(), "relay worker must be non-nil on success (A11 wire guard)")
 
-	// Close pool via ManagedResource so pool.Close() is called correctly.
-	require.NoError(t, res.Close())
+	// Close pool via ManagedResource so pool.Close(ctx) is called correctly.
+	require.NoError(t, res.Close(ctx))
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that buildConfigCoreOpts
@@ -104,7 +104,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	_, execErr := pool.DB().Exec(ctx,
 		"DELETE FROM schema_migrations WHERE version_id > 3")
 	require.NoError(t, execErr, "deleting version records must succeed")
-	pool.Close()
+	_ = pool.Close(ctx)
 
 	// Set env so buildConfigCoreOpts picks the postgres path.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")

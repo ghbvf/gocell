@@ -10,10 +10,10 @@ import (
 )
 
 // poolCloser is the narrow interface PGResource needs from the pool for
-// shutdown. Using an interface instead of *Pool makes Close() testable via
+// shutdown. Using an interface instead of *Pool makes Close(ctx) testable via
 // a stub without a real database connection.
 type poolCloser interface {
-	Close()
+	Close(ctx context.Context) error
 }
 
 // PGResource wraps a Pool (and an optional relay worker) as a
@@ -84,11 +84,13 @@ func (r *PGResource) Worker() worker.Worker {
 	return r.relay
 }
 
-// Close shuts down the pool. Always returns nil; pool.Close() is void.
+// Close shuts down the pool, bounded by ctx. Delegates to Pool.Close(ctx)
+// so the caller's shutdown budget propagates into pool drain.
 // Uses the poolCloser interface so tests can inject a stub without a real DB.
-func (r *PGResource) Close() error {
-	r.closer().Close()
-	return nil
+//
+// ref: uber-go/fx app.go StopTimeout — shared shutdown budget via ctx.
+func (r *PGResource) Close(ctx context.Context) error {
+	return r.closer().Close(ctx)
 }
 
 // closer returns the poolCloser for the pool. Indirection allows tests to

@@ -311,7 +311,7 @@ func (f *fakePubSub) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	}
 }
 
-func (f *fakePubSub) Close() error { return nil }
+func (f *fakePubSub) Close(_ context.Context) error { return nil }
 
 func TestCollector_CollectsAllEntries(t *testing.T) {
 	bus := &fakePubSub{}

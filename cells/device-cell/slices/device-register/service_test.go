@@ -19,6 +19,7 @@ type failPublisher struct{}
 func (failPublisher) Publish(_ context.Context, _ string, _ []byte) error {
 	return errors.New("publish failed")
 }
+func (failPublisher) Close(_ context.Context) error { return nil }
 
 func newTestService() (*Service, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()

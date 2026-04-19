@@ -27,7 +27,11 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 )
+
+// Compile-time assertion: Watcher implements lifecycle.ContextCloser.
+var _ lifecycle.ContextCloser = (*Watcher)(nil)
 
 // Event type constants for WatcherCollector.RecordEvent.
 const (
@@ -211,7 +215,9 @@ func (w *Watcher) Start() {
 func (w *Watcher) StartWithContext(ctx context.Context) {
 	go func() {
 		<-ctx.Done()
-		_ = w.Close()
+		closeCtx, cancel := context.WithTimeout(context.Background(), w.cfg.drainTimeout)
+		defer cancel()
+		_ = w.Close(closeCtx)
 	}()
 	go w.loop()
 }
@@ -405,10 +411,21 @@ func (w *Watcher) fireCallbacks(symPivot bool) {
 	}
 }
 
-// Close stops the watcher and releases resources. It is safe to call
-// concurrently from multiple goroutines. Close waits for in-flight callbacks
-// up to the drain timeout before closing the underlying fsnotify watcher.
-func (w *Watcher) Close() error {
+// Close stops the watcher and releases resources, bounded by ctx.
+//
+// Phase 1: signals the internal done channel (stops the fsnotify loop and
+// debounce goroutines), then waits for in-flight callbacks bounded by ctx.
+// If ctx expires before all callbacks finish, Close returns ctx.Err()
+// but still closes the underlying fsnotify.Watcher (OS file descriptor leak
+// prevention takes priority over the caller's budget).
+//
+// Phase 2: closes the underlying fsnotify.Watcher unconditionally.
+//
+// Close is idempotent: concurrent and repeated calls are safe.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
+func (w *Watcher) Close(ctx context.Context) error {
 	w.closeOnce.Do(func() {
 		// Set admission gate first — firePendingCallbacks and scheduleCallback
 		// check this before touching the WaitGroup, preventing Add-after-Wait.
@@ -428,7 +445,7 @@ func (w *Watcher) Close() error {
 		}
 		w.debounceMu.Unlock()
 
-		// Wait for in-flight callbacks with timeout.
+		// Phase 1: wait for in-flight callbacks bounded by ctx.
 		done := make(chan struct{})
 		go func() {
 			w.callbackWg.Wait()
@@ -438,12 +455,16 @@ func (w *Watcher) Close() error {
 		select {
 		case <-done:
 			// Clean drain.
-		case <-time.After(w.cfg.drainTimeout):
-			slog.Warn("config: watcher drain timeout exceeded, forcing close",
-				slog.Duration("timeout", w.cfg.drainTimeout))
+		case <-ctx.Done():
+			slog.Warn("config: watcher drain budget exceeded, forcing close",
+				slog.Any("error", ctx.Err()))
+			w.closeErr = ctx.Err()
 		}
 
-		w.closeErr = w.watcher.Close()
+		// Phase 2: always close the fsnotify watcher to release OS file descriptors.
+		if err := w.watcher.Close(); err != nil && w.closeErr == nil {
+			w.closeErr = err
+		}
 	})
 	return w.closeErr
 }

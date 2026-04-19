@@ -100,10 +100,12 @@
 
 **域间依赖**：RBAC 域 S8 依赖本域 A11（已完成）。A10 已迁出至域 9。
 
-**合入 PR 记录**：PR#180 ✅（A5 entry.ID guard + A6 ClaimPolicy polish + X6 Receipt.Extend）；PR#184 ✅（Subscription first-class + lease-lost fence + Commit→Ack ordering）；PR#185（298-outbox-harden-rmq：A14 ExponentialDelay 单一真源 + consumer_base 强化，待合）；PR#186（301-outbox-subscriber-harden：P1-14 envelope fail-closed + A13 concurrent processDelivery + eventrouter lifecycle，待合）
+**合入 PR 记录**：PR#180 ✅（A5 entry.ID guard + A6 ClaimPolicy polish + X6 Receipt.Extend）；PR#184 ✅（Subscription first-class + lease-lost fence + Commit→Ack ordering）；PR#185（298-outbox-harden-rmq：A14 ExponentialDelay 单一真源 + consumer_base 强化，待合）；PR#186（301-outbox-subscriber-harden：P1-14 envelope fail-closed + A13 concurrent processDelivery + eventrouter lifecycle，待合）；fix/308-lifecycle-context-closer ✅（R10 SUBSCRIBER-CLOSE-CTX-01 + A19 RMQ-SUBSCRIBER-CH-CLOSE-RACE-01 +全栈 Close(ctx) 统一）
 
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
+| ~~R10~~ | ~~**SUBSCRIBER-CLOSE-CTX-01**~~ ✅ fix/308-lifecycle-context-closer：`kernel/outbox.Subscriber/Publisher.Close(ctx)` 接口升级；rabbitmq/eventbus/SubscriberWithMiddleware 实现同步；独立 ShutdownTimeout 废弃；bootstrap phase10 shutCtx 预算全栈透传 | — | ✅ | — | PR#191 review UNRESOLVED-2 |
+| ~~A19~~ | ~~**RMQ-SUBSCRIBER-CH-CLOSE-RACE-01**~~ ✅ fix/308-lifecycle-context-closer：引入 `subscriptionRun` struct 封装 per-subscribeOnce 的 ch+tag+localWg；subscribeOnce exit 路径 `localWg.Wait()` 后再 `ch.Close()`（sync.Once 防双关）；reconnect 路径 A19 use-after-close race 彻底消除 | — | ✅ | — | PR#191 review UNRESOLVED-1 |
 | A13 | **SUBSCRIBER-CONCURRENCY-DECISION-01** 🟠（PR#180 review 暴露）：`subscriber.go::consumeLoop` 同步调用 `processDelivery`，使 `PrefetchCount=10` 默认值的并发语义退化为串行。需先决定 PrefetchCount 真实意图：(a) 改文档明确串行；或 (b) 改 `go s.processDelivery(...)` 走真并发并补并发安全测试（审 settleReceipt / Receipt.Commit/Release 多 goroutine 安全）| 1-3h（视方向）| 🟠 | `adapters/rabbitmq/subscriber.go` | PR#180 reviewer |
 | A14 | **BACKOFF-DEDUP-01** 🟡（PR#180 review 暴露）：`exponentialDelay` 在 `adapters/rabbitmq/backoff.go` 与 `kernel/outbox/consumer_base.go` 重复实现。两路径：(a) export `kernel/outbox.ExponentialDelay` 并删 adapters 副本；或 (b) 抽 `pkg/backoff` 共享。需调整 `adapters/rabbitmq/connection.go` 调用点 | 1-2h | 🟡 | `adapters/rabbitmq/backoff.go` + `adapters/rabbitmq/connection.go` + `kernel/outbox/consumer_base.go`（或新建 `pkg/backoff/`）| PR#180 reviewer |
 | P1-14 | **ENVELOPE-FAILCLOSED-01** (P1, Cx2)：relay 发布 envelope 后 consumer 遇 unknown action 静默跳过 + 解析不完整走 legacy fallback，两者组合 fail-open；加版本判别位 + unknown action → DispositionRequeue | 2h | P1 | `runtime/outbox/envelope.go` + `runtime/eventbus/` consumer dispatch | 2026-04-18 六席审查 |

@@ -2,6 +2,7 @@ package eventrouter
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -81,7 +82,7 @@ func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscript
 	r.cancelledAt.Store(time.Now().UnixNano())
 	return ctx.Err()
 }
-func (r *cancelTimeRecorder) Close() error { return r.inner.Close() }
+func (r *cancelTimeRecorder) Close(ctx context.Context) error { return r.inner.Close(ctx) }
 
 func (r *cancelTimeRecorder) WaitSubscribed(timeout time.Duration) bool {
 	select {
@@ -126,7 +127,9 @@ func (c *compositeStopIntakeSubscriber) Ready(sub outbox.Subscription) <-chan st
 func (c *compositeStopIntakeSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	return c.cancelRec.Subscribe(ctx, sub, handler)
 }
-func (c *compositeStopIntakeSubscriber) Close() error { return c.cancelRec.Close() }
+func (c *compositeStopIntakeSubscriber) Close(ctx context.Context) error {
+	return c.cancelRec.Close(ctx)
+}
 func (c *compositeStopIntakeSubscriber) StopIntake(ctx context.Context) error {
 	return c.stopRecorder.StopIntake(ctx)
 }
@@ -283,7 +286,7 @@ func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscriptio
 	}
 }
 
-func (s *inflightSubscriber) Close() error { return nil }
+func (s *inflightSubscriber) Close(_ context.Context) error { return nil }
 func (s *inflightSubscriber) StopIntake(_ context.Context) error {
 	// StopIntake tells the broker to stop delivering new messages.
 	// In this mock we do nothing (simulates the broker cancellation being instant).
@@ -450,6 +453,126 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not exit after StopIntake released")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// F21: phaseError label tests
+// ---------------------------------------------------------------------------
+
+// TestRouterClose_WrapsErrorsByPhase verifies that Router.Close wraps timeout
+// errors in phaseError so that the shutdown phase is preserved for post-mortem
+// diagnosis via errors.As.
+//
+// Close always returns a "wg_wait" phaseError on ctx expiry regardless of
+// whether the budget was consumed by StopIntake (Phase 1) or the goroutine
+// drain (Phase 3) — the returned error reflects the final phase reached.
+// The "stop_intake" phase is logged but not separately surfaced in the return
+// value because Close must always complete Phases 2+3 to avoid goroutine leaks.
+//
+// ref: uber-go/fx app.go per-hook error surfacing.
+func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
+	t.Run("phaseError returned when ctx expires during StopIntake", func(t *testing.T) {
+		// hangingStopIntakeSubscriber with ignoreCtx=true consumes the entire close
+		// budget. Router still completes Phase 2 (cancel) + Phase 3 (wg.Wait), and
+		// returns a "wg_wait" phaseError because that is the last phase observed.
+		h := &hangingStopIntakeSubscriber{
+			release:   make(chan struct{}),
+			ignoreCtx: true,
+		}
+
+		r := New(h)
+		r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "test-cg")
+
+		runCtx, runCancel := context.WithCancel(context.Background())
+		defer runCancel()
+		done := make(chan error, 1)
+		go func() { done <- r.Run(runCtx) }()
+
+		select {
+		case <-r.Running():
+		case <-time.After(2 * time.Second):
+			t.Fatal("Router did not become ready")
+		}
+
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer closeCancel()
+
+		err := r.Close(closeCtx)
+
+		// Must propagate a context error wrapped in phaseError.
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		var pe *phaseError
+		require.True(t, errors.As(err, &pe),
+			"Close error must be *phaseError; got %T: %v", err, err)
+		// "wg_wait" is the phase label returned — StopIntake consumed the budget,
+		// so Phase 3 also sees an expired ctx and labels accordingly.
+		assert.Equal(t, "wg_wait", pe.Phase)
+
+		// Unblock the hanging goroutine so test cleanup is clean.
+		close(h.release)
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Run did not exit after releasing StopIntake")
+		}
+	})
+
+	t.Run("wg_wait phase label when goroutine drain times out", func(t *testing.T) {
+		// inflightSubscriber simulates a long in-flight message that outlasts the
+		// close ctx. StopIntake is a no-op, so the budget is consumed by wg.Wait.
+		const veryLongDrain = 5 * time.Second
+		sub := newInflightSubscriber(veryLongDrain)
+
+		r := New(sub)
+		r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		}, "test-cg")
+
+		runCtx, runCancel := context.WithCancel(context.Background())
+		defer runCancel()
+		done := make(chan error, 1)
+		go func() { done <- r.Run(runCtx) }()
+
+		select {
+		case <-r.Running():
+		case <-time.After(2 * time.Second):
+			t.Fatal("Router did not become ready")
+		}
+
+		// Wait for Subscribe to be live before starting Close.
+		select {
+		case <-sub.subscribedCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Subscribe goroutine did not start")
+		}
+
+		// Short ctx — StopIntake returns immediately (no-op), but the 5s inflight
+		// message outlasts the 150ms close budget.
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer closeCancel()
+
+		err := r.Close(closeCtx)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+
+		var pe *phaseError
+		require.True(t, errors.As(err, &pe),
+			"Close error must be *phaseError; got %T: %v", err, err)
+		assert.Equal(t, "wg_wait", pe.Phase)
+
+		// Run will exit once the long inflight sleep finishes — cancel runCtx to speed up.
+		runCancel()
+		select {
+		case <-done:
+		case <-time.After(6 * time.Second):
+			t.Fatal("Run did not exit")
+		}
+	})
 }
 
 // TestRouterClose_StopIntakeErr_ProceedsToCancel verifies that when

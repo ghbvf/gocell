@@ -118,15 +118,15 @@ type stubCloser struct {
 	called int
 }
 
-func (s *stubCloser) Close() { s.called++ }
+func (s *stubCloser) Close(_ context.Context) error { s.called++; return nil }
 
-// TestPGResource_CloseReturnsNil verifies Close() calls the underlying closer
+// TestPGResource_CloseReturnsNil verifies Close(ctx) calls the underlying closer
 // exactly once and always returns nil.
 func TestPGResource_CloseReturnsNil(t *testing.T) {
 	sc := &stubCloser{}
 	res := &PGResource{name: "postgres", closeOverride: sc}
 
-	if err := res.Close(); err != nil {
+	if err := res.Close(context.Background()); err != nil {
 		t.Errorf("Close() returned non-nil error: %v", err)
 	}
 	if sc.called != 1 {

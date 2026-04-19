@@ -79,6 +79,9 @@ func (p *fakePublisher) Publish(_ context.Context, topic string, payload []byte)
 	return nil
 }
 
+// Close satisfies outbox.Publisher.
+func (p *fakePublisher) Close(_ context.Context) error { return nil }
+
 // Captured returns a snapshot of all successfully published (topic, payload) pairs.
 func (p *fakePublisher) Captured() []publishCall {
 	p.mu.Lock()
@@ -885,6 +888,7 @@ func (b *blockingPublisher) Publish(ctx context.Context, _ string, _ []byte) err
 	<-ctx.Done()
 	return ctx.Err()
 }
+func (b *blockingPublisher) Close(_ context.Context) error { return nil }
 
 // testCollector records relay metric calls for assertions.
 type testCollector struct {

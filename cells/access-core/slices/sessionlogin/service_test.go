@@ -168,6 +168,7 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 type failingPublisher struct{ err error }
 
 func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error { return f.err }
+func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 	svc, userRepo := newTestService()

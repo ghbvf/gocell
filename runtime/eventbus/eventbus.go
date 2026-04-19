@@ -295,7 +295,14 @@ func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
 // Safety: Close holds mu.Lock() for the full channel-closing loop, while
 // Publish holds mu.RLock() while sending to subscriber channels. That lock
 // ordering prevents Publish from sending to a closed subscriber channel.
-func (b *InMemoryEventBus) Close() error {
+//
+// ctx is intentionally not consumed: closing in-memory channels is O(1) and
+// must always complete to avoid goroutine leaks. Intercepting ctx here would
+// risk leaving subscriber goroutines permanently blocked on the channel read.
+//
+// ref: kernel/lifecycle doc.go — "resources that must complete teardown
+// unconditionally should ignore the ctx and document the reason"
+func (b *InMemoryEventBus) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

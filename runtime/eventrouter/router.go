@@ -33,6 +33,22 @@ import (
 // Set to a non-positive value via WithReadyTimeout to disable the bound.
 const DefaultReadyTimeout = 30 * time.Second
 
+// phaseError wraps an error with the name of the shutdown phase that produced
+// it. This makes post-mortem diagnosis unambiguous when multiple phases can
+// fail and the error is logged or inspected via errors.As.
+//
+// Phase labels mirror the Close comment block:
+//
+//	"stop_intake"   — Phase 1: StopIntake ctx budget exceeded
+//	"wg_wait"       — Phase 3: goroutine drain timed out
+type phaseError struct {
+	Phase string
+	Err   error
+}
+
+func (e *phaseError) Error() string { return e.Phase + ": " + e.Err.Error() }
+func (e *phaseError) Unwrap() error { return e.Err }
+
 // Option configures a Router.
 type Option func(*Router)
 
@@ -433,11 +449,14 @@ func (r *Router) Close(ctx context.Context) error {
 		case err := <-stopDone:
 			if err != nil {
 				slog.Warn("eventrouter: StopIntake returned error, continuing shutdown",
+					slog.String("phase", "stop_intake"),
 					slog.Any("error", err))
 			}
 		case <-ctx.Done():
+			phErr := &phaseError{Phase: "stop_intake", Err: ctx.Err()}
 			slog.Warn("eventrouter: StopIntake exceeded ctx budget, advancing to cancel+wait",
-				slog.Any("error", ctx.Err()),
+				slog.String("phase", phErr.Phase),
+				slog.Any("error", phErr.Err),
 				slog.Duration("elapsed", time.Since(start)))
 			// Do NOT return: we still need to cancel runCtx and reap goroutines
 			// so the caller's resources are released.
@@ -466,13 +485,16 @@ func (r *Router) Close(ctx context.Context) error {
 		// If ctx already expired (e.g. StopIntake consumed the budget), surface
 		// the timeout so callers see consistent shutdown outcomes.
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			return &phaseError{Phase: "wg_wait", Err: ctxErr}
 		}
 		return nil
 	case <-ctx.Done():
+		phErr := &phaseError{Phase: "wg_wait", Err: ctx.Err()}
 		slog.Warn("eventrouter: close timed out, some goroutines may still be running",
+			slog.String("phase", phErr.Phase),
+			slog.Any("error", phErr.Err),
 			slog.Duration("elapsed", time.Since(start)))
-		return ctx.Err()
+		return phErr
 	}
 }
 

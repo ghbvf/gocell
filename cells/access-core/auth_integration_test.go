@@ -250,6 +250,7 @@ func (rbacStubTxRunner) RunInTx(_ context.Context, fn func(context.Context) erro
 type noopPublisher struct{}
 
 func (noopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (noopPublisher) Close(_ context.Context) error                       { return nil }
 
 // Compile-time proof these tests hit the real slices (not stubs).
 var (

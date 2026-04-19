@@ -104,7 +104,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
-	migrationPool.Close()
+	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
 	eb := eventbus.New()
@@ -121,7 +121,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	relayWorker := pgRes.Worker()
 	require.NotNil(t, relayWorker,
 		"A11 regression guard: ManagedResource MUST carry a non-nil relay worker in PG mode")
-	t.Cleanup(func() { _ = pgRes.Close() })
+	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped

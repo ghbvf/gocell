@@ -57,7 +57,7 @@ func startRedis(t *testing.T) (*Client, func()) {
 	require.NoError(t, err, "create redis client")
 
 	cleanup := func() {
-		_ = client.Close()
+		_ = client.Close(ctx)
 		_ = container.Terminate(ctx)
 	}
 

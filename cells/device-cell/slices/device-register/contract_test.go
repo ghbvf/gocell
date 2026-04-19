@@ -30,6 +30,7 @@ func (p *recordingPublisher) Publish(_ context.Context, topic string, payload []
 	p.calls = append(p.calls, publishCall{topic: topic, payload: payload})
 	return nil
 }
+func (p *recordingPublisher) Close(_ context.Context) error { return nil }
 
 var _ outbox.Publisher = (*recordingPublisher)(nil)
 
