@@ -353,8 +353,367 @@ Service.Create(ctx)
        Receipt.Commit (idempotency key marked done)
 ```
 
-### Chapters 5–7 (placeholder — PR3)
+---
 
-- **Chapter 5**: Repository-boundary encryption + `ValueTransformer` + `KeyProvider` selection
-- **Chapter 6**: Key rotation + staleness-driven lazy re-encrypt
-- **Chapter 7**: Three-layer testing (unit / testcontainers / e2e compose)
+## Chapter 5 — Repository-boundary Encryption
+
+Sensitive config values are encrypted before they reach the database and
+decrypted on the way out, entirely within the repository layer. The handler
+and service layers are unaware of encryption details.
+
+### Core abstractions
+
+```go
+// runtime/crypto — three interfaces, one selection concern.
+
+type KeyHandle interface {
+    ID() string
+    Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error)
+    Decrypt(ctx context.Context, ciphertext, nonce, edk, aad []byte) (plaintext []byte, err error)
+}
+
+type KeyProvider interface {
+    Current(ctx context.Context) (KeyHandle, error)      // current key for encryption
+    ByID(ctx context.Context, keyID string) (KeyHandle, error) // historical key for decryption
+    Rotate(ctx context.Context) (newKeyID string, err error)
+}
+
+type ValueTransformer interface {
+    Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext []byte, keyID string, nonce, edk []byte, err error)
+    Decrypt(ctx context.Context, ciphertext []byte, keyID string, nonce, edk, aad []byte) (plaintext []byte, err error)
+}
+```
+
+`ValueTransformer` is the boundary interface: it wraps `KeyProvider` to handle
+key resolution and forwards AAD to `KeyHandle`. The repository only calls
+`Encrypt` and `Decrypt` — it does not manage keys.
+
+`NoopTransformer` is the production-safe fallback for `sensitive=false` entries
+and for development without a key provider. It is an identity transformer, not
+a zero value — explicit, auditable, and searchable in code.
+
+### Envelope encryption design
+
+Each sensitive row uses a per-row Data Encryption Key (DEK):
+
+```
+plaintext ──→ AES-GCM-256 (DEK, nonce) ──→ value_cipher  + value_nonce
+DEK       ──→ AES-GCM-256 (KEK, edk_nonce) ──→ value_edk
+KeyHandle.ID() ──→ value_key_id
+```
+
+- `value_cipher`: raw ciphertext (no nonce prefix — nonce stored separately)
+- `value_nonce`: 12-byte random nonce for AES-GCM  
+- `value_edk`: encrypted DEK (self-contained blob with its own nonce prefix)
+- `value_key_id`: key version identifier used to resolve the correct KEK on
+  read (enables key rotation without re-encrypting all rows)
+
+VaultTransit uses a different scheme: Vault manages DEK + KEK internally.
+`nonce` and `edk` are nil; `value_cipher` contains the opaque Vault ciphertext
+(`vault:vN:base64...`); `value_key_id` stores the Vault key version extracted
+from the ciphertext prefix.
+
+### Additional Authenticated Data (AAD)
+
+```go
+func AADForConfig(cellID, configKey string) []byte {
+    return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
+}
+```
+
+AAD is computed from the row's identity and bound into the ciphertext. It is
+**not** stored in the database — it is recomputed on decrypt from the row's key.
+This prevents a ciphertext for `cell:A/key:x` from being transplanted into
+`cell:B/key:y` (cross-row replay attack).
+
+### Repository boundary — write path
+
+```go
+// config_repo.go — Create (sensitive branch)
+ct, keyID, nonce, edk, err := r.encryptValue(ctx, entry.Key, entry.Value)
+db.Exec(ctx, `INSERT INTO config_entries
+    (id, key, value, sensitive, version, created_at, updated_at,
+     value_cipher, value_key_id, value_edk, value_nonce)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    entry.ID, entry.Key, "",  // value stored as "" when encrypted
+    entry.Sensitive, entry.Version, entry.CreatedAt, entry.UpdatedAt,
+    ct, keyID, edk, nonce,
+)
+```
+
+Plaintext value is set to `""` (empty string) for encrypted rows. On decrypt
+failure the entry is **not** returned with an empty value — the error propagates
+as `ErrConfigDecryptFailed` (fail-closed).
+
+### Repository boundary — read path
+
+```go
+// Transparent decryption (config_repo.go — GetByKey)
+if e.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != "" {
+    plain, err := r.decryptValue(ctx, key, valueCipher, *valueKeyID, valueNonce, valueEDK)
+    if err != nil {
+        return nil, err // ErrConfigDecryptFailed — never return empty plaintext
+    }
+    e.Value = plain
+}
+```
+
+### Provider selection at startup
+
+```
+GOCELL_KEY_PROVIDER=local-aes      → LocalAESKeyProvider (dev/CI)
+GOCELL_KEY_PROVIDER=vault-transit  → VaultTransitKeyProvider (production)
+(unset)                            → NoopTransformer (dev mode, plaintext)
+```
+
+When `GOCELL_KEY_PROVIDER` is unset and storage backend is `postgres`,
+`buildKeyProvider` logs a structured Warn (not an error) so that operators
+who haven't yet configured encryption are notified without breaking deployments.
+
+Fail-fast applies for invalid values:
+```
+GOCELL_KEY_PROVIDER=unknown → ErrValidationFailed at startup
+GOCELL_MASTER_KEY not set with local-aes → ErrValidationFailed at startup
+```
+
+### Wiring in cell.go (deferred construction)
+
+`WithKeyProvider` and `WithPostgresDefaults` may be applied in any order.
+Repo construction is deferred to `Init()` so both options are visible:
+
+```go
+// cell.go — Init()
+if c.pgPool != nil && c.configRepo == nil {
+    session := cellpg.NewSession(c.pgPool)
+    c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer)
+    c.flagRepo = cellpg.NewFlagRepository(session)
+}
+```
+
+`c.valueTransformer` is set by `WithKeyProvider` or `WithValueTransformer`.
+If neither is called, the repo receives `nil` — the repo treats nil as
+"no encryption for non-sensitive entries" but fails-fast on sensitive writes
+with `ErrConfigKeyMissing`.
+
+---
+
+## Chapter 6 — Key Rotation and Staleness-Driven Lazy Re-encrypt
+
+### Rotation model
+
+Keys are versioned. `KeyProvider.Rotate(ctx)` advances the "current" key ID.
+Existing ciphertext rows are **not** re-encrypted eagerly — they remain readable
+via `ByID(ctx, storedKeyID)` until explicitly migrated.
+
+```
+Before rotation:   current = "local-aes-v1"
+After rotation:    current = "local-aes-v2", "local-aes-v1" still accessible
+```
+
+This decouples rotation from downtime: you rotate, deploy, then run the
+migration tool at a convenient time.
+
+### Staleness signal
+
+On each read, the repository compares the stored `value_key_id` against the
+current key ID:
+
+```go
+// hasCurrent is the optional interface for staleness detection.
+type hasCurrent interface {
+    CurrentKeyID(ctx context.Context) (string, error)
+}
+
+func (r *ConfigRepository) currentKeyID(ctx context.Context) (string, bool) {
+    if hc, ok := r.transformer.(hasCurrent); ok {
+        id, err := hc.CurrentKeyID(ctx)
+        if err != nil || id == "" {
+            return "", false
+        }
+        return id, true
+    }
+    return "", false
+}
+```
+
+`ConfigEntry.Stale = true` when `storedKeyID != currentKeyID`. The service
+and handler layers may expose `stale` in responses so operators know which
+entries need re-encryption.
+
+The `hasCurrent` interface is optional — `ValueTransformer` does not require
+it. Only `keyProviderTransformer` implements it. `NoopTransformer` and custom
+test transformers that do not implement it will simply never mark entries stale.
+
+### Re-encryption patterns
+
+**Lazy (per-request)**: On a write (`Update`, `PublishVersion`) for a stale
+entry, the repository naturally re-encrypts under the new key because it
+always calls `transformer.Encrypt(ctx, ...)` with the current key. No explicit
+lazy path is needed — re-encryption happens on the next mutation.
+
+**Eager (bulk migration)**: For long-lived read-only entries that are never
+updated, use `plaintextMigrator.MigrateConfigEntries(ctx)`:
+
+```go
+migrator, err := newPlaintextMigrator(db, transformer, PlaintextMigrationConfig{
+    BatchSize:      100,            // rows per DB round-trip
+    RateLimitDelay: 50 * time.Millisecond, // pause between batches
+})
+result, err := migrator.MigrateConfigEntries(ctx)
+// result.Processed = rows encrypted this run
+// result.Skipped   = rows already encrypted (idempotent)
+```
+
+The migrator scans `WHERE sensitive = true AND value_cipher IS NULL`, so it is
+safe to run multiple times (idempotent by SQL predicate). It does not update
+already-encrypted rows regardless of their key ID. Key-rotation migration
+(re-encrypting under a new KEK) is a separate future concern (backlog S14b).
+
+### LocalAES key loading
+
+```
+GOCELL_MASTER_KEY          64-char hex or base64 (required)
+GOCELL_MASTER_KEY_PREVIOUS 64-char hex or base64 (optional; enables reading
+                            pre-rotation ciphertext after KEK rotation)
+```
+
+LocalAES does not call an external KMS — keys are loaded from environment
+variables at startup. This is intentional for dev/CI: no network dependency,
+deterministic, fast. Production should use VaultTransit.
+
+### VaultTransit key management
+
+VaultTransit delegates all key material management to Vault:
+
+```
+GOCELL_VAULT_ADDR    e.g. https://vault.example.com
+GOCELL_VAULT_TOKEN   service token with transit/{name}/encrypt+decrypt+rotate
+GOCELL_VAULT_KEY     Vault key name (default: "gocell-config")
+```
+
+Vault manages DEK + KEK rotation internally. `ByID` validates the
+`vault-transit:{version}` prefix and reconstructs the Vault key name.
+`nonce` and `edk` columns are NULL for VaultTransit rows.
+
+Integration with the production Vault SDK is tracked in backlog S14a.
+
+---
+
+## Chapter 7 — Three-Layer Testing Strategy
+
+Testing encrypted config values requires three layers: unit tests that
+avoid DB and KMS calls, testcontainers integration tests with a real PG schema,
+and e2e tests that validate the full assembly.
+
+### Layer 1 — Unit tests (no DB, no KMS)
+
+Test the transformer independently using table-driven cases:
+
+```go
+// runtime/crypto/local_aes_provider_test.go — pattern
+func TestLocalAESHandle_Encrypt_Decrypt_RoundTrip(t *testing.T) {
+    cases := []struct {
+        name      string
+        plaintext string
+    }{
+        {"empty", ""},
+        {"short", "v"},
+        {"unicode", "日本語テスト"},
+        {"binary", string([]byte{0x00, 0xFF, 0xFE})},
+    }
+    for _, tc := range cases {
+        t.Run(tc.name, func(t *testing.T) {
+            kp := mustBuildLocalAESProvider(t)
+            h, _ := kp.Current(ctx)
+            ct, nonce, edk, _ := h.Encrypt(ctx, []byte(tc.plaintext), nil)
+            pt, _ := h.Decrypt(ctx, ct, nonce, edk, nil)
+            assert.Equal(t, normBytes(tc.plaintext), normBytes(string(pt)))
+        })
+    }
+}
+```
+
+Test the repository boundary using the `fakeDB` pattern (implemented in
+`config_repo_test.go`):
+
+```go
+// Inject a pre-built transformer alongside a fakeDB — no pgxpool.Pool needed.
+m := newEncryptedRepoFromDBTX(fakeDB, transformer)
+err := m.Create(ctx, &domain.ConfigEntry{Key: "k", Value: "v", Sensitive: true})
+```
+
+AAD mismatch and wrong-key tests must be present and marked fail-closed:
+```go
+_, err = h.Decrypt(ctx, ct, nonce, edk, []byte("wrong-aad"))
+require.Error(t, err, "AAD mismatch must fail-closed")
+```
+
+### Layer 2 — testcontainers (real PG schema)
+
+Integration tests in `cells/config-core/internal/adapters/postgres/*_test.go`
+use `testcontainers-go` to spin up a real PostgreSQL instance and run
+migrations 001–008 before the test suite. These tests exercise the full
+repository path including cipher columns.
+
+```go
+//go:build integration
+
+func TestConfigRepository_Encrypt_Decrypt_IntegrationRoundTrip(t *testing.T) {
+    pool := startTestPG(t) // testcontainers helper
+    kp, _ := crypto.NewLocalAESKeyProviderFromKeys(validKey, "")
+    tr := crypto.NewValueTransformer(kp)
+    session := cellpg.NewSession(pool)
+    repo := cellpg.NewConfigRepository(session, tr)
+
+    entry := &domain.ConfigEntry{Key: "sec.key", Value: "secret", Sensitive: true}
+    // ... Create, GetByKey, assert decrypted value matches
+}
+```
+
+Run with: `go test -tags=integration -timeout=120s ./cells/config-core/...`
+
+### Layer 3 — e2e compose (full assembly)
+
+E2E tests in `tests/e2e/config_pilot_e2e_test.go` validate the full HTTP API
+with a running core-bundle, PostgreSQL, and optionally Vault:
+
+```go
+//go:build e2e
+
+func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
+    waitForReady(t, 30*time.Second)
+    token := e2eAdminToken()
+    // POST sensitive entry, GET back — assert value is redacted.
+}
+```
+
+Required environment:
+```
+GOCELL_CELL_ADAPTER_MODE=postgres
+GOCELL_KEY_PROVIDER=local-aes
+GOCELL_MASTER_KEY=<64-char hex>
+GOCELL_DATABASE_URL=postgres://...
+E2E_ADMIN_TOKEN=<jwt>
+```
+
+Run with: `go test -tags=e2e -timeout=120s ./tests/e2e/...`
+
+### Coverage thresholds
+
+| Layer | Package | Minimum |
+|-------|---------|---------|
+| Unit | `runtime/crypto/` | ≥ 90% |
+| Unit | `cells/config-core/internal/adapters/postgres/` | ≥ 80% |
+| Integration | cipher columns round-trip | required (no skip) |
+| E2E | all `t.Skip` stubs | acceptable — activated by compose environment |
+
+### Anti-patterns to avoid
+
+- Using `NoopTransformer` in integration tests that claim to test encryption.
+- Asserting that `entry.Value == ""` as proof of encryption — the plaintext
+  field is cleared on write but the integration test must verify the value can
+  be decrypted back, not just that it was zeroed.
+- Testing key rotation without asserting that the old ciphertext is still
+  decryptable after rotation (historical key access is a correctness invariant).
+- Skipping AAD mismatch tests — they must fail-closed; a passing test here
+  is a security regression.
