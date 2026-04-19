@@ -352,13 +352,15 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-nonexistent", nil)
-	// Simulate the auth middleware having populated the caller subject in ctx;
-	// the handler now enforces ownership so it must see a caller identity.
-	req = req.WithContext(auth.TestContext("usr-router", nil))
+	// SelfOr("id", RoleAdmin) policy: subject must match the path {id} or carry
+	// the admin role. Use the session ID as subject so the policy admits the
+	// request and we can verify the handler is wired (returns 404 = not found,
+	// not a routing miss).
+	req = req.WithContext(auth.TestContext("sess-nonexistent", nil))
 	r.ServeHTTP(rec, req)
 
 	// 404 means handler was reached and session not found (correct routing).
-	// 405 or chi-level 404 (without JSON body) means routing is broken.
+	// 403/405 or chi-level 404 (without JSON body) means routing is broken.
 	assert.Equal(t, http.StatusNotFound, rec.Code,
 		"DELETE /api/v1/access/sessions/{id} should reach handler (got %d)", rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
