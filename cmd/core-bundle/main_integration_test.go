@@ -77,8 +77,8 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	assert.NotNil(t, opts, "opts must be non-nil")
 	require.NotNil(t, res.Worker(), "relay worker must be non-nil on success (A11 wire guard)")
 
-	// Close pool via ManagedResource so pool.Close() is called correctly.
-	require.NoError(t, res.Close())
+	// Close pool via ManagedResource so pool.Close(ctx) is called correctly.
+	require.NoError(t, res.Close(ctx))
 }
 
 // TestBuildConfigCoreOpts_Postgres_SchemaMismatch verifies that buildConfigCoreOpts

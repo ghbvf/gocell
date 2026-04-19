@@ -48,7 +48,7 @@ func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager, func()) {
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}

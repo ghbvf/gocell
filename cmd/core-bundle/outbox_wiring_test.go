@@ -82,8 +82,8 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	// ManagedResource must have a non-nil relay worker (A11 fix).
 	assert.NotNil(t, res.Worker(), "postgres ManagedResource must carry a relay worker")
 
-	// Close the pool via ManagedResource.Close so pool.Close() is called.
-	require.NoError(t, res.Close())
+	// Close the pool via ManagedResource.Close(ctx) so pool.Close(ctx) is called.
+	require.NoError(t, res.Close(context.Background()))
 }
 
 // TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that

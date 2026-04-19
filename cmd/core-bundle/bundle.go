@@ -465,7 +465,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		}
 		// A12: fail-fast on schema version mismatch.
 		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
-			pool.Close()
+			_ = pool.Close(ctx)
 			return nil, nil, fmt.Errorf("config-core PG schema guard: %w", schemaErr)
 		}
 		// A4: warn on INVALID indexes (non-fatal).
@@ -482,7 +482,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		relayCfg := outboxruntime.DefaultRelayConfig()
 		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
 		if rmErr != nil {
-			pool.Close()
+			_ = pool.Close(ctx)
 			return nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
@@ -491,7 +491,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 
 		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
 		if resErr != nil {
-			pool.Close()
+			_ = pool.Close(ctx)
 			return nil, nil, fmt.Errorf("config-core PG resource: %w", resErr)
 		}
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))

@@ -29,7 +29,7 @@ func (f *fakeResource) Checkers() map[string]func() error {
 
 func (f *fakeResource) Worker() worker.Worker { return f.worker }
 
-func (f *fakeResource) Close() error {
+func (f *fakeResource) Close(_ context.Context) error {
 	f.closed = true
 	return f.closeErr
 }
@@ -194,7 +194,7 @@ func (r *trackingResource) Checkers() map[string]func() error {
 
 func (r *trackingResource) Worker() worker.Worker { return nil }
 
-func (r *trackingResource) Close() error {
+func (r *trackingResource) Close(_ context.Context) error {
 	*r.closeOrder = append(*r.closeOrder, r.name)
 	return nil
 }
