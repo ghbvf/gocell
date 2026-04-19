@@ -99,7 +99,7 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagRepoNotFound,
+				Code:            errcode.ErrFlagNotFound,
 				Message:         "flag not found",
 				InternalMessage: fmt.Sprintf("flag repo: GetByKey miss key=%s", key),
 				Cause:           err,
@@ -117,7 +117,7 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 
 // Update atomically sets enabled, rollout_percentage, description, and
 // increments version by 1 via UPDATE...SET version=version+1 RETURNING.
-// Returns the updated flag. Returns ErrFlagRepoNotFound if key does not exist.
+// Returns the updated flag. Returns ErrFlagNotFound if key does not exist.
 func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error) {
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
@@ -137,7 +137,7 @@ func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, r
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagRepoNotFound,
+				Code:            errcode.ErrFlagNotFound,
 				Message:         "flag not found",
 				InternalMessage: fmt.Sprintf("flag repo: Update miss key=%s", key),
 				Cause:           err,
@@ -188,7 +188,7 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 }
 
 // Delete removes a feature flag by key and returns the deleted entity via
-// DELETE...RETURNING. Returns ErrFlagRepoNotFound if the key does not exist.
+// DELETE...RETURNING. Returns ErrFlagNotFound if the key does not exist.
 func (r *FlagRepository) Delete(ctx context.Context, key string) (*domain.FeatureFlag, error) {
 	const sql = `DELETE FROM feature_flags WHERE key=$1
 		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
@@ -206,7 +206,7 @@ func (r *FlagRepository) Delete(ctx context.Context, key string) (*domain.Featur
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagRepoNotFound,
+				Code:            errcode.ErrFlagNotFound,
 				Message:         "flag not found",
 				InternalMessage: fmt.Sprintf("flag repo: Delete miss key=%s", key),
 				Cause:           err,
@@ -247,7 +247,7 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, enabled bool) (
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagRepoNotFound,
+				Code:            errcode.ErrFlagNotFound,
 				Message:         "flag not found",
 				InternalMessage: fmt.Sprintf("flag repo: Toggle miss key=%s", key),
 				Cause:           err,

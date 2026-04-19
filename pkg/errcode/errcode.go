@@ -98,7 +98,6 @@ const (
 	ErrFlagNotFound              Code = "ERR_FLAG_NOT_FOUND"
 	ErrFlagDuplicate             Code = "ERR_FLAG_DUPLICATE"
 	ErrFlagInvalidInput          Code = "ERR_FLAG_INVALID_INPUT"
-	ErrFlagRepoNotFound          Code = "ERR_FLAG_REPO_NOT_FOUND"
 	ErrFlagRepoQuery             Code = "ERR_FLAG_REPO_QUERY"
 
 	// Audit-core cell error codes.

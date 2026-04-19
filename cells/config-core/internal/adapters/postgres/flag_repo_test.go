@@ -235,7 +235,7 @@ func TestFlagRepo_Toggle_Concurrent_NoLost(t *testing.T) {
 	assert.Greater(t, got, 0, "at least one Toggle result expected")
 }
 
-// TestFlagRepo_NotFound_Errors verifies GetByKey/Toggle/Delete miss → ErrFlagRepoNotFound.
+// TestFlagRepo_NotFound_Errors verifies GetByKey/Toggle/Delete miss → ErrFlagNotFound.
 func TestFlagRepo_NotFound_Errors(t *testing.T) {
 	t.Run("GetByKey_NotFound", func(t *testing.T) {
 		db := &mockDB{
@@ -247,7 +247,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
+		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
 	})
 
 	t.Run("GetByKey_OtherError_Returns_ErrFlagRepoQuery", func(t *testing.T) {
@@ -273,7 +273,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
+		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
 	})
 
 	t.Run("Update_NotFound", func(t *testing.T) {
@@ -286,7 +286,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
+		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
 	})
 
 	t.Run("Delete_NotFound", func(t *testing.T) {
@@ -299,7 +299,7 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		require.Error(t, err)
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrFlagRepoNotFound, ec.Code)
+		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
 	})
 }
 

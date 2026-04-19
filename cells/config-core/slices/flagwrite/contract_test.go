@@ -153,6 +153,15 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 	c.ValidatePayload(t, writer.entries[0].Payload)
 	assert.Equal(t, "created", payload.Action)
 	assert.Equal(t, "event-flag", payload.Key)
+
+	// Contract invariant: payload.eventId must equal the transport-level
+	// envelope identifier (outbox.Entry.ID) because headers.event_id —
+	// declared idempotencyKey in contract.yaml — is carried via Entry.ID.
+	// Two independent UUIDs here would let headers-based idempotency drift
+	// from payload-based inspection. See headers.schema.json description.
+	assert.Equal(t, writer.entries[0].ID, payload.EventID,
+		"contract drift: payload.eventId must mirror outbox.Entry.ID so "+
+			"headers.event_id (idempotencyKey) is coherent across envelope and body")
 }
 
 func testAdminCtx() context.Context {

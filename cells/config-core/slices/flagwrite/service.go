@@ -219,8 +219,21 @@ func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *doma
 		// which is allowed for local demo/testing without a real broker.
 		return nil
 	}
+	// Single event identifier shared by both the transport envelope and the
+	// payload body. headers.event_id (contract idempotency key) is carried in
+	// outbox.Entry.ID at the transport level; payload.eventId mirrors it so
+	// legacy consumers that read the body see the same value. Two parallel
+	// UUIDs here would drift, making headers-based idempotency inconsistent
+	// with payload-based inspection.
+	//
+	// ref: Watermill message/router.go handleMessage — message.UUID is the
+	// single identity threaded through publisher, middleware, and consumer.
+	// ref: contracts/event/session/created/v1/headers.schema.json — same
+	// convention ("event_id is carried in outbox.Entry.ID at the transport
+	// level"), now applied uniformly to flag.changed.v1.
+	eventID := outbox.NewEntryID()
 	payload, err := json.Marshal(FlagChangedPayload{
-		EventID:    uuid.NewString(),
+		EventID:    eventID,
 		Action:     action,
 		Key:        flag.Key,
 		Enabled:    flag.Enabled,
@@ -232,7 +245,7 @@ func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *doma
 	}
 
 	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
+		ID:        eventID,
 		EventType: TopicFlagChanged,
 		Payload:   payload,
 	}
