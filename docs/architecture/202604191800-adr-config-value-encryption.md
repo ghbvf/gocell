@@ -160,14 +160,42 @@ When `GOCELL_KEY_PROVIDER=vault-transit`:
 
 ---
 
+## Security Guarantees: AAD Binding Equivalence
+
+Both provider implementations bind the ciphertext to a row-specific context (AAD) to prevent
+cross-row replay attacks where an attacker transplants the ciphertext from one row to another.
+
+### LocalAESKeyProvider
+Passes the AAD bytes directly as the AES-GCM additional authenticated data parameter.
+AES-GCM authentication fails with a non-nil error if the AAD does not match.
+
+### VaultTransitKeyProvider
+Passes the AAD as the `context` field (base64-encoded) in the Vault Transit encrypt/decrypt
+API call. Vault uses this context for HMAC binding — the decrypt call fails if the context
+does not match what was provided during encryption.
+
+Both providers therefore provide equivalent cross-row replay prevention:
+- AAD = `cell:config-core/key:{configKey}` (constructed by `crypto.AADForConfig`)
+- Mismatched AAD (e.g. transplanted ciphertext from key "db_password" to "api_key") → decrypt error → `ErrConfigDecryptFailed`
+
+ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field semantics
+
+---
+
 ## Fail-Closed Policy
 
 Decryption failures return `ErrConfigDecryptFailed`. There is no fallback to returning the
 raw ciphertext or empty string. This prevents silent data corruption from appearing as
 "empty config" to callers.
 
+Legacy sensitive rows (sensitive=true, value_cipher IS NULL) also return `ErrConfigDecryptFailed`
+to enforce fail-closed semantics — plaintext is never returned from un-migrated rows.
+
 ```go
-if value_cipher IS NOT NULL {
+if e.Sensitive {
+    if len(valueCipher) == 0 || valueKeyID == nil {
+        return nil, ErrConfigDecryptFailed  // legacy row — run plaintext_migration
+    }
     plaintext, err = transformer.Decrypt(...)
     if err != nil {
         return nil, ErrConfigDecryptFailed  // never nil, never ciphertext
@@ -209,6 +237,24 @@ covers legacy rows where `value_cipher IS NULL AND sensitive=true`.
 5. **Rotate** (optional) — trigger `provider.Rotate()` to generate a new key version; subsequent reads detect staleness and re-encrypt lazily.
 
 The tool is idempotent: re-running it skips rows already migrated (`value_cipher IS NOT NULL`).
+
+---
+
+## Rotation Strategy
+
+### VaultTransitKeyProvider (production)
+`VaultTransitKeyProvider.Rotate()` calls the Vault Transit `transit/keys/{name}/rotate` API.
+Vault persists all key versions server-side. Historical ciphertext (encoded with `vault:vN:...`)
+remains decryptable after rotation because Vault routes decryption to the correct version via
+the ciphertext prefix.
+
+### LocalAESKeyProvider (dev/CI only)
+`LocalAESKeyProvider.Rotate()` returns `ErrNotImplemented`. LocalAES key rotation is not
+persistent — a new in-memory key is lost on restart, making all values encrypted with the
+rotated key permanently unreadable. For rotation scenarios, use VaultTransitKeyProvider.
+
+This design prevents accidental production rotation via LocalAES while keeping the dev
+path simple (restart = fresh key).
 
 ---
 
