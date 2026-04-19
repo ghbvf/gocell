@@ -1,0 +1,15 @@
+id: event.flag.changed.v1
+kind: event
+ownerCell: config-core
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: config-core
+  subscribers: []
+  # TODO: add audit-core once the consumer is implemented in audit-core slice
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: event_id
+deliverySemantics: at-least-once

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe"
 	"github.com/ghbvf/gocell/cells/config-core/slices/configwrite"
 	"github.com/ghbvf/gocell/cells/config-core/slices/featureflag"
+	"github.com/ghbvf/gocell/cells/config-core/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -81,8 +82,11 @@ func WithInMemoryDefaults() Option {
 // WithPostgresDefaults wires the config-core cell with PostgreSQL-backed
 // repositories and a transactional outbox. Use this option when
 // GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
-// migrations (004_create_config_entries_and_versions.sql) before starting.
-// Requires migrations 001–005 to be applied first (see adapters/postgres/migrations/).
+// all migrations up to the current ExpectedVersion before starting; the
+// adapterpg schema guard (VerifyExpectedVersion) enforces this at startup.
+// Tables owned by config-core: config_entries / config_versions (004) and
+// feature_flags (008 table + 009 concurrent index). See
+// adapters/postgres/migrations/ for the full set.
 //
 // pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
 // writes to the outbox_entries table within the same transaction.
@@ -95,7 +99,7 @@ func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option
 	return func(c *ConfigCore) {
 		session := cellpg.NewSession(pool)
 		c.configRepo = cellpg.NewConfigRepository(session)
-		c.flagRepo = mem.NewFlagRepository() // flags remain in-memory in PR-C1
+		c.flagRepo = cellpg.NewFlagRepository(session)
 		c.outboxWriter = outboxWriter
 	}
 }
@@ -112,11 +116,12 @@ type ConfigCore struct {
 	logger       *slog.Logger
 
 	// Slice services and handlers.
-	writeHandler   *configwrite.Handler
-	readHandler    *configread.Handler
-	publishHandler *configpublish.Handler
-	flagHandler    *featureflag.Handler
-	subscribeSvc   *configsubscribe.Service
+	writeHandler     *configwrite.Handler
+	readHandler      *configread.Handler
+	publishHandler   *configpublish.Handler
+	flagHandler      *featureflag.Handler
+	flagWriteHandler *flagwrite.Handler
+	subscribeSvc     *configsubscribe.Service
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
@@ -160,6 +165,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
 	}
+	c.initFlagWriteSlice()
 	return nil
 }
 
@@ -263,28 +269,53 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 	return nil
 }
 
-// RegisterRoutes registers HTTP routes for config-core.
+// initFlagWriteSlice registers the flag-write L2 slice: Create/Update/Toggle/Delete
+// with transactional outbox (flag.changed.v1 event).
+func (c *ConfigCore) initFlagWriteSlice() {
+	var opts []flagwrite.Option
+	if c.outboxWriter != nil {
+		opts = append(opts, flagwrite.WithOutboxWriter(c.outboxWriter))
+	}
+	if c.txRunner != nil {
+		opts = append(opts, flagwrite.WithTxManager(c.txRunner))
+	}
+	flagWriteSvc := flagwrite.NewService(c.flagRepo, c.logger, opts...)
+	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
+	c.AddSlice(cell.NewBaseSlice("flag-write", "config-core", cell.L2))
+}
+
+// RegisterRoutes registers HTTP routes for config-core. All admin-guarded
+// write handlers delegate to the slice's RegisterRoutes (which applies
+// auth.Secured + auth.AnyRole(RoleAdmin)) so the policy declaration cannot
+// drift between production wiring and contract/integration tests — there is
+// exactly one place where each write endpoint's policy is declared.
+//
+// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
+// resource, authz chain applied once at registration.
+// ref: go-kratos/kratos transport/http/server.go — route + middleware pair
+// declared once; runtime and test paths share the same registration call.
 func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		// Config CRUD + publish/rollback under /api/v1/config.
 		v1.Route("/config", func(cfg cell.RouteMux) {
-			// config-read
+			// config-read (unauthenticated GETs by design).
 			cfg.Handle("GET /", http.HandlerFunc(c.readHandler.HandleList))
 			cfg.Handle("GET /{key}", http.HandlerFunc(c.readHandler.HandleGet))
-			// config-write
-			cfg.Handle("POST /", http.HandlerFunc(c.writeHandler.HandleCreate))
-			cfg.Handle("PUT /{key}", http.HandlerFunc(c.writeHandler.HandleUpdate))
-			cfg.Handle("DELETE /{key}", http.HandlerFunc(c.writeHandler.HandleDelete))
-			// config-publish
-			cfg.Handle("POST /{key}/publish", http.HandlerFunc(c.publishHandler.HandlePublish))
-			cfg.Handle("POST /{key}/rollback", http.HandlerFunc(c.publishHandler.HandleRollback))
+			// config-write — admin-guarded via slice RegisterRoutes.
+			c.writeHandler.RegisterRoutes(cfg)
+			// config-publish — admin-guarded via slice RegisterRoutes.
+			c.publishHandler.RegisterRoutes(cfg)
 		})
 
-		// feature-flag: /api/v1/flags
+		// /api/v1/flags hosts feature-flag (read + evaluate, L0) and flag-write
+		// (write + toggle + delete, L2 + admin-guarded).
 		v1.Route("/flags", func(f cell.RouteMux) {
+			// feature-flag (read) slice — unauthenticated.
 			f.Handle("GET /", http.HandlerFunc(c.flagHandler.HandleList))
 			f.Handle("GET /{key}", http.HandlerFunc(c.flagHandler.HandleGet))
 			f.Handle("POST /{key}/evaluate", http.HandlerFunc(c.flagHandler.HandleEvaluate))
+			// flag-write — admin-guarded via slice RegisterRoutes.
+			c.flagWriteHandler.RegisterRoutes(f)
 		})
 	})
 }

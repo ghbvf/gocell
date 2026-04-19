@@ -326,6 +326,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrArchiveMarshal:         http.StatusInternalServerError,
 	errcode.ErrAuditRepoQuery:         http.StatusInternalServerError,
 	errcode.ErrConfigRepoQuery:        http.StatusInternalServerError,
+	errcode.ErrFlagRepoQuery:          http.StatusInternalServerError,
 	errcode.ErrAuthKeyMissing:         http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStarted:       http.StatusInternalServerError,
 	errcode.ErrWSAlreadyStopped:       http.StatusInternalServerError,

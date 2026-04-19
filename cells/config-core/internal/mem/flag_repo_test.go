@@ -91,20 +91,19 @@ func TestFlagRepository_Update(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
-		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: false,
+		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: false, Version: 1,
 	}))
 
 	t.Run("success", func(t *testing.T) {
-		require.NoError(t, repo.Update(ctx, &domain.FeatureFlag{
-			ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
-		}))
-		got, err := repo.GetByKey(ctx, "dark-mode")
+		got, err := repo.Update(ctx, "dark-mode", true, 0, "")
 		require.NoError(t, err)
+		require.NotNil(t, got)
 		assert.True(t, got.Enabled)
+		assert.Equal(t, 2, got.Version, "version must be incremented")
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		err := repo.Update(ctx, &domain.FeatureFlag{Key: "missing"})
+		_, err := repo.Update(ctx, "missing", false, 0, "")
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
@@ -336,12 +335,7 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 					continue
 				}
 				// Update the flag we just created.
-				if err := repo.Update(ctx, &domain.FeatureFlag{
-					ID:      fmt.Sprintf("id-w%d-i%d", id, i),
-					Key:     key,
-					Type:    domain.FlagBoolean,
-					Enabled: true,
-				}); err != nil {
+				if _, err := repo.Update(ctx, key, true, 0, ""); err != nil {
 					writeErrors.Add(1)
 				}
 			}

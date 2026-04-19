@@ -53,7 +53,7 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Equal(t, 5, len(c.OwnedSlices()), "should have 5 slices")
+	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -264,6 +264,79 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
+}
+
+// TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
+// the PR review: it exercises the REAL production routing path (cell.go ->
+// slice.RegisterRoutes -> auth.Secured) and locks the 401 / 403 / 2xx
+// spectrum end-to-end for each admin-guarded write endpoint.
+//
+// This test would have caught the prior drift where cell.go attached raw
+// HandlerFuncs that bypassed auth.Secured — every case below depends on the
+// admin guard actually being wired on the production path.
+//
+// ref: kubernetes/kubernetes pkg/endpoints/installer_test.go — integration
+// test reaches the installed handler via the real mux so authz wiring is
+// verified, not stubbed.
+func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	type adminWritePath struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}
+	paths := []adminWritePath{
+		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`},
+		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
+		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},
+		{"config-publish:publish", http.MethodPost, "/api/v1/config/k/publish", ``},
+		{"config-publish:rollback", http.MethodPost, "/api/v1/config/k/rollback", `{"version":1}`},
+		{"flag-write:create", http.MethodPost, "/api/v1/flags/", `{"key":"k","enabled":false,"rolloutPercentage":0,"description":"d"}`},
+		{"flag-write:update", http.MethodPut, "/api/v1/flags/k", `{"enabled":true,"rolloutPercentage":10,"description":"d"}`},
+		{"flag-write:toggle", http.MethodPost, "/api/v1/flags/k/toggle", `{"enabled":true}`},
+		{"flag-write:delete", http.MethodDelete, "/api/v1/flags/k", ``},
+	}
+
+	exec := func(t *testing.T, p adminWritePath, ctx context.Context) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(p.method, p.path, strings.NewReader(p.body))
+		req.Header.Set("Content-Type", "application/json")
+		if ctx != nil {
+			req = req.WithContext(ctx)
+		}
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+
+	for _, p := range paths {
+		p := p
+		t.Run(p.name, func(t *testing.T) {
+			// --- 401: no authenticated subject on context.
+			rec := exec(t, p, context.Background())
+			assert.Equal(t, http.StatusUnauthorized, rec.Code,
+				"unauthenticated %s %s must be 401 (auth.Secured -> Authenticated); got body %s",
+				p.method, p.path, rec.Body)
+
+			// --- 403: authenticated but wrong role.
+			rec = exec(t, p, auth.TestContext("user-non-admin", []string{"viewer"}))
+			assert.Equal(t, http.StatusForbidden, rec.Code,
+				"non-admin %s %s must be 403 (auth.Secured -> AnyRole(admin)); got body %s",
+				p.method, p.path, rec.Body)
+
+			// --- 2xx: admin role. We do not pin the exact success code
+			// (some paths return 404 because the resource was not seeded),
+			// but 401 / 403 must be gone — proving the policy ran and admits
+			// the admin.
+			rec = exec(t, p, auth.TestContext("admin-user", []string{"admin"}))
+			assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+				"admin %s %s must not be 401; body %s", p.method, p.path, rec.Body)
+			assert.NotEqual(t, http.StatusForbidden, rec.Code,
+				"admin %s %s must not be 403; body %s", p.method, p.path, rec.Body)
+		})
+	}
 }
 
 func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {

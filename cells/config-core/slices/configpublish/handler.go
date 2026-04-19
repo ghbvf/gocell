@@ -6,6 +6,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -47,9 +48,11 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers configpublish routes on the given mux with policies
-// declared at registration time via auth.Secured.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers configpublish routes with admin-only policies on
+// any cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux)
+// so production wiring, contract tests, and cell-level integration tests
+// share the same auth.Secured declarations.
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
 	mux.Handle("POST /{key}/publish", auth.Secured(h.HandlePublish, auth.AnyRole(dto.RoleAdmin)))
 	mux.Handle("POST /{key}/rollback", auth.Secured(h.HandleRollback, auth.AnyRole(dto.RoleAdmin)))
 }

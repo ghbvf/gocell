@@ -3,6 +3,7 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"time"
 )
 
 // FlagType distinguishes boolean from percentage-based feature flags.
@@ -23,6 +24,10 @@ type FeatureFlag struct {
 	Type              FlagType
 	Enabled           bool
 	RolloutPercentage int // 0-100, only meaningful when Type == FlagPercentage
+	Description       string
+	Version           int
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // Evaluate determines whether the feature is enabled for the given subject.

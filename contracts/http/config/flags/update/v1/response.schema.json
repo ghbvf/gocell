@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.flags.update.v1.response",
+  "type": "object",
+  "required": ["data"],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": ["id", "key", "enabled", "rolloutPercentage", "description", "version"],
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "description": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
