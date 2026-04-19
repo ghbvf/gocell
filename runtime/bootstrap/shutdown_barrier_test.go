@@ -122,19 +122,29 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	// workerCtxCancelledAt captures when the worker's ctx.Done fires.
 	var workerCtxCancelledAt atomic.Int64
 	workerStarted := make(chan struct{})
+	// workerCtxDone is closed by the tracking worker when its ctx.Done fires.
+	workerCtxDone := make(chan struct{})
 
 	trackWorker := &trackingWorker{
 		started: workerStarted,
 		onCancel: func() {
 			workerCtxCancelledAt.Store(time.Now().UnixNano())
+			close(workerCtxDone)
 		},
 	}
 
 	asm := assembly.New(assembly.Config{ID: "test-ctx-sep", DurabilityMode: cell.DurabilityDemo})
+
+	// preShutdownDelay creates a reliable assertion window: after extCancel(),
+	// phase10ReadinessFlip blocks for the delay duration before LIFO teardown
+	// (which calls workerCancel) runs. This guarantees the worker ctx stays
+	// alive for at least that window — enough to assert temporal separation.
+	const assertionDelay = 150 * time.Millisecond
 	b := New(
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
+		WithPreShutdownDelay(assertionDelay),
 		WithWorkers(trackWorker),
 	)
 
@@ -147,6 +157,17 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 
 	extCancelledAt := time.Now()
 	extCancel()
+
+	// After external ctx cancel, worker ctx must NOT be cancelled yet —
+	// they are derived from different roots. The preShutdownDelay holds
+	// phase10 before LIFO teardown (which calls workerCancel), giving us a
+	// reliable assertion window of ~50ms (well within assertionDelay).
+	select {
+	case <-workerCtxDone:
+		t.Fatal("worker ctx was cancelled synchronously with external ctx cancel — they must be independent")
+	case <-time.After(50 * time.Millisecond):
+		// Good: worker ctx still running 50ms after external ctx cancel.
+	}
 
 	select {
 	case <-done:
