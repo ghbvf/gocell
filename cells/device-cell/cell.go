@@ -162,8 +162,21 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/devices", func(devices cell.RouteMux) {
-			devices.Handle("POST /", http.HandlerFunc(c.registerHandler.HandleRegister))
-			devices.Handle("GET /{id}/status", http.HandlerFunc(c.statusHandler.HandleGetStatus))
+			// Device self-registration is a public endpoint: devices bootstrap
+			// without a user JWT; the caller identifies itself in the request body.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.registerHandler.HandleRegister),
+				Public:  true,
+			})
+			// Device status is queried by authenticated operators/devices.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{id}/status",
+				Handler: http.HandlerFunc(c.statusHandler.HandleGetStatus),
+				Policy:  auth.Authenticated(),
+			})
 			// device-command routes declared via auth.Declare so policies are
 			// explicit at registration time.
 			// TODO(S43): role-name literals — migrate to permission-based authz

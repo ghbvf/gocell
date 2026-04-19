@@ -222,7 +222,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			}
 		})
-		mid := auth.AuthMiddleware(e2eVerifier, nil,
+		mid := auth.AuthMiddleware(e2eVerifier,
 			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)
