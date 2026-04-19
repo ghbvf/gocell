@@ -184,3 +184,40 @@ func TestNewClient_SentinelEmptyMaster(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SentinelMaster is required")
 }
+
+// ---------------------------------------------------------------------------
+// T18: Client.CloseCtx(ctx) tests
+// ---------------------------------------------------------------------------
+
+func TestClientCloseCtx_AcceptsCtx(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.CloseCtx(ctx)
+	assert.NoError(t, err)
+	assert.True(t, mock.closed)
+}
+
+func TestClientCloseCtx_PreCancelledCtxReturnsError(t *testing.T) {
+	mock := newMockCmdable()
+	client := newClientFromCmdable(mock, Config{})
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+
+	err := client.CloseCtx(cancelledCtx)
+	require.Error(t, err, "CloseCtx with pre-cancelled ctx must return error")
+}
+
+func TestClientCloseCtx_Failure(t *testing.T) {
+	mock := newMockCmdable()
+	mock.closeErr = errMock
+	client := newClientFromCmdable(mock, Config{})
+
+	err := client.CloseCtx(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+}

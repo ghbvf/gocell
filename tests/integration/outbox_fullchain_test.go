@@ -212,10 +212,9 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	writer := postgres.NewOutboxWriter()
 	pub := rabbitmq.NewPublisher(rmqConn)
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
-		QueueName:       "outbox.fullchain.queue",
-		PrefetchCount:   1,
-		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
+		QueueName:     "outbox.fullchain.queue",
+		PrefetchCount: 1,
+		DLXExchange:   "test.dlx",
 	})
 	claimer := redis.NewIdempotencyClaimer(redisClient)
 
@@ -428,7 +427,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	relayCancel()
 	_ = relay.Stop(ctx)
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_OutboxFullChain_NoTrace validates that the outbox pipeline
@@ -473,10 +472,9 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	writer := postgres.NewOutboxWriter()
 	pub := rabbitmq.NewPublisher(rmqConn)
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
-		QueueName:       "outbox.fullchain.notrace.queue",
-		PrefetchCount:   1,
-		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
+		QueueName:     "outbox.fullchain.notrace.queue",
+		PrefetchCount: 1,
+		DLXExchange:   "test.dlx",
 	})
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
@@ -623,7 +621,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	relayCancel()
 	_ = relay.Stop(ctx)
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_OutboxWriteRelayMockPublisher is a lighter variant that

@@ -45,7 +45,6 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	handlerCalled := false
@@ -103,7 +102,6 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	handlerCalled := false
@@ -161,7 +159,6 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
@@ -225,7 +222,6 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → success
@@ -332,7 +328,6 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 			QueueName:       "test-queue",
 			DLXExchange:     "test.dlx",
 			PrefetchCount:   numDeliveries,
-			ShutdownTimeout: 2 * time.Second,
 		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler)
 	}()
 
@@ -399,7 +394,6 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
 		PrefetchCount:   numDeliveries,
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	subDone := make(chan error, 1)
@@ -461,7 +455,6 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -490,7 +483,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 	assert.NoError(t, <-subDone)
 
 	// Close subscriber.
-	assert.NoError(t, sub.Close())
+	assert.NoError(t, sub.Close(context.Background()))
 
 	// Close the Connection explicitly so its reconnectLoop goroutine exits
 	// before goleak.VerifyNone runs.
@@ -523,7 +516,6 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "test-queue",
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	// Exactly maxEntryIDLength bytes.

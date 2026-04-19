@@ -20,6 +20,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -77,6 +78,29 @@ func (s *phaseState) registerHealthChecker(name string, fn func() error) error {
 	s.hh.RegisterChecker(name, health.Checker(fn))
 	s.registeredCheckers[name] = struct{}{}
 	return nil
+}
+
+// addCloser registers a resource for teardown, preferring kernellifecycle.ContextCloser
+// over io.Closer so that the shared shutCtx budget flows through to the resource.
+//
+// Priority:
+//  1. kernellifecycle.ContextCloser: Close(ctx) — budget propagated directly.
+//  2. io.Closer: wrapped via kernellifecycle.IgnoreCtx (ctx discarded at boundary).
+//  3. Neither: silently skipped.
+//
+// ref: uber-go/fx Lifecycle.Append — OnStop hook receives the shared StopTimeout ctx.
+func (s *phaseState) addCloser(res any) {
+	if res == nil {
+		return
+	}
+	if cc, ok := res.(kernellifecycle.ContextCloser); ok {
+		s.addTeardown(cc.Close)
+		return
+	}
+	if ic, ok := res.(io.Closer); ok {
+		s.addTeardown(kernellifecycle.IgnoreCtx(ic).Close)
+	}
+	// else: resource has no Close method — silently skip.
 }
 
 // phase0ValidateOptions checks all option preconditions before any side effects.
@@ -146,17 +170,16 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
 		s.cfgWatcher = w
-		s.addTeardown(func(_ context.Context) error {
-			return s.cfgWatcher.Close()
-		})
+		// Watcher.CloseCtx propagates the shared shutCtx budget to the
+		// in-flight callback drain phase (replaces the fixed drainTimeout).
+		s.addCloser(s.cfgWatcher)
 	}
 
-	// Register closable middleware dependencies (e.g. rate limiter background goroutines).
+	// Register closable middleware dependencies (e.g. rate limiter background
+	// goroutines). addCloser prefers ContextCloser over io.Closer so that
+	// resources upgraded to CloseCtx automatically receive the shut budget.
 	for _, cl := range b.closers {
-		cl := cl // capture for closure
-		s.addTeardown(func(_ context.Context) error {
-			return cl.Close()
-		})
+		s.addCloser(cl)
 	}
 	return nil
 }
@@ -174,16 +197,14 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	s.pub = pub
 	s.sub = sub
 
-	if cl, ok := sub.(io.Closer); ok {
-		s.addTeardown(func(_ context.Context) error {
-			return cl.Close()
-		})
+	// outbox.Subscriber.Close now accepts ctx — use it directly so the teardown
+	// passes the shared shutCtx budget through to the implementation.
+	if sub != nil {
+		s.addTeardown(sub.Close)
 	}
 	// Avoid double-close when pub and sub are the same instance.
-	if cl, ok := pub.(io.Closer); ok && any(pub) != any(sub) {
-		s.addTeardown(func(_ context.Context) error {
-			return cl.Close()
-		})
+	if pub != nil && any(pub) != any(sub) {
+		s.addTeardown(pub.Close)
 	}
 }
 

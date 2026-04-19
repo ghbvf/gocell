@@ -328,7 +328,252 @@ func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T19: addCloser dual-path teardown tests
+// ---------------------------------------------------------------------------
+
+// TestPhaseState_AddCloser_PrefersContextCloser verifies that addCloser
+// registers a ContextCloser's Close method directly (ctx budget propagated).
+func TestPhaseState_AddCloser_PrefersContextCloser(t *testing.T) {
+	var receivedCtx context.Context
+	cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+		receivedCtx = ctx
+		return nil
+	}}
+
+	_, s := newPhaseState()
+	s.addCloser(cc)
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	// The ctx passed to the teardown must be the shut ctx, not Background.
+	deadline, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline")
+	_, refDeadline := shutCtx.Deadline()
+	assert.Equal(t, refDeadline, hasDeadline,
+		"deadline presence must match shutCtx; got deadline=%v", deadline)
+}
+
+// TestPhaseState_AddCloser_FallsBackToIoCloser verifies that a plain io.Closer
+// is wrapped by IgnoreCtx and still registered for teardown.
+func TestPhaseState_AddCloser_FallsBackToIoCloser(t *testing.T) {
+	closed := false
+	ic := &ioCloserSpy{fn: func() error { closed = true; return nil }}
+
+	_, s := newPhaseState()
+	s.addCloser(ic)
+	require.Len(t, s.teardowns, 1)
+
+	require.NoError(t, s.teardowns[0](context.Background()))
+	assert.True(t, closed, "io.Closer must be called via IgnoreCtx wrapper")
+}
+
+// TestPhaseState_AddCloser_SkipsNil verifies that addCloser(nil) does not
+// register any teardown.
+func TestPhaseState_AddCloser_SkipsNil(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser(nil)
+	assert.Empty(t, s.teardowns, "nil resource must not register a teardown")
+}
+
+// TestPhaseState_AddCloser_SkipsNonCloser verifies that a resource that
+// implements neither ContextCloser nor io.Closer is silently skipped.
+func TestPhaseState_AddCloser_SkipsNonCloser(t *testing.T) {
+	_, s := newPhaseState()
+	s.addCloser("just-a-string")
+	assert.Empty(t, s.teardowns)
+}
+
+// TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser verifies that
+// addCloser prefers ContextCloser (CloseCtx) over io.Closer when both are
+// available — which is the case for *config.Watcher after T14.
+func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T) {
+	var receivedCtx context.Context
+	watcherClosed := false
+
+	spy := &watcherCloserSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			watcherClosed = true
+			return nil
+		},
+	}
+
+	_, s := newPhaseState()
+
+	// Use addCloser directly — spy implements both Close() and CloseCtx(ctx).
+	// addCloser should pick CloseCtx (ContextCloser path).
+	s.addCloser(spy)
+
+	require.Len(t, s.teardowns, 1)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	assert.True(t, watcherClosed)
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "ContextCloser must receive ctx with deadline (not Background)")
+}
+
+// ---------------------------------------------------------------------------
+// T19: phase2InitPubSub shutCtx propagation tests
+// ---------------------------------------------------------------------------
+
+// TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx verifies that the
+// teardown registered by phase2InitPubSub passes the shutCtx directly to
+// sub.Close — i.e. the shared shutdown budget is propagated to the subscriber.
+func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
+	var receivedCtx context.Context
+	sub := &pubSubCtxSpy{
+		closeFn: func(ctx context.Context) error {
+			receivedCtx = ctx
+			return nil
+		},
+	}
+
+	b := New(WithSubscriber(sub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.Len(t, s.teardowns, 1)
+	require.NoError(t, s.teardowns[0](shutCtx))
+
+	require.NotNil(t, receivedCtx, "sub.Close must have been called")
+	_, hasDeadline := receivedCtx.Deadline()
+	assert.True(t, hasDeadline, "sub.Close must receive ctx with deadline (shutCtx)")
+}
+
+// TestPhase2InitPubSub_PublisherCloseReceivesShutCtx verifies that when a
+// separate publisher is configured, its teardown also receives shutCtx.
+func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
+	var subReceivedCtx, pubReceivedCtx context.Context
+
+	sub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		subReceivedCtx = ctx
+		return nil
+	}}
+	pub := &pubSubCtxSpy{closeFn: func(ctx context.Context) error {
+		pubReceivedCtx = ctx
+		return nil
+	}}
+
+	b := New(WithSubscriber(sub), WithPublisher(pub))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Two teardowns: one for sub, one for pub (different instances).
+	require.Len(t, s.teardowns, 2)
+	for _, td := range s.teardowns {
+		require.NoError(t, td(shutCtx))
+	}
+
+	require.NotNil(t, subReceivedCtx, "sub.Close must have been called")
+	require.NotNil(t, pubReceivedCtx, "pub.Close must have been called")
+
+	_, subHasDeadline := subReceivedCtx.Deadline()
+	assert.True(t, subHasDeadline, "sub.Close must receive ctx with deadline")
+
+	_, pubHasDeadline := pubReceivedCtx.Deadline()
+	assert.True(t, pubHasDeadline, "pub.Close must receive ctx with deadline")
+}
+
+// TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce verifies that when pub
+// and sub are the same instance, exactly one Close call is registered.
+func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
+	var closeCount int
+	eb := &pubSubCtxSpy{closeFn: func(_ context.Context) error {
+		closeCount++
+		return nil
+	}}
+
+	b := New(WithPublisher(eb), WithSubscriber(eb))
+	_, s := newPhaseState()
+	b.phase2InitPubSub(s)
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, td := range s.teardowns {
+		require.NoError(t, td(shutCtx))
+	}
+	assert.Equal(t, 1, closeCount, "shared pub/sub bus must be closed exactly once")
+}
+
+// TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers verifies that
+// phase10LIFOTeardown passes the shutCtx to every registered teardown function,
+// including those added via addCloser from ContextCloser resources.
+func TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers(t *testing.T) {
+	const numClosers = 3
+	receivedCtxs := make([]context.Context, numClosers)
+
+	b := New()
+	_, s := newPhaseState()
+
+	for i := range numClosers {
+		idx := i
+		cc := &ctxCloserSpy{fn: func(ctx context.Context) error {
+			receivedCtxs[idx] = ctx
+			return nil
+		}}
+		s.addCloser(cc)
+	}
+
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errs := b.phase10LIFOTeardown(shutCtx, s)
+	assert.Empty(t, errs, "all teardowns must succeed")
+
+	for i, ctx := range receivedCtxs {
+		require.NotNil(t, ctx, "closer %d must have been called", i)
+		_, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline, "closer %d must receive ctx with deadline (shutCtx)", i)
+	}
+}
+
 // --- Helpers / stubs ---
+
+// ctxCloserSpy implements lifecycle.ContextCloser and records the ctx it receives.
+type ctxCloserSpy struct {
+	fn func(ctx context.Context) error
+}
+
+func (s *ctxCloserSpy) Close(ctx context.Context) error {
+	return s.fn(ctx)
+}
+
+// ioCloserSpy implements io.Closer only (no Close(ctx)).
+type ioCloserSpy struct {
+	fn func() error
+}
+
+func (s *ioCloserSpy) Close() error {
+	return s.fn()
+}
+
+// watcherCloserSpy implements lifecycle.ContextCloser (Close(ctx) error) so
+// that addCloser picks the ContextCloser path and propagates the shut budget.
+// It also implements io.Closer for the fallback path test.
+type watcherCloserSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+// Close implements lifecycle.ContextCloser — addCloser checks this first.
+func (w *watcherCloserSpy) Close(ctx context.Context) error {
+	return w.closeFn(ctx)
+}
+
+// --- Helpers / stubs (existing) ---
 
 // phaseTestVerifier satisfies auth.IntentTokenVerifier for phase0 tests.
 type phaseTestVerifier struct{}
@@ -341,6 +586,7 @@ func (v *phaseTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.Tok
 type phaseTestPublisher struct{}
 
 func (p *phaseTestPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (p *phaseTestPublisher) Close(_ context.Context) error                       { return nil }
 
 // phaseTestSubscriber is a no-op outbox.Subscriber for phase tests.
 type phaseTestSubscriber struct{}
@@ -354,7 +600,7 @@ func (s *phaseTestSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (s *phaseTestSubscriber) Close() error { return nil }
+func (s *phaseTestSubscriber) Close(_ context.Context) error { return nil }
 
 // phaseTestSubscriberCloser tracks Close calls and exposes an outbox.Subscriber interface.
 type phaseTestSubscriberCloser struct {
@@ -373,7 +619,7 @@ func (s *phaseTestSubscriberCloser) Ready(_ outbox.Subscription) <-chan struct{}
 func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (s *phaseTestSubscriberCloser) Close() error {
+func (s *phaseTestSubscriberCloser) Close(_ context.Context) error {
 	*s.log = append(*s.log, s.name)
 	return nil
 }
@@ -394,7 +640,7 @@ func (b *phaseTestSharedBus) Ready(_ outbox.Subscription) <-chan struct{} {
 func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return nil
 }
-func (b *phaseTestSharedBus) Close() error {
+func (b *phaseTestSharedBus) Close(_ context.Context) error {
 	*b.closeCount++
 	return nil
 }
@@ -403,3 +649,23 @@ func (b *phaseTestSharedBus) Close() error {
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
+
+// pubSubCtxSpy implements both outbox.Publisher and outbox.Subscriber with a
+// ctx-recording Close. Used for T19 shutCtx propagation tests in phase2.
+type pubSubCtxSpy struct {
+	closeFn func(ctx context.Context) error
+}
+
+func (s *pubSubCtxSpy) Publish(_ context.Context, _ string, _ []byte) error  { return nil }
+func (s *pubSubCtxSpy) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (s *pubSubCtxSpy) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+	return nil
+}
+func (s *pubSubCtxSpy) Close(ctx context.Context) error {
+	return s.closeFn(ctx)
+}

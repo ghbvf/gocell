@@ -3,8 +3,8 @@
 package rabbitmq
 
 import (
+	"context"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
@@ -45,11 +45,10 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 
 		pub := NewPublisher(conn)
 		sub := NewSubscriber(conn, SubscriberConfig{
-			DLXExchange:     "test.dlx",
-			PrefetchCount:   1,
-			ShutdownTimeout: 5 * time.Second,
+			DLXExchange:   "test.dlx",
+			PrefetchCount: 1,
 		})
-		t.Cleanup(func() { _ = sub.Close() })
+		t.Cleanup(func() { _ = sub.Close(context.Background()) })
 		// outboxtest.PublishN wraps payloads in a v1 wire envelope, matching
 		// the RabbitMQ subscriber's unmarshalDelivery contract — no additional
 		// envelope wrapper is needed here.

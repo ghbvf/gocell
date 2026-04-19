@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
@@ -163,4 +164,33 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_PG_CONNECT")
+}
+
+// ---------------------------------------------------------------------------
+// T17: Pool.CloseCtx(ctx) tests
+// ---------------------------------------------------------------------------
+
+// TestPool_CloseCtx_PreCancelledCtxReturnsError verifies that CloseCtx
+// with a pre-cancelled context returns ctx.Err() promptly without attempting
+// the underlying pool drain.
+func TestPool_CloseCtx_PreCancelledCtxReturnsError(t *testing.T) {
+	// Use a zero Pool (inner=nil) — CloseCtx must short-circuit on ctx.Err()
+	// before reaching the goroutine, so inner being nil is acceptable.
+	p := &Pool{}
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := p.CloseCtx(cancelledCtx)
+	require.Error(t, err, "CloseCtx with pre-cancelled ctx must return error")
+	assert.Equal(t, context.Canceled, err)
+}
+
+// TestPool_CloseCtx_ImplementsContextCloser verifies that *Pool satisfies the
+// CloseCtx(context.Context) error signature expected by lifecycle.ContextCloser.
+func TestPool_CloseCtx_ImplementsContextCloser(t *testing.T) {
+	type contextCloser interface {
+		CloseCtx(ctx context.Context) error
+	}
+	var _ contextCloser = (*Pool)(nil)
 }

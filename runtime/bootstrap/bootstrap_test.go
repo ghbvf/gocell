@@ -290,7 +290,7 @@ func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ outbox.Subscript
 	return ctx.Err()
 }
 
-func (s *invokeOnceSubscriber) Close() error { return nil }
+func (s *invokeOnceSubscriber) Close(_ context.Context) error { return nil }
 
 func newEventCell(id string, subErr error) *eventCell {
 	return &eventCell{

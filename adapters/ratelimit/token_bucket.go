@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -96,7 +97,21 @@ func (l *Limiter) Window() (time.Duration, int) {
 
 // Close stops the background cleanup goroutine. It implements io.Closer so
 // callers can integrate it into managed shutdown sequences.
+//
+// Delegates to CloseCtx(context.Background()) for back-compat.
 func (l *Limiter) Close() error {
+	return l.CloseCtx(context.Background())
+}
+
+// CloseCtx stops the background cleanup goroutine. The ctx parameter is
+// accepted for lifecycle.ContextCloser compatibility; the actual stop is
+// O(1) (channel close) and completes unconditionally within the goroutine
+// scheduler's next cycle.
+//
+// CloseCtx is idempotent: concurrent and repeated calls are safe.
+//
+// ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
+func (l *Limiter) CloseCtx(_ context.Context) error {
 	l.stopOnce.Do(func() { close(l.stopCh) })
 	return nil
 }

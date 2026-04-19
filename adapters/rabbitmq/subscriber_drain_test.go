@@ -54,9 +54,8 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	}
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "drain-test-queue",
-		DLXExchange:     "drain.dlx",
-		ShutdownTimeout: 5 * time.Second,
+		QueueName:   "drain-test-queue",
+		DLXExchange: "drain.dlx",
 	})
 
 	// Pre-load 3 deliveries before Subscribe starts.
@@ -150,7 +149,6 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       longQueue,
 		DLXExchange:     "trunc.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,7 +194,6 @@ func TestSubscriber_StopIntake_Idempotent(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "idempotent-queue",
 		DLXExchange:     "idempotent.dlx",
-		ShutdownTimeout: 2 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -210,7 +207,7 @@ func TestSubscriber_StopIntake_Idempotent(t *testing.T) {
 
 // TestSubscriber_IntakeStoppedThenCloseNoTimeout verifies the ideal path:
 // after StopIntake drains in-flight messages and the deliveries chan closes,
-// Close() finishes well within ShutdownTimeout (no ErrAdapterAMQPCloseTimeout).
+// Close() finishes quickly after StopIntake drained all in-flight messages.
 func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -220,16 +217,15 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	const shutdownTimeout = 2 * time.Second
+	const closeCtxBudget = 2 * time.Second
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "close-fast-queue",
-		DLXExchange:     "close-fast.dlx",
-		ShutdownTimeout: shutdownTimeout,
+		QueueName:   "close-fast-queue",
+		DLXExchange: "close-fast.dlx",
 	})
 
 	// Send one delivery so Subscribe has something to process.
@@ -271,17 +267,17 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 
 	// Close should finish well before ShutdownTimeout.
 	start := time.Now()
-	closeErr := sub.Close()
+	closeErr := sub.Close(context.Background())
 	elapsed := time.Since(start)
 
 	assert.NoError(t, closeErr, "Close must not return ErrAdapterAMQPCloseTimeout after clean drain")
-	assert.Less(t, elapsed, shutdownTimeout/2,
+	assert.Less(t, elapsed, closeCtxBudget/2,
 		"Close should finish quickly after StopIntake drained; took %v", elapsed)
 }
 
 // TestSubscriber_HardCloseForcesTimeout is a regression guard: when Close() is
 // called without StopIntake and the handler is hanging, Close must return
-// ErrAdapterAMQPCloseTimeout after ShutdownTimeout expires.
+// ErrAdapterAMQPCloseTimeout when the ctx deadline expires during Close.
 func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -304,9 +300,8 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	}
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "timeout-queue",
-		DLXExchange:     "timeout.dlx",
-		ShutdownTimeout: shortTimeout,
+		QueueName:   "timeout-queue",
+		DLXExchange: "timeout.dlx",
 	})
 
 	// Send one delivery to trigger a hanging handler goroutine.
@@ -343,16 +338,20 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 		t.Fatal("Subscribe did not return after context cancel")
 	}
 
-	// Close without StopIntake: processDelivery is hanging → must time out.
+	// Close with a short deadline — processDelivery is hanging → must time out.
+	// ShutdownTimeout is deprecated; callers now pass ctx with deadline directly.
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), shortTimeout)
+	defer closeCancel()
+
 	start := time.Now()
-	closeErr := sub.Close()
+	closeErr := sub.Close(closeCtx)
 	elapsed := time.Since(start)
 
 	// Close must have waited (at least shortTimeout / 2) before giving up.
 	assert.Error(t, closeErr, "Close must return ErrAdapterAMQPCloseTimeout when handler hangs")
 	assert.ErrorContains(t, closeErr, string(ErrAdapterAMQPCloseTimeout))
 	assert.GreaterOrEqual(t, elapsed, shortTimeout/2,
-		"Close should have waited at least half of ShutdownTimeout")
+		"Close should have waited at least half of close ctx deadline")
 }
 
 // TestSubscriber_StopIntake_RespectsCtx verifies that StopIntake returns
@@ -377,7 +376,6 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:       "ctx-respect-queue",
 		DLXExchange:     "ctx-respect.dlx",
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	// Start Subscribe so the consumerTag is registered.
@@ -390,12 +388,12 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 		})
 	}()
 
-	// Wait for Subscribe to register its consumerTag.
+	// Wait for Subscribe to register its subscriptionRun.
 	require.Eventually(t, func() bool {
-		sub.mu.Lock()
-		defer sub.mu.Unlock()
-		return len(sub.consumerTags) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+		sub.runsMu.Lock()
+		defer sub.runsMu.Unlock()
+		return len(sub.runs) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
 
 	// Call StopIntake with a short ctx; broker Cancel hangs indefinitely.
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -438,7 +436,6 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:                "per-call-timeout-queue",
 		DLXExchange:              "per-call-timeout.dlx",
-		ShutdownTimeout:          5 * time.Second,
 		StopIntakePerCallTimeout: 300 * time.Millisecond,
 	})
 
@@ -453,10 +450,10 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		sub.mu.Lock()
-		defer sub.mu.Unlock()
-		return len(sub.consumerTags) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+		sub.runsMu.Lock()
+		defer sub.runsMu.Unlock()
+		return len(sub.runs) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
 
 	// Outer ctx is generous; per-call timeout should bound Cancel.
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -478,10 +475,9 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 }
 
 // TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO verifies the key
-// F1 invariant: Subscriber.mu is NOT held while ch.Cancel is pending.
-// Another goroutine holding lock-dependent logic (e.g. a new Subscribe call,
-// or consumeLoop's delete(consumerTags, ch)) must not be blocked by a slow
-// basic.cancel.
+// F1 invariant: Subscriber.runsMu is NOT held while ch.Cancel is pending.
+// Another goroutine holding lock-dependent logic (e.g. a new addRun call)
+// must not be blocked by a slow basic.cancel.
 func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 
@@ -503,7 +499,6 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:                "lock-free-queue",
 		DLXExchange:              "lock-free.dlx",
-		ShutdownTimeout:          5 * time.Second,
 		StopIntakePerCallTimeout: 2 * time.Second,
 	})
 
@@ -517,10 +512,10 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		sub.mu.Lock()
-		defer sub.mu.Unlock()
-		return len(sub.consumerTags) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a consumerTag")
+		sub.runsMu.Lock()
+		defer sub.runsMu.Unlock()
+		return len(sub.runs) > 0
+	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
 
 	// Fire StopIntake in a goroutine; Cancel hangs on hangGate.
 	stopDone := make(chan error, 1)
@@ -529,20 +524,20 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	}()
 
 	// While StopIntake is pending (hanging on broker Cancel), the Subscriber
-	// lock must NOT be held — a lock acquisition from another goroutine must
+	// runsMu must NOT be held — a lock acquisition from another goroutine must
 	// succeed within 100ms.
 	lockAcquired := make(chan struct{})
 	go func() {
-		sub.mu.Lock()
+		sub.runsMu.Lock()
 		close(lockAcquired)
-		sub.mu.Unlock()
+		sub.runsMu.Unlock()
 	}()
 
 	select {
 	case <-lockAcquired:
 		// success — StopIntake released the lock before invoking broker I/O
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Subscriber.mu was held across broker I/O — StopIntake must snapshot then release")
+		t.Fatal("Subscriber.runsMu was held across broker I/O — StopIntake must snapshot then release")
 	}
 
 	// Release the hang and let StopIntake complete.

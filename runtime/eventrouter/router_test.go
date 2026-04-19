@@ -39,7 +39,7 @@ func (s *blockingSubscriber) Subscribe(ctx context.Context, sub outbox.Subscript
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (s *blockingSubscriber) Close() error { return nil }
+func (s *blockingSubscriber) Close(_ context.Context) error { return nil }
 
 func (s *blockingSubscriber) Topics() []string {
 	s.mu.Lock()
@@ -64,7 +64,7 @@ func (s *failingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 func (s *failingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	return s.err
 }
-func (s *failingSubscriber) Close() error { return nil }
+func (s *failingSubscriber) Close(_ context.Context) error { return nil }
 
 // delayedFailSubscriber blocks briefly then returns an error (simulates
 // runtime failure after startup).
@@ -87,7 +87,7 @@ func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ outbox.Subscrip
 		return ctx.Err()
 	}
 }
-func (s *delayedFailSubscriber) Close() error { return nil }
+func (s *delayedFailSubscriber) Close(_ context.Context) error { return nil }
 
 // --- Tests ---
 
@@ -489,7 +489,7 @@ func (s *stuckSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ 
 	<-s.block // ignores ctx -- simulates unresponsive subscriber
 	return nil
 }
-func (s *stuckSubscriber) Close() error { return nil }
+func (s *stuckSubscriber) Close(_ context.Context) error { return nil }
 
 // panickingSubscriber panics on Subscribe.
 type panickingSubscriber struct{}
@@ -503,7 +503,7 @@ func (s *panickingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 func (s *panickingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
 	panic("boom")
 }
-func (s *panickingSubscriber) Close() error { return nil }
+func (s *panickingSubscriber) Close(_ context.Context) error { return nil }
 
 // --- Helpers ---
 
@@ -528,7 +528,7 @@ func newTestEventBus(t *testing.T) *testBus {
 		subs:    make(map[string][]*testSub),
 		bufSize: 256,
 	}
-	t.Cleanup(func() { _ = b.Close() })
+	t.Cleanup(func() { _ = b.Close(context.Background()) })
 	return b
 }
 
@@ -606,7 +606,7 @@ func (b *testBus) Subscribe(ctx context.Context, sub outbox.Subscription, handle
 	}
 }
 
-func (b *testBus) Close() error {
+func (b *testBus) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
@@ -649,7 +649,7 @@ func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Sub
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (s *recordingGroupSubscriber) Close() error { return nil }
+func (s *recordingGroupSubscriber) Close(_ context.Context) error { return nil }
 
 func (s *recordingGroupSubscriber) Calls() []groupSubscribeCall {
 	s.mu.Lock()
@@ -751,7 +751,7 @@ func (s *delayedReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscri
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (s *delayedReadySubscriber) Close() error { return nil }
+func (s *delayedReadySubscriber) Close(_ context.Context) error { return nil }
 
 // setupFailSubscriber returns an error from Setup, never calling Subscribe.
 type setupFailSubscriber struct {
@@ -769,7 +769,7 @@ func (s *setupFailSubscriber) Subscribe(_ context.Context, _ outbox.Subscription
 	s.subscribeCnt.Add(1)
 	return nil
 }
-func (s *setupFailSubscriber) Close() error { return nil }
+func (s *setupFailSubscriber) Close(_ context.Context) error { return nil }
 
 // partialReadySubscriber: topics A and B have immediately-closed Ready channels;
 // topic C closes its Ready channel after the configured delay.
@@ -797,7 +797,7 @@ func (s *partialReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscri
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (s *partialReadySubscriber) Close() error { return nil }
+func (s *partialReadySubscriber) Close(_ context.Context) error { return nil }
 
 // TestRouter_RunBlocksUntilReady_NoTimeout verifies that Router.Running() is
 // NOT closed until the Subscriber.Ready signal fires. The Ready channel closes
@@ -898,7 +898,7 @@ func (s *mixedReadySubscriber) Subscribe(ctx context.Context, sub outbox.Subscri
 	<-ctx.Done()
 	return ctx.Err()
 }
-func (s *mixedReadySubscriber) Close() error { return nil }
+func (s *mixedReadySubscriber) Close(_ context.Context) error { return nil }
 
 // TestRouter_ReadyError_PartialNotReady_NoLeak verifies the runAwaitReady
 // failure path (six-seat review F1): when one Subscribe goroutine sends

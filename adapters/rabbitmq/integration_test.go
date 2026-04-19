@@ -174,7 +174,6 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		QueueName:       queueName,
 		PrefetchCount:   1,
 		DLXExchange:     "test.dlx",
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	ctx := context.Background()
@@ -227,7 +226,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 
 	// Clean up subscriber.
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_PublishOnly verifies that Publisher.Publish succeeds
@@ -309,7 +308,6 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	var callCount atomic.Int32
@@ -378,7 +376,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		"handler should be called at least RetryCount times before rejection")
 
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // TestIntegration_ConnectionRecovery verifies that the Connection automatically
@@ -482,7 +480,6 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		QueueName:       mainQueue,
 		PrefetchCount:   1,
 		DLXExchange:     dlxExchange,
-		ShutdownTimeout: 5 * time.Second,
 	})
 
 	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)
@@ -554,7 +551,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	t.Logf("DLX end-to-end verified: message %s arrived in dead-letter queue", dlEntry.ID)
 
 	subCancel()
-	_ = sub.Close()
+	_ = sub.Close(context.Background())
 }
 
 // noopClaimer is a minimal idempotency.Claimer for testing that always

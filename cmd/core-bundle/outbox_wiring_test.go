@@ -21,6 +21,7 @@ import (
 type discardPublisher struct{}
 
 func (discardPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (discardPublisher) Close(_ context.Context) error                       { return nil }
 
 var _ outbox.Publisher = discardPublisher{}
 
@@ -176,7 +177,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	const topic = "test.fanout.cross-cg.v1"
 
 	eb := eventbus.New()
-	t.Cleanup(func() { _ = eb.Close() })
+	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
