@@ -346,3 +346,104 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 	assert.Contains(t, logged, "AuthMiddleware is not installed", "expected warning about missing AuthMiddleware")
 	assert.Contains(t, logged, "WARN", "expected WARN level")
 }
+
+// ---------------------------------------------------------------------------
+// F7-1: Delegated meta bypasses JWT, non-delegated meta requires JWT
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_DelegatedMeta_BypassesJWT(t *testing.T) {
+	// verifier always returns an error — so any JWT verification would yield 401.
+	verifier := &authMetaVerifier{err: assert.AnError}
+	r, err := NewE(WithAuthMiddleware(verifier))
+	require.NoError(t, err)
+
+	r.Handle("/delegated", okHandler)
+	r.Handle("/normal", okHandler)
+
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/delegated", Delegated: true})
+	// /normal has no meta → it requires JWT.
+	require.NoError(t, r.FinalizeAuth())
+
+	// Delegated route: no token → 200 (JWT verification skipped).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/delegated", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "delegated route must bypass JWT verification")
+
+	// Non-delegated route: no token → 401.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/normal", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "non-delegated route must require JWT")
+}
+
+// ---------------------------------------------------------------------------
+// F7-2: OR-merge of internal prefix guard + declared Delegated meta
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_DelegatedMeta_ORMergesWithInternalGuard(t *testing.T) {
+	// Internal guard blocks with 403 so we can distinguish it from 401 (JWT failure).
+	guard := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Simplified guard: accept requests with X-Service-Token header.
+			if r.Header.Get("X-Service-Token") == "secret" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.WriteHeader(http.StatusForbidden)
+		})
+	}
+	verifier := &authMetaVerifier{err: assert.AnError}
+	r, err := NewE(
+		WithAuthMiddleware(verifier),
+		WithInternalPathPrefixGuard("/internal/v1/", guard),
+	)
+	require.NoError(t, err)
+
+	// Declare a delegated route outside the internal prefix.
+	r.Handle("/api/v1/svc-route", okHandler)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/api/v1/svc-route", Delegated: true})
+	require.NoError(t, r.FinalizeAuth())
+
+	// Route under /internal/v1/ is already delegated via the guard option.
+	r.Handle("/internal/v1/thing", okHandler)
+
+	// Internal prefix route: JWT skipped (delegated), guard passes with token.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/thing", nil)
+	req.Header.Set("X-Service-Token", "secret")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "internal prefix route must reach guard")
+
+	// Declared delegated route outside internal prefix: JWT skipped, 200.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/svc-route", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "declared delegated route must bypass JWT")
+}
+
+// ---------------------------------------------------------------------------
+// F7-3: Method case normalisation — declared uppercase METHOD matches requests
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_MethodCaseNormalisation(t *testing.T) {
+	// Verifier errors so any JWT check → 401; a successful response means auth was skipped.
+	verifier := &authMetaVerifier{err: assert.AnError}
+	r, err := NewE(WithAuthMiddleware(verifier))
+	require.NoError(t, err)
+
+	r.Handle("/submit", okHandler)
+
+	// Method declared as "POST" (uppercase — validateOrPanic enforces this).
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "POST", Path: "/submit", Delegated: true})
+	require.NoError(t, r.FinalizeAuth())
+
+	// net/http canonicalises Method to uppercase for incoming requests, so POST
+	// from a real client always arrives as "POST". The compiled matcher uses
+	// strings.EqualFold so it is case-tolerant; verify that standard "POST"
+	// matches as expected.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/submit", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code, "POST declared delegated route must bypass JWT verification")
+}
