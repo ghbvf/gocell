@@ -3,7 +3,6 @@ package auth
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -45,12 +44,12 @@ func Secured(h http.HandlerFunc, policy Policy) http.HandlerFunc {
 	}
 }
 
-// Authenticated returns a Policy that requires an authenticated subject
-// (any non-empty subject in context). Use for endpoints that only need
-// to verify a user is logged in, regardless of role.
+// Authenticated returns a Policy that requires an authenticated Principal in
+// context. Use for endpoints that only need to verify a user is logged in,
+// regardless of role. Returns ErrAuthUnauthorized when no Principal is present.
 func Authenticated() Policy {
 	return func(r *http.Request) error {
-		if subject, ok := ctxkeys.SubjectFrom(r.Context()); !ok || subject == "" {
+		if _, ok := FromContext(r.Context()); !ok {
 			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 		}
 		return nil

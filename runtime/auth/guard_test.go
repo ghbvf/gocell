@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,10 +118,9 @@ func TestAuthenticated(t *testing.T) {
 			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
-			name:     "empty string subject — ErrAuthUnauthorized",
-			ctx:      ctxkeys.WithSubject(context.Background(), ""),
-			wantErr:  true,
-			wantCode: errcode.ErrAuthUnauthorized,
+			name:    "principal present with empty subject — authenticated (subject validation is caller's responsibility)",
+			ctx:     WithPrincipal(context.Background(), &Principal{Subject: "", Kind: PrincipalUser}),
+			wantErr: false,
 		},
 	}
 

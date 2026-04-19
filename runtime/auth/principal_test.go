@@ -104,6 +104,25 @@ func TestMustFromContext_Panics(t *testing.T) {
 	MustFromContext(context.Background())
 }
 
+func TestPrincipal_PasswordResetRequired_DefaultFalse(t *testing.T) {
+	var p Principal
+	if p.PasswordResetRequired {
+		t.Error("zero-value Principal.PasswordResetRequired must be false")
+	}
+}
+
+func TestPrincipal_PasswordResetRequired_RoundTrip(t *testing.T) {
+	original := &Principal{Kind: PrincipalUser, PasswordResetRequired: true}
+	ctx := WithPrincipal(context.Background(), original)
+	got, ok := FromContext(ctx)
+	if !ok {
+		t.Fatal("expected ok=true from FromContext")
+	}
+	if !got.PasswordResetRequired {
+		t.Error("PasswordResetRequired must survive WithPrincipal/FromContext round-trip")
+	}
+}
+
 func TestBuiltinServiceRoles(t *testing.T) {
 	tests := []struct {
 		name    string

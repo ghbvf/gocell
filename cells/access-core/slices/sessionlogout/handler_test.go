@@ -13,7 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
@@ -75,9 +75,11 @@ func TestHandleLogout(t *testing.T) {
 			h := setup()
 			w := httptest.NewRecorder()
 			sessionID := strings.TrimPrefix(tc.path, "/")
-			ctx := context.Background()
+			var ctx context.Context
 			if tc.caller != "" {
-				ctx = ctxkeys.WithSubject(ctx, tc.caller)
+				ctx = auth.TestContext(tc.caller, nil)
+			} else {
+				ctx = context.Background()
 			}
 			req := httptest.NewRequest(http.MethodDelete, tc.path, nil).WithContext(ctx)
 			req.SetPathValue("id", sessionID)

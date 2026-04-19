@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -118,7 +117,7 @@ func buildPublicMatcher(publicEndpoints []string, cfg authConfig) func(*http.Req
 
 // handleAuthRequest extracts the bearer token, verifies it (with intent=access
 // when the verifier supports it), records metrics, and either forwards to
-// next with claims attached or writes a 401 response.
+// next with claims and Principal attached or writes a 401 response.
 //
 // Enumeration defense: all verification failures — including
 // ErrAuthInvalidTokenIntent — are mapped to the generic ERR_AUTH_UNAUTHORIZED
@@ -169,8 +168,9 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		return
 	}
 
-	ctx := WithClaims(r.Context(), claims)
-	ctx = ctxkeys.WithSubject(ctx, claims.Subject)
+	// Inject the unified Principal (F7 wiring).
+	p := jwtClaimsToPrincipal(claims)
+	ctx := WithPrincipal(r.Context(), p)
 	ctx = withLogger(ctx, cfg.logger)
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
@@ -261,23 +261,23 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 }
 
 func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string]bool, next http.Handler, w http.ResponseWriter, r *http.Request) {
-	claims, ok := ClaimsFrom(r.Context())
+	p, ok := FromContext(r.Context())
 	if !ok {
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
 		return
 	}
 
-	if hasMatchingRole(claims, roleSet) {
+	if hasMatchingRoleList(p.Roles, roleSet) {
 		next.ServeHTTP(w, r)
 		return
 	}
 
 	if authorizer != nil {
-		allowed, err := checkAuthorizer(authorizer, r, claims.Subject, roles)
+		allowed, err := checkAuthorizer(authorizer, r, p.Subject, roles)
 		if err != nil {
 			loggerFrom(r.Context()).Error("authorization check failed",
 				"error", err,
-				"subject", claims.Subject,
+				"subject", p.Subject,
 			)
 			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			return
@@ -291,8 +291,8 @@ func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string
 	httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
 }
 
-func hasMatchingRole(claims Claims, roleSet map[string]bool) bool {
-	for _, role := range claims.Roles {
+func hasMatchingRoleList(roleList []string, roleSet map[string]bool) bool {
+	for _, role := range roleList {
 		if roleSet[role] {
 			return true
 		}

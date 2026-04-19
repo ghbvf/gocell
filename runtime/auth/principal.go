@@ -34,11 +34,12 @@ func (k PrincipalKind) String() string {
 // AuthMiddleware will inject Principal once F7 wiring lands. New handlers should
 // consume FromContext rather than reading Claims directly.
 type Principal struct {
-	Kind       PrincipalKind
-	Subject    string
-	Roles      []string
-	AuthMethod string
-	Claims     map[string]string
+	Kind                  PrincipalKind
+	Subject               string
+	Roles                 []string
+	AuthMethod            string
+	PasswordResetRequired bool
+	Claims                map[string]string
 }
 
 // HasRole is nil-safe: a nil receiver always returns false.

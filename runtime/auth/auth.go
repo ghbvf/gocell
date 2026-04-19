@@ -110,16 +110,3 @@ type VerificationKeyStore interface {
 	PublicKeyByKID(kid string) (*rsa.PublicKey, error)
 }
 
-// claimsKey is the context key for storing Claims.
-type claimsKey struct{}
-
-// WithClaims returns a new context carrying the given Claims.
-func WithClaims(ctx context.Context, c Claims) context.Context {
-	return context.WithValue(ctx, claimsKey{}, c)
-}
-
-// ClaimsFrom extracts Claims from ctx. The boolean indicates presence.
-func ClaimsFrom(ctx context.Context) (Claims, bool) {
-	c, ok := ctx.Value(claimsKey{}).(Claims)
-	return c, ok
-}

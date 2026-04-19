@@ -252,7 +252,17 @@ func handleServiceToken(cfg serviceTokenConfig, ring *HMACKeyRing, next http.Han
 	}
 
 	cfg.metrics.recordServiceVerify("success", "ok")
-	next.ServeHTTP(w, r)
+
+	// Inject the unified service Principal (F7/T5 wiring).
+	roles := append([]string(nil), BuiltinServiceRoles(ServiceNameInternal)...)
+	p := &Principal{
+		Kind:       PrincipalService,
+		Subject:    ServiceNameInternal,
+		Roles:      roles,
+		AuthMethod: "service_token",
+	}
+	ctx := WithPrincipal(r.Context(), p)
+	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // checkNonceReplay handles nonce-based replay detection. Returns true if the

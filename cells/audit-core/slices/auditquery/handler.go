@@ -8,7 +8,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -56,12 +55,12 @@ func NewHandler(svc *Service) *Handler {
 // TODO(S43): role-name literal — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
-	subject, ok := ctxkeys.SubjectFrom(ctx)
-	if !ok || subject == "" {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	actorID := r.URL.Query().Get("actorId")
-	if actorID == "" || actorID == subject {
+	if actorID == "" || actorID == p.Subject {
 		return nil
 	}
 	return auth.AnyRole("admin")(r)
@@ -76,7 +75,8 @@ func auditQueryPolicy(r *http.Request) error {
 // Policy is enforced by auditQueryPolicy (see above).
 func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// auditQueryPolicy (declared at route registration) guarantees subject presence.
-	subject, _ := ctxkeys.SubjectFrom(r.Context())
+	p, _ := auth.FromContext(r.Context())
+	subject := p.Subject
 
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" {

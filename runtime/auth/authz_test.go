@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,21 +23,21 @@ func TestRequireSelfOrRole(t *testing.T) {
 	}{
 		{
 			name:     "self-access allowed",
-			ctx:      withSubjectAndClaims("user-1", nil),
+			ctx:      withPrincipalCtx("user-1", nil),
 			targetID: "user-1",
 			roles:    []string{"admin"},
 			wantErr:  false,
 		},
 		{
 			name:     "admin bypass allowed",
-			ctx:      withSubjectAndClaims("user-2", []string{"admin"}),
+			ctx:      withPrincipalCtx("user-2", []string{"admin"}),
 			targetID: "user-1",
 			roles:    []string{"admin"},
 			wantErr:  false,
 		},
 		{
 			name:     "different user no admin denied",
-			ctx:      withSubjectAndClaims("user-2", []string{"viewer"}),
+			ctx:      withPrincipalCtx("user-2", []string{"viewer"}),
 			targetID: "user-1",
 			roles:    []string{"admin"},
 			wantErr:  true,
@@ -54,7 +53,7 @@ func TestRequireSelfOrRole(t *testing.T) {
 		},
 		{
 			name:     "empty targetID denied",
-			ctx:      withSubjectAndClaims("user-1", nil),
+			ctx:      withPrincipalCtx("user-1", nil),
 			targetID: "",
 			roles:    []string{"admin"},
 			wantErr:  true,
@@ -62,14 +61,14 @@ func TestRequireSelfOrRole(t *testing.T) {
 		},
 		{
 			name:     "multiple bypass roles second matches",
-			ctx:      withSubjectAndClaims("user-2", []string{"operator"}),
+			ctx:      withPrincipalCtx("user-2", []string{"operator"}),
 			targetID: "user-1",
 			roles:    []string{"admin", "operator"},
 			wantErr:  false,
 		},
 		{
 			name:     "no bypass roles specified only self allowed",
-			ctx:      withSubjectAndClaims("user-2", []string{"admin"}),
+			ctx:      withPrincipalCtx("user-2", []string{"admin"}),
 			targetID: "user-1",
 			roles:    nil,
 			wantErr:  true,
@@ -102,47 +101,47 @@ func TestRequireAnyRole(t *testing.T) {
 	}{
 		{
 			name:    "admin role allowed",
-			ctx:     withSubjectAndClaims("user-1", []string{"admin"}),
+			ctx:     withPrincipalCtx("user-1", []string{"admin"}),
 			roles:   []string{"admin"},
 			wantErr: false,
 		},
 		{
 			name:    "second role matches",
-			ctx:     withSubjectAndClaims("user-1", []string{"operator"}),
+			ctx:     withPrincipalCtx("user-1", []string{"operator"}),
 			roles:   []string{"admin", "operator"},
 			wantErr: false,
 		},
 		{
 			name:     "no matching role denied",
-			ctx:      withSubjectAndClaims("user-1", []string{"viewer"}),
+			ctx:      withPrincipalCtx("user-1", []string{"viewer"}),
 			roles:    []string{"admin"},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthForbidden,
 		},
 		{
-			name:     "no roles in claims denied",
-			ctx:      withSubjectAndClaims("user-1", nil),
+			name:     "no roles in principal denied",
+			ctx:      withPrincipalCtx("user-1", nil),
 			roles:    []string{"admin"},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthForbidden,
 		},
 		{
-			name:     "missing subject denied",
+			name:     "missing principal denied",
 			ctx:      context.Background(),
 			roles:    []string{"admin"},
 			wantErr:  true,
 			wantCode: errcode.ErrAuthUnauthorized,
 		},
 		{
-			name:     "empty string subject denied",
-			ctx:      withSubjectAndClaims("", nil),
+			name:     "empty string subject still has principal — forbidden if no role",
+			ctx:      withPrincipalCtx("", nil),
 			roles:    []string{"admin"},
 			wantErr:  true,
-			wantCode: errcode.ErrAuthUnauthorized,
+			wantCode: errcode.ErrAuthForbidden,
 		},
 		{
 			name:     "empty required roles denied",
-			ctx:      withSubjectAndClaims("user-1", []string{"admin"}),
+			ctx:      withPrincipalCtx("user-1", []string{"admin"}),
 			roles:    nil,
 			wantErr:  true,
 			wantCode: errcode.ErrAuthForbidden,
@@ -168,16 +167,94 @@ func TestRequireSelfOrRole_EmptyTargetID_LogsWarning(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	ctx := withLogger(context.Background(), logger)
-	ctx = ctxkeys.WithSubject(ctx, "user-1")
-	ctx = WithClaims(ctx, Claims{Subject: "user-1", Roles: []string{"admin"}})
+	ctx = WithPrincipal(ctx, &Principal{
+		Kind:    PrincipalUser,
+		Subject: "user-1",
+		Roles:   []string{"admin"},
+	})
 
 	err := RequireSelfOrRole(ctx, "", "admin")
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "empty targetID")
 }
 
-func withSubjectAndClaims(subject string, roles []string) context.Context {
-	ctx := ctxkeys.WithSubject(context.Background(), subject)
-	ctx = WithClaims(ctx, Claims{Subject: subject, Roles: roles})
-	return ctx
+// TestRequireAnyRole_ServicePrincipalAlsoWorks verifies that a service Principal
+// (Kind=PrincipalService) is accepted by RequireAnyRole when its role matches.
+func TestRequireAnyRole_ServicePrincipalAlsoWorks(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalService,
+		Subject: ServiceNameInternal,
+		Roles:   []string{RoleInternalAdmin},
+	})
+	err := RequireAnyRole(ctx, RoleInternalAdmin)
+	assert.NoError(t, err)
+}
+
+// TestRequireAnyRole_NoPrincipal_Unauthorized verifies that a ctx with no
+// Principal returns ErrAuthUnauthorized (401 domain error).
+func TestRequireAnyRole_NoPrincipal_Unauthorized(t *testing.T) {
+	err := RequireAnyRole(context.Background(), "admin")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
+}
+
+// TestRequireAnyRole_PrincipalWithoutRole_Forbidden verifies that a Principal
+// present in ctx but lacking the required role returns ErrAuthForbidden (403).
+func TestRequireAnyRole_PrincipalWithoutRole_Forbidden(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "user-1",
+		Roles:   []string{"viewer"},
+	})
+	err := RequireAnyRole(ctx, "admin")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthForbidden, ecErr.Code)
+}
+
+// TestRequireSelfOrRole_NoPrincipal_Unauthorized verifies that a ctx with no
+// Principal returns ErrAuthUnauthorized.
+func TestRequireSelfOrRole_NoPrincipal_Unauthorized(t *testing.T) {
+	err := RequireSelfOrRole(context.Background(), "user-1", "admin")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
+}
+
+// TestRequireSelfOrRole_SelfMatch_Ok verifies that a Principal whose Subject
+// matches targetSubject returns nil regardless of roles.
+func TestRequireSelfOrRole_SelfMatch_Ok(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "user-42",
+		Roles:   nil,
+	})
+	err := RequireSelfOrRole(ctx, "user-42", "admin")
+	assert.NoError(t, err)
+}
+
+// TestRequireSelfOrRole_RoleMatch_Ok verifies that a Principal whose Subject
+// does not match but holds the required role returns nil.
+func TestRequireSelfOrRole_RoleMatch_Ok(t *testing.T) {
+	ctx := WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: "user-99",
+		Roles:   []string{"admin"},
+	})
+	err := RequireSelfOrRole(ctx, "user-42", "admin")
+	assert.NoError(t, err)
+}
+
+// withPrincipalCtx builds a context carrying a PrincipalUser with the given
+// subject and roles. Used by authz_test table-driven tests.
+func withPrincipalCtx(subject string, roles []string) context.Context {
+	return WithPrincipal(context.Background(), &Principal{
+		Kind:    PrincipalUser,
+		Subject: subject,
+		Roles:   append([]string(nil), roles...),
+	})
 }
