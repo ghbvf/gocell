@@ -117,6 +117,10 @@ type initialAdminConfig struct {
 	passwordSource io.Reader // nil → crypto/rand.Reader (default in GeneratePassword)
 	scheduler      initialadmin.Scheduler
 	clock          initialadmin.Clock
+	// hasher produces the bcrypt hash for the generated admin password.
+	// nil → initialadmin.DefaultPasswordHasher() (bcrypt cost=12). Tests
+	// inject a fast hasher to avoid 5-7s bcrypt cost=12 blocking phase3.
+	hasher initialadmin.PasswordHasher
 }
 
 // InitialAdminOption configures WithInitialAdminBootstrap.
@@ -144,6 +148,18 @@ func WithBootstrapTTL(d time.Duration) InitialAdminOption {
 // crypto/rand.Reader via GeneratePassword.
 func withBootstrapPasswordSource(r io.Reader) InitialAdminOption {
 	return func(c *initialAdminConfig) { c.passwordSource = r }
+}
+
+// WithBootstrapPasswordHasher overrides the password hasher used to produce
+// the admin's bcrypt hash. Production leaves this unset (defaults to bcrypt
+// cost=12). Tests inject initialadmin.BcryptHasher{Cost: bcrypt.MinCost}
+// so the bundle_test TestBuildBootstrap_* startup path does not block on
+// the 5-7s production-strength bcrypt computation on slow CI runners.
+//
+// ref: uber-go/fx — expensive dependencies exposed as options so tests can
+// swap in fast stubs without diverging from the production wire graph.
+func WithBootstrapPasswordHasher(h initialadmin.PasswordHasher) InitialAdminOption {
+	return func(c *initialAdminConfig) { c.hasher = h }
 }
 
 // WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
@@ -313,6 +329,7 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 		TTL:            c.initialAdminCfg.ttl,
 		PasswordSource: c.initialAdminCfg.passwordSource,
 		Scheduler:      c.initialAdminCfg.scheduler,
+		Hasher:         c.initialAdminCfg.hasher,
 	}
 	bs, err := initialadmin.NewBootstrapper(bsDeps, bsCfg)
 	if err != nil {

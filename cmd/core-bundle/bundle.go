@@ -73,6 +73,14 @@ type AppDeps struct {
 
 	// VerboseToken is the token guarding /readyz?verbose.
 	VerboseToken string
+
+	// InitialAdminBootstrapOpts are additional options passed to
+	// access-core's WithInitialAdminBootstrap. Production (AppDepsFromEnv)
+	// leaves this nil so default bcrypt cost=12 is used. Tests append
+	// accesscore.WithBootstrapPasswordHasher(initialadmin.BcryptHasher{
+	// Cost: bcrypt.MinCost}) so phase3 is not blocked by a 5-7s bcrypt
+	// on slow CI runners — startup wiring is still fully exercised.
+	InitialAdminBootstrapOpts []accesscore.InitialAdminOption
 }
 
 // AppDepsFromEnv reads all environment variables and builds a fully-populated
@@ -178,7 +186,7 @@ func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootst
 		accesscore.WithPublisher(deps.EventBus),
 		accesscore.WithJWTIssuer(deps.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(deps.JWTDeps.verifier),
-	})
+	}, deps.InitialAdminBootstrapOpts...)
 	accessCell := accesscore.NewAccessCore(accessOpts...)
 
 	auditCell := auditcore.NewAuditCore(

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -57,6 +56,12 @@ type BootstrapConfig struct {
 	PasswordSource io.Reader
 	// Scheduler is used by the returned Cleaner. Defaults to RealScheduler{}.
 	Scheduler Scheduler
+	// Hasher produces the bcrypt-compatible hash stored in the user record.
+	// Defaults to DefaultPasswordHasher() (bcrypt cost=12). Tests inject a
+	// low-cost hasher (bcrypt.MinCost=4) to avoid blocking the startup
+	// sequence — bcrypt cost=12 takes 5-7s on a slow CI runner and blocks
+	// phase3→phase7 of bootstrap.Run, making /healthz appear unready.
+	Hasher PasswordHasher
 }
 
 // Bootstrapper orchestrates initial admin creation: CountByRole → generate
@@ -100,6 +105,9 @@ func NewBootstrapper(deps BootstrapDeps, cfg BootstrapConfig) (*Bootstrapper, er
 	}
 	if deps.Clock == nil {
 		deps.Clock = RealClock{}
+	}
+	if cfg.Hasher == nil {
+		cfg.Hasher = DefaultPasswordHasher()
 	}
 
 	return &Bootstrapper{deps: deps, cfg: cfg}, nil
@@ -281,8 +289,8 @@ func (b *Bootstrapper) generateAndHash() (password string, hash []byte, err erro
 	}
 
 	passwordBytes := []byte(password)
-	hash, err = bcrypt.GenerateFromPassword(passwordBytes, domain.BcryptCost)
-	// Overwrite the byte slice regardless of bcrypt success.
+	hash, err = b.cfg.Hasher.Hash(passwordBytes)
+	// Overwrite the byte slice regardless of hashing success.
 	for i := range passwordBytes {
 		passwordBytes[i] = 0
 	}
