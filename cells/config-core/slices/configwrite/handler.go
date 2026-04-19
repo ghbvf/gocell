@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/dto"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -72,10 +73,11 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// securedMux is a minimal helper to register configwrite routes with policies
-// on any http.ServeMux-compatible handler. Used by both production wiring and
-// tests so that route setup and policy declaration stay in sync.
-func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+// RegisterRoutes registers configwrite routes with admin-only policies on any
+// cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux) so
+// production wiring, contract tests, and cell-level integration tests share
+// the same auth.Secured declarations.
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
 	mux.Handle("POST /", auth.Secured(h.HandleCreate, auth.AnyRole(dto.RoleAdmin)))
 	mux.Handle("PUT /{key}", auth.Secured(h.HandleUpdate, auth.AnyRole(dto.RoleAdmin)))
 	mux.Handle("DELETE /{key}", auth.Secured(h.HandleDelete, auth.AnyRole(dto.RoleAdmin)))

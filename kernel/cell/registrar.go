@@ -89,6 +89,32 @@ type HTTPRegistrar interface {
 	RegisterRoutes(mux RouteMux)
 }
 
+// RouteHandler is the minimum route-registration surface shared by both the
+// production RouteMux and stdlib *http.ServeMux. Slices expose
+// RegisterRoutes(RouteHandler) so a single declaration — including any
+// auth.Secured policy wrappers — is the source of truth for production wiring
+// (called from Cell.RegisterRoutes), contract tests, and cell-level
+// integration tests.
+//
+// Both cell.RouteMux and *http.ServeMux satisfy this interface structurally
+// (each declares Handle(pattern string, handler http.Handler)), so slices do
+// not need to know which one they receive at call time.
+//
+// Rationale: the previous split — slice helper built for *http.ServeMux in
+// contract tests, cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux —
+// allowed production to silently skip Secured() wrappers declared in the
+// slice, producing a policy-drift surface that passed contract tests but
+// exposed unguarded routes in production. This interface collapses the two
+// paths into one.
+//
+// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer type
+// for all write handlers; authz chain is declared at registration time.
+// ref: go-kratos/kratos transport/http/server.go — route + middleware pair
+// declared once; both runtime and test paths consume the same registration.
+type RouteHandler interface {
+	Handle(pattern string, handler http.Handler)
+}
+
 // EventRouter declares event subscriptions. Cells call AddHandler during
 // RegisterSubscriptions to declare intent; the caller (bootstrap/Router)
 // is responsible for starting consumption.
