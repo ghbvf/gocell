@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,6 +168,49 @@ func TestIsDomainNotFound(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, IsDomainNotFound(tt.err, tt.codes...))
+		})
+	}
+}
+
+// TestIsTransient covers the KeyProvider transient-vs-permanent classifier.
+// Transient errors (ErrKeyProviderTransient) map to DispositionRequeue;
+// all other KeyProvider errors map to DispositionReject → DLX.
+func TestIsTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil is not transient",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "plain non-errcode error is not transient",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "direct ErrKeyProviderTransient is transient",
+			err:  New(ErrKeyProviderTransient, "vault sealed"),
+			want: true,
+		},
+		{
+			name: "ErrKeyProviderTransient wrapped with fmt.Errorf is transient",
+			err:  fmt.Errorf("keywrap: %w", New(ErrKeyProviderTransient, "rate limited")),
+			want: true,
+		},
+		{
+			name: "non-transient errcode.Error is not transient",
+			err:  New(ErrKeyProviderEncryptFailed, "encrypt API error"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsTransient(tt.err))
 		})
 	}
 }
