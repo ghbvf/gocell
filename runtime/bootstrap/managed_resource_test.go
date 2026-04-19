@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +263,24 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestWithManagedResource_NilFailFast verifies that WithManagedResource(nil)
+// sets the managedResourceNil flag and Run() rejects it at phase0 before any
+// side effects. Mirrors the WithCircuitBreaker / WithBrokerHealth fail-fast
+// pattern.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
+// does no nil-substitution; bad inputs surface before any component starts.
+func TestWithManagedResource_NilFailFast(t *testing.T) {
+	app := New(WithManagedResource(nil))
+	err := app.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must fail when WithManagedResource(nil) was used")
+	}
+	const want = "managed resource must not be nil"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error %q must contain %q", err.Error(), want)
 	}
 }

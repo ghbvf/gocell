@@ -52,7 +52,28 @@ func TopologyFromEnv() (Topology, error) {
 }
 
 // validate checks that the topology is self-consistent.
+//
+// Two independent gates:
+//  1. AdapterMode allowlist ("" | "real") — illegal values fail-fast so a
+//     typo in GOCELL_ADAPTER_MODE cannot silently degrade to the dev path.
+//  2. StorageBackend coupling — postgres requires AdapterMode=real so real
+//     persistence demands production key loading, token-guarded /metrics,
+//     and token-guarded /readyz?verbose.
+//
+// ref: kubernetes/kubernetes cmd/kube-apiserver/app/server.go —
+// Complete → Validate → Run; illegal flag values aggregate into a single
+// startup error before any component starts.
+// ref: go-zero core/conf/config.go validate(v) — single validation gate at
+// the unmarshal boundary, not deferred to downstream consumers.
 func (t Topology) validate() error {
+	switch t.AdapterMode {
+	case "", "real":
+		// allowlisted; proceed to storage coupling check.
+	default:
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown adapter mode %q (GOCELL_ADAPTER_MODE); known values: \"\" (unset = dev) or \"real\"", t.AdapterMode))
+	}
+
 	switch t.StorageBackend {
 	case "memory":
 		// memory allows any adapter mode

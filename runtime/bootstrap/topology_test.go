@@ -61,6 +61,27 @@ func TestTopologyFromEnv_UnknownStorageBackend(t *testing.T) {
 	}
 }
 
+// TestTopologyFromEnv_UnknownAdapterMode guards the adapter-mode allowlist:
+// illegal GOCELL_ADAPTER_MODE values (typos, unknown modes) must fail-fast
+// with an unambiguous error instead of silently taking the dev path.
+//
+// ref: kubernetes/kubernetes cmd/kube-apiserver/app/server.go — Validate
+// rejects unknown flag values before Run starts.
+func TestTopologyFromEnv_UnknownAdapterMode(t *testing.T) {
+	cases := []string{"production", "fake", "test", "REAL"}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("GOCELL_CELL_ADAPTER_MODE", "memory")
+			t.Setenv("GOCELL_ADAPTER_MODE", raw)
+
+			_, err := TopologyFromEnv()
+			if err == nil {
+				t.Fatalf("expected error for illegal GOCELL_ADAPTER_MODE=%q, got nil", raw)
+			}
+		})
+	}
+}
+
 func TestTopologyFromEnv_RequireProductionControlPlane(t *testing.T) {
 	tests := []struct {
 		name        string
