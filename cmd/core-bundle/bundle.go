@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
@@ -81,6 +82,16 @@ type AppDeps struct {
 	// Cost: bcrypt.MinCost}) so phase3 is not blocked by a 5-7s bcrypt
 	// on slow CI runners — startup wiring is still fully exercised.
 	InitialAdminBootstrapOpts []accesscore.InitialAdminOption
+
+	// KeyProvider is the KMS backend used to encrypt/decrypt sensitive config
+	// values at the repository boundary. nil = NoopTransformer (no encryption).
+	// Set via GOCELL_KEY_PROVIDER=local-aes|vault-transit in production;
+	// left nil for test struct-literal AppDeps (in-memory mode).
+	KeyProvider crypto.KeyProvider
+
+	// ValueTransformer is the encryption interface passed to the config-core cell.
+	// Constructed from KeyProvider by AppDepsFromEnv; tests may inject directly.
+	ValueTransformer crypto.ValueTransformer
 }
 
 // AppDepsFromEnv reads all environment variables and builds a fully-populated
@@ -120,13 +131,23 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 
 	eb := eventbus.New()
 
+	// Build KeyProvider from GOCELL_KEY_PROVIDER env var. The provider
+	// constructor is the single validation gate for encryption-mode coupling:
+	// postgres storage must fail-fast when no provider is configured.
+	// ref: kubernetes/kubernetes EncryptionConfig — missing provider is a
+	// startup error, never a silent NoopTransformer fallback.
+	kp, vt, err := buildKeyProvider(topo.StorageBackend)
+	if err != nil {
+		return nil, fmt.Errorf("key provider: %w", err)
+	}
+
 	// Topology is the single source of truth for adapter/storage selection.
 	// buildConfigCoreOpts receives it as a parameter and must not re-read the
 	// environment — any second read would create a drift path between the
 	// "reported topology" and "actual wiring".
 	// ref: go-zero core/conf/config.go validate(v) — single validation gate at
 	// the unmarshal boundary, never re-read downstream.
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, topo, eb, ps.metricProvider)
+	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, topo, eb, ps.metricProvider, vt)
 	if err != nil {
 		return nil, err
 	}
@@ -153,19 +174,21 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
 	return &AppDeps{
-		Topology:       topo,
-		PGResource:     pgRes,
-		configCellOpts: cellOpts,
-		JWTDeps:        jwt,
-		PromStack:      ps,
-		CursorCodecs:   codecs,
-		HMACKey:        hmacKey,
-		EventBus:       eb,
-		InternalGuard:  internalGuard,
-		MetricsToken:   metricsToken,
-		VerboseToken:   verboseToken,
-		metricsHandler: metricsHandler,
-		verboseOpts:    verboseOpts,
+		Topology:         topo,
+		PGResource:       pgRes,
+		configCellOpts:   cellOpts,
+		JWTDeps:          jwt,
+		PromStack:        ps,
+		CursorCodecs:     codecs,
+		HMACKey:          hmacKey,
+		EventBus:         eb,
+		InternalGuard:    internalGuard,
+		MetricsToken:     metricsToken,
+		VerboseToken:     verboseToken,
+		metricsHandler:   metricsHandler,
+		verboseOpts:      verboseOpts,
+		KeyProvider:      kp,
+		ValueTransformer: vt,
 	}, nil
 }
 
@@ -248,6 +271,9 @@ func buildConfigCell(deps *AppDeps) *configcore.ConfigCore {
 		configcore.WithPublisher(deps.EventBus),
 		configcore.WithCursorCodec(deps.CursorCodecs.config),
 	}
+	if deps.ValueTransformer != nil {
+		base = append(base, configcore.WithValueTransformer(deps.ValueTransformer))
+	}
 	if deps.configCellOpts != nil {
 		return configcore.NewConfigCore(append(base, deps.configCellOpts...)...)
 	}
@@ -301,6 +327,45 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 	return opts
 }
 
+// buildKeyProvider constructs the KeyProvider and ValueTransformer from
+// GOCELL_KEY_PROVIDER env var. Supported values: "local-aes", "vault-transit".
+// In memory mode (empty env var) a NoopTransformer is returned (no encryption).
+// In postgres mode (empty env var) the function logs a warning and falls back to
+// NoopTransformer to allow deployment without encryption — operators should set
+// GOCELL_KEY_PROVIDER=local-aes for production.
+func buildKeyProvider(storageBackend string) (crypto.KeyProvider, crypto.ValueTransformer, error) {
+	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
+	if providerName == "" {
+		if storageBackend == "postgres" {
+			slog.Warn("config-core: GOCELL_KEY_PROVIDER not set; sensitive values will be stored unencrypted",
+				slog.String("storage_backend", storageBackend),
+				slog.String("recommendation", "set GOCELL_KEY_PROVIDER=local-aes for production"))
+		}
+		return nil, crypto.NoopTransformer{}, nil
+	}
+	switch providerName {
+	case "local-aes":
+		kp, err := crypto.NewLocalAESKeyProviderFromEnv()
+		if err != nil {
+			return nil, nil, fmt.Errorf("local-aes key provider: %w", err)
+		}
+		vt := crypto.NewValueTransformer(kp)
+		slog.Info("config-core: key provider initialized", slog.String("provider", "local-aes"))
+		return kp, vt, nil
+	case "vault-transit":
+		kp, err := crypto.NewVaultTransitKeyProviderFromEnv()
+		if err != nil {
+			return nil, nil, fmt.Errorf("vault-transit key provider: %w", err)
+		}
+		vt := crypto.NewValueTransformer(kp)
+		slog.Info("config-core: key provider initialized", slog.String("provider", "vault-transit"))
+		return kp, vt, nil
+	default:
+		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("unknown GOCELL_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
+	}
+}
+
 // buildConfigCoreOpts selects storage-adapter options for config-core based on
 // the already-resolved Topology. Returns a ManagedResource (non-nil iff
 // postgres mode) and cell options to pass to configcore.NewConfigCore.
@@ -318,7 +383,7 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 //
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider) (bootstrap.ManagedResource, []configcore.Option, error) {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt crypto.ValueTransformer) (bootstrap.ManagedResource, []configcore.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
 		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
@@ -353,10 +418,14 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 
 		pgRes := adapterpg.NewPGResource(pool, relayWorker)
 		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
-		return pgRes, []configcore.Option{
+		opts := []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
-		}, nil
+		}
+		if vt != nil {
+			opts = append(opts, configcore.WithValueTransformer(vt))
+		}
+		return pgRes, opts, nil
 
 	case "memory":
 		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
