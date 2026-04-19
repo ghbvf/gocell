@@ -12,5 +12,3 @@ endpoints:
     path: /api/v1/flags/{key}
     successStatus: 204
     noContent: true
-schemaRefs:
-  request: request.schema.json
