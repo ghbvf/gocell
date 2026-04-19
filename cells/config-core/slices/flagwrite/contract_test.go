@@ -74,6 +74,12 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50,"description":"updated"}`))
 	c.MustRejectRequest(t, []byte(`{"enabled":true,"extra":"bad"}`))
+	// PUT is full replacement: schema must reject bodies missing any of the
+	// three required fields. Catches any future drift that relaxes required
+	// constraints in request.schema.json.
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"rolloutPercentage":50}`))    // missing description
+	c.MustRejectRequest(t, []byte(`{"enabled":true,"description":"x"}`))         // missing rolloutPercentage
+	c.MustRejectRequest(t, []byte(`{"rolloutPercentage":50,"description":"x"}`)) // missing enabled
 
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "upd-flag")
 	rec := httptest.NewRecorder()
@@ -84,6 +90,19 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	// Runtime guard: even if schema were bypassed (e.g. by a different
+	// decoder), handler-level validation must also reject partial bodies
+	// with a deterministic 400. Locks the PUT semantic at two independent
+	// layers.
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(c.HTTP.Method, path,
+		strings.NewReader(`{"enabled":true}`))
+	req2.Header.Set("Content-Type", "application/json")
+	req2 = req2.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	mux.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusBadRequest, rec2.Code,
+		"PUT with missing fields must 400; got body: %s", rec2.Body)
 }
 
 // --- Toggle contract test ---
