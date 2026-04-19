@@ -10,6 +10,7 @@ package router
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -583,7 +584,15 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 
 // ServeHTTP delegates to the outer mux (shared observability + infra routes +
 // business routes via mount).
+//
+// Panics if auth route metadata has been declared but FinalizeAuth has not yet
+// been called. This provides a loud, early failure rather than silently
+// dropping auth declarations on the first request. Routers with no
+// declarations (plain mux, tests, custom compositions) are unaffected.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
+		panic("router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared")
+	}
 	r.outerMux.ServeHTTP(w, req)
 }
 
@@ -644,6 +653,14 @@ func (r *Router) FinalizeAuth() error {
 	}
 	r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
 	r.deriveHint()
+
+	// Warn when auth declarations exist but no verifier is installed: the
+	// Public/Policy/PasswordResetExempt semantics compile successfully but
+	// AuthMiddleware is absent so none of the declarations have any effect.
+	if r.authVerifier == nil && len(r.declaredAuthMetas) > 0 {
+		slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/Policy/PasswordResetExempt declarations will have no effect",
+			slog.Int("declared", len(r.declaredAuthMetas)))
+	}
 	return nil
 }
 

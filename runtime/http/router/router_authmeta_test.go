@@ -1,8 +1,10 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -288,4 +290,59 @@ func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/protected", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code, "unrelated route must still require auth")
+}
+
+// ---------------------------------------------------------------------------
+// F3: ServeHTTP panics when metas declared but FinalizeAuth not called
+// ---------------------------------------------------------------------------
+
+func TestServeHTTP_AuthMetasWithoutFinalize_Panics(t *testing.T) {
+	r := New()
+	r.Handle("/guarded", okHandler)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/guarded", Public: true})
+	// FinalizeAuth intentionally NOT called.
+
+	assert.PanicsWithValue(t,
+		"router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared",
+		func() {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/guarded", nil)
+			r.ServeHTTP(rec, req)
+		},
+		"ServeHTTP must panic when metas are declared but FinalizeAuth was not called",
+	)
+}
+
+func TestServeHTTP_NoMetas_NoFinalize_OK(t *testing.T) {
+	r := New()
+	r.Handle("/hello", okHandler)
+	// No auth.Declare calls, no FinalizeAuth — should work fine.
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/hello", nil)
+	assert.NotPanics(t, func() {
+		r.ServeHTTP(rec, req)
+	}, "Router with no declarations must not require FinalizeAuth")
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// ---------------------------------------------------------------------------
+// F4: FinalizeAuth logs a warning when metas declared but no verifier
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
+	// Capture slog output via a JSON handler.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(prev)
+
+	r := New() // no WithAuthMiddleware
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/public-route", Public: true})
+	require.NoError(t, r.FinalizeAuth())
+
+	logged := buf.String()
+	assert.Contains(t, logged, "AuthMiddleware is not installed", "expected warning about missing AuthMiddleware")
+	assert.Contains(t, logged, "WARN", "expected WARN level")
 }
