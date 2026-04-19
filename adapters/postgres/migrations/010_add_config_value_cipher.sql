@@ -23,19 +23,6 @@ ALTER TABLE config_versions
     ADD COLUMN IF NOT EXISTS value_nonce  BYTEA;
 
 -- +goose Down
--- Rollback is intentionally disabled for this migration.
---
--- Dropping value_cipher / value_key_id / value_edk / value_nonce columns would
--- permanently destroy encrypted sensitive values with no recovery path.
--- Production rollback strategy: rename columns to _deprecated_YYYYMMDD (manual DBA action).
---
--- To proceed with a rollback in dev/CI, manually execute:
---   ALTER TABLE config_entries  RENAME COLUMN value_cipher TO value_cipher_deprecated_20260419;
---   ALTER TABLE config_versions RENAME COLUMN value_cipher TO value_cipher_deprecated_20260419;
--- (and similar for value_key_id / value_edk / value_nonce)
+-- Intentional no-op: dropping cipher columns destroys encrypted values with no recovery path.
+-- Production rollback: DBA manually renames columns per migration 010 header comments and ADR.
 -- See ADR: docs/architecture/202604191800-adr-config-value-encryption.md
--- +goose StatementBegin
-DO $$ BEGIN
-    RAISE EXCEPTION 'config_value_cipher rollback requires manual rename — see migration 010 header and ADR docs/architecture/202604191800-adr-config-value-encryption.md';
-END $$;
--- +goose StatementEnd
