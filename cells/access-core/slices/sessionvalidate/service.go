@@ -4,7 +4,6 @@ package sessionvalidate
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
@@ -112,9 +111,12 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 
 // logSessionLookupError distinguishes "not found" (expected / logged at Warn)
 // from infrastructure failures (Error) so dashboards can alert correctly.
+//
+// Only domain-layer not-found codes on the whitelist (ErrSessionNotFound) are
+// logged at Warn. Any infra error, unclassified error, or non-whitelisted
+// errcode is logged at Error — fail-closed, ref S40.
 func (s *Service) logSessionLookupError(sid, subject string, err error) {
-	var ec *errcode.Error
-	if errors.As(err, &ec) {
+	if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
 		s.logger.Warn("session-validate: session not found",
 			slog.String("sid", sid),
 			slog.String("subject", subject))

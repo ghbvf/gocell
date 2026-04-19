@@ -14,6 +14,8 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -295,6 +297,92 @@ func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, buf.String(), "token verification failed")
+}
+
+// TestAuthMiddleware_LogLevel_Expected4xx_Warn verifies S43: expected 4xx errors
+// (invalid token, expired token, unauthorized) must log at Warn, not Error.
+func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
+	expected4xxErrs := []struct {
+		name string
+		err  error
+	}{
+		{"ErrAuthTokenInvalid", errcode.New(errcode.ErrAuthTokenInvalid, "invalid token")},
+		{"ErrAuthTokenExpired", errcode.New(errcode.ErrAuthTokenExpired, "token expired")},
+		{"ErrAuthUnauthorized", errcode.New(errcode.ErrAuthUnauthorized, "unauthorized")},
+		{"ErrAuthInvalidToken", errcode.New(errcode.ErrAuthInvalidToken, "invalid")},
+	}
+
+	for _, tc := range expected4xxErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			verifier := &mockVerifier{err: tc.err}
+			handler := AuthMiddleware(verifier, nil, WithLogger(logger))(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Fatal("should not be called")
+				}),
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+			req.Header.Set("Authorization", "Bearer bad-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			logOutput := buf.String()
+			// P2-4: precise JSON-line matching — locate the token verification log
+			// line specifically, ignoring any unrelated ERROR lines that may exist.
+			entry := sloghelper.FindLogEntry(logOutput, "token verification failed")
+			require.NotNil(t, entry,
+				"expected a log line containing 'token verification failed'")
+			assert.Equal(t, "WARN", entry["level"],
+				"expected 4xx token error must log at WARN, not ERROR")
+		})
+	}
+}
+
+// TestAuthMiddleware_LogLevel_InfraError_Error verifies S43: infra errors
+// (verifier init failure, key load failure) must log at Error, not Warn.
+//
+// P1-1: ErrAuthKeyMissing maps to HTTP 500 in codeToStatus (infra), so it must
+// NOT appear in expected4xxCodes. This test confirms it logs at Error level.
+func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
+	infraErrs := []struct {
+		name string
+		err  error
+	}{
+		{"plain verifier error", fmt.Errorf("key loading failed: connection refused")},
+		{"CategoryInfra errcode", errcode.NewInfra(errcode.ErrInternal, "key set unavailable")},
+		// P1-1: ErrAuthKeyMissing is HTTP 500 (infra misconfiguration); must log Error.
+		{"ErrAuthKeyMissing is infra 500", errcode.New(errcode.ErrAuthKeyMissing, "no signing key configured")},
+	}
+
+	for _, tc := range infraErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			verifier := &mockVerifier{err: tc.err}
+			handler := AuthMiddleware(verifier, nil, WithLogger(logger))(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Fatal("should not be called")
+				}),
+			)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+			req.Header.Set("Authorization", "Bearer any-token")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			logOutput := buf.String()
+			// P2-4: precise JSON-line matching on the token verification log line.
+			entry := sloghelper.FindLogEntry(logOutput, "token verification failed")
+			require.NotNil(t, entry,
+				"expected a log line containing 'token verification failed'")
+			assert.Equal(t, "ERROR", entry["level"],
+				"infra error must log at ERROR")
+		})
+	}
 }
 
 func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {
