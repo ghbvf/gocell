@@ -177,27 +177,25 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 				Handler: http.HandlerFunc(c.statusHandler.HandleGetStatus),
 				Policy:  auth.Authenticated(),
 			})
-			// device-command routes declared via auth.Declare so policies are
-			// explicit at registration time.
-			// TODO(S43): role-name literals — migrate to permission-based authz
-			// when PERMISSION-BASED-AUTHZ-01 lands.
+			// device-command routes: no route-level policy. Pre-F3 device-cell
+			// had no policy wrapping; restoring Policy:nil matches that state.
+			// When a deployment wants authz, wire WithAuthDiscovery() and add a
+			// Policy or rely on AuthMiddleware's baseline JWT check.
+			// Hardening device-cell authz is out of scope for the F3 migration.
 			auth.Declare(devices, auth.RouteDecl{
 				Method:  "POST",
 				Path:    "/{id}/commands",
 				Handler: http.HandlerFunc(c.commandHandler.HandleEnqueue),
-				Policy:  auth.AnyRole("admin", "operator"),
 			})
 			auth.Declare(devices, auth.RouteDecl{
 				Method:  "GET",
 				Path:    "/{id}/commands",
 				Handler: http.HandlerFunc(c.commandHandler.HandleListPending),
-				Policy:  auth.SelfOr("id", "admin"),
 			})
 			auth.Declare(devices, auth.RouteDecl{
 				Method:  "POST",
 				Path:    "/{id}/commands/{cmdId}/ack",
 				Handler: http.HandlerFunc(c.commandHandler.HandleAck),
-				Policy:  auth.SelfOr("id", "admin"),
 			})
 		})
 	})

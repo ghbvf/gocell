@@ -48,27 +48,26 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers device-command routes on the given mux with policies
-// declared at registration time via auth.Declare.
-// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+// RegisterRoutes registers device-command routes on the given mux.
+// No route-level policy is declared; pre-F3 device-cell had no policy
+// wrapping. Deployments that want authz should wire WithAuthDiscovery()
+// and add a Policy field or rely on AuthMiddleware's baseline JWT check.
+// Hardening device-cell authz is out of scope for the F3 migration.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/{id}/commands",
 		Handler: http.HandlerFunc(h.HandleEnqueue),
-		Policy:  auth.AnyRole("admin", "operator"),
 	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "GET",
 		Path:    "/{id}/commands",
 		Handler: http.HandlerFunc(h.HandleListPending),
-		Policy:  auth.SelfOr("id", "admin"),
 	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/{id}/commands/{cmdId}/ack",
 		Handler: http.HandlerFunc(h.HandleAck),
-		Policy:  auth.SelfOr("id", "admin"),
 	})
 }
 

@@ -120,14 +120,16 @@ func TestHandleEnqueue(t *testing.T) {
 	}
 }
 
-// Trust boundary tests for enqueue (#P1-2)
-func TestHandleEnqueue_Authorization(t *testing.T) {
+// TestHandleEnqueue_NoRoutePolicy verifies that enqueue works for any
+// authenticated caller — device-cell carries no route-level policy post-F3
+// revert (Policy:nil, pre-F3 state). Deployments that need authz wire
+// WithAuthDiscovery() and add a Policy or rely on AuthMiddleware JWT check.
+func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		subject    string
 		roles      []string
 		wantStatus int
-		wantCode   string
 	}{
 		{
 			name:       "admin allowed",
@@ -142,43 +144,29 @@ func TestHandleEnqueue_Authorization(t *testing.T) {
 			wantStatus: http.StatusCreated,
 		},
 		{
-			name:       "device role returns 403",
+			name:       "device role allowed (no route policy)",
 			subject:    "dev-99",
 			roles:      []string{"device"},
-			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
+			wantStatus: http.StatusCreated,
 		},
 		{
-			name:       "no roles returns 403",
+			name:       "no roles allowed (no route policy)",
 			subject:    "user-1",
 			roles:      nil,
-			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
-		},
-		{
-			name:       "no subject returns 401",
-			subject:    "",
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+			wantStatus: http.StatusCreated,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use Secured mux so the policy declared at registration runs.
 			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
 			req.Header.Set("Content-Type", "application/json")
-			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
-			}
+			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
-			if tc.wantCode != "" {
-				assert.Contains(t, w.Body.String(), tc.wantCode)
-			}
 		})
 	}
 }
@@ -437,15 +425,15 @@ func TestCommandResponse_AckedAt_Serialization(t *testing.T) {
 	})
 }
 
-// Trust boundary tests (#27p)
-func TestHandleListPending_DeviceIDOR(t *testing.T) {
+// TestHandleListPending_NoRoutePolicy verifies that list returns 200 for any
+// caller — device-cell carries no route-level policy post-F3 revert.
+func TestHandleListPending_NoRoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceID   string
 		subject    string
 		roles      []string
 		wantStatus int
-		wantCode   string
 	}{
 		{
 			name:       "self-access allowed",
@@ -454,55 +442,42 @@ func TestHandleListPending_DeviceIDOR(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "admin bypass allowed",
+			name:       "admin access allowed",
 			deviceID:   "dev-1",
 			subject:    "operator-1",
 			roles:      []string{"admin"},
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "different device returns 403",
+			name:       "different device allowed (no route policy)",
 			deviceID:   "dev-1",
 			subject:    "dev-2",
 			roles:      []string{"device"},
-			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
-		},
-		{
-			name:       "no subject returns 401",
-			deviceID:   "dev-1",
-			subject:    "",
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+			wantStatus: http.StatusOK,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use Secured mux so the policy declared at registration runs.
 			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/"+tc.deviceID+"/commands", nil)
-			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
-			}
+			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
-			if tc.wantCode != "" {
-				assert.Contains(t, w.Body.String(), tc.wantCode)
-			}
 		})
 	}
 }
 
-func TestHandleAck_DeviceIDOR(t *testing.T) {
+// TestHandleAck_NoRoutePolicy verifies that ack returns 200 for any caller —
+// device-cell carries no route-level policy post-F3 revert.
+func TestHandleAck_NoRoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		subject    string
 		roles      []string
 		wantStatus int
-		wantCode   string
 	}{
 		{
 			name:       "self-access allowed",
@@ -510,45 +485,32 @@ func TestHandleAck_DeviceIDOR(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "admin bypass allowed",
+			name:       "admin access allowed",
 			subject:    "operator-1",
 			roles:      []string{"admin"},
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "different device returns 403",
+			name:       "different device allowed (no route policy)",
 			subject:    "dev-2",
 			roles:      []string{"device"},
-			wantStatus: http.StatusForbidden,
-			wantCode:   "ERR_AUTH_FORBIDDEN",
-		},
-		{
-			name:       "no subject returns 401",
-			subject:    "",
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   "ERR_AUTH_UNAUTHORIZED",
+			wantStatus: http.StatusOK,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use Secured mux so the policy declared at registration runs.
 			mux, _, cmdRepo := setupCommandMux()
 			_ = cmdRepo.Create(context.Background(), &domain.Command{
-				ID: "cmd-idor", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
+				ID: "cmd-ack", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
 			})
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands/cmd-idor/ack", nil)
-			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
-			}
+			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands/cmd-ack/ack", nil)
+			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
-			if tc.wantCode != "" {
-				assert.Contains(t, w.Body.String(), tc.wantCode)
-			}
 		})
 	}
 }
