@@ -39,6 +39,19 @@ func toFlagWriteResponse(f *domain.FeatureFlag) FlagWriteResponse {
 	}
 }
 
+// writeFlagResult is the shared tail of Create/Update/Toggle: on success
+// emit the canonical {"data": toFlagWriteResponse(flag)} body with the
+// supplied status; on error route through httputil.WriteDomainError. Keeps
+// the three success-path handlers identical without three copies of the
+// same five lines.
+func writeFlagResult(w http.ResponseWriter, r *http.Request, status int, flag *domain.FeatureFlag, err error) {
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+	httputil.WriteJSON(w, status, map[string]any{"data": toFlagWriteResponse(flag)})
+}
+
 // Handler provides HTTP endpoints for feature flag write operations.
 type Handler struct {
 	svc *Service
@@ -72,12 +85,7 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		RolloutPercentage: req.RolloutPercentage,
 		Description:       req.Description,
 	})
-	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toFlagWriteResponse(flag)})
+	writeFlagResult(w, r, http.StatusCreated, flag, err)
 }
 
 // HandleUpdate handles PUT /{key} — full replacement of a feature flag's
@@ -118,12 +126,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		RolloutPercentage: *req.RolloutPercentage,
 		Description:       *req.Description,
 	})
-	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toFlagWriteResponse(flag)})
+	writeFlagResult(w, r, http.StatusOK, flag, err)
 }
 
 // validateRolloutPercentage mirrors the contract schema's 0..100 bound at the
@@ -176,12 +179,7 @@ func (h *Handler) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flag, err := h.svc.Toggle(r.Context(), key, req.Enabled)
-	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toFlagWriteResponse(flag)})
+	writeFlagResult(w, r, http.StatusOK, flag, err)
 }
 
 // HandleDelete handles DELETE /{key} — deletes a feature flag.

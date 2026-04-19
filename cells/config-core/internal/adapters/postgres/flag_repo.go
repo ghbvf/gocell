@@ -17,6 +17,11 @@ import (
 // Compile-time interface check.
 var _ ports.FlagRepository = (*FlagRepository)(nil)
 
+// flagColumns is the canonical column list for feature_flags used by every
+// SELECT/RETURNING projection in this file. Centralised so the column order
+// stays in sync between the INSERT, SELECT, RETURNING, and scanFlagRow calls.
+const flagColumns = "id, key, enabled, rollout_percentage, description, version, created_at, updated_at"
+
 // FlagRepository implements ports.FlagRepository using PostgreSQL.
 //
 // Write paths (Create/Update/Delete/Toggle) require an ambient pgx.Tx in ctx
@@ -56,10 +61,55 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 	return r.db, nil
 }
 
+// scanFlagRow scans a single row (order matches flagColumns) into a
+// domain.FeatureFlag. Called by GetByKey/Update/Delete/Toggle so the field
+// order stays in sync with the SELECT/RETURNING projections.
+func scanFlagRow(row pgx.Row) (*domain.FeatureFlag, error) {
+	var f domain.FeatureFlag
+	if err := row.Scan(
+		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
+		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// scanFlagOrMapError runs scanFlagRow and translates the two known failure
+// modes into GoCell errcode.Error values:
+//
+//   - pgx.ErrNoRows  → ErrFlagNotFound (domain not-found; maps to 404).
+//   - anything else  → ErrFlagRepoQuery (infra failure; maps to 500).
+//
+// op is the method name (e.g. "Update") used only in InternalMessage for
+// operator-side debugging; key is the lookup key surfaced the same way.
+// Centralising this mapping removes the ~40 lines of repeated error
+// boilerplate previously scattered across Update/Delete/Toggle/GetByKey.
+func scanFlagOrMapError(row pgx.Row, op, key string) (*domain.FeatureFlag, error) {
+	flag, err := scanFlagRow(row)
+	if err == nil {
+		return flag, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, &errcode.Error{
+			Code:            errcode.ErrFlagNotFound,
+			Message:         "flag not found",
+			InternalMessage: fmt.Sprintf("flag repo: %s miss key=%s", op, key),
+			Cause:           err,
+		}
+	}
+	return nil, &errcode.Error{
+		Code:            errcode.ErrFlagRepoQuery,
+		Message:         "flag repo query failed",
+		InternalMessage: fmt.Sprintf("flag repo: %s scan error key=%s", op, key),
+		Cause:           err,
+	}
+}
+
 // Create inserts a new feature flag. All 8 columns are written.
 func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) error {
 	const sql = `INSERT INTO feature_flags
-		(id, key, enabled, rollout_percentage, description, version, created_at, updated_at)
+		(` + flagColumns + `)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
 	now := time.Now()
@@ -90,32 +140,8 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 
 // GetByKey retrieves a feature flag by key.
 func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag, error) {
-	const sql = `SELECT id, key, enabled, rollout_percentage, description, version, created_at, updated_at
-		FROM feature_flags WHERE key = $1`
-
-	row := r.resolveDB(ctx).QueryRow(ctx, sql, key)
-
-	var f domain.FeatureFlag
-	if err := row.Scan(
-		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
-		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagNotFound,
-				Message:         "flag not found",
-				InternalMessage: fmt.Sprintf("flag repo: GetByKey miss key=%s", key),
-				Cause:           err,
-			}
-		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrFlagRepoQuery,
-			Message:         "flag repo query failed",
-			InternalMessage: fmt.Sprintf("flag repo: GetByKey scan error key=%s", key),
-			Cause:           err,
-		}
-	}
-	return &f, nil
+	const sql = `SELECT ` + flagColumns + ` FROM feature_flags WHERE key = $1`
+	return scanFlagOrMapError(r.resolveDB(ctx).QueryRow(ctx, sql, key), "GetByKey", key)
 }
 
 // Update atomically sets enabled, rollout_percentage, description, and
@@ -125,42 +151,20 @@ func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, r
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
 		WHERE key=$4
-		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
+		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key)
-
-	var f domain.FeatureFlag
-	if err := row.Scan(
-		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
-		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagNotFound,
-				Message:         "flag not found",
-				InternalMessage: fmt.Sprintf("flag repo: Update miss key=%s", key),
-				Cause:           err,
-			}
-		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrFlagRepoQuery,
-			Message:         "flag repo query failed",
-			InternalMessage: fmt.Sprintf("flag repo: Update scan error key=%s", key),
-			Cause:           err,
-		}
-	}
-	return &f, nil
+	return scanFlagOrMapError(db.QueryRow(ctx, sql, enabled, rolloutPercentage, description, key), "Update", key)
 }
 
 // List retrieves feature flags with keyset cursor pagination.
 // Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC)
 func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
 	b := query.NewBuilder()
-	b.Append("SELECT id, key, enabled, rollout_percentage, description, version, created_at, updated_at FROM feature_flags WHERE 1=1")
+	b.Append("SELECT " + flagColumns + " FROM feature_flags WHERE 1=1")
 
 	if err := query.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: keyset build failed", err)
@@ -175,14 +179,11 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 
 	var flags []*domain.FeatureFlag
 	for rows.Next() {
-		var f domain.FeatureFlag
-		if err := rows.Scan(
-			&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
-			&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-		); err != nil {
-			return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: scan failed", err)
+		flag, scanErr := scanFlagRow(rows)
+		if scanErr != nil {
+			return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: scan failed", scanErr)
 		}
-		flags = append(flags, &f)
+		flags = append(flags, flag)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: rows error", err)
@@ -193,36 +194,13 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 // Delete removes a feature flag by key and returns the deleted entity via
 // DELETE...RETURNING. Returns ErrFlagNotFound if the key does not exist.
 func (r *FlagRepository) Delete(ctx context.Context, key string) (*domain.FeatureFlag, error) {
-	const sql = `DELETE FROM feature_flags WHERE key=$1
-		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
+	const sql = `DELETE FROM feature_flags WHERE key=$1 RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(ctx, sql, key)
-
-	var f domain.FeatureFlag
-	if err := row.Scan(
-		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
-		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagNotFound,
-				Message:         "flag not found",
-				InternalMessage: fmt.Sprintf("flag repo: Delete miss key=%s", key),
-				Cause:           err,
-			}
-		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrFlagRepoQuery,
-			Message:         "flag repo query failed",
-			InternalMessage: fmt.Sprintf("flag repo: Delete scan error key=%s", key),
-			Cause:           err,
-		}
-	}
-	return &f, nil
+	return scanFlagOrMapError(db.QueryRow(ctx, sql, key), "Delete", key)
 }
 
 // Toggle atomically sets the enabled state and increments version by 1.
@@ -235,33 +213,11 @@ func (r *FlagRepository) Toggle(ctx context.Context, key string, enabled bool) (
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, version=version+1, updated_at=now()
 		WHERE key=$2
-		RETURNING id, key, enabled, rollout_percentage, description, version, created_at, updated_at`
+		RETURNING ` + flagColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
 		return nil, err
 	}
-	row := db.QueryRow(ctx, sql, enabled, key)
-
-	var f domain.FeatureFlag
-	if err := row.Scan(
-		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
-		&f.Description, &f.Version, &f.CreatedAt, &f.UpdatedAt,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrFlagNotFound,
-				Message:         "flag not found",
-				InternalMessage: fmt.Sprintf("flag repo: Toggle miss key=%s", key),
-				Cause:           err,
-			}
-		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrFlagRepoQuery,
-			Message:         "flag repo query failed",
-			InternalMessage: fmt.Sprintf("flag repo: Toggle scan error key=%s", key),
-			Cause:           err,
-		}
-	}
-	return &f, nil
+	return scanFlagOrMapError(db.QueryRow(ctx, sql, enabled, key), "Toggle", key)
 }
