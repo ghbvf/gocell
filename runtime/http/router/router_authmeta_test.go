@@ -43,6 +43,46 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 })
 
 // ---------------------------------------------------------------------------
+// Nested Route adapter propagates declared metadata with composed prefix
+// ---------------------------------------------------------------------------
+
+func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
+	r := New()
+
+	// Cells commonly register routes under nested mux.Route scopes:
+	//   mux.Route("/api/v1", func(v1) { v1.Route("/access", func(a) {
+	//       a.Route("/sessions", func(s) { auth.Declare(s, RouteDecl{...}) })
+	//   })})
+	// The adapter chain must compose the mount prefixes so the declared
+	// meta reaches the Router with the full path.
+	r.Route("/api/v1", func(v1 kcell.RouteMux) {
+		v1.Route("/access", func(a kcell.RouteMux) {
+			a.Route("/sessions", func(s kcell.RouteMux) {
+				auth.Declare(s, auth.RouteDecl{
+					Method:  "POST",
+					Path:    "/login",
+					Handler: okHandler,
+					Public:  true,
+				})
+				auth.Declare(s, auth.RouteDecl{
+					Method:              "DELETE",
+					Path:                "/{id}",
+					Handler:             okHandler,
+					Policy:              auth.Authenticated(),
+					PasswordResetExempt: true,
+				})
+			})
+		})
+	})
+
+	require.Len(t, r.declaredAuthMetas, 2)
+	assert.Equal(t, "/api/v1/access/sessions/login", r.declaredAuthMetas[0].Path)
+	assert.True(t, r.declaredAuthMetas[0].Public)
+	assert.Equal(t, "/api/v1/access/sessions/{id}", r.declaredAuthMetas[1].Path)
+	assert.True(t, r.declaredAuthMetas[1].PasswordResetExempt)
+}
+
+// ---------------------------------------------------------------------------
 // DeclareAuthMeta accumulates metas
 // ---------------------------------------------------------------------------
 

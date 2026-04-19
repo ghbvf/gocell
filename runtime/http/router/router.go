@@ -11,6 +11,7 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -684,15 +685,18 @@ func (r *Router) Handle(pattern string, handler http.Handler) {
 // Group creates a sub-scope with a shared prefix, implementing cell.RouteMux.
 func (r *Router) Group(fn func(kcell.RouteMux)) {
 	r.mux.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, declarer: r}
 		fn(sub)
 	})
 }
 
-// Route mounts a sub-router under the given pattern.
+// Route mounts a sub-router under the given pattern. The adapter carries
+// both the chi sub-router and a reference to the Router-rooted declarer so
+// that auth.Declare called on a nested sub-mux composes the mount prefix
+// with the declared path and forwards AuthRouteMeta to the top-level Router.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	r.mux.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
 		fn(sub)
 	})
 }
@@ -706,7 +710,7 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 // registered through it, without modifying the receiver. Safe to call
 // after routes are registered (unlike chi.Mux.Use which panics).
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{r.mux.With(mw...)}
+	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
 }
 
 // ServeHTTP delegates to the outer mux (shared observability + infra routes +
@@ -893,10 +897,19 @@ func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, stri
 	}
 }
 
-// chiRouterAdapter wraps chi.Router to implement cell.RouteMux.
+// chiRouterAdapter wraps chi.Router to implement cell.RouteMux. prefix is the
+// mount prefix the adapter inherited from its parent Route; declarer points to
+// the Router-rooted AuthRouteDeclarer so nested auth.Declare calls propagate
+// metadata with the fully-composed path.
 type chiRouterAdapter struct {
-	cr chi.Router
+	cr       chi.Router
+	prefix   string
+	declarer kcell.AuthRouteDeclarer
 }
+
+// Compile-time check: chiRouterAdapter forwards AuthRouteMeta so Cells that
+// declare routes under mux.Route("/api/v1", ...) reach the top-level Router.
+var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 	a.cr.Handle(pattern, handler)
@@ -904,7 +917,11 @@ func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 	a.cr.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{
+			cr:       cr,
+			prefix:   joinPrefix(a.prefix, pattern),
+			declarer: a.declarer,
+		}
 		fn(sub)
 	})
 }
@@ -915,11 +932,36 @@ func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{a.cr.With(mw...)}
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer}
+}
+
+// DeclareAuthMeta composes the adapter's mount prefix with the declared path
+// before handing the metadata off to the Router. A prefix of "" means the
+// adapter sits directly under the Router (Group without a Route wrapper) and
+// no path rewrite is needed.
+func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+	if a.declarer == nil {
+		return
+	}
+	if a.prefix != "" {
+		m.Path = joinPrefix(a.prefix, m.Path)
+	}
+	a.declarer.DeclareAuthMeta(m)
+}
+
+// joinPrefix composes a parent mount prefix with a child pattern/path,
+// normalising the result via path.Clean so nested chains like
+// `/api/v1` + `/access` + `/sessions/{id}` collapse to `/api/v1/access/sessions/{id}`.
+// Both inputs are expected to begin with '/'; callers guard that invariant.
+func joinPrefix(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	return path.Clean(parent + child)
 }
