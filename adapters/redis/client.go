@@ -7,9 +7,13 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+// Compile-time assertion: Client implements lifecycle.ContextCloser.
+var _ lifecycle.ContextCloser = (*Client)(nil)
 
 // Error codes for the Redis adapter.
 const (
@@ -228,21 +232,15 @@ func (c *Client) Health(ctx context.Context) error {
 	return nil
 }
 
-// Close releases the underlying Redis connection.
-//
-// Delegates to CloseCtx(context.Background()) for back-compat.
-func (c *Client) Close() error {
-	return c.CloseCtx(context.Background())
-}
-
-// CloseCtx releases the underlying Redis connection, bounded by ctx.
+// Close releases the underlying Redis connection, bounded by ctx.
 //
 // go-redis Client.Close() is synchronous and may block on in-flight commands.
-// CloseCtx wraps it in a goroutine so the caller's shutdown budget is honoured;
+// Close wraps it in a goroutine so the caller's shutdown budget is honoured;
 // if ctx expires, in-flight commands may be abandoned (process-exit semantics).
 //
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
-func (c *Client) CloseCtx(ctx context.Context) error {
+// ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
+func (c *Client) Close(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

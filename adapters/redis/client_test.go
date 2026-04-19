@@ -64,7 +64,7 @@ func TestClientClose_Success(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
 
-	err := client.Close()
+	err := client.Close(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, mock.closed)
 }
@@ -74,7 +74,7 @@ func TestClientClose_Failure(t *testing.T) {
 	mock.closeErr = errMock
 	client := newClientFromCmdable(mock, Config{})
 
-	err := client.Close()
+	err := client.Close(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
 }
@@ -186,38 +186,46 @@ func TestNewClient_SentinelEmptyMaster(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// T18: Client.CloseCtx(ctx) tests
+// T18: Client.Close(ctx) tests
 // ---------------------------------------------------------------------------
 
-func TestClientCloseCtx_AcceptsCtx(t *testing.T) {
+func TestClientClose_AcceptsCtx(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := client.CloseCtx(ctx)
+	err := client.Close(ctx)
 	assert.NoError(t, err)
 	assert.True(t, mock.closed)
 }
 
-func TestClientCloseCtx_PreCancelledCtxReturnsError(t *testing.T) {
+func TestClientClose_PreCancelledCtxReturnsError(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
 
-	err := client.CloseCtx(cancelledCtx)
-	require.Error(t, err, "CloseCtx with pre-cancelled ctx must return error")
+	err := client.Close(cancelledCtx)
+	require.Error(t, err, "Close with pre-cancelled ctx must return error")
 }
 
-func TestClientCloseCtx_Failure(t *testing.T) {
+func TestClientClose_ContextFailure(t *testing.T) {
 	mock := newMockCmdable()
 	mock.closeErr = errMock
 	client := newClientFromCmdable(mock, Config{})
 
-	err := client.CloseCtx(context.Background())
+	err := client.Close(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_CONNECT")
+}
+
+// TestClient_ImplementsContextCloser verifies the compile-time assertion at
+// package level. This is a belt-and-suspenders test confirming the interface.
+func TestClient_ImplementsContextCloser(t *testing.T) {
+	var _ interface {
+		Close(ctx context.Context) error
+	} = (*Client)(nil)
 }
