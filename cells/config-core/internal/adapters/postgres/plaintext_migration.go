@@ -29,6 +29,37 @@ type PlaintextMigrationResult struct {
 	Skipped int
 }
 
+// migTableQueries holds the SQL for a specific table's migration.
+type migTableQueries struct {
+	selectQ string
+	updateQ string
+}
+
+// tableQueries returns the SQL queries for the given table name.
+func tableQueries(table string) (migTableQueries, error) {
+	switch table {
+	case "config_entries":
+		return migTableQueries{
+			selectQ: `SELECT id, key, value FROM config_entries WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`,
+			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`,
+		}, nil
+	case "config_versions":
+		return migTableQueries{
+			selectQ: `SELECT id, key, value FROM config_versions WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`,
+			updateQ: `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`,
+		}, nil
+	default:
+		return migTableQueries{}, fmt.Errorf("plaintext-migrator: unknown table %q", table)
+	}
+}
+
+// pendingRow holds a single row fetched from the pending-encryption query.
+type pendingRow struct {
+	id    string
+	key   string
+	value string
+}
+
 // plaintextMigrator encrypts sensitive config_entries rows that were written
 // before the ValueTransformer was wired (value_cipher IS NULL AND sensitive=true).
 // It is idempotent: rows already encrypted (value_cipher IS NOT NULL) are
@@ -73,82 +104,26 @@ func (m *plaintextMigrator) MigrateConfigVersions(ctx context.Context) (Plaintex
 
 // migrateTable is the shared implementation for both tables.
 func (m *plaintextMigrator) migrateTable(ctx context.Context, table string) (PlaintextMigrationResult, error) {
-	const (
-		selectConfigEntries  = `SELECT id, key, value FROM config_entries WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`
-		selectConfigVersions = `SELECT id, key, value FROM config_versions WHERE sensitive = true AND value_cipher IS NULL LIMIT $1`
-		updateConfigEntries  = `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`
-		updateConfigVersions = `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5`
-	)
-
-	var selectQ, updateQ string
-	switch table {
-	case "config_entries":
-		selectQ, updateQ = selectConfigEntries, updateConfigEntries
-	case "config_versions":
-		selectQ, updateQ = selectConfigVersions, updateConfigVersions
-	default:
-		return PlaintextMigrationResult{}, fmt.Errorf("plaintext-migrator: unknown table %q", table)
+	q, err := tableQueries(table)
+	if err != nil {
+		return PlaintextMigrationResult{}, err
 	}
 
 	var result PlaintextMigrationResult
-
 	for {
-		rows, err := m.db.Query(ctx, selectQ, m.cfg.BatchSize)
+		batch, err := m.fetchBatch(ctx, q.selectQ, table)
 		if err != nil {
-			return result, errcode.Wrap(errcode.ErrConfigRepoQuery,
-				fmt.Sprintf("plaintext-migrator: query %s", table), err)
+			return result, err
 		}
-
-		type pendingRow struct {
-			id    string
-			key   string
-			value string
-		}
-		var batch []pendingRow
-		for rows.Next() {
-			var r pendingRow
-			if scanErr := rows.Scan(&r.id, &r.key, &r.value); scanErr != nil {
-				rows.Close()
-				return result, errcode.Wrap(errcode.ErrConfigRepoQuery,
-					fmt.Sprintf("plaintext-migrator: scan %s", table), scanErr)
-			}
-			batch = append(batch, r)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return result, errcode.Wrap(errcode.ErrConfigRepoQuery,
-				fmt.Sprintf("plaintext-migrator: rows err %s", table), err)
-		}
-
 		if len(batch) == 0 {
-			break // nothing left to migrate
+			break
 		}
-
-		for _, row := range batch {
-			aad := crypto.AADForConfig("config-core", row.key)
-			ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
-			if encErr != nil {
-				return result, fmt.Errorf("plaintext-migrator: encrypt key=%s: %w", row.key, encErr)
-			}
-			execErr := m.updateRow(ctx, updateQ, row.id, ct, keyID, nonce, edk)
-			if execErr != nil {
-				return result, fmt.Errorf("plaintext-migrator: update key=%s: %w", row.key, execErr)
-			}
-			result.Processed++
-			slog.Info("plaintext-migrator: encrypted row",
-				slog.String("table", table),
-				slog.String("key", row.key),
-				slog.String("key_id", keyID))
+		if err := m.encryptBatch(ctx, q.updateQ, table, batch, &result); err != nil {
+			return result, err
 		}
-
-		if m.cfg.RateLimitDelay > 0 {
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(m.cfg.RateLimitDelay):
-			}
+		if err := m.waitRateLimit(ctx); err != nil {
+			return result, err
 		}
-
 		if len(batch) < m.cfg.BatchSize {
 			break // last batch was smaller than limit — no more rows
 		}
@@ -159,6 +134,64 @@ func (m *plaintextMigrator) migrateTable(ctx context.Context, table string) (Pla
 		slog.Int("processed", result.Processed),
 		slog.Int("skipped", result.Skipped))
 	return result, nil
+}
+
+// fetchBatch queries the DB for the next batch of unencrypted rows.
+func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table string) ([]pendingRow, error) {
+	rows, err := m.db.Query(ctx, selectQ, m.cfg.BatchSize)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+			fmt.Sprintf("plaintext-migrator: query %s", table), err)
+	}
+	defer rows.Close()
+
+	var batch []pendingRow
+	for rows.Next() {
+		var r pendingRow
+		if scanErr := rows.Scan(&r.id, &r.key, &r.value); scanErr != nil {
+			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+				fmt.Sprintf("plaintext-migrator: scan %s", table), scanErr)
+		}
+		batch = append(batch, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+			fmt.Sprintf("plaintext-migrator: rows err %s", table), err)
+	}
+	return batch, nil
+}
+
+// encryptBatch encrypts each row in the batch and writes it back.
+func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult) error {
+	for _, row := range batch {
+		aad := crypto.AADForConfig("config-core", row.key)
+		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
+		if encErr != nil {
+			return fmt.Errorf("plaintext-migrator: encrypt key=%s: %w", row.key, encErr)
+		}
+		if err := m.updateRow(ctx, updateQ, row.id, ct, keyID, nonce, edk); err != nil {
+			return fmt.Errorf("plaintext-migrator: update key=%s: %w", row.key, err)
+		}
+		result.Processed++
+		slog.Info("plaintext-migrator: encrypted row",
+			slog.String("table", table),
+			slog.String("key", row.key),
+			slog.String("key_id", keyID))
+	}
+	return nil
+}
+
+// waitRateLimit sleeps between batches if RateLimitDelay is configured.
+func (m *plaintextMigrator) waitRateLimit(ctx context.Context) error {
+	if m.cfg.RateLimitDelay <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(m.cfg.RateLimitDelay):
+		return nil
+	}
 }
 
 // updateRow executes the UPDATE for a single row.
