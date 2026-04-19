@@ -345,6 +345,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrKeyProviderEncryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
+	errcode.ErrKeyProviderTransient:     http.StatusInternalServerError,
 	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
 	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
 
