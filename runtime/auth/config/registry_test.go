@@ -322,6 +322,92 @@ func TestNewJWTVerifierFromRegistry_EmptyAudiences(t *testing.T) {
 	require.Error(t, err, "empty Audiences must return error for verifier construction")
 }
 
+// ----- F1-001 / F1-002 whitespace trim tests -----
+
+// TestNew_RealMode_WhitespaceOnlyIssuerRejected verifies that a whitespace-only
+// Issuer is rejected in RealMode (F1-001 security fix).
+func TestNew_RealMode_WhitespaceOnlyIssuerRejected(t *testing.T) {
+	_, err := config.New(config.Config{
+		Issuer:    "   ",
+		Audiences: []string{"gocell"},
+		RealMode:  true,
+	})
+	require.Error(t, err, "RealMode + whitespace-only Issuer must return error")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+// TestNew_RealMode_WhitespaceAudienceElement verifies that a whitespace-only
+// audience element is treated as empty and rejected in RealMode (F1-002 security fix).
+func TestNew_RealMode_WhitespaceAudienceElement(t *testing.T) {
+	_, err := config.New(config.Config{
+		Issuer:    "https://gocell.example",
+		Audiences: []string{"   "},
+		RealMode:  true,
+	})
+	require.Error(t, err, "RealMode + whitespace-only Audience element must return error")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrAuthVerifierConfig, ecErr.Code)
+}
+
+// TestNew_TrimsIssuerAndAudiences verifies that leading/trailing whitespace is
+// trimmed and stored trimmed values are returned by accessors.
+func TestNew_TrimsIssuerAndAudiences(t *testing.T) {
+	reg, err := config.New(config.Config{
+		Issuer:    " acme ",
+		Audiences: []string{" a ", " b "},
+		RealMode:  true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "acme", reg.Issuer(), "issuer must be trimmed")
+	assert.Equal(t, []string{"a", "b"}, reg.Audiences(), "audience elements must be trimmed")
+}
+
+// ----- F1-005 WithKeys signing-only provider tests -----
+
+// stubSigningOnlyProvider satisfies auth.SigningKeyProvider but does NOT
+// implement auth.VerificationKeyStore — used to test the WithKeys type
+// assertion failure path.
+type stubSigningOnlyProvider struct{}
+
+func (s *stubSigningOnlyProvider) SigningKey() *rsa.PrivateKey { return nil }
+func (s *stubSigningOnlyProvider) SigningKeyID() string        { return "signing-only-kid" }
+
+// TestWithKeys_SigningOnly_LeavesVerificationStoreNil verifies that when a
+// provider implements only SigningKeyProvider (not VerificationKeyStore), the
+// type assertion in WithKeys fails gracefully and VerificationKeyStore remains nil.
+func TestWithKeys_SigningOnly_LeavesVerificationStoreNil(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	prov := &stubSigningOnlyProvider{}
+	reg, err := config.FromEnv(config.WithKeys(prov))
+	require.NoError(t, err)
+
+	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set")
+	assert.Nil(t, reg.VerificationKeyStore(),
+		"VerificationKeyStore must be nil when provider does not implement it")
+}
+
+// TestWithKeys_SigningOnly_VerifierReturnsError verifies that
+// NewJWTVerifierFromRegistry returns an error when VerificationKeyStore is nil.
+func TestWithKeys_SigningOnly_VerifierReturnsError(t *testing.T) {
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+
+	prov := &stubSigningOnlyProvider{}
+	reg, err := config.FromEnv(config.WithKeys(prov))
+	require.NoError(t, err)
+
+	_, err = config.NewJWTVerifierFromRegistry(reg)
+	require.Error(t, err, "NewJWTVerifierFromRegistry must fail when VerificationKeyStore is nil")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
+}
+
 // TestNewJWTIssuerVerifierFromRegistry_EndToEnd verifies the full round-trip:
 // issue a token via Registry-constructed issuer, verify with Registry-constructed verifier.
 func TestNewJWTIssuerVerifierFromRegistry_EndToEnd(t *testing.T) {

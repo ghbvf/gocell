@@ -1,9 +1,3 @@
-// Package config provides the JWT configuration Registry — a single source of
-// truth for JWT issuer, audiences, key material, and clock.
-//
-// ref: Hydra internal/driver/config.DefaultProvider — single Registry pattern
-// ref: Kratos middleware/auth/jwt WithParserOptions — one-time injection
-// plan: docs/plans/202604191515-auth-federated-whistle.md §F1
 package config
 
 import (
@@ -60,12 +54,23 @@ type Config struct {
 // Configuration errors use errcode.ErrAuthVerifierConfig so operators can
 // distinguish startup misconfigurations from runtime key errors.
 func New(cfg Config) (*Registry, error) {
+	issuer := strings.TrimSpace(cfg.Issuer)
+
+	// Trim and filter whitespace-only audience elements before validation so
+	// that "   " is treated identically to "" (avoids RealMode bypass).
+	var auds []string
+	for _, a := range cfg.Audiences {
+		if t := strings.TrimSpace(a); t != "" {
+			auds = append(auds, t)
+		}
+	}
+
 	if cfg.RealMode {
-		if cfg.Issuer == "" {
+		if issuer == "" {
 			return nil, errcode.New(errcode.ErrAuthVerifierConfig,
 				"JWT registry: Issuer is required in real mode (set GOCELL_JWT_ISSUER)")
 		}
-		if len(cfg.Audiences) == 0 {
+		if len(auds) == 0 {
 			return nil, errcode.New(errcode.ErrAuthVerifierConfig,
 				"JWT registry: Audiences must not be empty in real mode (set GOCELL_JWT_AUDIENCE)")
 		}
@@ -76,11 +81,8 @@ func New(cfg Config) (*Registry, error) {
 		clock = time.Now
 	}
 
-	auds := make([]string, len(cfg.Audiences))
-	copy(auds, cfg.Audiences)
-
 	return &Registry{
-		issuer:    cfg.Issuer,
+		issuer:    issuer,
 		audiences: auds,
 		keyProv:   cfg.KeyProv,
 		keyStore:  cfg.KeyStore,
@@ -160,8 +162,8 @@ func WithEnvClock(fn func() time.Time) EnvOption {
 const envVarIssuer = "GOCELL_JWT_ISSUER"
 
 // envVarAudience is the environment variable for the JWT audience.
-// Future: GOCELL_JWT_AUDIENCES (comma-separated multi-value) — see
-// docs/ops/env-vars.md for migration notes.
+// Future: GOCELL_JWT_AUDIENCES (comma-separated multi-value) — not yet
+// implemented; priority and migration path will be defined when introduced.
 const envVarAudience = "GOCELL_JWT_AUDIENCE"
 
 // FromEnv constructs a Registry by reading GOCELL_JWT_ISSUER and
@@ -241,6 +243,7 @@ func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (
 	}
 
 	baseOpts := []auth.JWTVerifierOption{
+		// auds is guaranteed non-empty by the check above; auds[1:] is the zero-length slice when len==1.
 		auth.WithExpectedAudiences(auds[0], auds[1:]...),
 		auth.WithExpectedIssuer(reg.issuer),
 		auth.WithVerifierClock(reg.Clock()),
