@@ -47,6 +47,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -114,7 +115,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx,
 		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		eb, kernelmetrics.NopProvider{})
+		eb, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	require.NotNil(t, pgRes,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")

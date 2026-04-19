@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,7 +50,7 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session)
+	repo := NewConfigRepository(session, crypto.NoopTransformer{})
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {

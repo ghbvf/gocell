@@ -12,6 +12,7 @@ import (
 	cellpg "github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +55,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session)
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -137,7 +138,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session)
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
 
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
