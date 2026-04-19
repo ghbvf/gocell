@@ -8,6 +8,7 @@ import (
 	"os"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	accesscore "github.com/ghbvf/gocell/cells/access-core"
 	configcore "github.com/ghbvf/gocell/cells/config-core"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -114,7 +115,7 @@ func buildKeyProvider(storageBackend string) (kcrypto.KeyProvider, error) {
 		slog.Info("config-core: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := crypto.NewVaultTransitKeyProviderFromEnv()
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv()
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
