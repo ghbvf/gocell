@@ -87,11 +87,11 @@ type AppDeps struct {
 	// values at the repository boundary. nil = NoopTransformer (no encryption).
 	// Set via GOCELL_KEY_PROVIDER=local-aes|vault-transit in production;
 	// left nil for test struct-literal AppDeps (in-memory mode).
+	//
+	// BuildBootstrap constructs a ValueTransformer from KeyProvider internally.
+	// Tests that need to inject a custom transformer should use configCellOpts
+	// (e.g. configcore.WithValueTransformer(fakeT)).
 	KeyProvider crypto.KeyProvider
-
-	// ValueTransformer is the encryption interface passed to the config-core cell.
-	// Constructed from KeyProvider by AppDepsFromEnv; tests may inject directly.
-	ValueTransformer crypto.ValueTransformer
 }
 
 // AppDepsFromEnv reads all environment variables and builds a fully-populated
@@ -136,10 +136,12 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 	// postgres storage must fail-fast when no provider is configured.
 	// ref: kubernetes/kubernetes EncryptionConfig — missing provider is a
 	// startup error, never a silent NoopTransformer fallback.
-	kp, vt, err := buildKeyProvider(topo.StorageBackend)
+	kp, err := buildKeyProvider(topo.StorageBackend)
 	if err != nil {
 		return nil, fmt.Errorf("key provider: %w", err)
 	}
+	// Derive ValueTransformer from KeyProvider for postgres wiring.
+	vt := keyProviderToTransformer(kp)
 
 	// Topology is the single source of truth for adapter/storage selection.
 	// buildConfigCoreOpts receives it as a parameter and must not re-read the
@@ -174,21 +176,20 @@ func AppDepsFromEnv(ctx context.Context) (*AppDeps, error) {
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
 	return &AppDeps{
-		Topology:         topo,
-		PGResource:       pgRes,
-		configCellOpts:   cellOpts,
-		JWTDeps:          jwt,
-		PromStack:        ps,
-		CursorCodecs:     codecs,
-		HMACKey:          hmacKey,
-		EventBus:         eb,
-		InternalGuard:    internalGuard,
-		MetricsToken:     metricsToken,
-		VerboseToken:     verboseToken,
-		metricsHandler:   metricsHandler,
-		verboseOpts:      verboseOpts,
-		KeyProvider:      kp,
-		ValueTransformer: vt,
+		Topology:       topo,
+		PGResource:     pgRes,
+		configCellOpts: cellOpts,
+		JWTDeps:        jwt,
+		PromStack:      ps,
+		CursorCodecs:   codecs,
+		HMACKey:        hmacKey,
+		EventBus:       eb,
+		InternalGuard:  internalGuard,
+		MetricsToken:   metricsToken,
+		VerboseToken:   verboseToken,
+		metricsHandler: metricsHandler,
+		verboseOpts:    verboseOpts,
+		KeyProvider:    kp,
 	}, nil
 }
 
@@ -266,13 +267,20 @@ func BuildBootstrap(deps *AppDeps, extra ...bootstrap.Option) (*bootstrap.Bootst
 // When configCellOpts is populated (via AppDepsFromEnv), those options are used.
 // In tests (struct literal without configCellOpts), in-memory defaults apply.
 // When deps.configCellOpts is nil, falls back to in-memory defaults; this is the test-injection contract.
+//
+// ValueTransformer is derived from KeyProvider here (single source of truth).
+// Tests that need a custom transformer inject it via configCellOpts:
+//
+//	deps.configCellOpts = []configcore.Option{configcore.WithValueTransformer(fakeT)}
 func buildConfigCell(deps *AppDeps) *configcore.ConfigCore {
 	base := []configcore.Option{
 		configcore.WithPublisher(deps.EventBus),
 		configcore.WithCursorCodec(deps.CursorCodecs.config),
 	}
-	if deps.ValueTransformer != nil {
-		base = append(base, configcore.WithValueTransformer(deps.ValueTransformer))
+	// Derive ValueTransformer from KeyProvider. When KeyProvider is nil (test
+	// struct-literal path), keyProviderToTransformer returns NoopTransformer.
+	if vt := keyProviderToTransformer(deps.KeyProvider); vt != nil {
+		base = append(base, configcore.WithValueTransformer(vt))
 	}
 	if deps.configCellOpts != nil {
 		return configcore.NewConfigCore(append(base, deps.configCellOpts...)...)
@@ -327,13 +335,12 @@ func assembleFromDeps(d assembledDeps) []bootstrap.Option {
 	return opts
 }
 
-// buildKeyProvider constructs the KeyProvider and ValueTransformer from
-// GOCELL_KEY_PROVIDER env var. Supported values: "local-aes", "vault-transit".
-// In memory mode (empty env var) a NoopTransformer is returned (no encryption).
-// In postgres mode (empty env var) the function logs a warning and falls back to
-// NoopTransformer to allow deployment without encryption — operators should set
-// GOCELL_KEY_PROVIDER=local-aes for production.
-func buildKeyProvider(storageBackend string) (crypto.KeyProvider, crypto.ValueTransformer, error) {
+// buildKeyProvider constructs the KeyProvider from GOCELL_KEY_PROVIDER env var.
+// Supported values: "local-aes", "vault-transit".
+// In memory mode (empty env var) nil is returned (no encryption; NoopTransformer via keyProviderToTransformer).
+// In postgres mode (empty env var) a warning is logged and nil is returned —
+// operators should set GOCELL_KEY_PROVIDER=local-aes for production.
+func buildKeyProvider(storageBackend string) (crypto.KeyProvider, error) {
 	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
 	if providerName == "" {
 		if storageBackend == "postgres" {
@@ -341,29 +348,36 @@ func buildKeyProvider(storageBackend string) (crypto.KeyProvider, crypto.ValueTr
 				slog.String("storage_backend", storageBackend),
 				slog.String("recommendation", "set GOCELL_KEY_PROVIDER=local-aes for production"))
 		}
-		return nil, crypto.NoopTransformer{}, nil
+		return nil, nil
 	}
 	switch providerName {
 	case "local-aes":
 		kp, err := crypto.NewLocalAESKeyProviderFromEnv()
 		if err != nil {
-			return nil, nil, fmt.Errorf("local-aes key provider: %w", err)
+			return nil, fmt.Errorf("local-aes key provider: %w", err)
 		}
-		vt := crypto.NewValueTransformer(kp)
 		slog.Info("config-core: key provider initialized", slog.String("provider", "local-aes"))
-		return kp, vt, nil
+		return kp, nil
 	case "vault-transit":
 		kp, err := crypto.NewVaultTransitKeyProviderFromEnv()
 		if err != nil {
-			return nil, nil, fmt.Errorf("vault-transit key provider: %w", err)
+			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
-		vt := crypto.NewValueTransformer(kp)
 		slog.Info("config-core: key provider initialized", slog.String("provider", "vault-transit"))
-		return kp, vt, nil
+		return kp, nil
 	default:
-		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("unknown GOCELL_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
 	}
+}
+
+// keyProviderToTransformer wraps a KeyProvider in a ValueTransformer.
+// When kp is nil (no encryption configured), returns NoopTransformer.
+func keyProviderToTransformer(kp crypto.KeyProvider) crypto.ValueTransformer {
+	if kp == nil {
+		return crypto.NoopTransformer{}
+	}
+	return crypto.NewValueTransformer(kp)
 }
 
 // buildConfigCoreOpts selects storage-adapter options for config-core based on
@@ -421,9 +435,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		opts := []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
-		}
-		if vt != nil {
-			opts = append(opts, configcore.WithValueTransformer(vt))
+			configcore.WithValueTransformer(vt),
 		}
 		return pgRes, opts, nil
 
