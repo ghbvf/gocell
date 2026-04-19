@@ -11,7 +11,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,9 +28,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
-	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/eventrouter"
-	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -640,6 +636,8 @@ type Bootstrap struct {
 	hookTimeoutSet                  bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                    cell.LifecycleHookObserver
 	metricsProvider                 kernelmetrics.Provider
+	shutdownMet                     *shutdownMetrics // nil only when provider is nil
+	shutdownMetricsErr              error            // non-nil when metric registration failed in New
 	runOnce                         sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
@@ -675,6 +673,12 @@ type Bootstrap struct {
 }
 
 // New creates a Bootstrap with the given options.
+//
+// shutdownMetrics are registered against the provider here (plan option B):
+// instruments live as long as the Bootstrap, matching the "register at
+// start-up" convention used by relay_collector.go and the hook dispatcher.
+// On registration failure the error is stored and surfaced by Run() at
+// phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
 		httpAddr:             ":8080",
@@ -697,6 +701,16 @@ func New(opts ...Option) *Bootstrap {
 	})
 	for _, reg := range b.lifecycleRegistrars {
 		reg(b.lifecycle)
+	}
+	// Register shutdown metrics against the (potentially Nop) provider.
+	// newShutdownMetrics returns (nil, nil) for NopProvider — that is the
+	// correct "disabled" state; nil *shutdownMetrics is safe to call.
+	m, err := newShutdownMetrics(b.metricsProvider)
+	if err != nil {
+		// Store error; phase0 will surface it before any component starts.
+		b.shutdownMetricsErr = err
+	} else {
+		b.shutdownMet = m
 	}
 	return b
 }
@@ -725,679 +739,88 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 // Run executes the full startup sequence. It blocks until ctx is cancelled
 // (or a signal is received), then performs orderly shutdown.
 //
-// Startup sequence (ref: uber-go/fx app.go Run):
-//  1. Load config
-//  2. Initialise publisher/subscriber (default: InMemoryEventBus for both)
-//  3. Initialise assembly (inject config into Dependencies.Config)
-//  4. Cell.Init -> Cell.Start (assembly.Start)
-//  5. RegisterRoutes for HTTPRegistrar cells
-//  6. RegisterSubscriptions for EventRegistrar cells
-//  7. Start HTTP server
-//  8. Start workers
-//  9. Wait for signal (runtime/shutdown)
-//  10. Shutdown: stop workers -> drain HTTP -> stop assembly -> close subscriber/publisher
+// The ten phases and their responsibilities:
 //
-// If any step fails, already-started components are rolled back in reverse.
-func (b *Bootstrap) Run(ctx context.Context) error { //nolint:gocognit // complexity tracked as backlog R1 BOOTSTRAP-RUN-COGNIT-01
+//	phase0: validate all options before any side effects
+//	phase1: load config + create watcher + register middleware closers
+//	phase2: init publisher/subscriber (default InMemoryEventBus)
+//	phase3: init and start assembly; register LIFO teardown
+//	phase4: discover auth verifier; bind config-watcher OnChange; start watcher
+//	phase5: build HTTP router + health handler; register all health checkers
+//	phase6: register event subscriptions; start event router on runCtx
+//	phase7: start HTTP server; wire httpErrCh
+//	phase8: start worker group on runCtx; wire workerErrCh
+//	phase9: block until external ctx cancel, HTTP error, worker error, or router error
+//	phase10: LIFO teardown (readiness flip → pre-shutdown delay → components)
+//
+// runCtx is derived from context.Background(), NOT from the caller ctx.
+// External ctx cancellation only triggers phase9 to return; workers and the
+// event router continue until their phase10 teardown functions run.
+//
+// ref: uber-go/fx app.go (Run/Start/Stop lifecycle, withRollback pattern)
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go (engageStopProcedure LIFO)
+func (b *Bootstrap) Run(ctx context.Context) error {
 	// Guard against double-Run. A second call would create duplicate
 	// teardowns and race on shared resources.
-	// ref: uber-go/fx App.Run — returns immediately if already started
+	// ref: uber-go/fx App.Run — returns immediately if already started.
 	started := false
 	b.runOnce.Do(func() { started = true })
 	if !started {
 		return fmt.Errorf("bootstrap: Run called more than once")
 	}
 
-	// Step 0: Validate inputs before any side effects.
-	// Health checker params are pure data — no reason to defer to runtime.
-	for _, hc := range b.healthCheckers {
-		if hc.name == "" {
-			return fmt.Errorf("bootstrap: health checker name must not be empty")
-		}
-		if hc.fn == nil {
-			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
-		}
-	}
-
-	// Fail-fast: nil circuit breaker means the operator called
-	// WithCircuitBreaker(nil) which would silently skip CB installation,
-	// leaving handlers unprotected despite the caller's intent.
-	if b.circuitBreakerNil {
-		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
-	}
-
-	// Fail-fast: nil (or typed-nil) BrokerHealthChecker means the operator
-	// called WithBrokerHealth(nil) which would nil-deref on the first
-	// /readyz probe instead of surfacing the misconfiguration at startup.
-	if b.brokerHealthNil {
-		return fmt.Errorf("bootstrap: broker health checker must not be nil")
-	}
-
-	// Fail-fast: validate internal endpoint guard before any side effects.
-	// Mirrors the circuitBreakerNil pattern: surface misconfiguration at Run()
-	// rather than silently operating without the intended protection.
-	if err := b.validateInternalGuard(); err != nil {
+	if err := b.phase0ValidateOptions(); err != nil {
 		return err
 	}
 
-	// Fail-fast: nil relay passed to WithRelayHealth — surfaces misconfiguration
-	// at startup instead of silently skipping relay health registration.
-	if b.relayHealthNil {
-		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
-	}
-
-	// Fail-fast: WithAuthMiddleware and WithPublicEndpoints are mutually
-	// exclusive. Both set authPublicEndpoints but with different semantics
-	// (explicit verifier vs. discovery). Allowing both silently creates
-	// order-dependent behavior.
-	if b.authVerifier != nil && b.authDiscovery {
-		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithPublicEndpoints " +
-			"are mutually exclusive; use WithPublicEndpoints (recommended)")
-	}
-
-	// Track teardown functions for rollback (LIFO order).
-	var teardowns []func(context.Context) error
-
-	// hh is declared here (not at Step 5) so the rollback closure can
-	// mark readyz unhealthy when rolling back after the HTTP server
-	// has started. Before Step 5 executes, hh remains nil and the
-	// nil check in rollback is a no-op.
-	var hh *health.Handler
+	s := newPhaseState()
+	// Safety net: always release runCtx resources on exit (phase10 also calls
+	// runCancel after teardowns, but defer guarantees release on panic paths).
+	defer s.runCancel()
 
 	rollback := func(cause error) error {
-		slog.Error("bootstrap: startup failed, rolling back", slog.Any("error", cause))
-		if hh != nil {
-			hh.SetShuttingDown()
+		if s.hh != nil {
+			s.hh.SetShuttingDown()
 		}
 		rctx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 		defer cancel()
-		for i := len(teardowns) - 1; i >= 0; i-- {
-			if err := teardowns[i](rctx); err != nil {
-				slog.Warn("bootstrap: rollback step failed", slog.Any("error", err))
-			}
-		}
-		return cause
+		return s.rollback(rctx, cause)
 	}
 
-	// Step 1: Load config.
-	var cfg config.Config
-	if b.configPath != "" {
-		var err error
-		cfg, err = config.Load(b.configPath, b.envPrefix)
-		if err != nil {
-			return fmt.Errorf("bootstrap: load config: %w", err)
-		}
-	} else {
-		cfg = config.NewFromMap(make(map[string]any))
+	if err := b.phase1LoadConfig(s); err != nil {
+		return err // no side effects started yet; no rollback needed
 	}
-
-	// Step 1.5a: Create config watcher (if config file provided).
-	// The watcher is created here but NOT started until Step 4.5, after the
-	// OnChange callback is registered. This prevents a startup window where
-	// file events are consumed but no callback is bound to handle them.
-	var cfgWatcher *config.Watcher
-	if b.configPath != "" {
-		w, err := b.configWatcherFactory(b.configPath)
-		if err != nil {
-			return rollback(fmt.Errorf("bootstrap: config watcher: %w", err))
-		} else {
-			cfgWatcher = w
-			teardowns = append(teardowns, func(_ context.Context) error {
-				return cfgWatcher.Close()
-			})
-		}
+	b.phase2InitPubSub(s)
+	if err := b.phase3InitAssembly(ctx, s); err != nil {
+		return rollback(err)
 	}
-
-	// Step 1.5b: Register closable middleware dependencies for teardown.
-	// Middleware like ratelimit.Limiter owns background goroutines; if injected
-	// via bootstrap convenience options, bootstrap takes ownership of Close.
-	for _, cl := range b.closers {
-		teardowns = append(teardowns, func(_ context.Context) error {
-			return cl.Close()
-		})
-	}
-
-	// Step 2: Initialise publisher and subscriber.
-	// If neither publisher nor subscriber is set, create a default InMemoryEventBus
-	// that satisfies both roles — preserving the original single-bus behaviour.
-	pub := b.publisher
-	sub := b.subscriber
-	if pub == nil && sub == nil {
-		eb := eventbus.New()
-		pub = eb
-		sub = eb
-	}
-	// Register teardown for subscriber (if it implements io.Closer).
-	if cl, ok := sub.(io.Closer); ok {
-		teardowns = append(teardowns, func(_ context.Context) error {
-			return cl.Close()
-		})
-	}
-	// Register teardown for publisher (if it implements io.Closer and is not
-	// the same instance as the subscriber — avoid double-close).
-	if cl, ok := pub.(io.Closer); ok && any(pub) != any(sub) {
-		teardowns = append(teardowns, func(_ context.Context) error {
-			return cl.Close()
-		})
-	}
-
-	// Step 3-4: Initialise and start assembly.
-	asm := b.assembly
-	if asm == nil {
-		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-		if b.hookTimeoutSet {
-			cfg.HookTimeout = b.hookTimeout
-		}
-		if b.hookObserver != nil {
-			cfg.HookObserver = b.hookObserver
-		}
-		// Thread the bootstrap-level Provider into the default assembly so
-		// the hook dispatcher's drop / queue metrics flow to the same
-		// registry as the rest of the application without forcing each
-		// caller to construct their own assembly. Pre-built assemblies
-		// (b.assembly != nil) already own their MetricsProvider through
-		// assembly.Config — we must not clobber it.
-		if b.metricsProvider != nil {
-			cfg.MetricsProvider = b.metricsProvider
-		}
-		asm = assembly.New(cfg)
-	} else if b.hookTimeoutSet || b.hookObserver != nil {
-		// Pre-built assembly owns its own hook config — WithHookTimeout /
-		// WithHookObserver are silently superseded by assembly.Config. Warn
-		// so operators don't spend time debugging why the option had no effect.
-		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
-	}
-
-	// Register an unconditional Shutdown teardown BEFORE StartWithConfig.
-	// CoreAssembly.New() eagerly spawns the hook-dispatcher goroutine;
-	// if Start fails the goroutine stays alive until someone calls
-	// Shutdown/Stop. Placing this teardown first in the slice ensures the
-	// rollback LIFO sequence reaches it even when every later teardown
-	// succeeds. Shutdown is idempotent (sync.Once); after Stop runs the
-	// second call is a no-op.
-	//
-	// ref: uber-go/fx app.go Rollback — every component registered in
-	// forward order must be torn down in reverse even if the next step
-	// never succeeded. Runaway background goroutines are the canonical
-	// symptom of skipping this rule.
-	teardowns = append(teardowns, func(_ context.Context) error {
-		asm.Shutdown()
-		return nil
-	})
-
-	// Inject config into assembly dependencies.
-	cfgMap := snapshotConfig(cfg)
-
-	if err := asm.StartWithConfig(ctx, cfgMap); err != nil {
-		return rollback(fmt.Errorf("bootstrap: assembly start: %w", err))
-	}
-	// reloads ensures shutdown follows a strict gate-before-drain order:
-	//   1. reject new callbacks,
-	//   2. wait for in-flight callbacks to leave,
-	//   3. stop the assembly.
-	//
-	// ref: net/http Server.Shutdown — stop accepting + drain active + close.
-	reloads := newReloadGate()
-
-	teardowns = append(teardowns, func(c context.Context) error {
-		drained := reloads.BeginShutdown()
-		select {
-		case <-drained:
-		case <-c.Done():
-			return c.Err()
-		}
-		return asm.Stop(c)
-	})
-
-	// Step 4.6: Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
-	// Registered after asm.Stop teardown so that lifecycle.Stop executes before asm.Stop
-	// in the LIFO teardown sequence, ensuring hooks can still access cell resources.
+	// Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
+	// Registered after the asm.Stop teardown (phase3) so that lifecycle.Stop
+	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
+	// still access cell resources during shutdown.
+	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
 	if err := b.lifecycle.Start(ctx); err != nil {
 		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
 	}
-	teardowns = append(teardowns, func(stopCtx context.Context) error {
+	s.addTeardown(func(stopCtx context.Context) error {
 		return b.lifecycle.Stop(stopCtx)
 	})
+	if err := b.phase4WireAuthAndWatcher(s); err != nil {
+		return rollback(err)
+	}
+	if err := b.phase5BuildHTTPRouter(s); err != nil {
+		return rollback(err)
+	}
+	if err := b.phase6StartEventRouter(s); err != nil {
+		return rollback(err)
+	}
+	if err := b.phase7StartHTTPServer(s); err != nil {
+		return rollback(err)
+	}
+	b.phase8StartWorkers(s)
 
-	// Step 4.5a: Discover auth verifier from cells (post-Init).
-	// When no explicit verifier was provided via WithAuthMiddleware but
-	// publicEndpoints are configured via WithPublicEndpoints, discover a
-	// cell implementing authProvider and use its TokenVerifier.
-	if b.authVerifier == nil && b.authDiscovery {
-		var discoveredFrom string
-		for _, id := range asm.CellIDs() {
-			if ap, ok := asm.Cell(id).(authProvider); ok {
-				if v := ap.TokenVerifier(); v != nil {
-					if discoveredFrom != "" {
-						return rollback(fmt.Errorf(
-							"bootstrap: multiple auth provider cells discovered: %q and %q; use WithAuthMiddleware to select explicitly",
-							discoveredFrom, id))
-					}
-					b.authVerifier = v
-					discoveredFrom = id
-				}
-			}
-		}
-		if b.authVerifier == nil {
-			return rollback(fmt.Errorf("bootstrap: WithPublicEndpoints requires an auth provider cell, but none was discovered"))
-		}
-		slog.Info("bootstrap: auth verifier discovered from cell",
-			slog.String("cell", discoveredFrom))
-	}
-
-	// Step 4.5b: Register config watcher OnChange callback (now that asm is started).
-	// Snapshot → Reload → Diff → notify ConfigReloader cells.
-	if cfgWatcher != nil {
-		yamlPath, envPrefix := b.configPath, b.envPrefix
-		cfgWatcher.OnChange(func(evt config.WatchEvent) {
-			if !reloads.TryEnter() {
-				slog.Warn("bootstrap: config reload rejected during shutdown",
-					slog.String("path", evt.Path))
-				return
-			}
-			defer reloads.Leave()
-
-			rc, ok := cfg.(config.Reloader)
-			if !ok {
-				return
-			}
-
-			oldSnap := snapshotConfig(cfg)
-
-			if err := rc.Reload(yamlPath, envPrefix); err != nil {
-				slog.Error("bootstrap: config reload failed", slog.Any("error", err))
-				return
-			}
-			slog.Info("bootstrap: config reloaded", slog.String("path", evt.Path))
-
-			newSnap := snapshotConfig(cfg)
-			added, updated, removed := config.Diff(oldSnap, newSnap)
-			if len(added) == 0 && len(updated) == 0 && len(removed) == 0 {
-				slog.Debug("bootstrap: config reloaded but no effective changes")
-				// No-op rewrite: generation incremented by Reload, but all cells
-				// are already at the latest state. Sync observedGeneration to
-				// prevent false drift (HasDrift would otherwise return true).
-				if og, ok := cfg.(config.ObservedGenerationer); ok {
-					if g, gOK := cfg.(config.Generationer); gOK {
-						og.SetObservedGeneration(g.Generation())
-					}
-				}
-				return
-			}
-
-			// Read config generation for tracking drift between config and cells.
-			var gen int64
-			if g, ok := cfg.(config.Generationer); ok {
-				gen = g.Generation()
-			}
-
-			allCellsOK := true
-			for _, id := range asm.CellIDs() {
-				c := asm.Cell(id)
-				cr, ok := c.(cell.ConfigReloader)
-				if !ok {
-					continue
-				}
-				var filteredPrefixes []string
-				if kf, ok := c.(cell.ConfigKeyFilterer); ok {
-					filteredPrefixes = kf.ConfigKeyPrefixes()
-					if len(filteredPrefixes) > 0 {
-						changedKeys := make([]string, 0, len(added)+len(updated)+len(removed))
-						changedKeys = append(changedKeys, added...)
-						changedKeys = append(changedKeys, updated...)
-						changedKeys = append(changedKeys, removed...)
-						if !config.NewKeyFilter(filteredPrefixes...).Matches(changedKeys) {
-							continue
-						}
-					}
-				}
-				// Clone per cell to guarantee isolation: a misbehaving handler
-				// cannot mutate slices/map seen by subsequent handlers.
-				// When the cell declares key prefixes, trim the config snapshot
-				// to only matching keys (minimal exposure principle).
-				cfgSnap := cloneMap(newSnap)
-				if len(filteredPrefixes) > 0 {
-					cfgSnap = filterMapByPrefixes(cfgSnap, filteredPrefixes)
-				}
-				event := cell.ConfigChangeEvent{
-					Added:      cloneStrings(added),
-					Updated:    cloneStrings(updated),
-					Removed:    cloneStrings(removed),
-					Config:     cfgSnap,
-					Generation: gen,
-				}
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							allCellsOK = false
-							slog.Error("bootstrap: config reload callback panic",
-								slog.String("cell", id),
-								slog.String("type", fmt.Sprintf("%T", r)))
-							slog.Debug("bootstrap: config reload callback panic detail",
-								slog.String("cell", id), slog.Any("panic", r))
-						}
-					}()
-					if err := cr.OnConfigReload(event); err != nil {
-						allCellsOK = false
-						slog.Error("bootstrap: config reload callback failed",
-							slog.String("cell", id),
-							slog.Any("error", err),
-							slog.Int64("config_generation", gen))
-					}
-				}()
-			}
-
-			// Mark the generation as observed only when all cells applied it
-			// successfully. A gap between Generation and ObservedGeneration
-			// indicates config drift — surfaced via config.HasDrift().
-			if allCellsOK {
-				if og, ok := cfg.(config.ObservedGenerationer); ok {
-					og.SetObservedGeneration(gen)
-				}
-			}
-		})
-		// Start after OnChange is bound so no events are consumed without a handler.
-		cfgWatcher.Start()
-	}
-
-	// Step 5: Build router with health handler.
-	// Use NewE (error-returning) so that configuration errors (e.g. invalid
-	// trusted proxies) enter the rollback path instead of panicking past
-	// already-started components (assembly, config watcher, pub/sub).
-	//
-	// ref: uber-go/fx — startup failures return error, trigger rollback
-	hh = health.New(asm)
-	if b.adapterInfo != nil {
-		hh.SetAdapterInfo(b.adapterInfo)
-	}
-	if b.verboseToken != "" {
-		hh.SetVerboseToken(b.verboseToken)
-	}
-	// registerHealthChecker wraps hh.RegisterChecker with an error return
-	// instead of a panic on duplicate names. Since hh is local to Run() and
-	// all registrations go through this closure, the panic path in
-	// RegisterChecker is effectively unreachable — the map check here
-	// catches duplicates first and returns a rollback-safe error.
-	registeredCheckerNames := make(map[string]struct{})
-	registerHealthChecker := func(name string, fn func() error) error {
-		if _, exists := registeredCheckerNames[name]; exists {
-			return fmt.Errorf("bootstrap: duplicate health checker %q", name)
-		}
-		hh.RegisterChecker(name, health.Checker(fn))
-		registeredCheckerNames[name] = struct{}{}
-		return nil
-	}
-	// Name/fn already validated in Step 0 (before any side effects).
-	for _, hc := range b.healthCheckers {
-		if err := registerHealthChecker(hc.name, hc.fn); err != nil {
-			return rollback(err)
-		}
-	}
-	// Auto-discover HealthContributor cells and register their probes.
-	// This replaces manual WithHealthChecker calls for cell-owned probes
-	// (e.g. session-store), aligning with the authProvider discovery pattern.
-	for _, id := range asm.CellIDs() {
-		if hcc, ok := asm.Cell(id).(cell.HealthContributor); ok {
-			cellCheckers := hcc.HealthCheckers()
-			cellNames := make([]string, 0, len(cellCheckers))
-			for k := range cellCheckers {
-				cellNames = append(cellNames, k)
-			}
-			sort.Strings(cellNames)
-			for _, name := range cellNames {
-				fn := cellCheckers[name]
-				if fn == nil {
-					return rollback(fmt.Errorf("bootstrap: cell %q returned nil health checker for %q", id, name))
-				}
-				if err := registerHealthChecker(name, fn); err != nil {
-					return rollback(err)
-				}
-			}
-		}
-	}
-	if cfgWatcher != nil {
-		if err := registerHealthChecker(configWatcherCheckerName, cfgWatcher.Health); err != nil {
-			return rollback(err)
-		}
-	}
-	// Register config-drift checker when the config supports generation tracking.
-	// Reuses config.HasDrift to avoid duplicating the generation comparison logic.
-	// Returns unhealthy when desired generation (config reloaded) differs from
-	// observed generation (all cells applied). Transient drift during reload is
-	// absorbed by K8s failureThreshold (default 3 consecutive failures).
-	if g, gOK := cfg.(config.Generationer); gOK {
-		if og, ogOK := cfg.(config.ObservedGenerationer); ogOK {
-			if err := registerHealthChecker(configDriftCheckerName, func() error {
-				if config.HasDrift(cfg) {
-					return fmt.Errorf("config drift: generation %d, observed %d",
-						g.Generation(), og.ObservedGeneration())
-				}
-				return nil
-			}); err != nil {
-				return rollback(err)
-			}
-		}
-	}
-	// Framework health handler is applied LAST so user-supplied router options
-	// cannot accidentally override it. WithHealthHandler sets r.healthHandler;
-	// the last call wins, so placing the framework handler after user options
-	// guarantees the bootstrap-managed handler is always used.
-	// Copy to avoid mutating b.routerOpts' backing array.
-	routerOpts := make([]router.Option, 0, len(b.routerOpts)+4)
-	routerOpts = append(routerOpts, b.routerOpts...)
-	// Wire trust-boundary policy via router.WithPublicEndpoints which configures
-	// auth bypass + tracing new-root + request_id rejection in a single option.
-	if len(b.authPublicEndpoints) > 0 {
-		routerOpts = append(routerOpts, router.WithPublicEndpoints(b.authPublicEndpoints))
-	}
-	if len(b.passwordResetExemptEndpoints) > 0 {
-		routerOpts = append(routerOpts, router.WithPasswordResetExemptEndpoints(b.passwordResetExemptEndpoints))
-	}
-	if b.passwordResetChangeEndpointHint != "" {
-		routerOpts = append(routerOpts, router.WithPasswordResetChangeEndpointHint(b.passwordResetChangeEndpointHint))
-	}
-	if b.authVerifier != nil {
-		routerOpts = append(routerOpts, router.WithAuthMiddleware(b.authVerifier, b.authPublicEndpoints))
-		var authMetrics *auth.AuthMetrics
-		if b.metricsProvider != nil {
-			am, err := auth.NewAuthMetrics(b.metricsProvider)
-			if err != nil {
-				return rollback(fmt.Errorf("bootstrap: register auth metrics: %w", err))
-			}
-			authMetrics = am
-		}
-		if authMetrics != nil {
-			routerOpts = append(routerOpts, router.WithAuthMetrics(authMetrics))
-		}
-	}
-	// Wire the internal path-prefix guard when configured.
-	// Validation already passed (Step 0), so b.internalGuard is non-nil iff
-	// b.internalGuardPrefix is also a valid prefix — safe to forward unconditionally.
-	if b.internalGuard != nil {
-		routerOpts = append(routerOpts, router.WithInternalPathPrefixGuard(b.internalGuardPrefix, b.internalGuard))
-	}
-	routerOpts = append(routerOpts, router.WithHealthHandler(hh))
-	rtr, err := router.NewE(routerOpts...)
-	if err != nil {
-		return rollback(fmt.Errorf("bootstrap: %w", err))
-	}
-
-	// Step 5 continued: Register HTTP routes for cells implementing HTTPRegistrar.
-	for _, id := range asm.CellIDs() {
-		c := asm.Cell(id)
-		if hr, ok := c.(cell.HTTPRegistrar); ok {
-			hr.RegisterRoutes(rtr)
-		}
-	}
-
-	// Step 6: Register event subscriptions via EventRouter.
-	// Cells declare handlers (non-blocking), then Router.Run starts consumption.
-	// Setup errors (e.g., missing DLX) abort startup.
-	//
-	// Invariant: if any cell declares subscriptions, a subscriber must be injected.
-	// Without this check, callers who migrate from WithEventBus to WithPublisher
-	// but forget WithSubscriber would silently lose all event consumption.
-	var routerErrCh chan error // nil channel: never selected in Step 9; assigned only when event router starts
-	if sub == nil {
-		// Check whether any cell implements EventRegistrar — if so, the missing
-		// subscriber is a configuration error, not a valid "no-events" setup.
-		for _, id := range asm.CellIDs() {
-			if _, ok := asm.Cell(id).(cell.EventRegistrar); ok {
-				return rollback(fmt.Errorf(
-					"bootstrap: cell %s implements EventRegistrar but no subscriber is configured; "+
-						"add WithSubscriber to bootstrap options", id))
-			}
-		}
-	}
-	if sub != nil {
-		var mws []outbox.SubscriptionMiddleware
-		if !b.disableObservabilityRestore {
-			mws = append(mws, outbox.ObservabilityContextMiddleware())
-		}
-		// Application-registered middleware runs inside observability restore so
-		// that any log lines or metrics emitted by ConsumerBase / custom middleware
-		// see the restored request_id / correlation_id / trace_id fields.
-		mws = append(mws, b.consumerMiddleware...)
-		var routerOpts []eventrouter.Option
-		if b.eventRouterReadyTimeoutSet {
-			routerOpts = append(routerOpts, eventrouter.WithReadyTimeout(b.eventRouterReadyTimeout))
-		}
-		evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
-			Inner:      sub,
-			Middleware: mws,
-		}, routerOpts...)
-		for _, id := range asm.CellIDs() {
-			c := asm.Cell(id)
-			if er, ok := c.(cell.EventRegistrar); ok {
-				if err := er.RegisterSubscriptions(evtRouter); err != nil {
-					return rollback(fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err))
-				}
-			}
-		}
-		if evtRouter.HandlerCount() > 0 {
-			if err := registerHealthChecker(eventRouterCheckerName, evtRouter.Health); err != nil {
-				return rollback(err)
-			}
-			slog.Info("bootstrap: starting event router",
-				slog.Int("handler_count", evtRouter.HandlerCount()))
-			routerErrCh = make(chan error, 1)
-			go func() {
-				routerErrCh <- evtRouter.Run(ctx)
-			}()
-			// Wait for all subscriptions to start or a setup error.
-			select {
-			case err := <-routerErrCh:
-				return rollback(fmt.Errorf("bootstrap: event router: %w", err))
-			case <-evtRouter.Running():
-				// All subscriptions consuming.
-			}
-			teardowns = append(teardowns, func(c context.Context) error {
-				return evtRouter.Close(c)
-			})
-		}
-	}
-
-	// Step 7: Start HTTP server.
-	srv := &http.Server{
-		Addr:              b.httpAddr,
-		Handler:           rtr,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	ln := b.listener
-	if ln == nil {
-		var err error
-		ln, err = net.Listen("tcp", b.httpAddr)
-		if err != nil {
-			return rollback(fmt.Errorf("bootstrap: listen %s: %w", b.httpAddr, err))
-		}
-	}
-
-	httpErrCh := make(chan error, 1)
-	go func() {
-		slog.Info("bootstrap: HTTP server starting", slog.String("addr", ln.Addr().String()))
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			httpErrCh <- err
-		}
-		close(httpErrCh)
-	}()
-	teardowns = append(teardowns, func(c context.Context) error {
-		slog.Info("bootstrap: draining HTTP server")
-		return srv.Shutdown(c)
-	})
-
-	// Step 8: Start workers.
-	wg := worker.NewWorkerGroup()
-	for _, w := range b.workers {
-		wg.Add(w)
-	}
-
-	workerCtx, workerCancel := context.WithCancel(ctx)
-	var workerErrCh chan error // nil channel: never selected in Step 9 when no workers
-	if len(b.workers) > 0 {
-		workerErrCh = make(chan error, 1)
-		go func() {
-			workerErrCh <- wg.Start(workerCtx)
-			close(workerErrCh)
-		}()
-		teardowns = append(teardowns, func(c context.Context) error {
-			workerCancel()
-			return wg.Stop(c)
-		})
-	} else {
-		workerCancel() // no workers, release the context
-	}
-
-	// Step 9: Wait for shutdown signal or error.
-	// Monitor all background components: HTTP, workers, and event router.
-	slog.Info("bootstrap: application started successfully")
-	select {
-	case <-ctx.Done():
-		slog.Info("bootstrap: context cancelled, shutting down")
-	case err := <-httpErrCh:
-		if err != nil {
-			return rollback(fmt.Errorf("bootstrap: http server: %w", err))
-		}
-	case err := <-workerErrCh:
-		if err != nil {
-			slog.Error("bootstrap: worker failed, initiating shutdown", slog.Any("error", err))
-			return rollback(fmt.Errorf("bootstrap: worker: %w", err))
-		}
-	case err := <-routerErrCh:
-		if err != nil {
-			slog.Error("bootstrap: event router failed, initiating shutdown", slog.Any("error", err))
-			return rollback(fmt.Errorf("bootstrap: event router: %w", err))
-		}
-	}
-
-	// Step 10: Orderly shutdown.
-	// Sequence: mark readyz unhealthy → wait for LBs to drain → close connections.
-	// ref: Kubernetes pod shutdown model
-	slog.Info("bootstrap: initiating graceful shutdown")
-	reloads.BeginShutdown()
-	hh.SetShuttingDown() // Mark readyz unhealthy so LBs drain traffic
-
-	// Single shutdown budget: preShutdownDelay + teardown share shutdownTimeout.
-	// ref: Kubernetes — preStop counts toward terminationGracePeriodSeconds
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
-	defer shutCancel()
-	if b.preShutdownDelay > 0 {
-		slog.Info("bootstrap: pre-shutdown drain delay",
-			slog.Duration("delay", b.preShutdownDelay))
-		select {
-		case <-time.After(b.preShutdownDelay):
-		case <-shutCtx.Done():
-		}
-	}
-
-	var errs []error
-	for i := len(teardowns) - 1; i >= 0; i-- {
-		if err := teardowns[i](shutCtx); err != nil {
-			slog.Error("bootstrap: shutdown step failed", slog.Any("error", err))
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	sig := b.phase9AwaitShutdownSignal(ctx, s)
+	return b.phase10OrchestrateShutdown(s, sig)
 }
 
 // cloneStrings returns a shallow copy of a string slice.
