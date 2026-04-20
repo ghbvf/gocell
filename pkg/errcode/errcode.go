@@ -3,7 +3,10 @@
 // bare errors.New.
 package errcode
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+)
 
 // Code is a typed error code string.
 type Code string
@@ -312,12 +315,8 @@ func WithDetails(err *Error, details map[string]any) *Error {
 		panic("errcode: WithDetails called with nil *Error")
 	}
 	merged := make(map[string]any, len(err.Details)+len(details))
-	for k, v := range err.Details {
-		merged[k] = v
-	}
-	for k, v := range details {
-		merged[k] = v
-	}
+	maps.Copy(merged, err.Details)
+	maps.Copy(merged, details)
 	return &Error{
 		Code:            err.Code,
 		Message:         err.Message,

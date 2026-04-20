@@ -51,7 +51,6 @@ func TestEncryptDecryptGCM_RoundTrip(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ct, nonce, err := aeadutil.EncryptGCM(tc.key, plaintext, tc.aad)
@@ -192,7 +191,6 @@ func TestEncryptDecryptGCMSelfContained_RoundTrip(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			blob, err := aeadutil.EncryptGCMSelfContained(tc.key, plaintext, tc.aad)
@@ -326,7 +324,6 @@ func TestDecryptGCMSelfContained_ErrorNoKeyLeak(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := aeadutil.DecryptGCMSelfContained(tc.key, tc.blob, nil)
