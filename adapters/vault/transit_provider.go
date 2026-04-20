@@ -152,6 +152,7 @@ func (h *vaultTransitHandle) wrapDEKWithVault(ctx context.Context, dek []byte) (
 // Decrypt decrypts ciphertext using envelope decryption.
 //
 // Envelope flow:
+//  0. Verify keyID consistency: h.id must match the version encoded in edk prefix.
 //  1. Vault Transit decrypt(edk) → unwrapped DEK. defer clear(dek).
 //  2. AES-GCM Open(ct, nonce, DEK, aad) → plaintext.
 //     AAD mismatch causes GCM authentication failure → ErrKeyProviderDecryptFailed.
@@ -159,6 +160,21 @@ func (h *vaultTransitHandle) wrapDEKWithVault(ctx context.Context, dek []byte) (
 // ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master
 func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, nonce, edk, aad []byte) (plaintext []byte, err error) {
+	// 0. Verify that the keyID stored in the edk prefix matches this handle's ID.
+	// edk is the Vault Transit ciphertext "vault:vN:..." — parse the version prefix
+	// and confirm it matches h.id ("vault-transit:vN"). A mismatch indicates that
+	// the caller supplied an edk that belongs to a different key version, which is
+	// a permanent error (no retry will fix a misrouted keyID).
+	edkVersion, parseErr := parseVaultKeyID(string(edk))
+	if parseErr != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
+			"vault-transit: malformed edk prefix", parseErr)
+	}
+	if h.id != edkVersion {
+		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+			fmt.Sprintf("vault-transit: keyID %q does not match edk version %q", h.id, edkVersion))
+	}
+
 	// 1. Unwrap DEK via Vault Transit.
 	dek, err := h.unwrapDEKWithVault(ctx, edk)
 	if err != nil {

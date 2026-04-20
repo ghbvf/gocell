@@ -513,6 +513,148 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TC-4b: real *vaultapi.ResponseError classification chain (C1)
+// ---------------------------------------------------------------------------
+//
+// TC-4 (above) injects pre-built errcode.Error values, bypassing the
+// classifyVaultEncryptError → isTransientVaultError → isTransientHTTPStatus path.
+// These tests exercise the complete chain from a real *vaultapi.ResponseError.
+
+func TestVaultTransitHandle_RealResponseError_Classification(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name       string
+		statusCode int
+		wantTransi bool
+		wantCode   errcode.Code
+	}{
+		{
+			name:       "403 Forbidden → permanent ErrKeyProviderEncryptFailed",
+			statusCode: 403,
+			wantTransi: false,
+			wantCode:   errcode.ErrKeyProviderEncryptFailed,
+		},
+		{
+			name:       "400 Bad Request → permanent ErrKeyProviderEncryptFailed",
+			statusCode: 400,
+			wantTransi: false,
+			wantCode:   errcode.ErrKeyProviderEncryptFailed,
+		},
+		{
+			name:       "404 Not Found → permanent ErrKeyProviderEncryptFailed",
+			statusCode: 404,
+			wantTransi: false,
+			wantCode:   errcode.ErrKeyProviderEncryptFailed,
+		},
+		{
+			name:       "503 Service Unavailable → transient ErrKeyProviderTransient",
+			statusCode: 503,
+			wantTransi: true,
+			wantCode:   errcode.ErrKeyProviderTransient,
+		},
+		{
+			name:       "429 Rate Limited → transient ErrKeyProviderTransient",
+			statusCode: 429,
+			wantTransi: true,
+			wantCode:   errcode.ErrKeyProviderTransient,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Inject a real *vaultapi.ResponseError — exercises the full
+			// classifyVaultEncryptError → isTransientVaultError → isTransientHTTPStatus chain.
+			fake := &fakeVaultClient{
+				latestVersion: 1,
+				writeErr: &vaultapi.ResponseError{
+					StatusCode: tc.statusCode,
+					Errors:     []string{"permission denied"},
+				},
+			}
+			p := newTestProvider(fake)
+			h := mustCurrent(t, p)
+
+			_, _, _, _, err := callEncrypt(t, h, ctx, []byte("payload"), []byte("aad"))
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if tc.wantTransi != errcode.IsTransient(err) {
+				t.Errorf("IsTransient=%v, want %v for status %d (err=%v)",
+					errcode.IsTransient(err), tc.wantTransi, tc.statusCode, err)
+			}
+
+			// Walk chain to find the expected code.
+			var found bool
+			for e := err; e != nil; {
+				if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == tc.wantCode {
+					found = true
+					break
+				}
+				if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
+					e = unwrapper.Unwrap()
+				} else {
+					break
+				}
+			}
+			if !found {
+				t.Errorf("error chain must contain %s for status %d; err=%v", tc.wantCode, tc.statusCode, err)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TC-3b: Decrypt keyID / edk version mismatch → permanent error
+// ---------------------------------------------------------------------------
+
+func TestVaultTransitHandle_Decrypt_KeyIDEdkMismatch_PermanentError(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 3}
+	p := newTestProvider(fake)
+	ctx := context.Background()
+
+	// Encrypt with v3 handle.
+	h := mustCurrent(t, p)
+	_, nonce, edk, _, err := callEncrypt(t, h, ctx, []byte("secret"), []byte("aad"))
+	if err != nil {
+		t.Fatalf("Encrypt() unexpected error: %v", err)
+	}
+
+	// Build a handle for v2 (different version) — edk prefix says v3, handle says v2.
+	h2, err := p.ByID(ctx, "vault-transit:v2")
+	if err != nil {
+		t.Fatalf("ByID(v2) unexpected error: %v", err)
+	}
+	vh2 := h2.(*vaultTransitHandle)
+
+	_, decErr := callDecrypt(t, vh2, ctx, []byte("ct"), nonce, edk, []byte("aad"))
+	if decErr == nil {
+		t.Fatal("expected error for keyID/edk mismatch, got nil")
+	}
+	if errcode.IsTransient(decErr) {
+		t.Errorf("keyID/edk mismatch must be permanent, not transient; err=%v", decErr)
+	}
+	var ec *errcode.Error
+	found := false
+	for e := decErr; e != nil; {
+		if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == errcode.ErrKeyProviderDecryptFailed {
+			ec = ecErr
+			found = true
+			break
+		}
+		if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
+			e = unwrapper.Unwrap()
+		} else {
+			break
+		}
+	}
+	if !found {
+		t.Errorf("error chain must contain ErrKeyProviderDecryptFailed; err=%v (ec=%v)", decErr, ec)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TC-5: keyID parsed from edk prefix, not from handle.id
 // ---------------------------------------------------------------------------
 

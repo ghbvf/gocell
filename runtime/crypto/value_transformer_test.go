@@ -435,3 +435,54 @@ func TestKeyProviderTransformer_EncryptErrorPropagates(t *testing.T) {
 	assert.True(t, errcode.IsTransient(err),
 		"error chain must contain ErrKeyProviderTransient (got: %v)", err)
 }
+
+// ---------------------------------------------------------------------------
+// TC-VT-3: Decrypt defense-in-depth — provider returns handle with wrong ID
+// ---------------------------------------------------------------------------
+
+// mismatchedHandleProvider returns a handle whose ID() differs from the requested keyID.
+// This simulates a buggy KeyProvider that routes the lookup to the wrong key.
+type mismatchedHandleProvider struct {
+	returnedHandle crypto.KeyHandle
+}
+
+func (p *mismatchedHandleProvider) Current(_ context.Context) (crypto.KeyHandle, error) {
+	return p.returnedHandle, nil
+}
+
+func (p *mismatchedHandleProvider) ByID(_ context.Context, _ string) (crypto.KeyHandle, error) {
+	// Intentionally return a handle with a different ID than requested.
+	return p.returnedHandle, nil
+}
+
+func (p *mismatchedHandleProvider) Rotate(_ context.Context) (string, error) {
+	return "", nil
+}
+
+// mismatchedIDHandle is a handle whose ID() returns a different value than what
+// the caller requested — simulating a buggy provider routing error.
+type mismatchedIDHandle struct{}
+
+func (h *mismatchedIDHandle) ID() string { return "wrong-key-id" }
+
+func (h *mismatchedIDHandle) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, []byte, []byte, string, error) {
+	return plaintext, nil, nil, "wrong-key-id", nil
+}
+
+func (h *mismatchedIDHandle) Decrypt(_ context.Context, ct, _, _, _ []byte) ([]byte, error) {
+	return ct, nil
+}
+
+// TestValueTransformer_Decrypt_HandleIDMismatch_FailsClosed verifies that
+// when the provider returns a handle whose ID() does not match the requested
+// keyID, Decrypt returns an error (defense-in-depth against buggy providers).
+func TestValueTransformer_Decrypt_HandleIDMismatch_FailsClosed(t *testing.T) {
+	ctx := context.Background()
+	p := &mismatchedHandleProvider{returnedHandle: &mismatchedIDHandle{}}
+	tr := crypto.NewValueTransformer(p)
+
+	_, err := tr.Decrypt(ctx, []byte("ct"), "requested-key-id", nil, nil, nil)
+	require.Error(t, err, "handle ID mismatch must return an error (defense-in-depth)")
+	assert.Contains(t, err.Error(), "provider returned handle id")
+	assert.Contains(t, err.Error(), "requested-key-id")
+}

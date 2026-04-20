@@ -69,6 +69,14 @@ func (t *keyProviderTransformer) Decrypt(ctx context.Context, ciphertext []byte,
 		return nil, fmt.Errorf("value-transformer: resolve key %q: %w", keyID, err)
 	}
 
+	// Defense-in-depth: verify that the provider returned a handle whose ID
+	// matches the requested keyID. A mismatch indicates a buggy KeyProvider
+	// implementation that routed the lookup to the wrong key — permanent error.
+	if handle.ID() != keyID {
+		return nil, fmt.Errorf("value-transformer: provider returned handle id %q for requested keyID %q",
+			handle.ID(), keyID)
+	}
+
 	plaintext, err := handle.Decrypt(ctx, ciphertext, nonce, edk, aad)
 	if err != nil {
 		return nil, err // already wrapped with ErrKeyProviderDecryptFailed by handle
