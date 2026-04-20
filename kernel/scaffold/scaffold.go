@@ -167,7 +167,7 @@ func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 		return err
 	}
 	// Validate each dot-segment of the ID for path traversal.
-	for _, seg := range strings.Split(opts.ID, ".") {
+	for seg := range strings.SplitSeq(opts.ID, ".") {
 		if err := validatePathComponent(seg, "contract ID segment"); err != nil {
 			return err
 		}
