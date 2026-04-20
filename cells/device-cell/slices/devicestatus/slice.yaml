@@ -1,13 +1,13 @@
-id: device-status
+id: devicestatus
 belongsToCell: device-cell
 contractUsages:
   - contract: http.device.status.v1
     role: serve
 verify:
   unit:
-    - unit.device-status.service
+    - unit.devicestatus.service
   contract:
     - contract.http.device.status.v1.serve
 
 allowedFiles:
-  - cells/device-cell/slices/device-status/**
+  - cells/device-cell/slices/devicestatus/**

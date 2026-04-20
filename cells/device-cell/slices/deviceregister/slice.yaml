@@ -1,4 +1,4 @@
-id: device-register
+id: deviceregister
 belongsToCell: device-cell
 contractUsages:
   - contract: http.device.register.v1
@@ -7,10 +7,10 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.device-register.service
+    - unit.deviceregister.service
   contract:
     - contract.http.device.register.v1.serve
     - contract.event.device-registered.v1.publish
 
 allowedFiles:
-  - cells/device-cell/slices/device-register/**
+  - cells/device-cell/slices/deviceregister/**

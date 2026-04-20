@@ -1,4 +1,4 @@
-id: order-create
+id: ordercreate
 belongsToCell: order-cell
 contractUsages:
   - contract: http.order.create.v1
@@ -7,10 +7,10 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.order-create.service
+    - unit.ordercreate.service
   contract:
     - contract.http.order.create.v1.serve
     - contract.event.order-created.v1.publish
 
 allowedFiles:
-  - cells/order-cell/slices/order-create/**
+  - cells/order-cell/slices/ordercreate/**

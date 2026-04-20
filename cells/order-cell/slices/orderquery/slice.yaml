@@ -1,4 +1,4 @@
-id: order-query
+id: orderquery
 belongsToCell: order-cell
 contractUsages:
   - contract: http.order.get.v1
@@ -7,10 +7,10 @@ contractUsages:
     role: serve
 verify:
   unit:
-    - unit.order-query.service
+    - unit.orderquery.service
   contract:
     - contract.http.order.get.v1.serve
     - contract.http.order.list.v1.serve
 
 allowedFiles:
-  - cells/order-cell/slices/order-query/**
+  - cells/order-cell/slices/orderquery/**
