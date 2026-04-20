@@ -458,6 +458,11 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			patch: envPatch{"GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!"},
 			want:  "GOCELL_SERVICE_SECRET",
 		},
+		{
+			name:  "service secret previous demo literal rejected",
+			patch: envPatch{"GOCELL_SERVICE_SECRET_PREVIOUS", "service-secret-32-bytes-xxxxxx!!"},
+			want:  "GOCELL_SERVICE_SECRET_PREVIOUS",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc

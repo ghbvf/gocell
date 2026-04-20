@@ -323,7 +323,8 @@ func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, 
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		if adapterMode == "real" {
-			return nil, fmt.Errorf("GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
+			return nil, errcode.New(errcode.ErrValidationFailed,
+				"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
 		}
 		slog.Warn("controlplane guard disabled: GOCELL_SERVICE_SECRET is empty (dev mode only)")
 		return nil, nil
