@@ -766,7 +766,22 @@ func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	s.workerErrCh = workerErrCh
 	s.addTeardown(func(c context.Context) error {
 		workerCancel()
-		return wg.Stop(c)
+		stopErr := wg.Stop(c)
+		// Wait for the wg.Start goroutine to finish so that all worker goroutines
+		// have fully exited before Run() returns.
+		//
+		// In the ctx-cancel path, phase9 never reads from workerErrCh, so the
+		// goroutine is still blocked on wg.Wait(). We drain it here to prevent
+		// goroutine leaks and races on state set inside worker goroutines (e.g.,
+		// the workerCtxCancelledAt atomic in tests).
+		//
+		// In the worker-error path, phase9 already drained the error; the channel
+		// is closed and this select returns immediately.
+		select {
+		case <-workerErrCh:
+		case <-c.Done():
+		}
+		return stopErr
 	})
 }
 
