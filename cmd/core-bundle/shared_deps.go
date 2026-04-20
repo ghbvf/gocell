@@ -55,6 +55,10 @@ type SharedDeps struct {
 	// production topology; may be empty in dev mode.
 	VerboseToken string
 
+	// KeyProviderName is the value of GOCELL_KEY_PROVIDER read once at startup.
+	// Empty means no encryption configured (valid only for non-postgres backends).
+	KeyProviderName string
+
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
@@ -110,6 +114,11 @@ func (d *SharedDeps) validateCore() []error {
 	if d.EventBus == nil {
 		missing("EventBus")
 	}
+	if d.Topology.StorageBackend == "postgres" && d.KeyProviderName == "" {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"SharedDeps: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
+				"(defense-in-depth; config-core module also validates this)"))
+	}
 	return errs
 }
 
@@ -149,6 +158,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 	adapterMode := topo.AdapterMode
+	keyProviderName := os.Getenv("GOCELL_KEY_PROVIDER")
 
 	hmacKey, err := loadSecret("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", adapterMode)
 	if err != nil {
@@ -196,16 +206,17 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
 	deps := &SharedDeps{
-		Topology:       topo,
-		JWTDeps:        jwt,
-		PromStack:      ps,
-		CursorCodecs:   codecs,
-		HMACKey:        hmacKey,
-		EventBus:       eb,
-		InternalGuard:  internalGuard,
-		MetricsToken:   metricsToken,
-		VerboseToken:   verboseToken,
-		metricsHandler: metricsHandler,
+		Topology:        topo,
+		JWTDeps:         jwt,
+		PromStack:       ps,
+		CursorCodecs:    codecs,
+		HMACKey:         hmacKey,
+		EventBus:        eb,
+		InternalGuard:   internalGuard,
+		MetricsToken:    metricsToken,
+		VerboseToken:    verboseToken,
+		KeyProviderName: keyProviderName,
+		metricsHandler:  metricsHandler,
 	}
 
 	if err := deps.Validate(); err != nil {

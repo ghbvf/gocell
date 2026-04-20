@@ -29,6 +29,10 @@ var wellKnownDemoKeys = []string{
 
 	// Service token HMAC (shipped as test fixture; never use in production)
 	"service-secret-32-bytes-xxxxxx!!",
+
+	// AES master key (hex-encoded, 64 chars) shipped as test fixture in
+	// cmd/core-bundle and CI; real mode must refuse this value.
+	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 }
 
 // rejectDemoKey returns an error if adapterMode == "real" and key matches a

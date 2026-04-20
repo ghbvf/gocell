@@ -125,6 +125,10 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		deps.VerboseToken = "test-verbose"
 		deps.InternalGuard = func(h http.Handler) http.Handler { return h }
 	}
+	if topo.StorageBackend == "postgres" {
+		deps.KeyProviderName = "local-aes"
+		t.Setenv("GOCELL_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+	}
 	return deps
 }
 

@@ -180,7 +180,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// Deferred PG repo construction — options are all applied before Init().
 	if c.pgPool != nil && c.configRepo == nil {
 		session := cellpg.NewSession(c.pgPool)
-		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer)
+		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, nil)
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 

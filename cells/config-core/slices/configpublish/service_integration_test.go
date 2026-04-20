@@ -58,7 +58,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 

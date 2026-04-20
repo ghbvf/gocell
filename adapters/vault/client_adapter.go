@@ -52,3 +52,30 @@ func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any,
 	}
 	return resp.Data, nil
 }
+
+// LookupSelfToken implements TokenRenewer. It calls auth/token/lookup-self to
+// retrieve the current token's metadata (TTL, renewable flag, accessor) and
+// returns a *vaultapi.Secret suitable for seeding a LifetimeWatcher.
+//
+// ref: hashicorp/vault api/auth_token.go@main — LookupSelfWithContext
+func (a *vaultAPIClient) LookupSelfToken(ctx context.Context) (*vaultapi.Secret, error) {
+	secret, err := a.client.Auth().Token().LookupSelfWithContext(ctx)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault api: lookup self token", err)
+	}
+	return secret, nil
+}
+
+// NewLifetimeWatcher implements TokenRenewer. It wraps client.NewLifetimeWatcher
+// to create a watcher that automatically renews the token at ~2/3 of its TTL.
+//
+// ref: hashicorp/vault api/lifetime_watcher.go@main — Client.NewLifetimeWatcher
+func (a *vaultAPIClient) NewLifetimeWatcher(i *vaultapi.LifetimeWatcherInput) (*vaultapi.LifetimeWatcher, error) {
+	w, err := a.client.NewLifetimeWatcher(i)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault api: create lifetime watcher", err)
+	}
+	return w, nil
+}

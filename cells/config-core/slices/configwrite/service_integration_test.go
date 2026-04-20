@@ -55,7 +55,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
@@ -138,7 +138,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{})
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
 
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}

@@ -24,11 +24,13 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
 
@@ -846,6 +848,345 @@ func TestParseVaultKeyID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// A13: Token LifetimeWatcher tests
+// ---------------------------------------------------------------------------
+
+// fakeTokenWatcher is a controllable fake for the tokenWatcher interface.
+// Channels are buffered to avoid goroutine leaks in tests.
+type fakeTokenWatcher struct {
+	doneCh    chan error
+	renewCh   chan *vaultapi.RenewOutput
+	startedCh chan struct{} // closed when Start() is called
+	stopped   atomic.Bool
+}
+
+func newFakeTokenWatcher() *fakeTokenWatcher {
+	return &fakeTokenWatcher{
+		doneCh:    make(chan error, 1),
+		renewCh:   make(chan *vaultapi.RenewOutput, 4),
+		startedCh: make(chan struct{}),
+	}
+}
+
+func (f *fakeTokenWatcher) Start() { close(f.startedCh) }
+func (f *fakeTokenWatcher) Stop()  { f.stopped.Store(true) }
+
+func (f *fakeTokenWatcher) DoneCh() <-chan error {
+	return f.doneCh
+}
+
+func (f *fakeTokenWatcher) RenewCh() <-chan *vaultapi.RenewOutput {
+	return f.renewCh
+}
+
+// TestTransitKeyProvider_Worker_NilWhenNoRenewal verifies that the default
+// constructor (NewTransitKeyProvider) returns nil Worker — no background
+// goroutine needed when no TokenRenewer is available.
+func TestTransitKeyProvider_Worker_NilWhenNoRenewal(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+
+	if p.Worker() != nil {
+		t.Error("Worker() must return nil when no renewal worker is configured")
+	}
+}
+
+// TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured verifies that
+// Worker() returns the configured renewal worker when one is set.
+func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+
+	fw := newFakeTokenWatcher()
+	p.renewalWorker = &tokenRenewalWorker{watcher: fw}
+
+	if p.Worker() == nil {
+		t.Error("Worker() must return non-nil when renewalWorker is set")
+	}
+}
+
+// TestTokenRenewalWorker_Start_StopsOnContextCancel verifies that Start()
+// returns nil when its context is cancelled (graceful shutdown path).
+func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Start(ctx)
+	}()
+
+	// Wait until the watcher's Start goroutine has been scheduled before
+	// cancelling — ensures the assertion below is race-free.
+	select {
+	case <-fw.startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher.Start() was not called within 2s")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Start() returned error on ctx cancel, want nil: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return after context cancel")
+	}
+
+	if !fw.stopped.Load() {
+		t.Error("Start() must call watcher.Stop() on exit")
+	}
+}
+
+// TestTokenRenewalWorker_Start_HandlesRenewalNotification verifies that
+// renewal notifications are consumed and logged without blocking Start.
+// Also verifies that a nil renewal is handled gracefully (no panic, no stop).
+func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
+	t.Run("valid renewal consumed without error", func(t *testing.T) {
+		fw := newFakeTokenWatcher()
+		w := &tokenRenewalWorker{
+			watcher: fw,
+			logger:  slog.Default(),
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- w.Start(ctx)
+		}()
+
+		select {
+		case <-fw.startedCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watcher.Start() was not called within 2s")
+		}
+
+		fw.renewCh <- &vaultapi.RenewOutput{
+			Secret: &vaultapi.Secret{
+				Auth: &vaultapi.SecretAuth{
+					LeaseDuration: 3600,
+				},
+			},
+		}
+
+		cancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Start() returned error on renewal+cancel, want nil: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Start() did not return after context cancel")
+		}
+	})
+
+	t.Run("nil renewal handled gracefully (F7)", func(t *testing.T) {
+		fw := newFakeTokenWatcher()
+		w := &tokenRenewalWorker{
+			watcher: fw,
+			logger:  slog.Default(),
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- w.Start(ctx)
+		}()
+
+		select {
+		case <-fw.startedCh:
+		case <-time.After(2 * time.Second):
+			t.Fatal("watcher.Start() was not called within 2s")
+		}
+
+		// Send nil renewal — must not panic, must not stop Start.
+		fw.renewCh <- nil
+
+		cancel()
+
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Start() returned error after nil renewal+cancel, want nil: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Start() did not return after context cancel")
+		}
+	})
+}
+
+// TestTokenRenewalWorker_Start_ChannelClosed verifies that Start returns nil
+// when DoneCh is closed externally (channel closed = watcher stopped externally).
+func TestTokenRenewalWorker_Start_ChannelClosed(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Start(ctx)
+	}()
+
+	// Close the channel (not send on it) to simulate external watcher stop.
+	close(fw.doneCh)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Start() on closed DoneCh must return nil, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return after DoneCh closed")
+	}
+}
+
+// TestTokenRenewalWorker_Start_HandlesDone verifies that Start returns a
+// non-nil ErrKeyProviderAuthFailed when the watcher signals the token is
+// no longer renewable (nil error on DoneCh = operational alert, not graceful).
+func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Start(ctx)
+	}()
+
+	// Signal watcher done with nil error (token no longer renewable).
+	// F3: this must return a non-nil ErrKeyProviderAuthFailed, not nil.
+	fw.doneCh <- nil
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Start() on nil DoneCh must return non-nil error (token no longer renewable)")
+		}
+		if !errChainHasCode(err, errcode.ErrKeyProviderAuthFailed) {
+			t.Errorf("expected ErrKeyProviderAuthFailed in error chain, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return after DoneCh fired")
+	}
+
+	if !fw.stopped.Load() {
+		t.Error("Start() must call watcher.Stop() on DoneCh exit")
+	}
+}
+
+// TestTokenRenewalWorker_Start_HandlesDoneWithError verifies that Start
+// propagates a non-nil error from the done channel.
+func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.Start(ctx)
+	}()
+
+	injectedErr := errcode.New(errcode.ErrKeyProviderTransient, "vault: token renewal failed")
+	fw.doneCh <- injectedErr
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("Start() must propagate non-nil DoneCh error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return after DoneCh fired with error")
+	}
+}
+
+// TestTokenRenewalWorker_Stop verifies that Stop calls watcher.Stop().
+func TestTokenRenewalWorker_Stop(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	if err := w.Stop(context.Background()); err != nil {
+		t.Errorf("Stop() returned unexpected error: %v", err)
+	}
+	if !fw.stopped.Load() {
+		t.Error("Stop() must call watcher.Stop()")
+	}
+}
+
+// TestTokenRenewalWorker_Stop_Idempotent verifies that calling Stop twice does
+// not panic or produce errors (F2: double-stop during shutdown).
+func TestTokenRenewalWorker_Stop_Idempotent(t *testing.T) {
+	fw := newFakeTokenWatcher()
+	w := &tokenRenewalWorker{
+		watcher: fw,
+		logger:  slog.Default(),
+	}
+
+	ctx := context.Background()
+	if err := w.Stop(ctx); err != nil {
+		t.Errorf("Stop() first call returned unexpected error: %v", err)
+	}
+	if err := w.Stop(ctx); err != nil {
+		t.Errorf("Stop() second call returned unexpected error: %v", err)
+	}
+	if !fw.stopped.Load() {
+		t.Error("Stop() must have called watcher.Stop()")
+	}
+}
+
+// TestTransitKeyProvider_Close_StopsRenewalWorker verifies that Close()
+// stops the renewal worker when one is configured.
+func TestTransitKeyProvider_Close_StopsRenewalWorker(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+
+	fw := newFakeTokenWatcher()
+	p.renewalWorker = &tokenRenewalWorker{watcher: fw}
+
+	if err := p.Close(context.Background()); err != nil {
+		t.Errorf("Close() returned unexpected error: %v", err)
+	}
+	if !fw.stopped.Load() {
+		t.Error("Close() must call watcher.Stop() when renewalWorker is set")
+	}
+}
+
+// TestVaultAPIClient_ImplementsTokenRenewer is a compile-time assertion that
+// vaultAPIClient satisfies the TokenRenewer interface.
+// The actual interface is in transit_provider.go; this test fails to compile
+// if the implementation is missing or mismatched.
+func TestVaultAPIClient_ImplementsTokenRenewer(t *testing.T) {
+	// This is a compile-time check only; no runtime assertions needed.
+	var _ TokenRenewer = (*vaultAPIClient)(nil)
+}
+
+// ---------------------------------------------------------------------------
 // FID-010: TestTransitKeyProvider_ConcurrentEncryptRotate — race detector test
 // ---------------------------------------------------------------------------
 
@@ -886,4 +1227,82 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 
 	wg.Wait()
 	// No race detector report = pass. The test itself needs -race to be meaningful.
+}
+
+// ---------------------------------------------------------------------------
+// F4+F5: initTokenRenewal error code tests
+// ---------------------------------------------------------------------------
+
+// fakeTokenRenewer implements both VaultClient and TokenRenewer for testing
+// initTokenRenewal. LookupSelfToken and NewLifetimeWatcher errors are injectable.
+type fakeTokenRenewer struct {
+	fakeVaultClient
+	lookupErr     error
+	newWatcherErr error
+	lookupSecret  *vaultapi.Secret
+}
+
+var _ TokenRenewer = (*fakeTokenRenewer)(nil)
+
+func (f *fakeTokenRenewer) LookupSelfToken(_ context.Context) (*vaultapi.Secret, error) {
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+	if f.lookupSecret != nil {
+		return f.lookupSecret, nil
+	}
+	return &vaultapi.Secret{}, nil
+}
+
+func (f *fakeTokenRenewer) NewLifetimeWatcher(_ *vaultapi.LifetimeWatcherInput) (*vaultapi.LifetimeWatcher, error) {
+	if f.newWatcherErr != nil {
+		return nil, f.newWatcherErr
+	}
+	// Return nil watcher — caller (initTokenRenewal) will panic if it dereferences it.
+	// Tests that exercise the happy path must not call this.
+	return nil, nil
+}
+
+// TestInitTokenRenewal_LookupFails_ReturnsAuthError verifies that a
+// LookupSelfToken failure results in ErrKeyProviderAuthFailed, not
+// ErrKeyProviderTransient (F4: wrong error code at startup).
+func TestInitTokenRenewal_LookupFails_ReturnsAuthError(t *testing.T) {
+	injectedErr := fmt.Errorf("vault: 403 forbidden")
+	fake := &fakeTokenRenewer{
+		fakeVaultClient: fakeVaultClient{latestVersion: 1},
+		lookupErr:       injectedErr,
+	}
+
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+	err := p.initTokenRenewal(context.Background())
+
+	if err == nil {
+		t.Fatal("initTokenRenewal must return error when LookupSelfToken fails")
+	}
+	if !errChainHasCode(err, errcode.ErrKeyProviderAuthFailed) {
+		t.Errorf("expected ErrKeyProviderAuthFailed in error chain, got: %v", err)
+	}
+	if errChainHasCode(err, errcode.ErrKeyProviderTransient) {
+		t.Errorf("must NOT return ErrKeyProviderTransient for LookupSelf failure; got: %v", err)
+	}
+}
+
+// TestInitTokenRenewal_NewWatcherFails_ReturnsAuthError verifies that a
+// NewLifetimeWatcher failure also results in ErrKeyProviderAuthFailed (F4).
+func TestInitTokenRenewal_NewWatcherFails_ReturnsAuthError(t *testing.T) {
+	injectedErr := fmt.Errorf("vault: create watcher: invalid secret")
+	fake := &fakeTokenRenewer{
+		fakeVaultClient: fakeVaultClient{latestVersion: 1},
+		newWatcherErr:   injectedErr,
+	}
+
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+	err := p.initTokenRenewal(context.Background())
+
+	if err == nil {
+		t.Fatal("initTokenRenewal must return error when NewLifetimeWatcher fails")
+	}
+	if !errChainHasCode(err, errcode.ErrKeyProviderAuthFailed) {
+		t.Errorf("expected ErrKeyProviderAuthFailed in error chain, got: %v", err)
+	}
 }

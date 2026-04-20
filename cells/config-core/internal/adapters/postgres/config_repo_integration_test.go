@@ -50,7 +50,7 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session, crypto.NoopTransformer{})
+	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil)
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
@@ -303,7 +303,7 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 	transformer := crypto.NewValueTransformer(kp)
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session, transformer)
+	repo := NewConfigRepository(session, transformer, nil)
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
