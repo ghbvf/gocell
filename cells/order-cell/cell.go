@@ -11,8 +11,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/order-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/order-cell/internal/mem"
-	ordercreate "github.com/ghbvf/gocell/cells/order-cell/slices/order-create"
-	orderquery "github.com/ghbvf/gocell/cells/order-cell/slices/order-query"
+	ordercreate "github.com/ghbvf/gocell/cells/order-cell/slices/ordercreate"
+	orderquery "github.com/ghbvf/gocell/cells/order-cell/slices/orderquery"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -117,7 +117,7 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		ordercreate.WithTxManager(c.txRunner),
 	)
 	c.createHandler = ordercreate.NewHandler(createSvc)
-	c.AddSlice(cell.NewBaseSlice("order-create", "order-cell", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("ordercreate", "order-cell", cell.L2))
 
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -145,7 +145,7 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		return fmt.Errorf("order-query: %w", err)
 	}
 	c.queryHandler = orderquery.NewHandler(querySvc)
-	c.AddSlice(cell.NewBaseSlice("order-query", "order-cell", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("orderquery", "order-cell", cell.L0))
 
 	return nil
 }

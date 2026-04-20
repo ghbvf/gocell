@@ -34,26 +34,29 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Cells, id, "missing cell %s", id)
 	}
 
-	// --- Slices: at least the 16 original slices (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.Slices), 16, "expected at least 16 slices")
-	assert.LessOrEqual(t, len(pm.Slices), 24, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
+	// --- Slices: at least the 19 slices after R1e rename (upper bound catches over-parse) ---
+	assert.GreaterOrEqual(t, len(pm.Slices), 19, "expected at least 19 slices")
+	assert.LessOrEqual(t, len(pm.Slices), 30, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
 	expectedSlices := []string{
-		"access-core/session-login",
-		"access-core/session-validate",
-		"access-core/rbac-check",
-		"access-core/identity-manage",
-		"access-core/session-refresh",
-		"access-core/session-logout",
-		"access-core/authorization-decide",
-		"audit-core/audit-append",
-		"audit-core/audit-query",
-		"audit-core/audit-verify",
-		"audit-core/audit-archive",
-		"config-core/config-read",
-		"config-core/config-write",
-		"config-core/config-publish",
-		"config-core/config-subscribe",
-		"config-core/feature-flag",
+		"access-core/sessionlogin",
+		"access-core/sessionvalidate",
+		"access-core/rbaccheck",
+		"access-core/identitymanage",
+		"access-core/sessionrefresh",
+		"access-core/sessionlogout",
+		"access-core/authorizationdecide",
+		"access-core/rbacassign",
+		"access-core/configreceive",
+		"audit-core/auditappend",
+		"audit-core/auditquery",
+		"audit-core/auditverify",
+		"audit-core/auditarchive",
+		"config-core/configread",
+		"config-core/configwrite",
+		"config-core/configpublish",
+		"config-core/configsubscribe",
+		"config-core/featureflag",
+		"config-core/flagwrite",
 	}
 	for _, key := range expectedSlices {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
@@ -61,7 +64,7 @@ func TestParseRealProject(t *testing.T) {
 
 	// --- Contracts: at least the 26 contracts after per-operation split (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Contracts), 26, "expected at least 26 contracts after per-operation split")
-	assert.LessOrEqual(t, len(pm.Contracts), 35, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
+	assert.LessOrEqual(t, len(pm.Contracts), 60, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
 		"http.auth.refresh.v1",

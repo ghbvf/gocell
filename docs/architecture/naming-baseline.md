@@ -20,9 +20,16 @@
 以下 ID 统一使用 `kebab-case`：
 
 - Cell ID：`access-core`
-- Slice ID：`session-login`
 - Assembly ID：`core-bundle`
 - Actor ID：`platform-team`
+
+Slice ID 统一使用无连字符的 `nodash` 小写格式（与 slice 目录名一致）：
+
+- `sessionlogin`
+- `configwrite`
+- `devicecommand`
+
+Slice ID 由 `gocell validate --strict` 的 FMT-16 拦截 kebab-case；`gocell scaffold slice` 在生成时直接拒绝含 `-` 的 ID。历史上写作 `session-login`、`audit-query` 的 kebab 形式在 R1e-β 统一迁移为 no-dash，迁移后不再允许回退。
 
 Journey ID 统一使用 `J-{kebab-case}`：
 
@@ -37,7 +44,8 @@ Contract ID 统一使用小写点分格式：
 不使用：
 
 - `access_core`
-- `sessionlogin` 作为 Slice ID
+- `session-login` 作为 Slice ID（kebab-case 由 FMT-16 拦截）
+- `sessionLogin` / `SessionLogin` 作为 Slice ID（必须全小写无连字符）
 - `http/auth/login/v1`
 - `J_session_refresh`
 

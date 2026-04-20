@@ -1,0 +1,33 @@
+name: Governance Strict
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  gocell-validate-strict:
+    name: gocell validate --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Validate metadata (strict)
+        run: go run ./cmd/gocell validate --strict
+
+      - name: Scaffold rejects kebab slice names
+        run: |
+          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=access-core 2>&1 || true)
+          echo "scaffold output: $result"
+          if echo "$result" | grep -q "must not contain"; then
+            echo "PASS: scaffold correctly rejects kebab slice name"
+          else
+            echo "FAIL: scaffold should have rejected kebab slice name"
+            exit 1
+          fi

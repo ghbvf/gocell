@@ -266,7 +266,7 @@ func (c *ConfigCore) initWriteSlice() {
 	}
 	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
-	c.AddSlice(cell.NewBaseSlice("config-write", "config-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("configwrite", "config-core", cell.L2))
 }
 
 func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
@@ -275,7 +275,7 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 		return fmt.Errorf("config-read: %w", err)
 	}
 	c.readHandler = configread.NewHandler(readSvc)
-	c.AddSlice(cell.NewBaseSlice("config-read", "config-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("configread", "config-core", cell.L0))
 	return nil
 }
 
@@ -289,12 +289,12 @@ func (c *ConfigCore) initPublishSlice() {
 	}
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
-	c.AddSlice(cell.NewBaseSlice("config-publish", "config-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("configpublish", "config-core", cell.L2))
 }
 
 func (c *ConfigCore) initSubscribeSlice() {
 	c.subscribeSvc = configsubscribe.NewService(c.logger)
-	c.AddSlice(cell.NewBaseSlice("config-subscribe", "config-core", cell.L3))
+	c.AddSlice(cell.NewBaseSlice("configsubscribe", "config-core", cell.L3))
 }
 
 func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
@@ -303,7 +303,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 		return fmt.Errorf("feature-flag: %w", err)
 	}
 	c.flagHandler = featureflag.NewHandler(flagSvc)
-	c.AddSlice(cell.NewBaseSlice("feature-flag", "config-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("featureflag", "config-core", cell.L0))
 	return nil
 }
 
@@ -322,7 +322,7 @@ func (c *ConfigCore) initFlagWriteSlice() error {
 		return fmt.Errorf("config-core: init flag-write slice: %w", err)
 	}
 	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
-	c.AddSlice(cell.NewBaseSlice("flag-write", "config-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("flagwrite", "config-core", cell.L2))
 	return nil
 }
 

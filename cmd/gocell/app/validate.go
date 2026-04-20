@@ -21,6 +21,8 @@ func runValidate(args []string) error {
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
+	strict := fs.Bool("strict", false,
+		"enforce kebab-case slice directory and allowedFiles-mismatch rules (FMT-16, FMT-17); strict-only, silent without this flag")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -45,45 +47,73 @@ func runValidate(args []string) error {
 	depChecker := governance.NewDependencyChecker(project)
 
 	if *failFast {
-		// True bailout: validator first (most errors originate there); if it
-		// already flagged an error, depcheck is skipped entirely.
-		valResults := validator.ValidateFailFast()
-		if firstErr := firstError(valResults); firstErr != nil {
-			formatResultsFailFast(valResults)
-			return fmt.Errorf("validation failed: %s", firstErr.Code)
-		}
-		depResults := depChecker.CheckFailFast()
-		if firstErr := firstError(depResults); firstErr != nil {
-			formatResultsFailFast(depResults)
-			return fmt.Errorf("validation failed: %s", firstErr.Code)
-		}
-		fmt.Println("OK: no errors.")
-		return nil
+		return runValidateFailFast(validator, depChecker, *strict)
 	}
+	return runValidateFull(validator, depChecker, *strict)
+}
 
-	valResults := validator.Validate()
+// runValidateFailFast runs validation in short-circuit mode: the validator
+// and the dependency checker stop at the first SeverityError. When strict is
+// true, FMT-16/17 are appended only if the base pass finds no errors.
+func runValidateFailFast(validator *governance.Validator, depChecker *governance.DependencyChecker, strict bool) error {
+	valResults := runValidatorFailFast(validator, strict)
+	if firstErr := firstError(valResults); firstErr != nil {
+		formatResultsFailFast(valResults)
+		return fmt.Errorf("validation failed: %s", firstErr.Code)
+	}
+	depResults := depChecker.CheckFailFast()
+	if firstErr := firstError(depResults); firstErr != nil {
+		formatResultsFailFast(depResults)
+		return fmt.Errorf("validation failed: %s", firstErr.Code)
+	}
+	fmt.Println("OK: no errors.")
+	return nil
+}
+
+// runValidatorFailFast selects the appropriate validator method for fail-fast mode.
+func runValidatorFailFast(validator *governance.Validator, strict bool) []governance.ValidationResult {
+	if strict {
+		return validator.ValidateStrictFailFast()
+	}
+	return validator.ValidateFailFast()
+}
+
+// runValidateFull runs all validation rules and prints a summary.
+func runValidateFull(validator *governance.Validator, depChecker *governance.DependencyChecker, strict bool) error {
+	valResults := runValidatorFull(validator, strict)
 	depResults := depChecker.Check()
 	allResults := append(valResults, depResults...)
 
 	formatResults(allResults)
 
-	// Summary.
-	var errCount, warnCount int
-	for i := range allResults {
-		switch allResults[i].Severity {
-		case governance.SeverityError:
-			errCount++
-		case governance.SeverityWarning:
-			warnCount++
-		}
-	}
-
+	errCount, warnCount := countSeverities(allResults)
 	fmt.Printf("\nValidation complete: %d error(s), %d warning(s)\n", errCount, warnCount)
 
 	if errCount > 0 {
 		return fmt.Errorf("validation failed with %d error(s)", errCount)
 	}
 	return nil
+}
+
+// runValidatorFull selects the appropriate validator method for full mode.
+func runValidatorFull(validator *governance.Validator, strict bool) []governance.ValidationResult {
+	if strict {
+		return validator.ValidateStrict(true)
+	}
+	return validator.Validate()
+}
+
+// countSeverities returns the number of errors and warnings in results.
+func countSeverities(results []governance.ValidationResult) (errCount, warnCount int) {
+	for i := range results {
+		switch results[i].Severity {
+		case governance.SeverityError:
+			errCount++
+		case governance.SeverityWarning:
+			warnCount++
+		}
+	}
+	return
 }
 
 // firstError returns the first result whose severity is error, or nil.

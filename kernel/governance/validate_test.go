@@ -28,6 +28,7 @@ func validProject() *metadata.ProjectMeta {
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Dir:              "access-core",
 			},
 			"audit-core": {
 				ID:               "audit-core",
@@ -37,6 +38,7 @@ func validProject() *metadata.ProjectMeta {
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.startup"}},
+				Dir:              "audit-core",
 			},
 			"shared-crypto": {
 				ID:               "shared-crypto",
@@ -44,6 +46,7 @@ func validProject() *metadata.ProjectMeta {
 				ConsistencyLevel: "L0",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.shared-crypto.startup"}},
+				Dir:              "shared-crypto",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -67,6 +70,8 @@ func validProject() *metadata.ProjectMeta {
 					"cells/access-core/slices/session-login/**",
 					"cells/access-core/slices/sessionlogin/**",
 				},
+				Dir:     "session-login",
+				CellDir: "access-core",
 			},
 			"audit-core/audit-write": {
 				ID:            "audit-write",
@@ -82,6 +87,8 @@ func validProject() *metadata.ProjectMeta {
 					"cells/audit-core/slices/audit-write/**",
 					"cells/audit-core/slices/auditwrite/**",
 				},
+				Dir:     "audit-write",
+				CellDir: "audit-core",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -318,17 +325,20 @@ func TestREF04(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name:      "id matches key",
+			name:      "id matches directory",
 			setup:     func(_ *metadata.ProjectMeta) {},
 			wantCount: 0,
 		},
 		{
-			name: "id mismatch",
+			name: "id mismatch directory",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["wrong-key"] = &metadata.CellMeta{
+				// Dir captures the walked filesystem name; a disagreement
+				// between Dir and ID is exactly what REF-04 must flag.
+				pm.Cells["actual-id"] = &metadata.CellMeta{
 					ID:               "actual-id",
 					Type:             "core",
 					ConsistencyLevel: "L1",
+					Dir:              "wrong-dir",
 				}
 			},
 			wantCount: 1,
@@ -357,11 +367,13 @@ func TestREF05(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "id mismatch",
+			name: "id mismatch directory",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/wrong-name"] = &metadata.SliceMeta{
+				pm.Slices["access-core/actual-name"] = &metadata.SliceMeta{
 					ID:            "actual-name",
 					BelongsToCell: "access-core",
+					Dir:           "wrong-dir",
+					CellDir:       "access-core",
 				}
 			},
 			wantCount: 1,

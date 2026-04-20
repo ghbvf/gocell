@@ -52,8 +52,8 @@ l0Dependencies:           # 仅在导入 L0 Cell 时声明
 实现映射。slice 是**依赖真相的唯一写入方**。
 
 ```yaml
-# cells/access-core/slices/session-login/slice.yaml
-id: session-login
+# cells/access-core/slices/sessionlogin/slice.yaml
+id: sessionlogin
 belongsToCell: access-core       # derived-anchor，可省略
 contractUsages:
   - contract: http.auth.login.v1
@@ -64,7 +64,7 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.session-login.service
+    - unit.sessionlogin.service
   contract:
     - contract.http.auth.login.v1.serve
     - contract.event.session.created.v1.publish
@@ -75,7 +75,9 @@ verify:
       expiresAt: 2026-06-01
 ```
 
-目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
+目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。Slice ID 使用无连字符的 nodash 小写格式（例如 `sessionlogin`，而非 `session-login`），由 `gocell validate --strict` FMT-16/REF-05 拦截。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
+
+**slice id 命名约束**：slice.id 和目录名必须为 no-dash 格式（不含 `-`）；kebab-case 由 FMT-16 治理规则在 `gocell validate --strict` 下升级为 error。`allowedFiles` 首段必须与 slice 目录匹配（FMT-17）。
 
 ### Contract
 

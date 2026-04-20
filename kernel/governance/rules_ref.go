@@ -3,7 +3,6 @@ package governance
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -58,43 +57,46 @@ func (v *Validator) validateREF03() []ValidationResult {
 	return results
 }
 
-// validateREF04 checks that cell.id equals the directory name.
-// The Cells map is keyed by cell ID; the directory is derived from
-// the cells/{cell-id}/cell.yaml convention.
+// validateREF04 checks that cell.id equals the filesystem directory name.
+// The check reads CellMeta.Dir (populated by the parser from the walked
+// path) rather than the map key, because the map key is also m.ID — using
+// the key degenerates into a tautology that cannot catch a path/id split.
+// Cells synthesized in tests without a Dir are skipped.
 func (v *Validator) validateREF04() []ValidationResult {
 	var results []ValidationResult
 	for key, c := range v.project.Cells {
-		// The map key is the cell ID (set by parser from the YAML id field).
-		// The directory name is also key since parser uses m.ID as the key.
-		// We check that c.ID matches the map key.
-		if c.ID != key {
+		if c.Dir == "" {
+			continue
+		}
+		if c.ID != c.Dir {
 			results = append(results, v.newResult(
 				"REF-04", SeverityError, IssueRefNotFound,
 				cellFile(key),
 				"id",
-				fmt.Sprintf("cell id %q does not match map key %q (expected directory name)", c.ID, key),
+				fmt.Sprintf("cell id %q does not match directory name %q", c.ID, c.Dir),
 			))
 		}
 	}
 	return results
 }
 
-// validateREF05 checks that slice.id equals the directory name.
-// The Slices map key is "cellID/sliceID"; we extract the sliceID part.
+// validateREF05 checks that slice.id equals the filesystem directory name.
+// The check reads SliceMeta.Dir (populated by the parser) rather than the
+// map key, because the map key embeds m.ID and self-comparing m.ID against
+// itself can never fail. Slices synthesized in tests without a Dir are
+// skipped.
 func (v *Validator) validateREF05() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
+		if s.Dir == "" {
 			continue
 		}
-		expectedSliceID := parts[1]
-		if s.ID != expectedSliceID {
+		if s.ID != s.Dir {
 			results = append(results, v.newResult(
 				"REF-05", SeverityError, IssueRefNotFound,
 				sliceFile(key),
 				"id",
-				fmt.Sprintf("slice id %q does not match directory name %q", s.ID, expectedSliceID),
+				fmt.Sprintf("slice id %q does not match directory name %q", s.ID, s.Dir),
 			))
 		}
 	}

@@ -99,6 +99,80 @@ func TestRunValidate_FailFast_ReturnsError(t *testing.T) {
 		"error message must contain 'validation failed:'")
 }
 
+// --- validate --strict ---
+
+// writeKebabSlice writes a minimal cells/{cell}/slices/{dir}/slice.yaml that
+// will trip FMT-16 in strict mode because the directory contains '-'. Returns
+// the project root. Used by the --strict tests below.
+func writeKebabSlice(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
+	cellDir := filepath.Join(dir, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
+		[]byte("id: accesscore\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+	sliceDir := filepath.Join(cellDir, "slices", "session-login") // kebab dir
+	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"),
+		[]byte("id: session-login\nbelongsToCell: accesscore\ncontractUsages: []\nverify:\n  unit:\n    - unit.session-login.service\n  contract: []\nallowedFiles:\n  - cells/accesscore/slices/session-login/**\n"), 0o644))
+	return dir
+}
+
+// Strict full mode: FMT-16 fires on a kebab-case slice directory; the base
+// pass produces no errors, so the summary shows the FMT-16 error and the
+// command returns a non-nil error.
+func TestRunValidate_Strict_Full_ErrorsOnKebabDir(t *testing.T) {
+	dir := writeKebabSlice(t)
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict"})
+	})
+	require.Error(t, gotErr, "strict full must return error when FMT-16 fires")
+	assert.Contains(t, gotErr.Error(), "validation failed")
+	assert.Contains(t, out, "FMT-16", "full-mode output must report FMT-16 code")
+	assert.Contains(t, out, "Validation complete:", "full-mode must print summary")
+}
+
+// Strict + fail-fast: base pass is clean, so FMT-16 is appended and becomes
+// the single reported error. Validates that a strict-only violation is caught
+// when no standard-rule error takes precedence.
+func TestRunValidate_StrictFailFast_StrictOnlyError(t *testing.T) {
+	dir := writeKebabSlice(t)
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict", "--fail-fast"})
+	})
+	require.Error(t, gotErr, "strict+fail-fast must surface FMT-16")
+	assert.Contains(t, gotErr.Error(), "validation failed: FMT-16")
+	assert.NotContains(t, out, "Validation complete:",
+		"fail-fast must not emit summary line")
+}
+
+// Strict + fail-fast: when a base-pass error (e.g. FMT-02 invalid type) is
+// present alongside a kebab directory, the base error short-circuits and
+// FMT-16 must NOT appear — this is the whole reason ValidateStrictFailFast
+// gates FMT-16/17 behind HasErrors(results).
+func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
+	dir := writeKebabSlice(t)
+	// Corrupt the cell.yaml so standard rules fire an error before FMT-16 runs.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "cell.yaml"),
+		[]byte("id: accesscore\ntype: INVALID\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict", "--fail-fast"})
+	})
+	require.Error(t, gotErr, "strict+fail-fast must return error when base pass fails")
+	assert.NotContains(t, gotErr.Error(), "FMT-16",
+		"base error must short-circuit FMT-16/17 under fail-fast")
+	assert.NotContains(t, out, "FMT-16",
+		"fail-fast output must not include FMT-16 when base pass already failed")
+}
+
 // --- scaffold --dry-run ---
 //
 // These tests drive runScaffoldWithRoot directly, bypassing runScaffold's
@@ -144,12 +218,12 @@ func TestRunScaffoldSlice_DryRun_NoFileWritten(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"slice", "--id=dry-slice", "--cell=parent-cell", "--dry-run"})
+			[]string{"slice", "--id=dryslice", "--cell=parent-cell", "--dry-run"})
 		require.NoError(t, err)
 	})
 
 	_, statErr := os.Stat(filepath.Join(dir,
-		"cells", "parent-cell", "slices", "dry-slice", "slice.yaml"))
+		"cells", "parent-cell", "slices", "dryslice", "slice.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create slice.yaml")
 	assert.NotContains(t, out, "Created slice", "dry-run must not emit a 'Created slice' line")
 }

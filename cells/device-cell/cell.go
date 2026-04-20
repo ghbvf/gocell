@@ -11,9 +11,9 @@ import (
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
-	devicecommand "github.com/ghbvf/gocell/cells/device-cell/slices/device-command"
-	deviceregister "github.com/ghbvf/gocell/cells/device-cell/slices/device-register"
-	devicestatus "github.com/ghbvf/gocell/cells/device-cell/slices/device-status"
+	devicecommand "github.com/ghbvf/gocell/cells/device-cell/slices/devicecommand"
+	deviceregister "github.com/ghbvf/gocell/cells/device-cell/slices/deviceregister"
+	devicestatus "github.com/ghbvf/gocell/cells/device-cell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -120,7 +120,7 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	// device-register slice
 	registerSvc := deviceregister.NewService(c.deviceRepo, c.publisher, c.logger)
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
-	c.AddSlice(cell.NewBaseSlice("device-register", "device-cell", cell.L4))
+	c.AddSlice(cell.NewBaseSlice("deviceregister", "device-cell", cell.L4))
 
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -148,12 +148,12 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		return fmt.Errorf("device-command: %w", err)
 	}
 	c.commandHandler = devicecommand.NewHandler(commandSvc)
-	c.AddSlice(cell.NewBaseSlice("device-command", "device-cell", cell.L4))
+	c.AddSlice(cell.NewBaseSlice("devicecommand", "device-cell", cell.L4))
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
 	c.statusHandler = devicestatus.NewHandler(statusSvc)
-	c.AddSlice(cell.NewBaseSlice("device-status", "device-cell", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("devicestatus", "device-cell", cell.L0))
 
 	return nil
 }

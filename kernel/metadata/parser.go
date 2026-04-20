@@ -144,6 +144,11 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("cell id is empty in %s", path))
 	}
+	// Record the real filesystem directory so strict rules (REF-04) can
+	// compare it against m.ID instead of self-comparing against the map key.
+	// matchCellYAML guarantees len(parts) == 3 && parts[0] == "cells".
+	parts := splitPath(path)
+	m.Dir = parts[1]
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
@@ -172,9 +177,10 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 	// G-7: auto-derive belongsToCell from path.
 	// matchSliceYAML guarantees len(parts)==5 && parts[0]=="cells",
-	// so parts[1] is always the cellID.
+	// so parts[1] is always the cellID and parts[3] is the slice directory.
 	parts := splitPath(path)
 	cellID := parts[1]
+	sliceDir := parts[3]
 
 	if m.BelongsToCell == "" {
 		m.BelongsToCell = cellID
@@ -183,6 +189,13 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 			fmt.Sprintf("slice %q: belongsToCell %q does not match directory cell %q in %s",
 				m.ID, m.BelongsToCell, cellID, path))
 	}
+
+	// Record filesystem truth separately from the yaml id. Strict rules
+	// (FMT-16, FMT-17, REF-05) consume these fields so a path-vs-id split
+	// (kebab dir paired with no-dash id, or vice versa) cannot escape the
+	// governance gate.
+	m.Dir = sliceDir
+	m.CellDir = cellID
 
 	key := cellID + "/" + m.ID
 	if _, exists := pm.Slices[key]; exists {

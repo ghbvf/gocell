@@ -1,0 +1,11 @@
+id: auditarchive
+belongsToCell: audit-core
+contractUsages: []
+verify:
+  unit:
+    - unit.auditarchive.service
+  contract: []
+  waivers: []
+
+allowedFiles:
+  - cells/audit-core/slices/auditarchive/**
