@@ -5,7 +5,6 @@ package vault_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -38,11 +37,9 @@ func isErrCode(err error, code errcode.Code) bool {
 //
 //	uses token/lookup + business-path probe (not sys/health, vault#28846)
 func TestTransitReadiness_Healthy(t *testing.T) {
-	ctx := context.Background()
 	addr, token, teardown := startVaultContainer(t)
 	defer teardown()
 
-	_ = ctx
 	p := newProviderFromEnv(t, addr, token)
 
 	checkers := p.Checkers()
@@ -63,8 +60,9 @@ func TestTransitReadiness_Healthy(t *testing.T) {
 
 // TestTransitReadiness_MountDeleted verifies that after deleting the transit
 // mount, Checkers["vault_transit_ready"]() returns an errcode-classified error.
-// The error must be either ErrKeyProviderKeyNotFound (permanent 404/403) or
-// ErrKeyProviderTransient (transient).
+// The error must be either ErrKeyProviderKeyNotFound (404 — mount/key absent) or
+// ErrKeyProviderTransient (transient). Mount deletion causes Vault to return 404
+// (not 403), so ErrKeyProviderAuthFailed is not expected here.
 //
 // ref: hashicorp/vault builtin/logical/transit — mount deletion causes 404
 // ref: external-secrets/external-secrets — business-path probe detects missing mount
@@ -92,8 +90,8 @@ func TestTransitReadiness_MountDeleted(t *testing.T) {
 	probeErr := probe()
 	require.Error(t, probeErr, "vault_transit_ready must return error when transit mount is deleted")
 
-	// classifyVaultReadError routes 404/403 → ErrKeyProviderKeyNotFound.
-	// Accept either KeyNotFound or Transient (depending on Vault response to missing mount).
+	// classifyVaultReadError routes 404 → ErrKeyProviderKeyNotFound (mount absent).
+	// Accept either KeyNotFound or Transient (depending on exact Vault response to missing mount).
 	isKeyNotFound := isErrCode(probeErr, errcode.ErrKeyProviderKeyNotFound)
 	isTransient := isErrCode(probeErr, errcode.ErrKeyProviderTransient)
 	assert.True(t, isKeyNotFound || isTransient,
@@ -144,15 +142,18 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestTransitReadiness_RevokedToken verifies that after revoking the token
-// used by the provider, the readiness probe returns a classified errcode error.
+// used by the provider, the readiness probe returns ErrKeyProviderAuthFailed.
 //
 // Implementation notes:
 //   - Dev root token cannot be revoked (Vault dev mode restriction).
-//   - We create a short-lived child token via auth/token/create (ttl=60s),
-//     build a provider with that child token, then revoke it via
-//     auth/token/revoke-accessor (using the root token to do the revocation).
-//   - After revocation, Vault returns 403, which classifyVaultReadError routes
-//     to ErrKeyProviderKeyNotFound (permanent 4xx).
+//   - We create a named policy "gocell-transit-reader" with exactly the
+//     capabilities needed (read on transit/keys/gocell-config), create a
+//     short-lived child token bound to that policy, build a provider with it,
+//     then revoke the token via auth/token/revoke-accessor.
+//   - After revocation, Vault returns HTTP 403, which classifyVaultReadError
+//     routes to ErrKeyProviderAuthFailed (distinct from ErrKeyProviderKeyNotFound
+//     which covers 404 / missing key).
+//   - The named policy is cleaned up via DeletePolicy in a t.Cleanup hook.
 //
 // ref: testcontainers-go modules/vault — dev root token cannot be revoked
 // ref: hashicorp/vault api/auth/token — create child token + revoke-accessor
@@ -161,21 +162,34 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	addr, token, teardown := startVaultContainer(t)
 	defer teardown()
 
-	// Build a root client to create and revoke child tokens.
+	// Build a root client to create policies and child tokens.
 	cfg := vaultapi.DefaultConfig()
 	cfg.Address = addr
 	rootClient, err := vaultapi.NewClient(cfg)
 	require.NoError(t, err)
 	rootClient.SetToken(token)
 
-	// Create a short-lived child token with a policy that allows transit reads.
+	// Define a named policy with exactly the capability the probe needs:
+	// read on transit/keys/gocell-config. Using "default" policy is insufficient
+	// because it does not grant transit read capability; binding to default would
+	// cause probe() to fail unconditionally (before revocation), defeating the
+	// test's intent of proving the probe fails AFTER revocation.
+	const policyName = "gocell-transit-reader"
+	policyRules := `path "transit/keys/gocell-config" { capabilities = ["read"] }`
+	err = rootClient.Sys().PutPolicyWithContext(ctx, policyName, policyRules)
+	require.NoError(t, err, "create gocell-transit-reader policy must succeed")
+	t.Cleanup(func() {
+		_ = rootClient.Sys().DeletePolicyWithContext(ctx, policyName)
+	})
+
+	// Create a short-lived child token bound to gocell-transit-reader.
 	// Use the high-level Auth().Token().CreateWithContext API instead of
 	// RawRequestWithContext (which is deprecated in vault/api v1.16+).
 	renewable := false
 	secret, err := rootClient.Auth().Token().CreateWithContext(ctx, &vaultapi.TokenCreateRequest{
 		TTL:       "60s",
 		Renewable: &renewable,
-		Policies:  []string{"default"},
+		Policies:  []string{policyName},
 		NoParent:  false,
 	})
 	require.NoError(t, err, "create child token must succeed")
@@ -197,25 +211,25 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	childVaultClient := vaultadapter.NewVaultAPIClient(childClient)
 	p := vaultadapter.NewTransitKeyProvider(childVaultClient, "transit", "gocell-config")
 
-	// Verify the probe works before revocation.
+	// Verify the probe works before revocation (confirms the policy grants access).
 	checkers := p.Checkers()
 	probe := checkers["vault_transit_ready"]
 	require.NotNil(t, probe)
-	require.NoError(t, probe(), "probe must succeed with valid child token")
+	require.NoError(t, probe(), "probe must succeed with valid child token (policy grants transit read)")
 
 	// Revoke the child token via revoke-accessor using the high-level API.
 	// Root token can revoke any accessor without knowing the child token value.
 	err = rootClient.Auth().Token().RevokeAccessorWithContext(ctx, accessor)
 	require.NoError(t, err, "revoke-accessor must succeed using root token")
 
-	// After revocation, probe must return a classified error.
+	// After revocation, Vault returns HTTP 403 → classifyVaultReadError maps to
+	// ErrKeyProviderAuthFailed (token revoked / permission denied), which is
+	// semantically distinct from ErrKeyProviderKeyNotFound (404 / missing key).
 	probeErr := probe()
 	require.Error(t, probeErr, "probe must fail after token is revoked")
 
-	isKeyNotFound := isErrCode(probeErr, errcode.ErrKeyProviderKeyNotFound)
-	isTransient := isErrCode(probeErr, errcode.ErrKeyProviderTransient)
-	assert.True(t, isKeyNotFound || isTransient,
-		"revoked token must return ErrKeyProviderKeyNotFound or ErrKeyProviderTransient, got: %v", probeErr)
+	assert.True(t, isErrCode(probeErr, errcode.ErrKeyProviderAuthFailed),
+		"revoked token must return ErrKeyProviderAuthFailed (Vault returns 403 after revocation), got: %v", probeErr)
 }
 
 // ---------------------------------------------------------------------------
@@ -237,5 +251,4 @@ func TestTransitReadiness_ReadyzHTTPIntegration(t *testing.T) {
 	t.Skipf("TC-INT-10: /readyz HTTP integration requires bootstrap composition root; " +
 		"Checkers() readiness probe is covered by TC-INT-6 to TC-INT-9. " +
 		"See journeys/J-readiness.yaml for full HTTP integration tracking.")
-	fmt.Println("skipped")
 }

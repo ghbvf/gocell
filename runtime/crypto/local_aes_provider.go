@@ -54,20 +54,23 @@ func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciph
 	// 1. Generate a fresh 32-byte DEK.
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: generate DEK: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: generate DEK", err)
 	}
 	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Encrypt plaintext with DEK. Returns raw ciphertext + nonce separately.
 	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: encrypt value: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: encrypt value", err)
 	}
 
 	// 3. Encrypt DEK with KEK (no AAD). edk is a self-contained nonce-prefixed blob.
 	edk, err = aeadutil.EncryptGCMSelfContained(h.kek, dek, nil)
 	if err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: wrap DEK: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: wrap DEK", err)
 	}
 
 	return ciphertext, nonce, edk, h.id, nil

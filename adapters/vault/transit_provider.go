@@ -471,11 +471,19 @@ func classifyVaultDecryptError(err error) error {
 }
 
 // classifyVaultReadError classifies a metadata read path error
-// (transit/keys/{name}). Permanent 4xx — especially 404 (missing key) and 403
-// (permission denied) — surface as ErrKeyProviderKeyNotFound; transient 5xx or
-// network failures surface as ErrKeyProviderTransient so startup retry logic
-// and EventBus DispositionRequeue routing can distinguish the two.
+// (transit/keys/{name}).
+//
+//   - 403 Forbidden (token revoked / insufficient permissions) →
+//     ErrKeyProviderAuthFailed (distinct from key-not-found so operators can
+//     route token failures separately from missing-key failures).
+//   - 404 Not Found (missing key or mount) → ErrKeyProviderKeyNotFound.
+//   - 429 / 408 / 5xx / network → ErrKeyProviderTransient (safe to retry).
 func classifyVaultReadError(err error) error {
+	var respErr *vaultapi.ResponseError
+	if errors.As(err, &respErr) && respErr.StatusCode == 403 {
+		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault-transit: read key metadata (Vault HTTP 403 — token revoked or permission denied)", err)
+	}
 	return classifyVaultError(err, errcode.ErrKeyProviderKeyNotFound, "read key metadata")
 }
 

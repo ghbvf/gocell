@@ -171,7 +171,21 @@ const (
 	// present in the provider's keyring — e.g. a historical key that has been
 	// purged. Callers must not fall back to plaintext; surface as a config error.
 	// Permanent error — EventBus handlers should return DispositionReject.
+	// Maps to Vault HTTP 404 (key or mount not found).
 	ErrKeyProviderKeyNotFound Code = "ERR_KEY_PROVIDER_KEY_NOT_FOUND"
+	// ErrKeyProviderAuthFailed signals that the Vault token has been revoked,
+	// has insufficient permissions, or has expired (Vault HTTP 403 Forbidden).
+	// Distinct from ErrKeyProviderKeyNotFound (404 — key absent) so operators
+	// can route permission/token failures separately from missing-key failures.
+	//
+	// Use when:
+	//   - Vault returns HTTP 403 on any transit read/encrypt/decrypt path.
+	//   - Token revoked (revoke-accessor) or token lacks required capabilities.
+	//   - Permission denied on transit/keys/{name} or transit/encrypt|decrypt.
+	//
+	// Permanent error — EventBus handlers should return DispositionReject.
+	// Operators must rotate the Vault token (not retry the operation).
+	ErrKeyProviderAuthFailed Code = "ERR_KEY_PROVIDER_AUTH_FAILED"
 	// ErrKeyProviderEncryptFailed signals a KMS encrypt-side operation failure
 	// (Vault Transit encrypt API error, malformed response, etc.). Distinct from
 	// ErrKeyProviderDecryptFailed so callers and log aggregators can route
