@@ -170,23 +170,48 @@ const (
 	// ErrKeyProviderKeyNotFound signals that the requested key ID is not
 	// present in the provider's keyring — e.g. a historical key that has been
 	// purged. Callers must not fall back to plaintext; surface as a config error.
+	// Permanent error — EventBus handlers should return DispositionReject.
 	ErrKeyProviderKeyNotFound Code = "ERR_KEY_PROVIDER_KEY_NOT_FOUND"
 	// ErrKeyProviderEncryptFailed signals a KMS encrypt-side operation failure
 	// (Vault Transit encrypt API error, malformed response, etc.). Distinct from
 	// ErrKeyProviderDecryptFailed so callers and log aggregators can route
 	// encrypt-side failures (usually transient / retriable) separately from
 	// decrypt-side failures (usually permanent / data integrity signal).
+	// Permanent error — EventBus handlers should return DispositionReject.
 	ErrKeyProviderEncryptFailed Code = "ERR_KEY_PROVIDER_ENCRYPT_FAILED"
 	// ErrKeyProviderDecryptFailed signals an AES-GCM authentication failure,
 	// wrong key, or malformed ciphertext. Fail-closed: callers must surface
 	// this as an error and never return raw ciphertext or empty string.
+	// Permanent error — EventBus handlers should return DispositionReject.
 	ErrKeyProviderDecryptFailed Code = "ERR_KEY_PROVIDER_DECRYPT_FAILED"
 	// ErrKeyProviderRotateFailed signals a key-rotation operation failure
 	// (Vault rotate API returned an error, new key version could not be read
 	// back, malformed response). Distinct from ErrKeyProviderKeyNotFound so
 	// rotation-path retries and alerting do not confuse "key absent" with
 	// "rotation API unreachable".
+	// Permanent error — EventBus handlers should return DispositionReject.
 	ErrKeyProviderRotateFailed Code = "ERR_KEY_PROVIDER_ROTATE_FAILED"
+	// ErrKeyProviderTransient signals a transient KeyProvider failure that is
+	// safe to retry after back-off. Maps to Vault HTTP responses indicating
+	// temporary unavailability:
+	//
+	//   - 503 Service Unavailable (sealed, standby, maintenance)
+	//   - 429 Too Many Requests (rate-limited)
+	//   - 408 / 499 Request Timeout / network timeout
+	//
+	// Contrast with ErrKeyProviderEncryptFailed / ErrKeyProviderDecryptFailed /
+	// ErrKeyProviderKeyNotFound / ErrKeyProviderRotateFailed, which signal
+	// permanent conditions (400 Bad Request, 403 Forbidden, 404 Not Found).
+	//
+	// EventBus Disposition routing:
+	//   - ErrKeyProviderTransient → DispositionRequeue (back-off retry)
+	//   - All other KeyProvider errors → DispositionReject (DLX)
+	//
+	// Use IsTransient to check the full error chain.
+	//
+	// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
+	// (GenerateKeyError / DecryptKeyError transient vs permanent split)
+	ErrKeyProviderTransient Code = "ERR_KEY_PROVIDER_TRANSIENT"
 	// ErrConfigDecryptFailed signals that a sensitive config value could not be
 	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
 	ErrConfigDecryptFailed Code = "ERR_CONFIG_DECRYPT_FAILED"

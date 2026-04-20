@@ -44,26 +44,34 @@ func (h *localAESHandle) ID() string { return h.id }
 //   - ciphertext: AES-GCM(DEK, plaintext, aad) — raw GCM output (no nonce prefix)
 //   - nonce:      random 12-byte IV for the data encryption; stored in value_nonce
 //   - edk:        nonce-prefixed AES-GCM(KEK, DEK) — self-contained blob stored in value_edk
-func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error) {
+//   - keyID:      actual KEK version used (for LocalAES always equals h.ID(), but the
+//     interface requires callers to persist the Encrypt-returned keyID to eliminate the
+//     race between Current() and a key rotation in backends like VaultTransit)
+//
+// Note: DEK uses defer clear() to zeroize on function exit; defense-in-depth over Go GC.
+//
+// ref: kubernetes/kubernetes staging/.../kmsv2/envelope.go EncryptResponse.KeyID semantics
+func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
 	// 1. Generate a fresh 32-byte DEK.
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: generate DEK: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: generate DEK: %w", err)
 	}
+	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Encrypt plaintext with DEK. Returns raw ciphertext + nonce separately.
 	ciphertext, nonce, err = aesGCMEncryptSplit(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: encrypt value: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: encrypt value: %w", err)
 	}
 
 	// 3. Encrypt DEK with KEK (no AAD). edk is a self-contained nonce-prefixed blob.
 	edk, err = aesGCMEncryptSelfContained(h.kek, dek, nil)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("local-aes: wrap DEK: %w", err)
+		return nil, nil, nil, "", fmt.Errorf("local-aes: wrap DEK: %w", err)
 	}
 
-	return ciphertext, nonce, edk, nil
+	return ciphertext, nonce, edk, h.id, nil
 }
 
 // Decrypt reverses AES-GCM envelope encryption.
@@ -77,6 +85,7 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: unwrap DEK", err)
 	}
+	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Decrypt value using DEK + stored nonce.
 	plaintext, err = aesGCMDecrypt(dek, ciphertext, nonce, aad)
@@ -93,7 +102,7 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 
 // LocalAESKeyProvider implements KeyProvider using local AES-GCM-256 keys
 // loaded from environment variables. Suitable for dev/CI; not recommended for
-// production (use VaultTransitKeyProvider instead).
+// production (use `adapters/vault.TransitKeyProvider` instead).
 //
 // Master KEK loading:
 //   - GOCELL_MASTER_KEY:          required in postgres mode (32B hex or base64).
@@ -186,15 +195,15 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 // error rather than silently losing data.
 //
 // Production rotation strategy (S14a):
-//   - Use VaultTransitKeyProvider.Rotate() which delegates key generation to Vault.
+//   - Use adapters/vault.TransitKeyProvider.Rotate() which delegates key generation to Vault.
 //   - Vault persists key versions server-side; historical ciphertext remains
 //     decryptable via the ciphertext version prefix.
 //
-// Testing rotation scenarios: use VaultTransitKeyProvider with a fake vaultClient
-// (see vault_transit_unit_test.go).
+// Testing rotation scenarios: use adapters/vault.TransitKeyProvider with a fake VaultClient
+// (see adapters/vault/transit_provider_test.go).
 func (p *LocalAESKeyProvider) Rotate(_ context.Context) (string, error) {
 	return "", errcode.New(errcode.ErrNotImplemented,
-		"LocalAES rotation is not persistent; use VaultTransitKeyProvider for production key rotation (S14a)")
+		"LocalAES rotation is not persistent; use adapters/vault.TransitKeyProvider for production key rotation (S14a)")
 }
 
 // ---------------------------------------------------------------------------

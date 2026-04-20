@@ -23,6 +23,10 @@ ALTER TABLE config_versions
     ADD COLUMN IF NOT EXISTS value_nonce  BYTEA;
 
 -- +goose Down
--- Intentional no-op: dropping cipher columns destroys encrypted values with no recovery path.
--- Production rollback: DBA manually renames columns per migration 010 header comments and ADR.
--- See ADR: docs/architecture/202604191800-adr-config-value-encryption.md
+-- Intentionally not implemented: this migration is forward-only because dropping
+-- value_cipher / value_key_id / value_edk / value_nonce would destroy encrypted
+-- data with no recovery path. Manual rollback required; see ADR below and
+-- docs/backlog.md A19.
+--
+-- ADR: docs/architecture/202604191800-adr-config-value-encryption.md
+SELECT 'migration 010 has no automatic rollback — see comment above' AS notice;

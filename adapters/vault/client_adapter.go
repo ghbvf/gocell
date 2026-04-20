@@ -1,4 +1,4 @@
-package crypto
+package vault
 
 import (
 	"context"
@@ -9,18 +9,21 @@ import (
 )
 
 // vaultAPIClient wraps *vaultapi.Client to satisfy the vaultClient interface.
-// This adapter is the production wiring between vault/api and VaultTransitKeyProvider.
+// This is the production wiring between vault/api and TransitKeyProvider.
+//
+// Migrated from runtime/crypto.vaultAPIClient (R1c Phase 0-c). The adapter
+// itself carries no envelope semantics — it is a thin I/O shim.
 //
 // ref: hashicorp/vault api/client.go — vaultapi.Client.Logical().WriteWithContext
 type vaultAPIClient struct {
 	client *vaultapi.Client
 }
 
-// NewVaultAPIClient wraps the provided *vaultapi.Client in the vaultClient adapter
-// used by VaultTransitKeyProvider. Call this when constructing the provider from a
-// pre-configured *vaultapi.Client (e.g. in tests or when the caller manages auth
-// separately from NewVaultTransitKeyProviderFromEnv).
-func NewVaultAPIClient(c *vaultapi.Client) vaultClient {
+// NewVaultAPIClient wraps the provided *vaultapi.Client in the VaultClient
+// adapter used by TransitKeyProvider. Use this when constructing the provider
+// from a pre-configured *vaultapi.Client (e.g. in tests or when the caller
+// manages Vault authentication separately from NewTransitKeyProviderFromEnv).
+func NewVaultAPIClient(c *vaultapi.Client) VaultClient {
 	return &vaultAPIClient{client: c}
 }
 

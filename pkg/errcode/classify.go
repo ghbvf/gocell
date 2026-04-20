@@ -264,6 +264,34 @@ var expected4xxCodes = map[Code]bool{
 	ErrRateLimited: true,
 }
 
+// IsTransient reports whether err, or any error in its Unwrap chain, carries
+// the ErrKeyProviderTransient code. It is the canonical predicate for routing
+// KeyProvider failures in EventBus handlers:
+//
+//	if errcode.IsTransient(err) {
+//	    return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
+//	}
+//	return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: err}
+//
+// Transient conditions map to Vault HTTP 503 / 429 / 408 / 499 (sealed,
+// rate-limited, request timeout). All other KeyProvider errors are permanent
+// (400 / 403 / 404) and must be routed to DispositionReject → DLX.
+//
+// Returns false for nil. Uses errors.As so it correctly traverses chains
+// produced by fmt.Errorf("…: %w", err).
+//
+// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
+func IsTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ec *Error
+	if !errors.As(err, &ec) {
+		return false
+	}
+	return ec.Code == ErrKeyProviderTransient
+}
+
 // IsExpected4xx reports whether err maps to an HTTP 400-499 response code.
 // These are expected client-side / business rejection conditions that callers
 // should log at Warn level; true infrastructure failures should be Error.

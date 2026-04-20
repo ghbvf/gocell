@@ -43,12 +43,12 @@ func (t *keyProviderTransformer) Encrypt(ctx context.Context, plaintext, aad []b
 		return nil, "", nil, nil, fmt.Errorf("value-transformer: get current key: %w", err)
 	}
 
-	ct, nonce, edk, err := handle.Encrypt(ctx, plaintext, aad)
+	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("value-transformer: encrypt: %w", err)
 	}
 
-	return ct, handle.ID(), nonce, edk, nil
+	return ct, keyID, nonce, edk, nil
 }
 
 // CurrentKeyID returns the ID of the currently active key. Used by the config
@@ -67,6 +67,14 @@ func (t *keyProviderTransformer) Decrypt(ctx context.Context, ciphertext []byte,
 	handle, err := t.provider.ByID(ctx, keyID)
 	if err != nil {
 		return nil, fmt.Errorf("value-transformer: resolve key %q: %w", keyID, err)
+	}
+
+	// Defense-in-depth: verify that the provider returned a handle whose ID
+	// matches the requested keyID. A mismatch indicates a buggy KeyProvider
+	// implementation that routed the lookup to the wrong key — permanent error.
+	if handle.ID() != keyID {
+		return nil, fmt.Errorf("value-transformer: provider returned handle id %q for requested keyID %q",
+			handle.ID(), keyID)
 	}
 
 	plaintext, err := handle.Decrypt(ctx, ciphertext, nonce, edk, aad)
