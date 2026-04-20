@@ -54,3 +54,41 @@ func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"guard must reject requests without service token header")
 }
+
+// TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected verifies that
+// internalGuardFromEnv returns an error when GOCELL_SERVICE_SECRET is set to
+// the well-known demo value in real adapter mode. Guards against an attacker
+// forging ServiceTokens using the public demo secret shipped in test fixtures.
+func TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	_, err := internalGuardFromEnv("real")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
+		"error must name the offending env var")
+	assert.Contains(t, err.Error(), "well-known demo key",
+		"error must indicate the reason")
+}
+
+// TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed verifies that
+// the demo key check is a no-op outside of real adapter mode, preserving
+// the dev/test workflow where demo fixture values are acceptable.
+func TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
+	guard, err := internalGuardFromEnv("") // dev mode
+	require.NoError(t, err)
+	assert.NotNil(t, guard, "dev mode must accept demo key and return a guard")
+}
+
+// TestInternalGuardFromEnv_RealMode_DemoPreviousServiceSecret_Rejected verifies
+// that GOCELL_SERVICE_SECRET_PREVIOUS is also checked against the demo blocklist
+// in real adapter mode.
+func TestInternalGuardFromEnv_RealMode_DemoPreviousServiceSecret_Rejected(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_SERVICE_SECRET_PREVIOUS", "service-secret-32-bytes-xxxxxx!!")
+	_, err := internalGuardFromEnv("real")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET_PREVIOUS",
+		"error must name the offending env var")
+	assert.Contains(t, err.Error(), "well-known demo key",
+		"error must indicate the reason")
+}

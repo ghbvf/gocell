@@ -453,6 +453,11 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"},
 			want:  "GOCELL_CONFIG_CURSOR_KEY",
 		},
+		{
+			name:  "service secret demo literal rejected",
+			patch: envPatch{"GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!"},
+			want:  "GOCELL_SERVICE_SECRET",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
