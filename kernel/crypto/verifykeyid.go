@@ -26,49 +26,47 @@ func ParseKeyID(keyID string) (provider string, version int, err error) {
 			"invalid keyID: empty string")
 	}
 
-	// Try colon separator first: "{provider}:v{N}"
-	if idx := strings.LastIndex(keyID, ":v"); idx >= 0 {
-		providerPart := keyID[:idx]
-		versionStr := keyID[idx+2:] // skip ":v"
-		if providerPart == "" {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: empty provider before ':v'", keyID))
-		}
-		v, parseErr := strconv.Atoi(versionStr)
-		if parseErr != nil {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: non-numeric version %q", keyID, versionStr))
-		}
-		if v < 0 {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: negative version %d", keyID, v))
-		}
-		return providerPart, v, nil
+	// Try colon separator first (e.g. "vault-transit:v3").
+	if p, v, ok, err := tryParseVersionSuffix(keyID, ":v"); ok || err != nil {
+		return p, v, err
 	}
-
-	// Try dash separator: "{provider}-v{N}"
-	// The version segment is the last "-v{N}" suffix.
-	if idx := strings.LastIndex(keyID, "-v"); idx >= 0 {
-		providerPart := keyID[:idx]
-		versionStr := keyID[idx+2:] // skip "-v"
-		if providerPart == "" {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: empty provider before '-v'", keyID))
-		}
-		v, parseErr := strconv.Atoi(versionStr)
-		if parseErr != nil {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: non-numeric version %q", keyID, versionStr))
-		}
-		if v < 0 {
-			return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-				fmt.Sprintf("invalid keyID %q: negative version %d", keyID, v))
-		}
-		return providerPart, v, nil
+	// Try dash separator (e.g. "local-aes-v1").
+	if p, v, ok, err := tryParseVersionSuffix(keyID, "-v"); ok || err != nil {
+		return p, v, err
 	}
 
 	return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
 		fmt.Sprintf("invalid keyID %q: must end with '-v{N}' or ':v{N}'", keyID))
+}
+
+// tryParseVersionSuffix attempts to parse a version suffix from keyID using sep
+// as the separator (either ":v" or "-v"). It finds the last occurrence of sep,
+// splits keyID into provider and version string, and validates both parts.
+//
+// Returns (provider, version, true, nil) on success.
+// Returns ("", 0, false, nil) when sep is not found in keyID.
+// Returns ("", 0, true, err) when sep is found but the format is invalid.
+func tryParseVersionSuffix(keyID, sep string) (provider string, version int, found bool, err error) {
+	idx := strings.LastIndex(keyID, sep)
+	if idx < 0 {
+		return "", 0, false, nil
+	}
+	provider = keyID[:idx]
+	versionStr := keyID[idx+len(sep):]
+	if provider == "" {
+		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+			fmt.Sprintf("invalid keyID %q: empty provider before %q", keyID, sep))
+	}
+	v, parseErr := strconv.Atoi(versionStr)
+	if parseErr != nil {
+		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+			fmt.Sprintf("invalid keyID %q: non-numeric version %q", keyID, versionStr))
+	}
+	if v < 0 {
+		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+			fmt.Sprintf("invalid keyID %q: negative version %d", keyID, v))
+	}
+	return provider, v, true, nil
 }
 
 // MatchKeyID verifies that handleID and edkKeyID refer to the same provider

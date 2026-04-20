@@ -132,7 +132,7 @@ type tokenRenewalWorker struct {
 //     layer can alert operators before token expiry.
 func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	go w.watcher.Start()
-	defer w.watcher.Stop()
+	defer w.stopOnce.Do(func() { w.watcher.Stop() })
 
 	for {
 		select {
