@@ -211,7 +211,7 @@ const (
 	//
 	//   - 503 Service Unavailable (sealed, standby, maintenance)
 	//   - 429 Too Many Requests (rate-limited)
-	//   - 408 / 499 Request Timeout / network timeout
+	//   - 408 Request Timeout / network timeout
 	//
 	// Contrast with ErrKeyProviderEncryptFailed / ErrKeyProviderDecryptFailed /
 	// ErrKeyProviderKeyNotFound / ErrKeyProviderRotateFailed, which signal

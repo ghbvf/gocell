@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -380,6 +381,9 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 //
 // ref: hashicorp/vault builtin/logical/transit/path_keys.go@main
 func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
+	slog.InfoContext(ctx, "vault-transit: rotating key",
+		slog.String("key_name", p.keyName),
+		slog.String("mount_path", p.mountPath))
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -568,8 +572,7 @@ func parseVaultKeyID(ciphertext string) (string, error) {
 var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
 
 // transitReadinessTimeout is the per-probe context deadline for vault_transit_ready.
-// 3 seconds is sufficient for LAN Vault; adjust via GOCELL_VAULT_READINESS_TIMEOUT_SEC
-// if needed in future iterations.
+// 3 seconds is sufficient for LAN Vault deployments.
 const transitReadinessTimeout = 3 * time.Second
 
 // Checkers returns a map of readiness probe functions for TransitKeyProvider.

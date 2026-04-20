@@ -164,7 +164,7 @@ The Vault transit adapter satisfies all 8 checklist items:
 
 | # | Item | Evidence |
 |---|------|---------|
-| 1 | Metadata compliance | `adapters/vault/` has no cell/slice YAML (it is an infrastructure adapter, not a Cell); validated via `gocell validate` |
+| 1 | Metadata compliance | N/A — `adapters/vault/` is an infrastructure adapter, not a Cell; no cell/slice YAML is expected or required. |
 | 2 | errcode three-way | `transit_provider.go::classifyVaultError` + `classifyVaultReadError`; `NewTransitKeyProviderFromEnv` returns classifier output directly |
 | 3 | testcontainers | `readiness_test.go` TC-INT-6~9; `integration_test.go` TC-INT-1~5 |
 | 4 | slog + no payload dump | No `fmt.Println`; no body dumps in error messages |

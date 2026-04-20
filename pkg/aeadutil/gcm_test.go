@@ -274,3 +274,73 @@ func TestDecryptGCM_ErrorNoKeyLeak(t *testing.T) {
 		t.Errorf("error message leaks plaintext: %v", errMsg)
 	}
 }
+
+// TestDecryptGCMSelfContained_WrongKey verifies authentication failure on wrong key.
+func TestDecryptGCMSelfContained_WrongKey(t *testing.T) {
+	t.Parallel()
+	blob, err := aeadutil.EncryptGCMSelfContained(validKey32, []byte("secret"), nil)
+	if err != nil {
+		t.Fatalf("EncryptGCMSelfContained error: %v", err)
+	}
+
+	wrongKey := bytes.Repeat([]byte{0xFF}, 32)
+	_, err = aeadutil.DecryptGCMSelfContained(wrongKey, blob, nil)
+	if err == nil {
+		t.Fatal("expected error with wrong key, got nil")
+	}
+}
+
+// TestDecryptGCMSelfContained_ErrorNoKeyLeak verifies that error messages from wrong-key
+// or tampered-blob decryption do not expose the key bytes or plaintext.
+func TestDecryptGCMSelfContained_ErrorNoKeyLeak(t *testing.T) {
+	t.Parallel()
+	plaintext := []byte("secret plaintext that must not appear in error")
+	wrongKey := bytes.Repeat([]byte{0xFF}, 32)
+	keyHex := strings.Repeat("ff", 32)
+
+	blob, err := aeadutil.EncryptGCMSelfContained(validKey32, plaintext, nil)
+	if err != nil {
+		t.Fatalf("EncryptGCMSelfContained error: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		key  []byte
+		blob []byte
+	}{
+		{
+			name: "wrong_key",
+			key:  wrongKey,
+			blob: blob,
+		},
+		{
+			name: "tampered_blob",
+			key:  validKey32,
+			blob: func() []byte {
+				tampered := make([]byte, len(blob))
+				copy(tampered, blob)
+				tampered[len(tampered)-1] ^= 0xFF
+				return tampered
+			}(),
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := aeadutil.DecryptGCMSelfContained(tc.key, tc.blob, nil)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			errMsg := err.Error()
+			if strings.Contains(errMsg, keyHex) {
+				t.Errorf("error message leaks key hex: %v", errMsg)
+			}
+			if strings.Contains(errMsg, string(plaintext)) {
+				t.Errorf("error message leaks plaintext: %v", errMsg)
+			}
+		})
+	}
+}
