@@ -18,6 +18,32 @@ var validKey16 = bytes.Repeat([]byte{0x02}, 16)
 // validKey24 is a 24-byte AES-192 key for testing.
 var validKey24 = bytes.Repeat([]byte{0x03}, 24)
 
+// assertGCMRoundTrip encrypts+decrypts plaintext with the given key/aad and
+// asserts the round-trip returns the original bytes. Extracted from the
+// table-driven TestEncryptDecryptGCM_RoundTrip to keep cognitive complexity
+// inside Sonar's 15 threshold.
+func assertGCMRoundTrip(t *testing.T, key, plaintext, aad []byte) {
+	t.Helper()
+	ct, nonce, err := aeadutil.EncryptGCM(key, plaintext, aad)
+	if err != nil {
+		t.Fatalf("EncryptGCM error: %v", err)
+	}
+	if len(ct) == 0 {
+		t.Fatal("ciphertext must not be empty")
+	}
+	if len(nonce) == 0 {
+		t.Fatal("nonce must not be empty")
+	}
+
+	got, err := aeadutil.DecryptGCM(key, ct, nonce, aad)
+	if err != nil {
+		t.Fatalf("DecryptGCM error: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Errorf("round-trip mismatch: got %q, want %q", got, plaintext)
+	}
+}
+
 // TestEncryptDecryptGCM_RoundTrip tests EncryptGCM + DecryptGCM round-trips.
 func TestEncryptDecryptGCM_RoundTrip(t *testing.T) {
 	t.Parallel()
@@ -28,49 +54,16 @@ func TestEncryptDecryptGCM_RoundTrip(t *testing.T) {
 		key  []byte
 		aad  []byte
 	}{
-		{
-			name: "aes256_nil_aad",
-			key:  validKey32,
-			aad:  nil,
-		},
-		{
-			name: "aes256_non_empty_aad",
-			key:  validKey32,
-			aad:  []byte("additional authenticated data"),
-		},
-		{
-			name: "aes128_nil_aad",
-			key:  validKey16,
-			aad:  nil,
-		},
-		{
-			name: "aes192_non_empty_aad",
-			key:  validKey24,
-			aad:  []byte("aad-for-aes192"),
-		},
+		{name: "aes256_nil_aad", key: validKey32, aad: nil},
+		{name: "aes256_non_empty_aad", key: validKey32, aad: []byte("additional authenticated data")},
+		{name: "aes128_nil_aad", key: validKey16, aad: nil},
+		{name: "aes192_non_empty_aad", key: validKey24, aad: []byte("aad-for-aes192")},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ct, nonce, err := aeadutil.EncryptGCM(tc.key, plaintext, tc.aad)
-			if err != nil {
-				t.Fatalf("EncryptGCM error: %v", err)
-			}
-			if len(ct) == 0 {
-				t.Fatal("ciphertext must not be empty")
-			}
-			if len(nonce) == 0 {
-				t.Fatal("nonce must not be empty")
-			}
-
-			got, err := aeadutil.DecryptGCM(tc.key, ct, nonce, tc.aad)
-			if err != nil {
-				t.Fatalf("DecryptGCM error: %v", err)
-			}
-			if !bytes.Equal(got, plaintext) {
-				t.Errorf("round-trip mismatch: got %q, want %q", got, plaintext)
-			}
+			assertGCMRoundTrip(t, tc.key, plaintext, tc.aad)
 		})
 	}
 }

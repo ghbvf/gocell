@@ -1,0 +1,219 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// fakeKeyProvider satisfies kcrypto.KeyProvider AND
+// kernellifecycle.ManagedResource. It drives the A19 wiring test:
+// ConfigCoreModule must register the provider's Checkers() with bootstrap so
+// an unhealthy probe flips /readyz to 503.
+//
+// Encrypt/Decrypt are unreachable in this test because memory topology does
+// not exercise sensitive-value encryption; the ValueTransformer constructed
+// over this fake is never invoked.
+type fakeKeyProvider struct {
+	probeErr error
+}
+
+// --- kcrypto.KeyProvider ---
+
+func (f *fakeKeyProvider) Current(_ context.Context) (kcrypto.KeyHandle, error) {
+	return fakeKeyHandle{}, nil
+}
+
+func (f *fakeKeyProvider) ByID(_ context.Context, _ string) (kcrypto.KeyHandle, error) {
+	return fakeKeyHandle{}, nil
+}
+
+func (f *fakeKeyProvider) Rotate(_ context.Context) (string, error) {
+	return "fake-v1", nil
+}
+
+// --- kernellifecycle.ManagedResource ---
+
+func (f *fakeKeyProvider) Checkers() map[string]func() error {
+	return map[string]func() error{
+		"fake_key_provider_ready": func() error { return f.probeErr },
+	}
+}
+
+func (f *fakeKeyProvider) Worker() kworker.Worker { return nil }
+
+func (f *fakeKeyProvider) Close(_ context.Context) error { return nil }
+
+type fakeKeyHandle struct{}
+
+func (fakeKeyHandle) ID() string { return "fake-v1" }
+
+func (fakeKeyHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
+	return nil, nil, nil, "", errors.New("fakeKeyHandle.Encrypt must not be called in readiness tests")
+}
+
+func (fakeKeyHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) {
+	return nil, errors.New("fakeKeyHandle.Decrypt must not be called in readiness tests")
+}
+
+var (
+	_ kcrypto.KeyProvider             = (*fakeKeyProvider)(nil)
+	_ kernellifecycle.ManagedResource = (*fakeKeyProvider)(nil)
+	_ kcrypto.KeyHandle               = fakeKeyHandle{}
+)
+
+// buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
+// buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
+// so the readiness wiring can be exercised without GOCELL_KEY_PROVIDER / Vault.
+func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+	t.Helper()
+	ctx := context.Background()
+
+	cells, cellOpts, err := BuildApp(ctx, shared,
+		ConfigCoreModule{KeyProviderOverride: kp},
+		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AuditCoreModule{},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	asm, err := buildAssembly(shared.PromStack, cells...)
+	if err != nil {
+		return nil, err
+	}
+
+	consumerBase, err := buildConsumerBase()
+	if err != nil {
+		return nil, err
+	}
+
+	metricsHandler, err := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
+	if err != nil {
+		return nil, err
+	}
+
+	adapterInfo := shared.Topology.AdapterInfo()
+	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts = append(opts, cellOpts...)
+	opts = append(opts, extra...)
+	return bootstrap.New(opts...), nil
+}
+
+// TestA19_ConfigCoreModule_RegistersKeyProviderReadiness is the bootstrap-level
+// end-to-end guard the PR #205 review called out as missing: the
+// TransitKeyProvider's Checkers() probe must flow through ConfigCoreModule →
+// bootstrap.WithManagedResource → /readyz.
+//
+// We inject a fake KeyProvider that also implements ManagedResource with a
+// failing probe. If the wiring is in place, /readyz returns 503 and
+// /readyz?verbose lists "fake_key_provider_ready" as unhealthy. If the fix is
+// reverted, /readyz stays at 200 and this test fails.
+//
+// ref: docs/plans/202604201800-pg-pilot-layering-refactor-plan.md §9 (R1e A19)
+// ref: readiness review 2026-04-20 P1 finding (missing bootstrap wiring)
+func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	kp := &fakeKeyProvider{probeErr: errors.New("vault unreachable (test)")}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithListener(ln))
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 5*time.Second, 50*time.Millisecond, "bootstrap must become live")
+
+	// /readyz must reflect the failing fake probe → 503.
+	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"/readyz must be 503 when the KeyProvider readiness probe fails "+
+			"(proves ConfigCoreModule wires kp.Checkers() into bootstrap)")
+
+	// /readyz?verbose must list the fake probe by name as unhealthy (proves the
+	// aggregation step preserved the named checker, not just a boolean signal).
+	verboseResp, err := http.Get("http://" + addr + "/readyz?verbose") //nolint:noctx
+	require.NoError(t, err)
+	defer verboseResp.Body.Close()
+
+	var body struct {
+		Status       string            `json:"status"`
+		Dependencies map[string]string `json:"dependencies"`
+	}
+	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
+	assert.Equal(t, "unhealthy", body.Status)
+	assert.Equal(t, "unhealthy", body.Dependencies["fake_key_provider_ready"],
+		"fake_key_provider_ready must appear in /readyz?verbose as unhealthy")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestA19_ConfigCoreModule_KeyProviderReady is the positive control for
+// TestA19_ConfigCoreModule_RegistersKeyProviderReadiness. With the same wiring
+// and a passing probe, /readyz must stay at 200 — guards against the wiring
+// accidentally force-failing /readyz regardless of probe result.
+func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	kp := &fakeKeyProvider{probeErr: nil}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithListener(ln))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 5*time.Second, 50*time.Millisecond,
+		"/readyz must be 200 when the KeyProvider probe is healthy")
+
+	cancel()
+	select {
+	case err := <-errCh:
+		assert.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}

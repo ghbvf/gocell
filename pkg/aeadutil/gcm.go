@@ -8,6 +8,15 @@ import (
 	"io"
 )
 
+// Wrap-error format strings shared by the encrypt/decrypt entry points. Sonar
+// flags the literals as a DRY violation when they appear in more than one
+// callsite; keeping them in one place also guarantees identical wording across
+// EncryptGCM / DecryptGCM / DecryptGCMSelfContained.
+const (
+	errMsgNewCipher = "aes-gcm: new cipher: %w"
+	errMsgNewGCM    = "aes-gcm: new GCM: %w"
+)
+
 // EncryptGCM encrypts plaintext with key and aad using AES-GCM.
 // Returns (ciphertext, nonce, error). The nonce is NOT prepended to the
 // ciphertext — it is returned separately so callers can store it in a
@@ -22,11 +31,11 @@ import (
 func EncryptGCM(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
+		return nil, nil, fmt.Errorf(errMsgNewCipher, err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
+		return nil, nil, fmt.Errorf(errMsgNewGCM, err)
 	}
 	nonce = make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
@@ -46,11 +55,11 @@ func EncryptGCM(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error
 func DecryptGCM(key, ciphertext, nonce, aad []byte) (plaintext []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
+		return nil, fmt.Errorf(errMsgNewCipher, err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
+		return nil, fmt.Errorf(errMsgNewGCM, err)
 	}
 	if len(nonce) != gcm.NonceSize() {
 		return nil, fmt.Errorf("aes-gcm: nonce length %d, want %d", len(nonce), gcm.NonceSize())
@@ -92,11 +101,11 @@ func DecryptGCMSelfContained(key, blob, aad []byte) (plaintext []byte, err error
 	// Use a temporary cipher to determine the nonce size before splitting.
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
+		return nil, fmt.Errorf(errMsgNewCipher, err)
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
+		return nil, fmt.Errorf(errMsgNewGCM, err)
 	}
 	nonceSize := gcm.NonceSize()
 	if len(blob) < nonceSize {
