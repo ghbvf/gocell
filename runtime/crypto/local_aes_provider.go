@@ -2,8 +2,6 @@ package crypto
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -12,6 +10,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/ghbvf/gocell/pkg/aeadutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -55,20 +54,23 @@ func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciph
 	// 1. Generate a fresh 32-byte DEK.
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: generate DEK: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: generate DEK", err)
 	}
 	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Encrypt plaintext with DEK. Returns raw ciphertext + nonce separately.
-	ciphertext, nonce, err = aesGCMEncryptSplit(dek, plaintext, aad)
+	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: encrypt value: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: encrypt value", err)
 	}
 
 	// 3. Encrypt DEK with KEK (no AAD). edk is a self-contained nonce-prefixed blob.
-	edk, err = aesGCMEncryptSelfContained(h.kek, dek, nil)
+	edk, err = aeadutil.EncryptGCMSelfContained(h.kek, dek, nil)
 	if err != nil {
-		return nil, nil, nil, "", fmt.Errorf("local-aes: wrap DEK: %w", err)
+		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+			"local-aes: wrap DEK", err)
 	}
 
 	return ciphertext, nonce, edk, h.id, nil
@@ -81,14 +83,14 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 	}
 
 	// 1. Unwrap DEK using KEK. edk is a self-contained nonce-prefixed blob.
-	dek, err := aesGCMDecryptSelfContained(h.kek, edk, nil)
+	dek, err := aeadutil.DecryptGCMSelfContained(h.kek, edk, nil)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: unwrap DEK", err)
 	}
 	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Decrypt value using DEK + stored nonce.
-	plaintext, err = aesGCMDecrypt(dek, ciphertext, nonce, aad)
+	plaintext, err = aeadutil.DecryptGCM(dek, ciphertext, nonce, aad)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: decrypt value (AAD mismatch or tampered)", err)
 	}
@@ -207,89 +209,6 @@ func (p *LocalAESKeyProvider) Rotate(_ context.Context) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// AES-GCM helpers
-// ---------------------------------------------------------------------------
-
-// aesGCMEncryptSplit encrypts plaintext with key+aad using AES-GCM-256.
-// Returns (rawCiphertext, nonce, error). rawCiphertext does NOT include the
-// nonce — the nonce is returned separately and should be stored in value_nonce.
-func aesGCMEncryptSplit(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
-	}
-	nonce = make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, nil, fmt.Errorf("aes-gcm: generate nonce: %w", err)
-	}
-	ciphertext = gcm.Seal(nil, nonce, plaintext, aad)
-	return ciphertext, nonce, nil
-}
-
-// aesGCMDecrypt decrypts rawCiphertext (not nonce-prefixed) with key+nonce+aad.
-func aesGCMDecrypt(key, ciphertext, nonce, aad []byte) (plaintext []byte, err error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
-	}
-	if len(nonce) != gcm.NonceSize() {
-		return nil, fmt.Errorf("aes-gcm: nonce length %d, want %d", len(nonce), gcm.NonceSize())
-	}
-	plaintext, err = gcm.Open(nil, nonce, ciphertext, aad)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: open: %w", err)
-	}
-	return plaintext, nil
-}
-
-// aesGCMEncryptSelfContained encrypts plaintext and returns a nonce-prefixed
-// self-contained blob: nonce || ciphertext. Used for edk (wrapped DEK) so
-// the blob is self-sufficient when stored in value_edk.
-func aesGCMEncryptSelfContained(key, plaintext, aad []byte) ([]byte, error) {
-	ct, nonce, err := aesGCMEncryptSplit(key, plaintext, aad)
-	if err != nil {
-		return nil, err
-	}
-	// Prepend nonce so the blob is self-contained.
-	blob := make([]byte, len(nonce)+len(ct))
-	copy(blob, nonce)
-	copy(blob[len(nonce):], ct)
-	return blob, nil
-}
-
-// aesGCMDecryptSelfContained decrypts a nonce-prefixed self-contained blob
-// produced by aesGCMEncryptSelfContained.
-func aesGCMDecryptSelfContained(key, blob, aad []byte) ([]byte, error) {
-	// We need the nonce size to split the blob. Use a temporary cipher to get it.
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new cipher: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: new GCM: %w", err)
-	}
-	nonceSize := gcm.NonceSize()
-	if len(blob) < nonceSize {
-		return nil, fmt.Errorf("aes-gcm: self-contained blob too short (len=%d)", len(blob))
-	}
-	nonce := blob[:nonceSize]
-	ct := blob[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ct, aad)
-	if err != nil {
-		return nil, fmt.Errorf("aes-gcm: open self-contained: %w", err)
-	}
-	return plaintext, nil
-}
-
 // ---------------------------------------------------------------------------
 // Key decoding
 // ---------------------------------------------------------------------------

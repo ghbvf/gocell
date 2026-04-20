@@ -439,7 +439,6 @@ func runEncryptWithInjectedErr(t *testing.T, writeErr error, wantTransient bool,
 }
 
 func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
-	// Phase 2-a will make this test green.
 	transientCases := []struct {
 		name     string
 		vaultErr error
@@ -506,42 +505,15 @@ func TestVaultTransitHandle_RealResponseError_Classification(t *testing.T) {
 		wantTransi bool
 		wantCode   errcode.Code
 	}{
-		{
-			name:       "403 Forbidden → permanent ErrKeyProviderEncryptFailed",
-			statusCode: 403,
-			wantTransi: false,
-			wantCode:   errcode.ErrKeyProviderEncryptFailed,
-		},
-		{
-			name:       "400 Bad Request → permanent ErrKeyProviderEncryptFailed",
-			statusCode: 400,
-			wantTransi: false,
-			wantCode:   errcode.ErrKeyProviderEncryptFailed,
-		},
-		{
-			name:       "404 Not Found → permanent ErrKeyProviderEncryptFailed",
-			statusCode: 404,
-			wantTransi: false,
-			wantCode:   errcode.ErrKeyProviderEncryptFailed,
-		},
-		{
-			name:       "503 Service Unavailable → transient ErrKeyProviderTransient",
-			statusCode: 503,
-			wantTransi: true,
-			wantCode:   errcode.ErrKeyProviderTransient,
-		},
-		{
-			name:       "429 Rate Limited → transient ErrKeyProviderTransient",
-			statusCode: 429,
-			wantTransi: true,
-			wantCode:   errcode.ErrKeyProviderTransient,
-		},
+		{"403 Forbidden → permanent ErrKeyProviderEncryptFailed", 403, false, errcode.ErrKeyProviderEncryptFailed},
+		{"400 Bad Request → permanent ErrKeyProviderEncryptFailed", 400, false, errcode.ErrKeyProviderEncryptFailed},
+		{"404 Not Found → permanent ErrKeyProviderEncryptFailed", 404, false, errcode.ErrKeyProviderEncryptFailed},
+		{"503 Service Unavailable → transient ErrKeyProviderTransient", 503, true, errcode.ErrKeyProviderTransient},
+		{"429 Rate Limited → transient ErrKeyProviderTransient", 429, true, errcode.ErrKeyProviderTransient},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Inject a real *vaultapi.ResponseError — exercises the full
-			// classifyVaultEncryptError → isTransientVaultError → isTransientHTTPStatus chain.
 			runEncryptWithInjectedErr(t,
 				&vaultapi.ResponseError{
 					StatusCode: tc.statusCode,

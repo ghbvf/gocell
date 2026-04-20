@@ -8,13 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
 
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/aeadutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -97,7 +102,7 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte)
 	defer clear(dek)
 
 	// 2. Encrypt plaintext with DEK. AAD bound in local AES-GCM layer.
-	ciphertext, nonce, err = aeadEncryptSplit(dek, plaintext, aad)
+	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
 		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: local AES-GCM encrypt", err)
@@ -183,7 +188,7 @@ func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, nonce, edk
 	defer clear(dek)
 
 	// 2. Local AES-GCM Open. AAD is verified here — mismatch → authentication error.
-	plaintext, err = aeadDecrypt(dek, ciphertext, nonce, aad)
+	plaintext, err = aeadutil.DecryptGCM(dek, ciphertext, nonce, aad)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: local AES-GCM decrypt (AAD mismatch or tampered ciphertext)", err)
@@ -316,9 +321,12 @@ func NewTransitKeyProviderFromEnv() (*TransitKeyProvider, error) {
 	p := NewTransitKeyProvider(client, mountPath, keyName)
 
 	// Fail-fast: verify the key exists at construction time.
+	// readLatestVersion already calls classifyVaultReadError, which routes
+	// 404/403 → ErrKeyProviderKeyNotFound and 5xx/network → ErrKeyProviderTransient.
+	// Return the classified error directly to preserve errcode identity for callers.
 	ctx := context.Background()
 	if _, err = p.readLatestVersion(ctx); err != nil {
-		return nil, fmt.Errorf("vault-transit: key %q not found at mount %q: %w", keyName, mountPath, err)
+		return nil, err
 	}
 
 	return p, nil
@@ -373,6 +381,9 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 //
 // ref: hashicorp/vault builtin/logical/transit/path_keys.go@main
 func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
+	slog.InfoContext(ctx, "vault-transit: rotating key",
+		slog.String("key_name", p.keyName),
+		slog.String("mount_path", p.mountPath))
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -464,11 +475,19 @@ func classifyVaultDecryptError(err error) error {
 }
 
 // classifyVaultReadError classifies a metadata read path error
-// (transit/keys/{name}). Permanent 4xx — especially 404 (missing key) and 403
-// (permission denied) — surface as ErrKeyProviderKeyNotFound; transient 5xx or
-// network failures surface as ErrKeyProviderTransient so startup retry logic
-// and EventBus DispositionRequeue routing can distinguish the two.
+// (transit/keys/{name}).
+//
+//   - 403 Forbidden (token revoked / insufficient permissions) →
+//     ErrKeyProviderAuthFailed (distinct from key-not-found so operators can
+//     route token failures separately from missing-key failures).
+//   - 404 Not Found (missing key or mount) → ErrKeyProviderKeyNotFound.
+//   - 429 / 408 / 5xx / network → ErrKeyProviderTransient (safe to retry).
 func classifyVaultReadError(err error) error {
+	var respErr *vaultapi.ResponseError
+	if errors.As(err, &respErr) && respErr.StatusCode == 403 {
+		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault-transit: read key metadata (Vault HTTP 403 — token revoked or permission denied)", err)
+	}
 	return classifyVaultError(err, errcode.ErrKeyProviderKeyNotFound, "read key metadata")
 }
 
@@ -539,3 +558,60 @@ func parseVaultKeyID(ciphertext string) (string, error) {
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }
+
+// ---------------------------------------------------------------------------
+// lifecycle.ManagedResource implementation
+// ---------------------------------------------------------------------------
+
+// Compile-time assertion: TransitKeyProvider must implement lifecycle.ManagedResource.
+//
+// ref: uber-go/fx lifecycle.go — resource lifecycle bundle
+// ref: external-secrets/external-secrets pkg/provider/vault ValidateStore —
+//
+//	uses token/lookup + business-path probe (not sys/health, vault#28846)
+var _ lifecycle.ManagedResource = (*TransitKeyProvider)(nil)
+
+// transitReadinessTimeout is the per-probe context deadline for vault_transit_ready.
+// 3 seconds is sufficient for LAN Vault deployments.
+const transitReadinessTimeout = 3 * time.Second
+
+// Checkers returns a map of readiness probe functions for TransitKeyProvider.
+// The single probe "vault_transit_ready" reads transit/keys/{keyName} metadata
+// (the same path used by readLatestVersion) to verify that:
+//   - The Vault token is valid and not revoked.
+//   - The transit mount is enabled.
+//   - The named key exists.
+//
+// This is intentionally NOT sys/health — sys/health only reports whether the
+// Vault process is running and unsealed; it does NOT verify that the transit
+// mount or the specific key are accessible. (vault#28846)
+//
+// ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore
+//
+//	uses auth/token/lookup-self + business-path probe, not sys/health
+func (p *TransitKeyProvider) Checkers() map[string]func() error {
+	return map[string]func() error{
+		"vault_transit_ready": func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), transitReadinessTimeout)
+			defer cancel()
+			_, err := p.readLatestVersion(ctx)
+			return err
+		},
+	}
+}
+
+// Worker returns nil because TransitKeyProvider has no background goroutine.
+// The ManagedResource interface documents that returning nil means no background
+// goroutine is needed; bootstrap skips WithWorkers registration for this resource.
+//
+// ref: kernel/lifecycle.ManagedResource — "Returning nil means no background
+//
+//	goroutine is needed"
+func (p *TransitKeyProvider) Worker() worker.Worker { return nil }
+
+// Close is a no-op for TransitKeyProvider: the underlying VaultClient manages
+// HTTP connection pooling via the standard net/http.Client (which requires no
+// explicit close). Close satisfies the lifecycle.ManagedResource contract and
+// allows future implementations to flush pending work or drain connections
+// if the VaultClient abstraction changes.
+func (p *TransitKeyProvider) Close(_ context.Context) error { return nil }
