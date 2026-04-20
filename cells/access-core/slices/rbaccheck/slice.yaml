@@ -1,4 +1,4 @@
-id: rbac-check
+id: rbaccheck
 belongsToCell: access-core
 contractUsages:
   - contract: http.auth.role.list.v1
@@ -7,12 +7,11 @@ contractUsages:
     role: serve
 verify:
   unit:
-    - unit.rbac-check.service
+    - unit.rbaccheck.service
   contract:
     - contract.http.auth.role.list.v1.serve
     - contract.http.auth.role.check.v1.serve
   waivers: []
 
 allowedFiles:
-  - cells/access-core/slices/rbac-check/**
   - cells/access-core/slices/rbaccheck/**

@@ -1,4 +1,4 @@
-id: feature-flag
+id: featureflag
 belongsToCell: config-core
 contractUsages:
   - contract: http.config.flags.list.v1
@@ -9,7 +9,7 @@ contractUsages:
     role: serve
 verify:
   unit:
-    - unit.feature-flag.service
+    - unit.featureflag.service
   contract:
     - contract.http.config.flags.list.v1.serve
     - contract.http.config.flags.get.v1.serve
@@ -17,5 +17,4 @@ verify:
   waivers: []
 
 allowedFiles:
-  - cells/config-core/slices/feature-flag/**
   - cells/config-core/slices/featureflag/**

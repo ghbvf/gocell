@@ -1,4 +1,4 @@
-id: config-write
+id: configwrite
 belongsToCell: config-core
 contractUsages:
   - contract: http.config.write.v1
@@ -7,12 +7,11 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.config-write.service
+    - unit.configwrite.service
   contract:
     - contract.http.config.write.v1.serve
     - contract.event.config.changed.v1.publish
   waivers: []
 
 allowedFiles:
-  - cells/config-core/slices/config-write/**
   - cells/config-core/slices/configwrite/**

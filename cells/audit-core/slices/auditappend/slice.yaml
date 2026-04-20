@@ -1,4 +1,4 @@
-id: audit-append
+id: auditappend
 belongsToCell: audit-core
 contractUsages:
   - contract: event.audit.appended.v1
@@ -17,7 +17,7 @@ contractUsages:
     role: subscribe
 verify:
   unit:
-    - unit.audit-append.service
+    - unit.auditappend.service
   contract:
     - contract.event.audit.appended.v1.publish
     - contract.event.session.created.v1.subscribe
@@ -29,5 +29,4 @@ verify:
   waivers: []
 
 allowedFiles:
-  - cells/audit-core/slices/audit-append/**
   - cells/audit-core/slices/auditappend/**

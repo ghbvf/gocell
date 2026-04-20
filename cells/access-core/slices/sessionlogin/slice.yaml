@@ -1,4 +1,4 @@
-id: session-login
+id: sessionlogin
 belongsToCell: access-core
 contractUsages:
   - contract: http.auth.login.v1
@@ -9,7 +9,7 @@ contractUsages:
     role: call
 verify:
   unit:
-    - unit.session-login.service
+    - unit.sessionlogin.service
   contract:
     - contract.http.auth.login.v1.serve
     - contract.event.session.created.v1.publish
@@ -20,5 +20,4 @@ verify:
       expiresAt: 2026-06-01
 
 allowedFiles:
-  - cells/access-core/slices/session-login/**
   - cells/access-core/slices/sessionlogin/**

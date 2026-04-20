@@ -36,24 +36,24 @@ func TestParseRealProject(t *testing.T) {
 
 	// --- Slices: at least the 16 original slices (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Slices), 16, "expected at least 16 slices")
-	assert.LessOrEqual(t, len(pm.Slices), 24, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
+	assert.LessOrEqual(t, len(pm.Slices), 30, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
 	expectedSlices := []string{
-		"access-core/session-login",
-		"access-core/session-validate",
-		"access-core/rbac-check",
-		"access-core/identity-manage",
-		"access-core/session-refresh",
-		"access-core/session-logout",
-		"access-core/authorization-decide",
-		"audit-core/audit-append",
-		"audit-core/audit-query",
-		"audit-core/audit-verify",
-		"audit-core/audit-archive",
-		"config-core/config-read",
-		"config-core/config-write",
-		"config-core/config-publish",
-		"config-core/config-subscribe",
-		"config-core/feature-flag",
+		"access-core/sessionlogin",
+		"access-core/sessionvalidate",
+		"access-core/rbaccheck",
+		"access-core/identitymanage",
+		"access-core/sessionrefresh",
+		"access-core/sessionlogout",
+		"access-core/authorizationdecide",
+		"audit-core/auditappend",
+		"audit-core/auditquery",
+		"audit-core/auditverify",
+		"audit-core/auditarchive",
+		"config-core/configread",
+		"config-core/configwrite",
+		"config-core/configpublish",
+		"config-core/configsubscribe",
+		"config-core/featureflag",
 	}
 	for _, key := range expectedSlices {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)

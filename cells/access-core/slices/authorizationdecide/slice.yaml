@@ -1,12 +1,11 @@
-id: authorization-decide
+id: authorizationdecide
 belongsToCell: access-core
 contractUsages: []
 verify:
   unit:
-    - unit.authorization-decide.service
+    - unit.authorizationdecide.service
   contract: []
   waivers: []
 
 allowedFiles:
-  - cells/access-core/slices/authorization-decide/**
   - cells/access-core/slices/authorizationdecide/**

@@ -1,15 +1,14 @@
-id: session-refresh
+id: sessionrefresh
 belongsToCell: access-core
 contractUsages:
   - contract: http.auth.refresh.v1
     role: serve
 verify:
   unit:
-    - unit.session-refresh.service
+    - unit.sessionrefresh.service
   contract:
     - contract.http.auth.refresh.v1.serve
   waivers: []
 
 allowedFiles:
-  - cells/access-core/slices/session-refresh/**
   - cells/access-core/slices/sessionrefresh/**

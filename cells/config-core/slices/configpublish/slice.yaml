@@ -1,4 +1,4 @@
-id: config-publish
+id: configpublish
 belongsToCell: config-core
 contractUsages:
   - contract: http.config.publish.v1
@@ -11,7 +11,7 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.config-publish.service
+    - unit.configpublish.service
   contract:
     - contract.http.config.publish.v1.serve
     - contract.http.config.rollback.v1.serve
@@ -20,5 +20,4 @@ verify:
   waivers: []
 
 allowedFiles:
-  - cells/config-core/slices/config-publish/**
   - cells/config-core/slices/configpublish/**

@@ -411,7 +411,7 @@ func (c *AccessCore) initSlices() error {
 	}
 	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.jwtIssuer, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
-	c.AddSlice(cell.NewBaseSlice("session-login", "access-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("sessionlogin", "access-core", cell.L2))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
 	var identityOpts []identitymanage.Option
@@ -427,11 +427,11 @@ func (c *AccessCore) initSlices() error {
 		return err
 	}
 	c.identityHandler = identitymanage.NewHandler(identitySvc)
-	c.AddSlice(cell.NewBaseSlice("identity-manage", "access-core", cell.L1))
+	c.AddSlice(cell.NewBaseSlice("identitymanage", "access-core", cell.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
-	c.AddSlice(cell.NewBaseSlice("session-validate", "access-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "access-core", cell.L0))
 
 	// session-refresh uses jwtVerifier directly (not validateSvc) because
 	// validateSvc hard-requires token_use=access and would reject every
@@ -441,7 +441,7 @@ func (c *AccessCore) initSlices() error {
 	// from the current user state (e.g. after ChangePassword clears the flag).
 	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
-	c.AddSlice(cell.NewBaseSlice("session-refresh", "access-core", cell.L1))
+	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "access-core", cell.L1))
 
 	// session-logout
 	var logoutOpts []sessionlogout.Option
@@ -453,16 +453,16 @@ func (c *AccessCore) initSlices() error {
 	}
 	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
-	c.AddSlice(cell.NewBaseSlice("session-logout", "access-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("sessionlogout", "access-core", cell.L2))
 
 	// authorization-decide
 	c.authzSvc = authorizationdecide.NewService(c.roleRepo, c.logger)
-	c.AddSlice(cell.NewBaseSlice("authorization-decide", "access-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "access-core", cell.L0))
 
 	// rbac-check
 	rbacSvc := rbaccheck.NewService(c.roleRepo, c.logger)
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
-	c.AddSlice(cell.NewBaseSlice("rbac-check", "access-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("rbaccheck", "access-core", cell.L0))
 
 	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
 	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
@@ -473,7 +473,7 @@ func (c *AccessCore) initSlices() error {
 
 	// config-receive: subscribes to config.changed events from config-core
 	c.configReceiveSvc = configreceive.NewService(c.logger)
-	c.AddSlice(cell.NewBaseSlice("config-receive", "access-core", cell.L3))
+	c.AddSlice(cell.NewBaseSlice("configreceive", "access-core", cell.L3))
 	return nil
 }
 

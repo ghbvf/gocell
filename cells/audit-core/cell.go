@@ -174,7 +174,7 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, appendOpts...)
 	// L3: 订阅 access-core/config-core 跨 cell 事件，slice 级别可高于 cell 级别。
-	c.AddSlice(cell.NewBaseSlice("audit-append", "audit-core", cell.L3))
+	c.AddSlice(cell.NewBaseSlice("auditappend", "audit-core", cell.L3))
 
 	// audit-verify
 	var verifyOpts []auditverify.Option
@@ -186,11 +186,11 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, verifyOpts...)
 	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
-	c.AddSlice(cell.NewBaseSlice("audit-verify", "audit-core", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("auditverify", "audit-core", cell.L2))
 
 	// audit-archive (stub)
 	c.archiveSvc = auditarchive.NewService()
-	c.AddSlice(cell.NewBaseSlice("audit-archive", "audit-core", cell.L1))
+	c.AddSlice(cell.NewBaseSlice("auditarchive", "audit-core", cell.L1))
 
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -208,7 +208,7 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return fmt.Errorf("audit-query: %w", err)
 	}
 	c.queryHandler = auditquery.NewHandler(querySvc)
-	c.AddSlice(cell.NewBaseSlice("audit-query", "audit-core", cell.L0))
+	c.AddSlice(cell.NewBaseSlice("auditquery", "audit-core", cell.L0))
 
 	return nil
 }

@@ -1,4 +1,4 @@
-id: session-logout
+id: sessionlogout
 belongsToCell: access-core
 contractUsages:
   - contract: http.auth.session.delete.v1
@@ -11,7 +11,7 @@ contractUsages:
     role: subscribe
 verify:
   unit:
-    - unit.session-logout.service
+    - unit.sessionlogout.service
   contract:
     - contract.http.auth.session.delete.v1.serve
     - contract.event.session.revoked.v1.publish
@@ -26,5 +26,4 @@ verify:
       expiresAt: 2026-07-01
 
 allowedFiles:
-  - cells/access-core/slices/session-logout/**
   - cells/access-core/slices/sessionlogout/**

@@ -1,4 +1,4 @@
-id: flag-write
+id: flagwrite
 belongsToCell: config-core
 contractUsages:
   - contract: http.config.flags.create.v1
@@ -13,7 +13,7 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.flag-write.service
+    - unit.flagwrite.service
   contract:
     - contract.http.config.flags.create.v1.serve
     - contract.http.config.flags.update.v1.serve
