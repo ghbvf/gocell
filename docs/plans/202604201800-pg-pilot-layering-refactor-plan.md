@@ -5,6 +5,14 @@
 > 目标：**一次性建立 "加密 / 生命周期 / Cell 组装 / 新 adapter 接入" 四个横切能力的终局分层**，消灭 backlog S17/S29/M1/A1/A4 等 5+ 延后项
 > 施工期：~5 天（单人串行）/ ~3-4 天（双人并行）
 > 预计 PR 数：6（R1a ~ R1e + R2）
+>
+> **状态（2026-04-20 更新）**：
+> - R1a ✅ PR#200 合入（kernel/lifecycle + worker）
+> - R1b ✅ PR#202 合入（kernel/crypto）
+> - R1c ✅ PR#204 合入（Vault envelope + adapters/vault）— 追加审查发现 A13/A14/A19/A20 并入 R2/R1e
+> - R1d ✅ PR#203 合入（CellModule + BuildApp）
+> - R1e ⏳ 待开（工时 ~1 天，含 A2/A7/checklist + **A17 aead 提取 + A19 Vault readiness**）
+> - R2  ⏳ 待开（工时 ~1.5 天，含原 S1-S4/M3/A3/O3 + **A13 LifetimeWatcher + A14 AppRole/K8s + A20 keyID 契约**）
 
 ---
 
@@ -101,12 +109,12 @@ cmd/core-bundle/
 
 | PR | 范围 | 代码量 | 工时 | Review 难度 |
 |----|------|-------|------|-----------|
-| **R1a** | kernel/lifecycle 建立 + ManagedResource/ContextCloser 迁入 + adapters/postgres 改 import | +200/-150 | 0.5-1 天 | 低（纯搬家）|
-| **R1b** | kernel/crypto 建立 + KeyProvider/ValueTransformer 接口迁入 + LocalAES 改 import（不动 Vault） | +250/-150 | 0.5 天 | 低 |
-| **R1c** | VaultTransit 迁 adapters/vault/ + envelope 模式重写 + Vault testcontainer 集成测试 | +600/-400 | **1.5-2 天** | **高**（核心）|
-| **R1d** | CellModule interface + BuildApp + AppDeps 解体 + 3 个 module 文件 + flagwrite.NewService 改 error | +600/-400 | 1.5 天 | 中 |
-| **R1e** | PoolStats 接口统一（redis/rmq 侧）+ kebab-case 目录清理 + gocell validate --strict + adapter-checklist.md | +200/-150 | 0.5-1 天 | 低 |
-| **R2** | Validate fail-closed（KeyProvider 存在性）+ TOCTOU 守卫 + rejectDemoKey(MASTER_KEY) + migration 010 Down RAISE EXCEPTION + VAULT_TOKEN static guard | +300/-50 | 0.5-1 天 | 中 |
+| **R1a** ✅ | kernel/lifecycle 建立 + ManagedResource/ContextCloser 迁入 + adapters/postgres 改 import | +200/-150 | 0.5-1 天 | 低（纯搬家）|
+| **R1b** ✅ | kernel/crypto 建立 + KeyProvider/ValueTransformer 接口迁入 + LocalAES 改 import（不动 Vault） | +250/-150 | 0.5 天 | 低 |
+| **R1c** ✅ | VaultTransit 迁 adapters/vault/ + envelope 模式重写 + Vault testcontainer 集成测试 | +600/-400 | **1.5-2 天** | **高**（核心）|
+| **R1d** ✅ | CellModule interface + BuildApp + AppDeps 解体 + 3 个 module 文件 + flagwrite.NewService 改 error | +600/-400 | 1.5 天 | 中 |
+| **R1e** | **扩**：PoolStats 接口统一（redis/rmq 侧）+ kebab-case 目录清理 + gocell validate --strict + adapter-checklist.md **+ A17 aead 提取到 pkg/aeadutil + A19 Vault readiness/health（首条 adapter-checklist 样板）** | +400/-250 | 0.5-1 天 | 低 |
+| **R2** | **扩**：Validate fail-closed（KeyProvider 存在性）+ TOCTOU 守卫（R1c 已做 S3 CAS）+ rejectDemoKey(MASTER_KEY) + migration 010 Down（SELECT notice, R1c 已做）+ VAULT_TOKEN real-mode guard **+ A13 LifetimeWatcher + A14 AppRole/K8s auth + A20 keyID 契约强化**（三者合并为 VAULT-AUTH wave） | +500/-80 | 1-1.5 天 | 中 |
 
 ### 依赖图
 
@@ -561,7 +569,7 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 
 ---
 
-## 9. R1e 详细：治理扫尾
+## 9. R1e 详细：治理扫尾 + Vault 样板化
 
 ### 任务清单
 
@@ -587,47 +595,77 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
      - [ ] 对外协议字段 cross-check upstream API 文档（引用 URL 写注释）
      - [ ] Rotation/token 续期路径在 backlog 登记（即使延后实现）
      - [ ] fail-fast smoke test（构造期验证连通性 + 认证）
+     - [ ] readiness 探测接入 `runtime/http/health` 或 `kernel/lifecycle.ManagedResource.Checkers()`
+     - [ ] 启动错误按 auth / config / network 三类分别映射 errcode，不折叠为 "not found"
+
+5. **A17 aead 提取到 `pkg/aeadutil/`**（R1c 承认的技术债）
+   - 新建 `pkg/aeadutil/gcm.go`：`EncryptSplit(key, plaintext, aad) (ct, nonce []byte, err error)` + `Decrypt(key, ct, nonce, aad []byte) (plaintext []byte, err error)` 两个纯函数，零外部依赖
+   - `adapters/vault/aead.go` 删除，改 import `pkg/aeadutil`
+   - `runtime/crypto/local_aes_provider.go` 同步切换
+   - 删除两处"手动同步"注释
+   - 验收：`go list -deps ./pkg/aeadutil/...` 只有 stdlib
+
+6. **A19 Vault readiness/health**（adapter-checklist.md 第 6/7 条的首个样板落地）
+   - `adapters/vault/transit_provider.go::NewTransitKeyProviderFromEnv` 把启动 self-check 按错误分类返回不同 errcode：
+     - 403 → `errcode.ErrVaultAuthFailed`（**需要在 `pkg/errcode` 新增**）
+     - 404 → `errcode.ErrVaultKeyNotFound`（或沿用现有 `ErrKeyProviderTransient` 的 permanent 侧）
+     - 5xx/网络 → `errcode.ErrKeyProviderTransient`
+   - `TransitKeyProvider` 实现 `kernel/lifecycle.ManagedResource.Checkers()`，暴露 `vault_transit_ready` 探测（延用 `ReadRaw("sys/health")` 或 `ReadKeyMetadata`）
+   - 接入 `runtime/http/health`：`/readyz` 反映 Vault 连通性
+   - integration test：testcontainers 覆盖 **token-revoked / mount-missing / key-missing** 三种场景，分别断言 non-ready + 对应 errcode
 
 ### 验收
 
 - `gocell validate --strict` CI 0 warning
 - `grep -r "kebab-case 目录" cells/*/slices/` 无结果
-- `docs/contributing/adapter-checklist.md` 存在
+- `docs/contributing/adapter-checklist.md` 存在且含 readiness/错误分类两条
+- `go list -deps ./adapters/vault/... | grep runtime/crypto` 无输出（aead 提取后不反依赖）
+- `curl /readyz` 在 Vault token revoke 后返回 503，恢复后回 200
 
 ---
 
-## 10. R2 详细：安全修复
+## 10. R2 详细：安全修复 + VAULT-AUTH wave
 
-### 任务清单（P0 + P1 安全）
+### 任务清单（原 P0/P1 安全 + 追加审查发现的 A13/A14/A20）
 
-| # | Finding | 修复点 |
-|---|---------|-------|
-| S1 fallback | VaultTransit AAD（已在 R1c envelope 重写中根治）| 确认 R1c 集成测试覆盖跨行复制攻击 |
-| S2 | `GOCELL_MASTER_KEY` 未纳入 `rejectDemoKey` | `cmd/core-bundle/bundle.go::buildKeyProvider` local-aes 分支追加 `rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", masterKeyBytes)` |
-| S3 | `plaintextMigrator` TOCTOU | UPDATE 语句追加 `AND value_cipher IS NULL` 守卫；并发 writer 不会覆盖已加密行 |
-| S4 | VAULT_TOKEN 静态模式 real-mode guard | `vault.NewTransitKeyProviderFromEnv` 开头 `if adapterMode == "real" && authMode == "token" → error` |
-| A3 | `AppDeps.Validate()` 对 KeyProvider 无存在性强制 | R1d 已把 Validate 移到 SharedDeps；新增 `if Topology.StorageBackend == "postgres" && KeyProvider == nil → error`（但 R1d 中 buildKeyProvider 已 fail-fast，这里是 struct-literal test 路径的防线）|
-| O3 | migration 010 Down 无守卫 | 010 Down 追加 `RAISE EXCEPTION 'migration 010 rollback drops encrypted data; manual DBA action required'` |
-| P1 | Toggle API 语义冲突 | 暂缓（产品决策，R2 范围外，转 backlog P1 项）|
-| M3 | Stale 可观测 | `config_repo.go` Decrypt 后检测 `storedKeyID != currentKeyID` → `slog.Warn("config value encrypted with stale key", cellID, key, stored_key_id, current_key_id)` + `metric_config_stale_cipher_total.Inc()` |
+| # | Finding / 来源 | 修复点 | 状态 |
+|---|---|---|---|
+| S1 | VaultTransit AAD（已在 R1c envelope 重写中根治） | 确认 R1c 集成测试覆盖跨行复制攻击（TC-INT-2 已补） | ✅ R1c 完成 |
+| S2 | `GOCELL_MASTER_KEY` 未纳入 `rejectDemoKey` | `cmd/core-bundle/config_module.go::buildKeyProvider` local-aes 分支追加 `rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", masterKeyBytes)` | R2 |
+| S3 | `plaintextMigrator` TOCTOU | UPDATE 追加 `AND value_cipher IS NULL` CAS 守卫；n=0 视为 skip | ✅ **R1c PR#204 已提前做**（Commit `7176a14`）|
+| S4a | VAULT_TOKEN 空 token fail-fast（原 develop 行为被 PR#195 误降级，R1c 恢复） | ✅ 已在 R1c 恢复 | ✅ R1c 完成 |
+| S4b | VAULT_TOKEN 静态模式 real-mode guard | `vault.NewTransitKeyProviderFromEnv` 新增 `authMode` option；real 模式 + static token → error，要求 AppRole/K8s | R2（与 A14 合并） |
+| **A13** | VAULT-TOKEN-RENEW-01 | 集成 `vaultapi.NewLifetimeWatcher`，后台 goroutine 续期；续期失败映射 transient → EventBus Requeue；暴露 `vault_token_renew_success_total` / `vault_token_renew_failure_total` | R2（与 S4b/A14 合并为 **VAULT-AUTH wave**）|
+| **A14** | VAULT-AUTH-PLUGGABLE-01（原 backlog 延后，与 A13 同域，**提前合并做**） | 构造函数加 `api.AuthMethod` 参数；env 支持 `GOCELL_VAULT_AUTH=token\|approle\|k8s\|jwt`；K8s/AppRole 自带续期时 A13 LifetimeWatcher 降级为 fallback。**理由**：A14 与 S14a 无耦合（S14a 用 AWS IAM / GCP SA，不走 Vault auth），先做 A13 再做 A14 会让 LifetimeWatcher 返工；生产部署 K8s/AppRole 时两者必须同时在位 | R2（与 S4b/A13 合并为 **VAULT-AUTH wave**）|
+| A3 | `AppDeps.Validate()` 对 KeyProvider 无存在性强制（R1d 已解体，迁到 SharedDeps） | `SharedDeps.Validate()` 新增 `if Topology.StorageBackend == "postgres" && KeyProvider == nil → error`（R1d 中 buildKeyProvider 已 fail-fast，这里是 struct-literal test 路径的 defense-in-depth）| R2 |
+| O3 | migration 010 Down | **方案修正**：原 plan 要 `RAISE EXCEPTION`，但 `+goose no transaction` 下 `DO $$ BEGIN RAISE $$` 会解析失败（CI 证据：`unterminated dollar-quoted string at or near "$$ BEGIN`，24637886673）；R1c PR#204 改为 `SELECT 'migration 010 has no automatic rollback'`——纯 SQL、no-op、不阻塞 goose 链。**R2 保留此方案**，只补 README 说明人工回滚流程 | ✅ **R1c PR#204 已做**（Commit `7c9a539`）|
+| **A20** | VAULT-KEYID-CONTRACT-STRONG-01（R1c 已做最小校验：Decrypt 前 keyID vs edk 一致性比对） | 契约文档级强化：`kernel/crypto/key_provider.go` godoc 声明 `keyID` 为"可验证元数据"；新增 `kernel/crypto/verifykeyid.go` 通用 helper（版本号解析 + 比对）；LocalAES/Vault 两实现切到 helper；**S14a 前置必要条件**，否则 AWS/GCP KMS provider 会继承弱契约 | R2（S14a 前置）|
+| P1 | Toggle API 语义冲突 | 暂缓（产品决策，R2 范围外，保留 backlog P1 项）| — |
+| M3 | Stale 可观测 | `config_repo.go` Decrypt 后检测 `storedKeyID != currentKeyID` → `slog.Warn("config value encrypted with stale key", cellID, key, stored_key_id, current_key_id)` + `metric_config_stale_cipher_total.Inc()` | R2 |
 
 ### 文件清单
 
 **修改**：
-- `cmd/core-bundle/bundle.go` (R1d 后变为 `shared_deps.go` + `config_module.go`) — 添加 S2/S4 guard
-- `cells/config-core/internal/adapters/postgres/plaintext_migration.go` — S3 TOCTOU 守卫
-- `adapters/postgres/migrations/010_add_config_value_cipher.sql` — S3 Down RAISE EXCEPTION
+- `cmd/core-bundle/config_module.go` — S2 rejectDemoKey
+- `cmd/core-bundle/shared_deps.go` — A3 KeyProvider 存在性强制
+- `adapters/vault/transit_provider.go` — S4b real-mode guard + **A13 LifetimeWatcher + A14 AuthMethod 参数**
 - `cells/config-core/internal/adapters/postgres/config_repo.go` — M3 stale slog.Warn + 指标
+- `kernel/crypto/key_provider.go` — **A20 godoc 强化**
+- `runtime/crypto/local_aes_provider.go` — **A20 切到 verifykeyid helper**
 
 **新建**：
-- `cmd/core-bundle/security_integration_test.go`（可选）— table-driven 覆盖 S2/S4 拒绝路径
+- `kernel/crypto/verifykeyid.go` — **A20 通用 helper**
+- `pkg/errcode/` 新增 `ErrVaultAuthFailed` / `ErrVaultTokenExpired`（如需）
+- `cmd/core-bundle/security_integration_test.go` — table-driven 覆盖 S2/S4b/A13 renewal/A14 auth mode 拒绝路径
 
 ### 验收
 
 - `adapterMode=real + GOCELL_MASTER_KEY=010203...（已知测试密钥）→ startup error`
-- `adapterMode=real + VAULT_TOKEN=hvs.xxx → startup error（要求 AppRole/K8s auth）`
-- `goose down 010 → ERROR`（手动执行需 DBA 改 migration）
-- 并发 plaintext migration + config write → 已加密行不被覆盖（testcontainer 验证）
+- `adapterMode=real + GOCELL_VAULT_AUTH=token → startup error（要求 approle/k8s）`
+- `adapterMode=real + GOCELL_VAULT_AUTH=approle` 走通且 token 自动续期（模拟 Vault token 过期仍能 Encrypt）
+- `goose down 010 → no-op SELECT`（人工 rollback 需 DBA 编写独立 migration）
+- 并发 plaintext migration + config write → 已加密行不被覆盖（R1c 已验证）
+- A20：`verifykeyid.Parse("vault-transit:v3") → ("vault-transit", 3, nil)`；LocalAES/Vault 各一条 table-driven 覆盖伪造 keyID 被拒
 
 ---
 
@@ -691,36 +729,54 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 
 | backlog 条目 | PR |
 |-------------|-----|
-| S17 POOL-FRAMEWORK-LIFECYCLE-01 | R1a |
-| S29 CORE-BUNDLE-APP-BUILDER-01 | R1d |
+| S17 POOL-FRAMEWORK-LIFECYCLE-01 | R1a ✅ |
+| S29 CORE-BUNDLE-APP-BUILDER-01 | R1d ✅ |
 | S12 AUTH-GUARD-INLINE-UNIFY-01 | 已 ✅（无关本 plan）|
-| A3 AppDeps KeyProvider 存在性 | R2 |
+| A3 AppDeps/SharedDeps KeyProvider 存在性 | R2 |
 | S2 GOCELL_MASTER_KEY demo key | R2 |
-| S3 plaintextMigrator TOCTOU | R2 |
-| S4 VAULT_TOKEN static real-mode | R2 |
-| A1 VaultTransit 放错层 | R1c |
-| S1 VaultTransit `context` AAD bug | R1c（envelope 根治）|
-| M1 AppDeps God Struct | R1d |
-| M2 flagwrite.NewService panic | R1d |
+| S3 plaintextMigrator TOCTOU | **R1c ✅**（PR#204 提前做 CAS 守卫）|
+| S4a VAULT_TOKEN 空 token fail-fast | **R1c ✅**（PR#204 恢复 develop 原行为）|
+| S4b VAULT_TOKEN real-mode static-token guard | R2（与 A13/A14 合并 VAULT-AUTH wave）|
+| A1 VaultTransit 放错层 | R1c ✅ |
+| S1 VaultTransit `context` AAD bug | R1c ✅（envelope 根治）|
+| M1 AppDeps God Struct | R1d ✅ |
+| M2 flagwrite.NewService panic | R1d ✅ |
 | M3 Stale 可观测 | R2 |
-| O3 migration 010 Down RAISE | R2 |
+| O3 migration 010 Down | **R1c ✅**（方案修正为 SELECT no-op notice，见 §10）|
 | A2 kebab-case slice 目录 | R1e |
-| A4 ManagedResource 宿主包 | R1a |
+| A4 ManagedResource 宿主包 | R1a ✅ |
+| **A13** VAULT-TOKEN-RENEW-01（R1c 追加审查产出） | R2 VAULT-AUTH wave |
+| **A14** VAULT-AUTH-PLUGGABLE-01（原 backlog 延后项，与 A13 同域提前做） | R2 VAULT-AUTH wave |
+| **A17** VAULT-AEAD-UTIL-EXTRACT-01（R1c 承认的技术债） | R1e |
+| **A19** VAULT-READINESS-HEALTH-01（R1c 追加审查产出，兼作 adapter-checklist 首样板） | R1e |
+| **A20** VAULT-KEYID-CONTRACT-STRONG-01（R1c 追加审查产出，S14a 前置） | R2 |
 
 ### 本 plan 推进（条件触发转 backlog 可见）
 
 | backlog 条目 | 说明 |
 |-------------|------|
-| S14a AWS-KMS / GCP-KMS adapter | R1c 建立 adapters/vault/ 后，adapters/awskms/ + gcpkms/ 路径确定；envelope 模式下新 KMS = 实现 KMS interface wrap/unwrap 即可（~2-3h/个，而非原估 6h）|
+| S14a AWS-KMS / GCP-KMS adapter | R1c 建立 adapters/vault/ 后，adapters/awskms/ + gcpkms/ 路径确定；envelope 模式下新 KMS = 实现 KMS interface wrap/unwrap 即可（~2-3h/个，而非原估 6h）。**前置条件**：R2 的 A20 keyID 契约强化必须先完成，否则新 KMS provider 会继承弱契约 |
 
 ### 本 plan 不处理（保留 backlog）
 
 - S14a 实际 AWS-KMS/GCP-KMS 实现（等生产云平台选定）
+- A15 VAULT-NAMESPACE-MULTITENANT-01（HCP/Enterprise 多租户部署才触发）
+- A16 VAULT-DATAKEY-ENDPOINT-01（大 blob / S3 加密场景才触发）
+- A18 VAULT-ROTATE-OPTIMISTIC-LOCK-01（生产压测出现 rotate 并发瓶颈才触发）
 - P1/P2 Toggle API 语义（产品决策）
 - S19-S23 JWT audience 系列（独立链条）
 - S10 RunMode 读写类型分离（纯类型层，独立）
 - S16 Topology 彻底单一事实源（本 plan 未触及）
 - X10 AUTH-REFRESH-OPAQUE-01（依赖 X1 PG-DOMAIN-REPO）
+
+### A14 为何不等 S14a（决策记录）
+
+原 plan §13 曾把 A14 归为"等生产云平台选定"项，与 S14a 同档延后。2026-04-20 追加审查后修正：
+
+- **A14 是 Vault adapter 内部的 auth 方式演进**（AppRole/K8s/JWT 替代静态 token），作用域在 `adapters/vault/`
+- **S14a 是引入 AWS-KMS/GCP-KMS 新 adapter**，AWS 用 IAM credentials、GCP 用 Service Account，**不走 Vault auth 栈**
+- 两者唯一共同点是"都实现 `kernel/crypto.KeyProvider`"，但 A14 的工作量不因 S14a 是否上线而变化
+- A13（LifetimeWatcher）与 A14 必须合做：K8s/AppRole 自带续期，先做 A13 再做 A14 会让 LifetimeWatcher 整段返工；生产部署时两者本就同时在位
 
 ---
 
