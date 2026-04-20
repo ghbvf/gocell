@@ -280,9 +280,12 @@ func NewTransitKeyProviderFromEnv() (*TransitKeyProvider, error) {
 		return nil, errcode.Wrap(errcode.ErrConfigKeyMissing,
 			"vault-transit: create vault api client (check VAULT_ADDR / VAULT_TOKEN)", err)
 	}
-	if token := os.Getenv("VAULT_TOKEN"); token != "" {
-		raw.SetToken(token)
+	token := os.Getenv("VAULT_TOKEN")
+	if token == "" {
+		return nil, errcode.New(errcode.ErrConfigKeyMissing,
+			"vault-transit: VAULT_TOKEN is required")
 	}
+	raw.SetToken(token)
 
 	mountPath := os.Getenv("GOCELL_VAULT_TRANSIT_MOUNT")
 	if mountPath == "" {
@@ -417,16 +420,17 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 // ---------------------------------------------------------------------------
 
 // classifyVaultError routes a Vault client error to transient (retriable) or
-// permanent (caller-specified) classification. Vault HTTP 5xx/429/408 and
-// network/context errors map to ErrKeyProviderTransient; everything else maps
-// to permanentCode (supplied by the caller so the semantics match the call
-// site — encrypt/decrypt/read/rotate all surface distinct permanent codes).
+// permanent (caller-specified) classification. Vault HTTP 429/408/500/502/503/504
+// and network/context errors map to ErrKeyProviderTransient (CategoryInfra);
+// everything else maps to permanentCode (supplied by the caller so the semantics
+// match the call site — encrypt/decrypt/read/rotate all surface distinct permanent
+// codes).
 //
 // ref: aws/aws-encryption-sdk-python exceptions.py (transient/permanent split)
 // ref: hashicorp/vault api/logical.go — *vaultapi.ResponseError status codes
 func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg string) error {
 	if isTransientVaultError(err) {
-		return errcode.Wrap(errcode.ErrKeyProviderTransient,
+		return errcode.WrapInfra(errcode.ErrKeyProviderTransient,
 			"vault-transit: transient "+permanentMsg, err)
 	}
 	return errcode.Wrap(permanentCode,
@@ -487,10 +491,10 @@ func isTransientVaultError(err error) bool {
 }
 
 // isTransientHTTPStatus reports whether an HTTP status code indicates a
-// condition safe to retry after back-off.
+// condition safe to retry after back-off. Transient codes: 429, 408, 500, 502, 503, 504.
 func isTransientHTTPStatus(code int) bool {
 	switch code {
-	case 429, 408, 499, 500, 502, 503, 504:
+	case 429, 408, 500, 502, 503, 504:
 		return true
 	default:
 		return false

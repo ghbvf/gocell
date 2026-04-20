@@ -102,7 +102,7 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 
 // LocalAESKeyProvider implements KeyProvider using local AES-GCM-256 keys
 // loaded from environment variables. Suitable for dev/CI; not recommended for
-// production (use VaultTransitKeyProvider instead).
+// production (use `adapters/vault.TransitKeyProvider` instead).
 //
 // Master KEK loading:
 //   - GOCELL_MASTER_KEY:          required in postgres mode (32B hex or base64).
