@@ -830,7 +830,7 @@ func TestParseVaultKeyID(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseVaultKeyID(tc.ciphertext)
+			got, err := parseVaultKeyID(tc.ciphertext, errcode.ErrKeyProviderEncryptFailed)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("parseVaultKeyID(%q) expected error, got nil (keyID=%q)", tc.ciphertext, got)
@@ -902,6 +902,38 @@ func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
 
 	if p.Worker() == nil {
 		t.Error("Worker() must return non-nil when renewalWorker is set")
+	}
+}
+
+// TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal verifies that
+// RenewalMetrics returns nil when no renewal worker is configured.
+func TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+
+	if got := p.RenewalMetrics(); got != nil {
+		t.Errorf("RenewalMetrics() = %v, want nil when no renewal worker configured", got)
+	}
+}
+
+// TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors verifies that
+// RenewalMetrics returns exactly two collectors (success, failure) when a
+// renewal worker with counters is configured.
+func TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p := NewTransitKeyProvider(fake, "transit", "gocell-config")
+
+	successCtr, failureCtr := newRenewalCounters()
+	fw := newFakeTokenWatcher()
+	p.renewalWorker = &tokenRenewalWorker{
+		watcher:      fw,
+		renewSuccess: successCtr,
+		renewFailure: failureCtr,
+	}
+
+	got := p.RenewalMetrics()
+	if len(got) != 2 {
+		t.Errorf("RenewalMetrics() returned %d collectors, want 2", len(got))
 	}
 }
 

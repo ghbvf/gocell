@@ -19,6 +19,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
 
 	"log/slog"
 )
@@ -78,8 +79,10 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 		},
 	}
 
-	// Give the loop a moment to consume the renewal before cancelling.
-	time.Sleep(20 * time.Millisecond)
+	// Wait for the loop to consume the renewal before cancelling.
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(successCtr) >= 1
+	}, time.Second, time.Millisecond)
 	cancel()
 
 	select {
@@ -136,7 +139,9 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 	fw.renewCh <- renewal
 
 	// Wait for all three to be consumed.
-	time.Sleep(30 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(successCtr) >= 3
+	}, time.Second, time.Millisecond)
 	cancel()
 
 	select {
@@ -267,7 +272,10 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 			Auth: &vaultapi.SecretAuth{LeaseDuration: 3600},
 		},
 	}
-	time.Sleep(10 * time.Millisecond)
+	// Wait for the renewal to be consumed before cancelling.
+	require.Eventually(t, func() bool {
+		return len(fw.renewCh) == 0
+	}, time.Second, time.Millisecond)
 	cancel()
 
 	select {

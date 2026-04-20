@@ -84,6 +84,11 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 
+	// A13: register vault token renewal counters when the KeyProvider exposes
+	// them. Uses the same Register-not-MustRegister pattern as staleCipherCounter
+	// so repeated Provide calls in integration tests are handled gracefully.
+	registerRenewalMetrics(kp, shared.PromStack.registry)
+
 	var opts []bootstrap.Option
 	if pgRes != nil {
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
@@ -101,3 +106,28 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 }
 
 var _ CellModule = ConfigCoreModule{}
+
+// renewalMetricsProvider is a local interface satisfied by vault.TransitKeyProvider
+// (and any future KeyProvider that exposes Prometheus renewal metrics). Using an
+// interface avoids importing the vault adapter package directly from config_module.go.
+type renewalMetricsProvider interface {
+	RenewalMetrics() []prom.Collector
+}
+
+// registerRenewalMetrics registers per-collector metrics exposed by KeyProvider
+// implementations that satisfy renewalMetricsProvider. Uses Register (not
+// MustRegister) so repeated Provide calls in integration tests are graceful:
+// AlreadyRegisteredError and other non-fatal errors leave counters usable
+// in memory while simply omitting them from /metrics scrapes.
+func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) {
+	rmp, ok := kp.(renewalMetricsProvider)
+	if !ok {
+		return
+	}
+	for _, col := range rmp.RenewalMetrics() {
+		// Non-fatal: AlreadyRegisteredError is benign on integration-test re-run;
+		// other errors leave the counter usable in memory only.
+		//nolint:errcheck
+		_ = reg.Register(col)
+	}
+}

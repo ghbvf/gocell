@@ -60,6 +60,22 @@ func TestParseKeyID(t *testing.T) {
 			keyID:           "bad:vXYZ",
 			wantErrContains: "invalid keyID",
 		},
+		{
+			name:            "negative version dash separator",
+			keyID:           "local-aes-v-1",
+			wantErrContains: "negative version",
+		},
+		{
+			name:            "negative version colon separator",
+			keyID:           "vault-transit:v-5",
+			wantErrContains: "negative version",
+		},
+		{
+			name:         "colon separator takes precedence over dash for unambiguous input",
+			keyID:        "provider-x:v2",
+			wantProvider: "provider-x",
+			wantVersion:  2, // colon separator tried first; dash in provider name is fine
+		},
 	}
 
 	for _, tc := range tests {
@@ -143,6 +159,12 @@ func TestMatchKeyID(t *testing.T) {
 			handleID:        "vault-transit:v1",
 			edkKeyID:        "bad-edk",
 			wantErrContains: "invalid keyID",
+		},
+		{
+			name:            "negative version in handleID",
+			handleID:        "local-aes-v-1",
+			edkKeyID:        "local-aes-v1",
+			wantErrContains: "negative version",
 		},
 	}
 

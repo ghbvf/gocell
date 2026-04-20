@@ -25,7 +25,9 @@ func TestWithOnStaleCipherMetric_WiresCallback(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithPublisher(eventbus.New()),
 	)
-	assert.NotNil(t, c.staleCipherCounter, "WithOnStaleCipherMetric must set staleCipherCounter field")
+	// The PG Init() wiring path (pgPool != nil → NewConfigRepository receives
+	// WithOnStaleCipher option) is covered by config_repo_encrypt_test.go:TestWithOnStaleCipher_Option.
+	assert.Equal(t, counter, c.staleCipherCounter, "WithOnStaleCipherMetric must set staleCipherCounter field")
 }
 
 // TestWithOnStaleCipherMetric_CounterIncrements verifies end-to-end that the
