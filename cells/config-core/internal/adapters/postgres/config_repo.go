@@ -119,6 +119,40 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 	return string(pt), nil
 }
 
+// encryptVersionValue encrypts value for a sensitive config version.
+// Uses AADForVersion (not AADForConfig) so the AAD domain is distinct from
+// config entries — prevents cross-field ciphertext replay between the two tables.
+// configID is the UUID primary key from config_entries.
+func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
+	if r.transformer == nil {
+		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+			"config repo: no ValueTransformer configured for sensitive version")
+	}
+	aad := configcrypto.AADForVersion(cellID, configID)
+	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
+	if err != nil {
+		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt version value for config_id %s: %w", configID, err)
+	}
+	return ct, keyID, nonce, edk, nil
+}
+
+// decryptVersionValue decrypts a cipher-column tuple for a sensitive config version.
+// Uses AADForVersion so the AAD matches the write path in encryptVersionValue.
+// Fail-closed: returns ErrConfigDecryptFailed on any error.
+func (r *ConfigRepository) decryptVersionValue(ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
+	if r.transformer == nil {
+		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+			"config repo: no ValueTransformer configured, cannot decrypt sensitive version")
+	}
+	aad := configcrypto.AADForVersion(cellID, configID)
+	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
+	if err != nil {
+		return "", errcode.Wrap(errcode.ErrConfigDecryptFailed,
+			fmt.Sprintf("config repo: decrypt version failed for config_id %s", configID), err)
+	}
+	return string(pt), nil
+}
+
 // Create inserts a new config entry.
 // For sensitive=true: encrypts value and writes cipher columns; value column is set to "".
 // For sensitive=false: writes plaintext value; cipher columns are NULL.
@@ -393,7 +427,7 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 	}
 
 	if version.Sensitive {
-		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, version.ConfigID, version.Value)
+		ct, keyID, nonce, edk, encErr := r.encryptVersionValue(ctx, version.ConfigID, version.Value)
 		if encErr != nil {
 			return encErr
 		}
@@ -465,7 +499,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
 				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
 		}
-		plain, err := r.decryptValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
+		plain, err := r.decryptVersionValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)
 		if err != nil {
 			return nil, err
 		}

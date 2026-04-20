@@ -17,3 +17,16 @@ import "fmt"
 func AADForConfig(cellID, configKey string) []byte {
 	return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
 }
+
+// AADForVersion computes the Additional Authenticated Data for a config version.
+// Format: "cell:{cellID}/version:{configID}"
+//
+// Deliberately uses the "/version:" segment (not "/key:") so that a ciphertext
+// encrypted as a config version cannot be replayed into a config entry AAD domain
+// and vice versa — even if configID happened to equal a configKey string.
+// configID is the UUID primary key of config_entries; using it (rather than the
+// human-readable configKey) also prevents cross-field AAD collisions of the form
+// configKey == "version:<someUUID>".
+func AADForVersion(cellID, configID string) []byte {
+	return []byte(fmt.Sprintf("cell:%s/version:%s", cellID, configID))
+}

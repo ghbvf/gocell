@@ -429,3 +429,114 @@ func TestPlaintextMigration_AADBinding(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestPlaintextMigrator_CAS_ConcurrentWrite_Skipped (B1)
+// ---------------------------------------------------------------------------
+
+// casFakeDB simulates a DB where the CAS predicate (value_cipher IS NULL) fails
+// because a concurrent writer already encrypted the row. Exec returns 0 rows
+// affected instead of 1.
+type casFakeDB struct {
+	rows      []migrationRow
+	execCalls []fakeExecCall
+}
+
+func (db *casFakeDB) Exec(_ context.Context, sql string, args ...any) (int64, error) {
+	db.execCalls = append(db.execCalls, fakeExecCall{sql: sql, args: args})
+	return 0, nil // CAS predicate failed: row was already encrypted
+}
+
+func (db *casFakeDB) Query(_ context.Context, _ string, args ...any) (Rows, error) {
+	limit := 50
+	if len(args) > 0 {
+		if l, ok := args[0].(int); ok {
+			limit = l
+		}
+	}
+	var pending []migrationRow
+	for _, r := range db.rows {
+		if r.sensitive && len(r.cipher) == 0 {
+			pending = append(pending, r)
+		}
+	}
+	if len(pending) > limit {
+		pending = pending[:limit]
+	}
+	return &fakeRows{rows: pending}, nil
+}
+
+func (db *casFakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
+	return &fakeEmptyRow{}
+}
+
+// TestPlaintextMigrator_CAS_ConcurrentWrite_Skipped verifies that when the UPDATE
+// CAS predicate (value_cipher IS NULL) matches 0 rows — because a concurrent
+// writer already encrypted the row between our SELECT and UPDATE — the migrator
+// increments Skipped (not Processed) and returns no error.
+func TestPlaintextMigrator_CAS_ConcurrentWrite_Skipped(t *testing.T) {
+	db := &casFakeDB{
+		rows: []migrationRow{
+			{id: "r1", key: "db.password", value: "s3cret", sensitive: true},
+		},
+	}
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	require.NoError(t, err)
+
+	result, err := m.MigrateConfigEntries(context.Background())
+	require.NoError(t, err, "CAS miss must not be treated as an error")
+	assert.Equal(t, 0, result.Processed, "Processed must be 0 when CAS predicate fails")
+	assert.Equal(t, 1, result.Skipped, "Skipped must be 1 when concurrent writer won")
+	// Exec was still called (we did try the UPDATE).
+	assert.Len(t, db.execCalls, 1)
+}
+
+// ---------------------------------------------------------------------------
+// TestPlaintextMigration_ConfigVersions_AADBinding (B2)
+// ---------------------------------------------------------------------------
+
+// TestPlaintextMigration_ConfigVersions_AADBinding verifies that the migrator
+// uses AADForVersion (not AADForConfig) when migrating config_versions rows.
+//
+// Test flow:
+//  1. Migrate a plaintext config_versions row → ciphertext stored in db.execCalls.
+//  2. Decrypt with the CORRECT AAD (AADForVersion) → plaintext matches.
+//  3. Decrypt with AADForConfig (wrong domain) → must fail — cross-domain replay blocked.
+func TestPlaintextMigration_ConfigVersions_AADBinding(t *testing.T) {
+	ctx := context.Background()
+
+	configID := "550e8400-e29b-41d4-a716-446655440000"
+	value := "super-secret-version-value"
+
+	tr := &aadAwareTransformer{keyID: "test-key-v1"}
+	db := &batchFakeDB{
+		rows: []migrationRow{
+			{id: "cv-row-1", key: configID, value: value, sensitive: true},
+		},
+	}
+	m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10})
+	require.NoError(t, err)
+
+	result, err := m.MigrateConfigVersions(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Processed)
+	require.Len(t, db.execCalls, 1)
+
+	// Extract the ciphertext written to the DB.
+	ct, ok := db.execCalls[0].args[0].([]byte)
+	require.True(t, ok, "first arg of UPDATE must be []byte ciphertext")
+
+	// Correct AAD: AADForVersion (matches config_repo.go encryptVersionValue path).
+	correctAAD := configcrypto.AADForVersion(cellID, configID)
+	pt, err := tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, correctAAD)
+	require.NoError(t, err, "Decrypt with AADForVersion must succeed")
+	assert.Equal(t, value, string(pt), "decrypted plaintext must match original")
+
+	// Wrong AAD domain: AADForConfig with the same configID string must fail.
+	wrongAAD := configcrypto.AADForConfig(cellID, configID)
+	_, err = tr.Decrypt(ctx, ct, "test-key-v1", nil, nil, wrongAAD)
+	require.Error(t, err, "Decrypt with AADForConfig (wrong domain) must fail")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be errcode.Error")
+	assert.Equal(t, errcode.ErrKeyProviderDecryptFailed, ec.Code)
+}

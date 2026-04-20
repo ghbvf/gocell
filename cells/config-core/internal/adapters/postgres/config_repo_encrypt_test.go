@@ -315,15 +315,15 @@ func TestEncrypt_PublishVersion_SensitiveWritesCipherColumns(t *testing.T) {
 }
 
 // TestEncrypt_GetVersion_SensitiveDecryptsValue verifies transparent decryption
-// of published versions. The AAD for config_versions uses v.ConfigID as the key
-// (see encryptValue call in PublishVersion: encryptValue(ctx, version.ConfigID, ...)).
+// of published versions. The AAD for config_versions uses AADForVersion with
+// v.ConfigID (see decryptVersionValue in GetVersion).
 func TestEncrypt_GetVersion_SensitiveDecryptsValue(t *testing.T) {
 	ctx := context.Background()
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "published-secret"
-	// Use "cfg-1" as the AAD key — matches v.ConfigID used by GetVersion decryptValue.
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "cfg-1"))
+	// Use AADForVersion — matches decryptVersionValue called by GetVersion.
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForVersion("config-core", "cfg-1"))
 	require.NoError(t, err)
 
 	now := time.Now()
