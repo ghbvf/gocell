@@ -9,6 +9,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // ConfigCoreModule wires config-core: KeyProvider → ValueTransformer →
@@ -28,6 +29,17 @@ type ConfigCoreModule struct {
 // ID returns the stable identifier used in error messages.
 func (ConfigCoreModule) ID() string { return "config-core" }
 
+// configStaleCipherOpts is the Prometheus counter descriptor for M3 stale-key
+// observability. The counter is registered against the isolated per-run
+// Prometheus registry (shared.PromStack.registry) inside Provide so it
+// never touches the global default registry and remains isolated between tests.
+var configStaleCipherOpts = prom.CounterOpts{
+	Namespace: "gocell",
+	Subsystem: "config",
+	Name:      "stale_cipher_total",
+	Help:      "Number of config values read that are encrypted with a non-current key version.",
+}
+
 // Provide resolves all config-core-specific dependencies and returns the
 // constructed cell and any bootstrap.Options (e.g. WithManagedResource).
 func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
@@ -46,14 +58,30 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		return nil, nil, err
 	}
 
+	// Register the stale-cipher counter against the isolated per-run registry.
+	// Use Register (not MustRegister) so that repeated Provide calls in the
+	// same process (e.g. integration tests with shared registry) are handled
+	// gracefully: AlreadyRegisteredError carries the existing collector so we
+	// can reuse it instead of creating an orphaned counter.
+	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config-core: register stale_cipher counter: %w", err)
+	}
+
 	baseOpts := []configcore.Option{
 		configcore.WithPublisher(shared.EventBus),
 		configcore.WithCursorCodec(shared.CursorCodecs.config),
+		configcore.WithOnStaleCipherMetric(staleCipherCounter),
 	}
 	if vt != nil {
 		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
+
+	// A13: register vault token renewal counters when the KeyProvider exposes them.
+	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
+		return nil, nil, fmt.Errorf("config-core: register renewal metrics: %w", err)
+	}
 
 	var opts []bootstrap.Option
 	if pgRes != nil {
@@ -72,3 +100,46 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 }
 
 var _ CellModule = ConfigCoreModule{}
+
+// renewalMetricsProvider is a local interface satisfied by vault.TransitKeyProvider
+// (and any future KeyProvider that exposes Prometheus renewal metrics). Using an
+// interface avoids importing the vault adapter package directly from config_module.go.
+type renewalMetricsProvider interface {
+	RenewalMetrics() []prom.Collector
+}
+
+// registerRenewalMetrics registers per-collector metrics exposed by KeyProvider
+// implementations that satisfy renewalMetricsProvider. Returns error on
+// registration failures other than AlreadyRegisteredError.
+func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) error {
+	rmp, ok := kp.(renewalMetricsProvider)
+	if !ok {
+		return nil
+	}
+	for _, col := range rmp.RenewalMetrics() {
+		if err := reg.Register(col); err != nil {
+			if _, ok := err.(prom.AlreadyRegisteredError); !ok {
+				return fmt.Errorf("vault renewal metric: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// registerOrReuseCounter registers a new counter with the given opts. If the
+// counter is already registered (AlreadyRegisteredError), it reuses the
+// existing collector. Any other registration error is returned as-is.
+func registerOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Counter, error) {
+	c := prom.NewCounter(opts)
+	if err := reg.Register(c); err != nil {
+		are, ok := err.(prom.AlreadyRegisteredError)
+		if !ok {
+			return nil, err
+		}
+		if existing, ok2 := are.ExistingCollector.(prom.Counter); ok2 {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("existing collector is not a Counter: %w", err)
+	}
+	return c, nil
+}

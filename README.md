@@ -69,7 +69,7 @@ Follow these steps to create a custom Cell from scratch.
 ### Step 1: Create Cell directory and metadata
 
 ```bash
-mkdir -p cells/my-cell/slices/my-action
+mkdir -p cells/my-cell/slices/myaction
 ```
 
 Create `cells/my-cell/cell.yaml`:
@@ -87,16 +87,16 @@ verify:
     - my-cell/smoke
 ```
 
-Create `cells/my-cell/slices/my-action/slice.yaml`:
+Create `cells/my-cell/slices/myaction/slice.yaml`:
 ```yaml
-id: my-action
+id: myaction
 belongsToCell: my-cell
 contractUsages:
   - contract: http.my-api.v1
     role: serve
 verify:
-  unit: my-action/unit
-  contract: my-action/contract
+  unit: myaction/unit
+  contract: myaction/contract
 ```
 
 ### Step 2: Define the domain
@@ -231,7 +231,7 @@ asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDe
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
 ├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
 ├── pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
-├── cmd/          — CLI (gocell validate / scaffold / generate / check / verify)
+├── cmd/          — CLI (gocell validate [--strict] / scaffold / generate / check / verify)
 ├── examples/     — Example projects (sso-bff / todo-order / iot-device)
 ├── templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
 └── generated/    — Tool-generated artifacts (indexes, derived views)

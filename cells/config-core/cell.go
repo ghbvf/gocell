@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5/pgxpool"
+	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // Compile-time interface checks.
@@ -98,6 +99,13 @@ func WithValueTransformer(t kcrypto.ValueTransformer) Option {
 	return func(c *ConfigCore) { c.valueTransformer = t }
 }
 
+// WithOnStaleCipherMetric sets a Prometheus counter that increments when a
+// config value encrypted with a stale (non-current) key is read. Wire this
+// from the composition root to enable M3 stale-key observability.
+func WithOnStaleCipherMetric(c prom.Counter) Option {
+	return func(cc *ConfigCore) { cc.staleCipherCounter = c }
+}
+
 // WithPostgresDefaults wires the config-core cell with PostgreSQL-backed
 // repositories and a transactional outbox. Use this option when
 // GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
@@ -130,16 +138,17 @@ func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option
 // ConfigCore is the config-core Cell implementation.
 type ConfigCore struct {
 	*cell.BaseCell
-	configRepo       ports.ConfigRepository
-	flagRepo         ports.FlagRepository
-	publisher        outbox.Publisher
-	outboxWriter     outbox.Writer
-	txRunner         persistence.TxRunner
-	cursorCodec      *query.CursorCodec
-	logger           *slog.Logger
-	keyProvider      kcrypto.KeyProvider
-	valueTransformer kcrypto.ValueTransformer
-	pgPool           *pgxpool.Pool // stored by WithPostgresDefaults for deferred Init()
+	configRepo         ports.ConfigRepository
+	flagRepo           ports.FlagRepository
+	publisher          outbox.Publisher
+	outboxWriter       outbox.Writer
+	txRunner           persistence.TxRunner
+	cursorCodec        *query.CursorCodec
+	logger             *slog.Logger
+	keyProvider        kcrypto.KeyProvider
+	valueTransformer   kcrypto.ValueTransformer
+	pgPool             *pgxpool.Pool // stored by WithPostgresDefaults for deferred Init()
+	staleCipherCounter prom.Counter  // optional; incremented on stale-key reads (M3)
 
 	// Slice services and handlers.
 	writeHandler     *configwrite.Handler
@@ -180,7 +189,13 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// Deferred PG repo construction — options are all applied before Init().
 	if c.pgPool != nil && c.configRepo == nil {
 		session := cellpg.NewSession(c.pgPool)
-		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, nil)
+		var repoOpts []cellpg.ConfigRepoOption
+		if c.staleCipherCounter != nil {
+			repoOpts = append(repoOpts, cellpg.WithOnStaleCipher(func(_, _, _ string) {
+				c.staleCipherCounter.Inc()
+			}))
+		}
+		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, nil, repoOpts...)
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 

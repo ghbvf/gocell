@@ -15,6 +15,7 @@ import (
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	"github.com/prometheus/client_golang/prometheus"
 
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
@@ -112,9 +113,11 @@ func (a *vaultLifetimeWatcherAdapter) RenewCh() <-chan *vaultapi.RenewOutput { r
 //
 // ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
 type tokenRenewalWorker struct {
-	watcher  tokenWatcher
-	logger   *slog.Logger
-	stopOnce sync.Once
+	watcher      tokenWatcher
+	logger       *slog.Logger
+	stopOnce     sync.Once
+	renewSuccess prometheus.Counter // vault_token_renew_success_total; nil when not configured
+	renewFailure prometheus.Counter // vault_token_renew_failure_total; nil when not configured
 }
 
 // Start launches watcher.Start() in a goroutine, then loops on the watcher
@@ -129,7 +132,7 @@ type tokenRenewalWorker struct {
 //     layer can alert operators before token expiry.
 func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	go w.watcher.Start()
-	defer w.watcher.Stop()
+	defer w.stopOnce.Do(func() { w.watcher.Stop() })
 
 	for {
 		select {
@@ -158,12 +161,18 @@ func (w *tokenRenewalWorker) handleDone(ctx context.Context, err error, ok bool)
 	if err != nil {
 		w.logger.ErrorContext(ctx, "vault-transit: token renewal stopped with error",
 			slog.String("error", err.Error()))
+		if w.renewFailure != nil {
+			w.renewFailure.Inc()
+		}
 		return true, err
 	}
 	// nil error = Vault LifetimeWatcher confirmed token is no longer renewable.
 	// Operational alert: return error so bootstrap/supervisor can surface this
 	// before encrypt/decrypt starts failing.
 	w.logger.ErrorContext(ctx, "vault-transit: token is no longer renewable; operator must rotate token before expiry")
+	if w.renewFailure != nil {
+		w.renewFailure.Inc()
+	}
 	return true, errcode.New(errcode.ErrKeyProviderAuthFailed,
 		"vault-transit: token is no longer renewable; encrypt/decrypt will fail after token expiry")
 }
@@ -181,6 +190,9 @@ func (w *tokenRenewalWorker) handleRenewal(ctx context.Context, renewal *vaultap
 	}
 	w.logger.InfoContext(ctx, "vault-transit: token renewed",
 		slog.Int("lease_duration", renewal.Secret.Auth.LeaseDuration))
+	if w.renewSuccess != nil {
+		w.renewSuccess.Inc()
+	}
 	return false
 }
 
@@ -294,7 +306,7 @@ func (h *vaultTransitHandle) wrapDEKWithVault(ctx context.Context, dek []byte) (
 			"vault-transit: encrypt response missing string 'ciphertext' field")
 	}
 
-	keyID, err = parseVaultKeyID(ciphertextStr)
+	keyID, err = parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
 	if err != nil {
 		return nil, "", err
 	}
@@ -318,14 +330,12 @@ func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, nonce, edk
 	// and confirm it matches h.id ("vault-transit:vN"). A mismatch indicates that
 	// the caller supplied an edk that belongs to a different key version, which is
 	// a permanent error (no retry will fix a misrouted keyID).
-	edkVersion, parseErr := parseVaultKeyID(string(edk))
+	edkVersion, parseErr := parseVaultKeyID(string(edk), errcode.ErrKeyProviderDecryptFailed)
 	if parseErr != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
-			"vault-transit: malformed edk prefix", parseErr)
+		return nil, parseErr
 	}
-	if h.id != edkVersion {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed,
-			fmt.Sprintf("vault-transit: keyID %q does not match edk version %q", h.id, edkVersion))
+	if err := kcrypto.MatchKeyID(h.id, edkVersion); err != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "vault-transit: keyID mismatch", err)
 	}
 
 	// 1. Unwrap DEK via Vault Transit.
@@ -707,17 +717,27 @@ func isTransientHTTPStatus(code int) bool {
 // ciphertext string. The ciphertext format is "vault:vN:base64..." where N is
 // the key version integer.
 //
-// Returns "vault-transit:vN" on success, or ErrKeyProviderEncryptFailed if the
+// errCode is the errcode.Code to use on parse failure — callers should pass
+// ErrKeyProviderEncryptFailed on the encrypt path and ErrKeyProviderDecryptFailed
+// on the decrypt path so that the returned error code matches the operation.
+//
+// Returns "vault-transit:vN" on success, or an errcode wrapping errCode if the
 // prefix is not in the expected "vault:vN:" format.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (version prefix)
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master (EncryptResponse.KeyID)
-func parseVaultKeyID(ciphertext string) (string, error) {
+func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 	// Expected format: "vault:vN:base64payload"
 	parts := strings.SplitN(ciphertext, ":", 3)
 	if len(parts) != 3 || parts[0] != "vault" || !strings.HasPrefix(parts[1], "v") {
-		return "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
-			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", ciphertext))
+		// Do NOT include the full ciphertext in the error message — it contains
+		// the wrapped DEK and would leak to server-side logs via the 5xx error chain.
+		prefix := ciphertext
+		if len(prefix) > 12 {
+			prefix = prefix[:12] + "..."
+		}
+		return "", errcode.New(errCode,
+			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", prefix))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }
@@ -761,6 +781,18 @@ func (p *TransitKeyProvider) Checkers() map[string]func() error {
 			return err
 		},
 	}
+}
+
+// RenewalMetrics returns the Prometheus collectors for token renewal
+// observability. The composition root must register these with its
+// prometheus.Registerer so that renewal counters appear in /metrics scrapes.
+// Returns nil when no renewal worker is configured (VaultClient did not
+// implement TokenRenewer, e.g. test fakes with static tokens).
+func (p *TransitKeyProvider) RenewalMetrics() []prometheus.Collector {
+	if p.renewalWorker == nil {
+		return nil
+	}
+	return []prometheus.Collector{p.renewalWorker.renewSuccess, p.renewalWorker.renewFailure}
 }
 
 // Worker returns the token renewal worker when one has been configured, or nil
@@ -816,10 +848,26 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context) error {
 		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: create lifetime watcher", err)
 	}
+	if raw == nil {
+		return errcode.New(errcode.ErrKeyProviderAuthFailed,
+			"vault-transit: NewLifetimeWatcher returned nil without error")
+	}
 
 	p.renewalWorker = &tokenRenewalWorker{
 		watcher: &vaultLifetimeWatcherAdapter{w: raw},
 		logger:  p.logger,
+		renewSuccess: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "gocell",
+			Subsystem: "vault",
+			Name:      "token_renew_success_total",
+			Help:      "Number of successful Vault token renewals.",
+		}),
+		renewFailure: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "gocell",
+			Subsystem: "vault",
+			Name:      "token_renew_failure_total",
+			Help:      "Number of Vault token renewal failures (token no longer renewable).",
+		}),
 	}
 	return nil
 }
