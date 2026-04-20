@@ -37,6 +37,18 @@ Missing required variables cause fail-fast before any assembly initialization.
 | `GOCELL_CONFIG_CURSOR_KEY` | HMAC key for config cursor codec | `core-bundle-cfg-cursor-key--32b!` | **Real mode** |
 | `GOCELL_CONFIG_CURSOR_PREVIOUS_KEY` | Previous config cursor key (rotation) | — | No |
 
+## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
+
+| Variable | Purpose | Default | Required | Notes |
+|---|---|---|---|---|
+| `GOCELL_KEY_PROVIDER` | Selects the encryption backend for sensitive config values | — | **postgres mode** | `"local-aes"` (dev/CI) or `"vault-transit"` (production). Must be set when `GOCELL_CELL_ADAPTER_MODE=postgres`; startup fails fast otherwise. Memory mode does not encrypt. |
+| `GOCELL_MASTER_KEY` | 32-byte hex-encoded AES key for `local-aes` provider | — | When `GOCELL_KEY_PROVIDER=local-aes` | Generate: `openssl rand -hex 32`. Real mode rejects well-known demo keys (case-insensitive hex comparison). |
+| `GOCELL_MASTER_KEY_PREVIOUS` | Previous master key for key rotation | — | No | Optional; enables decryption of values encrypted with the prior key during rotation window. |
+| `VAULT_ADDR` | Vault server address | `https://127.0.0.1:8200` | When `GOCELL_KEY_PROVIDER=vault-transit` | Standard Vault SDK env var. |
+| `VAULT_TOKEN` | Vault authentication token | — | When `GOCELL_KEY_PROVIDER=vault-transit` | Static token path; token renewal via LifetimeWatcher is automatic when the token is renewable. Real mode will require AppRole/K8s auth in a future release (A14). |
+| `GOCELL_VAULT_TRANSIT_MOUNT` | Vault Transit secrets engine mount path | `transit` | No | |
+| `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
+
 ## Observability / Monitoring
 
 | Variable | Purpose | Default | Required |

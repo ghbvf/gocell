@@ -37,14 +37,14 @@ import (
 // ---------------------------------------------------------------------------
 
 // fakeValueTransformer is a deterministic in-memory transformer that
-// "encrypts" by XOR-ing with 0x55 and records the AAD used during Encrypt.
+// "encrypts" by XOR-ing with 0x55 and embeds the AAD into the edk so that
+// Decrypt can verify AAD binding without mutable state.
 // Round-trip: Encrypt + Decrypt with matching AAD returns the original plaintext.
-// AAD mismatch: Decrypt with a different AAD than was used during Encrypt returns
-// ErrKeyProviderDecryptFailed — exercising the repo-layer cross-row replay protection.
+// AAD mismatch: Decrypt with a different AAD than was encoded in the edk returns
+// ErrConfigDecryptFailed — exercising the repo-layer cross-row replay protection.
 type fakeValueTransformer struct {
-	currentKeyID   string
-	failDecrypt    bool
-	lastEncryptAAD []byte // records AAD from the most recent Encrypt call
+	currentKeyID string
+	failDecrypt  bool
 }
 
 // CurrentKeyID implements crypto.CurrentKeyIDProvider — the optional
@@ -57,33 +57,30 @@ func (f *fakeValueTransformer) CurrentKeyID(_ context.Context) (string, error) {
 const fakeNonce = "FAKENC123456" // 12 bytes
 
 func (f *fakeValueTransformer) Encrypt(_ context.Context, plaintext, aad []byte) ([]byte, string, []byte, []byte, error) {
-	// Record the AAD so Decrypt can verify binding.
-	aadCopy := make([]byte, len(aad))
-	copy(aadCopy, aad)
-	f.lastEncryptAAD = aadCopy
-
 	// Fake cipher: XOR each byte with 0x55.
 	ct := make([]byte, len(plaintext))
 	for i, b := range plaintext {
 		ct[i] = b ^ 0x55
 	}
-	return ct, f.currentKeyID, []byte(fakeNonce), []byte("edk-" + f.currentKeyID), nil
+	// Encode AAD into edk so Decrypt can verify binding without mutable state.
+	edk := append([]byte("edk-"+f.currentKeyID+":aad:"), aad...)
+	return ct, f.currentKeyID, []byte(fakeNonce), edk, nil
 }
 
-func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, keyID string, _, _, aad []byte) ([]byte, error) {
+func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, keyID string, _, edk, aad []byte) ([]byte, error) {
 	if f.failDecrypt {
 		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "fake: forced decrypt failure")
 	}
-	// Check that the keyID is present (any non-empty keyID is OK for fake).
 	if keyID == "" {
 		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "fake: empty keyID")
 	}
-	// Enforce AAD binding: the AAD passed to Decrypt must match what was used
-	// during Encrypt. This exercises the repo-layer cross-row replay protection.
-	if string(aad) != string(f.lastEncryptAAD) {
+	// Verify AAD binding via edk-embedded AAD (stateless check).
+	expectedEDK := append([]byte("edk-"+keyID+":aad:"), aad...)
+	if string(edk) != string(expectedEDK) {
 		return nil, errcode.New(errcode.ErrConfigDecryptFailed,
-			"fake: AAD mismatch — cross-row replay detected")
+			"fake: AAD mismatch (edk does not match expected AAD binding)")
 	}
+	// Reverse XOR.
 	pt := make([]byte, len(ciphertext))
 	for i, b := range ciphertext {
 		pt[i] = b ^ 0x55
@@ -225,13 +222,15 @@ func TestEncrypt_GetByKey_SensitiveDecryptFailed_FailClosed(t *testing.T) {
 // from the current key ID.
 func TestEncrypt_GetByKey_SensitiveStaleKey(t *testing.T) {
 	ctx := context.Background()
-	tr := &fakeValueTransformer{currentKeyID: "local-aes-v2"} // current is v2
+	// Encrypt with v1 (the "old" key) so edk embeds v1.
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
 	original := "stale-value"
 	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "old_key"))
 	require.NoError(t, err)
 
-	// Row was encrypted with v1 (old key).
+	// Simulate key rotation: current is now v2, but the row was encrypted with v1.
+	tr.currentKeyID = "local-aes-v2"
 	oldKeyID := "local-aes-v1"
 
 	now := time.Now()
@@ -375,25 +374,28 @@ func TestConfigRepo_GetByKey_Sensitive_LegacyPlaintext_ReturnsErr(t *testing.T) 
 // TestConfigRepo_Decrypt_AADMismatch_FailsClosed verifies that the repo returns
 // ErrConfigDecryptFailed when the transformer detects an AAD mismatch.
 // This exercises the cross-row replay protection at the repo boundary.
+//
+// Cross-row replay: ciphertext was encrypted for "other_key" but is stored in
+// the "db_password" row. The edk embeds "other_key"'s AAD; when the repo reads
+// "db_password" it passes "db_password" AAD to Decrypt — mismatch detected.
 func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	ctx := context.Background()
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
-	// Encrypt value for key "db_password".
-	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte("secret"), configcrypto.AADForConfig("config-core", "db_password"))
+	// Encrypt value for "other_key" — edk embeds "other_key" AAD.
+	ct, keyID, nonce, _, err := tr.Encrypt(ctx, []byte("secret"), configcrypto.AADForConfig("config-core", "other_key"))
 	require.NoError(t, err)
 
-	// Now tamper: change the fake's lastEncryptAAD to simulate it having been
-	// originally encrypted for a different key (cross-row replay scenario).
-	// We overwrite it with AAD for a different key so Decrypt will detect mismatch.
-	_, _, _, _, _ = tr.Encrypt(ctx, []byte("other"), configcrypto.AADForConfig("config-core", "other_key"))
-	// lastEncryptAAD is now "other_key" AAD, but the DB row has "db_password" AAD.
+	// Construct an edk that binds to "other_key" AAD (cross-row replay).
+	// When GetByKey reads "db_password", the repo passes "db_password" AAD to
+	// Decrypt, which won't match this edk → ErrConfigDecryptFailed.
+	wrongEDK := append([]byte("edk-"+keyID+":aad:"), configcrypto.AADForConfig("config-core", "other_key")...)
 
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
 			values: []any{"cfg-1", "db_password", "", true, 1, now, now,
-				ct, keyID, edk, nonce},
+				ct, keyID, wrongEDK, nonce},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -638,8 +640,7 @@ func TestList_StaleKey_EmitsWarn(t *testing.T) {
 	logEntries := parseLogEntries(t, &logBuf)
 	require.Len(t, logEntries, 1, "exactly one warn for the stale sensitive entry")
 	assert.Equal(t, "WARN", logEntries[0]["level"])
-	assert.Equal(t, "config value encrypted with stale key", logEntries[0]["msg"])
-	assert.Equal(t, "stale_cfg", logEntries[0]["key"])
+	assert.Equal(t, "config values encrypted with stale key (first occurrence in this List page)", logEntries[0]["msg"])
 	assert.Equal(t, storedKeyID, logEntries[0]["stored_key_id"])
 	assert.Equal(t, "local-aes-v2", logEntries[0]["current_key_id"])
 }
@@ -683,6 +684,162 @@ func TestGetByKey_StaleKey_OnStaleCipherCallback(t *testing.T) {
 	assert.Equal(t, "cb_key", got[0].key)
 	assert.Equal(t, storedKeyID, got[0].storedKeyID)
 	assert.Equal(t, "local-aes-v2", got[0].currentKeyID)
+}
+
+// TestList_StaleKey_LogDedup verifies that List emits slog.Warn only ONCE per
+// distinct stale keyID per List call, even when multiple entries share the same
+// stale keyID. The onStaleCipher callback must still fire for every stale entry
+// (metric accuracy).
+func TestList_StaleKey_LogDedup(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v2"} // current is v2
+
+	storedKeyID := "local-aes-v1" // stale
+
+	now := time.Now()
+	db := &mockDB{
+		queryRows: &mockRowSet{
+			entries: []mockRowValues{
+				// Three sensitive entries all encrypted with the same stale key.
+				{values: []any{"cfg-1", "key_a", "***", true, 1, now, now, &storedKeyID}},
+				{values: []any{"cfg-2", "key_b", "***", true, 1, now, now, &storedKeyID}},
+				{values: []any{"cfg-3", "key_c", "***", true, 1, now, now, &storedKeyID}},
+				// Non-sensitive — no warn expected.
+				{values: []any{"cfg-4", "plain_cfg", "value", false, 1, now, now, (*string)(nil)}},
+			},
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := newTestLogger(&logBuf)
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.logger = logger
+
+	// Wire callback to count every stale invocation (metrics accuracy).
+	var callbackCount int
+	repo.onStaleCipher = func(_, _, _ string) { callbackCount++ }
+
+	entries, err := repo.List(ctx, query.ListParams{
+		Limit: 10,
+		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+
+	// All three sensitive entries must be stale.
+	assert.True(t, entries[0].Stale, "key_a must be stale")
+	assert.True(t, entries[1].Stale, "key_b must be stale")
+	assert.True(t, entries[2].Stale, "key_c must be stale")
+	assert.False(t, entries[3].Stale, "plain_cfg must not be stale")
+
+	// Callback must fire for every stale entry (3 total).
+	assert.Equal(t, 3, callbackCount, "onStaleCipher callback must fire for every stale entry")
+
+	// slog.Warn must fire only ONCE for the shared stale keyID.
+	logEntries := parseLogEntries(t, &logBuf)
+	require.Len(t, logEntries, 1, "only one warn per distinct stale keyID per List call")
+	assert.Equal(t, "WARN", logEntries[0]["level"])
+	assert.Equal(t, storedKeyID, logEntries[0]["stored_key_id"])
+	assert.Equal(t, "local-aes-v2", logEntries[0]["current_key_id"])
+}
+
+// TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns verifies that when entries are
+// encrypted with two distinct stale keyIDs, exactly two slog.Warn lines are
+// emitted (one per distinct keyID), but callbacks fire for every entry.
+func TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v3"} // current is v3
+
+	keyIDv1 := "local-aes-v1"
+	keyIDv2 := "local-aes-v2"
+
+	now := time.Now()
+	db := &mockDB{
+		queryRows: &mockRowSet{
+			entries: []mockRowValues{
+				{values: []any{"cfg-1", "key_a", "***", true, 1, now, now, &keyIDv1}},
+				{values: []any{"cfg-2", "key_b", "***", true, 1, now, now, &keyIDv1}},
+				{values: []any{"cfg-3", "key_c", "***", true, 1, now, now, &keyIDv2}},
+			},
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := newTestLogger(&logBuf)
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.logger = logger
+
+	var callbackCount int
+	repo.onStaleCipher = func(_, _, _ string) { callbackCount++ }
+
+	entries, err := repo.List(ctx, query.ListParams{
+		Limit: 10,
+		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+
+	// All three are stale.
+	assert.True(t, entries[0].Stale)
+	assert.True(t, entries[1].Stale)
+	assert.True(t, entries[2].Stale)
+
+	// Callback fires for all 3.
+	assert.Equal(t, 3, callbackCount)
+
+	// Two distinct keyIDs → two slog.Warn lines.
+	logEntries := parseLogEntries(t, &logBuf)
+	require.Len(t, logEntries, 2, "one warn per distinct stale keyID")
+	assert.Equal(t, "WARN", logEntries[0]["level"])
+	assert.Equal(t, "WARN", logEntries[1]["level"])
+	storedIDs := []string{
+		logEntries[0]["stored_key_id"].(string),
+		logEntries[1]["stored_key_id"].(string),
+	}
+	assert.ElementsMatch(t, []string{keyIDv1, keyIDv2}, storedIDs)
+}
+
+// TestWithOnStaleCipher_Option verifies that NewConfigRepository wired with the
+// WithOnStaleCipher option correctly sets the callback. The test injects a stale
+// key via GetByKey and asserts the callback fires.
+func TestWithOnStaleCipher_Option(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	original := "value"
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "opt_key"))
+	require.NoError(t, err)
+
+	storedKeyID := "local-aes-v1"
+	tr.currentKeyID = "local-aes-v2" // rotate
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "opt_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce},
+		},
+	}
+
+	type callbackArgs struct{ key, storedID, currentID string }
+	var got []callbackArgs
+
+	// Use NewConfigRepository with WithOnStaleCipher option.
+	session := &Session{} // nil pool is fine — db field is set below via direct struct assignment
+	repo := NewConfigRepository(session, tr, nil, WithOnStaleCipher(func(key, storedID, currentID string) {
+		got = append(got, callbackArgs{key, storedID, currentID})
+	}))
+	// Bypass session for unit test — inject mockDB directly.
+	repo.session = nil
+	repo.db = db
+
+	_, err = repo.GetByKey(ctx, "opt_key")
+	require.NoError(t, err)
+
+	require.Len(t, got, 1, "WithOnStaleCipher callback must fire for stale key")
+	assert.Equal(t, "opt_key", got[0].key)
+	assert.Equal(t, storedKeyID, got[0].storedID)
+	assert.Equal(t, "local-aes-v2", got[0].currentID)
 }
 
 // TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled verifies that the

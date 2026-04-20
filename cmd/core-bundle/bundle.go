@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
@@ -82,10 +83,12 @@ func defaultRuntimeOptions(
 	return opts
 }
 
-// buildKeyProvider constructs the KeyProvider from GOCELL_KEY_PROVIDER env var.
-// Supported values: "local-aes", "vault-transit".
-// In memory mode (empty env var) nil is returned (no encryption; NoopTransformer via keyProviderToTransformer).
-// In postgres mode (empty env var) the function fails-fast: sensitive-value
+// buildKeyProvider constructs the KeyProvider from the given providerName
+// (pre-read from GOCELL_KEY_PROVIDER by the caller). Supported values:
+// "local-aes", "vault-transit".
+// In memory mode (empty providerName) nil is returned (no encryption;
+// NoopTransformer via keyProviderToTransformer).
+// In postgres mode (empty providerName) the function fails-fast: sensitive-value
 // encryption is a production security invariant; silently wiring NoopTransformer
 // would defeat the stated threat model (see docs/architecture/202604191800-adr-config-value-encryption.md).
 // Operators must explicitly opt in via GOCELL_KEY_PROVIDER=local-aes (dev/CI only) or
@@ -94,8 +97,7 @@ func defaultRuntimeOptions(
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend, adapterMode string) (kcrypto.KeyProvider, error) {
-	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
+func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.ErrConfigKeyMissing,
@@ -109,7 +111,11 @@ func buildKeyProvider(storageBackend, adapterMode string) (kcrypto.KeyProvider, 
 	switch providerName {
 	case "local-aes":
 		masterKeyRaw := os.Getenv("GOCELL_MASTER_KEY")
-		if err := rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", []byte(masterKeyRaw)); err != nil {
+		// Normalize hex to lowercase before demo-key check: hex.DecodeString is
+		// case-insensitive, so "0123ABCD..." and "0123abcd..." produce identical
+		// key material. Comparing at string level without normalization would let
+		// an uppercase variant of a known demo key slip through.
+		if err := rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", []byte(strings.ToLower(masterKeyRaw))); err != nil {
 			return nil, err
 		}
 		kp, err := crypto.NewLocalAESKeyProviderFromEnv()

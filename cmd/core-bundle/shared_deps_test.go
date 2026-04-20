@@ -10,13 +10,12 @@ import (
 
 // TestSharedDeps_Validate_PostgresWithoutKeyProvider_Fails verifies that
 // SharedDeps.Validate() returns an error when StorageBackend=postgres but
-// GOCELL_KEY_PROVIDER is unset. This is defense-in-depth: buildKeyProvider
+// KeyProviderName is empty. This is defense-in-depth: buildKeyProvider
 // also checks this, but Validate catches test-constructed SharedDeps.
 func TestSharedDeps_Validate_PostgresWithoutKeyProvider_Fails(t *testing.T) {
-	t.Setenv("GOCELL_KEY_PROVIDER", "")
-
 	deps := &SharedDeps{
-		Topology: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		Topology:        bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		KeyProviderName: "", // explicitly empty
 		// Deliberately leave other fields zero to isolate this check.
 		// Validate will also report other missing fields, but we just need
 		// to find our specific error in the joined result.
@@ -28,16 +27,15 @@ func TestSharedDeps_Validate_PostgresWithoutKeyProvider_Fails(t *testing.T) {
 }
 
 // TestSharedDeps_Validate_MemoryWithoutKeyProvider_OK verifies that
-// memory mode doesn't require GOCELL_KEY_PROVIDER.
+// memory mode doesn't require KeyProviderName.
 func TestSharedDeps_Validate_MemoryWithoutKeyProvider_OK(t *testing.T) {
-	t.Setenv("GOCELL_KEY_PROVIDER", "")
-
 	// Build a minimal SharedDeps for memory mode.
 	// This test only asserts that the KeyProvider check doesn't fire;
 	// other fields will still be missing, so Validate will still error.
 	// We check that the specific "GOCELL_KEY_PROVIDER" message is NOT in the error.
 	deps := &SharedDeps{
-		Topology: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
+		Topology:        bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
+		KeyProviderName: "", // empty is valid for non-postgres
 	}
 
 	err := deps.Validate()

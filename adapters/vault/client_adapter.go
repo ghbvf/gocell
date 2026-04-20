@@ -61,7 +61,8 @@ func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any,
 func (a *vaultAPIClient) LookupSelfToken(ctx context.Context) (*vaultapi.Secret, error) {
 	secret, err := a.client.Auth().Token().LookupSelfWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("vault api: token lookup-self: %w", err)
+		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault api: lookup self token", err)
 	}
 	return secret, nil
 }
@@ -71,5 +72,10 @@ func (a *vaultAPIClient) LookupSelfToken(ctx context.Context) (*vaultapi.Secret,
 //
 // ref: hashicorp/vault api/lifetime_watcher.go@main — Client.NewLifetimeWatcher
 func (a *vaultAPIClient) NewLifetimeWatcher(i *vaultapi.LifetimeWatcherInput) (*vaultapi.LifetimeWatcher, error) {
-	return a.client.NewLifetimeWatcher(i)
+	w, err := a.client.NewLifetimeWatcher(i)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+			"vault api: create lifetime watcher", err)
+	}
+	return w, nil
 }

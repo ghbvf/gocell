@@ -65,6 +65,24 @@ type ConfigRepository struct {
 	onStaleCipher func(key, storedKeyID, currentKeyID string)
 }
 
+// ConfigRepoOption configures optional behaviour on ConfigRepository.
+type ConfigRepoOption func(*ConfigRepository)
+
+// WithOnStaleCipher sets a callback invoked when a stale-key value is detected
+// during a read. Callers may wire this to a prometheus counter:
+//
+//	WithOnStaleCipher(func(key, storedKeyID, currentKeyID string) {
+//	    staleCipherTotal.Inc()
+//	})
+//
+// The callback receives (key, storedKeyID, currentKeyID). When nil, it is
+// skipped; slog.Warn is always emitted regardless.
+func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) ConfigRepoOption {
+	return func(r *ConfigRepository) {
+		r.onStaleCipher = fn
+	}
+}
+
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
 // pgx.Tx from the context on each call, enabling transactional participation
 // via persistence.TxCtxKey. Session is the sole production entry point;
@@ -73,11 +91,15 @@ type ConfigRepository struct {
 // If logger is nil, slog.Default() is used.
 //
 // Requires migrations 001–010 to be applied first (see adapters/postgres/migrations/).
-func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer, logger *slog.Logger) *ConfigRepository {
+func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer, logger *slog.Logger, opts ...ConfigRepoOption) *ConfigRepository {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ConfigRepository{session: s, transformer: tr, logger: logger}
+	r := &ConfigRepository{session: s, transformer: tr, logger: logger}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // resolveDB returns the DBTX to use for read calls. When a Session is
@@ -384,7 +406,12 @@ const sensitiveListSentinel = "***"
 // preserves key metadata (KeyID, Stale) for informational purposes, and emits
 // observability signals (slog.Warn + optional onStaleCipher callback) when the
 // stored keyID differs from the current active keyID.
-func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *domain.ConfigEntry, valueKeyID *string, currentID string) {
+//
+// staleLogged tracks which stale keyIDs have already been logged in this List
+// call to prevent log flooding when many entries share the same stale keyID.
+// The onStaleCipher callback always fires for every stale entry (metric accuracy);
+// only the slog.Warn is deduplicated per distinct keyID per List call.
+func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *domain.ConfigEntry, valueKeyID *string, currentID string, staleLogged map[string]bool) {
 	e.Value = sensitiveListSentinel
 	if valueKeyID == nil {
 		return
@@ -392,7 +419,16 @@ func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *do
 	e.KeyID = *valueKeyID
 	if currentID != "" && currentID != *valueKeyID {
 		e.Stale = true
-		r.observeStaleCipher(ctx, e.Key, *valueKeyID, currentID)
+		if r.onStaleCipher != nil {
+			r.onStaleCipher(e.Key, *valueKeyID, currentID)
+		}
+		if !staleLogged[*valueKeyID] {
+			staleLogged[*valueKeyID] = true
+			r.logger.WarnContext(ctx, "config values encrypted with stale key (first occurrence in this List page)",
+				slog.String("stored_key_id", *valueKeyID),
+				slog.String("current_key_id", currentID),
+			)
+		}
 	}
 }
 
@@ -428,6 +464,7 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	defer rows.Close()
 
 	currentID := r.currentKeyID(ctx)
+	staleLogged := make(map[string]bool)
 	var entries []*domain.ConfigEntry
 	for rows.Next() {
 		var (
@@ -438,7 +475,7 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
 		}
 		if e.Sensitive {
-			r.applySensitiveListSentinel(ctx, &e, valueKeyID, currentID)
+			r.applySensitiveListSentinel(ctx, &e, valueKeyID, currentID, staleLogged)
 		}
 		entries = append(entries, &e)
 	}

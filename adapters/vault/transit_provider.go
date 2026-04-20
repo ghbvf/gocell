@@ -106,15 +106,27 @@ func (a *vaultLifetimeWatcherAdapter) RenewCh() <-chan *vaultapi.RenewOutput { r
 // lifecycle. Start blocks until the context is cancelled or the token can no
 // longer be renewed. Stop signals the watcher to stop gracefully.
 //
+// stopOnce ensures watcher.Stop is called at most once regardless of whether
+// the caller invokes Stop explicitly (Worker.Stop, phase 8) and also via
+// Close (ManagedResource.Close, phase 10) during shutdown.
+//
 // ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
 type tokenRenewalWorker struct {
-	watcher tokenWatcher
-	logger  *slog.Logger
+	watcher  tokenWatcher
+	logger   *slog.Logger
+	stopOnce sync.Once
 }
 
 // Start launches watcher.Start() in a goroutine, then loops on the watcher
 // channels until ctx is done or the token is no longer renewable.
 // Stop() is always called on exit to release watcher resources.
+//
+// DoneCh semantics:
+//   - channel closed (ok=false): watcher stopped externally → return nil.
+//   - non-nil error: unrecoverable renewal failure → log + return error.
+//   - nil error: token is no longer renewable (operational alert) →
+//     log at Error level + return ErrKeyProviderAuthFailed so the bootstrap
+//     layer can alert operators before token expiry.
 func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	go w.watcher.Start()
 	defer w.watcher.Stop()
@@ -123,28 +135,61 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case err := <-w.watcher.DoneCh():
-			if err != nil {
-				w.logger.ErrorContext(ctx, "vault-transit: token renewal stopped with error",
-					slog.String("error", err.Error()))
-			} else {
-				w.logger.WarnContext(ctx, "vault-transit: token is no longer renewable")
+		case err, ok := <-w.watcher.DoneCh():
+			if done, result := w.handleDone(ctx, err, ok); done {
+				return result
 			}
-			return err
-		case renewal := <-w.watcher.RenewCh():
-			leaseDuration := 0
-			if renewal.Secret != nil && renewal.Secret.Auth != nil {
-				leaseDuration = renewal.Secret.Auth.LeaseDuration
+		case renewal, ok := <-w.watcher.RenewCh():
+			if stop := w.handleRenewal(ctx, renewal, ok); stop {
+				return nil
 			}
-			w.logger.InfoContext(ctx, "vault-transit: token renewed",
-				slog.Int("lease_duration", leaseDuration))
 		}
 	}
 }
 
-// Stop signals the watcher to stop its internal loop.
+// handleDone processes a DoneCh event. Returns (true, err) when Start should
+// exit, (false, nil) when the event should be ignored (never occurs in practice
+// since DoneCh fires at most once, but the signature is symmetric for clarity).
+func (w *tokenRenewalWorker) handleDone(ctx context.Context, err error, ok bool) (done bool, result error) {
+	if !ok {
+		// Channel closed: watcher stopped externally — clean exit.
+		return true, nil
+	}
+	if err != nil {
+		w.logger.ErrorContext(ctx, "vault-transit: token renewal stopped with error",
+			slog.String("error", err.Error()))
+		return true, err
+	}
+	// nil error = Vault LifetimeWatcher confirmed token is no longer renewable.
+	// Operational alert: return error so bootstrap/supervisor can surface this
+	// before encrypt/decrypt starts failing.
+	w.logger.ErrorContext(ctx, "vault-transit: token is no longer renewable; operator must rotate token before expiry")
+	return true, errcode.New(errcode.ErrKeyProviderAuthFailed,
+		"vault-transit: token is no longer renewable; encrypt/decrypt will fail after token expiry")
+}
+
+// handleRenewal processes a RenewCh event. Returns true when Start should exit
+// (channel closed), false to continue the loop.
+func (w *tokenRenewalWorker) handleRenewal(ctx context.Context, renewal *vaultapi.RenewOutput, ok bool) (stop bool) {
+	if !ok {
+		// RenewCh closed: watcher stopped externally — clean exit.
+		return true
+	}
+	if renewal == nil || renewal.Secret == nil || renewal.Secret.Auth == nil {
+		w.logger.WarnContext(ctx, "vault-transit: received nil or incomplete renewal notification")
+		return false
+	}
+	w.logger.InfoContext(ctx, "vault-transit: token renewed",
+		slog.Int("lease_duration", renewal.Secret.Auth.LeaseDuration))
+	return false
+}
+
+// Stop signals the watcher to stop its internal loop. Idempotent: safe to
+// call multiple times (stopOnce ensures watcher.Stop is invoked exactly once).
 func (w *tokenRenewalWorker) Stop(_ context.Context) error {
-	w.watcher.Stop()
+	w.stopOnce.Do(func() {
+		w.watcher.Stop()
+	})
 	return nil
 }
 
@@ -760,7 +805,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context) error {
 	// Look up the current token to seed the LifetimeWatcher with accurate TTL.
 	secret, err := renewer.LookupSelfToken(ctx)
 	if err != nil {
-		return errcode.Wrap(errcode.ErrKeyProviderTransient,
+		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: lookup self token for renewal initialisation", err)
 	}
 
@@ -768,7 +813,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context) error {
 		Secret: secret,
 	})
 	if err != nil {
-		return errcode.Wrap(errcode.ErrKeyProviderTransient,
+		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: create lifetime watcher", err)
 	}
 
