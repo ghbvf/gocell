@@ -36,6 +36,9 @@ type KeyProvider interface {
 //   - KeyID MUST reflect the KEK version actually used to wrap the data/DEK;
 //     for LocalAES this equals handle.ID(); for VaultTransit this is parsed
 //     from the wrapped DEK prefix "vault:vN:".
+//   - keyID is "verifiable metadata": callers SHOULD use MatchKeyID() to verify
+//     that a stored keyID matches the handle used for decryption. This prevents
+//     silent data corruption from misrouted key versions.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (keyID version prefix)
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master (EncryptResponse.KeyID)
