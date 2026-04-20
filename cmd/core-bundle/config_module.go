@@ -63,15 +63,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// same process (e.g. integration tests with shared registry) are handled
 	// gracefully: AlreadyRegisteredError carries the existing collector so we
 	// can reuse it instead of creating an orphaned counter.
-	staleCipherCounter := prom.NewCounter(configStaleCipherOpts)
-	if regErr := shared.PromStack.registry.Register(staleCipherCounter); regErr != nil {
-		if are, ok := regErr.(prom.AlreadyRegisteredError); ok {
-			if existing, ok2 := are.ExistingCollector.(prom.Counter); ok2 {
-				staleCipherCounter = existing
-			}
-		}
-		// Non-AlreadyRegisteredError: counter is still usable without registration;
-		// metrics simply won't appear in /metrics scrapes for this run.
+	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config-core: register stale_cipher counter: %w", err)
 	}
 
 	baseOpts := []configcore.Option{
@@ -84,10 +78,10 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 
-	// A13: register vault token renewal counters when the KeyProvider exposes
-	// them. Uses the same Register-not-MustRegister pattern as staleCipherCounter
-	// so repeated Provide calls in integration tests are handled gracefully.
-	registerRenewalMetrics(kp, shared.PromStack.registry)
+	// A13: register vault token renewal counters when the KeyProvider exposes them.
+	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
+		return nil, nil, fmt.Errorf("config-core: register renewal metrics: %w", err)
+	}
 
 	var opts []bootstrap.Option
 	if pgRes != nil {
@@ -115,19 +109,37 @@ type renewalMetricsProvider interface {
 }
 
 // registerRenewalMetrics registers per-collector metrics exposed by KeyProvider
-// implementations that satisfy renewalMetricsProvider. Uses Register (not
-// MustRegister) so repeated Provide calls in integration tests are graceful:
-// AlreadyRegisteredError and other non-fatal errors leave counters usable
-// in memory while simply omitting them from /metrics scrapes.
-func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) {
+// implementations that satisfy renewalMetricsProvider. Returns error on
+// registration failures other than AlreadyRegisteredError.
+func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) error {
 	rmp, ok := kp.(renewalMetricsProvider)
 	if !ok {
-		return
+		return nil
 	}
 	for _, col := range rmp.RenewalMetrics() {
-		// Non-fatal: AlreadyRegisteredError is benign on integration-test re-run;
-		// other errors leave the counter usable in memory only.
-		//nolint:errcheck
-		_ = reg.Register(col)
+		if err := reg.Register(col); err != nil {
+			if _, ok := err.(prom.AlreadyRegisteredError); !ok {
+				return fmt.Errorf("vault renewal metric: %w", err)
+			}
+		}
 	}
+	return nil
+}
+
+// registerOrReuseCounter registers a new counter with the given opts. If the
+// counter is already registered (AlreadyRegisteredError), it reuses the
+// existing collector. Any other registration error is returned as-is.
+func registerOrReuseCounter(reg prom.Registerer, opts prom.CounterOpts) (prom.Counter, error) {
+	c := prom.NewCounter(opts)
+	if err := reg.Register(c); err != nil {
+		are, ok := err.(prom.AlreadyRegisteredError)
+		if !ok {
+			return nil, err
+		}
+		if existing, ok2 := are.ExistingCollector.(prom.Counter); ok2 {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("existing collector is not a Counter: %w", err)
+	}
+	return c, nil
 }

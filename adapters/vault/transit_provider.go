@@ -730,8 +730,14 @@ func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 	// Expected format: "vault:vN:base64payload"
 	parts := strings.SplitN(ciphertext, ":", 3)
 	if len(parts) != 3 || parts[0] != "vault" || !strings.HasPrefix(parts[1], "v") {
+		// Do NOT include the full ciphertext in the error message — it contains
+		// the wrapped DEK and would leak to server-side logs via the 5xx error chain.
+		prefix := ciphertext
+		if len(prefix) > 12 {
+			prefix = prefix[:12] + "..."
+		}
 		return "", errcode.New(errCode,
-			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", ciphertext))
+			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", prefix))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }
@@ -841,6 +847,10 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context) error {
 	if err != nil {
 		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: create lifetime watcher", err)
+	}
+	if raw == nil {
+		return errcode.New(errcode.ErrKeyProviderAuthFailed,
+			"vault-transit: NewLifetimeWatcher returned nil without error")
 	}
 
 	p.renewalWorker = &tokenRenewalWorker{
