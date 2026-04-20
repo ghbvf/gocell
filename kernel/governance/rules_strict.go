@@ -6,14 +6,14 @@ import (
 )
 
 // ValidateStrict runs all standard validation rules and, when strict is true,
-// additionally upgrades the following advisory checks to errors:
+// additionally enforces the following strict-only checks as errors:
 //
 //   - FMT-16: slice directory contains '-' (kebab-case disallowed in strict mode)
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //
 // When strict is false the method is equivalent to Validate() — FMT-16 and
 // FMT-17 emit nothing (they are strict-only rules; non-strict mode is silent
-// by design).
+// by design, there is no warning severity to "upgrade" from).
 func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results := v.Validate()
 	results = append(results, v.validateFMT16(strict)...)
@@ -40,28 +40,32 @@ func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 	return results
 }
 
-// validateFMT16 checks that no slice key contains '-' (kebab-case directory).
+// validateFMT16 checks that no slice directory contains '-' (kebab-case).
 // In strict mode this is a SeverityError; in non-strict mode it is silent.
+//
+// The check reads the filesystem directory segment captured by the parser
+// (SliceMeta.Dir), not the map key or slice.id. This matters: a slice can
+// live under a kebab directory while declaring a no-dash id in slice.yaml,
+// and pre-Dir implementations that read the map key saw only the id and let
+// the kebab directory slip through. Slices synthesized in tests without a
+// Dir are skipped (Dir != "" is the "parsed from disk" signal).
 func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 	if !strict {
 		return nil
 	}
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
-		// key format: "cellID/sliceID"
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
+		if s.Dir == "" {
 			continue
 		}
-		sliceDir := parts[1]
-		if strings.Contains(sliceDir, "-") {
+		if strings.Contains(s.Dir, "-") {
 			results = append(results, v.newResult(
 				"FMT-16", SeverityError, IssueInvalid,
 				sliceFile(key),
 				"id",
 				fmt.Sprintf(
 					"slice %q uses kebab-case directory %q; kebab-case slice directories are disallowed in strict mode (rename to %q)",
-					s.ID, sliceDir, strings.ReplaceAll(sliceDir, "-", ""),
+					s.ID, s.Dir, strings.ReplaceAll(s.Dir, "-", ""),
 				),
 			))
 		}
@@ -71,7 +75,9 @@ func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 
 // validateFMT17 checks that the first entry in slice.yaml allowedFiles matches
 // the canonical slice directory path. In strict mode this is a SeverityError;
-// in non-strict mode it is silent.
+// in non-strict mode it is silent. Expected path is derived from SliceMeta.Dir
+// / CellDir (filesystem truth) so a faked-path/faked-id pairing cannot slip
+// through.
 func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 	if !strict {
 		return nil
@@ -82,14 +88,10 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 			// FMT-14 already covers missing allowedFiles; skip here.
 			continue
 		}
-		// key format: "cellID/sliceID"
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
+		if s.Dir == "" || s.CellDir == "" {
 			continue
 		}
-		cellID := parts[0]
-		sliceDir := parts[1]
-		expected := fmt.Sprintf("cells/%s/slices/%s/", cellID, sliceDir)
+		expected := fmt.Sprintf("cells/%s/slices/%s/", s.CellDir, s.Dir)
 		first := s.AllowedFiles[0]
 		// Normalize: strip trailing ** or glob suffix for comparison.
 		normalized := strings.TrimSuffix(first, "**")
@@ -101,7 +103,7 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 				"allowedFiles[0]",
 				fmt.Sprintf(
 					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)",
-					s.ID, first, sliceDir, expected,
+					s.ID, first, s.Dir, expected,
 				),
 			))
 		}

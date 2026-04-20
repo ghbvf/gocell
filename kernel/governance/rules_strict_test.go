@@ -34,6 +34,8 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 				AllowedFiles: []string{
 					"cells/access-core/slices/session-login/**",
 				},
+				Dir:     "session-login",
+				CellDir: "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -41,7 +43,7 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	// Non-strict: kebab dir in slice ID should produce warning, not error.
+	// Non-strict: kebab dir in slice dir should produce warning, not error.
 	v := NewValidator(project, "")
 	results := v.ValidateStrict(false)
 	hasKebabError := false
@@ -51,10 +53,10 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 		}
 	}
 	if hasKebabError {
-		t.Error("non-strict mode should not produce FMT-16 error for kebab slice ID")
+		t.Error("non-strict mode should not produce FMT-16 error for kebab slice dir")
 	}
 
-	// Strict mode: kebab dir in slice key should produce error.
+	// Strict mode: kebab dir in slice dir should produce error.
 	results = v.ValidateStrict(true)
 	hasKebabError = false
 	for _, r := range results {
@@ -97,6 +99,8 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 					"cells/access-core/slices/session-login/**",
 					"cells/access-core/slices/sessionlogin/**",
 				},
+				Dir:     "sessionlogin",
+				CellDir: "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -157,6 +161,8 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 					Contract: []string{"contract.http.auth.login.v1.serve"},
 				},
 				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				Dir:          "session-login",
+				CellDir:      "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -207,6 +213,8 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 					Contract: []string{},
 				},
 				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				Dir:          "session-login",
+				CellDir:      "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -289,6 +297,8 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 				AllowedFiles: []string{
 					"cells/access-core/slices/sessionlogin/**",
 				},
+				Dir:     "sessionlogin",
+				CellDir: "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -358,6 +368,8 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 				AllowedFiles: []string{
 					"cells/access-core/slices/sessionlogin/**",
 				},
+				Dir:     "sessionlogin",
+				CellDir: "access-core",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -371,5 +383,159 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 		if (r.Code == "FMT-16" || r.Code == "FMT-17") && r.Severity == SeverityError {
 			t.Errorf("clean no-dash slice should not produce %s error: %s", r.Code, r.Message)
 		}
+	}
+}
+
+// The previous implementation read sliceDir from the map key (which embeds
+// slice.id), so a kebab directory paired with a no-dash id escaped FMT-16
+// entirely. After moving FMT-16 onto SliceMeta.Dir this test guarantees the
+// check sees filesystem truth, not YAML-declared id.
+func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L1",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Dir:              "access-core",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			// Map key is "access-core/sessionlogin" (yaml id), but the
+			// walked directory is the kebab-case "session-login".
+			"access-core/sessionlogin": {
+				ID:             "sessionlogin",
+				BelongsToCell:  "access-core",
+				ContractUsages: []metadata.ContractUsage{},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.sessionlogin.service"},
+					Contract: []string{},
+				},
+				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				Dir:          "session-login",
+				CellDir:      "access-core",
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	results := v.ValidateStrict(true)
+
+	var gotFMT16 bool
+	for _, r := range results {
+		if r.Code == "FMT-16" && r.Severity == SeverityError {
+			gotFMT16 = true
+		}
+	}
+	if !gotFMT16 {
+		t.Error("FMT-16 must fire for kebab directory even when yaml id is no-dash (path/id split escape path)")
+	}
+}
+
+// REF-05 must fire when the slice directory disagrees with slice.id. The old
+// implementation rederived "expected id" from the map key (which is built
+// from slice.id itself), self-comparing and always passing — guard against
+// that regression.
+func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L1",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Dir:              "access-core",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"access-core/sessionlogin": {
+				ID:             "sessionlogin",
+				BelongsToCell:  "access-core",
+				ContractUsages: []metadata.ContractUsage{},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.sessionlogin.service"},
+					Contract: []string{},
+				},
+				AllowedFiles: []string{"cells/access-core/slices/sessionlogin/**"},
+				Dir:          "session-login", // disk says kebab, yaml says no-dash
+				CellDir:      "access-core",
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	results := v.Validate() // REF-05 is a standard rule, not strict-only
+
+	var gotREF05 bool
+	for _, r := range results {
+		if r.Code == "REF-05" && r.Severity == SeverityError {
+			gotREF05 = true
+		}
+	}
+	if !gotREF05 {
+		t.Error("REF-05 must fire when slice.id disagrees with directory name (was silent before Dir field)")
+	}
+}
+
+// FMT-17 must compare allowedFiles against the real disk directory, not
+// against a directory synthesised from slice.id. Before the Dir field was
+// introduced, an allowedFiles entry that echoed the (faked) id path would
+// silently match and let the real kebab-case directory slip through.
+func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L1",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Dir:              "access-core",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"access-core/sessionlogin": {
+				ID:             "sessionlogin",
+				BelongsToCell:  "access-core",
+				ContractUsages: []metadata.ContractUsage{},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.sessionlogin.service"},
+					Contract: []string{},
+				},
+				// allowedFiles points to the (no-dash) id path, lying about
+				// the real directory on disk.
+				AllowedFiles: []string{"cells/access-core/slices/sessionlogin/**"},
+				Dir:          "session-login",
+				CellDir:      "access-core",
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	results := v.ValidateStrict(true)
+
+	var gotFMT17 bool
+	for _, r := range results {
+		if r.Code == "FMT-17" && r.Severity == SeverityError {
+			gotFMT17 = true
+		}
+	}
+	if !gotFMT17 {
+		t.Error("FMT-17 must fire when allowedFiles[0] doesn't match the real directory (path/id split escape path)")
 	}
 }

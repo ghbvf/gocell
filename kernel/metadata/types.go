@@ -5,6 +5,11 @@ package metadata
 import "gopkg.in/yaml.v3"
 
 // CellMeta maps to cells/{id}/cell.yaml.
+//
+// Dir captures the filesystem directory segment under cells/ as walked by the
+// parser. It is populated from the file path, not the YAML, so strict-mode
+// governance rules (REF-04) can compare filesystem truth against cell.id
+// without being fooled by a path/id split.
 type CellMeta struct {
 	ID               string         `yaml:"id"`
 	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
@@ -14,6 +19,7 @@ type CellMeta struct {
 	Schema           SchemaMeta     `yaml:"schema"`
 	Verify           CellVerifyMeta `yaml:"verify"`
 	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
+	Dir              string         `yaml:"-"` // directory segment under cells/, set by parser
 }
 
 // OwnerMeta identifies the team responsible for a Cell or Journey.
@@ -40,12 +46,20 @@ type L0DepMeta struct {
 }
 
 // SliceMeta maps to cells/{cell-id}/slices/{slice-id}/slice.yaml.
+//
+// Dir / CellDir record the filesystem directory segments as walked by the
+// parser — they are the ground truth for strict-mode governance rules
+// (FMT-16, FMT-17, REF-05). Reading these instead of rederiving from the
+// map key prevents a path-vs-id split from fooling the validator (e.g. a
+// kebab directory paired with a no-dash id in slice.yaml).
 type SliceMeta struct {
 	ID             string          `yaml:"id"`
 	BelongsToCell  string          `yaml:"belongsToCell"`
 	ContractUsages []ContractUsage `yaml:"contractUsages"`
 	Verify         SliceVerifyMeta `yaml:"verify"`
 	AllowedFiles   []string        `yaml:"allowedFiles,omitempty"`
+	Dir            string          `yaml:"-"` // slice directory segment, set by parser
+	CellDir        string          `yaml:"-"` // parent cell directory segment, set by parser
 }
 
 // ContractUsage declares a Slice's participation in a Contract.
