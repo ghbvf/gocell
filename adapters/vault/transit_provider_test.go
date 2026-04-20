@@ -240,6 +240,24 @@ func callByID(t *testing.T, p *TransitKeyProvider, ctx context.Context, id strin
 	return p.ByID(ctx, id)
 }
 
+// errChainHasCode walks err's Unwrap chain and reports whether any entry is
+// an *errcode.Error whose Code equals want. Tests use it instead of inlining
+// the Unwrap loop, which was the biggest contributor to the cognitive
+// complexity of the TC-4, TC-4b, and TC-7 tests (SonarCloud CC>15).
+func errChainHasCode(err error, want errcode.Code) bool {
+	for e := err; e != nil; {
+		if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == want {
+			return true
+		}
+		unwrapper, ok := e.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		e = unwrapper.Unwrap()
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // TC-1: Encrypt calls local AES-GCM and wraps DEK
 // ---------------------------------------------------------------------------
@@ -389,21 +407,7 @@ func TestVaultTransitHandle_AADMismatch_FailsClosed(t *testing.T) {
 		t.Fatal("Decrypt with wrong AAD must return an error (fail-closed)")
 	}
 
-	var ec *errcode.Error
-	found := false
-	for err := decErr; err != nil; {
-		if e, ok := err.(*errcode.Error); ok {
-			ec = e
-			found = true
-			break
-		}
-		if unwrapper, ok := err.(interface{ Unwrap() error }); ok {
-			err = unwrapper.Unwrap()
-		} else {
-			break
-		}
-	}
-	if !found || ec.Code != errcode.ErrKeyProviderDecryptFailed {
+	if !errChainHasCode(decErr, errcode.ErrKeyProviderDecryptFailed) {
 		t.Errorf("expected ErrKeyProviderDecryptFailed in error chain, got: %v", decErr)
 	}
 }
@@ -412,44 +416,50 @@ func TestVaultTransitHandle_AADMismatch_FailsClosed(t *testing.T) {
 // TC-4: Vault server errors classified transient vs permanent
 // ---------------------------------------------------------------------------
 
+// runEncryptWithInjectedErr runs callEncrypt against a fake that returns
+// writeErr and asserts the resulting error chain's transient classification
+// and (optionally) the presence of wantCode. Used by TC-4 and TC-4b to drop
+// per-case boilerplate well below the cognitive-complexity threshold.
+func runEncryptWithInjectedErr(t *testing.T, writeErr error, wantTransient bool, wantCode errcode.Code) {
+	t.Helper()
+	fake := &fakeVaultClient{latestVersion: 1, writeErr: writeErr}
+	p := newTestProvider(fake)
+	h := mustCurrent(t, p)
+
+	_, _, _, _, err := callEncrypt(t, h, context.Background(), []byte("payload"), []byte("aad"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := errcode.IsTransient(err); got != wantTransient {
+		t.Errorf("IsTransient=%v, want %v (err=%v)", got, wantTransient, err)
+	}
+	if wantCode != "" && !errChainHasCode(err, wantCode) {
+		t.Errorf("error chain must contain %s (err=%v)", wantCode, err)
+	}
+}
+
 func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	// Phase 2-a will make this test green.
-	ctx := context.Background()
-
 	transientCases := []struct {
 		name     string
 		vaultErr error
 	}{
 		{
-			name: "503 Service Unavailable",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient,
-				"vault: 503 service unavailable"),
+			name:     "503 Service Unavailable",
+			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 503 service unavailable"),
 		},
 		{
-			name: "429 Too Many Requests",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient,
-				"vault: 429 rate limited"),
+			name:     "429 Too Many Requests",
+			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 429 rate limited"),
 		},
 		{
-			name: "408 Request Timeout",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient,
-				"vault: 408 request timeout"),
+			name:     "408 Request Timeout",
+			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 408 request timeout"),
 		},
 	}
-
 	for _, tc := range transientCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeVaultClient{latestVersion: 1, writeErr: tc.vaultErr}
-			p := newTestProvider(fake)
-			h := mustCurrent(t, p)
-
-			_, _, _, _, err := callEncrypt(t, h, ctx, []byte("payload"), []byte("aad"))
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !errcode.IsTransient(err) {
-				t.Errorf("expected IsTransient=true for %s, err=%v", tc.name, err)
-			}
+			runEncryptWithInjectedErr(t, tc.vaultErr, true, "")
 		})
 	}
 
@@ -474,40 +484,9 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 			wantCode: errcode.ErrKeyProviderEncryptFailed,
 		},
 	}
-
 	for _, tc := range permanentCases {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeVaultClient{latestVersion: 1, writeErr: tc.vaultErr}
-			p := newTestProvider(fake)
-			h := mustCurrent(t, p)
-
-			_, _, _, _, err := callEncrypt(t, h, ctx, []byte("payload"), []byte("aad"))
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if errcode.IsTransient(err) {
-				t.Errorf("expected IsTransient=false for %s, err=%v", tc.name, err)
-			}
-			// Error chain must contain the permanent errcode.
-			var ec *errcode.Error
-			found := false
-			for e := err; e != nil; {
-				if ecErr, ok := e.(*errcode.Error); ok {
-					if ecErr.Code == tc.wantCode {
-						ec = ecErr
-						found = true
-						break
-					}
-				}
-				if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
-					e = unwrapper.Unwrap()
-				} else {
-					break
-				}
-			}
-			if !found {
-				t.Errorf("error chain must contain %s, err=%v (ec=%v)", tc.wantCode, err, ec)
-			}
+			runEncryptWithInjectedErr(t, tc.vaultErr, false, tc.wantCode)
 		})
 	}
 }
@@ -521,8 +500,6 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 // These tests exercise the complete chain from a real *vaultapi.ResponseError.
 
 func TestVaultTransitHandle_RealResponseError_Classification(t *testing.T) {
-	ctx := context.Background()
-
 	cases := []struct {
 		name       string
 		statusCode int
@@ -565,42 +542,14 @@ func TestVaultTransitHandle_RealResponseError_Classification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Inject a real *vaultapi.ResponseError — exercises the full
 			// classifyVaultEncryptError → isTransientVaultError → isTransientHTTPStatus chain.
-			fake := &fakeVaultClient{
-				latestVersion: 1,
-				writeErr: &vaultapi.ResponseError{
+			runEncryptWithInjectedErr(t,
+				&vaultapi.ResponseError{
 					StatusCode: tc.statusCode,
 					Errors:     []string{"permission denied"},
 				},
-			}
-			p := newTestProvider(fake)
-			h := mustCurrent(t, p)
-
-			_, _, _, _, err := callEncrypt(t, h, ctx, []byte("payload"), []byte("aad"))
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-
-			if tc.wantTransi != errcode.IsTransient(err) {
-				t.Errorf("IsTransient=%v, want %v for status %d (err=%v)",
-					errcode.IsTransient(err), tc.wantTransi, tc.statusCode, err)
-			}
-
-			// Walk chain to find the expected code.
-			var found bool
-			for e := err; e != nil; {
-				if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == tc.wantCode {
-					found = true
-					break
-				}
-				if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
-					e = unwrapper.Unwrap()
-				} else {
-					break
-				}
-			}
-			if !found {
-				t.Errorf("error chain must contain %s for status %d; err=%v", tc.wantCode, tc.statusCode, err)
-			}
+				tc.wantTransi,
+				tc.wantCode,
+			)
 		})
 	}
 }
@@ -635,22 +584,8 @@ func TestVaultTransitHandle_Decrypt_KeyIDEdkMismatch_PermanentError(t *testing.T
 	if errcode.IsTransient(decErr) {
 		t.Errorf("keyID/edk mismatch must be permanent, not transient; err=%v", decErr)
 	}
-	var ec *errcode.Error
-	found := false
-	for e := decErr; e != nil; {
-		if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == errcode.ErrKeyProviderDecryptFailed {
-			ec = ecErr
-			found = true
-			break
-		}
-		if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
-			e = unwrapper.Unwrap()
-		} else {
-			break
-		}
-	}
-	if !found {
-		t.Errorf("error chain must contain ErrKeyProviderDecryptFailed; err=%v (ec=%v)", decErr, ec)
+	if !errChainHasCode(decErr, errcode.ErrKeyProviderDecryptFailed) {
+		t.Errorf("error chain must contain ErrKeyProviderDecryptFailed; err=%v", decErr)
 	}
 }
 
@@ -738,23 +673,8 @@ func TestTransitKeyProvider_ByID(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for wrong prefix, got nil")
 		}
-		var ec *errcode.Error
-		found := false
-		for e := err; e != nil; {
-			if ecErr, ok := e.(*errcode.Error); ok {
-				if ecErr.Code == errcode.ErrKeyProviderKeyNotFound {
-					found = true
-					break
-				}
-			}
-			if unwrapper, ok := e.(interface{ Unwrap() error }); ok {
-				e = unwrapper.Unwrap()
-			} else {
-				break
-			}
-		}
-		if !found {
-			t.Errorf("expected ErrKeyProviderKeyNotFound in error chain, got: %v (ec=%v)", err, ec)
+		if !errChainHasCode(err, errcode.ErrKeyProviderKeyNotFound) {
+			t.Errorf("expected ErrKeyProviderKeyNotFound in error chain, got: %v", err)
 		}
 	})
 
