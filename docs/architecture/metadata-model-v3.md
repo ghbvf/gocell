@@ -77,6 +77,8 @@ verify:
 
 目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
 
+**slice id 命名约束**：slice.id 和目录名必须为 no-dash 格式（不含 `-`）；kebab-case 由 FMT-16 治理规则在 `gocell validate --strict` 下升级为 error。`allowedFiles` 首段必须与 slice 目录匹配（FMT-17）。
+
 ### Contract
 
 跨 Cell 边界协议。L1+ Cell 之间的所有交互都需要契约。

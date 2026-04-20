@@ -228,6 +228,108 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 	}
 }
 
+// TestValidateStrict_EmptyProject verifies that ValidateStrict(true) on an
+// empty project (no slices) does not produce FMT-16 or FMT-17 findings.
+func TestValidateStrict_EmptyProject(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	strictResults := v.ValidateStrict(true)
+	baseResults := v.Validate()
+
+	// FMT-16 and FMT-17 must not appear on an empty slice map.
+	for _, r := range strictResults {
+		if r.Code == "FMT-16" || r.Code == "FMT-17" {
+			t.Errorf("empty project should not produce %s but got: %s", r.Code, r.Message)
+		}
+	}
+
+	// The strict run must not produce more findings than the base run (no slice
+	// to trigger FMT-16/17, so both runs should be identical in length).
+	if len(strictResults) != len(baseResults) {
+		t.Errorf("ValidateStrict(true) on empty project: got %d results, base Validate() got %d; expected equal",
+			len(strictResults), len(baseResults))
+	}
+}
+
+// TestValidateStrict_NonStrictEquivalentToValidate verifies that
+// ValidateStrict(false) produces results that are equivalent to Validate()
+// by comparing code+severity for every finding.
+func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
+	// Use a non-trivial project (L2 cell with a clean no-dash slice) so that
+	// standard rules actually fire some results.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"access-core/sessionlogin": {
+				ID:            "sessionlogin",
+				BelongsToCell: "access-core",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.auth.login.v1", Role: "serve"},
+				},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.sessionlogin.service"},
+					Contract: []string{"contract.http.auth.login.v1.serve"},
+				},
+				AllowedFiles: []string{
+					"cells/access-core/slices/sessionlogin/**",
+				},
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	nonStrictResults := v.ValidateStrict(false)
+	baseResults := v.Validate()
+
+	// Build comparable fingerprint: sorted list of "code:severity" strings.
+	fingerprint := func(results []ValidationResult) map[string]int {
+		m := make(map[string]int)
+		for _, r := range results {
+			key := r.Code + ":" + string(r.Severity)
+			m[key]++
+		}
+		return m
+	}
+
+	nsMap := fingerprint(nonStrictResults)
+	baseMap := fingerprint(baseResults)
+
+	if len(nsMap) != len(baseMap) {
+		t.Errorf("ValidateStrict(false) returned %d unique findings, Validate() returned %d; expected equal",
+			len(nsMap), len(baseMap))
+	}
+	for k, cnt := range baseMap {
+		if nsMap[k] != cnt {
+			t.Errorf("finding %q: ValidateStrict(false) count=%d, Validate() count=%d", k, nsMap[k], cnt)
+		}
+	}
+	// FMT-16 and FMT-17 must not appear in non-strict results.
+	for _, r := range nonStrictResults {
+		if r.Code == "FMT-16" || r.Code == "FMT-17" {
+			t.Errorf("ValidateStrict(false) must not produce %s but got: %s", r.Code, r.Message)
+		}
+	}
+}
+
 // TestStrictValidator_NodashSliceClean verifies that a correctly migrated
 // no-dash slice with matching allowedFiles passes strict validation.
 func TestStrictValidator_NodashSliceClean(t *testing.T) {
