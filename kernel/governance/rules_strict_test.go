@@ -126,6 +126,108 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	}
 }
 
+// TestValidateStrictFailFast_ShortCircuitsOnBaseError verifies that when the
+// base ValidateFailFast finds an error, ValidateStrictFailFast returns
+// immediately without appending FMT-16 or FMT-17 results.
+func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
+	// A project whose cell has a missing required field (schema.primary) so
+	// that standard rules fire an error, plus a kebab slice that would trigger
+	// FMT-16 in strict mode.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				// schema.primary intentionally empty → triggers FMT-01 error.
+				Schema: metadata.SchemaMeta{Primary: ""},
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"access-core/session-login": {
+				ID:            "session-login",
+				BelongsToCell: "access-core",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.auth.login.v1", Role: "serve"},
+				},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.session-login.service"},
+					Contract: []string{"contract.http.auth.login.v1.serve"},
+				},
+				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	results := v.ValidateStrictFailFast()
+
+	// Must contain at least one error.
+	if !HasErrors(results) {
+		t.Fatal("expected at least one error from standard rules, got none")
+	}
+
+	// FMT-16 and FMT-17 must NOT be present because the base pass short-circuited.
+	for _, r := range results {
+		if r.Code == "FMT-16" || r.Code == "FMT-17" {
+			t.Errorf("short-circuit path should not produce %s but got: %s", r.Code, r.Message)
+		}
+	}
+}
+
+// TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError verifies that when
+// the base pass finds no errors, ValidateStrictFailFast appends FMT-16/17 just
+// like ValidateStrict(true) would.
+func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
+	// L1 cell with no contractUsages — passes all standard rules while the
+	// slice key uses a kebab-case directory that strict mode (FMT-16) must flag.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L1",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"access-core/session-login": {
+				ID:             "session-login",
+				BelongsToCell:  "access-core",
+				ContractUsages: []metadata.ContractUsage{},
+				Verify: metadata.SliceVerifyMeta{
+					Unit:     []string{"unit.session-login.service"},
+					Contract: []string{},
+				},
+				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+	results := v.ValidateStrictFailFast()
+
+	hasFMT16 := false
+	for _, r := range results {
+		if r.Code == "FMT-16" && r.Severity == SeverityError {
+			hasFMT16 = true
+		}
+	}
+	if !hasFMT16 {
+		t.Error("expected FMT-16 error from ValidateStrictFailFast when no base error is present")
+	}
+}
+
 // TestStrictValidator_NodashSliceClean verifies that a correctly migrated
 // no-dash slice with matching allowedFiles passes strict validation.
 func TestStrictValidator_NodashSliceClean(t *testing.T) {

@@ -12,12 +12,31 @@ import (
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //
 // When strict is false the method is equivalent to Validate() — FMT-16 and
-// FMT-17 produce warnings only (they are omitted entirely in the standard
-// rules because they only apply to strict mode context).
+// FMT-17 emit nothing (they are strict-only rules; non-strict mode is silent
+// by design).
 func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results := v.Validate()
 	results = append(results, v.validateFMT16(strict)...)
 	results = append(results, v.validateFMT17(strict)...)
+	return results
+}
+
+// ValidateStrictFailFast is equivalent to ValidateStrict(true) but uses
+// ValidateFailFast as its base pass instead of Validate. The base pass
+// short-circuits on the first SeverityError; FMT-16 and FMT-17 are only
+// appended when the base pass finds no errors. This gives --strict --fail-fast
+// true single-error semantics: if any standard rule fires, FMT-16/17 are
+// skipped entirely.
+func (v *Validator) ValidateStrictFailFast() []ValidationResult {
+	results := v.ValidateFailFast()
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMT16(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMT17(true)...)
 	return results
 }
 
