@@ -110,6 +110,11 @@ func (d *SharedDeps) validateCore() []error {
 	if d.EventBus == nil {
 		missing("EventBus")
 	}
+	if d.Topology.StorageBackend == "postgres" && os.Getenv("GOCELL_KEY_PROVIDER") == "" {
+		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+			"SharedDeps: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
+				"(defense-in-depth; config-core module also validates this)"))
+	}
 	return errs
 }
 

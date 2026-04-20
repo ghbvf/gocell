@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
@@ -55,6 +56,13 @@ type ConfigRepository struct {
 	db          DBTX     // test-only: set by newConfigRepositoryFromDBTX (unexported helper in test file)
 	session     *Session // production path: resolves ambient tx via persistence.TxCtxKey
 	transformer kcrypto.ValueTransformer
+	logger      *slog.Logger
+	// onStaleCipher is an optional callback invoked when a stale-key value is
+	// detected during a read. Callers may wire this to a prometheus counter:
+	//   repo.onStaleCipher = func(_, _, _ string) { staleCipherTotal.Inc() }
+	// The callback receives (key, storedKeyID, currentKeyID). When nil, it is
+	// skipped; slog.Warn is always emitted regardless.
+	onStaleCipher func(key, storedKeyID, currentKeyID string)
 }
 
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
@@ -62,9 +70,14 @@ type ConfigRepository struct {
 // via persistence.TxCtxKey. Session is the sole production entry point;
 // use the unexported newConfigRepositoryFromDBTX in tests.
 //
+// If logger is nil, slog.Default() is used.
+//
 // Requires migrations 001–010 to be applied first (see adapters/postgres/migrations/).
-func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer) *ConfigRepository {
-	return &ConfigRepository{session: s, transformer: tr}
+func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer, logger *slog.Logger) *ConfigRepository {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &ConfigRepository{session: s, transformer: tr, logger: logger}
 }
 
 // resolveDB returns the DBTX to use for read calls. When a Session is
@@ -257,11 +270,26 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 			currentID := r.currentKeyID(ctx)
 			if currentID != "" && currentID != *valueKeyID {
 				e.Stale = true
+				r.observeStaleCipher(ctx, key, *valueKeyID, currentID)
 			}
 		}
 	}
 
 	return &e, nil
+}
+
+// observeStaleCipher emits a slog.Warn and invokes the optional onStaleCipher
+// callback when a sensitive config value is found to be encrypted with a stale
+// (non-current) key. This is the single observability point for M3.
+func (r *ConfigRepository) observeStaleCipher(ctx context.Context, key, storedKeyID, currentKeyID string) {
+	r.logger.WarnContext(ctx, "config value encrypted with stale key",
+		slog.String("key", key),
+		slog.String("stored_key_id", storedKeyID),
+		slog.String("current_key_id", currentKeyID),
+	)
+	if r.onStaleCipher != nil {
+		r.onStaleCipher(key, storedKeyID, currentKeyID)
+	}
 }
 
 // currentKeyID returns the ID of the current key from the transformer.
@@ -352,9 +380,11 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
 // List does not decrypt sensitive values — callers use GetByKey for plaintext access.
 const sensitiveListSentinel = "***"
 
-// applySensitiveListSentinel redacts the value field of a sensitive list entry
-// and preserves key metadata (KeyID, Stale) for informational purposes.
-func applySensitiveListSentinel(e *domain.ConfigEntry, valueKeyID *string, currentID string) {
+// applySensitiveListSentinel redacts the value field of a sensitive list entry,
+// preserves key metadata (KeyID, Stale) for informational purposes, and emits
+// observability signals (slog.Warn + optional onStaleCipher callback) when the
+// stored keyID differs from the current active keyID.
+func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *domain.ConfigEntry, valueKeyID *string, currentID string) {
 	e.Value = sensitiveListSentinel
 	if valueKeyID == nil {
 		return
@@ -362,6 +392,7 @@ func applySensitiveListSentinel(e *domain.ConfigEntry, valueKeyID *string, curre
 	e.KeyID = *valueKeyID
 	if currentID != "" && currentID != *valueKeyID {
 		e.Stale = true
+		r.observeStaleCipher(ctx, e.Key, *valueKeyID, currentID)
 	}
 }
 
@@ -407,7 +438,7 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
 		}
 		if e.Sensitive {
-			applySensitiveListSentinel(&e, valueKeyID, currentID)
+			r.applySensitiveListSentinel(ctx, &e, valueKeyID, currentID)
 		}
 		entries = append(entries, &e)
 	}

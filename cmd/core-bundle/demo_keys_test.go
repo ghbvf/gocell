@@ -65,6 +65,19 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	}
 }
 
+// TestMasterKeyDemoHex_IsInWellKnownDemoKeys verifies that the test-fixture
+// hex-encoded master key "0123456789abcdef..." is listed in wellKnownDemoKeys,
+// so that rejectDemoKey blocks it in real adapter mode.
+func TestMasterKeyDemoHex_IsInWellKnownDemoKeys(t *testing.T) {
+	const demoHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	for _, k := range wellKnownDemoKeys {
+		if k == demoHex {
+			return
+		}
+	}
+	t.Errorf("demo master key hex %q not found in wellKnownDemoKeys — real mode will accept it; add to demo_keys.go", demoHex)
+}
+
 // TestCellDemoKeys_AreAllInWellKnownDemoKeys guards against a cell being added
 // with a new per-cell demo codec key (cells/*/cell.go) without the value also
 // appearing in wellKnownDemoKeys. Without this guard, a cell that forgets

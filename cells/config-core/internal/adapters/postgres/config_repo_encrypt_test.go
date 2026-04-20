@@ -15,14 +15,18 @@ package postgres
 //   - sensitive=false paths are unaffected (no encryption).
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
 	configcrypto "github.com/ghbvf/gocell/cells/config-core/internal/crypto"
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,7 +96,7 @@ func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, key
 // ---------------------------------------------------------------------------
 
 func newEncryptedRepoFromDBTX(db DBTX, tr crypto.ValueTransformer) *ConfigRepository {
-	return &ConfigRepository{db: db, transformer: tr}
+	return &ConfigRepository{db: db, transformer: tr, logger: slog.Default()}
 }
 
 // ---------------------------------------------------------------------------
@@ -498,4 +502,212 @@ func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T
 	require.NoError(t, err)
 	assert.True(t, entry.Stale, "entry must be marked stale when storedKeyID != currentKeyID")
 	assert.Equal(t, storedKeyID, entry.KeyID)
+}
+
+// ---------------------------------------------------------------------------
+// M3 — Stale key observability: slog.Warn + onStaleCipher callback
+// ---------------------------------------------------------------------------
+
+// newTestLogger returns a slog.Logger backed by a JSON handler writing to buf.
+// Tests use this to assert structured log fields without relying on string formatting.
+func newTestLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// parseLogEntries decodes newline-delimited JSON log lines into a slice of maps.
+func parseLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var entries []map[string]any
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(line, &m), "log line must be valid JSON")
+		entries = append(entries, m)
+	}
+	return entries
+}
+
+// TestGetByKey_StaleKey_EmitsWarn verifies that when GetByKey detects a stale
+// key (stored keyID != current keyID), it emits a slog.Warn with the structured
+// fields: key, stored_key_id, current_key_id.
+func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
+	ctx := context.Background()
+	// Encrypt with v1, then rotate current to v2 → stale.
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	original := "sensitive-value"
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "api_secret"))
+	require.NoError(t, err)
+
+	storedKeyID := "local-aes-v1"
+	tr.currentKeyID = "local-aes-v2" // rotate after encrypt
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "api_secret", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce},
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := newTestLogger(&logBuf)
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.logger = logger
+
+	entry, err := repo.GetByKey(ctx, "api_secret")
+	require.NoError(t, err)
+	require.True(t, entry.Stale)
+
+	entries := parseLogEntries(t, &logBuf)
+	require.Len(t, entries, 1, "exactly one log line must be emitted for stale key")
+
+	logEntry := entries[0]
+	assert.Equal(t, "WARN", logEntry["level"], "log level must be WARN")
+	assert.Equal(t, "config value encrypted with stale key", logEntry["msg"])
+	assert.Equal(t, "api_secret", logEntry["key"])
+	assert.Equal(t, storedKeyID, logEntry["stored_key_id"])
+	assert.Equal(t, "local-aes-v2", logEntry["current_key_id"])
+}
+
+// TestGetByKey_FreshKey_NoWarn verifies that no slog.Warn is emitted when the
+// stored keyID matches the current keyID (fresh / non-stale entry).
+func TestGetByKey_FreshKey_NoWarn(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	original := "fresh-value"
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "fresh_key"))
+	require.NoError(t, err)
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "fresh_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce},
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := newTestLogger(&logBuf)
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.logger = logger
+
+	entry, err := repo.GetByKey(ctx, "fresh_key")
+	require.NoError(t, err)
+	assert.False(t, entry.Stale)
+	assert.Empty(t, logBuf.Bytes(), "no log output must be emitted for fresh key")
+}
+
+// TestList_StaleKey_EmitsWarn verifies that List emits slog.Warn for each
+// sensitive entry whose stored keyID differs from the current keyID.
+func TestList_StaleKey_EmitsWarn(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v2"} // current is v2
+
+	storedKeyID := "local-aes-v1" // stale
+
+	now := time.Now()
+	db := &mockDB{
+		queryRows: &mockRowSet{
+			entries: []mockRowValues{
+				// sensitive entry with stale key
+				{values: []any{"cfg-1", "stale_cfg", "***", true, 1, now, now, &storedKeyID}},
+				// non-sensitive entry — no warn expected
+				{values: []any{"cfg-2", "plain_cfg", "value", false, 1, now, now, (*string)(nil)}},
+			},
+		},
+	}
+
+	var logBuf bytes.Buffer
+	logger := newTestLogger(&logBuf)
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.logger = logger
+
+	entries, err := repo.List(ctx, query.ListParams{
+		Limit: 10,
+		Sort:  []query.SortColumn{{Name: "key", Direction: query.SortASC}, {Name: "id", Direction: query.SortASC}},
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.True(t, entries[0].Stale)
+	assert.False(t, entries[1].Stale)
+
+	logEntries := parseLogEntries(t, &logBuf)
+	require.Len(t, logEntries, 1, "exactly one warn for the stale sensitive entry")
+	assert.Equal(t, "WARN", logEntries[0]["level"])
+	assert.Equal(t, "config value encrypted with stale key", logEntries[0]["msg"])
+	assert.Equal(t, "stale_cfg", logEntries[0]["key"])
+	assert.Equal(t, storedKeyID, logEntries[0]["stored_key_id"])
+	assert.Equal(t, "local-aes-v2", logEntries[0]["current_key_id"])
+}
+
+// TestGetByKey_StaleKey_OnStaleCipherCallback verifies that the optional
+// onStaleCipher callback is invoked with the correct arguments when a stale
+// key is detected, enabling callers to wire a prometheus counter.
+func TestGetByKey_StaleKey_OnStaleCipherCallback(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	original := "value"
+	ct, _, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "cb_key"))
+	require.NoError(t, err)
+
+	storedKeyID := "local-aes-v1"
+	tr.currentKeyID = "local-aes-v2"
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "cb_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce},
+		},
+	}
+
+	type callbackArgs struct {
+		key, storedKeyID, currentKeyID string
+	}
+	var got []callbackArgs
+
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.onStaleCipher = func(key, storedID, currentID string) {
+		got = append(got, callbackArgs{key, storedID, currentID})
+	}
+
+	_, err = repo.GetByKey(ctx, "cb_key")
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "cb_key", got[0].key)
+	assert.Equal(t, storedKeyID, got[0].storedKeyID)
+	assert.Equal(t, "local-aes-v2", got[0].currentKeyID)
+}
+
+// TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled verifies that the
+// onStaleCipher callback is NOT called when the key is fresh.
+func TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled(t *testing.T) {
+	ctx := context.Background()
+	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
+
+	original := "value"
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte(original), configcrypto.AADForConfig("config-core", "fresh_cb_key"))
+	require.NoError(t, err)
+
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "fresh_cb_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce},
+		},
+	}
+
+	called := false
+	repo := newEncryptedRepoFromDBTX(db, tr)
+	repo.onStaleCipher = func(_, _, _ string) { called = true }
+
+	_, err = repo.GetByKey(ctx, "fresh_cb_key")
+	require.NoError(t, err)
+	assert.False(t, called, "onStaleCipher must not be called for a fresh key")
 }

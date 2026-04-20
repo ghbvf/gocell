@@ -34,7 +34,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	kp := m.KeyProviderOverride
 	if kp == nil {
 		var err error
-		kp, err = buildKeyProvider(shared.Topology.StorageBackend)
+		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode)
 		if err != nil {
 			return nil, nil, fmt.Errorf("config-core key provider: %w", err)
 		}

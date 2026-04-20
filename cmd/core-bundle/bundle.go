@@ -94,7 +94,7 @@ func defaultRuntimeOptions(
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend string) (kcrypto.KeyProvider, error) {
+func buildKeyProvider(storageBackend, adapterMode string) (kcrypto.KeyProvider, error) {
 	providerName := os.Getenv("GOCELL_KEY_PROVIDER")
 	if providerName == "" {
 		if storageBackend == "postgres" {
@@ -108,6 +108,10 @@ func buildKeyProvider(storageBackend string) (kcrypto.KeyProvider, error) {
 	}
 	switch providerName {
 	case "local-aes":
+		masterKeyRaw := os.Getenv("GOCELL_MASTER_KEY")
+		if err := rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", []byte(masterKeyRaw)); err != nil {
+			return nil, err
+		}
 		kp, err := crypto.NewLocalAESKeyProviderFromEnv()
 		if err != nil {
 			return nil, fmt.Errorf("local-aes key provider: %w", err)

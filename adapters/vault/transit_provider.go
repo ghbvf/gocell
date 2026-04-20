@@ -45,6 +45,109 @@ type VaultClient interface {
 	Read(ctx context.Context, path string) (map[string]any, error)
 }
 
+// TokenRenewer is an optional capability for VaultClient implementations that
+// support token lifecycle management. The production vaultAPIClient implements
+// this; test fakes do not (static tokens need no renewal).
+//
+// Type-assert the VaultClient to TokenRenewer to enable background renewal:
+//
+//	if r, ok := client.(TokenRenewer); ok { ... }
+//
+// ref: hashicorp/vault api/lifetime_watcher.go@main
+type TokenRenewer interface {
+	// LookupSelfToken returns the token's current metadata (TTL, renewable flag)
+	// by calling auth/token/lookup-self. Required to seed the LifetimeWatcher
+	// with an accurate initial LeaseDuration.
+	LookupSelfToken(ctx context.Context) (*vaultapi.Secret, error)
+	// NewLifetimeWatcher creates a LifetimeWatcher that automatically renews
+	// the token at ~2/3 of its TTL.
+	NewLifetimeWatcher(i *vaultapi.LifetimeWatcherInput) (*vaultapi.LifetimeWatcher, error)
+}
+
+// ---------------------------------------------------------------------------
+// tokenWatcher — abstraction over vaultapi.LifetimeWatcher for testability
+// ---------------------------------------------------------------------------
+
+// tokenWatcher abstracts the Vault SDK LifetimeWatcher channels so that
+// tokenRenewalWorker can be unit-tested without a real Vault connection.
+// The production implementation wraps *vaultapi.LifetimeWatcher directly.
+//
+// ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher.Start/Stop/DoneCh/RenewCh
+type tokenWatcher interface {
+	// Start begins the background renewal loop. Blocks until Stop() or the
+	// token can no longer be renewed.
+	Start()
+	// Stop signals the watcher to stop its internal loop.
+	Stop()
+	// DoneCh fires once, either when renewal is no longer possible (nil error)
+	// or when an unrecoverable error occurs.
+	DoneCh() <-chan error
+	// RenewCh fires on each successful token renewal.
+	RenewCh() <-chan *vaultapi.RenewOutput
+}
+
+// vaultLifetimeWatcherAdapter wraps *vaultapi.LifetimeWatcher to satisfy
+// the tokenWatcher interface. It is only used in the production path where
+// a real Vault client supports TokenRenewer.
+type vaultLifetimeWatcherAdapter struct {
+	w *vaultapi.LifetimeWatcher
+}
+
+func (a *vaultLifetimeWatcherAdapter) Start()                                { a.w.Start() }
+func (a *vaultLifetimeWatcherAdapter) Stop()                                 { a.w.Stop() }
+func (a *vaultLifetimeWatcherAdapter) DoneCh() <-chan error                  { return a.w.DoneCh() }
+func (a *vaultLifetimeWatcherAdapter) RenewCh() <-chan *vaultapi.RenewOutput { return a.w.RenewCh() }
+
+// ---------------------------------------------------------------------------
+// tokenRenewalWorker — worker.Worker wrapping the token renewal loop
+// ---------------------------------------------------------------------------
+
+// tokenRenewalWorker implements worker.Worker, wrapping the tokenWatcher
+// lifecycle. Start blocks until the context is cancelled or the token can no
+// longer be renewed. Stop signals the watcher to stop gracefully.
+//
+// ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
+type tokenRenewalWorker struct {
+	watcher tokenWatcher
+	logger  *slog.Logger
+}
+
+// Start launches watcher.Start() in a goroutine, then loops on the watcher
+// channels until ctx is done or the token is no longer renewable.
+// Stop() is always called on exit to release watcher resources.
+func (w *tokenRenewalWorker) Start(ctx context.Context) error {
+	go w.watcher.Start()
+	defer w.watcher.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-w.watcher.DoneCh():
+			if err != nil {
+				w.logger.ErrorContext(ctx, "vault-transit: token renewal stopped with error",
+					slog.String("error", err.Error()))
+			} else {
+				w.logger.WarnContext(ctx, "vault-transit: token is no longer renewable")
+			}
+			return err
+		case renewal := <-w.watcher.RenewCh():
+			leaseDuration := 0
+			if renewal.Secret != nil && renewal.Secret.Auth != nil {
+				leaseDuration = renewal.Secret.Auth.LeaseDuration
+			}
+			w.logger.InfoContext(ctx, "vault-transit: token renewed",
+				slog.Int("lease_duration", leaseDuration))
+		}
+	}
+}
+
+// Stop signals the watcher to stop its internal loop.
+func (w *tokenRenewalWorker) Stop(_ context.Context) error {
+	w.watcher.Stop()
+	return nil
+}
+
 // Compile-time interface assertions — fail at build time if the scaffold drifts
 // from the kernel/crypto contracts.
 var _ kcrypto.KeyProvider = (*TransitKeyProvider)(nil)
@@ -254,12 +357,19 @@ type TransitKeyProvider struct {
 	client    VaultClient
 	mountPath string
 	keyName   string
+
+	// renewalWorker manages background Vault token renewal (A13).
+	// nil when the VaultClient does not implement TokenRenewer (e.g. test fakes).
+	renewalWorker *tokenRenewalWorker
+	logger        *slog.Logger
 }
 
 // NewTransitKeyProvider creates a TransitKeyProvider with the given VaultClient.
 // This is the testable constructor — inject a fake VaultClient in tests.
 // The VaultClient interface is exported so external packages can provide
 // custom implementations without importing github.com/hashicorp/vault/api.
+// When the provided client also implements TokenRenewer, background token
+// renewal is automatically configured (but not started — call Worker().Start).
 func NewTransitKeyProvider(client VaultClient, mountPath, keyName string) *TransitKeyProvider {
 	if mountPath == "" {
 		mountPath = "transit"
@@ -271,6 +381,7 @@ func NewTransitKeyProvider(client VaultClient, mountPath, keyName string) *Trans
 		client:    client,
 		mountPath: mountPath,
 		keyName:   keyName,
+		logger:    slog.Default(),
 	}
 }
 
@@ -326,6 +437,13 @@ func NewTransitKeyProviderFromEnv() (*TransitKeyProvider, error) {
 	// Return the classified error directly to preserve errcode identity for callers.
 	ctx := context.Background()
 	if _, err = p.readLatestVersion(ctx); err != nil {
+		return nil, err
+	}
+
+	// A13: initialise background token renewal if the client supports it.
+	// Non-fatal: a warn log is emitted when the client lacks TokenRenewer;
+	// the provider continues to function but the token will expire without notice.
+	if err = p.initTokenRenewal(ctx); err != nil {
 		return nil, err
 	}
 
@@ -600,18 +718,63 @@ func (p *TransitKeyProvider) Checkers() map[string]func() error {
 	}
 }
 
-// Worker returns nil because TransitKeyProvider has no background goroutine.
-// The ManagedResource interface documents that returning nil means no background
-// goroutine is needed; bootstrap skips WithWorkers registration for this resource.
+// Worker returns the token renewal worker when one has been configured, or nil
+// when the VaultClient does not implement TokenRenewer (e.g. test fakes with
+// static tokens). The bootstrap layer skips WithWorkers registration for nil.
 //
 // ref: kernel/lifecycle.ManagedResource — "Returning nil means no background
 //
 //	goroutine is needed"
-func (p *TransitKeyProvider) Worker() worker.Worker { return nil }
+func (p *TransitKeyProvider) Worker() worker.Worker {
+	if p.renewalWorker == nil {
+		return nil
+	}
+	return p.renewalWorker
+}
 
-// Close is a no-op for TransitKeyProvider: the underlying VaultClient manages
-// HTTP connection pooling via the standard net/http.Client (which requires no
-// explicit close). Close satisfies the lifecycle.ManagedResource contract and
-// allows future implementations to flush pending work or drain connections
-// if the VaultClient abstraction changes.
-func (p *TransitKeyProvider) Close(_ context.Context) error { return nil }
+// Close stops the token renewal worker (if configured) and satisfies the
+// lifecycle.ManagedResource contract. The underlying VaultClient manages
+// HTTP connection pooling via net/http.Client, which requires no explicit close.
+func (p *TransitKeyProvider) Close(ctx context.Context) error {
+	if p.renewalWorker != nil {
+		return p.renewalWorker.Stop(ctx)
+	}
+	return nil
+}
+
+// initTokenRenewal configures background token renewal when the client
+// implements TokenRenewer. A warn log is emitted when the client lacks the
+// capability; the provider continues to function without renewal.
+//
+// ref: hashicorp/vault api/lifetime_watcher.go@main — LifetimeWatcher usage pattern
+// ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore (token lookup probe)
+func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context) error {
+	renewer, ok := p.client.(TokenRenewer)
+	if !ok {
+		p.logger.WarnContext(ctx,
+			"vault-transit: VaultClient does not support token renewal; "+
+				"static token will expire without notification")
+		return nil
+	}
+
+	// Look up the current token to seed the LifetimeWatcher with accurate TTL.
+	secret, err := renewer.LookupSelfToken(ctx)
+	if err != nil {
+		return errcode.Wrap(errcode.ErrKeyProviderTransient,
+			"vault-transit: lookup self token for renewal initialisation", err)
+	}
+
+	raw, err := renewer.NewLifetimeWatcher(&vaultapi.LifetimeWatcherInput{
+		Secret: secret,
+	})
+	if err != nil {
+		return errcode.Wrap(errcode.ErrKeyProviderTransient,
+			"vault-transit: create lifetime watcher", err)
+	}
+
+	p.renewalWorker = &tokenRenewalWorker{
+		watcher: &vaultLifetimeWatcherAdapter{w: raw},
+		logger:  p.logger,
+	}
+	return nil
+}
