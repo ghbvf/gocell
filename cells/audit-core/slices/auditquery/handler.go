@@ -52,7 +52,7 @@ func NewHandler(svc *Service) *Handler {
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
-// TODO(S43): role-name literal — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literal is migrated to permission-based authz when that backlog item lands.
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)

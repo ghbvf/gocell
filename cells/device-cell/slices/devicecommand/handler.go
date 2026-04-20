@@ -79,7 +79,7 @@ type enqueueRequest struct {
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
 // This is an operator/management endpoint — only admin or operator roles
 // may enqueue commands. ListPending and Ack are device-facing (subject == deviceID).
-// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
@@ -103,7 +103,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 //
 // Trust boundary: subject must match deviceID (device authenticates as itself)
 // or hold admin role.
-// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
@@ -132,7 +132,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 // updated entity.
 //
 // Trust boundary: subject must match deviceID or hold admin role.
-// TODO(S43): role-name literals — migrate to permission-based authz when PERMISSION-BASED-AUTHZ-01 lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
 func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 	cmdID := r.PathValue("cmdId")
