@@ -15,7 +15,7 @@ import "fmt"
 // Using a composite key prevents a ciphertext encrypted for one config entry
 // from being transplanted into a different entry (cross-row replay attack).
 func AADForConfig(cellID, configKey string) []byte {
-	return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
+	return fmt.Appendf(nil, "cell:%s/key:%s", cellID, configKey)
 }
 
 // AADForVersion computes the Additional Authenticated Data for a config version.
@@ -28,5 +28,5 @@ func AADForConfig(cellID, configKey string) []byte {
 // human-readable configKey) also prevents cross-field AAD collisions of the form
 // configKey == "version:<someUUID>".
 func AADForVersion(cellID, configID string) []byte {
-	return []byte(fmt.Sprintf("cell:%s/version:%s", cellID, configID))
+	return fmt.Appendf(nil, "cell:%s/version:%s", cellID, configID)
 }
