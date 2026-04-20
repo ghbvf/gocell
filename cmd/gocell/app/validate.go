@@ -21,6 +21,8 @@ func runValidate(args []string) error {
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
+	strict := fs.Bool("strict", false,
+		"upgrade kebab-case slice directory and allowedFiles-mismatch warnings to errors (FMT-16, FMT-17)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -47,7 +49,12 @@ func runValidate(args []string) error {
 	if *failFast {
 		// True bailout: validator first (most errors originate there); if it
 		// already flagged an error, depcheck is skipped entirely.
-		valResults := validator.ValidateFailFast()
+		var valResults []governance.ValidationResult
+		if *strict {
+			valResults = validator.ValidateStrict(true)
+		} else {
+			valResults = validator.ValidateFailFast()
+		}
 		if firstErr := firstError(valResults); firstErr != nil {
 			formatResultsFailFast(valResults)
 			return fmt.Errorf("validation failed: %s", firstErr.Code)
@@ -61,7 +68,12 @@ func runValidate(args []string) error {
 		return nil
 	}
 
-	valResults := validator.Validate()
+	var valResults []governance.ValidationResult
+	if *strict {
+		valResults = validator.ValidateStrict(true)
+	} else {
+		valResults = validator.Validate()
+	}
 	depResults := depChecker.Check()
 	allResults := append(valResults, depResults...)
 

@@ -135,19 +135,19 @@ func TestCreateSlice(t *testing.T) {
 	// Must create cell first.
 	require.NoError(t, s.CreateCell(CellOpts{ID: "access-core", OwnerTeam: "platform"}))
 
-	opts := SliceOpts{ID: "session-login", CellID: "access-core"}
+	opts := SliceOpts{ID: "sessionlogin", CellID: "access-core"}
 	require.NoError(t, s.CreateSlice(opts))
 
-	sliceDir := filepath.Join(root, "cells", "access-core", "slices", "session-login")
+	sliceDir := filepath.Join(root, "cells", "access-core", "slices", "sessionlogin")
 	info, err := os.Stat(sliceDir)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 
 	content := readGenerated(t, filepath.Join(sliceDir, "slice.yaml"))
-	assert.Contains(t, content, "id: session-login")
+	assert.Contains(t, content, "id: sessionlogin")
 	assert.Contains(t, content, "belongsToCell: access-core")
 	assert.Contains(t, content, "contractUsages: []")
-	assert.Contains(t, content, "unit.session-login.service")
+	assert.Contains(t, content, "unit.sessionlogin.service")
 	assert.Contains(t, content, "contract: []")
 	assert.Contains(t, content, "waivers: []")
 }
@@ -156,7 +156,7 @@ func TestCreateSlice_CellMissing(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	err := s.CreateSlice(SliceOpts{ID: "my-slice", CellID: "nonexistent"})
+	err := s.CreateSlice(SliceOpts{ID: "myslice", CellID: "nonexistent"})
 	requireErrCode(t, err, ErrScaffoldCellMissing)
 }
 
@@ -640,9 +640,9 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 		OwnerTeam:        "commerce",
 	}))
 
-	// 2. Create two slices.
-	require.NoError(t, s.CreateSlice(SliceOpts{ID: "order-create", CellID: "order-core"}))
-	require.NoError(t, s.CreateSlice(SliceOpts{ID: "order-cancel", CellID: "order-core"}))
+	// 2. Create two slices (no-dash IDs required).
+	require.NoError(t, s.CreateSlice(SliceOpts{ID: "ordercreate", CellID: "order-core"}))
+	require.NoError(t, s.CreateSlice(SliceOpts{ID: "ordercancel", CellID: "order-core"}))
 
 	// 3. Create contracts.
 	require.NoError(t, s.CreateContract(ContractOpts{
@@ -663,8 +663,8 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 	// Verify all files exist.
 	paths := []string{
 		"cells/order-core/cell.yaml",
-		"cells/order-core/slices/order-create/slice.yaml",
-		"cells/order-core/slices/order-cancel/slice.yaml",
+		"cells/order-core/slices/ordercreate/slice.yaml",
+		"cells/order-core/slices/ordercancel/slice.yaml",
 		"contracts/http/order/create/v1/contract.yaml",
 		"contracts/event/order/created/v1/contract.yaml",
 		"journeys/J-order-checkout.yaml",
@@ -679,7 +679,7 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 	cellContent := readGenerated(t, filepath.Join(root, "cells/order-core/cell.yaml"))
 	assert.True(t, strings.Contains(cellContent, "id: order-core"))
 
-	sliceContent := readGenerated(t, filepath.Join(root, "cells/order-core/slices/order-create/slice.yaml"))
+	sliceContent := readGenerated(t, filepath.Join(root, "cells/order-core/slices/ordercreate/slice.yaml"))
 	assert.True(t, strings.Contains(sliceContent, "belongsToCell: order-core"))
 
 	contractContent := readGenerated(t, filepath.Join(root, "contracts/event/order/created/v1/contract.yaml"))

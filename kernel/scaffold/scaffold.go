@@ -122,7 +122,9 @@ func (s *Scaffolder) CreateCell(opts CellOpts) error {
 }
 
 // CreateSlice creates cells/{cellID}/slices/{id}/slice.yaml.
-// Returns an error if the cell doesn't exist or the slice directory already exists.
+// Returns an error if the cell doesn't exist, the slice directory already
+// exists, or the slice ID contains a hyphen (kebab-case names are disallowed;
+// use no-dash identifiers such as "sessionlogin" instead of "session-login").
 func (s *Scaffolder) CreateSlice(opts SliceOpts) error {
 	if err := validatePathComponent(opts.ID, "slice ID"); err != nil {
 		return err
@@ -130,12 +132,19 @@ func (s *Scaffolder) CreateSlice(opts SliceOpts) error {
 	if err := validatePathComponent(opts.CellID, "slice cell ID"); err != nil {
 		return err
 	}
-
-	// Verify the parent cell exists.
+	// Verify the parent cell exists before name validation so that the caller
+	// sees ErrScaffoldCellMissing when both the cell is absent and the ID is
+	// kebab — cell existence is checked first to give the most actionable error.
 	cellDir := filepath.Join(s.root, "cells", opts.CellID)
 	if _, err := os.Stat(cellDir); os.IsNotExist(err) {
 		return errcode.New(ErrScaffoldCellMissing,
 			fmt.Sprintf("cell %q does not exist, create it first", opts.CellID))
+	}
+
+	if strings.Contains(opts.ID, "-") {
+		return errcode.New(ErrScaffoldInvalidOpts,
+			fmt.Sprintf("slice ID %q must not contain '-'; use no-dash identifier (e.g. %q)",
+				opts.ID, strings.ReplaceAll(opts.ID, "-", "")))
 	}
 
 	dir := filepath.Join(cellDir, "slices", opts.ID)

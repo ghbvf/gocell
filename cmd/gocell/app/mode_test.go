@@ -144,12 +144,12 @@ func TestRunScaffoldSlice_DryRun_NoFileWritten(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"slice", "--id=dry-slice", "--cell=parent-cell", "--dry-run"})
+			[]string{"slice", "--id=dryslice", "--cell=parent-cell", "--dry-run"})
 		require.NoError(t, err)
 	})
 
 	_, statErr := os.Stat(filepath.Join(dir,
-		"cells", "parent-cell", "slices", "dry-slice", "slice.yaml"))
+		"cells", "parent-cell", "slices", "dryslice", "slice.yaml"))
 	assert.True(t, os.IsNotExist(statErr), "dry-run must not create slice.yaml")
 	assert.NotContains(t, out, "Created slice", "dry-run must not emit a 'Created slice' line")
 }

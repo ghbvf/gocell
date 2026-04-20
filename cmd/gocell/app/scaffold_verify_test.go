@@ -36,7 +36,7 @@ func TestRunScaffoldSlice_Success(t *testing.T) {
 		[]byte("id: test-cell\ntype: core\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir,
-		[]string{"slice", "--id=my-slice", "--cell=test-cell"})
+		[]string{"slice", "--id=myslice", "--cell=test-cell"})
 	require.NoError(t, err)
 }
 
