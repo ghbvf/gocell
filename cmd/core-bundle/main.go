@@ -323,14 +323,21 @@ func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, 
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		if adapterMode == "real" {
-			return nil, fmt.Errorf("GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
+			return nil, errcode.New(errcode.ErrValidationFailed,
+				"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
 		}
 		slog.Warn("controlplane guard disabled: GOCELL_SERVICE_SECRET is empty (dev mode only)")
 		return nil, nil
 	}
+	if err := rejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {
+		return nil, err
+	}
 	prevSecret := os.Getenv(auth.EnvServiceSecretPrevious)
 	var prevBytes []byte
 	if prevSecret != "" {
+		if err := rejectDemoKey(adapterMode, auth.EnvServiceSecretPrevious, []byte(prevSecret)); err != nil {
+			return nil, err
+		}
 		prevBytes = []byte(prevSecret)
 	}
 	ring, err := auth.NewHMACKeyRing([]byte(secret), prevBytes)

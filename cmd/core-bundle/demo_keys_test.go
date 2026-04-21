@@ -47,6 +47,8 @@ func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	// The dev defaults currently wired in run(). Keep this list in sync with
 	// main.go's loadSecret/loadCursorCodec call sites when they change.
+	// Note: GOCELL_SERVICE_SECRET has no dev-default (empty disables the guard
+	// in dev mode); rejectDemoKey is called directly in internalGuardFromEnv.
 	devDefaults := []string{
 		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_HMAC_KEY", ...)
 		"core-bundle-audit-cursor-key-32!", // loadCursorCodec("GOCELL_AUDIT_CURSOR_KEY", ...)
