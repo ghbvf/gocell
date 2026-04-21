@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     obsolete_token TEXT        NULL,
     session_id     TEXT        NOT NULL,
     subject_id     TEXT        NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_used      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at     TIMESTAMPTZ NOT NULL,
+    last_used      TIMESTAMPTZ NOT NULL,
     expires_at     TIMESTAMPTZ NOT NULL,
     revoked_at     TIMESTAMPTZ NULL
 );
