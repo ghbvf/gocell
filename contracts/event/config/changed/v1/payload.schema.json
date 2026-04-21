@@ -8,7 +8,8 @@
     "key": { "type": "string" },
     "value": { "type": "string" },
     "version": { "type": "integer" },
-    "config_id": { "type": "string" }
+    "config_id": { "type": "string" },
+    "sensitive": { "type": "boolean" }
   },
   "additionalProperties": false,
   "oneOf": [
@@ -27,11 +28,11 @@
       "required": ["action", "key"]
     },
     {
-      "description": "published: includes config_id and version (no value)",
+      "description": "published: includes config_id, version, and sensitive flag",
       "properties": {
         "action": { "const": "published" }
       },
-      "required": ["action", "key", "config_id", "version"]
+      "required": ["action", "key", "config_id", "version", "sensitive"]
     }
   ]
 }

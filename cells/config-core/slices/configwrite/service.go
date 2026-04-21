@@ -104,11 +104,9 @@ type UpdateInput struct {
 }
 
 // Update modifies an existing config entry and publishes a change event.
-// All reads and writes happen inside runInTx to eliminate the TOCTOU stale-read
-// race: GetByKey reads the current sensitive flag under the same transaction
-// that performs the atomic UPDATE...RETURNING.
-//
-// ref: flagwrite.Update — same "all-inside-tx" pattern.
+// The repo reads the sensitive flag internally via SELECT...FOR UPDATE, so no
+// pre-read is needed here. The entire update and outbox write are wrapped in
+// a single transaction for L2 atomicity.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
 	if input.Key == "" {
 		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
@@ -116,22 +114,8 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		// Read inside tx to obtain the current sensitive flag (not changed by
-		// UpdateInput). The ambient transaction ensures this read is consistent
-		// with the subsequent UPDATE.
-		current, err := s.repo.GetByKey(txCtx, input.Key)
-		// NOTE: Under READ COMMITTED (PostgreSQL default), a concurrent Rollback
-		// that changes sensitive between this read and the UPDATE below could make
-		// the sensitive flag stale. This is acceptable because:
-		// 1. No API changes sensitive in a normal Update flow (UpdateInput has no
-		//    Sensitive field); only Rollback restores sensitivity from snapshots.
-		// 2. Concurrent Rollback + Update on the same key is an extremely rare
-		//    admin race. If stricter guarantees are needed, upgrade to REPEATABLE
-		//    READ or add SELECT...FOR UPDATE to the read inside the tx.
-		if err != nil {
-			return fmt.Errorf("config-write: update: %w", err)
-		}
-		updated, err = s.repo.Update(txCtx, input.Key, input.Value, current.Sensitive)
+		var err error
+		updated, err = s.repo.Update(txCtx, input.Key, input.Value)
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}

@@ -12,11 +12,17 @@ import (
 type ConfigRepository interface {
 	Create(ctx context.Context, entry *domain.ConfigEntry) error
 	GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error)
-	// Update modifies the config entry identified by key. The sensitive parameter
-	// is caller-provided; the repo does NOT verify it against the current row value.
-	// Callers must read the current sensitive flag before invoking Update (e.g.,
-	// via GetByKey inside the same transaction) to avoid stale-flag overwrites.
-	Update(ctx context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error)
+	// Update atomically sets value and increments version. Preserves the existing
+	// sensitive flag — the repo reads it internally via SELECT...FOR UPDATE to
+	// eliminate any TOCTOU race on the sensitive flag. Callers do not need to
+	// pre-read the entry. Returns ErrConfigRepoNotFound if the key does not exist.
+	Update(ctx context.Context, key string, value string) (*domain.ConfigEntry, error)
+	// UpdateForRollback atomically sets value AND sensitive, increments version.
+	// Used exclusively by configpublish.Rollback to restore a snapshot's sensitivity
+	// alongside its value. Returns ErrConfigRepoNotFound if the key does not exist.
+	// TODO(505-followup): add WHERE version=$expected for optimistic locking;
+	// return ErrConfigVersionConflict (409) on mismatch.
+	UpdateForRollback(ctx context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error)
 	Delete(ctx context.Context, key string) (*domain.ConfigEntry, error)
 	List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error)
 	PublishVersion(ctx context.Context, version *domain.ConfigVersion) error

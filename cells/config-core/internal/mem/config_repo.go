@@ -57,7 +57,23 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Update(_ context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) Update(_ context.Context, key string, value string) (*domain.ConfigEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.entries[key]
+	if !ok {
+		return nil, errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
+	}
+	existing.Value = value
+	// Preserve existing Sensitive — do NOT change it.
+	existing.Version++
+	existing.UpdatedAt = time.Now()
+	clone := *existing
+	return &clone, nil
+}
+
+func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

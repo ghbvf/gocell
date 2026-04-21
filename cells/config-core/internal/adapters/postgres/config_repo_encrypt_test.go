@@ -270,9 +270,10 @@ func TestEncrypt_GetByKey_NonSensitive_NoDecryption(t *testing.T) {
 	assert.Equal(t, "GoCell", entry.Value)
 }
 
-// TestEncrypt_Update_SensitiveWritesCipherColumns verifies that Update for a
-// sensitive entry writes cipher columns and returns the updated entry via RETURNING.
-func TestEncrypt_Update_SensitiveWritesCipherColumns(t *testing.T) {
+// TestEncrypt_UpdateForRollback_SensitiveWritesCipherColumns verifies that
+// UpdateForRollback for a sensitive entry writes cipher columns and returns the
+// updated entry via RETURNING.
+func TestEncrypt_UpdateForRollback_SensitiveWritesCipherColumns(t *testing.T) {
 	ctx := context.Background()
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
 
@@ -288,14 +289,14 @@ func TestEncrypt_Update_SensitiveWritesCipherColumns(t *testing.T) {
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry, err := repo.Update(context.Background(), "api_key", "new-secret", true)
+	entry, err := repo.UpdateForRollback(context.Background(), "api_key", "new-secret", true)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 
 	sql := db.queryRowCalls[0].sql
 	assert.Contains(t, sql, "UPDATE config_entries")
 	assert.Contains(t, sql, "value_cipher")
-	assert.Equal(t, "new-secret", entry.Value, "Update must return decrypted plaintext")
+	assert.Equal(t, "new-secret", entry.Value, "UpdateForRollback must return decrypted plaintext")
 }
 
 // TestEncrypt_PublishVersion_SensitiveWritesCipherColumns verifies that

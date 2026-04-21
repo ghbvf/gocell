@@ -122,7 +122,48 @@ func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
 }
 
+// TestConfigRepository_Update tests the new 3-arg Update (SELECT FOR UPDATE + UPDATE RETURNING).
+// The mock returns the SELECT FOR UPDATE row first (sensitive=false), then the UPDATE RETURNING row.
 func TestConfigRepository_Update(t *testing.T) {
+	now := time.Now()
+	seqDB := &sequencedMockDB{
+		rows: []*mockRow{
+			{values: []any{false}}, // SELECT FOR UPDATE → sensitive=false
+			{values: []any{"cfg-1", "app.name", "GoCell v2", false, 2, now, now, nil, nil, nil, nil}}, // UPDATE RETURNING
+		},
+	}
+	repo := newConfigRepositoryFromDBTX(seqDB)
+
+	entry, err := repo.Update(context.Background(), "app.name", "GoCell v2")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "GoCell v2", entry.Value)
+
+	require.Len(t, seqDB.queryRowCalls, 2)
+	assert.Contains(t, seqDB.queryRowCalls[0].sql, "FOR UPDATE")
+	assert.Contains(t, seqDB.queryRowCalls[1].sql, "UPDATE config_entries")
+}
+
+// TestConfigRepository_Update_NotFound tests that Update returns ErrConfigRepoNotFound
+// when the SELECT FOR UPDATE finds no row.
+func TestConfigRepository_Update_NotFound(t *testing.T) {
+	seqDB := &sequencedMockDB{
+		rows: []*mockRow{
+			{scanErr: pgx.ErrNoRows}, // SELECT FOR UPDATE → not found
+		},
+	}
+	repo := newConfigRepositoryFromDBTX(seqDB)
+
+	_, err := repo.Update(context.Background(), "missing", "v")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+}
+
+// TestConfigRepository_UpdateForRollback tests the 4-arg UpdateForRollback method.
+func TestConfigRepository_UpdateForRollback(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
@@ -132,7 +173,7 @@ func TestConfigRepository_Update(t *testing.T) {
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entry, err := repo.Update(context.Background(), "app.name", "GoCell v2", false)
+	entry, err := repo.UpdateForRollback(context.Background(), "app.name", "GoCell v2", false)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	assert.Equal(t, "GoCell v2", entry.Value)
@@ -141,13 +182,15 @@ func TestConfigRepository_Update(t *testing.T) {
 	assert.Contains(t, db.queryRowCalls[0].sql, "UPDATE config_entries")
 }
 
-func TestConfigRepository_Update_NotFound(t *testing.T) {
+// TestConfigRepository_UpdateForRollback_NotFound tests that UpdateForRollback
+// returns ErrConfigRepoNotFound when the key is not found.
+func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 	db := &mockDB{
 		queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
 	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	_, err := repo.Update(context.Background(), "missing", "v", false)
+	_, err := repo.UpdateForRollback(context.Background(), "missing", "v", false)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -431,7 +474,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil)
 
-	_, err := repo.Update(context.Background(), "k", "v", false)
+	_, err := repo.Update(context.Background(), "k", "v")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -700,3 +743,30 @@ func (r *mockRowSet) Scan(dest ...any) error {
 
 func (r *mockRowSet) Close()     {}
 func (r *mockRowSet) Err() error { return r.rowsErr }
+
+// sequencedMockDB returns a different mockRow for each successive QueryRow call.
+// Used to test methods that make multiple QueryRow calls (e.g. Update which
+// issues SELECT...FOR UPDATE then UPDATE...RETURNING).
+type sequencedMockDB struct {
+	queryRowCalls []dbCallRecord
+	rows          []*mockRow
+	idx           int
+}
+
+func (s *sequencedMockDB) Exec(_ context.Context, sql string, args ...any) (int64, error) {
+	return 0, nil
+}
+
+func (s *sequencedMockDB) Query(_ context.Context, sql string, args ...any) (Rows, error) {
+	return &mockRowSet{}, nil
+}
+
+func (s *sequencedMockDB) QueryRow(_ context.Context, sql string, args ...any) Row {
+	s.queryRowCalls = append(s.queryRowCalls, dbCallRecord{sql: sql, args: args})
+	if s.idx >= len(s.rows) {
+		return &mockRow{scanErr: assert.AnError}
+	}
+	row := s.rows[s.idx]
+	s.idx++
+	return row
+}

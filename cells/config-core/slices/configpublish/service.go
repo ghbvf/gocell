@@ -104,6 +104,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			"key":       key,
 			"config_id": entry.ID,
 			"version":   version.Version,
+			"sensitive": entry.Sensitive,
 		})
 		if err != nil {
 			return fmt.Errorf("config-publish: marshal event payload: %w", err)
@@ -149,7 +150,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 
 		// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
 		// The repo handles version=version+1 and updated_at=now() internally.
-		updated, err = s.repo.Update(txCtx, key, ver.Value, ver.Sensitive)
+		updated, err = s.repo.UpdateForRollback(txCtx, key, ver.Value, ver.Sensitive)
 		if err != nil {
 			return fmt.Errorf("config-publish: rollback update: %w", err)
 		}
