@@ -28,6 +28,9 @@ func TestIsSafeID(t *testing.T) {
 		{"sql' OR '1'='1", false, "SQL injection"},
 		{"has{braces}", false, "braces"},
 		{"has<angle>", false, "angle brackets"},
+		{"has%percent", false, "percent sign (URL encode prefix)"},
+		{"has@at", false, "at sign"},
+		{"has+plus", false, "plus sign"},
 		{strings.Repeat("a", 300), true, "long but valid charset"},
 	}
 

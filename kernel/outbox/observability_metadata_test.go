@@ -150,6 +150,18 @@ func TestContextWithObservabilityMetadata_RejectsUnsafeValues(t *testing.T) {
 	assert.False(t, ok, "unsafe value with newlines should be rejected")
 }
 
+func TestContextWithObservabilityMetadata_RejectsEmptyValues(t *testing.T) {
+	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
+		"request_id":     "",
+		"correlation_id": "corr-ok",
+	})
+	_, ok := ctxkeys.RequestIDFrom(ctx)
+	assert.False(t, ok, "empty metadata value must not be written to context")
+	corrID, ok := ctxkeys.CorrelationIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "corr-ok", corrID)
+}
+
 func TestContextWithObservabilityMetadata_RejectsOverlongValues(t *testing.T) {
 	longID := make([]byte, 300)
 	for i := range longID {

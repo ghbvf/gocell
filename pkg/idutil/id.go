@@ -24,6 +24,10 @@ const (
 //
 // Length checking is intentionally excluded — callers enforce their own limits
 // via MaxHTTPIDLen or MaxMetadataIDLen.
+//
+// Typical usage:
+//
+//	if len(id) > idutil.MaxHTTPIDLen || !idutil.IsSafeID(id) { /* reject */ }
 func IsSafeID(s string) bool {
 	if len(s) == 0 {
 		return false
@@ -47,7 +51,9 @@ func IsSafeID(s string) bool {
 // on OS entropy failure rather than returning an error.
 func NewUUID() string {
 	var buf [16]byte
-	rand.Read(buf[:])
+	if _, err := rand.Read(buf[:]); err != nil {
+		panic("idutil: crypto/rand.Read failed: " + err.Error())
+	}
 	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
 	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
