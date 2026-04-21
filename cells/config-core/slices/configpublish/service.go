@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
@@ -38,13 +39,20 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
+// WithPublishFailureMode sets direct-publisher failure behavior when
+// outboxWriter is nil.
+func WithPublishFailureMode(mode query.PublishFailureMode) Option {
+	return func(s *Service) { s.publishFailureMode = mode }
+}
+
 // Service implements config publish/rollback business logic.
 type Service struct {
-	repo         ports.ConfigRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	repo               ports.ConfigRepository
+	publisher          outbox.Publisher
+	outboxWriter       outbox.Writer
+	txRunner           persistence.TxRunner
+	publishFailureMode query.PublishFailureMode
+	logger             *slog.Logger
 }
 
 // NewService creates a config-publish Service.
@@ -191,6 +199,14 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 	// accepts the message.
 	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
 	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
+		if s.publishFailureMode.IsFailOpen() {
+			s.logger.Warn("config-publish: publisher failed (fail-open mode)",
+				slog.String("topic", topic),
+				slog.String("publish_failure_mode", s.publishFailureMode.String()),
+				slog.Any("error", err),
+			)
+			return nil
+		}
 		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
 	}
 	return nil

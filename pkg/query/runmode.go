@@ -61,3 +61,41 @@ func RunModeForDemo(demo bool) RunMode {
 	}
 	return RunModeProd
 }
+
+// PublishFailureMode controls whether direct publisher failures on write paths
+// are propagated (fail-closed) or tolerated (fail-open) when no outbox writer
+// is configured.
+type PublishFailureMode uint8
+
+const (
+	// PublishFailureModeFailClosed propagates publisher failures.
+	// This is the zero value and therefore the safe default.
+	PublishFailureModeFailClosed PublishFailureMode = 0
+
+	// PublishFailureModeFailOpen swallows publisher failures after warning logs.
+	PublishFailureModeFailOpen PublishFailureMode = 1
+)
+
+// IsFailOpen reports whether publisher failures are tolerated.
+func (m PublishFailureMode) IsFailOpen() bool { return m == PublishFailureModeFailOpen }
+
+// String returns a stable lowercase label suitable for structured logs.
+func (m PublishFailureMode) String() string {
+	switch m {
+	case PublishFailureModeFailClosed:
+		return "fail-closed"
+	case PublishFailureModeFailOpen:
+		return "fail-open"
+	default:
+		return "unknown"
+	}
+}
+
+// PublishFailureModeForDemo maps demo=true to fail-open and all other modes to
+// fail-closed at wire time.
+func PublishFailureModeForDemo(demo bool) PublishFailureMode {
+	if demo {
+		return PublishFailureModeFailOpen
+	}
+	return PublishFailureModeFailClosed
+}

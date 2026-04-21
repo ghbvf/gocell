@@ -497,3 +497,34 @@ func TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter(t *testing.T
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
 	assert.NotNil(t, c.flagRepo, "flagRepo must be non-nil after Init")
 }
+
+func TestConfigCore_DeriveModes(t *testing.T) {
+	tests := []struct {
+		name        string
+		durability  cell.DurabilityMode
+		wantRunMode query.RunMode
+		wantPubMode query.PublishFailureMode
+	}{
+		{
+			name:        "demo maps to demo+fail-open",
+			durability:  cell.DurabilityDemo,
+			wantRunMode: query.RunModeDemo,
+			wantPubMode: query.PublishFailureModeFailOpen,
+		},
+		{
+			name:        "durable maps to prod+fail-closed",
+			durability:  cell.DurabilityDurable,
+			wantRunMode: query.RunModeProd,
+			wantPubMode: query.PublishFailureModeFailClosed,
+		},
+	}
+
+	c := NewConfigCore(WithInMemoryDefaults(), WithPublisher(eventbus.New()))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runMode, publishMode := c.deriveModes(tt.durability)
+			assert.Equal(t, tt.wantRunMode, runMode)
+			assert.Equal(t, tt.wantPubMode, publishMode)
+		})
+	}
+}
