@@ -85,7 +85,7 @@ build:
 		"journeys/status-board.yaml",
 	}
 	for _, path := range wantFiles {
-		n, ok := pm.FileNode(path)
+		n, ok := pm.fileNode(path)
 		if !ok {
 			t.Errorf("missing Node for %s", path)
 			continue
@@ -117,7 +117,7 @@ func TestParseFS_NodesEnableLocate(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	root, _ := pm.FileNode("cells/x/cell.yaml")
+	root, _ := pm.fileNode("cells/x/cell.yaml")
 	require.NotNil(t, root)
 
 	// Top-level field line numbers.
@@ -194,8 +194,8 @@ func TestParseFS_NodesAbsentWhenEmpty(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	_, haveActors := pm.FileNode("actors.yaml")
-	_, haveStatus := pm.FileNode("journeys/status-board.yaml")
+	_, haveActors := pm.fileNode("actors.yaml")
+	_, haveStatus := pm.fileNode("journeys/status-board.yaml")
 	assert.False(t, haveActors, "empty actors.yaml should not populate FileNodes")
 	assert.False(t, haveStatus, "empty status-board.yaml should not populate FileNodes")
 }

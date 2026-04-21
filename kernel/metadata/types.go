@@ -3,6 +3,8 @@
 package metadata
 
 import (
+	"fmt"
+
 	"github.com/ghbvf/gocell/pkg/contracts"
 	"gopkg.in/yaml.v3"
 )
@@ -208,7 +210,7 @@ type ProjectMeta struct {
 	// root DocumentNode, enabling validator rules to report precise
 	// file:line:column locations. nil when the project was constructed
 	// manually (e.g. in tests); callers must tolerate that case.
-	// Access via Locate, FileNode, SetFileNode, or HasFileNodes.
+	// Access via Locate, PrepareFileNode, HasFileNodes.
 	fileNodes map[string]*yaml.Node
 }
 
@@ -229,18 +231,31 @@ func (pm *ProjectMeta) Locate(file, path string) Position {
 	return Locate(n, path)
 }
 
-// SetFileNode stores a parsed YAML document node for the given file path.
-// It initializes the internal map on first use.
-func (pm *ProjectMeta) SetFileNode(file string, node *yaml.Node) {
+// setFileNode stores a parsed YAML document node for the given file path.
+// It initializes the internal map on first use. Same-package only (parser).
+func (pm *ProjectMeta) setFileNode(file string, node *yaml.Node) {
 	if pm.fileNodes == nil {
 		pm.fileNodes = make(map[string]*yaml.Node)
 	}
 	pm.fileNodes[file] = node
 }
 
-// FileNode returns the parsed YAML document node for the given file path.
+// PrepareFileNode parses yamlSource into a document node and stores it for
+// the given file path. This is the public entry point for test setup —
+// callers never need to import yaml.v3 directly.
+func (pm *ProjectMeta) PrepareFileNode(file string, yamlSource []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(yamlSource, &root); err != nil {
+		return fmt.Errorf("metadata: PrepareFileNode %s: %w", file, err)
+	}
+	pm.setFileNode(file, &root)
+	return nil
+}
+
+// fileNode returns the parsed YAML document node for the given file path.
 // Returns (nil, false) if the file was not parsed or file nodes are not available.
-func (pm *ProjectMeta) FileNode(file string) (*yaml.Node, bool) {
+// Same-package only; external callers use Locate.
+func (pm *ProjectMeta) fileNode(file string) (*yaml.Node, bool) {
 	if pm == nil || pm.fileNodes == nil {
 		return nil, false
 	}
