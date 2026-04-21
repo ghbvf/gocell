@@ -16,20 +16,16 @@ type locator struct {
 
 // locate returns the 1-based (line, column) of `field` inside `file` using
 // the yaml.Node cache captured by the parser. Returns (0, 0) when any
-// precondition is missing (no FileNodes, no matching file, unresolvable path).
+// precondition is missing (no file nodes, no matching file, unresolvable path).
 // Rules should prefer newResult, which wraps this call.
 func (l *locator) locate(file, field string) (line, col int) {
 	if file == "" || field == "" {
 		return 0, 0
 	}
-	if l.project == nil || l.project.FileNodes == nil {
+	if l.project == nil {
 		return 0, 0
 	}
-	n, ok := l.project.FileNodes[file]
-	if !ok || n == nil {
-		return 0, 0
-	}
-	pos := metadata.Locate(n, field)
+	pos := l.project.Locate(file, field)
 	return pos.Line, pos.Column
 }
 

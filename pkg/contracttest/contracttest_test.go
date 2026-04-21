@@ -1,9 +1,11 @@
 package contracttest
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -272,20 +274,31 @@ func TestContractsRoot(t *testing.T) {
 type mockTB struct {
 	testing.TB
 	failed bool
-	logs   []string
+	msgs   []string
 }
 
 func (m *mockTB) Helper() {}
 
 func (m *mockTB) Errorf(format string, args ...any) {
 	m.failed = true
+	m.msgs = append(m.msgs, fmt.Sprintf(format, args...))
 }
 
 func (m *mockTB) Fatalf(format string, args ...any) {
 	m.failed = true
+	m.msgs = append(m.msgs, fmt.Sprintf(format, args...))
 	// In a real test this would stop execution; here we just record.
 	// Tests using mockTB for Fatal should check after a single call.
 	panic("mockTB.Fatalf called")
+}
+
+func (m *mockTB) containsMsg(substr string) bool {
+	for _, msg := range m.msgs {
+		if strings.Contains(msg, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *mockTB) Log(args ...any)                 {}

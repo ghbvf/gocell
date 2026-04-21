@@ -6,15 +6,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
-// parseNode is a test helper that parses src into a yaml.Node (DocumentNode).
-func parseNode(t *testing.T, src string) *yaml.Node {
+// prepareNode is a test helper that stores a YAML source as a file node
+// on the ProjectMeta via the public PrepareFileNode method.
+func prepareNode(t *testing.T, pm *metadata.ProjectMeta, file, src string) {
 	t.Helper()
-	var n yaml.Node
-	require.NoError(t, yaml.Unmarshal([]byte(src), &n))
-	return &n
+	require.NoError(t, pm.PrepareFileNode(file, []byte(src)))
 }
 
 // TestValidator_Locate_KnownField: locate returns the line/column for an
@@ -27,10 +25,8 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
-		FileNodes: map[string]*yaml.Node{
-			"cells/access-core/cell.yaml": parseNode(t, src),
-		},
 	}
+	prepareNode(t, pm, "cells/access-core/cell.yaml", src)
 	v := NewValidator(pm, "")
 
 	line, col := v.locate("cells/access-core/cell.yaml", "id")
@@ -42,25 +38,19 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 	assert.Positive(t, col, "owner.team column")
 }
 
-// TestValidator_Locate_Fallbacks: empty file, empty field, missing FileNodes,
+// TestValidator_Locate_Fallbacks: empty file, empty field, missing file nodes,
 // missing file entry, and missing field all return (0, 0).
 func TestValidator_Locate_Fallbacks(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
 	v := NewValidator(pm, "")
 
-	// FileNodes map entirely absent.
+	// No file nodes set at all.
 	line, col := v.locate("foo.yaml", "id")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
 
-	// FileNodes map present but empty.
-	pm.FileNodes = map[string]*yaml.Node{}
-	line, col = v.locate("foo.yaml", "id")
-	assert.Zero(t, line)
-	assert.Zero(t, col)
-
 	// File present but field not found.
-	pm.FileNodes["foo.yaml"] = parseNode(t, "id: x\n")
+	prepareNode(t, pm, "foo.yaml", "id: x\n")
 	line, col = v.locate("foo.yaml", "nope")
 	assert.Zero(t, line)
 	assert.Zero(t, col)
@@ -86,10 +76,8 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{},
-		FileNodes: map[string]*yaml.Node{
-			"cells/x/slices/s/slice.yaml": parseNode(t, src),
-		},
 	}
+	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	v := NewValidator(pm, "")
 
 	r := v.newResult("REF-02", SeverityError, IssueRefNotFound,
@@ -142,10 +130,8 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 
 	pm := &metadata.ProjectMeta{
 		Slices: map[string]*metadata.SliceMeta{},
-		FileNodes: map[string]*yaml.Node{
-			"cells/x/slices/s/slice.yaml": parseNode(t, src),
-		},
 	}
+	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
 	dc := NewDependencyChecker(pm)
 
 	r := dc.newResult("DEP-01", SeverityError, IssueMismatch,
@@ -158,7 +144,7 @@ func TestDependencyChecker_NewResult_AutoFillsLocation(t *testing.T) {
 }
 
 // TestDependencyChecker_Locate_FallsBack verifies the nil-project / missing
-// FileNodes fallback shared with Validator.
+// file nodes fallback shared with Validator.
 func TestDependencyChecker_Locate_FallsBack(t *testing.T) {
 	dc := NewDependencyChecker(nil)
 	// Safe on a nil project (NewDependencyChecker stores it as-is but locate

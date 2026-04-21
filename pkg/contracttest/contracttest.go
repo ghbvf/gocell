@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -43,56 +44,30 @@ type Contract struct {
 	responseSchema *jsonschema.Schema
 	payloadSchema  *jsonschema.Schema
 	headersSchema  *jsonschema.Schema
+	extraSchemas   map[string]*jsonschema.Schema // keyed by extra ref name
 }
 
 // HTTPTransport holds optional transport metadata for migrated HTTP contracts.
-type HTTPTransport struct {
-	Method        string
-	Path          string
-	SuccessStatus int
-	NoContent     bool
-	Responses     map[int]HTTPResponseEntry
-}
+// It is an alias of contracts.HTTPTransport to preserve the public API.
+type HTTPTransport = contracts.HTTPTransport
 
 // HTTPResponseEntry describes a declared error response for a specific HTTP status code.
-type HTTPResponseEntry struct {
-	Description string
-	SchemaRef   string
-}
+// It is an alias of contracts.HTTPResponse to preserve the public API.
+type HTTPResponseEntry = contracts.HTTPResponse
 
 // contractYAML is a local struct for parsing contract.yaml without
 // importing kernel/metadata (avoids coupling).
 type contractYAML struct {
-	ID               string         `yaml:"id"`
-	Kind             string         `yaml:"kind"`
-	OwnerCell        string         `yaml:"ownerCell"`
-	ConsistencyLevel string         `yaml:"consistencyLevel"`
-	Endpoints        endpointsYAML  `yaml:"endpoints"`
-	SchemaRefs       schemaRefsYAML `yaml:"schemaRefs"`
+	ID               string               `yaml:"id"`
+	Kind             string               `yaml:"kind"`
+	OwnerCell        string               `yaml:"ownerCell"`
+	ConsistencyLevel string               `yaml:"consistencyLevel"`
+	Endpoints        endpointsYAML        `yaml:"endpoints"`
+	SchemaRefs       contracts.SchemaRefs `yaml:"schemaRefs"`
 }
 
 type endpointsYAML struct {
-	HTTP *httpTransportYAML `yaml:"http,omitempty"`
-}
-
-type httpTransportYAML struct {
-	Method        string                        `yaml:"method"`
-	Path          string                        `yaml:"path"`
-	SuccessStatus int                           `yaml:"successStatus"`
-	NoContent     bool                          `yaml:"noContent"`
-	Responses     map[int]httpResponseEntryYAML `yaml:"responses,omitempty"`
-}
-
-type httpResponseEntryYAML struct {
-	Description string `yaml:"description"`
-	SchemaRef   string `yaml:"schemaRef"`
-}
-
-type schemaRefsYAML struct {
-	Request  string `yaml:"request,omitempty"`
-	Response string `yaml:"response,omitempty"`
-	Payload  string `yaml:"payload,omitempty"`
-	Headers  string `yaml:"headers,omitempty"`
+	HTTP *contracts.HTTPTransport `yaml:"http,omitempty"`
 }
 
 // ContractsRoot returns the absolute path to the contracts/ directory,
@@ -139,6 +114,11 @@ func Load(t testing.TB, contractDir string) *Contract {
 	c.payloadSchema = compileSchemaFile(t, contractDir, cy.SchemaRefs.Payload)
 	c.headersSchema = compileSchemaFile(t, contractDir, cy.SchemaRefs.Headers)
 
+	c.extraSchemas = make(map[string]*jsonschema.Schema)
+	for key, filename := range cy.SchemaRefs.Extra {
+		c.extraSchemas[key] = compileSchemaFile(t, contractDir, filename)
+	}
+
 	return c
 }
 
@@ -175,6 +155,32 @@ func (c *Contract) ValidatePayload(t testing.TB, jsonData []byte) {
 func (c *Contract) ValidateHeaders(t testing.TB, jsonData []byte) {
 	t.Helper()
 	validateJSON(t, c.headersSchema, jsonData, "headers")
+}
+
+// ValidateSchemaRef validates jsonData against the schema referenced by the
+// given key name. This covers both well-known refs (request, response, payload,
+// headers) and extra refs declared in schemaRefs. No-op if the key is not found.
+func (c *Contract) ValidateSchemaRef(t testing.TB, key string, jsonData []byte) {
+	t.Helper()
+	switch key {
+	case "request":
+		c.ValidateRequest(t, jsonData)
+		return
+	case "response":
+		c.ValidateResponse(t, jsonData)
+		return
+	case "payload":
+		c.ValidatePayload(t, jsonData)
+		return
+	case "headers":
+		c.ValidateHeaders(t, jsonData)
+		return
+	}
+	schema, ok := c.extraSchemas[key]
+	if !ok {
+		return // no-op: ref not declared
+	}
+	validateJSON(t, schema, jsonData, key)
 }
 
 // ValidateHTTPResponseRecorder validates an HTTP provider response against the
@@ -257,7 +263,7 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Base(filename)
+	url := "file:///" + filepath.Clean(fullPath)
 	if err := compiler.AddResource(url, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}
@@ -330,23 +336,8 @@ func formatValidationErrorDetail(ve *jsonschema.ValidationError, indent string) 
 	return sb.String()
 }
 
-func newHTTPTransport(meta *httpTransportYAML) *HTTPTransport {
-	if meta == nil {
-		return nil
-	}
-	t := &HTTPTransport{
-		Method:        meta.Method,
-		Path:          meta.Path,
-		SuccessStatus: meta.SuccessStatus,
-		NoContent:     meta.NoContent,
-	}
-	if len(meta.Responses) > 0 {
-		t.Responses = make(map[int]HTTPResponseEntry, len(meta.Responses))
-		for status, entry := range meta.Responses {
-			t.Responses[status] = HTTPResponseEntry(entry)
-		}
-	}
-	return t
+func newHTTPTransport(meta *contracts.HTTPTransport) *HTTPTransport {
+	return meta
 }
 
 // ValidateErrorResponse validates body against the JSON Schema declared for
@@ -392,7 +383,7 @@ func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.S
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Base(filename)
+	url := "file:///" + filepath.Clean(fullPath)
 	if err := compiler.AddResource(url, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}

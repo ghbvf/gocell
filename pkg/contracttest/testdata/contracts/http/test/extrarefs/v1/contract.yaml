@@ -1,0 +1,14 @@
+id: http.test.extrarefs.v1
+kind: http
+ownerCell: test-cell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  http:
+    method: GET
+    path: /api/v1/test/extrarefs
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json
+  customKey: custom.schema.json

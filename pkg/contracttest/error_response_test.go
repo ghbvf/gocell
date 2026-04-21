@@ -55,6 +55,14 @@ func TestValidateErrorResponse(t *testing.T) {
 			wantFail:   true,
 			wantMsg:    "no endpoints.http",
 		},
+		{
+			name:       "status with empty schemaRef",
+			contractID: "http.test.errresp.v1",
+			status:     429,
+			body:       []byte(`{}`),
+			wantFail:   true,
+			wantMsg:    "empty schemaRef",
+		},
 	}
 
 	for _, tt := range tests {
@@ -67,6 +75,9 @@ func TestValidateErrorResponse(t *testing.T) {
 			}
 			if !tt.wantFail && mockT.failed {
 				t.Errorf("expected ValidateErrorResponse to pass but it failed")
+			}
+			if tt.wantMsg != "" && !mockT.containsMsg(tt.wantMsg) {
+				t.Errorf("expected error containing %q, got %v", tt.wantMsg, mockT.msgs)
 			}
 		})
 	}

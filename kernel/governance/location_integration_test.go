@@ -248,7 +248,7 @@ func TestLocation_DEP02_ScopeNotFile(t *testing.T) {
 }
 
 // TestLocation_NoNodes_NoCrash confirms that validators tolerate a
-// ProjectMeta without FileNodes (e.g. constructed manually in a test): the Line
+// ProjectMeta without file nodes (e.g. constructed manually in a test): the Line
 // and Column fields are simply zero.
 func TestLocation_NoNodes_NoCrash(t *testing.T) {
 	pm := &metadata.ProjectMeta{
@@ -266,8 +266,8 @@ func TestLocation_NoNodes_NoCrash(t *testing.T) {
 	for _, r := range results {
 		if r.Code == "REF-01" {
 			seenRef01 = true
-			assert.Zero(t, r.Line, "Line should be 0 without FileNodes")
-			assert.Zero(t, r.Column, "Column should be 0 without FileNodes")
+			assert.Zero(t, r.Line, "Line should be 0 without file nodes")
+			assert.Zero(t, r.Column, "Column should be 0 without file nodes")
 		}
 	}
 	assert.True(t, seenRef01, "REF-01 should be produced")
