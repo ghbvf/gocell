@@ -15,6 +15,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// newContractQueryHandler builds an http.Handler that registers auditquery
+// routes at the canonical API prefix via RegisterRoutes + http.StripPrefix.
+// RegisterRoutes calls auth.Declare to install the auditQueryPolicy, so the
+// contract test exercises the same guard the production mux uses — not just
+// the happy-path handler.
 func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 	repo := mem.NewAuditRepository()
 	for _, e := range entries {
@@ -25,9 +30,11 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 		panic(err)
 	}
 	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/audit/entries", http.HandlerFunc(h.HandleQuery))
-	return mux
+	inner := http.NewServeMux()
+	h.RegisterRoutes(inner)
+	outer := http.NewServeMux()
+	outer.Handle("/api/v1/audit/", http.StripPrefix("/api/v1/audit", inner))
+	return outer
 }
 
 func TestHttpAuditListV1Serve(t *testing.T) {

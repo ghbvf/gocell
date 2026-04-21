@@ -266,13 +266,15 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 
 	r := router.New()
 	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries", nil)
+	req = req.WithContext(auth.TestContext("usr-1", nil))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/audit/entries should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/audit/entries should return 200 (got %d)", rec.Code)
 }
 
 // TestInit_DurableMode_RejectsMissingCursorCodec locks the fail-fast
@@ -355,6 +357,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 
 			r := router.New()
 			c.RegisterRoutes(r)
+			require.NoError(t, r.FinalizeAuth())
 
 			rec := httptest.NewRecorder()
 			ctx := auth.TestContext("admin-user", []string{"admin"})

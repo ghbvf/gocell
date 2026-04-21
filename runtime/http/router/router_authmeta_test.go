@@ -121,10 +121,18 @@ func TestFinalizeAuth_PublicMeta_BypassesAuth(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/public", okHandler)
-	r.Handle("/protected", okHandler)
-
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/public", Public: true})
+	// Use auth.Declare so every registered route has a corresponding auth declaration.
+	auth.Declare(r, auth.RouteDecl{
+		Method: "GET", Path: "/public",
+		Handler: okHandler,
+		Public:  true,
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/protected",
+		Handler: okHandler,
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Public route: no token → 200
@@ -151,10 +159,19 @@ func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/exempt", okHandler)
-	r.Handle("/blocked", okHandler)
-
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "POST", Path: "/exempt", PasswordResetExempt: true})
+	// Use auth.Declare so every registered route has a corresponding auth declaration.
+	auth.Declare(r, auth.RouteDecl{
+		Method:              "POST",
+		Path:                "/exempt",
+		Handler:             okHandler,
+		PasswordResetExempt: true,
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/blocked",
+		Handler: okHandler,
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Exempt route with password-reset token → 200
@@ -228,13 +245,18 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/blocked", okHandler)
-	r.Handle("/change-password", okHandler)
-
-	// No legacy hint set; POST + PasswordResetExempt meta should derive hint
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+	// Use auth.Declare so every registered route has a corresponding auth declaration.
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/blocked",
+		Handler: okHandler,
+		Policy:  auth.Authenticated(),
+	})
+	// POST + PasswordResetExempt meta should derive hint.
+	auth.Declare(r, auth.RouteDecl{
 		Method:              "POST",
 		Path:                "/change-password",
+		Handler:             okHandler,
 		PasswordResetExempt: true,
 	})
 	require.NoError(t, r.FinalizeAuth())
@@ -265,12 +287,23 @@ func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/declared-public-a", okHandler)
-	r.Handle("/declared-public-b", okHandler)
-	r.Handle("/protected", okHandler)
-
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/declared-public-a", Public: true})
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/declared-public-b", Public: true})
+	// Use auth.Declare so every registered route has a corresponding auth declaration.
+	auth.Declare(r, auth.RouteDecl{
+		Method: "GET", Path: "/declared-public-a",
+		Handler: okHandler,
+		Public:  true,
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method: "GET", Path: "/declared-public-b",
+		Handler: okHandler,
+		Public:  true,
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/protected",
+		Handler: okHandler,
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// First declared public route: no token → 200
@@ -357,11 +390,20 @@ func TestFinalizeAuth_DelegatedMeta_BypassesJWT(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/delegated", okHandler)
-	r.Handle("/normal", okHandler)
-
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/delegated", Delegated: true})
-	// /normal has no meta → it requires JWT.
+	// Use auth.Declare so every registered route has a corresponding auth declaration.
+	auth.Declare(r, auth.RouteDecl{
+		Method:    "GET",
+		Path:      "/delegated",
+		Handler:   okHandler,
+		Delegated: true,
+	})
+	// /normal requires JWT — declared with Policy to satisfy coverage enforcement.
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/normal",
+		Handler: okHandler,
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Delegated route: no token → 200 (JWT verification skipped).
@@ -401,11 +443,17 @@ func TestFinalizeAuth_DelegatedMeta_ORMergesWithInternalGuard(t *testing.T) {
 	require.NoError(t, err)
 
 	// Declare a delegated route outside the internal prefix.
-	r.Handle("/api/v1/svc-route", okHandler)
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/api/v1/svc-route", Delegated: true})
+	auth.Declare(r, auth.RouteDecl{
+		Method:    "GET",
+		Path:      "/api/v1/svc-route",
+		Handler:   okHandler,
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Route under /internal/v1/ is already delegated via the guard option.
+	// Registered after FinalizeAuth so it is not subject to coverage verification;
+	// the internal prefix guard provides the auth layer for this path.
 	r.Handle("/internal/v1/thing", okHandler)
 
 	// Internal prefix route: JWT skipped (delegated), guard passes with token.
@@ -432,10 +480,14 @@ func TestFinalizeAuth_MethodCaseNormalisation(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
-	r.Handle("/submit", okHandler)
-
+	// Use auth.Declare so the registered route has a corresponding auth declaration.
 	// Method declared as "POST" (uppercase — validateOrPanic enforces this).
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "POST", Path: "/submit", Delegated: true})
+	auth.Declare(r, auth.RouteDecl{
+		Method:    "POST",
+		Path:      "/submit",
+		Handler:   okHandler,
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// net/http canonicalises Method to uppercase for incoming requests, so POST
@@ -446,4 +498,69 @@ func TestFinalizeAuth_MethodCaseNormalisation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/submit", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "POST declared delegated route must bypass JWT verification")
+}
+
+// ---------------------------------------------------------------------------
+// Policy coverage verification tests
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_PolicyCoverage_DetectsMissingPolicy(t *testing.T) {
+	// A route registered via raw Handle without auth.Declare must cause
+	// FinalizeAuth to return an error listing the uncovered route.
+	r, err := NewE(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
+	require.NoError(t, err)
+
+	// /unguarded is registered without auth.Declare — coverage violation.
+	r.Handle("GET /unguarded", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+
+	// /guarded is registered via auth.Declare — covered.
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/guarded",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Policy:  auth.Authenticated(),
+	})
+
+	err = r.FinalizeAuth()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GET /unguarded", "error must list the uncovered route")
+	assert.NotContains(t, err.Error(), "GET /guarded", "covered route must not appear in error")
+}
+
+func TestFinalizeAuth_PolicyCoverage_AllDeclaredOK(t *testing.T) {
+	// All registered routes have auth.Declare — FinalizeAuth must succeed.
+	r, err := NewE(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
+	require.NoError(t, err)
+
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/api/v1/items",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Policy:  auth.Authenticated(),
+	})
+	auth.Declare(r, auth.RouteDecl{
+		Method:  "POST",
+		Path:    "/api/v1/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Public:  true,
+	})
+
+	err = r.FinalizeAuth()
+	require.NoError(t, err)
+}
+
+func TestFinalizeAuth_PolicyCoverage_WhitelistExempts(t *testing.T) {
+	// Routes matching WithPolicyCoverageWhitelist patterns are exempt from
+	// coverage enforcement even when registered via raw Handle.
+	r, err := NewE(
+		WithPolicyCoverageWhitelist([]string{"/debug/*"}),
+		WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}),
+	)
+	require.NoError(t, err)
+
+	// Registered without auth.Declare but whitelisted via prefix pattern.
+	r.Handle("GET /debug/pprof", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+
+	err = r.FinalizeAuth()
+	require.NoError(t, err, "whitelisted route must not trigger policy coverage error")
 }

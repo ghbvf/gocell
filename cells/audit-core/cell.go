@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/mem"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
@@ -122,9 +121,31 @@ func NewAuditCore(opts ...Option) *AuditCore {
 
 // Init constructs all 4 slices.
 func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
-	// Resolve HMAC key from Dependencies.Config if not set via option.
+	if err := c.resolveHMACKey(deps.Config); err != nil {
+		return err
+	}
+	if err := c.BaseCell.Init(ctx, deps); err != nil {
+		return err
+	}
+	if err := c.validateOutboxDeps(deps.DurabilityMode); err != nil {
+		return err
+	}
+	c.initSlices()
+	// Default cursor codec for pagination if not injected. Durable mode
+	// refuses the public demo-key fallback — an assembly that forgets to
+	// wire a production codec must fail closed, not silently sign cursors
+	// with a key that ships in the source tree.
+	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
+	if err := c.initCursorCodec(deps.DurabilityMode); err != nil {
+		return err
+	}
+	return c.initQuerySlice(deps.DurabilityMode)
+}
+
+// resolveHMACKey populates c.hmacKey from config if not set via option.
+func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 	if len(c.hmacKey) == 0 {
-		if raw, ok := deps.Config["audit.hmac_key"]; ok {
+		if raw, ok := cfg["audit.hmac_key"]; ok {
 			if s, ok := raw.(string); ok && s != "" {
 				c.hmacKey = []byte(s)
 			}
@@ -134,23 +155,22 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrValidationFailed,
 			"audit-core: HMAC key is required (set via WithHMACKey or config audit.hmac_key)")
 	}
+	return nil
+}
 
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
-		return err
-	}
-
+// validateOutboxDeps enforces the XOR constraint on outboxWriter/txRunner and
+// the demo-mode publisher requirement.
+func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
 	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
 	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
 	if (c.outboxWriter == nil) != (c.txRunner == nil) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
 			"audit-core durable mode requires both outboxWriter and txRunner")
 	}
-
 	// Durable mode: reject noop implementations.
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "audit-core", c.outboxWriter, c.txRunner, c.publisher); err != nil {
+	if err := cell.CheckNotNoop(mode, "audit-core", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
 	}
-
 	// Demo mode: both nil → require publisher for degraded event delivery.
 	if c.outboxWriter == nil && c.txRunner == nil {
 		if c.publisher == nil {
@@ -163,7 +183,13 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				slog.Int("consistency_level", int(c.ConsistencyLevel())))
 		}
 	}
+	return nil
+}
 
+// initSlices constructs and registers the audit-append, audit-verify, and
+// audit-archive slices. audit-query is initialised separately in initQuerySlice
+// because it requires the cursor codec to be resolved first.
+func (c *AuditCore) initSlices() {
 	// audit-append
 	var appendOpts []auditappend.Option
 	if c.outboxWriter != nil {
@@ -191,25 +217,18 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// audit-archive (stub)
 	c.archiveSvc = auditarchive.NewService()
 	c.AddSlice(cell.NewBaseSlice("auditarchive", "audit-core", cell.L1))
+}
 
-	// Default cursor codec for pagination if not injected. Durable mode
-	// refuses the public demo-key fallback — an assembly that forgets to
-	// wire a production codec must fail closed, not silently sign cursors
-	// with a key that ships in the source tree.
-	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
-	if err := c.initCursorCodec(deps.DurabilityMode); err != nil {
-		return err
-	}
-
-	// audit-query
+// initQuerySlice constructs the audit-query handler slice. Must be called after
+// initCursorCodec so that c.cursorCodec is set.
+func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
 	querySvc, err := auditquery.NewService(c.auditRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(mode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("audit-query: %w", err)
 	}
 	c.queryHandler = auditquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("auditquery", "audit-core", cell.L0))
-
 	return nil
 }
 
@@ -238,7 +257,7 @@ func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 // RegisterRoutes registers HTTP routes for audit-core.
 func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
-		sub.Handle("GET /entries", http.HandlerFunc(c.queryHandler.HandleQuery))
+		c.queryHandler.RegisterRoutes(sub)
 	})
 }
 

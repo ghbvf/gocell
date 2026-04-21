@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Compile-time interface checks.
@@ -154,9 +155,24 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *OrderCell) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/orders", func(orders cell.RouteMux) {
-			orders.Handle("POST /", http.HandlerFunc(c.createHandler.HandleCreate))
-			orders.Handle("GET /", http.HandlerFunc(c.queryHandler.HandleList))
-			orders.Handle("GET /{id}", http.HandlerFunc(c.queryHandler.HandleGet))
+			auth.Declare(orders, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.createHandler.HandleCreate),
+				Policy:  auth.Authenticated(),
+			})
+			auth.Declare(orders, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.queryHandler.HandleList),
+				Policy:  auth.Authenticated(),
+			})
+			auth.Declare(orders, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/{id}",
+				Handler: http.HandlerFunc(c.queryHandler.HandleGet),
+				Policy:  auth.Authenticated(),
+			})
 		})
 	})
 }
