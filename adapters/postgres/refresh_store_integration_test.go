@@ -4,41 +4,66 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
+	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	// Run migrations using a dedicated tracking table so this test's schema
-	// version tracking does not collide with other integration test suites.
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_refresh_store")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx))
-
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// Clean any residual data before the parallel contract suite.
-	// Each subtest uses unique session IDs, but GC counts ALL expired rows
-	// including those from other subtests — T13 is sensitive to this.
-	_, err = pool.DB().Exec(ctx, "TRUNCATE refresh_tokens")
-	require.NoError(t, err)
-
+	// Each factory call gets its own PG schema so parallel subtests are fully
+	// isolated. GC (T13) only sees rows it inserted — no shared-table pollution.
 	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
 
+		p := isolatedSchemaPool(t, ctx, base)
+		migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations")
+		require.NoError(t, err)
+		require.NoError(t, migrator.Up(ctx))
+
 		clock := storetest.NewFakeClock(baseTime)
-		store := NewRefreshStore(pool.DB(), policy, clock, nil)
+		store := NewRefreshStore(p.DB(), policy, clock, nil)
 		return store, clock
 	})
+}
+
+// isolatedSchemaPool creates a fresh PG schema and returns a Pool whose
+// search_path is scoped to that schema. t.Cleanup drops the schema and closes
+// the pool after the subtest finishes.
+func isolatedSchemaPool(t *testing.T, ctx context.Context, base *Pool) *Pool {
+	t.Helper()
+
+	schema := fmt.Sprintf("ts%016x", rand.Int63())
+	_, err := base.DB().Exec(ctx, "CREATE SCHEMA "+schema)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = base.DB().Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	})
+
+	cfg := base.DB().Config()
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+
+	inner, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+
+	p := &Pool{inner: inner, config: base.config}
+	t.Cleanup(func() { _ = p.Close(context.Background()) })
+	return p
 }
 
 // ---------------------------------------------------------------------------
